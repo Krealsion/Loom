@@ -1,0 +1,19 @@
+# Build trees
+/build/
+/build-*/
+/out/
+cmake-build-*/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.claude/
+*.swp
+*~
+.DS_Store
+
+# Compiled artifacts
+*.o
+*.a
+*.so
+*.obj
