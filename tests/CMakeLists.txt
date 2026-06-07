@@ -9,6 +9,7 @@ add_executable(zen-tests
     test_gate.cpp
     test_registry.cpp
     test_serialize.cpp
+    test_compat.cpp
     test_integration.cpp
     test_fuzz.cpp)
 
@@ -26,7 +27,7 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 
 # doctest returns the failed-assertion count as its exit code, so CTest's default
 # exit-status check is the source of truth — no output-scraping needed.
-set(ZEN_TEST_SUITES schema value gate registry serialize integration fuzz)
+set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()

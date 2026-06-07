@@ -19,7 +19,8 @@ enum class ErrorKind : std::uint8_t {
     TypeMismatch,   ///< a field is present but holds the wrong kind
     NullMessage,    ///< a Message field holds a null sub-value
     MalformedBytes, ///< the serialized envelope could not be parsed at all
-    MalformedField, ///< a field's bytes could not be decoded (bad base64, non-integer, bad UTF-8)
+    MalformedField, ///< a field's bytes could not be decoded (bad varint/base64, bad UTF-8, bad bool)
+    UnknownField,   ///< the payload carries a field the door does not declare (strict-reject)
 };
 
 const char* name_of(ErrorKind k) noexcept;

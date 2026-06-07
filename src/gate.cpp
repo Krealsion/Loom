@@ -29,6 +29,8 @@ const char* name_of(ErrorKind k) noexcept {
         return "MalformedBytes";
     case ErrorKind::MalformedField:
         return "MalformedField";
+    case ErrorKind::UnknownField:
+        return "UnknownField";
     }
     return "?";
 }

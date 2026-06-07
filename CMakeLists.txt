@@ -47,7 +47,8 @@ add_library(zen-core
     src/registry.cpp
     src/serialize.cpp
     src/detail/json.cpp
-    src/detail/base64.cpp)
+    src/detail/base64.cpp
+    src/detail/binary.cpp)
 
 target_include_directories(zen-core
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

@@ -51,6 +51,16 @@ ctest --test-dir build-san
 The library builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
 -Wsign-conversion -Werror`, and the suite is green under the sanitizers.
 
+## Wire formats
+
+The **native** format is canonical binary: compact, positional, schema-guided,
+and byte-identical for equal values (so native bytes are content-addressable).
+`serialize` / `parse` are the native entry points. The original self-describing
+**JSON** format is retained as a compatibility / debug codec under
+`zen::compat::serialize` / `zen::compat::parse` — inspectable, but larger and not
+byte-canonical. Both formats funnel through the same gate; deserializing either
+yields an `Unverified` that the same `admit` validates.
+
 ## End to end
 
 Define a schema → register it → build a value → admit it → serialize →
@@ -59,6 +69,7 @@ deserialize → re-admit. (This is `examples/quickstart.cpp`.)
 ```cpp
 #include <zen/zen.hpp>
 
+#include <cstdio>
 #include <iostream>
 
 int main() {
@@ -84,9 +95,11 @@ int main() {
         return 1;
     }
 
-    // 5. Serialize for persistence — the bytes carry the schema's identity.
+    // 5. Serialize to the native canonical binary format (compact; the header
+    //    carries the schema identity). Show the size and the "ZN" magic.
     std::string bytes = serialize(v);
-    std::cout << bytes << "\n";
+    std::printf("native: %zu bytes, magic '%c%c' v%d\n", bytes.size(), bytes[0], bytes[1],
+                static_cast<int>(static_cast<unsigned char>(bytes[2])));
 
     // 6. Read it back. Untrusted until proven: this is an Unverified, not a Value.
     Unverified candidate = parse(bytes);
@@ -100,9 +113,13 @@ int main() {
     std::cout << "revived hp=" << revived.value().get("hp")->as_int()
               << " name=" << revived.value().get("name")->as_text() << "\n";
 
-    // A corrupted candidate is refused, never repaired.
+    // The compat JSON codec gives an inspectable view of the same value.
+    std::cout << "compat json: " << compat::serialize(v) << "\n";
+
+    // A corrupted candidate is refused, never repaired (shown via the readable
+    // compat path so the diagnosis is legible).
     Unverified corrupt =
-        parse(R"({"zen":1,"schema":"PlayerState","version":1,"fields":{"hp":"oops"}})");
+        compat::parse(R"({"zen":1,"schema":"PlayerState","version":1,"fields":{"hp":"oops"}})");
     Admission refused = admit(corrupt, registry);
     std::cout << "corrupt admitted? " << std::boolalpha << refused.ok() << "\n";
     if (!refused.ok()) {
@@ -112,12 +129,13 @@ int main() {
 }
 ```
 
-Running it prints the self-describing bytes, the revived value, and a precise
-refusal for the corrupted one:
+Running it prints the compact native size, the revived value, the inspectable
+JSON view, and a precise refusal for the corrupted one:
 
 ```
-{"zen":1,"schema":"PlayerState","version":1,"content_id":"0x...","fields":{"hp":"30","name":"Ami"}}
+native: 34 bytes, magic 'ZN' v1
 revived hp=30 name=Ami
+compat json: {"zen":1,"schema":"PlayerState","version":1,"content_id":"0xb1d69bad13ae83d6","fields":{"hp":"30","name":"Ami"}}
 corrupt admitted? false
   hp: MalformedField (expected Int, got json:string) — not a base-10 64-bit integer
 ```
