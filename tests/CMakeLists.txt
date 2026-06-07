@@ -11,14 +11,17 @@ add_executable(zen-tests
     test_serialize.cpp
     test_compat.cpp
     test_integration.cpp
-    test_fuzz.cpp)
+    test_fuzz.cpp
+    test_switchboard.cpp
+    test_harness.cpp
+    test_breathing.cpp)
 
 target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(zen-tests
-    PRIVATE zen-core zen-warnings zen-sanitize)
+    PRIVATE zen-core zen-switchboard zen-warnings zen-sanitize)
 
 # doctest's own header trips -Wsign-conversion etc.; it is third-party, so we do
 # not hold it to Zen's warning policy. Mark its include dir as system.
@@ -27,7 +30,8 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 
 # doctest returns the failed-assertion count as its exit code, so CTest's default
 # exit-status check is the source of truth — no output-scraping needed.
-set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz)
+set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
+    switchboard harness breathing)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
