@@ -61,6 +61,21 @@ target_link_libraries(zen-core
 
 add_library(zen::core ALIAS zen-core)
 
+# ---- The switchboard (the first live boundary) ----------------------------
+
+add_library(zen-switchboard
+    src/switchboard/switchboard.cpp)
+
+target_include_directories(zen-switchboard
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+target_compile_features(zen-switchboard PUBLIC cxx_std_20)
+target_link_libraries(zen-switchboard
+    PUBLIC  zen-core zen-sanitize
+    PRIVATE zen-warnings)
+
+add_library(zen::switchboard ALIAS zen-switchboard)
+
 # ---- Tests ----------------------------------------------------------------
 
 if(ZEN_BUILD_TESTS)
