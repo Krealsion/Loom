@@ -14,10 +14,15 @@ The library holds the **grammar, never the answers**: it provides schema, value,
 gate, registry, and serialization, and hard-codes no application message type
 and no policy.
 
+A second library, **`zen-switchboard`**, builds the first *live* boundary on top
+of the core: an in-process message bus that gates every delivery through the same
+`admit`. See `examples/heartbeat.cpp` and the Switchboard section of `DESIGN.md`.
+
 ```
-include/zen/   public headers          src/      implementation
-tests/         suite (doctest)         examples/ runnable quickstart
-DESIGN.md      the full design rationale
+include/zen/             public headers (core)
+include/zen/switchboard/ public headers (bus)
+src/                     implementation        tests/   suite (doctest)
+examples/                quickstart, heartbeat  DESIGN.md  the full design rationale
 ```
 
 ## The spine

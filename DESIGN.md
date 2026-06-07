@@ -340,6 +340,110 @@ clean — run green under ASan/UBSan.
 
 ---
 
+## The Switchboard (the first live boundary)
+
+`zen-switchboard` is a separate library that links `zen-core` and builds the
+first place where a value actually *crosses* a boundary: an in-process message
+bus. It reimplements no validation, schema, or serialization logic — it routes
+`Value`s and calls `admit()`. The whole point of the core (one gate, untrusted
+until proven) now does real work guarding live delivery.
+
+### In-memory delivery, gated at the recipient's door
+
+Delivery is in-memory: the bus moves `Value` payloads between in-process Shards.
+Each delivery is validated by `admit(Value, recipient_accept_schema)` — the live
+path of zen-core's *one* validator. The gate runs **at delivery, against the
+recipient's accept-schema**: each Shard's boundary is its own door, so a publish
+to N accepters is N independent boundary crossings. The bus writes no validator;
+`gate_invocations()` proves a live delivery advances the same counter the
+persistence (bytes) path does (`tests/test_switchboard.cpp`).
+
+A handler is invoked **only** with an already-gated payload. A refused delivery
+never reaches the handler — it is recorded and surfaced to observers instead.
+
+### The `Message` envelope
+
+A payload `Value` (its own schema is its routing shape) plus routing metadata:
+`sender` (a `ShardId`), an optional `reply_to` `ShardId`, and an optional opaque
+`correlation` token. Replies are ordinary sends — a handler sends to `reply_to`.
+Synchronous request-and-await is a deliberate seam; the envelope already carries
+what it needs.
+
+### Addressing: accept-sets, directed, and publish
+
+A Shard declares the schemas it accepts (its accept-set, keyed by
+`(name, version)`). It is reachable two ways:
+
+- `send(ShardId, Message)` — directed. Refused unless the target's accept-set
+  includes the payload's `(name, version)` **and** the payload passes the gate.
+- `publish(Message)` — by shape. Enqueues one delivery for every alive Shard
+  whose accept-set includes the payload's shape, in registration order; returns
+  the recipient count (`0` is legal, not an error).
+
+The bus owns a `zen::Registry` and registers every accept- and state-schema in
+it, so all Shards must agree on what a given `(name, version)` means — a
+disagreement is a `zen::SchemaConflict` at registration.
+
+### Single-threaded FIFO dispatch; the reentrancy guarantee
+
+`send`/`publish` **enqueue**; `pump()` dequeues and delivers until the queue
+drains. Dispatch is single-threaded and FIFO, so ordering is deterministic. A
+handler that sends during handling enqueues a *later* delivery — never a nested
+one: a reentrancy guard makes a reentrant `pump()` a no-op, so delivery depth
+never exceeds one. Tests assert both the deterministic order and the
+non-reentrancy (a shared depth counter that never exceeds 1).
+
+Because `send` enqueues, a delivery's fate is read *after* `pump()`:
+`send` returns a `Ticket`, and `outcome(Ticket)` yields
+`Delivered` / `Refused{Refusal}` (or `Pending` before the pump). Live taps see
+the same outcomes as they happen.
+
+### Refusals are structured and observable
+
+A delivery either conforms or is refused — no partial or best-effort delivery,
+no silent drop. A `Refusal` distinguishes bus-level routing reasons
+(`NoSuchTarget`, `TargetUnavailable`, `NotAccepted`) from a gate refusal
+(`GateRefused`, which carries the zen-core `Error` with its field path and
+expected/actual). The two never blur: routing is the bus's, conformance is the
+gate's.
+
+### Observation (the IDE-as-a-node seed)
+
+An observer/tap registers via `add_observer` and is told of every delivery
+(`Delivered`/`Refused`) and every lifecycle transition (`Died`/`Revived`)
+through one `BusEvent` hook — without being a recipient. It is cheap and present:
+the seed the self-documenting console grows from. (`BusEvent::payload` is valid
+only during the callback; taps copy out the durable fields.)
+
+### Lifecycle / reload — orchestrated, mechanics reused
+
+The Switchboard owns the death→revive cycle and reinvents nothing:
+
+- `snapshot_bytes(id)` serializes the Shard's `snapshot()` with native `serialize`.
+- `kill(id)` marks it dead (it stops receiving deliveries) and emits `Died`.
+- `reload(id, bytes)` runs `parse` → `admit(Unverified, state_schema)` — the
+  self-set lock from the first nucleus. On success it calls `revive(state)` and
+  refreshes last-known-good. On refusal, the Shard's `policy()` decides.
+
+The **only** schema the bus hard-codes is its lifecycle-policy grammar —
+`LifecyclePolicy v1 { max_reloads: Int, revive_from_last_good: Bool }`, exposed
+as `lifecycle_policy_schema()`. The bus validates `policy()` against it and reads
+only those two fields; everything else about a Shard is opaque to it.
+Last-known-good is the last successfully-admitted snapshot (seeded at
+registration by gating the Shard's initial snapshot, so a Shard is born valid).
+
+### Shard contract (a frozen ABI surface)
+
+`Shard` is an abstract base with exactly five methods — `accepted_schemas`,
+`handle`, `snapshot`, `policy`, `revive` — kept minimal because it is a future
+ABI surface. It is designed to survive a move to per-Shard mailboxes and
+multi-threaded dispatch unchanged: a handler still *receives* a gated message and
+*sends* (which enqueues); only `pump`'s internals would change. The bus owns
+Shards (`register_shard(std::unique_ptr<Shard>)`); a non-owning `shard(ShardId)`
+accessor serves queries and tests.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Codegen marriage.** A build-time generator should later emit, from one
@@ -377,6 +481,33 @@ clean — run green under ASan/UBSan.
   the structural walk. Nothing in the binary layout forecloses it: a migrator
   would resolve `(name, claimed_version, content_id) → door` and transcode the
   decoded value, then submit it to the same `validate_into`.
+
+- **Multi-threaded dispatch (per-Shard mailboxes).** The single-threaded FIFO
+  loop is an implementation of the dispatcher, not part of the contract. The
+  `Shard` surface (receive a gated message; send, which enqueues) is identical
+  under per-Shard mailboxes and worker threads — only `pump`'s internals change.
+  Nothing in the Shard ABI or the `Message` envelope forecloses it.
+
+- **Request/response correlation and await.** The envelope already carries
+  `reply_to` and `correlation`; replies work today as ordinary sends. A
+  synchronous `request(...)` that blocks until a correlated reply arrives is a
+  layer over the same enqueue/deliver path — not built here.
+
+- **Schema-as-value over the bus.** A Shard answering "what do you accept?" with
+  its schemas rendered *as* `Value`s (the reflection seam above) turns the bus
+  self-documenting and is the path to the IDE-as-a-node. `accepted_schemas()` and
+  the observer hook are the surfaces it would build on.
+
+- **Content-id fast-path.** When a payload's schema identity already equals the
+  door's `content_id`, the structural re-validation is provably redundant and
+  could be skipped. The gate's identity check is exactly where this would sit; it
+  is an optimization, deliberately not taken so that "one gate, every delivery"
+  stays literally true for now.
+
+- **Cross-boundary delivery (process / DLL).** In-process delivery moves `Value`s
+  directly; a cross-boundary link would serialize at the sender and `parse` →
+  `admit(Unverified, door)` at the receiver — the bytes path that already exists
+  in zen-core — with no change to the Shard contract.
 
 ---
 
