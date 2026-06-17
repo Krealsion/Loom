@@ -440,7 +440,128 @@ ABI surface. It is designed to survive a move to per-Shard mailboxes and
 multi-threaded dispatch unchanged: a handler still *receives* a gated message and
 *sends* (which enqueues); only `pump`'s internals would change. The bus owns
 Shards (`register_shard(std::unique_ptr<Shard>)`); a non-owning `shard(ShardId)`
-accessor serves queries and tests.
+accessor serves queries and tests. `handle` sends through an abstract `Bus`
+interface (which `Switchboard` implements), so the *same* Shard works whether it
+is compiled in or loaded from a library — the kernel below relies on this.
+
+---
+
+## The Kernel (DLL loading · the C ABI · hot-reload)
+
+`zen-kernel` is the OS/entry-point layer: it loads Shards from dynamic libraries
+and hosts them on a Switchboard. It reimplements no validation, routing,
+serialization, or lifecycle — it links `zen-core` + `zen-switchboard` and adds
+only the library boundary.
+
+### Bytes are the boundary currency
+
+The hard, permanent part is the seam. Only **C** crosses it: opaque instance
+handles, plain function pointers, `const uint8_t*` + `size_t` buffers, and
+integer status codes — no C++ types, no STL, no `std::any`, no exceptions. Every
+Zen value/schema/message a library hands back crosses as **serialized bytes**,
+and the host **re-admits those bytes through zen-core's gate** before trusting
+them. So the DLL boundary is just another boundary the one gate guards, and
+*untrusted-until-proven extends to loaded code for free*: a buggy or hostile
+library can no more inject an unvalidated value than a hostile byte-stream from
+storage can. A test proves a value crossing the DLL seam advances the same
+`gate_invocations()` counter the persistence path does, in both directions
+(a delivery *to* the library Shard and a message *emitted by* it).
+
+This also supersedes a rejected prototype — a `std::any`-based service locator
+whose `any_cast<T*>` carried no schema, was UB across the seam, and retained raw
+library pointers that dangled on unload. Only its cross-platform `dlopen`
+wrapper survived (GCC default visibility, no `__declspec`).
+
+### The C ABI (`include/zen/kernel/abi.h`)
+
+One exported symbol, `extern "C" const ZenShardAbi* zen_shard_abi(void)`,
+returns a static descriptor:
+
+- `uint32_t abi_version` — the ABI's own version (distinct from schema versions);
+  the host rejects a descriptor whose version it does not support.
+- `create` / `destroy` — construct/destroy the opaque instance.
+- `describe` — emit the manifest (accepted schemas + state schema) as bytes.
+- `snapshot` / `policy` — emit state / lifecycle policy as bytes.
+- `revive` — receive already-host-admitted state bytes.
+- `handle` — receive an already-host-gated inbound message (sender/reply_to/
+  correlation + payload bytes) plus a **host callback table** (`ZenHostApi`)
+  through which the Shard `send`/`publish`es by handing the host serialized
+  message bytes.
+
+**Buffer ownership (the safety property).** Library→host returns go through a
+host-provided `ZenByteSink` — the library hands bytes, the host copies them
+immediately into host memory, and the library allocates nothing host-visible and
+frees nothing across the seam. Host→library inputs are `const ptr + len` valid
+only for the call. There is therefore **no cross-allocator free and no host
+pointer into library memory** — the prototype's "return a pointer and hope" is
+gone. The only library-owned thing the host holds is the opaque instance handle.
+
+### Schemas cross as gated values
+
+A library's accepted schemas (and its state schema) cross as a **manifest** —
+encoded *as a Value* of a fixed kernel meta-schema (`zen.Manifest` →
+`zen.SchemaDesc` → `zen.Field` → `zen.TypeToken`, in `schema_codec.hpp`), so a
+schema travels as ordinary bytes and is re-admitted through the gate exactly like
+any other value before the host reconstructs it with `SchemaBuilder`. A type
+reference is a flat, prefix-order token list, so nested Lists/Messages need no
+recursive meta-schema; Message/List nested schemas are referenced by
+`(name, version)` and resolved against the host registry (the manifest lists
+referenced schemas first). This is the minimal **schema-as-value** precursor —
+the one place that seam is lightly touched.
+
+### Authoring stays Zen-invisible
+
+`ZEN_EXPORT_SHARD(MyShard)` (header-only `export.hpp`) generates the descriptor
+and every thunk from a clean C++ `zen::sb::Shard` subclass — the author writes
+the same Shard they would compile in, plus one line, and hand-writes no thunk.
+The thunks have C language linkage (matching the descriptor's pointer types),
+forward to C++ template helpers, serialize Values to the host sink, rebuild a
+`Bus` that forwards the Shard's `send`/`publish` across the callback table, and
+**never let a C++ exception cross the seam** (all caught, turned into status
+codes).
+
+### The host adapter
+
+`HostAdapter` (host-side) **implements the existing `Shard` interface** by
+translating each method to its C thunk: serialize arguments to bytes, call
+across, and on the way back `parse` + `admit` through the gate (manifest,
+snapshot, policy, and every emitted message). From the Switchboard's side it is
+simply a Shard — a loaded Shard mounts, routes, and reloads exactly like a native
+one. The host callbacks resolve an emitted message's schema against the
+Switchboard's system-wide registry (`resolve_schema`) and gate it before routing.
+
+### Teardown and hot-reload order
+
+The adapter owns the instance and destroys it (`abi->destroy`) in its destructor;
+the Kernel owns the library handle and closes it **only after** the adapter is
+gone. Unload is therefore: `unregister_shard` (stop delivery, take ownership) →
+destroy the adapter (→ destroy the instance, library still open) → `close` — no
+call ever lands in a closed library (clean under ASan).
+
+`reload_from(name, new_path)` snapshots the live Shard to **host-owned** bytes,
+opens and validates the new library, then swaps `(abi, instance)` **in place
+behind the same adapter and ShardId** (so senders keep their handle), destroys
+the old instance while its library is still open, closes the old library, and
+revives the new instance from the snapshot **through the gate**. State survives
+because the snapshot bytes are host-owned, independent of either library. A new
+library whose **state-schema version differs** is a **clean refusal** — the old
+library keeps running. (This is exactly where the deferred migration layer will
+slot in.)
+
+### The one switchboard change for the kernel, and a note on hosting
+
+The kernel needed two small `Switchboard` additions: `unregister_shard` (to
+destroy an adapter before closing its library) and `resolve_schema` (to gate a
+library's emitted messages against the system registry). `Shard::handle` taking
+the abstract `Bus` (rather than the concrete `Switchboard`) is what lets one
+Shard be hosted either natively or from a `.so`.
+
+**Crash isolation is a non-goal here:** this kernel is in-process, so a crashing
+Shard takes the host down (accepted for now). The wire format already makes the
+eventual process boundary cheap — in-process (fast) and out-of-process (isolated)
+become the two permanent hosting modes, and a cross-boundary link is just
+`serialize` at the sender and `parse` → `admit` at the receiver, with no change
+to the Shard contract.
 
 ---
 
@@ -508,6 +629,27 @@ accessor serves queries and tests.
   directly; a cross-boundary link would serialize at the sender and `parse` →
   `admit(Unverified, door)` at the receiver — the bytes path that already exists
   in zen-core — with no change to the Shard contract.
+
+- **Crash isolation via per-process hosting.** Surviving a segfault in a loaded
+  Shard needs the Shard in its own process under supervision (IPC). The C ABI's
+  bytes-as-currency is already the cross-process currency, so in-process (fast)
+  and out-of-process (isolated) become the two permanent hosting modes behind the
+  same `Shard` contract — the next phase, not built here.
+
+- **Migration at the version-mismatch reload point.** Today a new library whose
+  state-schema version differs is a clean refusal. The migration layer slots in
+  exactly there: resolve `(name, claimed_version, content_id) → door`, transcode
+  the host-owned snapshot, and revive through the same gate.
+
+- **Cross-language libraries.** The C ABI is *designed* to admit a Shard authored
+  in another language: it exports only C, and Zen values cross as bytes. Only a
+  C++-authored test library is built now, but nothing in the descriptor or the
+  buffer discipline forecloses a Rust/C/other author.
+
+- **Full schema-as-value.** The accepted-schemas manifest is the minimal
+  precursor: schemas already round-trip as gated Values. Generalizing it lets the
+  console introspect the whole system and a Shard answer "what do you accept?"
+  with schemas rendered as Values.
 
 ---
 

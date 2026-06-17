@@ -18,6 +18,11 @@ A second library, **`zen-switchboard`**, builds the first *live* boundary on top
 of the core: an in-process message bus that gates every delivery through the same
 `admit`. See `examples/heartbeat.cpp` and the Switchboard section of `DESIGN.md`.
 
+A third, **`zen-kernel`**, loads Shards from dynamic libraries across a true C
+ABI: everything a `.so` hands back crosses as bytes and is re-admitted through
+the same gate, so the DLL seam is just another boundary the one gate guards (with
+hot-reload that survives a library swap). See the Kernel section of `DESIGN.md`.
+
 ```
 include/zen/             public headers (core)
 include/zen/switchboard/ public headers (bus)
