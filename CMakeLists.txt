@@ -15,6 +15,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The kernel loads Shards from shared libraries, which statically link the core.
+# Build everything position-independent so the static libraries can be pulled
+# into a .so.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 option(ZEN_WERROR    "Treat warnings as errors (CI default)"        ON)
 option(ZEN_SANITIZE  "Build with -fsanitize=address,undefined"     OFF)
 option(ZEN_BUILD_TESTS    "Build the test suite"                    ON)
@@ -75,6 +80,21 @@ target_link_libraries(zen-switchboard
     PRIVATE zen-warnings)
 
 add_library(zen::switchboard ALIAS zen-switchboard)
+
+# ---- The kernel (DLL loading + the C ABI + hot-reload) --------------------
+
+add_library(zen-kernel
+    src/kernel/kernel.cpp)
+
+target_include_directories(zen-kernel
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+target_compile_features(zen-kernel PUBLIC cxx_std_20)
+target_link_libraries(zen-kernel
+    PUBLIC  zen-core zen-switchboard zen-sanitize
+    PRIVATE zen-warnings ${CMAKE_DL_LIBS})
+
+add_library(zen::kernel ALIAS zen-kernel)
 
 # ---- Tests ----------------------------------------------------------------
 
