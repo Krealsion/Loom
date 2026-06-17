@@ -43,7 +43,7 @@ public:
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override { return accept_; }
 
-    void handle(const Message& in, Switchboard& bus) override {
+    void handle(const Message& in, Bus& bus) override {
         ++count_;
         std::cout << "  " << name_ << " handled " << in.payload.schema().name() << "\n";
         if (reply_ && in.reply_to.valid()) {

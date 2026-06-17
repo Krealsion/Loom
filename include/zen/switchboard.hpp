@@ -11,6 +11,7 @@
 ///
 /// This umbrella pulls in the whole public surface.
 
+#include <zen/switchboard/bus.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/shard.hpp>
 #include <zen/switchboard/switchboard.hpp>

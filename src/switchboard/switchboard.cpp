@@ -123,6 +123,16 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming) {
     return id;
 }
 
+std::unique_ptr<Shard> Switchboard::unregister_shard(ShardId id) {
+    auto it = shards_.find(id.value);
+    if (it == shards_.end()) {
+        return nullptr;
+    }
+    std::unique_ptr<Shard> released = std::move(it->second.shard);
+    shards_.erase(it);
+    return released;
+}
+
 Ticket Switchboard::send(ShardId target, Message msg) {
     const std::uint64_t seq = next_seq_++;
     journal_.push_back(DeliveryOutcome{}); // Pending at index seq
@@ -366,6 +376,11 @@ std::vector<std::shared_ptr<const Schema>> Switchboard::accepted_schemas(ShardId
         return {};
     }
     return rec->accept;
+}
+
+std::shared_ptr<const Schema> Switchboard::resolve_schema(std::string_view name,
+                                                          std::uint32_t version) const {
+    return registry_.lookup(name, version);
 }
 
 Shard* Switchboard::shard(ShardId id) {

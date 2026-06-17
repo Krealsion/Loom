@@ -25,8 +25,7 @@ TEST_CASE("a directed reply, a selective publish, and a death/revival under poli
     Registered collector = register_probe(bus, {pong_schema(), greet_schema()});
 
     // The responder answers whoever asked, by sending — replies are ordinary sends.
-    responder.shard->on_handle = [rid = responder.id](const Message& in, Switchboard& bus_,
-                                                      ProbeShard&) {
+    responder.shard->on_handle = [rid = responder.id](const Message& in, Bus& bus_, ProbeShard&) {
         const std::int64_t seq = in.payload.get("seq")->as_int();
         bus_.send(in.reply_to, Message(pong(seq), rid));
     };

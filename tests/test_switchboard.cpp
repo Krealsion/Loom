@@ -109,13 +109,13 @@ TEST_CASE("a handler that sends during handling causes a later delivery, never a
         --re.depth;
     };
 
-    a.shard->on_handle = [&re, bid = b.id](const Message&, Switchboard& bus_, ProbeShard&) {
+    a.shard->on_handle = [&re, bid = b.id](const Message&, Bus& bus_, ProbeShard&) {
         ++re.depth;
         re.max = std::max(re.max, re.depth);
         bus_.send(bid, Message(pong(99))); // enqueues; must not deliver now
         --re.depth;
     };
-    b.shard->on_handle = [&track](const Message&, Switchboard&, ProbeShard&) { track(); };
+    b.shard->on_handle = [&track](const Message&, Bus&, ProbeShard&) { track(); };
 
     bus.send(a.id, Message(ping(1)));
     bus.pump();

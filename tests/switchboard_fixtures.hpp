@@ -17,6 +17,7 @@
 namespace sbfx {
 
 using namespace zen;
+using zen::sb::Bus;
 using zen::sb::BusEvent;
 using zen::sb::EventKind;
 using zen::sb::Message;
@@ -77,7 +78,7 @@ inline Value tick(std::int64_t n) {
 // Its persistable state is a Counter{count}; its policy is the fixed grammar.
 class ProbeShard : public Shard {
 public:
-    using Hook = std::function<void(const Message&, Switchboard&, ProbeShard&)>;
+    using Hook = std::function<void(const Message&, Bus&, ProbeShard&)>;
 
     explicit ProbeShard(std::vector<std::shared_ptr<const Schema>> accept,
                         std::int64_t max_reloads = 2, bool revive_from_last_good = true)
@@ -93,7 +94,7 @@ public:
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override { return accept_; }
 
-    void handle(const Message& in, Switchboard& bus) override {
+    void handle(const Message& in, Bus& bus) override {
         handled_names.push_back(in.payload.schema().name());
         std::int64_t v = -1;
         if (const Cell* seq = in.payload.get("seq")) {

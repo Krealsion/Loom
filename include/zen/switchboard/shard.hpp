@@ -2,6 +2,7 @@
 #define ZEN_SWITCHBOARD_SHARD_HPP
 
 #include <zen/schema.hpp>
+#include <zen/switchboard/bus.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/value.hpp>
 
@@ -9,8 +10,6 @@
 #include <vector>
 
 namespace zen::sb {
-
-class Switchboard;
 
 /// The Shard contract — the unit that lives behind a boundary on the bus.
 ///
@@ -38,8 +37,10 @@ public:
     virtual std::vector<std::shared_ptr<const Schema>> accepted_schemas() const = 0;
 
     /// Handle a delivered, already-gated message. May call back into `bus` to
-    /// send/publish — those calls enqueue; they never deliver synchronously.
-    virtual void handle(const Message& in, Switchboard& bus) = 0;
+    /// send/publish — those calls enqueue; they never deliver synchronously. The
+    /// bus is the abstract send surface, so a Shard is agnostic to whether it is
+    /// hosted natively or loaded from a library.
+    virtual void handle(const Message& in, Bus& bus) = 0;
 
     /// The Shard's persistable state, as a self-describing Value.
     virtual Value snapshot() const = 0;

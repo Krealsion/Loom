@@ -22,7 +22,7 @@ TEST_CASE("a handler emitting a malformed payload: refused, recipient untouched,
 
     Registered recorder = register_probe(bus, {ping_schema()});
     Registered saboteur = register_probe(bus, {ping_schema()});
-    saboteur.shard->on_handle = [rid = recorder.id](const Message&, Switchboard& bus_, ProbeShard&) {
+    saboteur.shard->on_handle = [rid = recorder.id](const Message&, Bus& bus_, ProbeShard&) {
         bus_.send(rid, Message(malformed_ping())); // a Ping missing its required 'seq'
     };
 
@@ -107,7 +107,7 @@ TEST_CASE("a flooder's many messages are all delivered FIFO and the loop termina
     Registered flooder = register_probe(bus, {ping_schema()});
 
     constexpr int kN = 1000;
-    flooder.shard->on_handle = [sid = sink.id](const Message&, Switchboard& bus_, ProbeShard&) {
+    flooder.shard->on_handle = [sid = sink.id](const Message&, Bus& bus_, ProbeShard&) {
         for (int i = 0; i < kN; ++i) {
             bus_.send(sid, Message(tick(i)));
         }

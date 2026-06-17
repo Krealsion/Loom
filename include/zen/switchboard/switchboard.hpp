@@ -41,13 +41,6 @@ struct Refusal {
     std::string message() const;
 };
 
-/// A handle to a queued delivery. After the delivery is pumped, the sender can
-/// read its fate via Switchboard::outcome(). The zero ticket is invalid.
-struct Ticket {
-    std::uint64_t seq = 0;
-    bool valid() const noexcept { return seq != 0; }
-};
-
 enum class Disposition : std::uint8_t { Pending, Delivered, Refused };
 
 /// The fate of one queued delivery.
@@ -97,13 +90,20 @@ std::shared_ptr<const Schema> lifecycle_policy_schema();
 /// Dispatch is single-threaded and FIFO: send/publish enqueue; pump() drains.
 /// A handler that sends during handling enqueues a *later* delivery — delivery is
 /// never reentrant, and ordering is deterministic.
-class Switchboard {
+class Switchboard : public Bus {
 public:
     Switchboard();
-    ~Switchboard();
+    ~Switchboard() override;
 
     Switchboard(const Switchboard&) = delete;
     Switchboard& operator=(const Switchboard&) = delete;
+
+    /// Remove a Shard and hand its ownership back to the caller (or nullptr if
+    /// the id is unknown). Used by hosts that must destroy a Shard — and any
+    /// resources it holds, such as a loaded library instance — in a controlled
+    /// order. Pending deliveries to a removed Shard are refused (NoSuchTarget) at
+    /// delivery. Its registered schemas remain published.
+    std::unique_ptr<Shard> unregister_shard(ShardId id);
 
     /// Register a Shard (the bus takes ownership) and return its stable id. Each
     /// accepted schema and the state schema are registered in the bus registry,
@@ -115,12 +115,12 @@ public:
 
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
     /// readable after the delivery is pumped.
-    Ticket send(ShardId target, Message msg);
+    Ticket send(ShardId target, Message msg) override;
 
     /// Enqueue a delivery to every alive Shard whose accept-set includes the
     /// payload's (name, version), in registration order. Returns the recipient
     /// count (0 is legal, not an error). Each delivery is independently gated.
-    std::size_t publish(Message msg);
+    std::size_t publish(Message msg) override;
 
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
     /// reentrant call (from within a handler) is a no-op.
@@ -154,6 +154,13 @@ public:
 
     std::vector<ShardId> list_shards() const;
     std::vector<std::shared_ptr<const Schema>> accepted_schemas(ShardId id) const;
+
+    /// Resolve a registered schema by identity, across every Shard's accept-set
+    /// and state schema. nullptr if the system knows no such schema. Used by a
+    /// host that must gate a value whose schema the system knows but the caller
+    /// does not hold (e.g. a message emitted across the library boundary).
+    std::shared_ptr<const Schema> resolve_schema(std::string_view name,
+                                                 std::uint32_t version) const;
     Shard* shard(ShardId id);
     const Shard* shard(ShardId id) const;
     bool alive(ShardId id) const;
