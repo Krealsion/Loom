@@ -19,14 +19,15 @@ add_executable(zen-tests
     test_kernel.cpp
     test_author_shape.cpp
     test_author_shard.cpp
-    test_capabilities.cpp)
+    test_capabilities.cpp
+    test_isolation.cpp)
 
 target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(zen-tests
-    PRIVATE zen-core zen-switchboard zen-kernel zen-warnings zen-sanitize)
+    PRIVATE zen-core zen-switchboard zen-kernel zen-isolation zen-warnings zen-sanitize)
 
 # ---- Loadable test Shard libraries (.so) for the kernel tests -------------
 # One configurable source compiled into several variants, plus a bad-ABI lib.
@@ -41,22 +42,34 @@ zen_add_test_shard(zen_test_shard_b) # an identical "rebuild", for hot-reload
 zen_add_test_shard(zen_test_shard_badsnap ZEN_SHARD_MALFORMED_SNAPSHOT)
 zen_add_test_shard(zen_test_shard_badmsg ZEN_SHARD_MALFORMED_MESSAGE)
 zen_add_test_shard(zen_test_shard_v2 ZEN_SHARD_STATE_V2)
+# Isolation harness: a child that crashes (mid-handle + on revive, with a small
+# reload budget) and one that is deliberately silent.
+zen_add_test_shard(zen_test_shard_crasher
+    ZEN_SHARD_CRASH_ON_MAGIC ZEN_SHARD_CRASH_ON_REVIVE ZEN_SHARD_LOW_RELOADS)
+zen_add_test_shard(zen_test_shard_silent ZEN_SHARD_SILENT)
 
 add_library(zen_test_badabi SHARED shardlib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE zen-core zen-warnings zen-sanitize)
 
 set(ZEN_SHARD_LIBS zen_test_shard zen_test_shard_b zen_test_shard_badsnap
-    zen_test_shard_badmsg zen_test_shard_v2 zen_test_badabi)
+    zen_test_shard_badmsg zen_test_shard_v2 zen_test_shard_crasher
+    zen_test_shard_silent zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_SHARD_LIBS})
 
-# Hand the .so paths to the kernel tests as string macros.
+# The isolation tests spawn the real child-host executable.
+add_dependencies(zen-tests zen-shard-host)
+
+# Hand the .so paths and the child-host path to the tests as string macros.
 target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_SHARD=\"$<TARGET_FILE:zen_test_shard>\""
     "ZEN_SO_SHARD_B=\"$<TARGET_FILE:zen_test_shard_b>\""
     "ZEN_SO_BADSNAP=\"$<TARGET_FILE:zen_test_shard_badsnap>\""
     "ZEN_SO_BADMSG=\"$<TARGET_FILE:zen_test_shard_badmsg>\""
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_shard_v2>\""
-    "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\"")
+    "ZEN_SO_CRASHER=\"$<TARGET_FILE:zen_test_shard_crasher>\""
+    "ZEN_SO_SILENT=\"$<TARGET_FILE:zen_test_shard_silent>\""
+    "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
+    "ZEN_SHARD_HOST_EXE=\"$<TARGET_FILE:zen-shard-host>\"")
 
 # doctest's own header trips -Wsign-conversion etc.; it is third-party, so we do
 # not hold it to Zen's warning policy. Mark its include dir as system.
@@ -66,7 +79,8 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # doctest returns the failed-assertion count as its exit code, so CTest's default
 # exit-status check is the source of truth — no output-scraping needed.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec kernel author author_shard capabilities)
+    switchboard harness breathing schema_codec kernel author author_shard capabilities
+    isolation)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()

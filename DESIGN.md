@@ -782,15 +782,126 @@ drives the kernel by message; one without it is denied at the control Shard's do
 (`CapabilityDenied`), gating the single most dangerous surface in the system with
 the same mechanism as everything else.
 
-### Loaded `.so` Shards, and the B1/B2 split
+### Loaded `.so` Shards, and the B1 → B2 → B3 split
 
 A loaded `.so` can bypass the bus and reach syscalls directly, so a restrictive
-*bus* grant on it is not real containment in B1 — that is **B2's** job (the OS
-sandbox the reserved OS-capability flags drive). So the kernel grants loaded Shards
-**permissive bus sends** in B1; the kernel *door* is demonstrated fully gated
-against **native** Shards (the authored mod logic, the console's elevated
-instance). B1 makes the grant *real at the message boundary* and shapes it so B2
-can enforce its OS-relevant parts at the syscall boundary with no rework.
+*bus* grant on it is not real containment in B1. Containment is staged: **B2**
+(below) puts the Shard in its own **process** — crash isolation and memory
+separation — and **B3** adds the **OS sandbox** the reserved OS-capability flags
+drive (the syscall boundary). So the kernel grants loaded Shards **permissive bus
+sends** in B1; the kernel *door* is demonstrated fully gated against **native**
+Shards (the authored mod logic, the console's elevated instance). B1 makes the
+grant *real at the message boundary* and shapes it so B2 can host out-of-process
+and B3 can enforce its OS-relevant parts at the syscall boundary, each with no
+rework.
+
+---
+
+## Isolation (B2): out-of-process hosting & crash supervision
+
+B2 makes hosting mode a **mount choice**: a Shard can run in a child process,
+indistinguishable to the bus from an in-process one, and when it crashes the host
+survives, contains the blast, reloads it a bounded number of times, then
+quarantines it. This is the *isolation* half of "capabilities + isolation". It is
+honestly **isolation, not sandboxing** — see the status note below.
+
+### What changed, and what deliberately did not
+
+Nothing in the gate, the wire format, the `Value`/`Schema` model, or the
+single-threaded FIFO bus changed in behavior. The only new bus surface is the pair
+`send_as`/`publish_as` (root authority, added in B1's prep), which the host uses to
+re-enter a child's output with its identity stamped **from the connection**. The
+new code is a library (`zen-isolation`) and a child executable (`zen-shard-host`);
+the bus simply hosts one more kind of `Shard`.
+
+### The child is a byte shuttler (`zen-shard-host`)
+
+The child reuses the **kernel C ABI** unchanged: it `dlopen`s the `.so`, gets its
+`zen_shard_abi()`, and drives the same `create`/`describe`/`policy`/`snapshot`/
+`revive`/`handle` thunks. It links **no zen-core** — it neither validates nor
+interprets values; it only moves bytes between the `.so` and a framed socket. Its
+outbound `Bus` (the `ZenHostApi`) ships the `.so`'s emitted payload bytes as `Emit`
+frames; **gating happens parent-side**. The `.so` is identical to the in-process
+one and does not know it is hosted out-of-process. The child's I/O is blocking —
+it has nothing to do but service the parent — so all the non-blocking machinery
+lives on the host side.
+
+### Bytes are the IPC currency; one gate, host-side
+
+Exactly as for persistence and the DLL boundary, Zen's serialized values are the
+IPC currency. Every message/snapshot/policy/manifest crosses the socket as bytes
+and is re-admitted **host-side through the one gate** before the host trusts it.
+A child's emitted message is `parse`d, its schema `resolve`d against the system
+registry, and `admit`ted — only then is it routed. Malformed or hostile bytes are
+refused and dropped; they never reach a recipient and never crash the host. The
+manifest crosses as the same gated **schema-as-value** descriptor the kernel
+reconstructs, so the host rebuilds the child's accept-set and state schema through
+`admit` + `decode_schema`.
+
+### Sender integrity: stamped from the connection
+
+The `Emit` frame carries **no sender field by construction** — a child has no way
+to express one. The host stamps the proxy's `ShardId` (the identity of the
+*connection* the bytes arrived on) via `send_as`/`publish_as`, and the bus then
+authorizes that message against **that Shard's grant** at delivery, yielding
+`CapabilityDenied` on a violation — identical to the in-process `ShardBus` path. A
+child that wants to send as someone else cannot get it; a child granted nothing
+can emit, but its emissions are denied before the gate.
+
+### The proxy is a `Shard`; the host loop keeps the bus single-threaded
+
+The host-side `OutOfProcessShard` *is* a `Shard` on the bus, so the Switchboard is
+unchanged. `handle()` serializes the message and ships a `Deliver` frame and
+**returns at once** (fire-and-continue): a slow, flooding, or hung child can never
+block, stall, or OOM the host. `snapshot()`/`policy()` return **host-owned cached**
+values, refreshed from the child's proactive `Snapshot` frames (the child ships a
+fresh snapshot after each `handle`/`revive`), so crash recovery never needs a
+blocking round-trip. The IPC `Channel` is non-blocking and **bounded** (a per-frame
+cap and an outbound-backlog cap); a peer that won't drain, or a frame over the cap,
+marks the channel failed — the child is contained, not tolerated. EOF is observable
+and signals child death.
+
+`IsolationHost::step()` is the whole concurrency story, single-threaded:
+
+1. **drain IPC** — flush queued frames to each child, read its output, re-enqueue
+   emitted messages (gated), refresh cached snapshots, note EOF;
+2. **`pump`** — the bus delivers FIFO, including to proxies, which fire-and-continue;
+3. **supervise** — detect deaths (channel EOF/failure), and drive recovery.
+
+The bus's FIFO ordering and non-reentrancy hold exactly as before; the only
+asynchrony is the *timing* of a child's reply, which arrives on a later `step`.
+
+### Supervision: bounded reload, then quarantine
+
+On a child's death the host marks the Shard dead and emits `Died`, then drives the
+**existing lifecycle mechanics**: `reload` from the **host-owned snapshot**, which
+is budgeted by the Shard's own `max_reloads`. Reload re-enters through the proxy's
+`revive()`, which respawns a fresh child and ships it the last-good state. A child
+that crashes again on `revive` simply dies again next `step`, spending one unit of
+budget each cycle; when the budget is exhausted, `revive` is never called and the
+Shard stays dead — **quarantined**, surfaced on the tap. The host process is never
+the thing that dies. (Crash-revival is budgeted; intentional hot-reload remains the
+unbudgeted `swap_state` path — B2 reuses both without change.)
+
+### Honest containment status
+
+`containment(name)` reports the truth and never claims more:
+**"isolated (process boundary): crash-contained, cannot corrupt host memory. Not
+sandboxed: the grant's OS-capability flags are not OS-enforced yet (B3)."** Process
+isolation buys crash containment and memory separation; it does **not** stop a
+child from opening a socket or a file directly. The grant's `os_cap` flags remain
+**inert** — recorded, shaped, and ready, but not enforced. Pretending otherwise
+would be the one thing this layer must not do.
+
+### What B2 leaves to **B3** (the next phase)
+
+B3 is the **OS sandbox**: it projects the grant's OS-capability flags onto a
+real syscall-level profile (namespaces / seccomp / equivalent) applied to the
+child before it loads the `.so`, turning "isolated" into "isolated **and**
+sandboxed". The seam is already in place — hosting is out-of-process, the grant
+already carries the OS-capability flags, and the child is the single place a
+sandbox profile would be installed — so B3 is additive, with no rework to the gate,
+the bus, the wire format, or the supervision loop built here.
 
 ---
 
