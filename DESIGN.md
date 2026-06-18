@@ -424,6 +424,20 @@ The Switchboard owns the death→revive cycle and reinvents nothing:
 - `reload(id, bytes)` runs `parse` → `admit(Unverified, state_schema)` — the
   self-set lock from the first nucleus. On success it calls `revive(state)` and
   refreshes last-known-good. On refusal, the Shard's `policy()` decides.
+- `swap_state(id, bytes)` is the **intentional** sibling of `reload`: same gate
+  (`parse` → `admit(Unverified, state_schema)`), same `revive` + last-known-good
+  refresh, but it spends **no budget** and offers **no** last-known-good fallback —
+  a gate refusal is a clean refusal. Emits `Revived`/`Refused`.
+
+**Intentional swap ≠ crash revival (only crashes spend the budget).** `reload` is
+the crash-revival path: it is *budgeted* — it reads the policy's `max_reloads` and
+decrements a per-Shard counter, so a Shard that crash-thrashes cannot revive
+forever, and on a refused candidate the policy may fall back to last-known-good.
+`swap_state` is the deliberate code-swap path (what the kernel's `reload_from`
+calls): no budget, no fallback. Sharing one counter would be backwards — a Shard
+that spent its crash-revival allowance could not be hot-swapped to *fixed* code,
+and every deliberate swap would draw down the very budget meant to stop crash
+loops. The two operations are therefore separate methods, not a flag.
 
 The **only** schema the bus hard-codes is its lifecycle-policy grammar —
 `LifecyclePolicy v1 { max_reloads: Int, revive_from_last_good: Bool }`, exposed
@@ -546,7 +560,10 @@ revives the new instance from the snapshot **through the gate**. State survives
 because the snapshot bytes are host-owned, independent of either library. A new
 library whose **state-schema version differs** is a **clean refusal** — the old
 library keeps running. (This is exactly where the deferred migration layer will
-slot in.)
+slot in.) The revive after the swap goes through `Switchboard::swap_state`, the
+**unbudgeted** intentional-swap path, so a deliberate hot-reload neither draws
+down nor is blocked by the Shard's crash-revival budget (see *Intentional swap ≠
+crash revival* above).
 
 ### The one switchboard change for the kernel, and a note on hosting
 
@@ -614,14 +631,31 @@ and it is built.
 `ShardBase<Self, State, Accept<Shapes...>, Emit<Shapes...>>` (CRTP) derives:
 `accepted_schemas()` from `Accept<…>`, `snapshot() = to_value(state_)`,
 `revive() = from_value<State>`, and `policy()` from an overridable
-`policy_config()`. Its `handle()` matches the gated payload's content-id to an
-accepted shape, converts it, and dispatches to a **typed handler**
-`void on(const Ping&, Mail&)` — one per accepted shape, so the accept-set is named
-once, not a third time. `Mail` is the typed send context (it carries the inbound
-envelope): `mail.reply(Pong{…})`, `mail.send(target, T)`, `mail.publish(T)` — no
-`Value`/`Cell`/`Message` ceremony. `mount<Node>(bus)` constructs, registers (the
-derived schemas flow into the registry as usual), wires the self-id, and returns
-the `ShardId` in one call.
+`policy_config()`. Its `handle()` matches the gated payload to an accepted shape
+by **resolvable identity `(name, version)`**, converts it, and dispatches to a
+**typed handler** `void on(const Ping&, Mail&)` — one per accepted shape, so the
+accept-set is named once, not a third time. `Mail` is the typed send context (it
+carries the inbound envelope): `mail.reply(Pong{…})`, `mail.send(target, T)`,
+`mail.publish(T)` — no `Value`/`Cell`/`Message` ceremony. `mount<Node>(bus)`
+constructs, registers (the derived schemas flow into the registry as usual),
+wires the self-id, and returns the `ShardId` in one call.
+
+**Dispatch selects by `(name, version)`, the same key the bus admitted the
+message under — never by a content-id hash.** A delivered payload has already
+passed the gate against the accept-set entry the Switchboard chose by
+`(name, version)` (`accept_match`); `handle()` picks the handler the same way, so
+`from_value<S>`'s precondition — every field present and well-typed — is
+*guaranteed*, not merely probable. Selecting by `content_id()` would be a latent
+**null dereference**: `content_id` is a 64-bit FNV hash, and a collision *within
+one Shard's accept-set* would route a message to the wrong `on()`, whose
+`from_value<S>` reads `*v.get(field)` for each of `S`'s fields — and `get()`
+returns null for a field the colliding shape does not carry. (`zen::same_identity`
+is itself a content-id compare, so it would *not* close this collision;
+`(name, version)` equality does, which is also exactly how the door was chosen.)
+Because the delivered message is gated against one accept-set entry and the
+handler set is the *same* `Accept<A...>`, **exactly one** handler matches; a
+no-match is an internal-invariant violation, so `handle()` throws a clear
+`std::logic_error` rather than silently dropping the message.
 
 **Ceremony delta** (`examples/heartbeat.cpp` → `heartbeat_authored.cpp`): ~89 → ~58
 code lines, and the hand-built schemas, the stringly-typed `set`s, and the
@@ -645,10 +679,18 @@ touches only that block.
   already exists and is now derivable from a struct). It hooks into the *single*
   identity-mismatch decision points that already exist — `admit_against` (wire) and
   `reload_from` (kernel), both reject-by-default — which stay isolated and untouched.
-- **Emit-set.** `Emit<Shapes...>` is declared alongside `Accept<…>` and surfaced as
-  `emitted_schemas()`, **informational and unenforced** for now. Completing the
-  silhouette later (gating `publish` against the declared contract, drawing the bus
-  wiring graph, feeding a dependency-mapper) needs *no* authoring change.
+- **Emit-set (enforcement reserved at `Mail`).** `Emit<Shapes...>` is declared
+  alongside `Accept<…>` and surfaced as `emitted_schemas()`, **informational and
+  unenforced** for now. `Mail::send`/`reply`/`publish` are the *sole* outbound path
+  for an authored Shard, so **`Mail` is the single reserved chokepoint** where
+  emit-enforcement (a sent `T` must be in `Emit<...>`) would later sit. It stays
+  off **with intent**: a Shard's emit-set is not yet known to be statically
+  enumerable (a router/forwarder may emit shapes chosen at runtime), so the
+  substrate must not commit to it. The *declaration* is kept honest by test
+  (`tests/test_author_shard.cpp` pins that each Shard's observed emits equal its
+  `emitted_schemas()`) meanwhile. Completing the silhouette later (gating against
+  the declared contract, drawing the bus wiring graph, feeding a dependency-mapper)
+  needs *no* authoring change.
 
 ---
 
@@ -743,6 +785,65 @@ touches only that block.
   precursor: schemas already round-trip as gated Values. Generalizing it lets the
   console introspect the whole system and a Shard answer "what do you accept?"
   with schemas rendered as Values.
+
+---
+
+## Level 0 hardening — closed seams and the seam-readiness review
+
+Before Shard-based "Level 1" development begins — at which point every Level 0
+surface a Shard touches gets expensive to move — one tightening pass closed the
+handful of seams whose shape is *proven* and that Level 1 will immediately lean
+on, and **left the rest open on purpose**. The discipline is symmetric: closing a
+seam before its shape is proven is the same mistake as leaving a sharp one open.
+
+### Closed in this pass (code)
+
+1. **Dispatch selector → `(name, version)` full identity.** `ShardBase::handle`
+   now selects the handler the same way the bus selected the door, not by a
+   content-id hash — a null-deref fix (see *The authoring layer → Dispatch selects
+   by `(name, version)`*).
+2. **Exactly-one-handler, made loud.** A delivered message matches exactly one
+   handler; a no-match is an internal-invariant violation that throws, never a
+   silent drop. Pinned by a multi-shape routing test.
+3. **`swap_state` split from `reload`.** Intentional hot-reload no longer spends
+   the crash-revival budget (see *Intentional swap ≠ crash revival*).
+4. **Emit declaration proven honest by test; `Mail` reserved as the chokepoint.**
+   No enforcement added (see *Emit-set*).
+5. **Grep sweep of `content_id()`-equality sites.** The dispatch selector was the
+   only site reaching type-punned/positional access (`from_value<T>`) without a
+   structural `admit`/`validate_into` behind it. Every other site is backed by
+   structure and was left as-is: the gate's top-level and nested-message identity
+   checks (`src/gate.cpp`) — *reviewed and deliberately unchanged*, since a full
+   structural walk stands behind each, and FNV-as-drift-check is settled — the
+   wire identity check (`src/serialize.cpp`, decode + `validate_into` follow), the
+   registry's idempotent-re-registration check (`src/registry.cpp`, no type-pun),
+   and the kernel's state-schema compatibility guard (`src/kernel/kernel.cpp`,
+   refuse-on-mismatch; the real revive goes through the gate).
+
+### The readiness bar, and the verdict on every other seam
+
+A seam is **ready** only if *its shape is proven* **and** *Level 1 will
+immediately lean on it*. Judged against that bar, none of the remaining future
+seams is ready — each is **deferred with intent** so nothing helpfully closes it
+and couples the substrate to a guess:
+
+| Seam | Verdict | Why not yet |
+|---|---|---|
+| Migration transform registry | not-ready | the transform signature and keying need a real cross-version case to fix; reject-by-default holds until then |
+| Emit enforcement | not-ready | not known to be statically enumerable (runtime-routing Shards); chokepoint reserved at `Mail`, gate off |
+| Schema-as-value beyond the manifest precursor | not-ready | only the manifest slice is exercised; the general "schema of schemas" has no consumer yet |
+| Multi-threaded dispatch (per-Shard mailboxes) | not-ready | single-threaded FIFO is correct and sufficient; the `Shard` contract already survives the swap, so early closure buys nothing |
+| Request/response await | not-ready | replies-as-sends works; a blocking `request()` has no caller yet |
+| Content-id fast-path | not-ready (intentionally untaken) | kept off so "one gate, every delivery" stays literally true |
+| Cross-boundary / cross-process delivery | not-ready | the bytes path exists; there is no second process to talk to yet |
+| Crash isolation (per-process hosting) | not-ready | needs the process/supervision layer; in-process is accepted for now |
+| Cross-language libraries | not-ready | only a C++ test library exists; the C ABI already admits others when one appears |
+| Behavioral contracts | not-ready | the hook (the post-`admit` trusted value) is identified; there is no contract language yet |
+| Static-struct half of the codegen marriage | not-ready | the runtime half is built and shares the door; the generator is a separate build-time effort |
+
+No seam beyond items 1–5 was judged newly ready in this pass — the expected,
+correct outcome. Should a later judgment find one ready, it is to be **flagged for
+an explicit decision**, not closed unilaterally.
 
 ---
 
