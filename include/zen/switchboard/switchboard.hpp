@@ -4,6 +4,7 @@
 #include <zen/admission.hpp>
 #include <zen/registry.hpp>
 #include <zen/schema.hpp>
+#include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/shard.hpp>
 #include <zen/value.hpp>
@@ -28,6 +29,8 @@ enum class RefusalReason : std::uint8_t {
     TargetUnavailable, ///< the target is currently dead (awaiting revival)
     NotAccepted,       ///< the target's accept-set has no schema of this (name, version)
     GateRefused,       ///< routing passed, but admit() refused — see `error`
+    CapabilityDenied,  ///< the sender's grant does not permit (shape -> target); the gate is
+                       ///< never reached. Authorization, not conformance.
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -111,7 +114,14 @@ public:
     /// (a disagreement throws zen::SchemaConflict). The Shard's initial snapshot
     /// must conform to its own schema (it seeds last-known-good); otherwise
     /// std::invalid_argument is thrown.
-    ShardId register_shard(std::unique_ptr<Shard> shard);
+    ///
+    /// The Shard's authority is its `grant`: every message it originates is
+    /// authorized against it at delivery. The default is the **empty** grant —
+    /// minimal authority — so a Shard that needs to send must be granted that
+    /// reach by the host at registration (see the grant-defaulting in
+    /// zen::author::mount and the kernel's loaded-Shard grant).
+    ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant);
+    ShardId register_shard(std::unique_ptr<Shard> shard); ///< empty grant
 
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
     /// readable after the delivery is pumped.
@@ -187,6 +197,7 @@ private:
         std::vector<std::shared_ptr<const Schema>> accept;
         std::shared_ptr<const Schema> state_schema;
         Value last_known_good;
+        Grant grant;
         std::uint64_t reloads_used = 0;
         bool alive = true;
     };
@@ -195,7 +206,33 @@ private:
         Message msg;
         ShardId target{};
         std::uint64_t seq = 0;
+        bool gated = false; ///< true => Shard-originated; authorize against the sender's grant
     };
+
+    // The Bus a handler actually receives: it stamps the handling Shard's identity
+    // onto every send and routes through the *gated* path. A Shard holds only this
+    // — never the concrete Switchboard — so it cannot send except as itself and
+    // subject to its grant. (Switchboard::send/publish, held only by the host, are
+    // the ungated root authority.) This split is the trust boundary.
+    class ShardBus : public Bus {
+    public:
+        ShardBus(Switchboard& sb, ShardId self) noexcept : sb_(sb), self_(self) {}
+        Ticket send(ShardId target, Message msg) override {
+            return sb_.gated_send(self_, target, std::move(msg));
+        }
+        std::size_t publish(Message msg) override {
+            return sb_.gated_publish(self_, std::move(msg));
+        }
+
+    private:
+        Switchboard& sb_;
+        ShardId self_;
+    };
+
+    Ticket enqueue_directed(ShardId target, Message msg, bool gated);
+    std::size_t fanout(Message msg, bool gated);
+    Ticket gated_send(ShardId sender, ShardId target, Message msg);
+    std::size_t gated_publish(ShardId sender, Message msg);
 
     void deliver_one(Envelope env);
     void emit(const BusEvent& event);

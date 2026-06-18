@@ -23,6 +23,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "NotAccepted";
     case RefusalReason::GateRefused:
         return "GateRefused";
+    case RefusalReason::CapabilityDenied:
+        return "CapabilityDenied";
     }
     return "?";
 }
@@ -39,6 +41,8 @@ std::string Refusal::message() const {
         return "target does not accept this schema";
     case RefusalReason::GateRefused:
         return "gate refused: " + error.message();
+    case RefusalReason::CapabilityDenied:
+        return "sender's grant does not permit this shape to this target";
     }
     return "?";
 }
@@ -84,6 +88,10 @@ const std::shared_ptr<const Schema>* Switchboard::accept_match(const ShardRecord
 }
 
 ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming) {
+    return register_shard(std::move(incoming), Grant{}); // empty grant: minimal authority
+}
+
+ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant) {
     if (!incoming) {
         throw std::invalid_argument("register_shard: shard must be non-null");
     }
@@ -117,6 +125,7 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming) {
                     std::move(accept),
                     state_schema,
                     std::move(seeded).value(),
+                    std::move(grant),
                     0,
                     true};
     shards_.emplace(id.value, std::move(rec));
@@ -133,14 +142,14 @@ std::unique_ptr<Shard> Switchboard::unregister_shard(ShardId id) {
     return released;
 }
 
-Ticket Switchboard::send(ShardId target, Message msg) {
+Ticket Switchboard::enqueue_directed(ShardId target, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
     journal_.push_back(DeliveryOutcome{}); // Pending at index seq
-    queue_.push_back(Envelope{std::move(msg), target, seq});
+    queue_.push_back(Envelope{std::move(msg), target, seq, gated});
     return Ticket{seq};
 }
 
-std::size_t Switchboard::publish(Message msg) {
+std::size_t Switchboard::fanout(Message msg, bool gated) {
     const std::string name(msg.payload.schema().name());
     const std::uint32_t version = msg.payload.schema().version();
 
@@ -156,10 +165,29 @@ std::size_t Switchboard::publish(Message msg) {
         const std::uint64_t seq = next_seq_++;
         journal_.push_back(DeliveryOutcome{});
         queue_.push_back(Envelope{
-            Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id, seq});
+            Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id, seq, gated});
         ++recipients;
     }
     return recipients;
+}
+
+// Host root authority: held only by the host program, these enqueue ungated.
+Ticket Switchboard::send(ShardId target, Message msg) {
+    return enqueue_directed(target, std::move(msg), /*gated=*/false);
+}
+
+std::size_t Switchboard::publish(Message msg) { return fanout(std::move(msg), /*gated=*/false); }
+
+// The path a Shard's ShardBus uses: stamp the authoritative sender (a Shard
+// cannot send as anyone else) and enqueue gated, to be authorized at delivery.
+Ticket Switchboard::gated_send(ShardId sender, ShardId target, Message msg) {
+    msg.sender = sender;
+    return enqueue_directed(target, std::move(msg), /*gated=*/true);
+}
+
+std::size_t Switchboard::gated_publish(ShardId sender, Message msg) {
+    msg.sender = sender;
+    return fanout(std::move(msg), /*gated=*/true);
 }
 
 void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refusal& refusal) {
@@ -201,6 +229,26 @@ void Switchboard::deliver_one(Envelope env) {
         emit(ev);
         return;
     }
+
+    // Capability authorization — only for Shard-originated (gated) messages, and
+    // *before* the gate, so a denied message never reaches conformance (the gate
+    // is correctly not invoked for it). Host-injected (root) messages skip this.
+    // This is authorization ("are you allowed to send this to them"), categorically
+    // distinct from the gate's conformance question, and lives outside it.
+    if (env.gated) {
+        const ShardRecord* sender = find(env.msg.sender);
+        const bool permitted =
+            sender != nullptr && sender->grant.permits(ev.schema_name, ev.schema_version, env.target);
+        if (!permitted) {
+            const Refusal r{RefusalReason::CapabilityDenied, {}};
+            record(env.seq, Disposition::Refused, r);
+            ev.kind = EventKind::Refused;
+            ev.refusal = r;
+            emit(ev);
+            return;
+        }
+    }
+
     const std::shared_ptr<const Schema>* door =
         accept_match(*rec, ev.schema_name, ev.schema_version);
     if (door == nullptr) {
@@ -225,7 +273,11 @@ void Switchboard::deliver_one(Envelope env) {
     }
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
-    rec->shard->handle(trusted, *this); // may enqueue further deliveries
+    // The handler receives a ShardBus bound to its own id — never the concrete
+    // Switchboard — so anything it sends is stamped with its identity and gated
+    // against its grant.
+    ShardBus shard_bus(*this, env.target);
+    rec->shard->handle(trusted, shard_bus); // may enqueue further deliveries
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;
