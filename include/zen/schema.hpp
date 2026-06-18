@@ -73,9 +73,18 @@ private:
     ContentId content_id_;
 };
 
-/// True iff both schemas have the same normalized structure (same content id).
+/// True iff both schemas are the *same identity*: same name, same version, and
+/// same normalized structure (content id). This is resolvable identity plus
+/// structural integrity — it cannot be fooled by a content-id hash collision,
+/// nor by an unregistered schema claiming a taken (name, version) with a
+/// different shape. Reaching for same_identity is therefore always correct.
+///
+/// Bare `a.content_id() == b.content_id()` is a different, narrower thing: an
+/// integrity/drift check the gate, the wire reader, and the registry use inline,
+/// where the (name, version) is already established upstream by door selection.
 inline bool same_identity(const Schema& a, const Schema& b) noexcept {
-    return a.content_id() == b.content_id();
+    return a.name() == b.name() && a.version() == b.version() &&
+           a.content_id() == b.content_id();
 }
 
 /// Fluent construction of a schema. build() returns an immutable shared owner.
