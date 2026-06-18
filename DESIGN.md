@@ -565,15 +565,108 @@ to the Shard contract.
 
 ---
 
+## The authoring layer (schema-from-struct, low ceremony)
+
+`zen-author` (header-only, `include/zen/author/`) is the first layer whose job is
+to make apparatus *disappear*. It is **pure sugar**: no new schema type, no new
+value type, no second validator, no change to the gate, the wire format, the bus,
+or the kernel. It emits schemas only through `SchemaBuilder` and hands `Value`s to
+the same `admit`. A struct-derived `Foo v1` and a hand-built one are the *same*
+`Schema` — identical content-id, shared door — proven by `tests/test_author_shape.cpp`.
+
+### Schema-from-struct
+
+An author writes a plain C++ struct (real members) plus one in-class line:
+
+```cpp
+struct Ping {
+    std::int64_t seq;
+    ZEN_SHAPE(Ping, /*version=*/1, ZEN_FIELD(seq));
+};
+```
+
+`ZEN_SHAPE` adds `zen_name`, `zen_version`, and `zen_fields()` (a tuple of
+`(name, &member)` entries); `ZEN_FIELD(seq)` captures the member pointer and the
+name string. From that the layer derives, all through the public API:
+
+- the runtime `Schema` (`schema_of<T>()`, built once via `SchemaBuilder`), with
+  the **Kind deduced from each member's C++ type** (`type_ref_for<M>`):
+  `int64_t→Int`, `double→Float`, `std::string→Text`, `bool→Bool`,
+  `zen::Bytes→Bytes`, `std::vector<T>→List<T>` (recursive; a byte vector resolves
+  to Bytes first), and a nested registered shape `→Message`;
+- `to_value(const T&)` and `from_value<T>(const Value&)` (the latter assumes an
+  already-gated value — conversion to a struct happens *only after* the gate).
+
+The struct stays a plain aggregate; the author never touches a `Cell` or a
+`set("...")`, so a field typo is a compile error, not a runtime throw.
+
+### Explicit version (built now — migration seam #3)
+
+The macro **requires** a version and folds it into identity: `v1::Ping` and
+`v2::Ping` (same `zen_name`, different version) are distinct content-ids by
+construction. There is no way to evolve a shape in place; a new version is a new
+identity. Omitting the version fails to compile. The whole migration chain keys on
+these stable versions, so this is the one migration seam unsafe to leave loose —
+and it is built.
+
+### Low-ceremony Shard authoring + `mount`
+
+`ShardBase<Self, State, Accept<Shapes...>, Emit<Shapes...>>` (CRTP) derives:
+`accepted_schemas()` from `Accept<…>`, `snapshot() = to_value(state_)`,
+`revive() = from_value<State>`, and `policy()` from an overridable
+`policy_config()`. Its `handle()` matches the gated payload's content-id to an
+accepted shape, converts it, and dispatches to a **typed handler**
+`void on(const Ping&, Mail&)` — one per accepted shape, so the accept-set is named
+once, not a third time. `Mail` is the typed send context (it carries the inbound
+envelope): `mail.reply(Pong{…})`, `mail.send(target, T)`, `mail.publish(T)` — no
+`Value`/`Cell`/`Message` ceremony. `mount<Node>(bus)` constructs, registers (the
+derived schemas flow into the registry as usual), wires the self-id, and returns
+the `ShardId` in one call.
+
+**Ceremony delta** (`examples/heartbeat.cpp` → `heartbeat_authored.cpp`): ~89 → ~58
+code lines, and the hand-built schemas, the stringly-typed `set`s, and the
+hand-written `snapshot`/`revive` are *gone* — same observable behavior.
+
+### The reflection seam (what C++26 removes)
+
+C++20 has no reflection, so "write once" is "write-once-and-a-half": the struct's
+members plus the `ZEN_FIELD` list. That list is the **single seam**. Everything
+downstream (Kind deduction, conversions, schema build, dispatch) consumes only the
+abstract `zen_fields()` tuple, never how it was produced. Under C++26, `zen_fields()`
+becomes a reflect-over-members derivation and **nothing else changes** — the swap
+touches only that block.
+
+### Reserved (documented, not built)
+
+- **Migration transform registry.** A future registry maps `(name, vA) → (name, vB)`
+  via a function, chainable so a `v1` value walks `v1→v2→v3`. The authoring layer is
+  shaped so such a transform naturally **consumes and produces the typed structs**
+  (`Player_v2 migrate(const Player_v1&)`) and is **keyed by content-id** (which
+  already exists and is now derivable from a struct). It hooks into the *single*
+  identity-mismatch decision points that already exist — `admit_against` (wire) and
+  `reload_from` (kernel), both reject-by-default — which stay isolated and untouched.
+- **Emit-set.** `Emit<Shapes...>` is declared alongside `Accept<…>` and surfaced as
+  `emitted_schemas()`, **informational and unenforced** for now. Completing the
+  silhouette later (gating `publish` against the declared contract, drawing the bus
+  wiring graph, feeding a dependency-mapper) needs *no* authoring change.
+
+---
+
 ## Future seams (designed for, not built)
 
-- **Codegen marriage.** A build-time generator should later emit, from one
-  schema definition, *both* a compiled C++ struct (zero-overhead static path)
-  *and* this runtime `Schema`. Nothing here assumes schemas exist only at
-  runtime: `Schema`/`Value` are ordinary types a generator can emit and
-  populate, and content identity means a generated struct and a runtime value
-  share a door. The generator would target the same `SchemaBuilder`/`Value` API
-  the tests use.
+- **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in
+  `ZEN_SHAPE` becomes a reflect-over-members derivation. Everything downstream
+  consumes only the abstract `zen_fields()` tuple, so this is a single-seam swap
+  with no change to any consumer.
+
+- **Codegen marriage.** A build-time generator should emit, from one schema
+  definition, *both* a compiled C++ struct (zero-overhead static path) *and* this
+  runtime `Schema`. The authoring layer is the **first half** of this: a shape
+  declared once already yields the runtime `Schema` and typed accessors, sharing a
+  door with the hand-built equivalent by content-id. The remaining half (a
+  zero-overhead static path sharing the same door) is reachable from here
+  unchanged — `Schema`/`Value` are ordinary types a generator can emit and
+  populate against the same `SchemaBuilder`/`Value` API.
 
 - **Schema-as-value (reflection).** The schema model is plain data
   (`name`, `version`, ordered `Field`s with `TypeRef`s). It can be described by a
