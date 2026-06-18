@@ -702,7 +702,95 @@ touches only that block.
   (`tests/test_author_shard.cpp` pins that each Shard's observed emits equal its
   `emitted_schemas()`) meanwhile. Completing the silhouette later (gating against
   the declared contract, drawing the bus wiring graph, feeding a dependency-mapper)
-  needs *no* authoring change.
+  needs *no* authoring change. **B1 (capabilities) closes the in-process half of
+  this** — see below.
+
+---
+
+## Capabilities (B1): the in-process grant model
+
+Delivery is gated on message *shape*, but a Shard could send anything to anyone.
+B1 closes that: a Shard's reach is a **grant** the host assigns, default nearly
+empty, and the bus authorizes every Shard-originated send against it. (This is
+**B1 of two**: B1 is the *message* boundary; **B2 — the next phase — is
+isolation-as-enforcement**, out-of-process hosting that projects the grant onto OS
+sandbox primitives at the *syscall* boundary. The grant is the one source of truth
+projected onto whatever boundary the hosting mode provides.)
+
+### The grant
+
+A `Grant` (`include/zen/switchboard/grant.hpp`) has two parts:
+
+- **Send-permissions (enforced in B1):** a list of `SendRule`s, each a
+  `(shape-selector, target-selector)` where each selector is a specific value or
+  "any" — e.g. "`Pong` to any accepter", "`LoadLibrary` to the control Shard only".
+- **OS-capability flags (declared in B1, enforced in B2):** `Network`,
+  `FilesystemRead`, `FilesystemWrite`, `SpawnProcess`. B1 **does not consult** them
+  — they govern instruction-level behaviour a loaded `.so` reaches directly, which
+  only process isolation stops. They live on the grant so B2 projects them onto a
+  sandbox profile with no rework.
+
+The default grant is **empty**: minimal authority by default. Grants flow from the
+host (the root of trust) at registration, out-of-band; there is no in-band path by
+which a Shard widens its own grant.
+
+### The trust boundary: `Bus` gates, `Switchboard` is root
+
+The split that already existed *is* the trust boundary. A handler only ever
+receives a `Bus&` — and `deliver_one` now hands it a per-delivery **`ShardBus`**
+bound to the handling Shard's id, *not* the concrete `Switchboard`. The `ShardBus`
+stamps the authoritative sender on every message (a Shard cannot send as anyone
+else) and enqueues it **gated**. `Switchboard::send`/`publish` — held only by the
+host program — enqueue **ungated** root authority (test setup, the trusted host
+shell). `Mail` wraps the `ShardBus`; the kernel's loaded-Shard host callbacks
+route through the same `ShardBus` — so native and loaded Shards are authorized
+identically, keyed by id.
+
+### Authorization is a distinct step from the gate
+
+At delivery, for a *gated* (Shard-originated) message and **before** the gate, the
+bus looks up the **sender's** grant and checks `(target, shape)`. Denied →
+`RefusalReason::CapabilityDenied`: never delivered, and **the gate is not invoked**
+(`gate_invocations()` is unchanged — `tests/test_capabilities.cpp` asserts it).
+This is correct: authorization ("are *you* allowed to send an `X` to *them*") is a
+categorically different question from conformance ("is this a well-formed `X`"), so
+it sits *around* the gate, never inside it. **"One gate" stays literally true** —
+there is still exactly one conformance validator, untouched; an authorized,
+well-formed message still passes it. `send`, `publish`, and replies are all
+authorized the same way (uniform-gated; an implicit-reply convenience is a possible
+follow-up). Denials are observable on the tap with sender, attempted shape, and
+attempted target — the supervisor can *see* a Shard overreach.
+
+### Grant ↔ Emit, and the closed emit seam
+
+`zen::author::mount<Self>(bus)` defaults the grant to the Shard's self-declared
+`Emit<E…>` (each emitted shape → any accepter) — the *trusted* in-process default.
+This **closes the in-process emit-enforcement seam**: delivery now checks a real
+authority, and a Shard that sends a shape outside its declared `Emit` is denied.
+`mount_granted` supplies an explicit grant for an untrusted Shard, whose
+declaration is not trusted. (Emit-set *as a wiring contract* — enumerating a
+runtime router's emits, drawing the graph — remains the deferred seam.)
+
+### The kernel's message door (the teeth)
+
+The kernel registers a **control Shard** (`include/zen/kernel/control.hpp`)
+accepting `LoadLibrary` / `ReloadLibrary` / `UnloadLibrary` (`ZEN_SHAPE`s) whose
+handlers call the kernel's `load` / `reload_from` / `unload`. Operating the kernel
+is now just sending it messages. The **load capability** — the right to send those
+shapes to the control Shard — is the canonical dangerous grant: a Shard holding it
+drives the kernel by message; one without it is denied at the control Shard's door
+(`CapabilityDenied`), gating the single most dangerous surface in the system with
+the same mechanism as everything else.
+
+### Loaded `.so` Shards, and the B1/B2 split
+
+A loaded `.so` can bypass the bus and reach syscalls directly, so a restrictive
+*bus* grant on it is not real containment in B1 — that is **B2's** job (the OS
+sandbox the reserved OS-capability flags drive). So the kernel grants loaded Shards
+**permissive bus sends** in B1; the kernel *door* is demonstrated fully gated
+against **native** Shards (the authored mod logic, the console's elevated
+instance). B1 makes the grant *real at the message boundary* and shapes it so B2
+can enforce its OS-relevant parts at the syscall boundary with no rework.
 
 ---
 
@@ -849,7 +937,7 @@ and couples the substrate to a guess:
 | Seam | Verdict | Why not yet |
 |---|---|---|
 | Migration transform registry | not-ready | the transform signature and keying need a real cross-version case to fix; reject-by-default holds until then |
-| Emit enforcement | not-ready | not known to be statically enumerable (runtime-routing Shards); chokepoint reserved at `Mail`, gate off |
+| Emit enforcement (as a wiring *contract*) | partly closed in B1 | capability-gated delivery now authorizes every send against a real grant (Emit-defaulted for trusted Shards), so the *in-process* emit gate is live; emit-set *as an enumerated contract / wiring graph* is still deferred (a runtime router's emits are not statically known) |
 | Schema-as-value beyond the manifest precursor | not-ready | only the manifest slice is exercised; the general "schema of schemas" has no consumer yet |
 | Multi-threaded dispatch (per-Shard mailboxes) | not-ready | single-threaded FIFO is correct and sufficient; the `Shard` contract already survives the swap, so early closure buys nothing |
 | Request/response await | not-ready | replies-as-sends works; a blocking `request()` has no caller yet |
