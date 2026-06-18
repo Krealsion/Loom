@@ -105,12 +105,11 @@ public:
     }
 
     void handle(const zen::sb::Message& in, zen::sb::Bus& bus) override {
-        const zen::ContentId id = in.payload.schema().content_id();
         Self* self = static_cast<Self*>(this);
         Mail mail(bus, in, self_);
         // A delivered message has passed the gate against one accepted schema, so
         // exactly one of these matches; the fold short-circuits there.
-        (void)(dispatch_to<A>(self, id, in, mail) || ...);
+        (void)(dispatch_to<A>(self, in, mail) || ...);
     }
 
     /// Set by mount(); used as the sender id of emitted messages.
@@ -124,9 +123,25 @@ protected:
     zen::sb::ShardId self_{};
 
 private:
+    // Select the handler the same way the bus selected the door: by resolvable
+    // identity (name, version), exactly as Switchboard::accept_match does. The
+    // delivered payload already passed the gate against the accept-set entry the
+    // bus chose by (name, version), so matching the handler the same way makes
+    // from_value<S>'s precondition (every field present and well-typed) a
+    // guarantee, not a probability.
+    //
+    // This is deliberately NOT a content_id compare. content_id is a 64-bit FNV
+    // hash; a collision within one accept-set would select the wrong handler and
+    // call from_value<S> on a value the gate validated against a *different*
+    // schema. from_value reads *v.get(field) for each of S's fields, and get()
+    // returns null for a field that schema does not carry — so a wrong match is a
+    // null dereference, not merely a mislabeled value. Matching on (name, version)
+    // makes that path unreachable.
     template <class S>
-    bool dispatch_to(Self* self, zen::ContentId id, const zen::sb::Message& in, Mail& mail) {
-        if (schema_of<S>()->content_id() != id) {
+    bool dispatch_to(Self* self, const zen::sb::Message& in, Mail& mail) {
+        const zen::Schema& accepted = *schema_of<S>();
+        const zen::Schema& delivered = in.payload.schema();
+        if (accepted.name() != delivered.name() || accepted.version() != delivered.version()) {
             return false;
         }
         self->on(from_value<S>(in.payload), mail);
