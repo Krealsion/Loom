@@ -4,7 +4,9 @@
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
+#include <set>
 #include <string>
+#include <vector>
 
 using namespace zen;
 using namespace zen::sb;
@@ -54,6 +56,36 @@ public:
     std::int64_t last() const { return state_.last; }
 };
 
+// Three distinct accepted shapes, one handler each, for the routing test.
+struct Alpha {
+    std::int64_t v;
+    ZEN_SHAPE(Alpha, 1, ZEN_FIELD(v));
+};
+struct Beta {
+    std::int64_t v;
+    ZEN_SHAPE(Beta, 1, ZEN_FIELD(v));
+};
+struct Gamma {
+    std::int64_t v;
+    ZEN_SHAPE(Gamma, 1, ZEN_FIELD(v));
+};
+struct RouteLog {
+    std::int64_t alpha;
+    std::int64_t beta;
+    std::int64_t gamma;
+    ZEN_SHAPE(RouteLog, 1, ZEN_FIELD(alpha), ZEN_FIELD(beta), ZEN_FIELD(gamma));
+};
+
+// Records which handler fired and the value it saw, so a test can prove each
+// shape lands in its own handler and in no other.
+class Router : public au::ShardBase<Router, RouteLog, au::Accept<Alpha, Beta, Gamma>> {
+public:
+    std::vector<std::string> trail;
+    void on(const Alpha& m, au::Mail&) { ++state_.alpha; trail.push_back("alpha:" + std::to_string(m.v)); }
+    void on(const Beta& m, au::Mail&) { ++state_.beta; trail.push_back("beta:" + std::to_string(m.v)); }
+    void on(const Gamma& m, au::Mail&) { ++state_.gamma; trail.push_back("gamma:" + std::to_string(m.v)); }
+};
+
 } // namespace
 
 TEST_SUITE("author_shard") {
@@ -70,6 +102,26 @@ TEST_CASE("typed handlers dispatch the right struct and reply with plain structs
     REQUIRE(c != nullptr);
     CHECK(c->received() == 1);
     CHECK(c->last() == 42);
+}
+
+TEST_CASE("each accepted shape routes to its own handler and to no other") {
+    Switchboard bus;
+    ShardId rid = au::mount<Router>(bus);
+
+    // Deliver one of each accepted shape, with distinguishable payloads.
+    bus.send(rid, Message(au::to_value(Alpha{10})));
+    bus.send(rid, Message(au::to_value(Beta{20})));
+    bus.send(rid, Message(au::to_value(Gamma{30})));
+    bus.pump();
+
+    auto* r = static_cast<Router*>(bus.shard(rid));
+    REQUIRE(r != nullptr);
+    // Each shape landed in exactly its own handler, in delivery order — no shape
+    // leaked into another handler, none was silently dropped.
+    REQUIRE(r->trail.size() == 3);
+    CHECK(r->trail[0] == "alpha:10");
+    CHECK(r->trail[1] == "beta:20");
+    CHECK(r->trail[2] == "gamma:30");
 }
 
 TEST_CASE("the accept-set is derived from the typed handlers; emit-set is reported") {

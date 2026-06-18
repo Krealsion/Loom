@@ -17,6 +17,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -107,9 +109,21 @@ public:
     void handle(const zen::sb::Message& in, zen::sb::Bus& bus) override {
         Self* self = static_cast<Self*>(this);
         Mail mail(bus, in, self_);
-        // A delivered message has passed the gate against one accepted schema, so
-        // exactly one of these matches; the fold short-circuits there.
-        (void)(dispatch_to<A>(self, in, mail) || ...);
+        // A delivered message has passed the gate against one accepted schema, and
+        // the handler is selected by the same (name, version) the bus used to pick
+        // that door — so exactly one of these matches and the fold short-circuits
+        // there. A no-match is therefore impossible for a *delivered* message: it
+        // would require accepted_schemas() and the handler set to have drifted
+        // apart, which they cannot, since both are A.... Make that impossibility
+        // loud rather than a silent drop.
+        const bool routed = (dispatch_to<A>(self, in, mail) || ...);
+        if (!routed) {
+            throw std::logic_error(
+                "zen::author::ShardBase: delivered message of shape '" +
+                in.payload.schema().name() + " v" +
+                std::to_string(in.payload.schema().version()) +
+                "' matched no handler — accept-set and handler set are out of sync");
+        }
     }
 
     /// Set by mount(); used as the sender id of emitted messages.
