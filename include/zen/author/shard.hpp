@@ -42,6 +42,15 @@ struct LifecyclePolicy {
 /// The typed send context handed to a handler: it carries the inbound envelope
 /// and lets a Shard reply/send/publish with plain structs — no Value, no Cell,
 /// no Message construction.
+///
+/// Mail::send/reply/publish are the **sole** outbound path for an authored Shard.
+/// That makes Mail the single reserved chokepoint where emit-enforcement (gating
+/// a sent T against the Shard's declared Emit<...>) will one day live. It is
+/// deliberately NOT enforced now: it is not yet known whether every Shard's
+/// emit-set is statically enumerable (a router/forwarder may emit shapes chosen
+/// at runtime), so closing that gate before its shape is proven would couple the
+/// substrate to a guess. The declaration is kept honest by test instead; the
+/// gate is left off with intent.
 class Mail {
 public:
     Mail(zen::sb::Bus& bus, const zen::sb::Message& in, zen::sb::ShardId self)
