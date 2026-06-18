@@ -91,12 +91,14 @@ const ZenShardAbi* fetch_abi(void* lib, std::string& error) {
 
 // ---- host callbacks the library calls during handle() ---------------------
 
-// Binds a running delivery to the bus + the sender id, so the library's emitted
-// messages can be resolved, gated, and routed. Valid only for the duration of
-// the handle() call.
+// Binds a running delivery so the library's emitted messages are resolved, gated,
+// and routed exactly as a native Shard's are. `gated` is the per-delivery
+// ShardBus (it stamps the loaded Shard's id and authorizes against its grant);
+// `sb` is the Switchboard, used only for the read-only schema resolution. Valid
+// only for the duration of the handle() call.
 struct HostCtx {
+    zen::sb::Bus* gated;
     zen::sb::Switchboard* sb;
-    zen::sb::ShardId self;
 };
 
 } // namespace
@@ -124,9 +126,11 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
     if (!a.ok()) {
         return ZEN_ERR_REFUSED;
     }
-    h->sb->send(zen::sb::ShardId{target},
-                zen::sb::Message(std::move(a).value(), h->self, zen::sb::ShardId{reply_to},
-                                 correlation));
+    // Route through the gated ShardBus (it stamps the loaded Shard's id and
+    // authorizes against its grant), exactly as a native Shard's send is.
+    h->gated->send(zen::sb::ShardId{target},
+                   zen::sb::Message(std::move(a).value(), zen::sb::ShardId{},
+                                    zen::sb::ShardId{reply_to}, correlation));
     return ZEN_OK;
 }
 
@@ -142,8 +146,8 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
     if (!a.ok()) {
         return ZEN_ERR_REFUSED;
     }
-    h->sb->publish(zen::sb::Message(std::move(a).value(), h->self, zen::sb::ShardId{reply_to},
-                                    correlation));
+    h->gated->publish(zen::sb::Message(std::move(a).value(), zen::sb::ShardId{},
+                                       zen::sb::ShardId{reply_to}, correlation));
     return ZEN_OK;
 }
 
@@ -183,9 +187,10 @@ public:
     }
 
     void handle(const zen::sb::Message& in, zen::sb::Bus& bus) override {
-        (void)bus; // the bus passed in is bus_; the callbacks route through bus_ directly
         const std::string bytes = zen::serialize(in.payload);
-        HostCtx ctx{bus_, self_};
+        // `bus` is the per-delivery ShardBus (it gates by this loaded Shard's id);
+        // bus_ is the Switchboard, used only to resolve emitted schemas.
+        HostCtx ctx{&bus, bus_};
         ZenHostApi api{&ctx, &zen_host_send, &zen_host_publish};
         // The DLL handler's status is contained: the message was validly
         // delivered; any internal library error is the library's own concern.
@@ -310,7 +315,12 @@ LoadResult Kernel::load(const std::string& name, const std::string& path) {
                                                 std::move(mf.state), &bus_);
         adapter_built = true;
         HostAdapter* raw = adapter.get();
-        zen::sb::ShardId id = bus_.register_shard(std::move(adapter)); // gates the initial snapshot
+        // A loaded .so can bypass the bus and reach syscalls directly, so a
+        // restrictive *bus* grant on it is not real containment in B1 — that is
+        // B2's OS sandbox (which the grant's reserved OS-capability flags drive).
+        // B1 grants loaded Shards permissive bus sends; the kernel *door* (the load
+        // capability) is fully gated against native Shards.
+        zen::sb::ShardId id = bus_.register_shard(std::move(adapter), zen::sb::Grant{}.allow_any());
         raw->set_self(id);
         libs_.emplace(name, Loaded{name, lib, abi, raw, id});
         return {true, id, ""};
