@@ -173,14 +173,41 @@ private:
     }
 };
 
-/// Construct a Shard, register it (its derived schemas flow into the registry as
-/// usual), wire its self-id, and return its ShardId — the registration + policy +
-/// lifecycle wiring in one call.
+/// The grant a Shard's declared Emit<...> implies: it may send each emitted shape
+/// to any accepter. This is the *trusted in-process* default — the Shard's
+/// self-declared outbound intent is taken as its authority — and it closes the
+/// previously-deferred emit-enforcement seam: delivery now checks a real grant
+/// that matches the declaration. An untrusted Shard must be given an explicit
+/// grant instead (mount_granted), where the declaration is not trusted.
+template <class Shard>
+zen::sb::Grant emit_default_grant(const Shard& shard) {
+    zen::sb::Grant grant;
+    for (const auto& schema : shard.emitted_schemas()) {
+        grant.allow_to_any(schema->name(), schema->version());
+    }
+    return grant;
+}
+
+/// Construct a trusted Shard, grant it its declared Emit set, register it (its
+/// derived schemas flow into the registry as usual), wire its self-id, and return
+/// its ShardId — registration + policy + lifecycle + authority in one call.
 template <class Self, class... Args>
 zen::sb::ShardId mount(zen::sb::Switchboard& bus, Args&&... args) {
     auto shard = std::make_unique<Self>(std::forward<Args>(args)...);
     Self* raw = shard.get();
-    zen::sb::ShardId id = bus.register_shard(std::move(shard));
+    zen::sb::Grant grant = emit_default_grant(*raw);
+    zen::sb::ShardId id = bus.register_shard(std::move(shard), std::move(grant));
+    raw->zen_set_self(id);
+    return id;
+}
+
+/// As mount(), but with an explicit host-supplied grant (for an untrusted Shard,
+/// whose self-declared Emit is not trusted as its authority).
+template <class Self, class... Args>
+zen::sb::ShardId mount_granted(zen::sb::Switchboard& bus, zen::sb::Grant grant, Args&&... args) {
+    auto shard = std::make_unique<Self>(std::forward<Args>(args)...);
+    Self* raw = shard.get();
+    zen::sb::ShardId id = bus.register_shard(std::move(shard), std::move(grant));
     raw->zen_set_self(id);
     return id;
 }
