@@ -361,6 +361,45 @@ ReviveOutcome Switchboard::reload(ShardId id, std::string_view candidate_bytes) 
     return out;
 }
 
+ReviveOutcome Switchboard::swap_state(ShardId id, std::string_view candidate_bytes) {
+    ReviveOutcome out;
+    ShardRecord* rec = find(id);
+    if (rec == nullptr) {
+        out.refusal = Refusal{RefusalReason::NoSuchTarget, {}};
+        return out;
+    }
+
+    auto announce = [&](EventKind kind, const Refusal& refusal) {
+        BusEvent ev;
+        ev.kind = kind;
+        ev.target = id;
+        ev.schema_name = rec->state_schema->name();
+        ev.schema_version = rec->state_schema->version();
+        ev.from_last_known_good = false;
+        ev.refusal = refusal;
+        emit(ev);
+    };
+
+    // Same gate as the live and crash-revival paths: parse -> admit(Unverified,
+    // state schema). No policy is consulted: an intentional swap spends no budget.
+    Unverified candidate = zen::parse(candidate_bytes);
+    Admission admitted = zen::admit(candidate, rec->state_schema);
+    if (!admitted.ok()) {
+        // A clean refusal — no last-known-good fallback for an intentional swap.
+        out.refusal = Refusal{RefusalReason::GateRefused, admitted.first_error()};
+        announce(EventKind::Refused, out.refusal);
+        return out;
+    }
+
+    Value state = std::move(admitted).value();
+    rec->shard->revive(state);
+    rec->last_known_good = state;
+    rec->alive = true;
+    out.revived = true;
+    announce(EventKind::Revived, Refusal{});
+    return out;
+}
+
 std::vector<ShardId> Switchboard::list_shards() const {
     std::vector<ShardId> ids;
     ids.reserve(shards_.size());

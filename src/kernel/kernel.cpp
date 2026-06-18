@@ -382,7 +382,10 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     rec.lib = new_lib;
 
     // Revive the new instance from the host-owned snapshot, through the gate.
-    zen::sb::ReviveOutcome ro = bus_.reload(rec.id, snapshot);
+    // This is an intentional code swap, not crash recovery, so it uses the
+    // unbudgeted swap_state path: a deliberate hot-reload must never be blocked by
+    // (or draw down) the Shard's crash-revival allowance.
+    zen::sb::ReviveOutcome ro = bus_.swap_state(rec.id, snapshot);
 
     lib_close(old_lib); // the old instance is already gone; no live pointer remains
 
