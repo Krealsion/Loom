@@ -146,25 +146,26 @@ protected:
     zen::sb::ShardId self_{};
 
 private:
-    // Select the handler the same way the bus selected the door: by resolvable
-    // identity (name, version), exactly as Switchboard::accept_match does. The
-    // delivered payload already passed the gate against the accept-set entry the
-    // bus chose by (name, version), so matching the handler the same way makes
+    // Select the handler the same way the bus selected the door: by true schema
+    // identity, via the canonical same_identity helper (which now compares
+    // (name, version, content_id)) instead of re-deriving the comparison inline.
+    // The delivered payload already passed the gate against the accept-set entry
+    // the bus chose by (name, version), so matching the handler the same way makes
     // from_value<S>'s precondition (every field present and well-typed) a
     // guarantee, not a probability.
     //
-    // This is deliberately NOT a content_id compare. content_id is a 64-bit FNV
-    // hash; a collision within one accept-set would select the wrong handler and
-    // call from_value<S> on a value the gate validated against a *different*
-    // schema. from_value reads *v.get(field) for each of S's fields, and get()
-    // returns null for a field that schema does not carry — so a wrong match is a
-    // null dereference, not merely a mislabeled value. Matching on (name, version)
-    // makes that path unreachable.
+    // The (name, version) terms are what make this collision-safe. Matching on
+    // content_id ALONE could, on a 64-bit FNV collision within one accept-set,
+    // select the wrong handler and call from_value<S> on a value the gate
+    // validated against a *different* schema — and since from_value reads
+    // *v.get(field) for each of S's fields, a field the colliding shape does not
+    // carry is a null dereference, not merely a mislabeled value. same_identity
+    // checks (name, version) too, so that path is unreachable; its content_id
+    // term is the redundant-but-true integrity check (post-gate the payload's
+    // content_id already equals the door's).
     template <class S>
     bool dispatch_to(Self* self, const zen::sb::Message& in, Mail& mail) {
-        const zen::Schema& accepted = *schema_of<S>();
-        const zen::Schema& delivered = in.payload.schema();
-        if (accepted.name() != delivered.name() || accepted.version() != delivered.version()) {
+        if (!zen::same_identity(*schema_of<S>(), in.payload.schema())) {
             return false;
         }
         self->on(from_value<S>(in.payload), mail);

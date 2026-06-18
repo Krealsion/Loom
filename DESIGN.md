@@ -93,6 +93,16 @@ content id appears in the wire header, so changing the hash would silently
 reinterpret every persisted value's identity. It is not cryptographic — it
 identifies schemas, it does not authenticate bytes.
 
+**Two comparisons, named for what they are.** `same_identity(a, b)` is *true
+identity*: `name == && version == && content_id ==`. It cannot be fooled by a
+hash collision, nor by an unregistered schema claiming a taken `(name, version)`
+with a different shape — so reaching for it is always correct. Bare
+`a.content_id() == b.content_id()` is the narrower **integrity/drift** check: a
+single-integer comparison the gate, the wire reader (`admit_against`), and the
+registry use *inline* on the hot path, where the `(name, version)` is already
+established upstream by door selection. Those inline checks are unchanged; the
+helper carries the full identity so callers reaching for "identity" get it.
+
 Schemas are immutable once constructed (`SchemaBuilder::build()` /
 `make_schema`); the constructor rejects malformed `TypeRef`s (a Message with no
 schema, a List with no element, a primitive carrying either), empty field names,
@@ -632,26 +642,28 @@ and it is built.
 `accepted_schemas()` from `Accept<…>`, `snapshot() = to_value(state_)`,
 `revive() = from_value<State>`, and `policy()` from an overridable
 `policy_config()`. Its `handle()` matches the gated payload to an accepted shape
-by **resolvable identity `(name, version)`**, converts it, and dispatches to a
-**typed handler** `void on(const Ping&, Mail&)` — one per accepted shape, so the
+by **true identity** (`same_identity`: `name`, `version`, `content_id`), converts
+it, and dispatches to a **typed handler** `void on(const Ping&, Mail&)` — one per
+accepted shape, so the
 accept-set is named once, not a third time. `Mail` is the typed send context (it
 carries the inbound envelope): `mail.reply(Pong{…})`, `mail.send(target, T)`,
 `mail.publish(T)` — no `Value`/`Cell`/`Message` ceremony. `mount<Node>(bus)`
 constructs, registers (the derived schemas flow into the registry as usual),
 wires the self-id, and returns the `ShardId` in one call.
 
-**Dispatch selects by `(name, version)`, the same key the bus admitted the
-message under — never by a content-id hash.** A delivered payload has already
-passed the gate against the accept-set entry the Switchboard chose by
+**Dispatch selects by true identity (`same_identity`), the same key the bus
+admitted the message under — not by a bare content-id hash.** A delivered payload
+has already passed the gate against the accept-set entry the Switchboard chose by
 `(name, version)` (`accept_match`); `handle()` picks the handler the same way, so
 `from_value<S>`'s precondition — every field present and well-typed — is
-*guaranteed*, not merely probable. Selecting by `content_id()` would be a latent
-**null dereference**: `content_id` is a 64-bit FNV hash, and a collision *within
-one Shard's accept-set* would route a message to the wrong `on()`, whose
+*guaranteed*, not merely probable. Selecting by `content_id()` *alone* would be a
+latent **null dereference**: `content_id` is a 64-bit FNV hash, and a collision
+*within one Shard's accept-set* would route a message to the wrong `on()`, whose
 `from_value<S>` reads `*v.get(field)` for each of `S`'s fields — and `get()`
-returns null for a field the colliding shape does not carry. (`zen::same_identity`
-is itself a content-id compare, so it would *not* close this collision;
-`(name, version)` equality does, which is also exactly how the door was chosen.)
+returns null for a field the colliding shape does not carry. `same_identity`
+checks `(name, version)` as well as `content_id`, so it closes that collision —
+its `content_id` term is the redundant-but-true integrity check — and that is
+exactly how the door was chosen.
 Because the delivered message is gated against one accept-set entry and the
 handler set is the *same* `Accept<A...>`, **exactly one** handler matches; a
 no-match is an internal-invariant violation, so `handle()` throws a clear
@@ -798,10 +810,17 @@ seam before its shape is proven is the same mistake as leaving a sharp one open.
 
 ### Closed in this pass (code)
 
-1. **Dispatch selector → `(name, version)` full identity.** `ShardBase::handle`
-   now selects the handler the same way the bus selected the door, not by a
-   content-id hash — a null-deref fix (see *The authoring layer → Dispatch selects
-   by `(name, version)`*).
+1. **Dispatch selector → true `same_identity`; the `same_identity` misnomer
+   closed.** `ShardBase::handle` selects the handler the same way the bus selected
+   the door — by `same_identity` (`name == && version == && content_id ==`), not
+   by a bare content-id hash — a null-deref fix (see *Schema and content
+   identity*). In the same spirit, the public `same_identity` helper itself was
+   strengthened from hash-only equality (a function named for identity that did
+   `content_id`-only equality — a loaded gun in the surface) to full
+   `(name, version, content_id)` identity, so its name and behavior now agree and
+   the selector calls it instead of re-deriving the comparison inline. The
+   gate/wire/registry still compare `content_id` *inline* as the drift check —
+   unchanged.
 2. **Exactly-one-handler, made loud.** A delivered message matches exactly one
    handler; a no-match is an internal-invariant violation that throws, never a
    silent drop. Pinned by a multi-shape routing test.

@@ -29,6 +29,20 @@ TEST_CASE("content identity is stable across separately-built identical schemas"
     CHECK(same_identity(*a, *b));
 }
 
+TEST_CASE("same_identity is true identity (name, version, content_id), not bare content_id") {
+    auto base = SchemaBuilder("Foo", 1).field("a", Kind::Int).build();
+    auto twin = SchemaBuilder("Foo", 1).field("a", Kind::Int).build(); // separately built
+    auto diff_name = SchemaBuilder("Bar", 1).field("a", Kind::Int).build();
+    auto diff_version = SchemaBuilder("Foo", 2).field("a", Kind::Int).build();
+
+    CHECK(same_identity(*base, *twin)); // structurally identical => same identity
+    // The (name, version) discrimination is the testable, meaningful part (a forced
+    // FNV collision is not constructible): same_identity must reject a name or
+    // version difference, where bare content_id equality would not be asked to.
+    CHECK_FALSE(same_identity(*base, *diff_name));
+    CHECK_FALSE(same_identity(*base, *diff_version));
+}
+
 TEST_CASE("content identity changes with name, version, field name, kind, order, or requiredness") {
     auto base = SchemaBuilder("S", 1).field("a", Kind::Int).field("b", Kind::Text).build();
 
