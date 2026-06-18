@@ -16,7 +16,9 @@ add_executable(zen-tests
     test_harness.cpp
     test_breathing.cpp
     test_schema_codec.cpp
-    test_kernel.cpp)
+    test_kernel.cpp
+    test_author_shape.cpp
+    test_author_shard.cpp)
 
 target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
@@ -63,7 +65,7 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # doctest returns the failed-assertion count as its exit code, so CTest's default
 # exit-status check is the source of truth — no output-scraping needed.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec kernel)
+    switchboard harness breathing schema_codec kernel author author_shard)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
