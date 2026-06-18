@@ -89,8 +89,11 @@ int main() {
         std::cout << "\n";
     });
 
+    // The responder replies with Pong, so it is granted that reach; the collector
+    // emits nothing and needs no grant.
     ShardId responder = bus.register_shard(
-        std::make_unique<Node>("responder", std::vector{ping_schema()}, /*reply=*/true));
+        std::make_unique<Node>("responder", std::vector{ping_schema()}, /*reply=*/true),
+        Grant{}.allow_to_any("Pong", 1));
     ShardId collector = bus.register_shard(
         std::make_unique<Node>("collector", std::vector{pong_schema()}, /*reply=*/false));
 

@@ -20,6 +20,7 @@ using namespace zen;
 using zen::sb::Bus;
 using zen::sb::BusEvent;
 using zen::sb::EventKind;
+using zen::sb::Grant;
 using zen::sb::Message;
 using zen::sb::RefusalReason;
 using zen::sb::Shard;
@@ -156,13 +157,17 @@ struct Registered {
     ProbeShard* shard;
 };
 
+// The probe is a trusted in-process test fixture; by default it is granted
+// permissive send authority so existing routing/lifecycle tests are unaffected by
+// capability gating. A capability test passes an explicit, restrictive grant.
 inline Registered register_probe(Switchboard& bus,
                                  std::vector<std::shared_ptr<const Schema>> accept,
                                  std::int64_t max_reloads = 2,
-                                 bool revive_from_last_good = true) {
+                                 bool revive_from_last_good = true,
+                                 Grant grant = Grant{}.allow_any()) {
     auto owned = std::make_unique<ProbeShard>(std::move(accept), max_reloads, revive_from_last_good);
     ProbeShard* raw = owned.get();
-    ShardId id = bus.register_shard(std::move(owned));
+    ShardId id = bus.register_shard(std::move(owned), std::move(grant));
     return {id, raw};
 }
 
