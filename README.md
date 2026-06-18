@@ -30,6 +30,12 @@ follow — a struct-derived schema shares a door with the hand-built one by
 content-id. See `examples/heartbeat_authored.cpp` and the authoring section of
 `DESIGN.md`.
 
+**Capabilities (B1):** every Shard carries a host-assigned **grant** (default
+empty), and the bus authorizes each Shard-originated send against it *before* the
+gate — a denied send is `CapabilityDenied`, never delivered, and never reaches the
+gate, so "one gate" stays literally true. The kernel's control Shard makes the
+load surface a gated message door. See the Capabilities section of `DESIGN.md`.
+
 ```
 include/zen/             public headers (core)
 include/zen/switchboard/ public headers (bus)
