@@ -178,15 +178,17 @@ Ticket Switchboard::send(ShardId target, Message msg) {
 
 std::size_t Switchboard::publish(Message msg) { return fanout(std::move(msg), /*gated=*/false); }
 
-// The path a Shard's ShardBus uses: stamp the authoritative sender (a Shard
-// cannot send as anyone else) and enqueue gated, to be authorized at delivery.
-Ticket Switchboard::gated_send(ShardId sender, ShardId target, Message msg) {
-    msg.sender = sender;
+// The gated path a Shard's ShardBus uses, and the host uses to re-enter a
+// child's output: stamp the authoritative sender (a Shard cannot send as anyone
+// else) and enqueue gated, to be authorized against that sender's grant at
+// delivery.
+Ticket Switchboard::send_as(ShardId as_sender, ShardId target, Message msg) {
+    msg.sender = as_sender;
     return enqueue_directed(target, std::move(msg), /*gated=*/true);
 }
 
-std::size_t Switchboard::gated_publish(ShardId sender, Message msg) {
-    msg.sender = sender;
+std::size_t Switchboard::publish_as(ShardId as_sender, Message msg) {
+    msg.sender = as_sender;
     return fanout(std::move(msg), /*gated=*/true);
 }
 

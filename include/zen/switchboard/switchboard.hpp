@@ -132,6 +132,17 @@ public:
     /// count (0 is legal, not an error). Each delivery is independently gated.
     std::size_t publish(Message msg) override;
 
+    /// Inject a message AS a specific Shard: stamp `as_sender` as the
+    /// authoritative sender and authorize it against that Shard's grant at
+    /// delivery — exactly as if the Shard had sent it through its own ShardBus.
+    /// Held only by the host (root authority), this is how a trusted bridge
+    /// re-enters a Shard's output with its identity stamped from the *connection*
+    /// it arrived on, never from the payload — the cross-process form of the
+    /// in-process ShardBus identity-binding. A child claiming a different sender
+    /// cannot get it.
+    Ticket send_as(ShardId as_sender, ShardId target, Message msg);
+    std::size_t publish_as(ShardId as_sender, Message msg);
+
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
     /// reentrant call (from within a handler) is a no-op.
     void pump();
@@ -218,11 +229,9 @@ private:
     public:
         ShardBus(Switchboard& sb, ShardId self) noexcept : sb_(sb), self_(self) {}
         Ticket send(ShardId target, Message msg) override {
-            return sb_.gated_send(self_, target, std::move(msg));
+            return sb_.send_as(self_, target, std::move(msg));
         }
-        std::size_t publish(Message msg) override {
-            return sb_.gated_publish(self_, std::move(msg));
-        }
+        std::size_t publish(Message msg) override { return sb_.publish_as(self_, std::move(msg)); }
 
     private:
         Switchboard& sb_;
@@ -231,8 +240,6 @@ private:
 
     Ticket enqueue_directed(ShardId target, Message msg, bool gated);
     std::size_t fanout(Message msg, bool gated);
-    Ticket gated_send(ShardId sender, ShardId target, Message msg);
-    std::size_t gated_publish(ShardId sender, Message msg);
 
     void deliver_one(Envelope env);
     void emit(const BusEvent& event);
