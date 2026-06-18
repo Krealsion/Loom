@@ -96,6 +96,38 @@ target_link_libraries(zen-kernel
 
 add_library(zen::kernel ALIAS zen-kernel)
 
+# ---- Isolation (out-of-process Shard hosting + crash supervision) ---------
+
+# The host-side library: the IPC channel, the proxy Shard, and the supervisor.
+# It reuses the kernel's header-only schema codec to reconstruct a child's schemas;
+# it does not depend on the kernel's compiled code.
+add_library(zen-isolation
+    src/isolation/channel.cpp
+    src/isolation/host.cpp)
+
+target_include_directories(zen-isolation
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+target_compile_features(zen-isolation PUBLIC cxx_std_20)
+target_link_libraries(zen-isolation
+    PUBLIC  zen-core zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+
+add_library(zen::isolation ALIAS zen-isolation)
+
+# The child executable: runs one Shard out-of-process via the kernel C ABI. It is
+# a byte shuttler — it deliberately does NOT link zen-core; it speaks the wire
+# format only through the protocol header and lets the host gate everything.
+add_executable(zen-shard-host
+    src/isolation/shard_host_main.cpp)
+
+target_include_directories(zen-shard-host
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_compile_features(zen-shard-host PRIVATE cxx_std_20)
+target_link_libraries(zen-shard-host
+    PRIVATE zen-warnings zen-sanitize ${CMAKE_DL_LIBS})
+
 # ---- Tests ----------------------------------------------------------------
 
 if(ZEN_BUILD_TESTS)
