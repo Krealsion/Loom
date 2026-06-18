@@ -23,6 +23,13 @@ ABI: everything a `.so` hands back crosses as bytes and is re-admitted through
 the same gate, so the DLL seam is just another boundary the one gate guards (with
 hot-reload that survives a library swap). See the Kernel section of `DESIGN.md`.
 
+A fourth, header-only **`zen-author`** (`include/zen/author/`), is pure sugar: an
+author writes each shape once as a plain C++ struct (`ZEN_SHAPE`) and the runtime
+`Schema`, the typed conversions, and the derived `snapshot`/`revive`/dispatch all
+follow — a struct-derived schema shares a door with the hand-built one by
+content-id. See `examples/heartbeat_authored.cpp` and the authoring section of
+`DESIGN.md`.
+
 ```
 include/zen/             public headers (core)
 include/zen/switchboard/ public headers (bus)
