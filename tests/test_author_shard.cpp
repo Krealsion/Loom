@@ -124,6 +124,48 @@ TEST_CASE("each accepted shape routes to its own handler and to no other") {
     CHECK(r->trail[2] == "gamma:30");
 }
 
+TEST_CASE("a Shard's declared Emit<...> matches what it actually emits") {
+    Switchboard bus;
+    ShardId responder = au::mount<Responder>(bus);
+    ShardId collector = au::mount<Collector>(bus);
+
+    // The bus tap carries each delivery's sender, so we can collect the set of
+    // shapes a given Shard actually put on the wire (a refused emit still counts).
+    std::set<std::string> from_responder;
+    std::set<std::string> from_collector;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind != EventKind::Delivered && e.kind != EventKind::Refused) {
+            return;
+        }
+        if (e.sender == responder) {
+            from_responder.insert(e.schema_name);
+        } else if (e.sender == collector) {
+            from_collector.insert(e.schema_name);
+        }
+    });
+
+    bus.send(responder, Message(au::to_value(Ping{1}), ShardId{}, collector));
+    bus.send(responder, Message(au::to_value(Ping{2}), ShardId{}, collector));
+    bus.pump();
+
+    auto declared_of = [](auto* shard) {
+        std::set<std::string> names;
+        for (const auto& s : shard->emitted_schemas()) {
+            names.insert(s->name());
+        }
+        return names;
+    };
+    auto* r = static_cast<Responder*>(bus.shard(responder));
+    auto* c = static_cast<Collector*>(bus.shard(collector));
+
+    // Responder declares Emit<Pong> and emits exactly Pong — no more, no less.
+    CHECK(from_responder == std::set<std::string>{"Pong"});
+    CHECK(from_responder == declared_of(r));
+    // Collector declares no Emit<...> and emits nothing.
+    CHECK(from_collector.empty());
+    CHECK(declared_of(c).empty());
+}
+
 TEST_CASE("the accept-set is derived from the typed handlers; emit-set is reported") {
     Switchboard bus;
     ShardId responder = au::mount<Responder>(bus);
