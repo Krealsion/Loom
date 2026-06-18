@@ -116,6 +116,35 @@ TEST_CASE("hot-reload swaps the library and the state survives the swap") {
     CHECK(recorder.shard->handled_values.back() == 9);
 }
 
+TEST_CASE("intentional hot-reload spends no crash-revival budget: it never exhausts") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered recorder = register_probe(bus, {pong_schema()});
+
+    LoadResult lr = kernel.load("t", ZEN_SO_SHARD);
+    REQUIRE(lr.ok);
+    const ShardId id = lr.id;
+
+    // The DLL declares max_reloads = 8. If hot-reload drew from that budget, the
+    // 9th swap would be "exhausted". Swap many more times than the budget and
+    // require every one to succeed — intentional swap is unbudgeted.
+    constexpr int kSwaps = 12;
+    for (int i = 0; i < kSwaps; ++i) {
+        const char* path = (i % 2 == 0) ? ZEN_SO_SHARD_B : ZEN_SO_SHARD;
+        ReloadResult rr = kernel.reload_from("t", path);
+        REQUIRE_MESSAGE(rr.ok, rr.error);
+        CHECK(rr.reloaded);
+        CHECK_FALSE(rr.version_mismatch);
+    }
+    CHECK(kernel.shard_id("t") == id);
+
+    // Still live and serving after a dozen swaps.
+    bus.send(id, Message(ping(77), ShardId{}, recorder.id));
+    bus.pump();
+    REQUIRE_FALSE(recorder.shard->handled_values.empty());
+    CHECK(recorder.shard->handled_values.back() == 77);
+}
+
 TEST_CASE("a reload to a newer state-schema version is a clean refusal; the old library runs on") {
     Switchboard bus;
     Kernel kernel(bus);

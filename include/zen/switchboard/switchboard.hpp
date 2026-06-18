@@ -148,7 +148,21 @@ public:
     /// schema). On success, revive() and refresh last-known-good. On refusal, the
     /// Shard's policy() (validated against the fixed grammar) decides whether to
     /// fall back to last-known-good. Emits Revived (or Refused).
+    ///
+    /// This is the **crash-revival** path: it is budgeted (checks/decrements the
+    /// policy's max_reloads) so a crash-thrashing Shard cannot revive forever. A
+    /// future supervisor calls this on crash.
     ReviveOutcome reload(ShardId id, std::string_view candidate_bytes);
+
+    /// Intentional state swap (hot-reload of code, not crash recovery): gate the
+    /// candidate against the state schema, then revive(), refresh last-known-good,
+    /// and mark alive. Unlike reload(), it spends **no budget** (no max_reloads
+    /// check or decrement) — a deliberate swap to fixed code must never be blocked
+    /// by a Shard's crash-revival allowance. A gate refusal is a **clean refusal**:
+    /// there is no last-known-good fallback (the caller is swapping in known code
+    /// and a malformed candidate should fail visibly, not silently roll back).
+    /// Emits Revived on success, Refused on a gate refusal.
+    ReviveOutcome swap_state(ShardId id, std::string_view candidate_bytes);
 
     // ---- Queries ----------------------------------------------------------
 
