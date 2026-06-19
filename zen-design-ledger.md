@@ -22,12 +22,17 @@ the Built section) says so.
 | Level 0 hardening | dispatch selector → `(name,version)` (null-deref fix), loud no-match, `swap_state` split from the crash-revival budget, emit-honesty by test with `Mail` reserved as the enforcement chokepoint, `content_id`-site grep sweep, seam-readiness review. `same_identity` strengthened to true `(name,version,content_id)` identity. | built |
 | Capabilities **(B1)** — `grant.hpp` + switchboard + kernel door | the in-process grant model. Per-Shard `Grant` (send-rule selectors over shape→target, plus reserved OS-capability flags); capability-gated delivery (the `ShardBus` a handler receives stamps its identity and authorizes against its grant *before* the gate → `CapabilityDenied`); `Switchboard::send/publish` are the ungated host root, the gated `ShardBus` is all a Shard ever holds; public `send_as`/`publish_as` (host re-enters a Shard's output with the sender stamped from the connection); the kernel's `LoadLibrary` door is itself a gated capability, demonstrated against native Shards. | built |
 | Isolation **(B2)** — `zen-isolation` library + `zen-shard-host` child | out-of-process hosting + crash supervision. A Shard runs in a child process, indistinguishable to the bus (a proxy that *is* a `Shard`); framed, bounded, defensive unix-socket IPC (per-frame + backlog caps, EOF = death, never blocks the host); the child reuses the kernel C ABI and links no zen-core (a byte shuttler); child output is re-admitted through the one gate host-side with the sender stamped from the connection; a single-threaded `step()` (drain IPC → `pump` → supervise) keeps the bus's FIFO/reentrancy intact; on crash, bounded reload from the host-owned snapshot then quarantine. **Isolated, not sandboxed** — the grant's OS-capability flags stay inert (that is B3). | built |
+| OS sandbox **(B3)** — `zen-isolation/sandbox` + native enforcement | the detect→apply→know→refuse-or-proceed **honesty lattice** and the first real syscall-level enforcement. `detect_enforcement()` **probes** (never assumes) what this host can impose, per-capability; the **Network** flag is enforced by launching a child into a no-interface user+net namespace (native `fork`+`unshare(CLONE_NEWUSER+CLONE_NEWNET)`, sandboxed branch only — `posix_spawn` unchanged when Network is granted), so a child without the grant gets `ENETUNREACH` from a real `connect()` regardless of what the `.so` links; `containment()` is generated from what was *actually* imposed and **positively confirmed** (the child's `/proc/<pid>/ns/net` inode differs from the host's — verified, not inferred; never a false claim); a *surprise* real-entry failure refuses in **both** strict and dev mode (no run-while-claiming-contained path); per-capability resolution + an iterating `containment()` make B4 "a probe + an enforcement call"; a default-strict **dev-mode** knob converts a *known-gap* refusal into a visibly-uncontained warning; hard-vs-graduated capability vocabulary (`FsAccess`, safe default) reserves filesystem's home. | built |
+| Filesystem sandbox **(B4)** — `zen-isolation/sandbox` mount-ns view | the **first graduated capability**, enforced by a private mount namespace. The grant's `FsAccess` level (None → ReadOnly → WriteScoped → WriteNoExec → WriteAnywhere, default `None`) picks a point on a safe→dangerous axis; the child `pivot_root`s into an **allow-list** view (fresh tmpfs root, the loader closure + its own `.so` bind-mounted read-only via `mount_setattr(AT_RECURSIVE)`, an optional scratch tmpfs, root remounted read-only — built **private-first** to stop reverse mount propagation), so a stranger's Shard cannot read your `$HOME` secrets (they are *absent*, not hidden), cannot write outside `/scratch` (`EROFS`/`EACCES`), and at `WriteNoExec` cannot `execve` what it writes (`EACCES`); `WriteAnywhere` is the honest opt-out (reported *not contained, by grant*). Confirmed via a distinct `/proc/<pid>/ns/mnt` inode + the same fail-safe/dev-mode/surprise-failure discipline; the OS verdict is proven on the bus (the fs-probe still emits — sandbox ≠ muzzle). `FsAccess` is now the single source of truth (the binary `FilesystemRead/Write` flags were removed). **The map regression fix:** this host refuses a child's self-map, so the **parent** writes the child's uid/gid maps over a pipe handshake (which also hardened B3's netns entry). | built |
+| Resource containment **(B5)** — `zen-isolation/sandbox` cgroup-v2 | the **first quantitative capability** (a *limit*), enforced via a per-Shard cgroup-v2 leaf — completing the threat-model ladder (network + filesystem + resources). The grant's `ResourceLimits` (memory/pids/cpu) default to **host-computed conservative** values (no knob): memory = RAM/8 capped 1 GiB / floored 128 MiB, pids = 512, cpu_weight = 100; `with_unlimited_resources()` is the opt-out. The host discovers its **delegated** base, builds the no-internal-processes hierarchy (drain into a `zen-supervisor` leaf, enable `+memory +pids`), and at the spawn **sync point** the parent moves the child's pid into its leaf before release. A memory bomb is **OOM-killed within its cgroup** (host survives → reload-then-quarantine, proven with a granted-survives **negative control**); a fork-bomb is bounded by `pids.max`. Confirmed via `/proc/<pid>/cgroup` + limits read-back; fail-safe/dev-mode/unlimited as usual. **Delegation is invocation-dependent** — a plain `wsl bash` lands in the root cgroup (no delegation → fail-safe refuse), so the suite runs under a delegated scope (`run-under-scope.sh`); `cpu` isn't delegated here so B5 enforces memory+pids and reports the rest honestly. | built |
 
 The spine holds across every boundary: one gate everywhere, untrusted-until-proven,
 immutable published schemas, the kernel holds grammar not answers. The content-id
 fast-path is deliberately *untaken* so "one gate, every delivery" stays literally true.
-The grant is now projected onto two **real** boundaries — the message boundary (B1)
-and the process boundary (B2); the syscall boundary (B3) is the remaining projection.
+The grant is now projected onto **real** boundaries — the message boundary (B1), the
+process boundary (B2), and the syscall/kernel boundary for Network (B3), the filesystem
+(B4), and resources (B5). The mechanism ladder is **complete for the threat model**; only
+syscalls (seccomp) remain — a **deliberate later decision**, not an assumed phase.
 
 ---
 
@@ -36,7 +41,9 @@ and the process boundary (B2); the syscall boundary (B3) is the remaining projec
 This section is the **design record** for the three pillars. Where a pillar (or a phase of
 one) has since been built, its **Status** line says so and §1 carries the shipped summary;
 the prose here is the settled design it was built from. Pillar 1 is **built (B1)**; Pillar 2
-is **built as B2** with the sandbox (B3) still to come; Pillar 3 is **still wholly design**.
+is **built (B2 + B3)** — process isolation and the network sandbox both ship, with the
+remaining OS-capability primitives (seccomp, cgroups, filesystem) still to come; Pillar 3
+is **still wholly design**.
 Anything marked *designed, not built* is design the codebase allows — not a line of it written.
 
 ### 2.1 The console (the first human-facing Shard)
@@ -104,7 +111,7 @@ shaped for the sandbox, but inert until B3 makes them absolute at the syscall bo
 So B1 makes the grant real at the message boundary exactly as this design intended,
 with its OS-relevant parts deferred — not weakened — to the isolation phases.
 
-### 2.3 Pillar 2 — Isolation, then the sandbox (two phases: **B2 built**, **B3 designed**)
+### 2.3 Pillar 2 — Isolation, then the sandbox (two phases: **B2 built**, **B3 built**)
 
 > **Refinement settled this stretch.** The original framing (the old heading: "crash-isolation
 > and capability-enforcement are *one phase*") folded both into a single out-of-process move.
@@ -128,11 +135,14 @@ does **not** do is enforce the grant's OS-capability flags — it reports its co
 honestly as *"isolated, not sandboxed,"* and the flags stay inert. That honesty is
 load-bearing: a process boundary stops a *crash*, not a `connect()`.
 
-**B3 — the OS sandbox (designed, not built).** B3 projects the grant's OS-capability flags
-onto a real syscall-level profile applied to the child *before* it loads the `.so`, turning
-"isolated" into "isolated **and** sandboxed." The seam is already in place (hosting is
-out-of-process, the grant carries the flags, the child is the one place a profile installs),
-so B3 is additive — no rework to the gate, the bus, the wire format, or B2's supervisor:
+**B3 — the OS sandbox (built: the Network primitive + the honesty lattice; filesystem
+followed in B4; seccomp / cgroups deferred to B5+).** B3 projects the grant's OS-capability flags onto a real
+syscall-level profile applied to the child *before* it loads the `.so`, turning "isolated"
+into "isolated **and** sandboxed." The seam was already in place (hosting is out-of-process,
+the grant carries the flags, the child is the one place a profile installs), so B3 was
+additive — no rework to the gate, the bus, the wire format, or B2's supervisor. It enforces
+**Network** first (binary and coarse — no gradient to muddy the lattice) and builds the
+permanent **detect → apply → know → refuse-or-proceed** structure the rest plug into:
 
 - Out-of-process, the OS gives instruction-level enforcement the bus can't: a **network
   namespace with no interface** makes `connect()` fail *regardless of what's linked or
@@ -152,10 +162,11 @@ so B3 is additive — no rework to the gate, the bus, the wire format, or B2's s
 - A **full-trust, not-sandboxed, in-process** mode is explicitly wanted: trusted
   first-party native-speed code, bus-enforced only. It is one end of this spectrum — and
   it ships (B1: in-process, the grant enforced at the message boundary). The spectrum now
-  has **two of its three points built**: in-process/bus-enforced (B1) and
-  out-of-process/isolated-but-not-sandboxed (B2); only out-of-process/OS-sandboxed (B3)
-  remains. B2 made the middle point — isolate for *crash* containment without paying for a
-  full sandbox — a real, distinct choice rather than an all-or-nothing jump.
+  has **all three points built**: in-process/bus-enforced (B1),
+  out-of-process/isolated-but-not-sandboxed (B2), and out-of-process/OS-sandboxed (B3 — for
+  the Network flag now; seccomp/cgroups/filesystem extend this third point). B2 made the
+  middle point — isolate for *crash* containment without paying for a full sandbox — a real,
+  distinct choice rather than an all-or-nothing jump.
 - **Honest limits:** sandbox config is real work (seccomp is fiddly; namespaces are
   robust because coarse). Not every capability has an OS shadow (bus-only grants like "may
   send DamageEvent" stay bus-enforced). Out-of-process costs IPC + serialize-at-the-boundary
@@ -166,10 +177,20 @@ so B3 is additive — no rework to the gate, the bus, the wire format, or B2's s
   capability is yours to give, and giving it is real."* Not a sandbox in-process; not
   "arbitrary code made harmless" even out-of-process.
 
-**Status: B2 built, B3 designed.** B2 (out-of-process hosting + crash supervision +
-honest "isolated, not sandboxed" status) ships and is tested in Debug and under ASan/UBSan.
-B3 (the OS sandbox that enforces the grant's OS-capability flags) is designed, not built —
-additive on the seam B2 leaves in place.
+**Status: B2 built; B3 (Network), B4 (Filesystem), B5 (Resources) built — the mechanism
+ladder is complete for the threat model.** B2 (out-of-process hosting + crash supervision),
+B3 (the detection lattice; native `fork`+`unshare` no-interface network namespace; generated
+honest `containment()`; default-strict dev-mode override; parent-writes-maps handshake), B4
+(the graduated `FsAccess` filesystem capability: a private mount-namespace allow-list view,
+confirmed via `/proc/<pid>/ns/mnt`), and B5 (the quantitative `ResourceLimits` capability: a
+per-Shard cgroup-v2 leaf with memory/pids caps applied at the sync point, confirmed via
+`/proc/<pid>/cgroup` + read-back) all ship and are tested in Debug and under ASan/UBSan — a
+child without the Network grant gets `ENETUNREACH` from a real `connect()`, a restricted child
+gets `ENOENT`/`EROFS`/`EACCES` on out-of-scope files, a memory bomb is OOM-killed within its
+cgroup while a granted one survives the same allocation, all detection branches are covered, and
+no path ever claims containment it did not impose. Remaining: **seccomp-bpf** syscall filtering
+(a deliberate later decision — kernel-exploit-escape defense, a higher adversary tier), and
+macOS/Windows backends.
 
 ### 2.4 Pillar 3 — Gated continuous access (the safe shape of shared state)
 
@@ -241,15 +262,20 @@ registry; emit *enforcement* (chokepoint reserved at `Mail`); full schema-as-val
 the manifest precursor; multi-threaded dispatch; request/response await; content-id
 fast-path (kept untaken on purpose); cross-language libraries; behavioral contracts;
 static-struct half of the codegen marriage. The three pillars above now subsume or
-sharpen several of these — and three have since **shipped** as B1/B2: capability-gating,
-cross-process delivery, and crash isolation.
+sharpen several of these — and four have since **shipped** as B1/B2/B3: capability-gating,
+cross-process delivery, crash isolation, and OS-level network sandboxing.
 
 ---
 
 ## 4. Resolved: build order → **B** (capability + isolation first)
 
 **Decided.** Route **B** was chosen, and the phases built since are named for it: **B1**
-(capabilities), **B2** (isolation), **B3** (the OS sandbox, next). The demand-loading use
+(capabilities), **B2** (isolation), **B3** (the OS sandbox — Network primitive + the honesty
+lattice), **B4** (the filesystem primitive — graduated `FsAccess`, mount-namespace allow-list
+view), **B5** (the resource primitive — quantitative `ResourceLimits`, cgroup-v2 leaves). The
+mechanism ladder is now complete for the threat model; **seccomp** and the **policy phases**
+(provenance→grant→hosting-mode; persistent scoped storage) are the deliberate next decisions.
+The demand-loading use
 case (gameplay code loading and unloading as a *hot path* — the game's own spawn logic
 sending the kernel `LoadLibrary` when an ogre appears) settled it: it makes
 kernel-control-over-the-bus the hot path, which forces capability-gating before that surface
@@ -268,6 +294,8 @@ live system) doesn't strictly need kernel-control-as-messages, but the demand-lo
 showed the capability layer is the real spine of everything multi-Shard, and being born
 holding a real grant beats retrofitting one. The counter-argument for A was real (the
 console feels half-real until "operate the kernel like everything else" is true, and the
-human instrument in hand sooner accelerates everything) — but B won, and B1 + B2 now ship,
-so the console (§2.1) will be born *on top*, as the first grant-holder, in the real model.
-**B3 (the OS sandbox) is the remaining isolation step**, and the natural next phase.
+human instrument in hand sooner accelerates everything) — but B won, and B1 + B2 + B3 now
+ship, so the console (§2.1) will be born *on top*, as the first grant-holder, in the real
+model. **B3's first sandbox primitive (Network) now ships**; the remaining isolation work
+(seccomp, cgroups, filesystem — §2.3) extends the proven lattice, and the console is the
+natural next phase.
