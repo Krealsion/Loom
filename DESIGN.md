@@ -724,11 +724,12 @@ A `Grant` (`include/zen/switchboard/grant.hpp`) has two parts:
 - **Send-permissions (enforced in B1):** a list of `SendRule`s, each a
   `(shape-selector, target-selector)` where each selector is a specific value or
   "any" — e.g. "`Pong` to any accepter", "`LoadLibrary` to the control Shard only".
-- **OS-capability flags (declared in B1, enforced in B2):** `Network`,
-  `FilesystemRead`, `FilesystemWrite`, `SpawnProcess`. B1 **does not consult** them
-  — they govern instruction-level behaviour a loaded `.so` reaches directly, which
-  only process isolation stops. They live on the grant so B2 projects them onto a
-  sandbox profile with no rework.
+- **OS-capability flags (hard, binary):** `Network` (enforced out-of-process in B3)
+  and `SpawnProcess` (reserved). B1 **does not consult** them — they govern
+  instruction-level behaviour a loaded `.so` reaches directly, which only process
+  isolation stops. **Filesystem is not a flag** — it is the *graduated* `FsAccess`
+  level (enforced in B4); the old binary `FilesystemRead/Write` flags were removed in
+  B4 so files have a single source of truth.
 
 The default grant is **empty**: minimal authority by default. Grants flow from the
 host (the root of trust) at registration, out-of-band; there is no in-band path by
@@ -885,23 +886,335 @@ unbudgeted `swap_state` path — B2 reuses both without change.)
 
 ### Honest containment status
 
-`containment(name)` reports the truth and never claims more:
-**"isolated (process boundary): crash-contained, cannot corrupt host memory. Not
-sandboxed: the grant's OS-capability flags are not OS-enforced yet (B3)."** Process
-isolation buys crash containment and memory separation; it does **not** stop a
-child from opening a socket or a file directly. The grant's `os_cap` flags remain
-**inert** — recorded, shaped, and ready, but not enforced. Pretending otherwise
-would be the one thing this layer must not do.
+`containment(name)` reports the truth and never claims more. In B2 it was a fixed
+**"isolated (process boundary) … Not sandboxed,"** because the grant's `os_cap`
+flags were inert. As of **B3** the string is *generated from what was actually
+imposed* on each child, iterated per capability — e.g. **"isolated (process
+boundary): crash-contained … network: contained — private user+net namespace, no
+external interface … (confirmed: child netns distinct from host) … filesystem/
+syscalls/resources: not yet enforced (B4+)."** Process
+isolation *alone* buys crash containment and memory separation; it does **not** stop
+a child from opening a socket or a file directly. Making the Network flag *absolute*
+is exactly what B3 adds (below); the rest of the `os_cap` reach stays honestly
+reported as not-yet-enforced. Pretending otherwise would be the one thing this layer
+must not do.
 
-### What B2 leaves to **B3** (the next phase)
+---
 
-B3 is the **OS sandbox**: it projects the grant's OS-capability flags onto a
-real syscall-level profile (namespaces / seccomp / equivalent) applied to the
-child before it loads the `.so`, turning "isolated" into "isolated **and**
-sandboxed". The seam is already in place — hosting is out-of-process, the grant
-already carries the OS-capability flags, and the child is the single place a
-sandbox profile would be installed — so B3 is additive, with no rework to the gate,
-the bus, the wire format, or the supervision loop built here.
+## Isolation (B3): the OS sandbox — the network primitive + the honesty lattice
+
+B3 turns "isolated" into "isolated **and** sandboxed" by projecting the grant's
+OS-capability flags onto a real syscall-level profile applied to the child *before*
+it runs untrusted code. It enforces exactly **one** flag — **Network** — and, more
+importantly, builds the **permanent detection-and-honesty structure** every future
+primitive plugs into. The seam B2 left is honoured exactly: hosting is already
+out-of-process, the grant already carries the flags, the child is the single place
+a profile installs — so B3 is additive, with **no rework** to the gate, the bus, the
+wire format, or the supervision loop.
+
+### The lattice: detect → apply → know → refuse-or-proceed
+
+The real deliverable is not "configure a namespace" — it is that the system *always
+knows whether it actually sandboxed a Shard*, on every platform, and **never claims
+enforcement it did not impose**. `detect_enforcement()` (`src/isolation/sandbox.cpp`)
+**probes** — it does not assume: it attempts the real unprivileged operation in a
+throwaway child and observes the result, then caches a per-capability
+`EnforcementReport` (each capability is "enforced by «mechanism»" or "not enforceable
+here" — never a bare bool). The same mechanism the probe uses is the one enforcement
+uses, so a green probe means real enforcement. An **unrecognized platform is the
+floor**: zero enforceable capabilities, every requested capability fails safe. You do
+not enumerate platforms; "I have no native path I understand here" produces a loud
+refusal automatically.
+
+### The network primitive (the one real enforcement)
+
+When a grant's `Network` flag is **clear** (the default — minimal authority), the
+child is launched into a **user+network namespace with no usable interface**, so
+`connect()` and friends fail at the syscall level *regardless of what the child links
+or `dlopen`s* — closing the exact "linked-libcurl still works" gap B2 left open. When
+`Network` is **set**, the child runs with host networking (a granted capability is
+real power, by design). Network is the right *first* primitive because it is **binary
+and coarse**: there is no "safer network," so it has no gradient to muddy the lattice,
+and "there is no interface" cannot be subtly misconfigured.
+
+`posix_spawn` cannot unshare namespaces, so the sandboxed branch uses a native
+`fork()` → `unshare(CLONE_NEWUSER|…)` → (parent writes the child's uid/gid maps) →
+`execve()` (in `IsolationHost::spawn_and_handshake`), with everything the child does
+between fork and exec kept async-signal-safe (raw syscalls, no allocation). The
+**granted** (unsandboxed) branch keeps B2's `posix_spawn` byte-for-byte — the new,
+riskier code is confined to the new capability. The child's containment is recorded
+on its `Link` so crash recovery respawns it identically.
+
+*(Implementation note, settled in B4: this host **refuses a child's self-map** of
+`/proc/self/uid_map` with EPERM — the standard container constraint — so the **parent**
+writes `/proc/<child>/uid_map` (the way `unshare(1)` and runtimes do), synchronised by a
+small pipe handshake: the child unshares and signals, the parent maps it and releases
+it, then the child builds its view and execs. The parent only writes the release byte
+when the child is alive and waiting, so a forced/early child death never raises SIGPIPE.
+This also hardened B3's netns entry, which had relied on a self-map that happened to work
+earlier.)*
+
+### What "network: contained" means — scope, confirmation, and preconditions
+
+"Contained" is a precise, **structural** claim, and `containment()` states exactly it:
+*no external network reachability* — there is no veth/bridge/physical interface in the
+namespace, so the child cannot reach the host network, other namespaces, or the
+internet, and a new outbound `connect()` fails at the route/syscall level. It is robust
+because it is structural (no interface ⇒ no route), not a firewall rule. A fresh
+`CLONE_NEWNET` also scopes **abstract `AF_UNIX`** sockets.
+
+It does **not** mean "no communication," and the claim must never be read that way:
+
+- The inherited **host-control fd** (fd 3) stays open, **by design** — that is how the
+  child talks to the host. "Contained" is *no external reachability*, not *no IPC*.
+- **Pathname `AF_UNIX`** sockets on the shared filesystem are filesystem-scoped, not
+  netns-scoped — closed only when filesystem sandboxing lands (B4+).
+- Intra-namespace **loopback**: the child is root in its *own* user namespace and could
+  bring `lo` up, but that reaches only itself — inert **while there is exactly one
+  process in the namespace**. The guarantee rests on "no interface bridges outward," not
+  on "lo stays down."
+
+**Inferred → verified.** "Contained" does not rest on inference (report said enforceable
++ handshake succeeded). After spawn the host **positively confirms** the child is in a
+distinct network namespace, comparing `/proc/<child>/ns/net` against `/proc/self/ns/net`
+(different inode ⇒ different namespace) — host-side, no protocol change. If confirmation
+fails, the mount **fails safe** (refuses); only then does `containment()` say "confirmed."
+
+**Fail-safe on a surprise failure.** Detection probes in one child; real enforcement
+runs later in another, and could fail when the probe didn't (e.g. `unshare(CLONE_NEWUSER)`
+EINVAL in a since-threaded process). Because entry runs in the host's fork-child *before*
+`execve` — and a failed entry `_exit`s before any untrusted code loads, failing the
+handshake — such a failure **refuses the mount in both strict and dev mode**. Dev-mode
+relaxes only *known* gaps (a capability detected unenforceable *before* launch); it never
+downgrades an *intended* enforcement that failed at the last moment.
+
+**Preconditions for "no network" to hold:** **one process per fresh namespace; no
+namespace sharing; no in-namespace process spawning.** If a future primitive shares a
+namespace between children, or lets a child spawn an in-namespace helper, "no network"
+silently becomes "a private loopback network *between those processes*," and this claim
+must be revisited then.
+
+### Native-only — because a boundary you don't understand lies
+
+There is no portable sandbox-abstraction dependency. Each platform's enforcement is
+implemented directly and **known specifically**, because the system is the one telling
+the operator "this is contained," and that claim must be backed by enforcement *we*
+understand, not a library's promise. B3 implements **Linux** (the target); an
+unimplemented platform detects as zero enforceable capabilities and hits the fail-safe
+refusal. The seam is shaped so a macOS/Windows backend can be added later.
+
+### The dev-mode override (the one knob, introduced here)
+
+Strictness is **default-on**. When the safe floor for a requested capability cannot be
+imposed on this host, the mount **refuses**, loudly, naming the gap — a forgotten flag
+fails *safe* (refuses), never *open* (runs unprotected silently). **Dev-mode** is the
+human override: it converts those refusals into loud warnings and proceeds, with the
+Shard **visibly marked uncontained** for each unenforced capability (so a WSL/CI box
+lacking a primitive never blocks development while production stays protected by
+default). It is a deployment-level choice — the same binary, dev box vs prod,
+uninferable by code — which is exactly why it earns a knob. It gates *only* the
+fail-safe refusal; there is nothing else to override, and there is deliberately no
+second knob.
+
+### Hard vs graduated capabilities (filesystem's reserved home)
+
+**Network is a *hard* capability** — enforce-or-refuse, no middle. **Filesystem is
+*graduated*** — a spectrum with a safe default and louder-as-riskier widening: none →
+read-only → write-to-a-scoped-dir → write-with-no-exec-bit → write-anywhere. B3 builds
+the **vocabulary** only (`FsAccess` on `Grant`, defaulting to `None`), not the
+mechanism, so filesystem is not a retrofit. The unifying rule the vocabulary encodes:
+the *default* of a graduated capability is its **safe** end (a forgotten filesystem
+grant fails to none/scoped, never to write-anywhere), and reaching a dangerous level is
+an explicit, visible act. The intended filesystem phase (B4+) is **Linux-makes-it-
+hard-and-loud-but-possible**: a mount namespace with bind mounts for the scoped tree,
+the no-exec bit enforced via `MS_NOEXEC`, path scoping by what is (not) bound, and
+loudness scaling with the level.
+
+### Per-capability resolution (B4-ready)
+
+Each `Link` holds a **vector** of per-capability resolutions (capability, outcome ∈
+{enforced, granted, uncontained}, confirmed, note), and `containment()` **iterates**
+them — it does not hardcode one sentence. B3 proved the plural shape with one entry
+(Network); **B4 added Filesystem** as exactly "a probe + an enforcement call + a
+`describe_resolution` arm," and a mixed verdict (network + filesystem) now appears
+verbatim in `containment()`. The *application* step is per-capability by nature (a netns
+and a mount-ns view are built pre-`execve`; a cgroup would be applied post-fork) — there
+is no generic "apply-all," which is why each phase adds its own. `set_dev_mode` stays
+**global** ("let *known* gaps slide everywhere"); the *reporting* is per-capability,
+which is what the mixed verdict needs. **B5 (Resources/cgroups) slotted in exactly that way**,
+and a three-capability mixed verdict (network + filesystem + resources) now appears verbatim in
+`containment()`.
+
+### Status: built
+
+The detection lattice, the network primitive (sandboxed `fork`+`unshare` vs granted
+`posix_spawn`), positive `/proc/<pid>/ns/net` confirmation, the honest generated
+per-capability `containment()`, the dev-mode knob, and the graduated `FsAccess`
+vocabulary all ship and are tested in Debug and under ASan/UBSan. The isolation suite
+proves the OS enforcement end-to-end (a child without the Network grant gets
+`ENETUNREACH` from a real `connect()`; one with it gets `ECONNREFUSED`), proves both
+detection branches (enforceable → contained-and-confirmed; injected-unavailable → strict
+refuses / dev-mode proceeds visibly uncontained, never falsely claiming containment), and
+proves a **forced real-entry failure refuses in both strict and dev mode** (no
+run-while-claiming-contained path). Deferred to later phases: **seccomp-bpf** syscall
+filtering, **cgroups** CPU/memory caps, **filesystem** enforcement (B3 ships its
+`FsAccess` vocabulary; the mechanism is B4, below), and the macOS/Windows backends.
+
+---
+
+## Isolation (B4): the filesystem primitive — a graduated capability, mount-namespace enforced
+
+B4 closes the highest-value remaining harm a stranger's Shard can do once the network is
+shut: reach your **files** — read `~/.ssh` or a password store, destroy data, or plant an
+executable. It is the **first *graduated* capability**: the grant's `FsAccess` level picks
+a point on a safe→dangerous axis, defaulting to the safe end.
+
+### The level model (allow-list, not deny-list)
+
+The restricted view is an **allow-list** — the Shard sees only what it is granted, built by
+`pivot_root`-ing into a fresh, minimal, read-only root. A deny-list (hiding sensitive paths)
+fails *open* the moment you forget one; an allow-list fails *closed*. The levels:
+
+- **None** (default) — a minimal read-only view: the dynamic-loader closure and the Shard's
+  own `.so`, nothing writable, no home, no `/tmp`. A default-grant Shard cannot read your
+  secrets because they are **absent from the view**, not merely hidden.
+- **ReadOnly** — None plus the grant's `scoped_path` bind-mounted read-only.
+- **WriteScoped** — None plus a single writable scratch `tmpfs` at `/scratch`.
+- **WriteNoExec** — WriteScoped, but the scratch is `MS_NOEXEC`: the kernel refuses to
+  `execve` anything written there.
+- **WriteAnywhere** — the **opt-out**: the host filesystem, unrestricted. Treated like a
+  *granted* capability (à la `os_cap::Network` granted) and reported honestly as *not
+  contained, by grant* — real power the operator chose to give.
+
+### The mechanism (the same fork-child window as the netns)
+
+The fork-child enters `CLONE_NEWNS` alongside `CLONE_NEWUSER` (and `CLONE_NEWNET` when the
+network is contained). After the parent writes its id maps (so it holds `CAP_SYS_ADMIN` in
+the userns), the child runs a **mount plan precomputed in the parent** — raw syscalls only,
+no allocation — to build the view:
+
+1. **Make the tree private first** (`mount(NULL,"/",NULL,MS_REC|MS_PRIVATE,NULL)`) — the
+   reverse-leak guard. Without it a new mount namespace shares mounts with the host and the
+   child's mount changes can **propagate back to the host**. The #1 invisible footgun.
+2. A `tmpfs` new root; the loader closure (`/usr,/lib,/lib64,/bin,/etc`) and the exe/.so
+   directories bind-mounted **read-only**, made recursively read-only via
+   `mount_setattr(AT_RECURSIVE, MOUNT_ATTR_RDONLY)` (kernel 5.12+; the bind-then-remount-ro
+   alternative is *non-recursive* and would leave submounts writable).
+3. The scratch `tmpfs` for the write levels (`MS_NOEXEC` at `WriteNoExec`).
+4. **Remount the root read-only** so a Shard cannot write — or plant-and-exec — at `/`;
+   only the scratch submount stays writable. (Without this the writable root tmpfs would
+   leak past the read-only/noexec intent — a real gap the behavioural test caught.)
+5. `pivot_root` into the new root, `chdir("/")`, detach the old root.
+
+### Confirmation, fail-safe, dev-mode (the B3 discipline, extended)
+
+After the handshake the host **confirms** the child is in a distinct mount namespace
+(`/proc/<pid>/ns/mnt` inode differs); a failure fails safe (the mount refuses), so
+"contained at level X" rests on confirmation, never inference. Detection **probes** the real
+mechanism (a throwaway child that builds a minimal view); an unenforceable host refuses by
+default, and `set_dev_mode(true)` converts that to a loud warning with the Shard marked
+filesystem-uncontained. A *surprise* entry failure refuses in both modes.
+
+### Honest scope caveats (in the containment string)
+
+- `WriteNoExec` blocks **native `execve`**, not a script run by an interpreter already in the
+  view (`/bin/sh` is in the loader closure).
+- **PIDs are not namespaced** (B4 does no PID namespace), so a host `/proc` would reflect host
+  processes — therefore `/proc` is **deliberately not mounted**.
+- "Contained" is *no reach beyond the allow-list*, not "no IPC": the inherited host-control fd
+  remains, by design.
+
+### drvfs / WSL findings, and the `FsAccess`/`os_cap` cleanup
+
+Probing confirmed `drvfs` (`/mnt/...`) directories **bind-mount read-only into the view** and
+the loader + `dlopen` resolve inside the pivot-rooted view — no copy-to-`tmpfs` fallback was
+needed. `FsAccess` is now the **single source of truth** for files; the redundant binary
+`os_cap::FilesystemRead/Write` flags were removed (`Network`/`SpawnProcess` stay hard flags).
+
+### Status: built
+
+The Filesystem detection probe, the per-level mount-namespace view, `/proc/<pid>/ns/mnt`
+confirmation, the honest per-level `containment()` with its caveats, and the cleanup all ship,
+green in Debug and under ASan/UBSan. The OS-enforced proof passes end-to-end: a fs-probe
+Shard's read of a secret outside scope, a write outside `/scratch`, and an `execve` from a
+`noexec` scratch all return the OS's `ENOENT`/`EROFS`/`EACCES` — while the probe **still
+emits** its result (sandbox ≠ muzzle) — and `WriteAnywhere` proves the opt-out reaches host
+paths and is reported *not contained*. **Sandboxed-by-default now means network *and* a
+restricted filesystem view.** Next: **B5 — cgroups**.
+
+---
+
+## Isolation (B5): the resource primitive — a quantitative capability, cgroup-v2 enforced
+
+B5 closes the last threat-model harm: a Shard that **hogs resources** — allocates until the
+host OOMs, pegs every core, or fork-bombs. It is the **first *quantitative* capability**:
+not binary (network), not a safe→dangerous level (filesystem), but a *limit*. With network
++ filesystem + resources the mechanism ladder covers the mod-ecosystem threat model end to
+end. **seccomp is a separate, later decision** (it guards a different tier — kernel-exploit
+*escape*), not an assumed B6.
+
+### The grant's resource limits and computed defaults (no knob)
+
+`ResourceLimits` adds **memory** (bytes), **pids** (the fork-bomb stop), and **cpu_weight**;
+`0` means "use the host-computed conservative default," a positive value raises it, and
+`with_unlimited_resources()` is the explicit opt-out. Defaults are **computed from the host,
+not a config knob** (the stinginess bar): memory = a bounded fraction of RAM (1/8) capped at
+1 GiB and floored at 128 MiB so one Shard can't OOM the host; pids = 512 (room for threads,
+stops a bomb); cpu_weight = 100 (fair share, not a hard quota — a quota would waste idle
+cores). A forgotten/empty grant lands on the *bounded* default; unbounded is the explicit,
+honestly-reported opt-out.
+
+### cgroup-v2 mechanism (parent-applies-at-the-sync-point)
+
+Reusing the proven fork+handshake — **no `clone3` rewrite** (the handshake already closes
+the attach race: the child runs nothing real until released):
+
+- The host **discovers its delegated base** from `/proc/self/cgroup` and, once, builds the
+  hierarchy the **no-internal-processes** rule forces: create a `zen-supervisor` leaf, **drain
+  the base's processes into it**, then enable `+memory +pids` on the base's
+  `cgroup.subtree_control` (you can't enable controllers on a cgroup that holds processes).
+  Per-Shard leaves are created **alongside** the supervisor.
+- At **mount**, a per-Shard leaf is created with its limits (`memory.max`, `memory.swap.max=0`
+  so swap can't escape the cap, `pids.max`). At the **sync point** (child unshared, blocked on
+  "go") the parent writes the child's pid into the leaf's `cgroup.procs` — moving the whole
+  subtree it execs/spawns under the limits — then maps it (if it made a userns), then releases.
+  The child consumes nothing until released, so it is in the cgroup before it can.
+- A Shard exceeding `memory.max` is **OOM-killed within its cgroup** by the kernel; the child
+  dies and flows through the **existing** death → bounded-reload → quarantine path unchanged.
+  `pids.max` makes `fork()` fail (`EAGAIN`) rather than bomb the host. The leaf is removed on
+  teardown (after the process is reaped — `rmdir` needs it empty) and recreated on respawn.
+
+### Resolution, confirmation, and the delegation reality
+
+Resolution joins the tree: grant unlimited → **Granted** (opt-out); else enforceable →
+**Enforced** (create+limit+move+confirm); else dev-mode → **Uncontained**; else **fail-safe
+refuse**. Confirmation reads `/proc/<pid>/cgroup` (pid is in the leaf) and reads the limits
+back; a mismatch fails safe.
+
+**Delegation is the make-or-break, and it is invocation-dependent.** cgroup write access needs
+a *delegated* subtree the user owns (on systemd, the user session slice). A process launched
+outside a login session (e.g. plain `wsl bash`) lands in the **root cgroup with no delegation**
+— there resource containment is *not enforceable*, and a default mount fails safe. So the host
+must run inside a delegated scope; the isolation test suite is launched via
+`tests/run-under-scope.sh` (`systemd-run --user --scope -p Delegate=yes`) so enforcement is
+real. **Partial controllers:** on this host systemd delegates `memory` and `pids` but **not
+`cpu`** — B5 enforces what is present and reports the rest honestly (it does not refuse for a
+missing controller).
+
+### Status: built
+
+The Resources detection (establish-the-base probe), the per-Shard cgroup-v2 leaf with
+memory/pids limits applied at the sync point and confirmed (pid-in-leaf + limits read back),
+leaf cleanup/recreate across teardown/respawn, the resolution + dev-mode + fail-safe + the
+unlimited opt-out, and the honest per-Shard `containment()` all ship, green in Debug and under
+ASan/UBSan (the suite runs under a delegated scope). The OS-enforced proof passes **with its
+negative control**: a memory-bomb Shard under a 64 MiB cap is **OOM-killed within its cgroup**
+(the host survives and quarantines it), while the *same* allocation under a 512 MiB cap
+**survives** — proving the cap, not the allocation, is the cause; and a fork-bomb is **bounded
+by `pids.max`** (≤64 of its 4000 attempts). `containment()` now leaves **only syscalls**
+unenforced. The mechanism ladder is **complete for the threat model**; what remains is a
+**deliberate seccomp decision** (kernel-exploit-escape defense) and the **policy phases**
+(provenance→grant→hosting-mode; persistent scoped storage) — mechanism done, policy next.
 
 ---
 

@@ -8,12 +8,17 @@
 // only async is the child's reply *timing* — so the bus's FIFO and reentrancy
 // guarantees hold. The Switchboard must outlive the host.
 //
-// Honest containment: an out-of-process Shard here is *isolated* (process
-// boundary: crash-contained, cannot touch host memory) but *not sandboxed* (no OS
-// enforcement of the grant's OS-capability flags yet — that is B3). The status
-// reports this and never claims sandboxing.
+// Honest containment (B3): an out-of-process Shard is *isolated* (process boundary:
+// crash-contained, cannot touch host memory) and, when its grant withholds the
+// Network capability and this host can enforce it, also *network-sandboxed* (the
+// child runs with no network interface, so connect() fails at the syscall level).
+// containment() is generated from what was ACTUALLY imposed per Shard — it never
+// claims enforcement it did not apply. When the safe floor cannot be enforced the
+// mount fails safe (refuses) unless dev-mode is on, in which case it proceeds with
+// the Shard visibly marked uncontained.
 
 #include <zen/isolation/channel.hpp>
+#include <zen/isolation/sandbox.hpp>
 #include <zen/registry.hpp>
 #include <zen/switchboard/switchboard.hpp>
 #include <zen/value.hpp>
@@ -38,6 +43,22 @@ struct OutOfProcessResult {
     std::string error;
 };
 
+/// One capability's resolved outcome on a mounted child — recorded so containment()
+/// reports the truth *per capability* and crash-recovery reapplies identically. B3
+/// resolves exactly one (Network); B4 resolves more here, unchanged in shape (each
+/// Link holds a vector of these, and containment() iterates them).
+struct CapabilityResolution {
+    enum class Outcome {
+        Enforced,    ///< the safe floor was imposed AND positively confirmed
+        Granted,     ///< intentionally granted — real power, not contained
+        Uncontained, ///< requested but unenforceable here; dev-mode let it run, visibly
+    };
+    Capability capability{Capability::Network};
+    Outcome outcome{Outcome::Granted};
+    bool confirmed = false;  ///< Enforced only: positively verified (e.g. distinct netns inode)
+    std::string note;        ///< extra honest detail (e.g. the filesystem level name)
+};
+
 class IsolationHost {
 public:
     /// `shard_host_exe` is the path to the zen-shard-host child executable.
@@ -50,8 +71,33 @@ public:
     /// Mount a Shard out-of-process from `so_path` under `name`, with `grant`.
     /// Spawns a child, handshakes (reconstructs its schemas, caches its initial
     /// snapshot and policy), and registers the proxy on the bus.
+    ///
+    /// B3: if the grant withholds os_cap::Network, the child is launched into a
+    /// no-interface network namespace (OS-enforced). If that cannot be enforced on
+    /// this host, the mount refuses (fail-safe) unless dev-mode is on — then it
+    /// proceeds with the Shard marked network-uncontained.
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
                              zen::sb::Grant grant);
+
+    /// Dev-mode (default off = strict): converts a fail-safe refusal — when a
+    /// requested capability cannot be enforced on this host — into a loud warning,
+    /// proceeding with the Shard visibly marked uncontained for that capability. A
+    /// deployment-level choice (dev box vs prod); the one knob B3 introduces.
+    void set_dev_mode(bool on) noexcept { dev_mode_ = on; }
+    bool dev_mode() const noexcept { return dev_mode_; }
+
+    /// The enforcement this host detected it can impose.
+    const EnforcementReport& enforcement() const noexcept { return enforcement_; }
+    /// Test seam: force a detection report (e.g. Network unenforceable) so both the
+    /// enforced and the fail-safe/dev-mode branches are exercisable on any host.
+    void override_enforcement_for_test(EnforcementReport report) {
+        enforcement_ = std::move(report);
+    }
+    /// Test seam, distinct from override_enforcement_for_test (which forges the
+    /// detection *verdict*): force the *real* sandbox entry to fail at the next
+    /// spawn, as if `unshare()` failed in the child. Proves that a surprise failure
+    /// of an *intended* enforcement fails safe (refuses) in both strict and dev mode.
+    void force_entry_failure_for_test(bool on) noexcept { force_entry_failure_ = on; }
 
     /// One host-loop iteration, single-threaded: flush + drain child I/O
     /// (re-enqueue child output gated, refresh cached snapshots, note deaths) →
@@ -85,6 +131,11 @@ private:
         std::string snapshot_bytes;          // its canonical bytes, for revival
         std::optional<Value> policy_value;
         OutOfProcessShard* proxy = nullptr;
+        std::vector<CapabilityResolution> resolutions; // per-capability, resolved at mount
+        MountPlan fs_plan;     // precomputed restricted-view plan (empty if fs not sandboxed)
+        std::string fs_root;   // the mkdtemp'd new-root dir (for teardown), empty otherwise
+        std::string cg_leaf;   // the per-Shard cgroup leaf name (empty if resources not contained)
+        ResourceCaps cg_caps;  // the resolved resource caps applied to the leaf
         bool dead = false;
         bool death_signaled = false;
         bool quarantined = false;
@@ -106,10 +157,18 @@ private:
     void recover(Link& link);
     void teardown_child(Link& link);
 
+    // Is a capability resolved to Enforced for this link (→ sandboxed spawn)?
+    static bool network_sandboxed(const Link& link);
+    static bool filesystem_sandboxed(const Link& link);
+    static bool resources_contained(const Link& link);
+
     zen::sb::Switchboard& bus_;
     std::string exe_;
     zen::Registry registry_; // reconstructed child schemas (decode deps + resolution)
     std::map<std::string, std::unique_ptr<Link>> links_;
+    EnforcementReport enforcement_;    // what this host can actually impose (detected once)
+    bool dev_mode_ = false;            // strict by default
+    bool force_entry_failure_ = false; // test seam: simulate a real sandbox-entry failure
 };
 
 template <class Pred>

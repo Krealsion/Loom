@@ -47,13 +47,22 @@ zen_add_test_shard(zen_test_shard_v2 ZEN_SHARD_STATE_V2)
 zen_add_test_shard(zen_test_shard_crasher
     ZEN_SHARD_CRASH_ON_MAGIC ZEN_SHARD_CRASH_ON_REVIVE ZEN_SHARD_LOW_RELOADS)
 zen_add_test_shard(zen_test_shard_silent ZEN_SHARD_SILENT)
+# B3: a child that reaches for the network directly, to prove the OS sandbox blocks it.
+zen_add_test_shard(zen_test_shard_netprobe ZEN_SHARD_NET_PROBE)
+# B4: a child that reaches for the filesystem directly, to prove the mount-ns view.
+zen_add_test_shard(zen_test_shard_fsprobe ZEN_SHARD_FS_PROBE)
+# B5: a child that bombs memory (OOM-kill under memory.max, with a small reload budget so
+# it quarantines) and one that fork-bombs (bounded by pids.max).
+zen_add_test_shard(zen_test_shard_membomb ZEN_SHARD_MEM_BOMB ZEN_SHARD_LOW_RELOADS)
+zen_add_test_shard(zen_test_shard_forkbomb ZEN_SHARD_FORK_BOMB)
 
 add_library(zen_test_badabi SHARED shardlib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE zen-core zen-warnings zen-sanitize)
 
 set(ZEN_SHARD_LIBS zen_test_shard zen_test_shard_b zen_test_shard_badsnap
     zen_test_shard_badmsg zen_test_shard_v2 zen_test_shard_crasher
-    zen_test_shard_silent zen_test_badabi)
+    zen_test_shard_silent zen_test_shard_netprobe zen_test_shard_fsprobe
+    zen_test_shard_membomb zen_test_shard_forkbomb zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_SHARD_LIBS})
 
 # The isolation tests spawn the real child-host executable.
@@ -68,6 +77,10 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_shard_v2>\""
     "ZEN_SO_CRASHER=\"$<TARGET_FILE:zen_test_shard_crasher>\""
     "ZEN_SO_SILENT=\"$<TARGET_FILE:zen_test_shard_silent>\""
+    "ZEN_SO_NETPROBE=\"$<TARGET_FILE:zen_test_shard_netprobe>\""
+    "ZEN_SO_FSPROBE=\"$<TARGET_FILE:zen_test_shard_fsprobe>\""
+    "ZEN_SO_MEMBOMB=\"$<TARGET_FILE:zen_test_shard_membomb>\""
+    "ZEN_SO_FORKBOMB=\"$<TARGET_FILE:zen_test_shard_forkbomb>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SHARD_HOST_EXE=\"$<TARGET_FILE:zen-shard-host>\"")
 
@@ -79,11 +92,17 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # doctest returns the failed-assertion count as its exit code, so CTest's default
 # exit-status check is the source of truth — no output-scraping needed.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec kernel author author_shard capabilities
-    isolation)
+    switchboard harness breathing schema_codec kernel author author_shard capabilities)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
 
-# A catch-all that runs everything (so `ctest -R all` exercises the whole binary).
-add_test(NAME all COMMAND zen-tests)
+# The isolation suite needs cgroup-v2 delegation for B5 resource enforcement, which a
+# plain invocation lacks (it lands in the root cgroup). run-under-scope.sh launches the
+# binary inside an unprivileged delegated systemd scope when one is available.
+add_test(NAME isolation COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+    $<TARGET_FILE:zen-tests> --test-suite=isolation --no-skipped-summary)
+
+# A catch-all that runs everything (also under a scope, since it includes isolation).
+add_test(NAME all COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+    $<TARGET_FILE:zen-tests>)
