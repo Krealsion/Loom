@@ -1,5 +1,6 @@
 #include <doctest.h>
 
+#include "shardlib/storage_protocol.hpp"
 #include "switchboard_fixtures.hpp"
 
 #include <zen/isolation/grant_record.hpp>
@@ -239,6 +240,37 @@ TEST_CASE("the host holds the pen: a recorded delta — not the ask — raises a
     // recorded a delta. The declaration never changed; the host's pen did.
     CHECK(host.containment("blessed").find("network: granted") != std::string::npos);
     std::remove(path.c_str());
+}
+
+// ---- Part B: the StorageBroker (the powerbox, end to end) -----------------
+
+TEST_CASE("out-of-process role-send reaches the role holder, sender stamped (kEmitToRole seam)") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("the floor is not fully OS-enforceable here; skipping the kEmitToRole seam check");
+        return;
+    }
+    // An in-process Shard holds the "storage" role and accepts StoragePut — a stand-in
+    // for the broker; this stage proves only that the wire seam carries a role-send to
+    // its holder with the sender stamped host-side.
+    Registered holder =
+        register_probe_role(bus, {zen::author::schema_of<storage::StoragePut>()}, "storage");
+    zen::sb::ShardId got_sender{};
+    holder.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got_sender = in.sender; };
+
+    // Mount the storage-client mod out-of-process on the floor (FsAccess::None).
+    OutOfProcessResult mod = host.mount_mod("client", ZEN_SO_STORAGE_CLIENT);
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+
+    // Drive a DoPut -> the mod's handler calls Mail::send_to_role("storage", StoragePut).
+    bus.send(mod.id, Message(zen::author::to_value(storage::DoPut{"save", zen::Bytes{'x'}})));
+    REQUIRE(host.run_until([&] { return !holder.shard->handled_names.empty(); }, 2000));
+
+    CHECK(holder.shard->handled_names.back() == "StoragePut");
+    CHECK(got_sender == mod.id); // stamped from the connection (link.id), never the wire
 }
 
 } // TEST_SUITE

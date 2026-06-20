@@ -55,6 +55,11 @@ typedef struct ZenHostApi {
                       const uint8_t* payload, size_t len);
     ZenStatus (*publish)(void* ctx, uint64_t reply_to, uint64_t correlation,
                          const uint8_t* payload, size_t len);
+    /* Send to whichever Shard currently holds `role` (Part A's role-addressing). The
+     * sender is NOT passed and never rides the wire — the host stamps it from the
+     * connection, so a mod cannot impersonate another. `role` is NUL-terminated. */
+    ZenStatus (*send_to_role)(void* ctx, const char* role, uint64_t reply_to,
+                              uint64_t correlation, const uint8_t* payload, size_t len);
 } ZenHostApi;
 
 /* The single descriptor a Shard library exposes, returned by zen_shard_abi().

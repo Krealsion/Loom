@@ -106,6 +106,17 @@ ZenStatus ship_emit(std::uint8_t kind, std::uint64_t target, std::uint64_t reply
     return ZEN_OK;
 }
 
+ZenStatus ship_emit_role(const char* role, std::uint64_t reply_to, std::uint64_t correlation,
+                         const std::uint8_t* payload, std::size_t len) {
+    std::string out;
+    put_bytes(out, std::string_view(role)); // length-prefixed role; NO sender on the wire
+    put_u64(out, reply_to);
+    put_u64(out, correlation);
+    out.append(reinterpret_cast<const char*>(payload), len); // raw trailing message bytes
+    send_frame(Op::EmitRole, out);
+    return ZEN_OK;
+}
+
 bool emit_snapshot(const ZenShardAbi* abi, void* instance) {
     std::string snap;
     ZenByteSink sink{&snap, &sink_to_string};
@@ -129,6 +140,12 @@ static ZenStatus zen_child_publish(void* ctx, std::uint64_t reply_to, std::uint6
                                    const std::uint8_t* payload, std::size_t len) {
     (void)ctx;
     return ship_emit(kEmitPublish, 0, reply_to, correlation, payload, len);
+}
+static ZenStatus zen_child_send_to_role(void* ctx, const char* role, std::uint64_t reply_to,
+                                        std::uint64_t correlation, const std::uint8_t* payload,
+                                        std::size_t len) {
+    (void)ctx;
+    return ship_emit_role(role, reply_to, correlation, payload, len);
 }
 } // extern "C"
 
@@ -179,7 +196,7 @@ int main(int argc, char** argv) {
         send_frame(Op::Hello, hello);
     }
 
-    ZenHostApi api{nullptr, &zen_child_send, &zen_child_publish};
+    ZenHostApi api{nullptr, &zen_child_send, &zen_child_publish, &zen_child_send_to_role};
 
     for (;;) {
         Op op = Op::Hello;

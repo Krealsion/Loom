@@ -1,0 +1,51 @@
+#ifndef ZEN_TESTS_STORAGE_PROTOCOL_HPP
+#define ZEN_TESTS_STORAGE_PROTOCOL_HPP
+
+// The StorageBroker wire protocol + the test-control shapes that drive a storage
+// client mod. Shared by the broker .so, the client .so, and the policy test — each
+// TU derives the same content-id from the same ZEN_SHAPE, so they agree across the
+// .so boundary exactly as the gate requires.
+
+#include <zen/author/shape.hpp>
+#include <zen/value.hpp> // zen::Bytes
+
+#include <cstdint>
+#include <string>
+
+namespace storage {
+
+// ---- the broker protocol (what role "storage" accepts / replies) ----------
+// Names + version match grant_record.hpp's kStoragePut/kStorageGet/kStorageProtocolVersion,
+// which the floor pre-wires every mod to reach.
+struct StoragePut {
+    std::string key;
+    zen::Bytes value;
+    ZEN_SHAPE(StoragePut, 1, ZEN_FIELD(key), ZEN_FIELD(value));
+};
+struct StorageGet {
+    std::string key;
+    ZEN_SHAPE(StorageGet, 1, ZEN_FIELD(key));
+};
+struct StorageValue {
+    zen::Bytes value; // empty = the key was absent for this sender
+    ZEN_SHAPE(StorageValue, 1, ZEN_FIELD(value));
+};
+
+// ---- test-control shapes (the test drives the client mod with these) ------
+struct DoPut {
+    std::string key;
+    zen::Bytes value;
+    ZEN_SHAPE(DoPut, 1, ZEN_FIELD(key), ZEN_FIELD(value));
+};
+struct DoGet {
+    std::string key;
+    ZEN_SHAPE(DoGet, 1, ZEN_FIELD(key));
+};
+struct Probe { // trigger a direct-disk syscall probe; the result rides back via the broker
+    std::int64_t n;
+    ZEN_SHAPE(Probe, 1, ZEN_FIELD(n));
+};
+
+} // namespace storage
+
+#endif // ZEN_TESTS_STORAGE_PROTOCOL_HPP
