@@ -12,13 +12,16 @@
 // No stringly-typed set(), no hand-built schema, no hand-written snapshot/revive.
 
 #include <zen/author/shape.hpp>
+#include <zen/kernel/schema_codec.hpp>
 #include <zen/switchboard.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -75,6 +78,14 @@ public:
     template <class T>
     std::size_t publish(const T& msg, std::uint64_t correlation = 0) {
         return bus_.publish(zen::sb::Message(to_value(msg), self_, zen::sb::ShardId{}, correlation));
+    }
+    /// Send `msg` to whichever Shard holds `role` (resolved at delivery). The grant
+    /// must permit the shape to that role (Grant::allow_to_role); reload-stable.
+    template <class T>
+    zen::sb::Ticket send_to_role(std::string_view role, const T& msg,
+                                 std::uint64_t correlation = 0) {
+        return bus_.send_to_role(
+            role, zen::sb::Message(to_value(msg), self_, zen::sb::ShardId{}, correlation));
     }
 
 private:
@@ -140,6 +151,22 @@ public:
 
     /// Default lifecycle policy; a Self may declare its own policy_config().
     LifecyclePolicy policy_config() const { return LifecyclePolicy{}; }
+
+    /// The capabilities this Shard *asks* of the host — advice, never authority.
+    /// Defaults to nothing (the floor); a Self declares its own via ZEN_ASK. The
+    /// host reads the ask to know what to surface, but a declaration never becomes a
+    /// grant — the host alone decides (the floor-factory + grant-record).
+    zen::kernel::CapabilityAsk ask_config() const { return {}; }
+
+    /// The manifest hook the export layer calls. Returns the ask iff non-empty, so a
+    /// Shard with no ask produces a clean manifest with no requests section.
+    std::optional<zen::kernel::CapabilityAsk> zen_requested_capabilities() const {
+        zen::kernel::CapabilityAsk a = static_cast<const Self*>(this)->ask_config();
+        if (!a.network && a.filesystem.empty() && a.roles.empty()) {
+            return std::nullopt;
+        }
+        return a;
+    }
 
 protected:
     State state_{};
@@ -213,5 +240,16 @@ zen::sb::ShardId mount_granted(zen::sb::Switchboard& bus, zen::sb::Grant grant, 
 }
 
 } // namespace zen::author
+
+/// Declare the capabilities a Shard *asks* the host for — a ZEN_SHAPE-sibling that
+/// shadows the floor default (ShardBase::ask_config) with designated initializers:
+///   ZEN_ASK(.network = true, .filesystem = "write-scoped", .roles = {"storage"});
+/// It is advice only: the host reads the declaration, but the grant remains the
+/// host's decision. Omit it entirely to ask for nothing (the floor).
+#define ZEN_ASK(...)                                                                                \
+    ::zen::kernel::CapabilityAsk ask_config() const {                                               \
+        return ::zen::kernel::CapabilityAsk{__VA_ARGS__};                                           \
+    }                                                                                               \
+    static_assert(true, "") /* swallow the trailing semicolon */
 
 #endif // ZEN_AUTHOR_SHARD_HPP

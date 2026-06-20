@@ -72,7 +72,8 @@ struct SendRule {
     std::string shape_name; ///< used iff !any_shape
     std::uint32_t shape_version = 0;
     bool any_target = false;
-    ShardId target{}; ///< used iff !any_target
+    ShardId target{};          ///< used iff !any_target and not a role rule
+    std::string target_role{}; ///< non-empty iff a role rule (see Grant::allow_to_role)
 };
 
 /// Resource limits — a *quantitative* capability (B5, enforced via cgroup-v2). `0`
@@ -115,6 +116,16 @@ public:
         rules_.push_back(SendRule{true, std::string{}, 0, true, ShardId{}});
         return *this;
     }
+    /// May send shape (name, version) to whichever Shard currently holds `role`.
+    /// The send names a role, not a ShardId; the role is resolved to its holder at
+    /// delivery, so this rule survives the holder reloading (its ShardId is stable).
+    /// A role rule authorizes only role-targeted sends (see permits_role); it never
+    /// authorizes a direct ShardId send.
+    Grant& allow_to_role(std::string shape_name, std::uint32_t shape_version, std::string role) {
+        rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, ShardId{},
+                                  std::move(role)});
+        return *this;
+    }
     /// Record OS-capability flags (hard capabilities; Network enforced out-of-process
     /// in B3, the rest reserved for later phases). Not consulted in B1.
     Grant& with_os_capabilities(std::uint32_t caps) {
@@ -148,6 +159,24 @@ public:
             const bool shape_ok =
                 r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version);
             const bool target_ok = r.any_target || r.target == target;
+            if (shape_ok && target_ok) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// True iff some rule permits sending shape (name, version) to a Shard holding
+    /// `role`. Authorized only by a role rule for the same role (or an any-target
+    /// rule); a plain ShardId rule never authorizes a role-targeted send, just as a
+    /// role rule never authorizes a direct ShardId send (see permits).
+    bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
+                      std::string_view role) const {
+        for (const SendRule& r : rules_) {
+            const bool shape_ok =
+                r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version);
+            const bool target_ok =
+                r.any_target || (!r.target_role.empty() && r.target_role == role);
             if (shape_ok && target_ok) {
                 return true;
             }

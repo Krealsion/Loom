@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace zen::sb {
 
@@ -31,6 +32,12 @@ public:
     /// Enqueue a delivery to every accepter of the payload's shape; returns the
     /// recipient count.
     virtual std::size_t publish(Message msg) = 0;
+
+    /// Enqueue a directed delivery to whichever Shard currently holds `role`. The
+    /// role is resolved to its holder at delivery (singleton in this phase), so a
+    /// grant of "shape -> role" survives the holder reloading. An unheld role
+    /// degrades like an unknown target: the delivery is refused, never gated.
+    virtual Ticket send_to_role(std::string_view role, Message msg) = 0;
 
 protected:
     Bus() = default;

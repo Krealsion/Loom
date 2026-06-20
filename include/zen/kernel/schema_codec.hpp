@@ -29,6 +29,17 @@
 
 namespace zen::kernel {
 
+/// A Shard's *ask*: the capabilities it requests of the host. This is advice, not
+/// authority — conformance data carried in the manifest and gated like the
+/// accept-set, which the host reads to know what to surface. A declaration never
+/// becomes a grant; the host (via the floor-factory + grant-record) decides alone.
+/// Default-constructed = no ask (the floor): an empty ask emits no manifest section.
+struct CapabilityAsk {
+    bool network = false;           ///< would like os_cap::Network
+    std::string filesystem;         ///< an FsAccess level name (e.g. "write-scoped"); "" = none
+    std::vector<std::string> roles; ///< role names it would like a send-rule to
+};
+
 // ---- the fixed meta-schemas (the kernel's grammar for describing schemas) ----
 
 inline std::shared_ptr<const Schema> type_token_schema() {
@@ -58,10 +69,24 @@ inline std::shared_ptr<const Schema> schema_desc_schema() {
     return s;
 }
 
+inline std::shared_ptr<const Schema> capability_ask_schema() {
+    static const auto s = SchemaBuilder("zen.CapabilityAsk", 1)
+                              .field("network", Kind::Bool)
+                              .field("filesystem", Kind::Text)
+                              .list("roles", type_of(Kind::Text))
+                              .build();
+    return s;
+}
+
 inline std::shared_ptr<const Schema> manifest_schema() {
-    static const auto s = SchemaBuilder("zen.Manifest", 1)
+    // v2 adds the optional `requests` (the ask). Bumping the version — rather than
+    // mutating v1 in place — keeps the project invariant that a published (name,
+    // version) is a frozen shape. `requests` is optional: a Shard with no ask omits
+    // it, so the floor manifest still admits unchanged.
+    static const auto s = SchemaBuilder("zen.Manifest", 2)
                               .list("accepted", type_message(schema_desc_schema()))
                               .message("state", schema_desc_schema())
+                              .message("requests", capability_ask_schema(), /*required=*/false)
                               .build();
     return s;
 }
@@ -113,8 +138,23 @@ inline Value encode_schema(const Schema& s) {
     return desc;
 }
 
+inline Value encode_capability_ask(const CapabilityAsk& ask) {
+    Value v(capability_ask_schema());
+    v.set("network", Cell::boolean(ask.network));
+    v.set("filesystem", Cell::text(ask.filesystem));
+    std::vector<Cell> roles;
+    roles.reserve(ask.roles.size());
+    for (const auto& r : ask.roles) {
+        roles.push_back(Cell::text(r));
+    }
+    v.set("roles", Cell::list(std::move(roles)));
+    return v;
+}
+
+// `ask` is optional: a null ask emits no requests section (the floor), which admits
+// because the manifest's requests field is optional.
 inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& accepted,
-                             const Schema& state) {
+                             const Schema& state, const CapabilityAsk* ask = nullptr) {
     Value m(manifest_schema());
     std::vector<Cell> acc;
     acc.reserve(accepted.size());
@@ -123,6 +163,9 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
     }
     m.set("accepted", Cell::list(std::move(acc)));
     m.set("state", Cell::message(encode_schema(state)));
+    if (ask != nullptr) {
+        m.set("requests", Cell::message(encode_capability_ask(*ask)));
+    }
     return m;
 }
 
@@ -186,6 +229,19 @@ inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Regi
         rebuilt.push_back(Field{std::move(fname), std::move(type), required});
     }
     return make_schema(std::move(name), version, std::move(rebuilt));
+}
+
+// Precondition: `v` has passed the gate against capability_ask_schema() (it does,
+// as a nested message inside an admitted manifest), so every field is present and
+// well-typed.
+inline CapabilityAsk decode_capability_ask(const Value& v) {
+    CapabilityAsk ask;
+    ask.network = v.get("network")->as_bool();
+    ask.filesystem = v.get("filesystem")->as_text();
+    for (const Cell& c : v.get("roles")->as_list()) {
+        ask.roles.push_back(c.as_text());
+    }
+    return ask;
 }
 
 } // namespace zen::kernel

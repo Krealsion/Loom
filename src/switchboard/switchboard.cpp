@@ -92,8 +92,16 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming) {
 }
 
 ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant) {
+    return register_shard(std::move(incoming), std::move(grant), std::string{});
+}
+
+ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant, std::string role) {
     if (!incoming) {
         throw std::invalid_argument("register_shard: shard must be non-null");
+    }
+    if (!role.empty() && roles_.count(role) != 0) {
+        throw std::invalid_argument("register_shard: role '" + role +
+                                    "' is already held (roles are singletons in this phase)");
     }
 
     // Record the accept-set, registering each schema so all Shards agree on what
@@ -127,8 +135,12 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant
                     std::move(seeded).value(),
                     std::move(grant),
                     0,
-                    true};
+                    true,
+                    role};
     shards_.emplace(id.value, std::move(rec));
+    if (!role.empty()) {
+        roles_.emplace(std::move(role), id);
+    }
     return id;
 }
 
@@ -136,6 +148,9 @@ std::unique_ptr<Shard> Switchboard::unregister_shard(ShardId id) {
     auto it = shards_.find(id.value);
     if (it == shards_.end()) {
         return nullptr;
+    }
+    if (!it->second.role.empty()) {
+        roles_.erase(it->second.role); // a role has no holder once its Shard is removed
     }
     std::unique_ptr<Shard> released = std::move(it->second.shard);
     shards_.erase(it);
@@ -146,6 +161,13 @@ Ticket Switchboard::enqueue_directed(ShardId target, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
     journal_.push_back(DeliveryOutcome{}); // Pending at index seq
     queue_.push_back(Envelope{std::move(msg), target, seq, gated});
+    return Ticket{seq};
+}
+
+Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated) {
+    const std::uint64_t seq = next_seq_++;
+    journal_.push_back(DeliveryOutcome{}); // Pending at index seq
+    queue_.push_back(Envelope{std::move(msg), ShardId{}, seq, gated, std::move(role)});
     return Ticket{seq};
 }
 
@@ -192,6 +214,18 @@ std::size_t Switchboard::publish_as(ShardId as_sender, Message msg) {
     return fanout(std::move(msg), /*gated=*/true);
 }
 
+// Role-addressed sends. send_to_role is the host's ungated root authority; the
+// gated form (the ShardBus path) stamps the authoritative sender and is authorized
+// against that sender's grant by role at delivery.
+Ticket Switchboard::send_to_role(std::string_view role, Message msg) {
+    return enqueue_role(std::string(role), std::move(msg), /*gated=*/false);
+}
+
+Ticket Switchboard::send_as_to_role(ShardId as_sender, std::string_view role, Message msg) {
+    msg.sender = as_sender;
+    return enqueue_role(std::string(role), std::move(msg), /*gated=*/true);
+}
+
 void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refusal& refusal) {
     if (seq < journal_.size()) {
         journal_[static_cast<std::size_t>(seq)] = DeliveryOutcome{disposition, refusal};
@@ -214,6 +248,48 @@ void Switchboard::deliver_one(Envelope env) {
     ev.schema_name = env.msg.payload.schema().name();
     ev.schema_version = env.msg.payload.schema().version();
 
+    // Capability authorization — only for Shard-originated (gated) messages, and
+    // *before* role resolution and the gate, so a denied message never reaches
+    // either. Host-injected (root) messages skip this. This is authorization
+    // ("are you allowed to send this"), categorically distinct from the gate's
+    // conformance question. A role-targeted send is authorized by *role* (the stable
+    // slot the rule names — unspoofable, reload-stable); a direct send by ShardId.
+    // Authorizing before resolution means an unauthorized sender cannot even learn
+    // whether the role is currently held.
+    if (env.gated) {
+        const ShardRecord* sender = find(env.msg.sender);
+        const bool permitted =
+            sender != nullptr &&
+            (env.role.empty()
+                 ? sender->grant.permits(ev.schema_name, ev.schema_version, env.target)
+                 : sender->grant.permits_role(ev.schema_name, ev.schema_version, env.role));
+        if (!permitted) {
+            const Refusal r{RefusalReason::CapabilityDenied, {}};
+            record(env.seq, Disposition::Refused, r);
+            ev.kind = EventKind::Refused;
+            ev.refusal = r;
+            emit(ev);
+            return;
+        }
+    }
+
+    // Resolve a role target to its current holder (singleton in this phase). An
+    // unheld role degrades exactly like an unknown ShardId — NoSuchTarget, never the
+    // gate — so a crashed/unmounted broker is "unavailable", not a hole.
+    if (!env.role.empty()) {
+        auto it = roles_.find(env.role);
+        if (it == roles_.end()) {
+            const Refusal r{RefusalReason::NoSuchTarget, {}};
+            record(env.seq, Disposition::Refused, r);
+            ev.kind = EventKind::Refused;
+            ev.refusal = r;
+            emit(ev);
+            return;
+        }
+        env.target = it->second;
+        ev.target = env.target;
+    }
+
     ShardRecord* rec = find(env.target);
     if (rec == nullptr) {
         const Refusal r{RefusalReason::NoSuchTarget, {}};
@@ -230,25 +306,6 @@ void Switchboard::deliver_one(Envelope env) {
         ev.refusal = r;
         emit(ev);
         return;
-    }
-
-    // Capability authorization — only for Shard-originated (gated) messages, and
-    // *before* the gate, so a denied message never reaches conformance (the gate
-    // is correctly not invoked for it). Host-injected (root) messages skip this.
-    // This is authorization ("are you allowed to send this to them"), categorically
-    // distinct from the gate's conformance question, and lives outside it.
-    if (env.gated) {
-        const ShardRecord* sender = find(env.msg.sender);
-        const bool permitted =
-            sender != nullptr && sender->grant.permits(ev.schema_name, ev.schema_version, env.target);
-        if (!permitted) {
-            const Refusal r{RefusalReason::CapabilityDenied, {}};
-            record(env.seq, Disposition::Refused, r);
-            ev.kind = EventKind::Refused;
-            ev.refusal = r;
-            emit(ev);
-            return;
-        }
     }
 
     const std::shared_ptr<const Schema>* door =

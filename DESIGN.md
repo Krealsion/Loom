@@ -1218,6 +1218,103 @@ unenforced. The mechanism ladder is **complete for the threat model**; what rema
 
 ---
 
+## Policy phase P1 — the StorageBroker (the first powerbox)
+
+The B-series built **mechanism** — a grant projected onto an OS-enforced boundary. This phase
+builds the **policy that produces the grant**, in the **powerbox / object-capability** shape:
+a privileged capability (real disk) is held by a small, hard-rooted **broker** Shard; an
+untrusted mod never holds the raw capability — it holds only a *send-rule to talk to the
+broker*, which mediates and scopes by the authoritative sender the bus already stamps. The
+core barely changes; the broker is *ecosystem*. **Part A — the reusable grant-policy core
+hooks — is built**; Part B (the persistent-scoped-write extension + the StorageBroker Shard
+itself + the mod-vs-mod scoping proofs) is the immediate, named follow-on.
+
+### The wall: advice, not authority (ask ≠ grant)
+
+A Shard may **ask** for capabilities; the **host alone** decides the grant. The ask is
+*conformance data* — gated, untrusted, surfaced — never authority. This is Pillar 1
+(conformance ≠ authorization) applied to the policy layer, and it is kept absolute.
+
+- **The ask, in the manifest.** `zen.Manifest` is bumped to **v2** with an optional
+  `requests` field carrying a `zen.CapabilityAsk` (`network`, a `filesystem` level name,
+  `roles`). It is optional — a Shard with no ask emits no section and admits unchanged; and
+  bumping the version (not mutating v1 in place) preserves the invariant that a published
+  `(name, version)` is a frozen shape. The ask rides the manifest through the **same
+  meta-schema gate** as the accept-set and state schema (`schema_codec.hpp`); nothing in the
+  path lets a declaration become a grant.
+- **The author macro.** `ZEN_ASK(.network = true, .filesystem = "write-scoped", .roles =
+  {"storage"})` is a `ZEN_SHAPE`-sibling on `ShardBase`: it shadows a floor default
+  (`ask_config()` → empty) with designated initializers, defaulting to nothing. The export
+  layer reads it only if present (`if constexpr (requires { s->zen_requested_capabilities(); })`),
+  so a bare `Shard` without it simply has no ask.
+- **The host reads, never obeys.** `IsolationHost::declared_ask(name)` surfaces what the mod
+  wanted; the gap between it and `containment(name)` is the advice-vs-authority wall made
+  observable. Proven: a mod whose manifest declares `network` **and** `filesystem` write
+  still mounts on the floor (`network: contained`, `filesystem: contained`).
+
+### The floor, and where authority above it comes from
+
+- **Floor by default, no ceremony.** An unknown mod mounts via `mount_mod(name, so_path)` on
+  the **floor**: a default `Grant` (no network, `FsAccess::None`, bounded resources, empty
+  sends) plus a single send-rule to the storage broker **role** — enough to persist and
+  retrieve on messages alone, with zero disk access. It never holds a raw privileged
+  capability; it holds only a send-rule to the broker that does.
+- **The grant-record (the host holds the pen).** A persisted, per-install ledger keyed by the
+  mod's **`.so` content-hash** (FNV-1a — stable across path moves, so a rebuild is a new
+  identity and re-floors, the honest default) maps identity → a granted **delta** above the
+  floor. It is **TCB data**: only the host writes it (`record_grant_delta`), never a Shard;
+  it persists as a gated `Value` in Zen's JSON (inspectable, editable per-install). This
+  stands in for the consent UX (deferred). Proven: with an empty record a greedy mod floors;
+  with a recorded network delta the *same* mod mounts `network: granted` — the pen, not the
+  declaration, is the authority.
+
+### Role-addressing (the seam, baked in, resolved trivially)
+
+Power is a granted send-rule to a **role**, not a `ShardId`:
+
+- A Shard may be **registered under a role** (`register_shard(shard, grant, "storage")`); v1
+  is **singleton** — a role has exactly one holder, and binding a held role throws.
+- A send may target a **role** (`Bus::send_to_role`); a grant may permit `shape → role`
+  (`Grant::allow_to_role` / `permits_role`). Authorization is **by role** — the stable slot
+  the rule names — decided in `deliver_one` **before** the role is resolved to a holder, so
+  an unauthorized sender cannot even learn whether the role is held, and a role-rule and a
+  ShardId-rule are **distinct walls** (neither authorizes the other's send).
+- The role resolves to its holder at delivery; the holder's `ShardId` is **stable across
+  reload**, so a role send-rule survives the broker reloading. An **unheld role degrades to
+  `NoSuchTarget`** — exactly like an unknown ShardId, never the gate: a crashed/unmounted
+  broker is *unavailable*, not a hole.
+- **Out-of-process role-send is wired in Part B.** `HostApiBus::send_to_role` is an explicit
+  inert stub until then (a role-target ABI frame + a host callback is Part B's first task);
+  in-process role-addressing is complete and proven now.
+
+### Part B and named follow-ons (designed, not built)
+
+- **Part B — the StorageBroker.** Extend `FsAccess::WriteScoped` to honor its `scoped_path`
+  as a *persistent* writable bind (TCB-only; mods stay `None`); the out-of-process broker
+  Shard (role `"storage"`, host-granted `WriteScoped(storage_root)`) accepting
+  `StoragePut`/`StorageGet`, scoping each mod's keyspace by the **stamped sender**; the
+  out-of-process role-send ABI frame; and the four proofs (scoping + negative control;
+  floor-without-disk OS proof; ask-is-not-a-grant; reload-keeps-state).
+- **Authority-transfer** — promoting a *different* Shard into the broker role (loud,
+  user-gated, with a state handoff + transition-window quiescing) — its own focused phase.
+  This phase ships **reload-in-place only**.
+- **The concurrent-instance version resolver** — multiple versioned holders of a role
+  resolved by send-time constraint. The role-target is real from day one; the resolver is a
+  later addition with no migration. All brokers stay singletons.
+
+### Status: Part A built
+
+The ask (`zen.Manifest` v2 + `zen.CapabilityAsk` + `ZEN_ASK` + host `declared_ask`), the
+floor-factory + content-hash-keyed JSON grant-record + the host grant-API (`mount_mod`,
+`set_grant_record_path`, `record_grant_delta`), and in-process role-addressing (role registry,
+`send_to_role`, `allow_to_role`/`permits_role`, authorize-before-resolve, singleton binding,
+reload-stable, `NoSuchTarget` on an unheld role) all ship, green in Debug and under ASan/UBSan
+(the policy suite runs under the delegated scope). The advice-vs-authority wall and the
+role/ShardId authorization walls are proven with negative controls. Part B is the immediate
+follow-on.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in

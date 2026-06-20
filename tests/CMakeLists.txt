@@ -20,6 +20,7 @@ add_executable(zen-tests
     test_author_shape.cpp
     test_author_shard.cpp
     test_capabilities.cpp
+    test_policy.cpp
     test_isolation.cpp)
 
 target_include_directories(zen-tests PRIVATE
@@ -59,10 +60,15 @@ zen_add_test_shard(zen_test_shard_forkbomb ZEN_SHARD_FORK_BOMB)
 add_library(zen_test_badabi SHARED shardlib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE zen-core zen-warnings zen-sanitize)
 
+# Policy phase (P1): an authored mod that *asks* for network + filesystem write (via
+# ZEN_ASK), used to prove the ask is not a grant — it still lands on the floor.
+add_library(zen_test_mod_storage SHARED shardlib/mod_storage.cpp)
+target_link_libraries(zen_test_mod_storage PRIVATE zen-core zen-switchboard zen-warnings zen-sanitize)
+
 set(ZEN_SHARD_LIBS zen_test_shard zen_test_shard_b zen_test_shard_badsnap
     zen_test_shard_badmsg zen_test_shard_v2 zen_test_shard_crasher
     zen_test_shard_silent zen_test_shard_netprobe zen_test_shard_fsprobe
-    zen_test_shard_membomb zen_test_shard_forkbomb zen_test_badabi)
+    zen_test_shard_membomb zen_test_shard_forkbomb zen_test_mod_storage zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_SHARD_LIBS})
 
 # The isolation tests spawn the real child-host executable.
@@ -81,6 +87,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_FSPROBE=\"$<TARGET_FILE:zen_test_shard_fsprobe>\""
     "ZEN_SO_MEMBOMB=\"$<TARGET_FILE:zen_test_shard_membomb>\""
     "ZEN_SO_FORKBOMB=\"$<TARGET_FILE:zen_test_shard_forkbomb>\""
+    "ZEN_SO_MOD_STORAGE=\"$<TARGET_FILE:zen_test_mod_storage>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SHARD_HOST_EXE=\"$<TARGET_FILE:zen-shard-host>\"")
 
@@ -97,11 +104,14 @@ foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
 
-# The isolation suite needs cgroup-v2 delegation for B5 resource enforcement, which a
-# plain invocation lacks (it lands in the root cgroup). run-under-scope.sh launches the
-# binary inside an unprivileged delegated systemd scope when one is available.
+# The isolation and policy suites mount out-of-process Shards under the default
+# resource containment, which needs cgroup-v2 delegation a plain invocation lacks (it
+# lands in the root cgroup). run-under-scope.sh launches the binary inside an
+# unprivileged delegated systemd scope when one is available.
 add_test(NAME isolation COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
     $<TARGET_FILE:zen-tests> --test-suite=isolation --no-skipped-summary)
+add_test(NAME policy COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+    $<TARGET_FILE:zen-tests> --test-suite=policy --no-skipped-summary)
 
 # A catch-all that runs everything (also under a scope, since it includes isolation).
 add_test(NAME all COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
