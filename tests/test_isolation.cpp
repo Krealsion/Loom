@@ -500,7 +500,7 @@ TEST_CASE("a fork-bomb is bounded by pids.max; the host survives") {
     CHECK(forked <= 64); // bounded by pids.max, not the 4000 it attempted
 }
 
-TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the unlimited opt-out") {
+TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out") {
     const auto forced = [] {
         EnforcementReport rep;
         rep.capabilities.push_back({Capability::Network, true, "net", ""});
@@ -539,13 +539,66 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the unlimited opt-o
         REQUIRE_MESSAGE(r.ok, r.error);
         CHECK(host.containment("x").find("resources: NOT CONTAINED") != std::string::npos);
     }
-    SUBCASE("unlimited is the honest opt-out") {
+    SUBCASE("the memory opt-out uncaps memory but stays pids-bounded") {
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
-        OutOfProcessResult r = host.mount("u", ZEN_SO_SHARD, Grant{}.with_unlimited_resources());
+        if (!host.enforcement().enforceable(Capability::Resources)) {
+            WARN("no cgroup-v2 delegation here; skipping the memory opt-out check");
+            return;
+        }
+        OutOfProcessResult r = host.mount("u", ZEN_SO_SHARD, Grant{}.with_unlimited_memory());
         REQUIRE_MESSAGE(r.ok, r.error);
-        CHECK(host.containment("u").find("resources: unlimited") != std::string::npos);
+        const std::string s = host.containment("u");
+        CHECK(s.find("resources: contained") != std::string::npos);     // Enforced, never Granted
+        CHECK(s.find("memory unlimited-by-grant") != std::string::npos); // the memory cap is opted out
+        CHECK(s.find("pids<=") != std::string::npos);                   // pids is still bounded
+        CHECK(s.find("NOT CONTAINED") == std::string::npos);
     }
+}
+
+TEST_CASE("no grant licenses a fork-bomb: pids stays bounded even with memory unlimited") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Resources)) {
+        WARN("no cgroup-v2 delegation here; skipping fork-bomb-under-unlimited-memory");
+        return;
+    }
+    Registered rec = register_probe(bus, {forkresult_schema()});
+    std::int64_t forked = -1;
+    rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+        forked = in.payload.get("forked")->as_int();
+    };
+    ResourceLimits lim;
+    lim.pids = 64; // the shard tries 4000 forks; pids.max must still bound it
+    Grant g;
+    g.allow("ForkResult", 1, rec.id).with_resources(lim).with_unlimited_memory();
+    OutOfProcessResult r = host.mount("fb", ZEN_SO_FORKBOMB, std::move(g));
+    REQUIRE_MESSAGE(r.ok, r.error);
+    // Memory is uncapped by the grant, yet the leaf still carries a real pids.max.
+    CHECK(host.containment("fb").find("memory unlimited-by-grant") != std::string::npos);
+    bus.send(r.id, Message(ping(1), ShardId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 5000));
+    CHECK(forked > 0);
+    CHECK(forked <= 64); // bounded by pids.max — the memory opt-out did NOT remove it
+}
+
+TEST_CASE("the memory opt-out lets a memory-bomb survive the cap that would OOM-kill it") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Resources)) {
+        WARN("no cgroup-v2 delegation here; skipping the memory opt-out survival check");
+        return;
+    }
+    Registered rec = register_probe(bus, {pong_schema()});
+    Grant g;
+    g.allow("Pong", 1, rec.id).with_unlimited_memory(); // memory uncapped; pids still bounded
+    OutOfProcessResult r = host.mount("um", ZEN_SO_MEMBOMB, std::move(g));
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(host.containment("um").find("pids<=") != std::string::npos); // still pids-bounded
+    bus.send(r.id, Message(ping(5), ShardId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 3000));
+    CHECK(rec.shard->handled_names.back() == "Pong"); // survived the ~200 MiB alloc (uncapped)
+    CHECK_FALSE(host.quarantined("um"));
 }
 
 TEST_CASE("fail-safe + dev-mode: an unenforceable host refuses by default; dev-mode overrides") {

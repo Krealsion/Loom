@@ -231,12 +231,15 @@ std::string describe_resolution(const CapabilityResolution& r) {
             case Outcome::Enforced:
                 return std::string("resources: contained (cgroup-v2: ") + r.note + ")" +
                        (r.confirmed ? " (confirmed: pid in leaf, limits read back)" : "") +
-                       "; honest scope: a memory cap OOM-kills within the cgroup (the host "
-                       "survives and reloads-then-quarantines), pids.max stops a fork-bomb; "
+                       "; honest scope: pids.max ALWAYS bounds a fork-bomb (no grant licenses "
+                       "one); a memory cap OOM-kills within the cgroup (the host survives and "
+                       "reloads-then-quarantines) unless opted out by grant (still pids-bounded); "
                        "cpu.weight is a fair-share weight (set-and-confirmed where the cpu "
                        "controller is delegated, absent otherwise), not a hard cap";
             case Outcome::Granted:
-                return "resources: unlimited — no limits, by grant (not contained)";
+                // Resources never resolve to Granted (there is no wholesale opt-out — pids is
+                // always bounded). Kept only for switch-exhaustiveness; defensive if ever hit.
+                return "resources: (unexpected) — always at least pids-bounded; no opt-out";
             case Outcome::Uncontained:
                 return "resources: NOT CONTAINED — requested but unenforceable on this host, "
                        "running under dev-mode override";
@@ -706,24 +709,31 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         CapabilityResolution rc;
         rc.capability = Capability::Resources;
         const zen::sb::ResourceLimits& lim = grant.resources();
-        if (lim.unlimited) {
-            rc.outcome = Outcome::Granted; // the opt-out: no limits, by grant
-        } else if (enforcement_.enforceable(Capability::Resources)) {
+        if (enforcement_.enforceable(Capability::Resources)) {
+            // Always Enforced when cgroups work: a leaf with at-least-pids bounded.
+            // There is no wholesale opt-out — no grant can license a fork bomb. The
+            // memory cap may be opted out of (unlimited_memory), but pids and cpu stay
+            // applied. (cgroups unavailable -> Uncontained in dev-mode, else refuse —
+            // never Granted.)
             rc.outcome = Outcome::Enforced;
             ResourceCaps caps = cgroup_default_caps(); // conservative, computed from host
-            if (lim.memory_bytes > 0) {
+            if (lim.unlimited_memory) {
+                caps.memory_max = -1; // uncap memory: create_leaf leaves memory.max at "max"
+            } else if (lim.memory_bytes > 0) {
                 caps.memory_max = lim.memory_bytes;
             }
             if (lim.pids > 0) {
-                caps.pids_max = lim.pids;
+                caps.pids_max = lim.pids; // raise the fork-bomb stop; never removes it
             }
             if (lim.cpu_weight > 0) {
                 caps.cpu_weight = lim.cpu_weight;
             }
             link->cg_caps = caps;
             link->cg_leaf = "zen-shard-" + std::to_string(g_leaf_counter++);
-            rc.note = "memory<=" + std::to_string(caps.memory_max / (1024 * 1024)) +
-                      "MiB, pids<=" + std::to_string(caps.pids_max);
+            rc.note = (caps.memory_max < 0
+                           ? std::string("memory unlimited-by-grant")
+                           : "memory<=" + std::to_string(caps.memory_max / (1024 * 1024)) + "MiB") +
+                      ", pids<=" + std::to_string(caps.pids_max);
         } else if (dev_mode_) {
             rc.outcome = Outcome::Uncontained;
             std::fprintf(stderr,
@@ -735,8 +745,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             return {false, {},
                     "refused (fail-safe): cannot enforce resource limits for '" + name +
                         "' on this host (no cgroup-v2 delegation — run the host under a delegated "
-                        "scope). Grant unlimited resources to opt out, or enable dev-mode to run "
-                        "it resource-uncontained."};
+                        "scope, or enable dev-mode to run it resource-uncontained)."};
         }
         link->resolutions.push_back(rc);
     }

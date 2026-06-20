@@ -78,14 +78,15 @@ struct SendRule {
 
 /// Resource limits — a *quantitative* capability (B5, enforced via cgroup-v2). `0`
 /// means "use the host-computed conservative default" (bounded so one Shard can't
-/// starve the host); a positive value is an explicit raise. `unlimited` is the
-/// opt-out (no limits, honestly reported "not resource-contained") — the analog of
-/// `os_cap::Network` granted / `FsAccess::WriteAnywhere`.
+/// starve the host); a positive value is an explicit raise. `unlimited_memory` is the
+/// only opt-out (a trusted compute Shard may use all RAM) and it removes the **memory**
+/// cap ONLY: **pids stays bounded** (no grant can license a fork bomb) and cpu stays a
+/// fair-share weight. There is no wholesale "no limits" opt-out.
 struct ResourceLimits {
-    std::int64_t memory_bytes = 0; ///< 0 = conservative default; >0 = explicit cap
-    std::int64_t pids = 0;         ///< 0 = conservative default; >0 = explicit max (fork-bomb stop)
-    std::int64_t cpu_weight = 0;   ///< 0 = default share (100); else 1..10000 (cgroup cpu.weight)
-    bool unlimited = false;        ///< explicit opt-out: no resource containment
+    std::int64_t memory_bytes = 0;  ///< 0 = conservative default; >0 = explicit cap
+    std::int64_t pids = 0;          ///< 0 = conservative default; >0 = explicit max (fork-bomb stop)
+    std::int64_t cpu_weight = 0;    ///< 0 = default share (100); else 1..10000 (cgroup cpu.weight)
+    bool unlimited_memory = false;  ///< opt out of the MEMORY cap only; pids stays bounded
 };
 
 /// What a Shard may do. Default-constructed = empty: may send nothing, holds no
@@ -147,9 +148,11 @@ public:
         res_ = limits;
         return *this;
     }
-    /// The explicit resource opt-out: run with no limits ("not resource-contained").
-    Grant& with_unlimited_resources() {
-        res_.unlimited = true;
+    /// Opt out of the **memory** cap only (a trusted compute Shard may use all RAM).
+    /// pids stays bounded (no grant can license a fork bomb) and cpu stays a fair-share
+    /// weight — there is no wholesale "no limits" opt-out.
+    Grant& with_unlimited_memory() {
+        res_.unlimited_memory = true;
         return *this;
     }
 
