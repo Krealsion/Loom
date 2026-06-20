@@ -22,6 +22,8 @@ enum class Op : std::uint8_t {
     Hello = 1,    ///< [bytes manifest][bytes policy][bytes snapshot] (the handshake)
     Emit = 2,     ///< [u8 kind][u64 target][u64 reply_to][u64 correlation][bytes payload]
     Snapshot = 3, ///< [bytes snapshot] (refreshed state, after each handle/revive)
+    EmitRole = 4, ///< [bytes role][u64 reply_to][u64 correlation][bytes payload] — NO sender
+                  ///< on the wire; the host stamps it from link.id and routes via role
     // parent -> child
     Deliver = 16,  ///< [u64 sender][u64 reply_to][u64 correlation][bytes payload]
     Revive = 17,   ///< [bytes state]

@@ -70,12 +70,16 @@ public:
         return 0;
     }
 
-    // Out-of-process role-addressed send. Wiring it across the C ABI (a role-target
-    // emit frame + a host callback) is the first task of Part B, where the
-    // StorageBroker actually receives role-targeted puts/gets; until then a library
-    // Shard has no role to send to, so this is an explicit inert stub, not a silent
-    // inherited default.
-    zen::sb::Ticket send_to_role(std::string_view /*role*/, zen::sb::Message /*msg*/) override {
+    // Out-of-process role-addressed send: ship the payload bytes + role to the host,
+    // which stamps the authoritative sender from the connection and routes via
+    // send_as_to_role. The sender is never passed here and never rides the wire.
+    zen::sb::Ticket send_to_role(std::string_view role, zen::sb::Message msg) override {
+        const std::string bytes = zen::serialize(msg.payload);
+        const std::string role_z(role); // NUL-terminated for the C ABI
+        if (host_ != nullptr && host_->send_to_role != nullptr) {
+            host_->send_to_role(host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
+                                reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        }
         return zen::sb::Ticket{};
     }
 

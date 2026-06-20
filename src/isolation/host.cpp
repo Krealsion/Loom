@@ -765,6 +765,37 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         return;
     }
 
+    if (frame.op == Op::EmitRole) {
+        Cursor cursor(frame.payload);
+        std::string_view role;
+        std::uint64_t reply_to = 0;
+        std::uint64_t correlation = 0;
+        if (!cursor.bytes(role) || !cursor.u64(reply_to) || !cursor.u64(correlation)) {
+            return; // malformed EmitRole header -> drop
+        }
+        const std::string_view payload = cursor.rest();
+
+        zen::Unverified u = zen::parse(payload);
+        std::shared_ptr<const Schema> door =
+            bus_.resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return; // a schema the system does not know -> drop (cannot be gated)
+        }
+        zen::Admission a = zen::admit(u, door);
+        if (!a.ok()) {
+            return; // gate-refused (malformed/hostile child output) -> drop
+        }
+        // The sender is stamped from the connection (link.id), never from the wire —
+        // the EmitRole frame carries no sender field. A role-send defaults its reply
+        // address to the sender itself (a child cannot know its own ShardId), so a
+        // broker can reply to the mod; an explicit non-zero reply_to is honored.
+        // send_as_to_role then authorizes by role at delivery (Part A).
+        const zen::sb::ShardId reply = reply_to != 0 ? zen::sb::ShardId{reply_to} : link.id;
+        zen::sb::Message msg(std::move(a).value(), zen::sb::ShardId{}, reply, correlation);
+        (void)bus_.send_as_to_role(link.id, std::string(role), std::move(msg));
+        return;
+    }
+
     if (frame.op == Op::Snapshot) {
         // A fresh post-handle/post-revive snapshot. Admit it host-side; on success
         // it becomes the host-owned last-known-good. A malformed snapshot is

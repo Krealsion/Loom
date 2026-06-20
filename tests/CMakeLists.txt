@@ -65,10 +65,16 @@ target_link_libraries(zen_test_badabi PRIVATE zen-core zen-warnings zen-sanitize
 add_library(zen_test_mod_storage SHARED shardlib/mod_storage.cpp)
 target_link_libraries(zen_test_mod_storage PRIVATE zen-core zen-switchboard zen-warnings zen-sanitize)
 
+# Policy phase (P1, Part B): a storage-client mod that persists/retrieves purely by
+# messaging the "storage" broker (zero disk), and the StorageBroker itself.
+add_library(zen_test_storage_client SHARED shardlib/storage_client.cpp)
+target_link_libraries(zen_test_storage_client PRIVATE zen-core zen-switchboard zen-warnings zen-sanitize)
+
 set(ZEN_SHARD_LIBS zen_test_shard zen_test_shard_b zen_test_shard_badsnap
     zen_test_shard_badmsg zen_test_shard_v2 zen_test_shard_crasher
     zen_test_shard_silent zen_test_shard_netprobe zen_test_shard_fsprobe
-    zen_test_shard_membomb zen_test_shard_forkbomb zen_test_mod_storage zen_test_badabi)
+    zen_test_shard_membomb zen_test_shard_forkbomb zen_test_mod_storage
+    zen_test_storage_client zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_SHARD_LIBS})
 
 # The isolation tests spawn the real child-host executable.
@@ -88,6 +94,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_MEMBOMB=\"$<TARGET_FILE:zen_test_shard_membomb>\""
     "ZEN_SO_FORKBOMB=\"$<TARGET_FILE:zen_test_shard_forkbomb>\""
     "ZEN_SO_MOD_STORAGE=\"$<TARGET_FILE:zen_test_mod_storage>\""
+    "ZEN_SO_STORAGE_CLIENT=\"$<TARGET_FILE:zen_test_storage_client>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SHARD_HOST_EXE=\"$<TARGET_FILE:zen-shard-host>\"")
 

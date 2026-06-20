@@ -151,6 +151,27 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
     return ZEN_OK;
 }
 
+// A library Shard sends to a role the same way: hand the host serialized bytes + the
+// role; the host admits, stamps the loaded Shard's id, and routes by role.
+static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_t reply_to,
+                                       std::uint64_t correlation, const std::uint8_t* payload,
+                                       std::size_t len) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    zen::Unverified u = zen::parse(zen::kernel::as_view(payload, len));
+    std::shared_ptr<const zen::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    zen::Admission a = zen::admit(u, door);
+    if (!a.ok()) {
+        return ZEN_ERR_REFUSED;
+    }
+    h->gated->send_to_role(role, zen::sb::Message(std::move(a).value(), zen::sb::ShardId{},
+                                                  zen::sb::ShardId{reply_to}, correlation));
+    return ZEN_OK;
+}
+
 } // extern "C"
 
 // ---- the host adapter: a Shard backed by a library instance ---------------
@@ -191,7 +212,7 @@ public:
         // `bus` is the per-delivery ShardBus (it gates by this loaded Shard's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_};
-        ZenHostApi api{&ctx, &zen_host_send, &zen_host_publish};
+        ZenHostApi api{&ctx, &zen_host_send, &zen_host_publish, &zen_host_send_to_role};
         // The DLL handler's status is contained: the message was validly
         // delivered; any internal library error is the library's own concern.
         abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation,
