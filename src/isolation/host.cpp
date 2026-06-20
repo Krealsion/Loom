@@ -856,12 +856,14 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
             return; // gate-refused (malformed/hostile child output) -> drop
         }
         // The sender is stamped from the connection (link.id), never from the wire —
-        // the EmitRole frame carries no sender field. A role-send defaults its reply
-        // address to the sender itself (a child cannot know its own ShardId), so a
-        // broker can reply to the mod; an explicit non-zero reply_to is honored.
-        // send_as_to_role then authorizes by role at delivery (Part A).
-        const zen::sb::ShardId reply = reply_to != 0 ? zen::sb::ShardId{reply_to} : link.id;
-        zen::sb::Message msg(std::move(a).value(), zen::sb::ShardId{}, reply, correlation);
+        // the EmitRole frame carries no sender field. The reply address of a role-send
+        // (a request to a broker) is ALWAYS the stamped sender: a child-supplied
+        // reply_to is ignored, so a mod cannot make a broker reply to another
+        // (guessable) ShardId — a confused deputy that would reintroduce a sender-like
+        // field a mod could fiddle with. send_as_to_role then authorizes by role at
+        // delivery (Part A).
+        (void)reply_to; // reserved in the frame; not trusted for routing a role-send reply
+        zen::sb::Message msg(std::move(a).value(), zen::sb::ShardId{}, link.id, correlation);
         (void)bus_.send_as_to_role(link.id, std::string(role), std::move(msg));
         return;
     }

@@ -1225,9 +1225,9 @@ builds the **policy that produces the grant**, in the **powerbox / object-capabi
 a privileged capability (real disk) is held by a small, hard-rooted **broker** Shard; an
 untrusted mod never holds the raw capability — it holds only a *send-rule to talk to the
 broker*, which mediates and scopes by the authoritative sender the bus already stamps. The
-core barely changes; the broker is *ecosystem*. **Part A — the reusable grant-policy core
-hooks — is built**; Part B (the persistent-scoped-write extension + the StorageBroker Shard
-itself + the mod-vs-mod scoping proofs) is the immediate, named follow-on.
+core barely changes; the broker is *ecosystem*. **Both parts are built**: Part A the reusable
+grant-policy core hooks (ask, floor + grant-record, role-addressing), Part B the broker itself
+(the role-send ABI, persistent-scoped write, the StorageBroker, and the mod-vs-mod proofs).
 
 ### The wall: advice, not authority (ask ≠ grant)
 
@@ -1283,35 +1283,59 @@ Power is a granted send-rule to a **role**, not a `ShardId`:
   reload**, so a role send-rule survives the broker reloading. An **unheld role degrades to
   `NoSuchTarget`** — exactly like an unknown ShardId, never the gate: a crashed/unmounted
   broker is *unavailable*, not a hole.
-- **Out-of-process role-send is wired in Part B.** `HostApiBus::send_to_role` is an explicit
-  inert stub until then (a role-target ABI frame + a host callback is Part B's first task);
-  in-process role-addressing is complete and proven now.
+- **Out-of-process role-send (Part B).** A new wire frame `Op::EmitRole` (role + reply_to +
+  correlation + payload, **no sender**) and a `ZenHostApi::send_to_role` callback close the
+  seam: `HostApiBus::send_to_role` ships the frame, and `handle_child_frame` re-admits the
+  payload and routes via `send_as_to_role(link.id, role, msg)` — the sender stamped from the
+  connection, never on the wire. `reply_to` defaults to `link.id` (a child cannot know its own
+  id), so a broker can reply to the mod. A floored, out-of-process mod reaches the broker end
+  to end on messages alone.
 
-### Part B and named follow-ons (designed, not built)
+### The broker (Part B): a real capability on a mod's behalf
 
-- **Part B — the StorageBroker.** Extend `FsAccess::WriteScoped` to honor its `scoped_path`
-  as a *persistent* writable bind (TCB-only; mods stay `None`); the out-of-process broker
-  Shard (role `"storage"`, host-granted `WriteScoped(storage_root)`) accepting
-  `StoragePut`/`StorageGet`, scoping each mod's keyspace by the **stamped sender**; the
-  out-of-process role-send ABI frame; and the four proofs (scoping + negative control;
-  floor-without-disk OS proof; ask-is-not-a-grant; reload-keeps-state).
-- **Authority-transfer** — promoting a *different* Shard into the broker role (loud,
-  user-gated, with a state handoff + transition-window quiescing) — its own focused phase.
-  This phase ships **reload-in-place only**.
-- **The concurrent-instance version resolver** — multiple versioned holders of a role
-  resolved by send-time constraint. The role-target is real from day one; the resolver is a
-  later addition with no migration. All brokers stay singletons.
+- **Persistent-scoped write (TCB-only).** `build_view_plan` binds the host's `storage_root`
+  **writable** at `/scratch` when `WriteScoped` carries a `scoped_path`, instead of the
+  ephemeral tmpfs it binds without one. Still least-privilege — the broker reaches only that
+  one dir, never the host home — but the data survives. A mod is `FsAccess::None` and never
+  gets a `scoped_path`; the path cannot leak to it.
+- **The StorageBroker** (an *ecosystem* Shard, not host code). Host-mounted out-of-process via
+  `mount_broker` at the TCB tier: `WriteScoped(storage_root)` only, permitted to reply
+  `StorageValue` to any mod, registered under role `"storage"`. It accepts
+  `StoragePut{key,value}` / `StorageGet{key}` → `StorageValue{value}`, and derives the keyspace
+  from the **stamped sender** (`mail.sender()`) — `storage_root/<sender>/<hex(key)>` — never a
+  payload field, so a mod reaches only its own data and a hostile key cannot escape its subdir.
+  Value is opaque bytes. A **hot-reloadable singleton**: `reload()` re-spawns the child in
+  place keeping ShardId/grant/role; the on-disk data is durable regardless.
+- **Session-scoped, stated honestly.** The sender is the *ephemeral* runtime `ShardId`, so a
+  mod's subdir changes across host restarts — storage is **session-scoped**, not
+  save-across-restart. `containment()` says so (the persistent-bind fs note). Persistent
+  identity is the named successor phase.
 
-### Status: Part A built
+### Named follow-ons (designed, not built)
 
-The ask (`zen.Manifest` v2 + `zen.CapabilityAsk` + `ZEN_ASK` + host `declared_ask`), the
-floor-factory + content-hash-keyed JSON grant-record + the host grant-API (`mount_mod`,
-`set_grant_record_path`, `record_grant_delta`), and in-process role-addressing (role registry,
-`send_to_role`, `allow_to_role`/`permits_role`, authorize-before-resolve, singleton binding,
-reload-stable, `NoSuchTarget` on an unheld role) all ship, green in Debug and under ASan/UBSan
-(the policy suite runs under the delegated scope). The advice-vs-authority wall and the
-role/ShardId authorization walls are proven with negative controls. Part B is the immediate
-follow-on.
+- **First-class persistent Shard identity** — the **save-file successor**: a stable identity
+  (beyond the ephemeral `ShardId` and the `.so` content-hash) that lets storage survive a host
+  restart. Part B is honestly session-scoped until this lands.
+- **Authority-transfer** — promoting a *different* Shard into the broker role (loud, user-gated,
+  with a state handoff + transition-window quiescing). P1 ships **reload-in-place only**.
+- **The concurrent-instance version resolver** — multiple versioned holders of a role resolved
+  by a send-time constraint. The role-target is real from day one; the resolver is a later
+  addition with no migration. All brokers stay singletons.
+
+### Status: built (Parts A and B)
+
+Everything above ships, green in Debug and under ASan/UBSan (the policy suite runs under the
+delegated scope). Part A: the ask (`zen.Manifest` v2 + `zen.CapabilityAsk` + `ZEN_ASK` +
+`declared_ask`), the floor-factory + content-hash-keyed JSON grant-record + the host grant-API,
+and role-addressing (registry, `send_to_role`, `allow_to_role`/`permits_role`,
+authorize-before-resolve, singleton, reload-stable, `NoSuchTarget` on an unheld role). Part B:
+the `Op::EmitRole` / `ZenHostApi::send_to_role` seam (sender stamped host-side, never on the
+wire), the persistent-`WriteScoped` extension, and the out-of-process `StorageBroker`. The
+powerbox is proven end to end with negative controls: **mod-vs-mod scoping** (A and B write the
+same key; each reads only its own, B never A's), **floor-without-disk** (a `None` mod's direct
+open fails at the syscall level while its broker-mediated put/get succeeds), **ask-is-not-a-grant**,
+and **reload-keeps-state** — plus broker-down degrading to `NoSuchTarget`. What remains is the
+first-class-identity (save-file) successor, authority-transfer, and the version resolver.
 
 ---
 
