@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace zen::isolation {
 
@@ -32,12 +33,23 @@ inline constexpr const char* kStorageGet = "StorageGet";
 inline constexpr const char* kStorageValue = "StorageValue"; ///< the broker's reply shape
 inline constexpr std::uint32_t kStorageProtocolVersion = 1;
 
+// The network protocol the NetworkBroker (P2) registers under role "net" and accepts.
+// Unlike storage, the floor grants the net role to NO mod — only a recorded grant delta
+// does (network is dangerous; persistence is benign). A mod reaching "net" holds the
+// role send-rule only, NOT os_cap::Network — it stays OS-network-denied and reaches the
+// network solely through the broker. Same request-response shape as storage.
+inline constexpr const char* kNetRole = "net";
+inline constexpr const char* kNetRequest = "NetRequest";
+inline constexpr const char* kNetResponse = "NetResponse"; ///< the broker's reply shape
+inline constexpr std::uint32_t kNetProtocolVersion = 1;
+
 /// A capability *delta* the host has granted a specific Shard above the floor. Only
 /// the dimensions a delta can raise today are represented; an empty delta is the
 /// floor (no change).
 struct GrantDelta {
-    bool network = false;   ///< grant os_cap::Network
-    std::string filesystem; ///< an FsAccess level name to grant (e.g. "read-only"); "" = no change
+    bool network = false;             ///< grant os_cap::Network (the OS capability itself — rare)
+    std::string filesystem{};         ///< an FsAccess level name (e.g. "read-only"); "" = none
+    std::vector<std::string> roles{}; ///< broker roles a mod may reach beyond the floor's storage
 };
 
 /// The persisted, per-install grant ledger: content-hash -> delta. A missing file

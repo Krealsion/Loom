@@ -1231,7 +1231,7 @@ ladder is **complete for the threat model**; what remains is a **deliberate secc
 
 ---
 
-## Policy phase P1 — the StorageBroker (the first powerbox)
+## Policy phases P1–P2 — the powerbox (StorageBroker, then NetworkBroker)
 
 The B-series built **mechanism** — a grant projected onto an OS-enforced boundary. This phase
 builds the **policy that produces the grant**, in the **powerbox / object-capability** shape:
@@ -1324,31 +1324,69 @@ Power is a granted send-rule to a **role**, not a `ShardId`:
   save-across-restart. `containment()` says so (the persistent-bind fs note). Persistent
   identity is the named successor phase.
 
+### P2: the NetworkBroker (the powerbox, generalized)
+
+The same pattern, a different capability — proving the powerbox is general, not bespoke to
+storage. A mod that needs the network reaches it **only through a broker**, never as a raw grant.
+
+- **Net is a recorded delta, never the floor.** Persistence is benign, so the floor grants the
+  storage role to all; network is dangerous, so the floor grants the net role to **no one**. A
+  mod reaches the NetworkBroker only via a host-recorded `GrantDelta.roles` entry (`"net"`) —
+  closing the deferred roles extension. Critically, that delta grants the **role send-rule only,
+  not `os_cap::Network`**: the mod stays OS-network-denied (no-interface netns), powerless to
+  `connect()` directly; it reaches the network solely by messaging the broker.
+- **The NetworkBroker** (an *ecosystem* Shard). Host-mounted via `mount_net_broker` at the TCB
+  tier with `os_cap::Network` (so it runs in the host netns, real network), `FsAccess::None`,
+  bounded resources, role `"net"`, permitted to reply `NetResponse` to any mod. Protocol:
+  `NetRequest{host,port,payload}` → `NetResponse{ok,data}`. It **validates `host:port` against an
+  allow-list** (v1: loopback only, exact-match then `inet_pton` the same string — no TOCTOU) and,
+  for an allowed destination, performs **raw TCP** connect/send/recv (no HTTP/TLS/DNS, no
+  dependency), replying to the **stamped sender** (the confused-deputy fix, identical to storage).
+- **A higher-trust broker, stated honestly.** Network is binary — there is no OS-scoped network
+  (no-interface or the whole net) — so the broker holds the **full host network** and
+  per-destination scoping is **software-enforced by its own allow-list, not the OS**. Its blast
+  radius if compromised is the whole network; its validation is therefore kept tiny and auditable.
+  `containment()` says the truth: `network: granted — full host network …, NOT OS-scoped …; any
+  per-destination limit is the holder's own software policy`. An OS-level tightening (nftables
+  inside the broker's netns) is a named future hardening, not built.
+
 ### Named follow-ons (designed, not built)
 
+- **OS-scoping the NetworkBroker** (nftables/firewall rules inside the broker's netns to limit
+  its reach at the kernel) — the defense-in-depth for the higher-trust broker, whose scoping is
+  software-only today. **Per-mod network policy** (different mods reach different destinations,
+  keyed by `mail.sender()`) — v1 is a broker-level allow-list.
 - **First-class persistent Shard identity** — the **save-file successor**: a stable identity
   (beyond the ephemeral `ShardId` and the `.so` content-hash) that lets storage survive a host
-  restart. Part B is honestly session-scoped until this lands.
-- **Authority-transfer** — promoting a *different* Shard into the broker role (loud, user-gated,
-  with a state handoff + transition-window quiescing). P1 ships **reload-in-place only**.
+  restart. Storage is honestly session-scoped until this lands.
+- **Authority-transfer** — promoting a *different* Shard into a broker role (loud, user-gated,
+  with a state handoff + transition-window quiescing). P1/P2 ship **reload-in-place only**.
 - **The concurrent-instance version resolver** — multiple versioned holders of a role resolved
   by a send-time constraint. The role-target is real from day one; the resolver is a later
   addition with no migration. All brokers stay singletons.
 
-### Status: built (Parts A and B)
+### Status: built (P1 and P2)
 
 Everything above ships, green in Debug and under ASan/UBSan (the policy suite runs under the
-delegated scope). Part A: the ask (`zen.Manifest` v2 + `zen.CapabilityAsk` + `ZEN_ASK` +
-`declared_ask`), the floor-factory + content-hash-keyed JSON grant-record + the host grant-API,
-and role-addressing (registry, `send_to_role`, `allow_to_role`/`permits_role`,
-authorize-before-resolve, singleton, reload-stable, `NoSuchTarget` on an unheld role). Part B:
-the `Op::EmitRole` / `ZenHostApi::send_to_role` seam (sender stamped host-side, never on the
-wire), the persistent-`WriteScoped` extension, and the out-of-process `StorageBroker`. The
-powerbox is proven end to end with negative controls: **mod-vs-mod scoping** (A and B write the
-same key; each reads only its own, B never A's), **floor-without-disk** (a `None` mod's direct
-open fails at the syscall level while its broker-mediated put/get succeeds), **ask-is-not-a-grant**,
-and **reload-keeps-state** — plus broker-down degrading to `NoSuchTarget`. What remains is the
-first-class-identity (save-file) successor, authority-transfer, and the version resolver.
+delegated scope). **P1 (StorageBroker):** the ask (`zen.Manifest` v2 + `zen.CapabilityAsk` +
+`ZEN_ASK` + `declared_ask`), the floor-factory + content-hash-keyed JSON grant-record + the host
+grant-API, role-addressing (registry, `send_to_role`, `allow_to_role`/`permits_role`,
+authorize-before-resolve, singleton, reload-stable, `NoSuchTarget` on an unheld role), the
+`Op::EmitRole` / `ZenHostApi::send_to_role` seam (sender stamped host-side, never on the wire),
+the persistent-`WriteScoped` extension, and the out-of-process `StorageBroker`. **P2
+(NetworkBroker):** the `GrantDelta.roles` extension + floor-denies-net wiring, and the
+out-of-process NetworkBroker (`os_cap::Network`, `FsAccess::None`, role `"net"`, a software
+allow-list, raw TCP). The powerbox is proven end to end with negative controls — **storage:**
+mod-vs-mod scoping (A and B write the same key; each reads only its own, B never A's),
+floor-without-disk (a `None` mod's direct open fails at the syscall level while its
+broker-mediated put/get succeeds), ask-is-not-a-grant, reload-keeps-state; **network:** mediation
++ negative control (a net-denied mod reaches the allowed loopback listener *only* through the
+broker — its own direct `connect()` returns ENETUNREACH), allow-list scoping (a disallowed
+destination is refused, never connected), and floor-denies-net (a pure-floor mod, even one that
+*asks* for network, is `CapabilityDenied` to role `"net"`) — plus broker-down → `NoSuchTarget`.
+The powerbox is proven **general** (two brokers, two capabilities). What remains: OS-scoping the
+net broker and per-mod network policy; the first-class-identity (save-file) successor;
+authority-transfer; the version resolver.
 
 ---
 

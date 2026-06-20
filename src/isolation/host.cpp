@@ -200,8 +200,10 @@ std::string describe_resolution(const CapabilityResolution& r) {
                        "; the inherited host-control fd and filesystem-path sockets remain by "
                        "design, so 'contained' means no external reachability, not no-IPC";
             case Outcome::Granted:
-                return "network: granted — child shares the host network by the grant (not "
-                       "contained)";
+                return "network: granted — full host network by the grant, NOT OS-scoped (no "
+                       "namespace limits its reach); any per-destination limit is the holder's "
+                       "own software policy (e.g. a broker's allow-list), not the kernel — a "
+                       "higher-trust posture than an OS-contained capability";
             case Outcome::Uncontained:
                 return "network: NOT CONTAINED — requested but unenforceable on this host, "
                        "running under dev-mode override";
@@ -588,6 +590,19 @@ OutOfProcessResult IsolationHost::mount_mod(const std::string& name, const std::
         }
         grant.with_filesystem(level);
     }
+    // Roles above the floor: the floor already grants the storage role to all; the delta
+    // may add others. v1 wires the well-known "net" role explicitly (a general
+    // role->protocol registry is a deferred refinement). Network is dangerous, so —
+    // unlike storage — NO mod reaches the net broker without this recorded delta, and
+    // even then it gets only the role send-rule, never os_cap::Network: it stays
+    // OS-network-denied and reaches the network solely through the broker.
+    for (const std::string& role : delta.roles) {
+        if (role == kNetRole) {
+            grant.allow_to_role(kNetRequest, kNetProtocolVersion, kNetRole);
+        }
+        // kStorageRole is already granted by the floor; a role the host doesn't know how
+        // to wire is ignored (the deferred role->protocol registry).
+    }
     return mount(name, so_path, std::move(grant));
 }
 
@@ -609,6 +624,18 @@ OutOfProcessResult IsolationHost::mount_broker(const std::string& name, const st
     grant.with_filesystem(zen::sb::FsAccess::WriteScoped, storage_root);
     grant.allow_to_any(kStorageValue, kStorageProtocolVersion);
     return mount(name, so_path, std::move(grant), kStorageRole);
+}
+
+OutOfProcessResult IsolationHost::mount_net_broker(const std::string& name,
+                                                   const std::string& so_path) {
+    // TCB-tier grant: os_cap::Network (no netns — the real host network), FsAccess::None
+    // (no disk), bounded resources, permitted to reply NetResponse to any mod, role "net".
+    // Per-destination scoping is the broker's own software allow-list, NOT OS-enforced —
+    // the higher-trust broker. No mod reaches "net" without a recorded delta.
+    zen::sb::Grant grant;
+    grant.with_os_capabilities(zen::sb::os_cap::Network);
+    grant.allow_to_any(kNetResponse, kNetProtocolVersion);
+    return mount(name, so_path, std::move(grant), kNetRole);
 }
 
 bool IsolationHost::reload(const std::string& name) {
