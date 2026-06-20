@@ -1157,12 +1157,14 @@ end. **seccomp is a separate, later decision** (it guards a different tier — k
 
 `ResourceLimits` adds **memory** (bytes), **pids** (the fork-bomb stop), and **cpu_weight**;
 `0` means "use the host-computed conservative default," a positive value raises it, and
-`with_unlimited_resources()` is the explicit opt-out. Defaults are **computed from the host,
-not a config knob** (the stinginess bar): memory = a bounded fraction of RAM (1/8) capped at
-1 GiB and floored at 128 MiB so one Shard can't OOM the host; pids = 512 (room for threads,
-stops a bomb); cpu_weight = 100 (fair share, not a hard quota — a quota would waste idle
-cores). A forgotten/empty grant lands on the *bounded* default; unbounded is the explicit,
-honestly-reported opt-out.
+`with_unlimited_memory()` is the **only** opt-out — it removes the *memory* cap alone. Defaults
+are **computed from the host, not a config knob** (the stinginess bar): memory = a bounded
+fraction of RAM (1/8) capped at 1 GiB and floored at 128 MiB so one Shard can't OOM the host;
+pids = 512 (room for threads, stops a bomb); cpu_weight = 100 (fair share, not a hard quota — a
+quota would waste idle cores). **A structural invariant: no grant can license a fork bomb.**
+There is no wholesale "no limits" opt-out; the only opt-out reaches *memory*, and **pids stays
+bounded for every Shard cgroups can reach** (a heavily-parallel Shard raises its pids cap, never
+removes it). A forgotten/empty grant lands on the *bounded* default.
 
 ### cgroup-v2 mechanism (parent-applies-at-the-sync-point)
 
@@ -1171,11 +1173,14 @@ the attach race: the child runs nothing real until released):
 
 - The host **discovers its delegated base** from `/proc/self/cgroup` and, once, builds the
   hierarchy the **no-internal-processes** rule forces: create a `zen-supervisor` leaf, **drain
-  the base's processes into it**, then enable `+memory +pids` on the base's
-  `cgroup.subtree_control` (you can't enable controllers on a cgroup that holds processes).
-  Per-Shard leaves are created **alongside** the supervisor.
-- At **mount**, a per-Shard leaf is created with its limits (`memory.max`, `memory.swap.max=0`
-  so swap can't escape the cap, `pids.max`). At the **sync point** (child unshared, blocked on
+  the base's processes into it**, then enable `+memory +pids` — **and `+cpu` where the
+  controller is delegated** — on the base's `cgroup.subtree_control` (you can't enable
+  controllers on a cgroup that holds processes). Per-Shard leaves are created **alongside** the
+  supervisor.
+- At **mount**, a per-Shard leaf is created with its limits (`memory.max` unless opted out by
+  grant, `memory.swap.max=0` so swap can't escape the cap, `pids.max` **always**, and
+  `cpu.weight` where the cpu controller is delegated — a fair-share weight, set-and-confirmed,
+  not a hard cap). At the **sync point** (child unshared, blocked on
   "go") the parent writes the child's pid into the leaf's `cgroup.procs` — moving the whole
   subtree it execs/spawns under the limits — then maps it (if it made a userns), then releases.
   The child consumes nothing until released, so it is in the cgroup before it can.
@@ -1186,10 +1191,12 @@ the attach race: the child runs nothing real until released):
 
 ### Resolution, confirmation, and the delegation reality
 
-Resolution joins the tree: grant unlimited → **Granted** (opt-out); else enforceable →
-**Enforced** (create+limit+move+confirm); else dev-mode → **Uncontained**; else **fail-safe
-refuse**. Confirmation reads `/proc/<pid>/cgroup` (pid is in the leaf) and reads the limits
-back; a mismatch fails safe.
+Resolution joins the tree: enforceable → **Enforced** (a leaf with at-least-pids bounded; memory
+capped or opted-out by grant; cpu weighted where delegated — create+limit+move+confirm); else
+dev-mode → **Uncontained**; else **fail-safe refuse**. Resources **never resolve to Granted** —
+there is no wholesale opt-out, so a leaf (with its pids cap) is always created when cgroups work.
+Confirmation reads `/proc/<pid>/cgroup` (pid is in the leaf) and reads the limits back (memory
+where capped, pids always, cpu where delegated); a mismatch fails safe.
 
 **Delegation is the make-or-break, and it is invocation-dependent.** cgroup write access needs
 a *delegated* subtree the user owns (on systemd, the user session slice). A process launched
@@ -1204,17 +1211,23 @@ missing controller).
 ### Status: built
 
 The Resources detection (establish-the-base probe), the per-Shard cgroup-v2 leaf with
-memory/pids limits applied at the sync point and confirmed (pid-in-leaf + limits read back),
-leaf cleanup/recreate across teardown/respawn, the resolution + dev-mode + fail-safe + the
-unlimited opt-out, and the honest per-Shard `containment()` all ship, green in Debug and under
-ASan/UBSan (the suite runs under a delegated scope). The OS-enforced proof passes **with its
-negative control**: a memory-bomb Shard under a 64 MiB cap is **OOM-killed within its cgroup**
-(the host survives and quarantines it), while the *same* allocation under a 512 MiB cap
-**survives** — proving the cap, not the allocation, is the cause; and a fork-bomb is **bounded
-by `pids.max`** (≤64 of its 4000 attempts). `containment()` now leaves **only syscalls**
-unenforced. The mechanism ladder is **complete for the threat model**; what remains is a
-**deliberate seccomp decision** (kernel-exploit-escape defense) and the **policy phases**
-(provenance→grant→hosting-mode; persistent scoped storage) — mechanism done, policy next.
+memory/pids limits (and `cpu.weight` where the cpu controller is delegated) applied at the sync
+point and confirmed (pid-in-leaf + limits read back), leaf cleanup/recreate across
+teardown/respawn, the resolution + dev-mode + fail-safe + the **memory-only opt-out**, and the
+honest per-Shard `containment()` all ship, green in Debug and under ASan/UBSan (the suite runs
+under a delegated scope). The OS-enforced proof passes **with its negative control**: a
+memory-bomb Shard under a 64 MiB cap is **OOM-killed within its cgroup** (the host survives and
+quarantines it), while the *same* allocation under a 512 MiB cap **survives** — proving the cap,
+not the allocation, is the cause; and a fork-bomb is **bounded by `pids.max`** (≤64 of its 4000
+attempts). **The structural invariant is pinned: a fork-bomb stays bounded *even with
+`with_unlimited_memory()`*** (memory uncapped, pids still 64-bounded), and the memory opt-out
+lets a bomb survive the cap that would OOM a default-capped one — no grant can license a fork
+bomb. `cpu.weight` is **set-and-confirmed where the cpu controller is delegated** (present but
+unexercised on this WSL host, which delegates only memory+pids — honestly reported absent), a
+*fair-share weight, never a hard cap*; an absolute `cpu.max` quota is a possible **future
+opt-in**, not built. `containment()` now leaves **only syscalls** unenforced. The mechanism
+ladder is **complete for the threat model**; what remains is a **deliberate seccomp decision**
+(kernel-exploit-escape defense) — the policy phases (P1, the StorageBroker) have since shipped.
 
 ---
 
