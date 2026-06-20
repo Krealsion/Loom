@@ -7,7 +7,10 @@
 #include <zen/isolation/host.hpp>
 #include <zen/switchboard.hpp>
 
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -28,6 +31,8 @@ using zen::sb::Ticket;
 namespace {
 
 const std::string kHostExe = ZEN_SHARD_HOST_EXE;
+
+zen::Bytes bytes_of(const std::string& s) { return zen::Bytes(s.begin(), s.end()); }
 
 // Register a ProbeShard bound to a role (a singleton capability slot), via the
 // role-binding register_shard overload. Like register_probe otherwise.
@@ -271,6 +276,178 @@ TEST_CASE("out-of-process role-send reaches the role holder, sender stamped (kEm
 
     CHECK(holder.shard->handled_names.back() == "StoragePut");
     CHECK(got_sender == mod.id); // stamped from the connection (link.id), never the wire
+}
+
+TEST_CASE("scoping: each mod reads only its own data; B can never read A's (negative control)") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("the floor/broker are not fully OS-enforceable here; skipping the scoping proof");
+        return;
+    }
+    const std::string root = "/tmp/zen_storage_scoping";
+    std::filesystem::remove_all(root);
+
+    // The broker holds the only disk capability (WriteScoped(root)); the two mods are
+    // FsAccess::None and hold only the floor's storage role send-rules.
+    OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    OutOfProcessResult a = host.mount_mod("modA", ZEN_SO_STORAGE_CLIENT);
+    OutOfProcessResult b = host.mount_mod("modB", ZEN_SO_STORAGE_CLIENT);
+    REQUIRE_MESSAGE(a.ok, a.error);
+    REQUIRE_MESSAGE(b.ok, b.error);
+
+    // Read each StorageValue reply off the bus tap, keyed by the mod it was delivered to.
+    std::map<std::uint64_t, std::string> got;
+    bus.add_observer([&got](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue" &&
+            e.payload != nullptr) {
+            const zen::Bytes& v = e.payload->get("value")->as_bytes();
+            got[e.target.value] = std::string(v.begin(), v.end());
+        }
+    });
+
+    // Both mods write the SAME key "save" with different secrets, then read it back.
+    bus.send(a.id, Message(zen::author::to_value(storage::DoPut{"save", bytes_of("secretA")})));
+    bus.send(a.id, Message(zen::author::to_value(storage::DoGet{"save"})));
+    bus.send(b.id, Message(zen::author::to_value(storage::DoPut{"save", bytes_of("secretB")})));
+    bus.send(b.id, Message(zen::author::to_value(storage::DoGet{"save"})));
+    REQUIRE(host.run_until([&] { return got.count(a.id.value) && got.count(b.id.value); }, 4000));
+
+    CHECK(got[a.id.value] == "secretA"); // A reads its own
+    CHECK(got[b.id.value] == "secretB"); // B reads its own
+    // The negative control: same key "save", yet B's value is its own — never A's. The
+    // scoping is by the unforgeable stamped sender, not incidental.
+    CHECK(got[b.id.value] != "secretA");
+
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("floor-without-disk: a None mod persists via the broker, but a direct open fails (syscall)") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("not fully OS-enforceable here; skipping the floor-without-disk proof");
+        return;
+    }
+    const std::string root = "/tmp/zen_storage_floor";
+    std::filesystem::remove_all(root);
+    OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    OutOfProcessResult mod = host.mount_mod("mod", ZEN_SO_STORAGE_CLIENT);
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+
+    // The mod is FsAccess::None — OS-enforced, no filesystem of its own.
+    CHECK(host.containment("mod").find("filesystem: contained at level none") != std::string::npos);
+
+    std::string probe;
+    bool have = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue" &&
+            e.payload != nullptr && e.target == mod.id) {
+            const zen::Bytes& v = e.payload->get("value")->as_bytes();
+            probe = std::string(v.begin(), v.end());
+            have = true;
+        }
+    });
+    // Probe: the mod attempts a DIRECT file open (must fail at the syscall level) and
+    // carries the errno back THROUGH the broker — proving "no disk of my own" and
+    // "persists via messages alone" in one round-trip.
+    bus.send(mod.id, Message(zen::author::to_value(storage::Probe{1})));
+    bus.send(mod.id, Message(zen::author::to_value(storage::DoGet{"__probe__"})));
+    REQUIRE(host.run_until([&] { return have; }, 4000));
+
+    REQUIRE_FALSE(probe.empty());      // the broker round-trip succeeded (persisted via messages)
+    CHECK(std::stol(probe) != 0);      // the direct open failed at the syscall level (no disk)
+
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("reload-keeps-state: stored data survives a broker implementation reload; mods still route") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("not fully OS-enforceable here; skipping the reload-keeps-state proof");
+        return;
+    }
+    const std::string root = "/tmp/zen_storage_reload";
+    std::filesystem::remove_all(root);
+    OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    OutOfProcessResult mod = host.mount_mod("mod", ZEN_SO_STORAGE_CLIENT);
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+
+    std::string got;
+    bool have = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue" &&
+            e.payload != nullptr && e.target == mod.id) {
+            const zen::Bytes& v = e.payload->get("value")->as_bytes();
+            got = std::string(v.begin(), v.end());
+            have = true;
+        }
+    });
+
+    bus.send(mod.id, Message(zen::author::to_value(storage::DoPut{"k", bytes_of("persisted")})));
+    bus.send(mod.id, Message(zen::author::to_value(storage::DoGet{"k"})));
+    REQUIRE(host.run_until([&] { return have; }, 4000));
+    REQUIRE(got == "persisted");
+
+    // Reload the broker's implementation in place: same ShardId, role, grant; fresh
+    // child; the on-disk data is durable.
+    REQUIRE(host.reload("broker"));
+    CHECK(host.is_mounted("broker"));
+
+    // The mod (same id, same role send-rule) reads the SAME key again — still its data,
+    // still correctly scoped, routed by role to the reloaded broker.
+    have = false;
+    got.clear();
+    bus.send(mod.id, Message(zen::author::to_value(storage::DoGet{"k"})));
+    REQUIRE(host.run_until([&] { return have; }, 4000));
+    CHECK(got == "persisted");
+
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget, the mod stays None") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("not fully OS-enforceable here; skipping the broker-down check");
+        return;
+    }
+    // Mount then UNMOUNT the broker, so the storage role has no live holder (the
+    // crashed/quarantined/unmounted case). The storage schemas stay registered, so the
+    // role-send still reaches delivery — and degrades there, not silently.
+    const std::string root = "/tmp/zen_storage_down";
+    std::filesystem::remove_all(root);
+    OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    OutOfProcessResult mod = host.mount_mod("mod", ZEN_SO_STORAGE_CLIENT);
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+    host.unmount("broker"); // the storage role now has no holder
+
+    bool refused = false;
+    bus.add_observer([&refused](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.schema_name == "StoragePut" &&
+            e.refusal.reason == RefusalReason::NoSuchTarget) {
+            refused = true;
+        }
+    });
+    bus.send(mod.id, Message(zen::author::to_value(storage::DoPut{"k", bytes_of("x")})));
+    REQUIRE(host.run_until([&] { return refused; }, 2000));
+    // The mod's authorized storage send is simply undelivered — storage is *unavailable*,
+    // not a disk leak. The mod is still FsAccess::None.
+    CHECK(host.containment("mod").find("filesystem: contained at level none") != std::string::npos);
+    std::filesystem::remove_all(root);
 }
 
 } // TEST_SUITE

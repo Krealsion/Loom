@@ -79,7 +79,17 @@ public:
     /// this host, the mount refuses (fail-safe) unless dev-mode is on — then it
     /// proceeds with the Shard marked network-uncontained.
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
-                             zen::sb::Grant grant);
+                             zen::sb::Grant grant, const std::string& role = "");
+
+    /// Mount the StorageBroker out-of-process at the TCB tier: host-granted
+    /// FsAccess::WriteScoped to `storage_root` ONLY (the persistent-scoped-write
+    /// extension — disk, but contained to that one dir; it can't reach the host home),
+    /// permitted to reply StorageValue to any mod, and registered under role
+    /// "storage" so floored mods reach it by role-addressing. `storage_root` is
+    /// created if absent. Storage is **session-scoped** (keyed by the ephemeral
+    /// sender); persistent-across-restart awaits the first-class-identity phase.
+    OutOfProcessResult mount_broker(const std::string& name, const std::string& so_path,
+                                    const std::string& storage_root);
 
     /// Mount an untrusted mod from `so_path` under `name` on the **floor**: minimal
     /// authority (no network, FsAccess::None, bounded resources) plus a single
@@ -133,6 +143,13 @@ public:
     bool run_until(Pred predicate, int max_steps);
 
     void unmount(const std::string& name);
+
+    /// Reload a mounted Shard's implementation IN PLACE: re-spawn its child (from the
+    /// same .so) and re-revive from the host-owned snapshot, keeping the SAME ShardId,
+    /// grant, and role — so routing (role-addressing included) and reload-stable
+    /// send-rules survive. A broker's on-disk data is durable independently of this.
+    /// Returns false if `name` is not mounted or the respawn failed.
+    bool reload(const std::string& name);
 
     bool is_mounted(const std::string& name) const;
     bool quarantined(const std::string& name) const;
