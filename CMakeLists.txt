@@ -103,6 +103,7 @@ add_library(zen::kernel ALIAS zen-kernel)
 # it does not depend on the kernel's compiled code.
 add_library(zen-isolation
     src/isolation/channel.cpp
+    src/isolation/grant_record.cpp
     src/isolation/host.cpp
     src/isolation/sandbox.cpp)
 

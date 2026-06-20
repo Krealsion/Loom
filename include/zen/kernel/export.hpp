@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,6 +70,15 @@ public:
         return 0;
     }
 
+    // Out-of-process role-addressed send. Wiring it across the C ABI (a role-target
+    // emit frame + a host callback) is the first task of Part B, where the
+    // StorageBroker actually receives role-targeted puts/gets; until then a library
+    // Shard has no role to send to, so this is an explicit inert stub, not a silent
+    // inherited default.
+    zen::sb::Ticket send_to_role(std::string_view /*role*/, zen::sb::Message /*msg*/) override {
+        return zen::sb::Ticket{};
+    }
+
 private:
     const ZenHostApi* host_;
 };
@@ -95,7 +105,15 @@ ZenStatus do_describe(void* instance, ZenByteSink sink) {
         S* s = static_cast<S*>(instance);
         std::vector<std::shared_ptr<const zen::Schema>> accepted = s->accepted_schemas();
         zen::Value state = s->snapshot();
-        sink_write(sink, zen::serialize(zen::kernel::encode_manifest(accepted, state.schema())));
+        // The ask is optional: a Shard that declares one (via ZEN_ASK on the author
+        // base) gets it surfaced in the manifest as advice; one that doesn't emits no
+        // requests section and lands on the floor. Either way it is never a grant.
+        std::optional<zen::kernel::CapabilityAsk> ask;
+        if constexpr (requires { s->zen_requested_capabilities(); }) {
+            ask = s->zen_requested_capabilities();
+        }
+        sink_write(sink, zen::serialize(zen::kernel::encode_manifest(accepted, state.schema(),
+                                                                     ask ? &*ask : nullptr)));
         return ZEN_OK;
     } catch (...) {
         return ZEN_ERR;

@@ -480,6 +480,14 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
     link.accept = std::move(accept);
     link.state_schema = state;
 
+    // The ask: requested-capabilities is *advice* (conformance data the host reads
+    // to know what to surface), not authority. Decode and record it; the grant is
+    // decided by the floor-factory + grant-record, never by this declaration. Absent
+    // (the floor case) leaves requested_caps empty.
+    if (const zen::Cell* rq = mv.get("requests")) {
+        link.requested_caps = zen::kernel::decode_capability_ask(*rq->as_message());
+    }
+
     // Policy -> cached, validated against the fixed lifecycle grammar.
     zen::Unverified up = zen::parse(policy);
     zen::Admission ap = zen::admit(up, zen::sb::lifecycle_policy_schema());
@@ -496,6 +504,58 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
     }
     link.snapshot_value = std::move(as).value();
     link.snapshot_bytes = snapshot;
+}
+
+std::optional<zen::kernel::CapabilityAsk>
+IsolationHost::declared_ask(const std::string& name) const {
+    auto it = links_.find(name);
+    if (it == links_.end()) {
+        return std::nullopt;
+    }
+    return it->second->requested_caps;
+}
+
+OutOfProcessResult IsolationHost::mount_mod(const std::string& name, const std::string& so_path) {
+    std::string hash;
+    try {
+        hash = so_content_hash(so_path);
+    } catch (const std::exception& e) {
+        return {false, {}, e.what()};
+    }
+    // The floor: minimal authority (no network, FsAccess::None, bounded resources,
+    // empty sends) plus the one reach that makes a mod useful on messages alone — a
+    // send-rule to the storage broker role. Least-privilege: storage shapes only.
+    zen::sb::Grant grant;
+    grant.allow_to_role(kStoragePut, kStorageProtocolVersion, kStorageRole);
+    grant.allow_to_role(kStorageGet, kStorageProtocolVersion, kStorageRole);
+
+    // Apply any host-recorded delta for this identity. The *ask* is NOT consulted
+    // here: only what the host has written into the grant-record raises a Shard above
+    // the floor. A declaration is never a grant.
+    const GrantDelta delta = grant_record_.lookup(hash);
+    if (delta.network) {
+        grant.with_os_capabilities(zen::sb::os_cap::Network);
+    }
+    if (!delta.filesystem.empty()) {
+        zen::sb::FsAccess level = zen::sb::FsAccess::None;
+        if (delta.filesystem == "read-only") {
+            level = zen::sb::FsAccess::ReadOnly;
+        } else if (delta.filesystem == "write-scoped") {
+            level = zen::sb::FsAccess::WriteScoped;
+        } else if (delta.filesystem == "write-no-exec") {
+            level = zen::sb::FsAccess::WriteNoExec;
+        } else if (delta.filesystem == "write-anywhere") {
+            level = zen::sb::FsAccess::WriteAnywhere;
+        }
+        grant.with_filesystem(level);
+    }
+    return mount(name, so_path, std::move(grant));
+}
+
+void IsolationHost::set_grant_record_path(const std::string& path) { grant_record_.load(path); }
+
+void IsolationHost::record_grant_delta(const std::string& content_hash, GrantDelta delta) {
+    grant_record_.record(content_hash, std::move(delta));
 }
 
 OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,

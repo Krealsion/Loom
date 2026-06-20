@@ -123,6 +123,14 @@ public:
     ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant);
     ShardId register_shard(std::unique_ptr<Shard> shard); ///< empty grant
 
+    /// As register_shard(shard, grant), but also bind the Shard to `role` — a named
+    /// capability slot a send may target instead of a ShardId (see send_to_role and
+    /// Grant::allow_to_role). v1 is singleton: a role has exactly one holder, so
+    /// binding a role already held throws std::invalid_argument. The binding
+    /// survives the holder reloading (its id is stable) and is cleared on
+    /// unregister_shard.
+    ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant, std::string role);
+
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
     /// readable after the delivery is pumped.
     Ticket send(ShardId target, Message msg) override;
@@ -142,6 +150,13 @@ public:
     /// cannot get it.
     Ticket send_as(ShardId as_sender, ShardId target, Message msg);
     std::size_t publish_as(ShardId as_sender, Message msg);
+
+    /// Role-addressed sends. send_to_role is the ungated root authority (held only
+    /// by the host); send_as_to_role is the gated path a ShardBus uses — it stamps
+    /// the authoritative sender and authorizes against that sender's grant *by role*
+    /// at delivery (see Grant::permits_role).
+    Ticket send_to_role(std::string_view role, Message msg) override;
+    Ticket send_as_to_role(ShardId as_sender, std::string_view role, Message msg);
 
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
     /// reentrant call (from within a handler) is a no-op.
@@ -211,13 +226,15 @@ private:
         Grant grant;
         std::uint64_t reloads_used = 0;
         bool alive = true;
+        std::string role{}; ///< the role this Shard holds (empty if none); see roles_
     };
 
     struct Envelope {
         Message msg;
         ShardId target{};
         std::uint64_t seq = 0;
-        bool gated = false; ///< true => Shard-originated; authorize against the sender's grant
+        bool gated = false;  ///< true => Shard-originated; authorize against the sender's grant
+        std::string role{};  ///< non-empty => role-targeted; resolved to a holder at delivery
     };
 
     // The Bus a handler actually receives: it stamps the handling Shard's identity
@@ -232,6 +249,9 @@ private:
             return sb_.send_as(self_, target, std::move(msg));
         }
         std::size_t publish(Message msg) override { return sb_.publish_as(self_, std::move(msg)); }
+        Ticket send_to_role(std::string_view role, Message msg) override {
+            return sb_.send_as_to_role(self_, role, std::move(msg));
+        }
 
     private:
         Switchboard& sb_;
@@ -239,6 +259,7 @@ private:
     };
 
     Ticket enqueue_directed(ShardId target, Message msg, bool gated);
+    Ticket enqueue_role(std::string role, Message msg, bool gated);
     std::size_t fanout(Message msg, bool gated);
 
     void deliver_one(Envelope env);
@@ -253,6 +274,7 @@ private:
 
     Registry registry_;
     std::map<std::uint64_t, ShardRecord> shards_;
+    std::map<std::string, ShardId> roles_; ///< role name -> its singleton holder's id
     std::uint64_t next_shard_id_ = 1;
 
     std::deque<Envelope> queue_;

@@ -18,7 +18,9 @@
 // the Shard visibly marked uncontained.
 
 #include <zen/isolation/channel.hpp>
+#include <zen/isolation/grant_record.hpp>
 #include <zen/isolation/sandbox.hpp>
+#include <zen/kernel/schema_codec.hpp>
 #include <zen/registry.hpp>
 #include <zen/switchboard/switchboard.hpp>
 #include <zen/value.hpp>
@@ -79,6 +81,25 @@ public:
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
                              zen::sb::Grant grant);
 
+    /// Mount an untrusted mod from `so_path` under `name` on the **floor**: minimal
+    /// authority (no network, FsAccess::None, bounded resources) plus a single
+    /// send-rule to the storage broker role — enough to persist and retrieve on
+    /// messages alone, with zero disk access. The mod's identity is its .so
+    /// content-hash; any delta the host has recorded for that identity (see
+    /// record_grant_delta) is applied on top of the floor. The mod's *ask* is read
+    /// (declared_ask) but never consulted for the grant: a declaration is not a grant.
+    OutOfProcessResult mount_mod(const std::string& name, const std::string& so_path);
+
+    /// Point the host's grant-record at a per-install JSON file (loading it). The
+    /// floor-factory consults it for deltas; record_grant_delta writes to it.
+    void set_grant_record_path(const std::string& path);
+
+    /// Record (replace) a capability delta for a Shard identity (its .so
+    /// content-hash, from so_content_hash) and persist it. This is the host holding
+    /// the pen — the stand-in for the consent UX (deferred). The host, never a Shard,
+    /// decides; only a delta recorded here raises a mod above the floor.
+    void record_grant_delta(const std::string& content_hash, GrantDelta delta);
+
     /// Dev-mode (default off = strict): converts a fail-safe refusal — when a
     /// requested capability cannot be enforced on this host — into a loud warning,
     /// proceeding with the Shard visibly marked uncontained for that capability. A
@@ -118,6 +139,12 @@ public:
     /// The honest containment level of a hosted Shard.
     std::string containment(const std::string& name) const;
 
+    /// The capability ask the Shard's manifest declared, or nullopt if it asked for
+    /// nothing (or is not mounted). This is the host reading the *advice* — what the
+    /// Shard wanted — distinct from what it was granted; the gap between this and
+    /// containment() is the advice-vs-authority wall made observable.
+    std::optional<zen::kernel::CapabilityAsk> declared_ask(const std::string& name) const;
+
 private:
     struct Link {
         std::string name;
@@ -130,6 +157,7 @@ private:
         std::optional<Value> snapshot_value; // last good admitted snapshot (host-owned)
         std::string snapshot_bytes;          // its canonical bytes, for revival
         std::optional<Value> policy_value;
+        std::optional<zen::kernel::CapabilityAsk> requested_caps; // the manifest's ask (advice)
         OutOfProcessShard* proxy = nullptr;
         std::vector<CapabilityResolution> resolutions; // per-capability, resolved at mount
         MountPlan fs_plan;     // precomputed restricted-view plan (empty if fs not sandboxed)
@@ -167,6 +195,7 @@ private:
     zen::Registry registry_; // reconstructed child schemas (decode deps + resolution)
     std::map<std::string, std::unique_ptr<Link>> links_;
     EnforcementReport enforcement_;    // what this host can actually impose (detected once)
+    GrantRecord grant_record_;         // per-install ledger of grant deltas above the floor
     bool dev_mode_ = false;            // strict by default
     bool force_entry_failure_ = false; // test seam: simulate a real sandbox-entry failure
 };
