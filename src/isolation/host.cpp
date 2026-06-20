@@ -103,6 +103,35 @@ void bind_ro_ops(MountPlan& p, const std::string& root, const std::string& src) 
     p.push_back({MountOp::Kind::SetattrRecRO, "", root + src, "", 0}); // recursive read-only
 }
 
+// mkdir -p a real host directory (mode 0700), creating missing parents. Idempotent;
+// returns false if a component exists as a non-directory or cannot be created. Used
+// for the broker's persistent storage_root (the writable bind target).
+bool ensure_host_dir(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    std::size_t pos = 0;
+    while (pos < path.size()) {
+        std::size_t slash = path.find('/', pos);
+        if (slash == std::string::npos) {
+            slash = path.size();
+        }
+        const std::string acc = path.substr(0, slash);
+        if (!acc.empty() && acc != "/") {
+            struct stat st {};
+            if (::stat(acc.c_str(), &st) == 0) {
+                if (!S_ISDIR(st.st_mode)) {
+                    return false;
+                }
+            } else if (::mkdir(acc.c_str(), 0700) != 0) {
+                return false;
+            }
+        }
+        pos = slash + 1;
+    }
+    return true;
+}
+
 // The allow-list view for `level`: private-first, a tmpfs root, the loader closure
 // and the exe/.so dirs bound read-only, a scratch tmpfs for the write levels, then
 // pivot_root into it. Nothing of the host home is bound, so secrets are absent.
@@ -131,7 +160,14 @@ MountPlan build_view_plan(zen::sb::FsAccess level, const std::string& scoped_pat
     if (level == zen::sb::FsAccess::ReadOnly && !scoped_path.empty()) {
         bind_ro_ops(p, root, scoped_path); // the granted tree, read-only
     }
-    if (level == zen::sb::FsAccess::WriteScoped || level == zen::sb::FsAccess::WriteNoExec) {
+    if (level == zen::sb::FsAccess::WriteScoped && !scoped_path.empty()) {
+        // Persistent-scoped write (TCB-only — the StorageBroker): bind the host's
+        // persistent storage dir writable at /scratch instead of the ephemeral tmpfs.
+        // Still least-privilege — only this one dir is reachable, never the host home —
+        // but the data survives. A mod is FsAccess::None and never gets a scoped_path.
+        p.push_back({MountOp::Kind::Mkdir, root + "/scratch", "", "", 0});
+        p.push_back({MountOp::Kind::Mount, scoped_path, root + "/scratch", "", MS_BIND});
+    } else if (level == zen::sb::FsAccess::WriteScoped || level == zen::sb::FsAccess::WriteNoExec) {
         const unsigned long f = (level == zen::sb::FsAccess::WriteNoExec) ? MS_NOEXEC : 0;
         p.push_back({MountOp::Kind::Mkdir, root + "/scratch", "", "", 0});
         p.push_back({MountOp::Kind::Mount, "tmpfs", root + "/scratch", "tmpfs", f});
@@ -558,8 +594,35 @@ void IsolationHost::record_grant_delta(const std::string& content_hash, GrantDel
     grant_record_.record(content_hash, std::move(delta));
 }
 
+OutOfProcessResult IsolationHost::mount_broker(const std::string& name, const std::string& so_path,
+                                               const std::string& storage_root) {
+    if (storage_root.empty() || !ensure_host_dir(storage_root)) {
+        return {false, {}, "storage root unavailable: '" + storage_root + "'"};
+    }
+    // TCB-tier grant: WriteScoped to storage_root ONLY (the persistent bind — disk, but
+    // contained to that one dir), plus the authority to reply StorageValue to any mod.
+    // Registered under role "storage" so floored mods reach it by role-addressing.
+    zen::sb::Grant grant;
+    grant.with_filesystem(zen::sb::FsAccess::WriteScoped, storage_root);
+    grant.allow_to_any(kStorageValue, kStorageProtocolVersion);
+    return mount(name, so_path, std::move(grant), kStorageRole);
+}
+
+bool IsolationHost::reload(const std::string& name) {
+    auto it = links_.find(name);
+    if (it == links_.end() || !it->second->snapshot_value) {
+        return false;
+    }
+    Link& link = *it->second;
+    // Re-spawn a fresh child from the same .so and re-revive from the host-owned
+    // snapshot. The bus registration (ShardId, grant, role) is untouched, so routing
+    // and role-addressing survive; a broker's on-disk data is durable regardless.
+    respawn_and_revive(link, *link.snapshot_value);
+    return link.channel != nullptr;
+}
+
 OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,
-                                        zen::sb::Grant grant) {
+                                        zen::sb::Grant grant, const std::string& role) {
     if (links_.count(name) != 0) {
         return {false, {}, "already mounted: " + name};
     }
@@ -602,6 +665,13 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         fs.capability = Capability::Filesystem;
         const zen::sb::FsAccess level = grant.filesystem();
         fs.note = zen::sb::fs_access_name(level);
+        if (level == zen::sb::FsAccess::WriteScoped && !grant.filesystem_path().empty()) {
+            // The persistent-scoped-write extension: a writable bind to one host dir
+            // that SURVIVES (vs the ephemeral tmpfs). Honest about its limit — a broker
+            // keying by the ephemeral sender is session-scoped, not save-across-restart.
+            fs.note = "write-scoped (persistent storage bind; session-scoped: keyed by the "
+                      "ephemeral sender, not save-across-restart)";
+        }
         if (level == zen::sb::FsAccess::WriteAnywhere) {
             fs.outcome = Outcome::Granted; // the opt-out: unrestricted host fs, by grant
         } else if (enforcement_.enforceable(Capability::Filesystem)) {
@@ -690,7 +760,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
     OutOfProcessShard* raw = proxy.get();
     zen::sb::ShardId id;
     try {
-        id = bus_.register_shard(std::move(proxy), std::move(grant));
+        id = bus_.register_shard(std::move(proxy), std::move(grant), role);
     } catch (const std::exception& e) {
         teardown_child(*link);
         return {false, {}, std::string("register refused: ") + e.what()};

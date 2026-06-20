@@ -29,6 +29,7 @@ namespace zen::isolation {
 inline constexpr const char* kStorageRole = "storage";
 inline constexpr const char* kStoragePut = "StoragePut";
 inline constexpr const char* kStorageGet = "StorageGet";
+inline constexpr const char* kStorageValue = "StorageValue"; ///< the broker's reply shape
 inline constexpr std::uint32_t kStorageProtocolVersion = 1;
 
 /// A capability *delta* the host has granted a specific Shard above the floor. Only
