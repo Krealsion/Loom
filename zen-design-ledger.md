@@ -25,7 +25,7 @@ the Built section) says so.
 | OS sandbox **(B3)** — `zen-isolation/sandbox` + native enforcement | the detect→apply→know→refuse-or-proceed **honesty lattice** and the first real syscall-level enforcement. `detect_enforcement()` **probes** (never assumes) what this host can impose, per-capability; the **Network** flag is enforced by launching a child into a no-interface user+net namespace (native `fork`+`unshare(CLONE_NEWUSER+CLONE_NEWNET)`, sandboxed branch only — `posix_spawn` unchanged when Network is granted), so a child without the grant gets `ENETUNREACH` from a real `connect()` regardless of what the `.so` links; `containment()` is generated from what was *actually* imposed and **positively confirmed** (the child's `/proc/<pid>/ns/net` inode differs from the host's — verified, not inferred; never a false claim); a *surprise* real-entry failure refuses in **both** strict and dev mode (no run-while-claiming-contained path); per-capability resolution + an iterating `containment()` make B4 "a probe + an enforcement call"; a default-strict **dev-mode** knob converts a *known-gap* refusal into a visibly-uncontained warning; hard-vs-graduated capability vocabulary (`FsAccess`, safe default) reserves filesystem's home. | built |
 | Filesystem sandbox **(B4)** — `zen-isolation/sandbox` mount-ns view | the **first graduated capability**, enforced by a private mount namespace. The grant's `FsAccess` level (None → ReadOnly → WriteScoped → WriteNoExec → WriteAnywhere, default `None`) picks a point on a safe→dangerous axis; the child `pivot_root`s into an **allow-list** view (fresh tmpfs root, the loader closure + its own `.so` bind-mounted read-only via `mount_setattr(AT_RECURSIVE)`, an optional scratch tmpfs, root remounted read-only — built **private-first** to stop reverse mount propagation), so a stranger's Shard cannot read your `$HOME` secrets (they are *absent*, not hidden), cannot write outside `/scratch` (`EROFS`/`EACCES`), and at `WriteNoExec` cannot `execve` what it writes (`EACCES`); `WriteAnywhere` is the honest opt-out (reported *not contained, by grant*). Confirmed via a distinct `/proc/<pid>/ns/mnt` inode + the same fail-safe/dev-mode/surprise-failure discipline; the OS verdict is proven on the bus (the fs-probe still emits — sandbox ≠ muzzle). `FsAccess` is now the single source of truth (the binary `FilesystemRead/Write` flags were removed). **The map regression fix:** this host refuses a child's self-map, so the **parent** writes the child's uid/gid maps over a pipe handshake (which also hardened B3's netns entry). | built |
 | Resource containment **(B5)** — `zen-isolation/sandbox` cgroup-v2 | the **first quantitative capability** (a *limit*), enforced via a per-Shard cgroup-v2 leaf — completing the threat-model ladder (network + filesystem + resources). The grant's `ResourceLimits` (memory/pids/cpu) default to **host-computed conservative** values (no knob): memory = RAM/8 capped 1 GiB / floored 128 MiB, pids = 512, cpu_weight = 100; `with_unlimited_memory()` is the **only** opt-out — it removes the memory cap alone (**pids stays bounded — no grant can license a fork bomb**; a structural invariant, not a default). The host discovers its **delegated** base, builds the no-internal-processes hierarchy (drain into a `zen-supervisor` leaf, enable `+memory +pids`, and `+cpu` where delegated), and at the spawn **sync point** the parent moves the child's pid into its leaf before release. A memory bomb is **OOM-killed within its cgroup** (host survives → reload-then-quarantine, proven with a granted-survives **negative control**); a fork-bomb is bounded by `pids.max` — **even under `with_unlimited_memory()`** (the headline invariant proof). Confirmed via `/proc/<pid>/cgroup` + limits read-back; fail-safe/dev-mode as usual — resources **never resolve to `Granted`** (a leaf with at-least-pids is always created when cgroups work). **Delegation is invocation-dependent** — a plain `wsl bash` lands in the root cgroup (no delegation → fail-safe refuse), so the suite runs under a delegated scope (`run-under-scope.sh`); `cpu.weight` is set-and-confirmed where the cpu controller is delegated, honestly reported absent on this host (which delegates only memory+pids). An absolute `cpu.max` quota is a named future opt-in. | built |
-| Policy **P1** — the StorageBroker (the first powerbox) | the first **policy** layer (§2.6): *where a grant comes from*, proven with one broker. **The ask** (advice, never authority): manifest **v2** `requests` → `zen.CapabilityAsk` + an ergonomic `ZEN_ASK`, gated like the accept-set; `declared_ask` surfaces it but the grant is unmoved. **The floor + grant-record:** `mount_mod` floors an unknown mod (default `Grant` + a send-rule to the storage **role**); authority above the floor comes only from a persisted, **content-hash-keyed** JSON grant-record the host writes (`record_grant_delta`, TCB-only — the host's pen). **Role-addressing:** register under a role, `send_to_role`, `allow_to_role`/`permits_role`, **authorize-by-role *before* resolution**, singleton, reload-stable, unheld-role → `NoSuchTarget`. **The broker:** a new sender-less `Op::EmitRole` frame + `ZenHostApi::send_to_role` close the out-of-process seam (sender stamped from `link.id`, never the wire); persistent-`WriteScoped` binds `storage_root` writable (TCB-only; mods stay `None`); the out-of-process **StorageBroker** (role `"storage"`) scopes each mod's keyspace by the stamped sender. Proven end to end with negative controls: mod-vs-mod scoping, floor-without-disk, ask-is-not-a-grant, reload-keeps-state; broker-down → `NoSuchTarget`. **Session-scoped** (keyed by the ephemeral sender), stated honestly in `containment()`; first-class persistent identity (save-files) is the named successor. | built |
+| Policy **P1–P2** — the powerbox (Storage, then Network brokers) | the first **policy** layer (§2.6): *where a grant comes from*, proven with two brokers on two capabilities. **The ask** (advice, never authority): manifest **v2** `requests` → `zen.CapabilityAsk` + an ergonomic `ZEN_ASK`, gated like the accept-set; `declared_ask` surfaces it but the grant is unmoved. **The floor + grant-record:** `mount_mod` floors an unknown mod (default `Grant` + a send-rule to the storage **role**); authority above the floor comes only from a persisted, **content-hash-keyed** JSON grant-record the host writes (`record_grant_delta`, TCB-only — the host's pen). **Role-addressing:** register under a role, `send_to_role`, `allow_to_role`/`permits_role`, **authorize-by-role *before* resolution**, singleton, reload-stable, unheld-role → `NoSuchTarget`. **The broker:** a new sender-less `Op::EmitRole` frame + `ZenHostApi::send_to_role` close the out-of-process seam (sender stamped from `link.id`, never the wire); persistent-`WriteScoped` binds `storage_root` writable (TCB-only; mods stay `None`); the out-of-process **StorageBroker** (role `"storage"`) scopes each mod's keyspace by the stamped sender. Proven end to end with negative controls: mod-vs-mod scoping, floor-without-disk, ask-is-not-a-grant, reload-keeps-state; broker-down → `NoSuchTarget`. **Session-scoped** (keyed by the ephemeral sender), stated honestly in `containment()`; first-class persistent identity (save-files) is the named successor. **P2** generalizes the powerbox to a second capability (network): `GrantDelta` gains `roles`; the floor grants storage to all but **net to none** (net is a recorded delta — and only the role send-rule, never `os_cap::Network`, so a net mod stays OS-network-denied and reaches the net solely through the broker); the out-of-process **NetworkBroker** (`os_cap::Network`, `FsAccess::None`, role `"net"`) validates `host:port` against a **software allow-list** (NOT OS — the higher-trust broker, honestly reported) and does raw TCP. Negative controls: mediation (a net-denied mod reaches the allowed loopback listener *only* via the broker; its own `connect()` → ENETUNREACH), allow-list scoping, floor-denies-net. | built |
 
 The spine holds across every boundary: one gate everywhere, untrusted-until-proven,
 immutable published schemas, the kernel holds grammar not answers. The content-id
@@ -254,7 +254,7 @@ built rather than wholly designed.)*
   it gets push-messages instead. Which is a second reason push is the right default and
   slots are the trusted-in-process optimization.
 
-### 2.6 The powerbox — policy that produces the grant (policy phase P1)
+### 2.6 The powerbox — policy that produces the grant (policy phases P1–P2)
 
 The B-series answered *what a grant enforces*; this phase answers *where a grant comes from*,
 in the **powerbox / object-capability** shape: a privileged capability is held by a small,
@@ -268,20 +268,30 @@ broker, never the raw capability. The spine:
   it come only from a host-written, per-install **grant-record** keyed by `.so` content-hash.
 - **Role-addressing.** A send-rule grants `shape → role`; the role resolves to its singleton
   holder at delivery, reload-stable; an unheld role degrades to `NoSuchTarget`, not a hole.
-- **Scope by the stamped sender (Part B).** The broker namespaces each mod's data by the
+- **Scope by the stamped sender (P1).** The broker namespaces each mod's data by the
   unspoofable sender the host stamps — the whole mod-vs-mod isolation model, resting on the
   existing stamping unchanged.
+- **Generalizes (P2).** The same hooks carry a second broker on a different capability: the
+  NetworkBroker holds `os_cap::Network` (there is no OS-scoped network — no-interface or the
+  whole net), scopes per-destination by its **own software allow-list** (a higher-trust posture,
+  honestly reported, not OS-enforced), and a mod reaches it only via a recorded `net` role delta
+  — never the floor, and the delta grants the role send-rule, **never `os_cap::Network`** (the
+  mod stays OS-network-denied and reaches the net solely through the broker).
 
-**Status: built (Parts A and B).** Part A — the ask, the floor-factory + grant-record + host
-grant-API, role-addressing. Part B — the `Op::EmitRole`/`ZenHostApi::send_to_role` seam (sender
-stamped host-side, never on the wire), persistent-`WriteScoped` (TCB-only; mods stay `None`),
-and the out-of-process **StorageBroker** (role `"storage"`, keyspace scoped by the stamped
-sender). The powerbox is proven end to end with negative controls (scoping; floor-without-disk;
-ask-is-not-a-grant; reload-keeps-state; broker-down → `NoSuchTarget`). Storage is
-**session-scoped** (keyed by the ephemeral sender), stated honestly in `containment()`. Named
-successors: **first-class persistent identity** (the save-file phase), **authority-transfer**
-(promoting a different Shard into the broker role — user-gated, with a state handoff), and the
-**concurrent-instance version resolver**; P1 ships reload-in-place, singleton roles only.
+**Status: built (P1 + P2).** **P1 (StorageBroker)** — the ask, the floor-factory + grant-record +
+host grant-API, role-addressing, the `Op::EmitRole`/`ZenHostApi::send_to_role` seam (sender
+stamped host-side, never on the wire), persistent-`WriteScoped` (TCB-only; mods stay `None`), and
+the out-of-process StorageBroker (role `"storage"`, keyspace scoped by the stamped sender;
+session-scoped, honestly stated). **P2 (NetworkBroker)** — proves the powerbox **general** (a
+second broker on a different capability): `GrantDelta` gains a `roles` field; the floor grants
+storage to all but **net to none**; the out-of-process NetworkBroker holds full host network,
+scopes per-destination by a **software allow-list** (NOT OS), and does raw TCP. Proven end to end
+with negative controls — storage: scoping, floor-without-disk, ask-is-not-a-grant,
+reload-keeps-state; network: mediation + negative control (a net-denied mod reaches the allowed
+listener *only* via the broker — its own `connect()` → ENETUNREACH), allow-list scoping,
+floor-denies-net — plus broker-down → `NoSuchTarget`. Named successors: **OS-scoping the net
+broker** + **per-mod network policy**; **first-class persistent identity** (the save-file phase);
+**authority-transfer**; the **version resolver**. P1/P2 ship reload-in-place, singleton roles only.
 
 ---
 
@@ -303,9 +313,9 @@ cross-process delivery, crash isolation, and OS-level network sandboxing.
 (capabilities), **B2** (isolation), **B3** (the OS sandbox — Network primitive + the honesty
 lattice), **B4** (the filesystem primitive — graduated `FsAccess`, mount-namespace allow-list
 view), **B5** (the resource primitive — quantitative `ResourceLimits`, cgroup-v2 leaves). The
-mechanism ladder is now complete for the threat model; the **policy phases** have begun —
-**P1 (the powerbox: the ask + floor + grant-record + role-addressing + the StorageBroker)
-ships** (§2.6), proven end to end — and **seccomp** remains a deliberate later decision. The
+mechanism ladder is now complete for the threat model; the **policy phases** are underway —
+**P1 (the StorageBroker) and P2 (the NetworkBroker) both ship** (§2.6), proving the powerbox
+general across two capabilities — and **seccomp** remains a deliberate later decision. The
 named successors are first-class persistent identity (save-files), authority-transfer, and the
 version resolver.
 The demand-loading use

@@ -91,6 +91,15 @@ public:
     OutOfProcessResult mount_broker(const std::string& name, const std::string& so_path,
                                     const std::string& storage_root);
 
+    /// Mount the NetworkBroker out-of-process at the TCB tier: host-granted
+    /// `os_cap::Network` (so it runs in the host netns, with the real network),
+    /// `FsAccess::None`, bounded resources, permitted to reply NetResponse to any mod, and
+    /// registered under role "net". A **higher-trust** broker than the StorageBroker:
+    /// network is binary, so the OS gives it the *whole* host network — its per-destination
+    /// scoping is **software** (its own allow-list), not OS-enforced. No mod reaches it
+    /// without a recorded `net` grant delta (the floor denies the net role).
+    OutOfProcessResult mount_net_broker(const std::string& name, const std::string& so_path);
+
     /// Mount an untrusted mod from `so_path` under `name` on the **floor**: minimal
     /// authority (no network, FsAccess::None, bounded resources) plus a single
     /// send-rule to the storage broker role — enough to persist and retrieve on

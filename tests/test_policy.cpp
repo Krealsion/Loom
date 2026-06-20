@@ -1,5 +1,6 @@
 #include <doctest.h>
 
+#include "shardlib/net_protocol.hpp"
 #include "shardlib/storage_protocol.hpp"
 #include "switchboard_fixtures.hpp"
 
@@ -7,6 +8,7 @@
 #include <zen/isolation/host.hpp>
 #include <zen/switchboard.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -14,7 +16,13 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 // The policy phase (P1). Part A's core hooks, proven on their own:
 //   - role-addressing: a send may name a *role* (a stable capability slot) instead
@@ -33,6 +41,72 @@ namespace {
 const std::string kHostExe = ZEN_SHARD_HOST_EXE;
 
 zen::Bytes bytes_of(const std::string& s) { return zen::Bytes(s.begin(), s.end()); }
+
+// A tiny loopback TCP echo listener on an ephemeral port, in a background thread (the
+// host netns — so the granted broker can reach it, while a netns'd mod cannot). For the
+// NetworkBroker mediation proof. Best-effort: port() is 0 if setup failed.
+class LoopbackEcho {
+public:
+    LoopbackEcho() {
+        fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd_ < 0) {
+            return;
+        }
+        int one = 1;
+        (void)::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0; // ephemeral
+        if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+            return;
+        }
+        socklen_t len = sizeof(addr);
+        if (::getsockname(fd_, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+            return;
+        }
+        port_ = ntohs(addr.sin_port);
+        if (::listen(fd_, 8) != 0) {
+            port_ = 0;
+            return;
+        }
+        thread_ = std::thread([this] { run(); });
+    }
+    ~LoopbackEcho() {
+        stop_.store(true);
+        if (fd_ >= 0) {
+            ::shutdown(fd_, SHUT_RDWR);
+            ::close(fd_);
+        }
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+    LoopbackEcho(const LoopbackEcho&) = delete;
+    LoopbackEcho& operator=(const LoopbackEcho&) = delete;
+
+    std::int64_t port() const { return port_; }
+
+private:
+    void run() {
+        while (!stop_.load()) {
+            const int c = ::accept(fd_, nullptr, nullptr);
+            if (c < 0) {
+                break; // shutdown/close makes accept fail -> exit the loop
+            }
+            std::uint8_t buf[4096];
+            const ssize_t r = ::recv(c, buf, sizeof(buf), 0);
+            if (r > 0) {
+                (void)::send(c, buf, static_cast<std::size_t>(r), MSG_NOSIGNAL); // echo
+            }
+            ::close(c);
+        }
+    }
+    int fd_ = -1;
+    std::int64_t port_ = 0;
+    std::thread thread_;
+    std::atomic<bool> stop_{false};
+};
 
 // Register a ProbeShard bound to a role (a singleton capability slot), via the
 // role-binding register_shard overload. Like register_probe otherwise.
@@ -448,6 +522,132 @@ TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget
     // not a disk leak. The mod is still FsAccess::None.
     CHECK(host.containment("mod").find("filesystem: contained at level none") != std::string::npos);
     std::filesystem::remove_all(root);
+}
+
+// ---- P2: the NetworkBroker (the powerbox generalized to a second capability) ----
+
+TEST_CASE("floor denies net: a mod (even one that asks) cannot reach role net without a delta") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("not fully OS-enforceable here; skipping the floor-denies-net proof");
+        return;
+    }
+    // The broker is present (so NetRequest is a known schema), but a pure-floor mod has no
+    // net role-rule — unlike storage, the floor grants the net role to no one.
+    OutOfProcessResult broker = host.mount_net_broker("net", ZEN_SO_NET_BROKER);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    OutOfProcessResult mod = host.mount_mod("nc", ZEN_SO_NET_CLIENT); // no delta -> pure floor
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+
+    // The host READ the mod's ask (it requested network) — advice, surfaced...
+    auto ask = host.declared_ask("nc");
+    REQUIRE(ask.has_value());
+    CHECK(ask->network);
+
+    bool denied = false;
+    bus.add_observer([&denied](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.schema_name == "NetRequest" &&
+            e.refusal.reason == RefusalReason::CapabilityDenied) {
+            denied = true;
+        }
+    });
+    bus.send(mod.id, Message(zen::author::to_value(net::DoNet{"127.0.0.1", 9})));
+    REQUIRE(host.run_until([&] { return denied; }, 2000));
+    // ...yet the floor holds: CapabilityDenied to role net (ask is not a grant), and the
+    // mod is OS-network-denied — net is a deliberate delta, not the floor.
+    CHECK(host.containment("nc").find("network: contained") != std::string::npos);
+}
+
+TEST_CASE("mediation + negative control: a net-denied mod reaches the allowed host only via the broker") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("not fully OS-enforceable here; skipping the mediation proof");
+        return;
+    }
+    LoopbackEcho echo;
+    REQUIRE(echo.port() > 0);
+
+    OutOfProcessResult broker = host.mount_net_broker("net", ZEN_SO_NET_BROKER);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+
+    // Record a net delta for the client — the net ROLE only, NOT os_cap::Network.
+    const std::string rec = "/tmp/zen_net_grant.json";
+    std::remove(rec.c_str());
+    host.set_grant_record_path(rec);
+    GrantDelta delta;
+    delta.roles = {"net"};
+    host.record_grant_delta(so_content_hash(ZEN_SO_NET_CLIENT), delta);
+    OutOfProcessResult mod = host.mount_mod("client", ZEN_SO_NET_CLIENT);
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+    // The delta granted the role, not the OS capability: the mod is still network-DENIED.
+    CHECK(host.containment("client").find("network: contained") != std::string::npos);
+
+    bool ok = false;
+    std::string echoed;
+    bool got = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "NetResponse" &&
+            e.payload != nullptr && e.target == mod.id) {
+            ok = e.payload->get("ok")->as_bool();
+            const zen::Bytes& d = e.payload->get("data")->as_bytes();
+            echoed = std::string(d.begin(), d.end());
+            got = true;
+        }
+    });
+    bus.send(mod.id, Message(zen::author::to_value(net::DoNet{"127.0.0.1", echo.port()})));
+    REQUIRE(host.run_until([&] { return got; }, 5000));
+
+    CHECK(ok); // reached the allowed loopback listener THROUGH the broker
+    // The echoed bytes are the mod's OWN direct-connect errno (carried via the broker's
+    // echo): nonzero proves the mod's direct connect failed at the syscall level
+    // (ENETUNREACH — the B3 netns denial). Useful via the broker, powerless directly.
+    REQUIRE_FALSE(echoed.empty());
+    CHECK(std::stol(echoed) != 0);
+    std::remove(rec.c_str());
+}
+
+TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and never connects") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    if (!host.enforcement().enforceable(Capability::Network) ||
+        !host.enforcement().enforceable(Capability::Filesystem) ||
+        !host.enforcement().enforceable(Capability::Resources)) {
+        WARN("not fully OS-enforceable here; skipping the allow-list scoping proof");
+        return;
+    }
+    OutOfProcessResult broker = host.mount_net_broker("net", ZEN_SO_NET_BROKER);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    const std::string rec = "/tmp/zen_net_scope_grant.json";
+    std::remove(rec.c_str());
+    host.set_grant_record_path(rec);
+    GrantDelta delta;
+    delta.roles = {"net"};
+    host.record_grant_delta(so_content_hash(ZEN_SO_NET_CLIENT), delta);
+    OutOfProcessResult mod = host.mount_mod("client", ZEN_SO_NET_CLIENT);
+    REQUIRE_MESSAGE(mod.ok, mod.error);
+
+    bool ok = true;
+    bool got = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "NetResponse" &&
+            e.payload != nullptr && e.target == mod.id) {
+            ok = e.payload->get("ok")->as_bool();
+            got = true;
+        }
+    });
+    // 203.0.113.0/24 is TEST-NET-3 (documentation/unroutable) — not on the broker's
+    // loopback-only allow-list. A fast ok=false is itself evidence the broker refused
+    // BEFORE connecting (a passthrough would stall on the unroutable address).
+    bus.send(mod.id, Message(zen::author::to_value(net::DoNet{"203.0.113.1", 80})));
+    REQUIRE(host.run_until([&] { return got; }, 5000));
+    CHECK_FALSE(ok); // refused by the broker's allow-list; the connection is never made
+    std::remove(rec.c_str());
 }
 
 } // TEST_SUITE

@@ -18,13 +18,16 @@ namespace zen::isolation {
 
 namespace {
 
-// The persisted shape: a list of {content_hash, network, filesystem} entries. A
-// gated Value like everything else — the record funnels through the same admit().
+// The persisted shape: a list of {content_hash, network, filesystem, roles} entries. A
+// gated Value like everything else — the record funnels through the same admit(). v2
+// adds `roles` (the broker roles a mod may reach beyond the floor's storage); bumping
+// the version rather than mutating v1 keeps the project's frozen-(name,version) invariant.
 std::shared_ptr<const zen::Schema> grant_entry_schema() {
-    static const auto s = zen::SchemaBuilder("zen.GrantEntry", 1)
+    static const auto s = zen::SchemaBuilder("zen.GrantEntry", 2)
                               .field("content_hash", zen::Kind::Text)
                               .field("network", zen::Kind::Bool)
                               .field("filesystem", zen::Kind::Text)
+                              .list("roles", zen::type_of(zen::Kind::Text))
                               .build();
     return s;
 }
@@ -94,6 +97,9 @@ void GrantRecord::load(std::string path) {
         GrantDelta d;
         d.network = e.get("network")->as_bool();
         d.filesystem = e.get("filesystem")->as_text();
+        for (const zen::Cell& role : e.get("roles")->as_list()) {
+            d.roles.push_back(role.as_text());
+        }
         deltas_[e.get("content_hash")->as_text()] = std::move(d);
     }
 }
@@ -120,6 +126,12 @@ void GrantRecord::persist() const {
         e.set("content_hash", zen::Cell::text(hash));
         e.set("network", zen::Cell::boolean(d.network));
         e.set("filesystem", zen::Cell::text(d.filesystem));
+        std::vector<zen::Cell> roles;
+        roles.reserve(d.roles.size());
+        for (const std::string& role : d.roles) {
+            roles.push_back(zen::Cell::text(role));
+        }
+        e.set("roles", zen::Cell::list(std::move(roles)));
         entries.push_back(zen::Cell::message(std::move(e)));
     }
     v.set("entries", zen::Cell::list(std::move(entries)));
