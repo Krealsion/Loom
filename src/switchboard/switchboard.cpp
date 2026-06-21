@@ -144,6 +144,18 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant
     return id;
 }
 
+ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant,
+                                    AcceptMode accept_mode) {
+    ShardId id = register_shard(std::move(incoming), std::move(grant), std::string{});
+    if (accept_mode == AcceptMode::AnyRegistered) {
+        auto it = shards_.find(id.value);
+        if (it != shards_.end()) {
+            it->second.accepts_any = true; // accept any registered shape, gated at delivery
+        }
+    }
+    return id;
+}
+
 std::unique_ptr<Shard> Switchboard::unregister_shard(ShardId id) {
     auto it = shards_.find(id.value);
     if (it == shards_.end()) {
@@ -310,7 +322,16 @@ void Switchboard::deliver_one(Envelope env) {
 
     const std::shared_ptr<const Schema>* door =
         accept_match(*rec, ev.schema_name, ev.schema_version);
-    if (door == nullptr) {
+    // Wildcard-accept (a deliberate capability — the console): a Shard registered
+    // AcceptMode::AnyRegistered accepts any shape it does not explicitly list, gated
+    // against the shape's OWN registry-resolved schema. An unregistered shape resolves
+    // to null and is still refused — an unknown shape reaches no one, not even the
+    // console. This widens the door set, it never skips the gate.
+    std::shared_ptr<const Schema> wildcard_door;
+    if (door == nullptr && rec->accepts_any) {
+        wildcard_door = resolve_schema(ev.schema_name, ev.schema_version);
+    }
+    if (door == nullptr && !wildcard_door) {
         const Refusal r{RefusalReason::NotAccepted, {}};
         record(env.seq, Disposition::Refused, r);
         ev.kind = EventKind::Refused;
@@ -321,7 +342,8 @@ void Switchboard::deliver_one(Envelope env) {
 
     // The one gate, live path. admit() consumes the candidate and re-emits it
     // trusted on success; on failure the candidate is dropped and never seen.
-    Admission a = zen::admit(std::move(env.msg.payload), **door);
+    const Schema& door_schema = door != nullptr ? **door : *wildcard_door;
+    Admission a = zen::admit(std::move(env.msg.payload), door_schema);
     if (!a.ok()) {
         const Refusal r{RefusalReason::GateRefused, a.first_error()};
         record(env.seq, Disposition::Refused, r);

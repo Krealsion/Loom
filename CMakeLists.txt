@@ -117,6 +117,27 @@ target_link_libraries(zen-isolation
 
 add_library(zen::isolation ALIAS zen-isolation)
 
+# ---- Console (the first doing-layer component: the engine, then a terminal) ------------
+#
+# A message-native bus participant — discover, compose, gate-send, receive replies into an
+# indexed buffer — built frontend-agnostic so the terminal (now) and a GUI (later) reuse
+# this engine unchanged. Depends only on the bus + core.
+add_library(zen-console
+    src/console/console.cpp)
+target_include_directories(zen-console
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_features(zen-console PUBLIC cxx_std_20)
+target_link_libraries(zen-console
+    PUBLIC  zen-core zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+add_library(zen::console ALIAS zen-console)
+
+# The terminal frontend — a thin, throwaway REPL over the engine (Stage 1; a GUI replaces
+# only this later). Exercises discovery / guided send / one-liner / buffer / tap as text.
+add_executable(zen-console-term src/console/console_term.cpp)
+target_link_libraries(zen-console-term
+    PRIVATE zen-console zen-switchboard zen-core zen-warnings zen-sanitize)
+
 # The child executable: runs one Shard out-of-process via the kernel C ABI. It is
 # a byte shuttler — it deliberately does NOT link zen-core; it speaks the wire
 # format only through the protocol header and lets the host gate everything.

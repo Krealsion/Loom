@@ -1390,6 +1390,80 @@ authority-transfer; the version resolver.
 
 ---
 
+## The Console (Stage 1): the engine + a plain terminal — the first doing-layer component
+
+Everything before this made the substrate impossible to misuse; the Console is the first thing a
+*human* uses. It is a fully message-native bus participant — it discovers what's registered,
+composes and gate-sends messages, and receives, indexes, and shows replies — so the Zen ideal
+(apparatus disappears, intent remains) becomes something a person *does*, not just a property the
+architecture quietly has. **Stage 1 is the engine + a deliberately plain terminal**; the
+dataflow/reference layer (Stage 2) and the rich TUI (Stage 3) are named successors.
+
+### The engine / frontend split (the durable spine)
+
+The `ConsoleEngine` (`zen-console`) is **frontend-agnostic and fully testable with no terminal**.
+It returns **domain data** — lists of shards, field descriptors, received `Value`s, the buffer —
+never formatted text and **never a widget tree**. The terminal is the first **replaceable skin**:
+it formats that data as plain text. Care and correctness live in the engine; a GUI later inherits
+it whole and only the skin is new. (UI-as-data is Stage 3, born from felt behavior; when it comes
+it will describe **intent and relationship, never absolute position/size**.)
+
+### Discovery-first; the console presumes nothing
+
+The engine drives shapes it has never seen: `shards()` enumerates live Shards (id + accept-set);
+`describe(name, version)` reads a shape's fields from the **registry**. So a person explores with
+no prior knowledge, and a *new* Shard with *new* shapes is immediately drivable. The console bakes
+in **no opinion** about what a shape means — the kernel holds grammar not answers, and the console
+must too. This is how emergence is protected.
+
+### Two layers, both free: the registry guides, the gate enforces
+
+The console *knows the schemas* (it reads the registry), so it **guides at compose-time** — shows
+fields and types, type-checks each value set. The **gate enforces at send-time**: the engine
+assembles a `Value` (via `construct_blind`) and `send_as(console, target, reply_to=console)` admits
+it against the target's accept-set at delivery. A field left unset slips compose-time and is
+cleanly **gate-refused** (surfaced as the gate's verdict — `MissingField`), never silently
+mis-sent. Compose-time makes it smart; send-time makes it safe — the same one-gate spine.
+
+### Wildcard-accept (the one bus change): accept-any-known-shape, gated
+
+A normal Shard's accept-set is specific `(name, version)` matches, so a reply of an unanticipated
+shape would be refused `NotAccepted` — but the console must receive **whatever** a Shard replies.
+`register_shard(…, AcceptMode::AnyRegistered)` is a deliberate, opt-in capability: on a shape it
+does not explicitly list, the bus **resolves the payload's claimed `(name, version)` from the
+registry and admits against that registered schema**. An *unregistered* shape resolves to null and
+is still refused — an unknown shape reaches no one, not even the console. It widens the door set; it
+**never skips the gate**, and a payload claiming a registered shape but carrying a different
+content_id is still caught (SchemaMismatch). Ordinary Shards (`Listed`, the default) are unchanged.
+
+### The console as a participant, not an exception
+
+The console is registered **in-process** as a raw `zen::sb::Shard` (it does not dispatch by shape;
+its generic handler buffers every received `Value` into an indexed buffer — `m1`, `m2`, …,
+retrievable by index, the substrate the Stage-2 `$m1.field` references read from). It is the
+**most-granted** participant — broad send (`Grant{}.allow_any()`), wildcard-accept, the observer
+tap, and discovery (registry read) — but each is a deliberate **grant**, not a bypass: its sends go
+through the *gated* `send_as` path, bounded by its grant, never the ungated root authority. The
+operator's hands on the bus — powerful, still a participant. (Discovery via a direct bus query is
+pragmatic here; "discovery as messages to a registry Shard" is a noted future purification.)
+
+### Status: Stage 1 built
+
+`zen-console`'s `ConsoleEngine` (discovery, compose-by-named-field, gated send, the reply buffer,
+the tap), the console-as-Shard (broad grant + `AnyRegistered`), the wildcard-accept bus capability,
+and a plain terminal REPL all ship, green in Debug and under ASan/UBSan. The four proofs pass
+**frontend-free**: the **participant loop** (discover → gate-send → reply read back from the
+buffer), the **gated-send backstop** (a malformed command → a clean `GateRefused`/`MissingField`,
+no mis-send), **discovery on an unseen shape** (a shape the console code has no knowledge of —
+listed, described, driven, its reply buffered), and **wildcard-accept** (a non-pre-declared shape
+buffered, gated against its registry schema; an unregistered shape refused, not buffered). Named
+successors: **Stage 2** — the dataflow/reference layer (`$m1.result_int`) and the assumption ladder
+(named → positional → type-directed → prompt-on-ambiguous); **Stage 3** — the UI-as-data TUI
+(panes, focus, the live guided-input redraw), describing **intent and relationship, never absolute
+position/size**.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in
