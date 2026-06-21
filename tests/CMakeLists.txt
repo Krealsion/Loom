@@ -21,6 +21,7 @@ add_executable(zen-tests
     test_author_shard.cpp
     test_capabilities.cpp
     test_policy.cpp
+    test_console.cpp
     test_isolation.cpp)
 
 target_include_directories(zen-tests PRIVATE
@@ -28,7 +29,7 @@ target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(zen-tests
-    PRIVATE zen-core zen-switchboard zen-kernel zen-isolation zen-warnings zen-sanitize)
+    PRIVATE zen-core zen-switchboard zen-kernel zen-isolation zen-console zen-warnings zen-sanitize)
 
 # ---- Loadable test Shard libraries (.so) for the kernel tests -------------
 # One configurable source compiled into several variants, plus a bad-ABI lib.
@@ -119,7 +120,7 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # doctest returns the failed-assertion count as its exit code, so CTest's default
 # exit-status check is the source of truth — no output-scraping needed.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec kernel author author_shard capabilities)
+    switchboard harness breathing schema_codec kernel author author_shard capabilities console)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()

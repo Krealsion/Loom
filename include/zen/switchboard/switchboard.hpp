@@ -86,6 +86,13 @@ struct ReviveOutcome {
 /// only these two fields are read.
 std::shared_ptr<const Schema> lifecycle_policy_schema();
 
+/// How a Shard's accept-set is interpreted at delivery. `Listed` (the default): only the
+/// explicit `(name, version)` schemas it declares. `AnyRegistered`: a deliberate
+/// capability — the Shard accepts **any registered shape**, gated at delivery against
+/// the shape's own registry-resolved schema (an unregistered shape is still refused).
+/// The console uses `AnyRegistered` to receive replies; ordinary Shards do not.
+enum class AcceptMode { Listed, AnyRegistered };
+
 /// The first live boundary: an in-process message bus that gates every delivery
 /// through zen-core's one validator. It reimplements no validation, schema, or
 /// serialization logic — it routes Values and calls admit().
@@ -130,6 +137,11 @@ public:
     /// survives the holder reloading (its id is stable) and is cleared on
     /// unregister_shard.
     ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant, std::string role);
+
+    /// Register with an accept-mode: `AnyRegistered` makes the Shard accept any
+    /// registered shape (gated against the registry-resolved schema at delivery) — a
+    /// deliberate capability (the console's reply path), distinct from its grant.
+    ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant, AcceptMode accept_mode);
 
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
     /// readable after the delivery is pumped.
@@ -227,6 +239,7 @@ private:
         std::uint64_t reloads_used = 0;
         bool alive = true;
         std::string role{}; ///< the role this Shard holds (empty if none); see roles_
+        bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };
 
     struct Envelope {
