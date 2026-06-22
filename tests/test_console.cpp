@@ -33,6 +33,42 @@ zen::Value widget(std::int64_t w) {
     return v;
 }
 
+// ---- Stage 2 shapes, known only to the tests ----
+
+// label (Text) is OPTIONAL and declared first, count (Int) is required and second — so a lone
+// Int fails positional at slot 0 (Text) and is rescued by type-directed into count.
+std::shared_ptr<const zen::Schema> tagged_schema() {
+    static const auto s = zen::SchemaBuilder("Tagged", 1)
+                              .field("label", zen::Kind::Text, /*required=*/false)
+                              .field("count", zen::Kind::Int)
+                              .build();
+    return s;
+}
+// name (Text, first) then two same-typed Int fields — a lone Int can't go positional (slot 0 is
+// Text) and matches BOTH a and b under type-direction: genuine ambiguity.
+std::shared_ptr<const zen::Schema> mix_schema() {
+    static const auto s = zen::SchemaBuilder("Mix", 1)
+                              .field("name", zen::Kind::Text)
+                              .field("a", zen::Kind::Int)
+                              .field("b", zen::Kind::Int)
+                              .build();
+    return s;
+}
+std::shared_ptr<const zen::Schema> note_schema() {
+    static const auto s = zen::SchemaBuilder("Note", 1).field("body", zen::Kind::Text).build();
+    return s;
+}
+
+// ---- Arg builders (what the terminal's lexer will hand the engine) ----
+Arg lit(FieldValue v) { return Arg{std::nullopt, std::move(v)}; }
+Arg named(std::string n, FieldValue v) { return Arg{std::move(n), std::move(v)}; }
+Arg ref(std::string label, std::string field) {
+    return Arg{std::nullopt, Ref{std::move(label), std::move(field)}};
+}
+Arg named_ref(std::string n, std::string label, std::string field) {
+    return Arg{std::move(n), Ref{std::move(label), std::move(field)}};
+}
+
 } // namespace
 
 TEST_SUITE("console") {
@@ -182,6 +218,186 @@ TEST_CASE("wildcard-accept gates against the REGISTRY schema, not the payload's 
     CHECK(bus.outcome(u).refusal.reason == RefusalReason::GateRefused);
     CHECK(bus.outcome(u).refusal.error.kind == zen::ErrorKind::SchemaMismatch);
     CHECK(engine.buffer_size() == 0); // the lie reached no one — gated against the registry shape
+}
+
+// ===================== Stage 2: references + the assumption ladder =====================
+
+TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW message") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+        if (in.payload.schema().name() == "Ping") {
+            b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+        }
+    };
+
+    // m1 ← Pong{seq=7}.
+    std::string err;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(t.valid(), err);
+    engine.pump();
+    REQUIRE(engine.buffer_size() == 1);
+    REQUIRE(engine.buffer_at(1)->value.get("seq")->as_int() == 7);
+
+    // The resolver, exercised standalone: $m1.seq → a typed Int Cell carrying 7.
+    std::string rerr;
+    std::optional<zen::Cell> cell = engine.resolve_ref(Ref{"m1", "seq"}, &rerr);
+    REQUIRE_MESSAGE(cell.has_value(), rerr);
+    CHECK(cell->kind() == zen::Kind::Int);
+    CHECK(cell->as_int() == 7);
+
+    // The wire: compose a NEW Ping whose seq IS $m1.seq — output→input, by reference.
+    Composed c = engine.compose(responder.id, "Ping", 1, {ref("m1", "seq")});
+    REQUIRE(c.status == Composed::Status::Ready);
+    REQUIRE(c.ticket.valid());
+    engine.pump();
+    CHECK(engine.outcome(c.ticket).delivered);
+
+    // The reply to the referenced send carries m1's value — the wire conducted it end to end.
+    REQUIRE(engine.buffer_size() == 2);
+    CHECK(engine.buffer_at(2)->name == "Pong");
+    CHECK(engine.buffer_at(2)->value.get("seq")->as_int() == 7);
+    CHECK(responder.shard->handled_values.back() == 7); // the 2nd Ping actually carried seq=7
+}
+
+TEST_CASE("ladder rung 1 — named wins: field=value assigns by name, any order") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered svc = register_probe(bus, {tagged_schema()});
+    std::optional<zen::Value> got;
+    svc.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got = in.payload; };
+
+    // count given before label, by name — the order is irrelevant to a named assignment.
+    Composed c = engine.compose(svc.id, "Tagged", 1,
+                                {named("count", FieldValue{std::int64_t{9}}),
+                                 named("label", FieldValue{std::string("hi")})});
+    REQUIRE(c.status == Composed::Status::Ready);
+    engine.pump();
+    REQUIRE(engine.outcome(c.ticket).delivered);
+    REQUIRE(got.has_value());
+    CHECK(got->get("label")->as_text() == "hi");
+    CHECK(got->get("count")->as_int() == 9);
+}
+
+TEST_CASE("ladder rung 2 — positional fills open fields in declaration order") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered svc = register_probe(bus, {tagged_schema()});
+    std::optional<zen::Value> got;
+    svc.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got = in.payload; };
+
+    // Bare ["hi"(Text), 5(Int)] → label, count in declaration order; both type-check.
+    Composed c = engine.compose(svc.id, "Tagged", 1,
+                                {lit(FieldValue{std::string("hi")}), lit(FieldValue{std::int64_t{5}})});
+    REQUIRE(c.status == Composed::Status::Ready);
+    engine.pump();
+    REQUIRE(engine.outcome(c.ticket).delivered);
+    REQUIRE(got.has_value());
+    CHECK(got->get("label")->as_text() == "hi");
+    CHECK(got->get("count")->as_int() == 5);
+}
+
+TEST_CASE("ladder — positional FAILS THROUGH, type-directed lands the value in its unique field") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered svc = register_probe(bus, {tagged_schema()});
+    std::optional<zen::Value> got;
+    svc.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got = in.payload; };
+
+    // A lone Int 5. Positional would put it in slot 0 (label:Text) — a type mismatch, so
+    // positional fails AS A WHOLE and falls through; type-directed sees Int matches only
+    // count and lands it there. label (optional) is left open → still Ready.
+    Composed c = engine.compose(svc.id, "Tagged", 1, {lit(FieldValue{std::int64_t{5}})});
+    REQUIRE(c.status == Composed::Status::Ready);
+    engine.pump();
+    REQUIRE(engine.outcome(c.ticket).delivered);
+    REQUIRE(got.has_value());
+    CHECK(got->get("count")->as_int() == 5);   // the 5 was rerouted to its unique Int field
+    CHECK(got->get("label") == nullptr);        // the optional Text field stayed unset
+}
+
+TEST_CASE("ladder rung 4 — genuine ambiguity returns NeedsInput and sends NOTHING") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered svc = register_probe(bus, {mix_schema()});
+    bool handled = false;
+    svc.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+
+    // A lone Int 5 against Mix{name:Text, a:Int, b:Int}. Positional fails at slot 0 (Text);
+    // type-directed finds 5 fits BOTH a and b — ambiguous. The ladder prompts, never guesses.
+    Composed c = engine.compose(svc.id, "Mix", 1, {lit(FieldValue{std::int64_t{5}})});
+    CHECK(c.status == Composed::Status::NeedsInput);
+    CHECK_FALSE(c.ticket.valid());                 // nothing assembled
+    CHECK(c.open_fields.size() == 3);              // name, a, b — none were placed
+    REQUIRE(c.unplaced.size() == 1);
+    CHECK(c.unplaced[0] == "5");                    // the value the ladder could not safely place
+    engine.pump();
+    CHECK_FALSE(handled);                           // no mis-send: the target saw nothing
+    CHECK(engine.buffer_size() == 0);
+}
+
+TEST_CASE("gate-backstop: a wrong-typed reference is caught at compose, never mis-sent") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    // m1 ← Pong{seq=7} (an Int we will try to misroute into a Text field).
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    std::string err;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(t.valid(), err);
+    engine.pump();
+    REQUIRE(engine.buffer_size() == 1);
+
+    // Note{body:Text}; feed $m1.seq (an Int) into body — a wrong-typed wire. The engine knows
+    // both types and refuses at compose; nothing is assembled, nothing is sent.
+    Registered notes = register_probe(bus, {note_schema()});
+    bool handled = false;
+    notes.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+
+    Composed c = engine.compose(notes.id, "Note", 1, {named_ref("body", "m1", "seq")});
+    CHECK(c.status == Composed::Status::Error);
+    CHECK_FALSE(c.error.empty());
+    CHECK_FALSE(c.ticket.valid());
+    engine.pump();
+    CHECK_FALSE(handled);                 // the target never received a wrong-typed message
+    CHECK(engine.buffer_size() == 1);     // only m1 — no spurious reply
+}
+
+TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, missing field") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+
+    // Into an empty buffer: $m1.x → no such entry (a clean error, never a crash).
+    std::string e0;
+    CHECK_FALSE(engine.resolve_ref(Ref{"m1", "x"}, &e0).has_value());
+    CHECK_FALSE(e0.empty());
+
+    // Populate m1 ← Pong{seq=7}.
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    std::string err;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(t.valid(), err);
+    engine.pump();
+    REQUIRE(engine.buffer_size() == 1);
+
+    std::string e1;
+    CHECK_FALSE(engine.resolve_ref(Ref{"m9", "x"}, &e1).has_value()); // no such entry
+    CHECK_FALSE(e1.empty());
+
+    std::string e2;
+    CHECK_FALSE(engine.resolve_ref(Ref{"m1", "nope"}, &e2).has_value()); // no such field
+    CHECK_FALSE(e2.empty());
+
+    // A bad reference inside compose is a hard Error (it never silently drops the arg).
+    Composed c = engine.compose(responder.id, "Ping", 1, {ref("m9", "x")});
+    CHECK(c.status == Composed::Status::Error);
+    CHECK_FALSE(c.ticket.valid());
 }
 
 } // TEST_SUITE

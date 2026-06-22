@@ -1390,7 +1390,7 @@ authority-transfer; the version resolver.
 
 ---
 
-## The Console (Stage 1): the engine + a plain terminal — the first doing-layer component
+## The Console: the doing-layer (Stage 1 engine + Stage 2 dataflow)
 
 Everything before this made the substrate impossible to misuse; the Console is the first thing a
 *human* uses. It is a fully message-native bus participant — it discovers what's registered,
@@ -1460,6 +1460,79 @@ buffered, gated against its registry schema; an unregistered shape refused, not 
 successors: **Stage 2** — the dataflow/reference layer (`$m1.result_int`) and the assumption ladder
 (named → positional → type-directed → prompt-on-ambiguous); **Stage 3** — the UI-as-data TUI
 (panes, focus, the live guided-input redraw), describing **intent and relationship, never absolute
+position/size**.
+
+### Stage 2: the dataflow layer — references and the assumption ladder
+
+Stage 2 turns the console from a sender-of-one-shot-messages into a **dataflow surface**. It is
+the **text-mode prototype of the flowchart crown**: the logic built here is the dataflow brain the
+later visual graph will *render*, not replace.
+
+**A reference is a wire.** `$m1.count` reads a field of the buffered reply `m1` and routes it into a
+new message — one message's output into another's input, by typing. This is exactly the wire the
+visual flowchart will have you *draw*; doing it in text first **validates the dataflow model** before
+it is committed to a canvas. Resolution lives in the **engine** (`resolve_ref` — standalone,
+independently tested); the terminal only lexes the `$label.field` token. The label format is the
+engine's (`buffer_at` produces `mN`); the resolver parses it back. A reference only ever **reads** an
+immutable, already-gated `Value` from the buffer — it copies a scalar `Cell` out; it cannot mutate
+the buffer. So `$m1.count` is *reading a field of a typed, schema'd Value you already hold* — safe by
+construction. Errors are clean, never crashes: missing entry (`$m9.x`), missing field (`$m1.nope`),
+a reference into an empty buffer. Stage 2 resolves **scalar** fields only (parity with compose);
+nested/non-scalar (`$m1.items`, `$m1.a.b`) is a named future refinement.
+
+**The assumption ladder (the durable dataflow brain).** `compose(target, name, version, args)` takes
+a list of **arguments** — each a literal or a reference, each optionally **named** (`field=…`) — and
+assigns them to the target shape's declared fields by a fixed resolution order, each rung a coherent
+strategy:
+
+1. **Named wins.** Every `field=value` is assigned to that field. Unknown or doubly-assigned field →
+   a clean compose `Error`. The rest are **open** fields; the rest are **bare** args.
+2. **Positional.** Bare args fill open fields in **declaration order** (bare[i] → open[i]),
+   type-checked. If *every* positional placement type-checks, accept it (fewer bare args than open
+   fields just leaves trailing fields open). If **any** mismatches, positional **fails as a whole**
+   and falls through — this is what lets `send foo 5` do the right thing when foo's first field is
+   Text and its second Int: the Text/Int mismatch fails through and type-directed lands the 5.
+3. **Type-directed.** Each bare arg seeks the open field(s) its type fits. If every bare arg matches
+   **exactly one** open field uniquely (no two args claim the same field), accept it. Otherwise (an
+   arg matches *no* open field, or *several*) fall through to prompt.
+4. **Prompt (`NeedsInput`).** Return the still-open fields and the unplaced args as **structured
+   data** (`open_fields` + `unplaced`) — *never a printed string*; the frontend prompts, the operator
+   re-composes with explicit `field=value`. After any successful rung, a still-open **required** field
+   *also* yields `NeedsInput` (prompt rather than knowingly send incomplete). The ladder **never
+   guesses on genuine ambiguity and never silently mis-sends.**
+
+**Coercion** is narrow and predictable: a numeric *literal* widens among numeric field types
+(Int→Float ok); Text only to Text, Bool only to Bool; a **reference matches its resolved type
+exactly** (no coercion — wiring stays predictable). 
+
+**The gate is the backstop, so the ladder guesses fearlessly.** The console knows the schemas, so it
+guides at compose-time; the **gate enforces at send-time**. On `Ready` the ladder assembles the
+`Value` (`construct_blind`) and gate-sends via the same `send_as` path — a wrong guess that ever
+reached assembly would be a clean `GateRefused`, never a silent mis-send. In practice Stage 2 catches
+a wrong-typed value (literal or reference) earlier still — at compose, as a clean `Error` — because
+the engine knows both types; the gate remains the unconditional floor beneath it. This is the
+week-one one-gate spine paying for the smart layer's boldness: the assumption logic can be as
+aggressive as it likes because the safe layer refuses a bad guess loudly.
+
+**The engine/frontend boundary holds exactly.** Reference *resolution* and the *ladder* are engine
+logic, driven entirely with no terminal (the proofs below are all frontend-free). The terminal
+(`console_term.cpp`) only **lexes** text to structured `Arg`s — each token to its narrowest type
+(digits → Int, `d.d` → Float, `true`/`false` → Bool, `$mN.field` → reference, quoted or non-numeric
+→ Text; **quote a numeric string to force Text** — `"5"` is text, `5` is Int), recognizes
+`field=value` — and **renders** a `NeedsInput` result as a plain prompt. So Stage 3 replaces the skin
+and inherits the dataflow brain whole.
+
+**Status: Stage 2 built.** References resolve `$label.field` to a typed scalar `Cell` with clean
+errors; the assumption ladder assigns named → positional → type-directed and returns structured
+`NeedsInput` on genuine ambiguity; the terminal lexes narrowest-type literals, references, and named
+args and renders the prompt plainly. Green in Debug and under ASan/UBSan. The proofs pass
+frontend-free: the **reference round-trip** (a reply lands in `m1`; `$m1.seq` feeds a new message
+that carries m1's value — reply→reference→send, the wire conducts), **each ladder rung** (named;
+positional; **positional fall-through** rerouting a type-mismatched value to its unique type-directed
+field; **prompt-on-ambiguous** returning `NeedsInput` and sending nothing), the **gate-backstop on a
+wrong-typed reference** (caught with no mis-send), and **reference resolution errors** (missing
+entry/field/empty buffer, all clean). Named successor: **Stage 3** — the UI-as-data TUI (panes,
+focus, the live guided-input redraw), describing **intent and relationship, never absolute
 position/size**.
 
 ---
