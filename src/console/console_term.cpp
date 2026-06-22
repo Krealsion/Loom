@@ -15,6 +15,7 @@
 // bus by other means; the console drives whatever is there.
 
 #include <zen/console/console.hpp>
+#include <zen/console/input_lex.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>
 
@@ -22,10 +23,16 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <variant>
 #include <vector>
 
 namespace {
+
+// The text lexers (tokenize / lex_arg / parse_u64) are shared with the TUI and the tests; they
+// live in <zen/console/input_lex.hpp>. Bring the ones this REPL uses into scope.
+using zen::console::parse_u64;
+using zen::console::Token;
+using zen::console::tokenize;
+using zen::console::lex_arg;
 
 std::shared_ptr<const zen::Schema> greet_schema() {
     static const auto s = zen::SchemaBuilder("Greet", 1).field("msg", zen::Kind::Text).build();
@@ -63,132 +70,6 @@ private:
         return s;
     }
 };
-
-// A lexed token. `quoted` is set if the token contained a double-quote — the quote-for-text
-// rule: a numeric-looking string in quotes (`"5"`) lexes to Text, the bareword (`5`) to Int.
-struct Token {
-    std::string text;
-    bool quoted = false;
-};
-
-// Quote-respecting tokenizer: split on whitespace, but keep whitespace inside "double quotes"
-// together as one token. The quote characters themselves are dropped from the token text.
-std::vector<Token> tokenize(const std::string& line) {
-    std::vector<Token> out;
-    std::string cur;
-    bool in_quote = false, started = false, quoted = false;
-    auto flush = [&]() {
-        if (started) {
-            out.push_back({cur, quoted});
-            cur.clear();
-            quoted = false;
-            started = false;
-        }
-    };
-    for (char ch : line) {
-        if (ch == '"') {
-            in_quote = !in_quote;
-            quoted = true;
-            started = true; // even "" is a (empty Text) token
-            continue;
-        }
-        if (!in_quote && (ch == ' ' || ch == '\t')) {
-            flush();
-            continue;
-        }
-        cur.push_back(ch);
-        started = true;
-    }
-    flush();
-    return out;
-}
-
-bool parse_u64(const std::string& s, std::uint64_t& out) {
-    try {
-        std::size_t pos = 0;
-        const unsigned long long v = std::stoull(s, &pos);
-        if (pos != s.size()) {
-            return false;
-        }
-        out = static_cast<std::uint64_t>(v);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool is_int(const std::string& s) {
-    try {
-        std::size_t pos = 0;
-        (void)std::stoll(s, &pos);
-        return pos == s.size();
-    } catch (...) {
-        return false;
-    }
-}
-bool is_float(const std::string& s) {
-    if (s.find('.') == std::string::npos) {
-        return false; // require a dot, so "5" stays Int and "5.0" is Float
-    }
-    try {
-        std::size_t pos = 0;
-        (void)std::stod(s, &pos);
-        return pos == s.size();
-    } catch (...) {
-        return false;
-    }
-}
-
-// Lex one value string to its narrowest type. Quoted → always Text. Unquoted: `$mN.field`
-// → Reference; true/false → Bool; an integer → Int; a decimal → Float; else Text. (The
-// engine, not this, decides which field the value fills and type-checks it.)
-std::variant<zen::console::FieldValue, zen::console::Ref> lex_value(const std::string& s,
-                                                                    bool quoted) {
-    using zen::console::FieldValue;
-    using zen::console::Ref;
-    if (!quoted && !s.empty() && s[0] == '$') {
-        const std::string body = s.substr(1);
-        const std::size_t dot = body.find('.');
-        if (dot == std::string::npos) {
-            return Ref{body, ""}; // malformed ($m1 with no field) — the engine errors cleanly
-        }
-        return Ref{body.substr(0, dot), body.substr(dot + 1)};
-    }
-    if (!quoted) {
-        if (s == "true") {
-            return FieldValue{true};
-        }
-        if (s == "false") {
-            return FieldValue{false};
-        }
-        if (is_int(s)) {
-            return FieldValue{static_cast<std::int64_t>(std::stoll(s))};
-        }
-        if (is_float(s)) {
-            return FieldValue{std::stod(s)};
-        }
-    }
-    return FieldValue{s}; // quoted, or a non-numeric bareword → Text
-}
-
-// Lex one token into an Arg: `field=value` is a named arg (the name is a bareword before the
-// first '='); anything else is a bare (positional/type-directed) literal or reference.
-zen::console::Arg lex_arg(const Token& t) {
-    zen::console::Arg a;
-    const std::string& s = t.text;
-    const std::size_t eq = s.find('=');
-    if (eq != std::string::npos && eq > 0) {
-        const std::string name = s.substr(0, eq);
-        // A bareword name (no spaces, not itself a reference/quoted value) → named arg.
-        if (name.find(' ') == std::string::npos && name[0] != '$') {
-            a.name = name;
-            a.value = lex_value(s.substr(eq + 1), t.quoted);
-            return a;
-        }
-    }
-    a.value = lex_value(s, t.quoted);
-    return a;
-}
 
 void print_shards(const zen::console::ConsoleEngine& engine) {
     const auto shards = engine.shards();

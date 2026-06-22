@@ -165,6 +165,23 @@ public:
     // ---- The tap (operator's window on the live bus) ----
     std::vector<TapEvent> tap() const { return tap_; }
 
+    /// Per-region change flags for message-driven partial redraw (the retained-mode / Zengine
+    /// point): a UI repaints only the regions whose data changed, and the change signal is bus
+    /// messages. Set inside the single bus observer (record_tap) as events arrive during pump():
+    /// `buffer` on a reply delivered to the console, `shards` on a Shard dying/reviving, `tap` on
+    /// any bus event. The compose/guidance regions are keystroke-driven (the input loop redraws
+    /// them), so they are not tracked here.
+    struct Dirty {
+        bool shards = false;
+        bool buffer = false;
+        bool tap = false;
+        bool any() const noexcept { return shards || buffer || tap; }
+    };
+
+    /// Read AND CLEAR the accumulated per-region dirty flags (consume-once, so a renderer pumps
+    /// then repaints exactly the changed regions). Not const — it resets the flags.
+    Dirty take_dirty() noexcept;
+
     /// Convenience: drive the bus so sends are delivered and replies buffered.
     void pump();
 
@@ -187,6 +204,7 @@ private:
     std::uint64_t correlation_ = 0;
     std::vector<TapEvent> tap_;
     std::optional<Compose> compose_;
+    Dirty dirty_; // accumulated by record_tap; drained by take_dirty
 };
 
 } // namespace zen::console

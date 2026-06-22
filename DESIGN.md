@@ -1390,7 +1390,7 @@ authority-transfer; the version resolver.
 
 ---
 
-## The Console: the doing-layer (Stage 1 engine + Stage 2 dataflow)
+## The Console: the doing-layer (Stage 1 engine + Stage 2 dataflow + Stage 3 UI-as-data)
 
 Everything before this made the substrate impossible to misuse; the Console is the first thing a
 *human* uses. It is a fully message-native bus participant — it discovers what's registered,
@@ -1534,6 +1534,82 @@ wrong-typed reference** (caught with no mis-send), and **reference resolution er
 entry/field/empty buffer, all clean). Named successor: **Stage 3** — the UI-as-data TUI (panes,
 focus, the live guided-input redraw), describing **intent and relationship, never absolute
 position/size**.
+
+### Stage 3: the UI-as-data layer — the renderer-agnostic widget tree
+
+Stage 3 is the capstone of the doing-layer: the console's **own interface becomes data**. The
+engine emits a **semantic widget tree** describing the console — and the *same tree* a terminal
+renderer resolves to box-characters, a GUI later resolves to rectangles. This is where "the GUI
+inherits the engine" stops being a claim and becomes a **type-level guarantee**.
+
+**The bet, made structural: absolute position is unrepresentable.** The widget types
+(`include/zen/console/ui.hpp`) express **intent and relationship — never coordinates or sizes**.
+There is no `x`/`y`/`width`/`height`/`row`/`col` member on a `Widget`, and a compile-time fence
+(member-detection `static_assert`s + an `equality_comparable` guard) makes *adding* one fail to
+build. Layout — resolving intent into a medium's positions — happens **only in a renderer**. That
+single discipline is what makes the TUI↔GUI mirror a guarantee rather than a hope. (The fence is
+one honest layer: it catches the enumerated geometry names, paired with code review, not sold as
+airtight — the real guarantee is that no such member exists to write.)
+
+**The vocabulary (general, used here only for the console).** A small semantic set:
+arrangement `VStack`/`HStack` (children in a vertical/horizontal *relationship*, each carrying an
+optional **weight grow-hint** — intent, never a size) and `Region{title, child}`; content `List`
+(selectable lines + a `selected_index` that is an index *into items*, never a y), `Log`
+(append-oriented), `Text`, and `Field` (an input affordance carrying an **engine-produced
+guidance hint**). Cross-cutting: an **overflow policy** (`Scroll`/`Wrap`/`Truncate`/`Grow`) and a
+**focus marker** — both resolved per-renderer in that medium's own units. A `Widget` is a single
+value type with a defaulted `operator==`, so the whole tree is **one value**: trivially asserted
+in tests and diffable by `region_id` for retained-mode partial redraw.
+
+**One description, two renderers (the bet, settled).** The engine library builds the tree from
+its **public domain data** (`shards()`, the reply buffer, the tap, registry-derived guidance) — a
+fresh value each call, renderer-agnostic, fully testable with no terminal. Two renderers consume
+that *same tree*: a headless **outline** walk (`render_outline`, used in tests — and deliberately
+ignoring `weight`, proving it a hint not a size) and the full-screen **TUI**
+(`src/console/console_tui.cpp`) which lays the tree out to a character grid (hand-rolled ANSI +
+POSIX termios raw mode, **no ncurses, no new dependency**). The TUI is the **only** place
+positions, sizes, and cells exist; a GUI later replaces it alone, laying the same tree out to
+pixels — exactly as a screen reader and a browser are two renderers of one HTML DOM.
+
+**Engine-produced guidance, the live guided-input.** As the operator types a partial command
+(`<shard id> <Shape> <version> [args]`), the `Field`'s hint shows the **next choice** —
+`guidance_for(partial)`, derived by the engine from the registry + the partial input (empty →
+"choose a shard"; an id → its shapes; a shape+version → its fields). The guidance is
+engine-produced, so it is renderer-agnostic (the GUI shows the same string as a dropdown). The
+Stage-1 show-then-choose, now a live interaction.
+
+**Retained-mode, message-driven dirty-tracking (the Zengine idea's home).** The change signal is
+**bus messages**: the single bus observer (`record_tap`) sets per-region dirty flags as events
+arrive during `pump()` — `buffer` on a reply delivered to the console, `shards` on a Shard
+dying/reviving, `tap` on any event — drained by `take_dirty()`. A reply arriving patches the
+buffer pane; a tap event patches the tap log. (The current single-threaded TUI consults the flags
+then full-repaints each frame, which is correct and cheap at terminal sizes; the flags are the
+mechanism a future async/multi-shard or GUI renderer uses for true per-region partial redraw —
+minimal cell-diffing is the named refinement.)
+
+**Symmetric input seam.** Input is factored as renderer-agnostic semantic **actions**
+(`FocusNext`/`FocusPrev`/`SelectUp`/`SelectDown`/`Activate`/`Edit`/`Backspace`/`Submit`/`Cancel`)
+that a `ConsoleUi` controller applies; the raw-key→action table is the *only* terminal-coupled
+input code and lives in the TUI alone. So a future GUI inherits the **input** abstraction too,
+symmetric with the output tree, and the interaction is driven headlessly by scripted actions in
+tests.
+
+**Status: Stage 3 built.** The widget vocabulary, the engine's tree emission + guidance, the
+headless outline renderer, the `ConsoleUi` controller + semantic-action input, and the full-screen
+termios TUI all ship, green in Debug and under ASan/UBSan. The proofs pass **frontend-free**: the
+**tree's semantic structure asserted with no renderer** (a `VStack` of a Bus `Region` [`HStack` of
+a Shards `List` + a Tap `Log`], a Buffer `List` with `m1`, a Compose `Field` carrying the engine's
+guidance); **position unrepresentable** (the compile-time fence + a runtime structural-`==` proof);
+**two renderers, one tree** (the outline renderer reflects the same tree, mutates nothing, ignores
+`weight`); **engine-produced guidance advancing with input**; a **bus message driving a buffer-pane
+update** (a reply dirties + grows the buffer; a refusal dirties only the tap); and a **TUI smoke
+test** (scripted actions move focus, compose a guided send, buffer the reply; an ambiguous command
+surfaces a `NeedsInput` prompt region and sends nothing). Named successors: a **general
+Shard-emitted-UI protocol** (any Shard describes its own UI as a tree the console/host renders —
+the vocabulary is built general *for* this, but the console validates it first); the **GUI
+renderer** (the same tree to pixels); **geometric/canvas UIs** (geometric by nature — they bridge
+at the sandboxed-Shard *fabric* level, not the semantic-rendering level); and the **result-graph
+buffer** (Stage 2's seam — the flat `m1,m2…` buffer becoming an addressable result-graph).
 
 ---
 
