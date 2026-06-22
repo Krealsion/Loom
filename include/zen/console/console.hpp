@@ -74,6 +74,32 @@ struct BufferEntry {
     zen::Value value;
 };
 
+/// A reference to a field of a buffered reply — `$m1.count` → {label "m1", field "count"}.
+/// A reference is a *wire*: one message's output read into another's input. The engine
+/// owns resolution (the terminal only lexes the `$label.field` token).
+struct Ref {
+    std::string label; ///< the buffer label, e.g. "m1"
+    std::string field; ///< a field of that entry's Value
+};
+
+/// One argument to the assumption ladder: a literal or a reference, optionally named
+/// (`field=…`). A named arg is assigned to that field; a bare (unnamed) arg is a
+/// positional/type-directed candidate.
+struct Arg {
+    std::optional<std::string> name;       ///< set iff `field=…` (the named rung)
+    std::variant<FieldValue, Ref> value;   ///< a literal value or a reference
+};
+
+/// The result of running the assumption ladder.
+struct Composed {
+    enum class Status { Ready, NeedsInput, Error };
+    Status status = Status::Error;
+    zen::sb::Ticket ticket{};            ///< Ready: the assembled, gate-sent message's ticket
+    std::string error;                   ///< Error: the compose-time verdict
+    std::vector<FieldDesc> open_fields;  ///< NeedsInput: the still-unfilled fields
+    std::vector<std::string> unplaced;   ///< NeedsInput: args (rendered) the ladder could not place
+};
+
 /// A copied bus event for the operator's window on the live bus (the tap).
 struct TapEvent {
     std::string kind;    ///< "Delivered" / "Refused" / "Died" / "Revived"
@@ -116,6 +142,21 @@ public:
 
     /// The fate of a previously-submitted Ticket (after pump()).
     SendOutcome outcome(zen::sb::Ticket t) const;
+
+    // ---- Stage 2: references + the assumption ladder (the dataflow brain) ----
+    /// Resolve `$label.field` off the indexed buffer to a typed scalar Cell — a reference
+    /// *read* of an immutable buffered Value (it cannot mutate the buffer). Returns nullopt
+    /// + sets *error on a missing entry, a missing field, or a non-scalar field (Stage 2 is
+    /// scalar-only). Independently testable.
+    std::optional<zen::Cell> resolve_ref(const Ref& ref, std::string* error = nullptr) const;
+
+    /// Compose by the assumption ladder: assign literal/reference args (each optionally
+    /// named) to the target's fields — named wins, then positional (declaration order), then
+    /// type-directed, else NeedsInput (prompt — never guess on genuine ambiguity, never
+    /// mis-send). On Ready it assembles and gate-sends (the gate is the unconditional
+    /// backstop). A wrong-typed named arg or a bad reference is a clean Error.
+    Composed compose(zen::sb::ShardId target, std::string_view name, std::uint32_t version,
+                     const std::vector<Arg>& args);
 
     // ---- Reply buffer (m1, m2, …) ----
     std::size_t buffer_size() const;
