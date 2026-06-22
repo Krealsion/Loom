@@ -250,6 +250,23 @@ void ConsoleEngine::record_tap(const zen::sb::BusEvent& e) {
     t.schema = e.schema_name;
     t.refusal = e.kind == zen::sb::EventKind::Refused ? zen::sb::name_of(e.refusal.reason) : "";
     tap_.push_back(std::move(t));
+
+    // Per-region dirty for message-driven redraw. Every event touches the tap pane. A reply is a
+    // Delivered event addressed to the console (ConsoleShard::handle has already grown received_
+    // by the time we see it). A Died/Revived changes who is on the bus -> the discovery pane.
+    dirty_.tap = true;
+    if (e.kind == zen::sb::EventKind::Delivered && e.target == console_id_) {
+        dirty_.buffer = true;
+    }
+    if (e.kind == zen::sb::EventKind::Died || e.kind == zen::sb::EventKind::Revived) {
+        dirty_.shards = true;
+    }
+}
+
+ConsoleEngine::Dirty ConsoleEngine::take_dirty() noexcept {
+    Dirty d = dirty_;
+    dirty_ = Dirty{};
+    return d;
 }
 
 std::vector<ShardInfo> ConsoleEngine::shards() const {

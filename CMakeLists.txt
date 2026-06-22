@@ -121,9 +121,11 @@ add_library(zen::isolation ALIAS zen-isolation)
 #
 # A message-native bus participant — discover, compose, gate-send, receive replies into an
 # indexed buffer — built frontend-agnostic so the terminal (now) and a GUI (later) reuse
-# this engine unchanged. Depends only on the bus + core.
+# this engine unchanged. Stage 3 adds the UI-as-data layer (ui.cpp): a renderer-agnostic
+# semantic widget tree the engine emits and any renderer consumes. Depends only on the bus + core.
 add_library(zen-console
-    src/console/console.cpp)
+    src/console/console.cpp
+    src/console/ui.cpp)
 target_include_directories(zen-console
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(zen-console PUBLIC cxx_std_20)
@@ -132,10 +134,18 @@ target_link_libraries(zen-console
     PRIVATE zen-warnings)
 add_library(zen::console ALIAS zen-console)
 
-# The terminal frontend — a thin, throwaway REPL over the engine (Stage 1; a GUI replaces
+# The terminal frontend — a thin, throwaway REPL over the engine (Stage 1-2; a GUI replaces
 # only this later). Exercises discovery / guided send / one-liner / buffer / tap as text.
 add_executable(zen-console-term src/console/console_term.cpp)
 target_link_libraries(zen-console-term
+    PRIVATE zen-console zen-switchboard zen-core zen-warnings zen-sanitize)
+
+# The full-screen TUI frontend (Stage 3) — the SECOND renderer of the same widget tree, this
+# one to terminal cells (hand-rolled ANSI + POSIX termios raw mode, NO ncurses, no new
+# dependency). The layout/draw/key-mapping is the ONLY place positions and cells exist; the
+# render/controller logic lives in zen-console so it is reused and headlessly testable.
+add_executable(zen-console-tui src/console/console_tui.cpp)
+target_link_libraries(zen-console-tui
     PRIVATE zen-console zen-switchboard zen-core zen-warnings zen-sanitize)
 
 # The child executable: runs one Shard out-of-process via the kernel C ABI. It is

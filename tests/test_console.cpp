@@ -3,6 +3,7 @@
 #include "switchboard_fixtures.hpp"
 
 #include <zen/console/console.hpp>
+#include <zen/console/ui.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>
 
@@ -57,6 +58,34 @@ std::shared_ptr<const zen::Schema> mix_schema() {
 std::shared_ptr<const zen::Schema> note_schema() {
     static const auto s = zen::SchemaBuilder("Note", 1).field("body", zen::Kind::Text).build();
     return s;
+}
+
+// ---- Stage 3 tree helpers ----
+const Widget* find_region(const Widget& w, const std::string& id) {
+    if (w.region_id == id) {
+        return &w;
+    }
+    for (const Widget& c : w.children) {
+        if (const Widget* r = find_region(c, id)) {
+            return r;
+        }
+    }
+    return nullptr;
+}
+int count_focused(const Widget& w) {
+    int n = w.focused ? 1 : 0;
+    for (const Widget& c : w.children) {
+        n += count_focused(c);
+    }
+    return n;
+}
+bool any_item_contains(const Widget& w, const std::string& needle) {
+    for (const std::string& it : w.items) {
+        if (it.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ---- Arg builders (what the terminal's lexer will hand the engine) ----
@@ -398,6 +427,222 @@ TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, m
     Composed c = engine.compose(responder.id, "Ping", 1, {ref("m9", "x")});
     CHECK(c.status == Composed::Status::Error);
     CHECK_FALSE(c.ticket.valid());
+}
+
+// ===================== Stage 3: UI-as-data — the renderer-agnostic widget tree =====================
+
+TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO renderer involved") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    // A reply in the buffer (m1) and a partial compose command.
+    std::string err;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(t.valid(), err);
+    engine.pump();
+    REQUIRE(engine.buffer_size() == 1);
+
+    UiState ui;
+    ui.focus = Focus::Compose;
+    ui.partial_input = std::to_string(responder.id.value) + " Ping 1";
+    const Widget tree = emit_ui_tree(engine, ui);
+
+    // The root is a VStack; the Bus region is an HStack of a Shards List and a Tap Log.
+    CHECK(tree.kind == WidgetKind::VStack);
+    CHECK(tree.region_id == "root");
+    const Widget* bus_region = find_region(tree, "bus");
+    REQUIRE(bus_region != nullptr);
+    CHECK(bus_region->kind == WidgetKind::Region);
+    CHECK(bus_region->title == "Bus");
+    REQUIRE(bus_region->children.size() == 1);
+    CHECK(bus_region->children[0].kind == WidgetKind::HStack);
+
+    const Widget* shards = find_region(tree, "shards");
+    REQUIRE(shards != nullptr);
+    CHECK(shards->kind == WidgetKind::List);
+    CHECK(any_item_contains(*shards, "Ping")); // discovery: the responder's shape, shown as data
+
+    const Widget* tap = find_region(tree, "tap");
+    REQUIRE(tap != nullptr);
+    CHECK(tap->kind == WidgetKind::Log);
+
+    const Widget* buffer = find_region(tree, "buffer");
+    REQUIRE(buffer != nullptr);
+    CHECK(buffer->kind == WidgetKind::List);
+    CHECK(any_item_contains(*buffer, "m1")); // the reply, as a buffer row
+    CHECK(any_item_contains(*buffer, "Pong"));
+
+    const Widget* compose = find_region(tree, "compose");
+    REQUIRE(compose != nullptr);
+    CHECK(compose->kind == WidgetKind::Field);
+    CHECK(compose->focused); // focus is Compose
+    CHECK(compose->value == ui.partial_input);
+    // The Field's hint IS the engine-produced guidance for this partial — not the renderer's.
+    CHECK(compose->hint == guidance_for(engine, ui.partial_input));
+    CHECK(count_focused(tree) == 1); // exactly one focused node (the controller is the single writer)
+}
+
+TEST_CASE("position is unrepresentable: structurally-identical trees are ==, content changes are !=") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    (void)register_probe(bus, {ping_schema()});
+
+    UiState a;
+    a.partial_input = "x";
+    // Two emits of identical state produce equal trees — there is provably no hidden positional
+    // state that could make them differ (defaulted operator== compares every member, recursively).
+    CHECK(emit_ui_tree(engine, a) == emit_ui_tree(engine, a));
+
+    UiState b = a;
+    b.partial_input = "y"; // a content change is observable as a tree inequality
+    CHECK(emit_ui_tree(engine, a) != emit_ui_tree(engine, b));
+    // (The compile-time fence in ui.hpp — has_geometry traits + equality_comparable — makes adding
+    // any x/y/w/h member fail to BUILD; that is the type-level half of this proof.)
+}
+
+TEST_CASE("two renderers, one tree: the headless outline reflects the SAME tree the TUI lays out") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    (void)register_probe(bus, {ping_schema()});
+    UiState ui;
+    const Widget tree = emit_ui_tree(engine, ui);
+
+    const Widget before = tree;
+    const std::string outline = render_outline(tree);
+    CHECK(tree == before); // the renderer takes const& and does not mutate the tree
+
+    CHECK(outline.find("VStack") != std::string::npos);
+    CHECK(outline.find("Region \"Bus\"") != std::string::npos);
+    CHECK(outline.find("List \"Shards\"") != std::string::npos);
+    CHECK(outline.find("Log \"Tap\"") != std::string::npos);
+    CHECK(outline.find("List \"Buffer\"") != std::string::npos);
+    CHECK(outline.find("Field") != std::string::npos);
+
+    // The outline renderer IGNORES `weight` (a grow HINT, not a size): two trees differing only
+    // in weight render to the SAME outline though they are unequal values.
+    Widget w1 = vstack("r", {text_widget("a"), text_widget("b")});
+    Widget w2 = w1;
+    w2.children[0].weight = 9;
+    CHECK(w1 != w2);
+    CHECK(render_outline(w1) == render_outline(w2));
+}
+
+TEST_CASE("engine-produced guidance advances with the partial command (renderer-agnostic)") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    const std::string id = std::to_string(responder.id.value);
+
+    // empty -> choose a shard; a shard id -> its shapes; a shape+version -> its fields.
+    CHECK(guidance_for(engine, "").find("shard") != std::string::npos);
+    CHECK(guidance_for(engine, id).find("Ping") != std::string::npos);
+    CHECK(guidance_for(engine, id + " Ping 1").find("seq") != std::string::npos);
+
+    // And the emitted Field carries exactly that engine-produced hint.
+    UiState ui;
+    ui.partial_input = id + " Ping 1";
+    const Widget tree = emit_ui_tree(engine, ui);
+    const Widget* compose = find_region(tree, "compose");
+    REQUIRE(compose != nullptr);
+    CHECK(compose->hint == guidance_for(engine, ui.partial_input));
+}
+
+TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refusal dirties only the tap") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+        if (in.payload.schema().name() == "Ping" && in.payload.get("seq") != nullptr) {
+            b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+        }
+    };
+    (void)engine.take_dirty(); // clear any construction-time flags
+
+    // A reply delivered to the console marks the buffer region dirty and grows the buffer list.
+    std::string err;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err);
+    REQUIRE_MESSAGE(t.valid(), err);
+    engine.pump();
+    const ConsoleEngine::Dirty d1 = engine.take_dirty();
+    CHECK(d1.buffer);            // the bus drove a buffer change
+    CHECK(d1.tap);               // and the tap log
+    UiState ui;
+    const Widget tree = emit_ui_tree(engine, ui);
+    const Widget* buffer = find_region(tree, "buffer");
+    REQUIRE(buffer != nullptr);
+    CHECK(any_item_contains(*buffer, "m1"));
+
+    // A refused send (missing required field) dirties the tap but NOT the buffer — no reply grew.
+    Ticket bad = engine.submit(responder.id, "Ping", 1, {}, &err);
+    REQUIRE(bad.valid());
+    engine.pump();
+    const ConsoleEngine::Dirty d2 = engine.take_dirty();
+    CHECK(d2.tap);
+    CHECK_FALSE(d2.buffer);      // nothing was delivered to the console
+}
+
+TEST_CASE("TUI smoke (headless): scripted semantic actions move focus, compose a guided send, buffer a reply") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    ConsoleUi ui(engine);
+
+    // Always exactly one focused node; FocusNext rotates which region is focused.
+    CHECK(count_focused(ui.tree()) == 1);
+    CHECK(find_region(ui.tree(), "compose")->focused); // starts on the command field
+    ui.dispatch({Action::FocusNext, 0});               // Compose -> Shards
+    CHECK(find_region(ui.tree(), "shards")->focused);
+    CHECK(count_focused(ui.tree()) == 1);
+
+    // Activate on the shards list prefills the command with the selected shard id and refocuses
+    // the command field — the engine-agnostic "begin a send" affordance.
+    ui.dispatch({Action::Activate, 0});
+    CHECK(ui.state().partial_input == std::to_string(responder.id.value) + " ");
+    CHECK(ui.state().focus == Focus::Compose);
+
+    // Type the rest of a guided send via Edit actions (the semantic input seam, no raw keys),
+    // then Submit — which composes via the ladder, gate-sends, and pumps.
+    for (char ch : std::string("Ping 1 seq=9")) {
+        ui.dispatch({Action::Edit, ch});
+    }
+    ui.dispatch({Action::Submit, 0});
+
+    CHECK(engine.buffer_size() == 1);                 // the send went and the reply landed
+    CHECK(ui.state().partial_input.empty());          // a Ready submit consumes the command
+    const Widget tree = ui.tree();
+    const Widget* buffer = find_region(tree, "buffer");
+    REQUIRE(buffer != nullptr);
+    CHECK(any_item_contains(*buffer, "Pong"));
+    CHECK(count_focused(tree) == 1);
+}
+
+TEST_CASE("TUI smoke (headless): an ambiguous command surfaces a NeedsInput prompt region, sends nothing") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    // Mix{name:Text, a:Int, b:Int}: a lone Int is ambiguous (fits a AND b) — the ladder prompts.
+    Registered svc = register_probe(bus, {mix_schema()});
+    bool handled = false;
+    svc.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+    ConsoleUi ui(engine);
+
+    for (char ch : std::to_string(svc.id.value) + " Mix 1 5") {
+        ui.dispatch({Action::Edit, ch});
+    }
+    ui.dispatch({Action::Submit, 0});
+
+    const Widget tree = ui.tree();
+    const Widget* prompt = find_region(tree, "prompt");
+    REQUIRE(prompt != nullptr);                 // the tree gained a prompt region
+    CHECK(prompt->title == "Needs input");
+    engine.pump();
+    CHECK_FALSE(handled);                        // nothing was sent — no mis-send
+    CHECK(engine.buffer_size() == 0);
 }
 
 } // TEST_SUITE
