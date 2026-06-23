@@ -1631,12 +1631,20 @@ terminal-free.
   (no new dependency): raw mode via `GetConsoleMode`/`SetConsoleMode` (clear line/echo/processed
   input, set `ENABLE_VIRTUAL_TERMINAL_INPUT`; set `ENABLE_VIRTUAL_TERMINAL_PROCESSING` on output —
   so the *same* ANSI renderer and the *same* escape-sequence key parsing run unchanged); `size` via
-  `GetConsoleScreenBufferInfo`'s `srWindow`; `read_byte` via `ReadFile`; `read_byte_timeout` via
-  `WaitForSingleObject`; a graceful VT-unavailable fallback (report not-interactive, never pretend).
-- **Build-verify division (the cpu-seam arrangement).** The build box is WSL/Linux and cannot
-  compile or run the Windows path, so the POSIX backend + the full Linux build are *proven* green
-  (ctest 20/20 Debug + ASan/UBSan; the TUI smoke unchanged), and the Windows backend is
-  *best-effort, Josh-verified in CLion*.
+  `GetConsoleScreenBufferInfo`'s `srWindow`; `read_byte` via `ReadFile`; `read_byte_timeout` via a
+  `WaitForSingleObject` deadline loop that `PeekConsoleInput`-drains non-key-down records (key-up /
+  focus / resize signal the handle but yield zero VT bytes, so a naive wait-then-`ReadFile` could
+  block past the bound); a graceful VT-unavailable fallback (report not-interactive, never pretend).
+  The renderer is **ASCII-only** on purpose — a non-ASCII byte (e.g. a `—`) would be decoded by the
+  console code page as mojibake; there is no UTF-8/code-page handling and none is needed.
+- **Build-verify division (the cpu-seam arrangement, since narrowed).** The Linux build + POSIX
+  backend are *proven* green on the WSL box (ctest 20/20 Debug + ASan/UBSan). The **portable Windows
+  subset is now verified natively too** — built with CLion's bundled MinGW (cmake + ninja + g++ 13.1)
+  into a separate `build-win`: `terminal_windows.cpp` compiles clean under the full `-Werror` set,
+  and the portable suites pass (15/15 ctest, the **console** suite 152/152 incl. every Stage-3
+  UI-as-data proof). What remains *Josh-verified in CLion* is only the **interactive raw-mode TUI
+  behavior** (arrow/Tab focus, Enter/Backspace edits, resize reflow, bare-ESC-vs-arrow disambiguation,
+  clean exit) — which a non-interactive shell cannot drive.
 - **Trusted-code, in-process, no containment surface.** The Windows TUI runs **in-process Shards
   only** — there is no `IsolationHost` in the TUI build (the sandbox is Linux/WSL, by design), so
   this phase adds **no out-of-process hosting and no containment surface**. The Windows TUI is the
