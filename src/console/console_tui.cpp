@@ -235,7 +235,9 @@ void layout(const Widget& node, Rect area, Grid& grid) {
 void draw(const Widget& root, int rows, int cols) {
     Grid grid(rows, cols);
     // Reserve the top row for a banner; lay the tree out beneath it.
-    grid.put(0, 0, "zen console (stage 3) — Tab: focus  arrows: select  Enter: send  Ctrl-X: quit",
+    // ASCII-only (no non-ASCII bytes anywhere the renderer emits): a Unicode em-dash here would be
+    // decoded by the Windows console code page as mojibake (the "GCo"/"ΓÇö" bytes).
+    grid.put(0, 0, "zen console (stage 3) | Tab: focus  arrows: select  Enter: send  Ctrl-X: quit",
              cols);
     layout(root, Rect{1, 0, rows - 1, cols}, grid);
 
