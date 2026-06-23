@@ -1611,6 +1611,61 @@ renderer** (the same tree to pixels); **geometric/canvas UIs** (geometric by nat
 at the sandboxed-Shard *fabric* level, not the semantic-rendering level); and the **result-graph
 buffer** (Stage 2's seam — the flat `m1,m2…` buffer becoming an addressable result-graph).
 
+### The terminal-backend seam (cross-platform frontends)
+
+The console's engine and UI-as-data layers are pure portable C++; the *only* platform-specific code
+in the whole console was the TUI's terminal control. That is now extracted into a **terminal-backend
+seam** — a small `TerminalBackend` interface (`src/console/terminal.hpp`, in the TUI executable, NOT
+the engine library) the shared TUI talks to: `is_interactive` / `size` / `read_byte` /
+`read_byte_timeout`, plus a RAII raw-mode ctor/dtor, with `make_terminal()` the one symbol selected
+per platform. After this, `console_tui.cpp` is **platform-header-free** (no `termios`/`unistd`/
+`windows.h`); every platform difference lives in a `terminal_*.cpp`, and `zen-console` stays
+terminal-free.
+
+- **POSIX backend (`terminal_posix.cpp`), preserved by moving.** The existing termios raw mode (the
+  `isatty` gate + the `atexit` restore), `ioctl(TIOCGWINSZ)` size, the blocking byte read, and the
+  ESC-continuation VTIME-grace read (now `read_byte_timeout(ms)`) moved behind the interface
+  **behavior-identical**. The Linux path is preserved by construction, not rewritten — the safety
+  property that makes this low-risk.
+- **Windows backend (`terminal_windows.cpp`), by-the-book, Josh-verified.** The Win32 Console API
+  (no new dependency): raw mode via `GetConsoleMode`/`SetConsoleMode` (clear line/echo/processed
+  input, set `ENABLE_VIRTUAL_TERMINAL_INPUT`; set `ENABLE_VIRTUAL_TERMINAL_PROCESSING` on output —
+  so the *same* ANSI renderer and the *same* escape-sequence key parsing run unchanged); `size` via
+  `GetConsoleScreenBufferInfo`'s `srWindow`; `read_byte` via `ReadFile`; `read_byte_timeout` via
+  `WaitForSingleObject`; a graceful VT-unavailable fallback (report not-interactive, never pretend).
+- **Build-verify division (the cpu-seam arrangement).** The build box is WSL/Linux and cannot
+  compile or run the Windows path, so the POSIX backend + the full Linux build are *proven* green
+  (ctest 20/20 Debug + ASan/UBSan; the TUI smoke unchanged), and the Windows backend is
+  *best-effort, Josh-verified in CLion*.
+- **Trusted-code, in-process, no containment surface.** The Windows TUI runs **in-process Shards
+  only** — there is no `IsolationHost` in the TUI build (the sandbox is Linux/WSL, by design), so
+  this phase adds **no out-of-process hosting and no containment surface**. The Windows TUI is the
+  trusted-code console (you trust what you run); containment honesty and the relocate-to-WSL flow
+  belong to the WSL-bridge phase, where hosting actually enters.
+
+**CMake platform-gating.** `zen-kernel`, `zen-isolation`, `zen-shard-host`, and the Linux-only test
+sources/shardlibs/suites (`test_kernel`, `test_capabilities`, `test_policy`, `test_isolation`, the
+loadable `.so`s, the `isolation`/`policy`/`all` ctest entries) are gated behind `if(NOT WIN32)`, so
+the portable subset (core, switchboard, console, both terminal frontends, and the portable suites
+incl. **console**) configures on Windows. On Linux every gate is taken — the full target set and
+full suite build and run exactly as before; the gating is invisible. (`test_capabilities` is gated
+Linux-only because it exercises capability enforcement *through the kernel loader* — it includes
+`<zen/kernel/kernel.hpp>` and loads a real `.so` — so it cannot build without the kernel + dlopen,
+despite "capabilities" reading as portable.)
+
+**Seams appreciated (latent power, not debt).** This boundary is the **hook the next two frontends
+plug into**, which is the whole point of doing it cleanly: the **WSL remote console** becomes
+*another `TerminalBackend`* (a socket transport, not a parallel codebase), and the **GUI** becomes
+*another renderer* of the same widget tree — both behind the same kind of seam. Two shape-notes for
+the remote phase, named now so it lands as a hook and not a refit: **output is not yet behind the
+seam** (the shared `draw()` writes the frame to stdout — fine for POSIX + Windows VT; a socket
+backend will route output over the wire, the natural extension being a `write()`/`flush()` pair),
+and **the TUI owns the I/O loop synchronously** (blocking `read_byte` + a timeout-read maps cleanly
+onto `recv`/`poll`, but a fully async transport would invert loop ownership). Separately, the
+platform gate makes the **native-Windows Shard-loading** port a *visible* seam (`dlopen` →
+`LoadLibrary` in the kernel) — hooked right there, but deferred to a trigger that likely **never
+fires**, because WSL-hosting dominates native execution for anything needing the sandbox.
+
 ---
 
 ## Future seams (designed for, not built)

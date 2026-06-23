@@ -4,18 +4,20 @@
 // resolving each VStack/HStack/Region arrangement to rows/columns and each List/Log/Field within
 // its computed area honoring the overflow policy. The tree, the controller, and the guidance all
 // come from zen-console unchanged; a GUI later replaces this file alone, laying the SAME tree out
-// to pixels. Hand-rolled ANSI + POSIX termios raw mode — no ncurses, no new dependency.
+// to pixels. Hand-rolled ANSI, no ncurses, no new dependency.
+//
+// This file is PLATFORM-HEADER-FREE: all terminal control (raw mode, window size, byte reads, the
+// ESC-disambiguation timeout) lives behind the TerminalBackend seam (terminal.hpp), implemented per
+// platform in terminal_posix.cpp / terminal_windows.cpp. make_terminal() is the only per-platform
+// symbol. That single seam is the hook the WSL remote console (a socket backend) plugs into next.
+
+#include "terminal.hpp"
 
 #include <zen/console/ui.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>
 
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <unistd.h>
-
 #include <cstdint>
-#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -59,50 +61,6 @@ private:
         return s;
     }
 };
-
-// ---- Raw-mode guard: enter raw mode on construction, restore on destruction (normal scope exit
-// or C++ exception unwinding) and via atexit (return-from-main / std::exit). NOTE: atexit does NOT
-// run on abort()/_exit, so a sanitizer-fatal abort can still leave the tty raw — acceptable for a
-// demo skin (run `reset` if so); a production renderer would add a SIGABRT/SIGSEGV handler. Gated
-// behind isatty so a non-tty (piped/headless) run touches no terminal state. ----
-class RawMode {
-public:
-    RawMode() {
-        active_ = isatty(STDIN_FILENO) != 0;
-        if (!active_) {
-            return;
-        }
-        tcgetattr(STDIN_FILENO, &saved_);
-        s_saved = saved_;
-        s_have_saved = true;
-        std::atexit(&RawMode::restore_atexit);
-        struct termios raw = saved_;
-        raw.c_lflag = raw.c_lflag & ~static_cast<tcflag_t>(ICANON | ECHO);
-        raw.c_cc[VMIN] = static_cast<cc_t>(1);
-        raw.c_cc[VTIME] = static_cast<cc_t>(0);
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-    }
-    ~RawMode() {
-        if (active_) {
-            tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_);
-        }
-    }
-    RawMode(const RawMode&) = delete;
-    RawMode& operator=(const RawMode&) = delete;
-
-private:
-    static void restore_atexit() {
-        if (s_have_saved) {
-            tcsetattr(STDIN_FILENO, TCSAFLUSH, &s_saved);
-        }
-    }
-    bool active_ = false;
-    struct termios saved_ {};
-    static struct termios s_saved;
-    static bool s_have_saved;
-};
-struct termios RawMode::s_saved {};
-bool RawMode::s_have_saved = false;
 
 // ---- A character grid: the medium-specific surface. THIS is where cells live. ----
 struct Grid {
@@ -291,21 +249,11 @@ void draw(const Widget& root, int rows, int cols) {
     std::cout << frame << std::flush;
 }
 
-void terminal_size(int& rows, int& cols) {
-    struct winsize ws {};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0) {
-        rows = static_cast<int>(ws.ws_row);
-        cols = static_cast<int>(ws.ws_col);
-    } else {
-        rows = 24;
-        cols = 80;
-    }
-}
-
-// Map one raw key (already read) to a semantic InputEvent. Returns false to signal quit. This
-// raw-key -> Action table is the ONLY terminal-coupled input code; the controller and engine
-// never see a raw key.
-bool map_key(char c, InputEvent& out) {
+// Map one raw byte (already read) to a semantic InputEvent. Returns false to signal quit. This
+// raw-byte -> Action table is the ONLY terminal-coupled input code; the controller and engine
+// never see a raw key. Escape continuations are read through the backend's timed read, so this is
+// platform-agnostic. `c` is a byte value (0..255); the caller guarantees c >= 0.
+bool map_key(int c, zen::tui::TerminalBackend& term, InputEvent& out) {
     const unsigned char u = static_cast<unsigned char>(c);
     if (u == 24) { // Ctrl-X
         return false;
@@ -322,28 +270,18 @@ bool map_key(char c, InputEvent& out) {
         out = {Action::Backspace, 0};
         return true;
     }
-    if (u == 27) { // ESC: either an arrow sequence (ESC [ A/B/...) or a bare Cancel
-        // Read the continuation with a brief timeout so a BARE ESC (the Cancel gesture) does not
-        // block forever on the next byte (VMIN=1 makes reads blocking), and an unrelated next
-        // keypress is not swallowed. Only meaningful on a tty (raw mode active).
-        const bool tty = isatty(STDIN_FILENO) != 0;
-        struct termios saved {};
-        if (tty) {
-            tcgetattr(STDIN_FILENO, &saved);
-            struct termios timed = saved;
-            timed.c_cc[VMIN] = static_cast<cc_t>(0);
-            timed.c_cc[VTIME] = static_cast<cc_t>(1); // 0.1s grace for the escape sequence
-            tcsetattr(STDIN_FILENO, TCSANOW, &timed);
-        }
-        char b1 = 0;
-        char b2 = 0;
-        const ssize_t r1 = read(STDIN_FILENO, &b1, 1);
-        const ssize_t r2 = (r1 == 1 && b1 == '[') ? read(STDIN_FILENO, &b2, 1) : 0;
-        if (tty) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &saved); // restore blocking VMIN=1
-        }
-        if (r1 != 1 || b1 != '[' || r2 != 1) {
+    if (u == 27) { // ESC: either an escape sequence (ESC [ A/B/...) or a bare Cancel
+        // Read the continuation with a brief grace so a BARE ESC (the Cancel gesture) does not
+        // block, and an unrelated next keypress is not swallowed. The platform-specific timed read
+        // lives behind the seam (POSIX VTIME / Windows WaitForSingleObject).
+        const int b1 = term.read_byte_timeout(100);
+        if (b1 != '[') {
             out = {Action::Cancel, 0}; // a bare ESC (or a timed-out / unknown sequence) = Cancel
+            return true;
+        }
+        const int b2 = term.read_byte_timeout(100);
+        if (b2 < 0) {
+            out = {Action::Cancel, 0}; // a partial "ESC [" whose final byte timed out = Cancel
             return true;
         }
         switch (b2) {
@@ -363,7 +301,7 @@ bool map_key(char c, InputEvent& out) {
         return true;
     }
     if (u >= 32 && u < 127) {
-        out = {Action::Edit, c};
+        out = {Action::Edit, static_cast<char>(c)};
         return true;
     }
     out = {Action::FocusNext, 0}; // benign no-op-ish for unknown control bytes
@@ -378,24 +316,29 @@ int main() {
     bus.register_shard(std::make_unique<Greeter>(), zen::sb::Grant{}.allow_any());
 
     ConsoleUi ui(engine);
-    RawMode raw; // raw mode for the duration of main (restored on return / atexit)
+    std::unique_ptr<zen::tui::TerminalBackend> term = zen::tui::make_terminal(); // enters raw mode
 
     int rows = 24, cols = 80;
-    terminal_size(rows, cols);
+    if (!term->size(rows, cols)) {
+        rows = 24;
+        cols = 80;
+    }
     draw(ui.tree(), rows, cols);
 
-    char c = 0;
-    while (read(STDIN_FILENO, &c, 1) == 1) {
+    for (int c = term->read_byte(); c >= 0; c = term->read_byte()) {
         InputEvent ev;
-        if (!map_key(c, ev)) {
-            break; // quit
+        if (!map_key(c, *term, ev)) {
+            break; // quit (Ctrl-X)
         }
         ui.dispatch(ev);
         (void)engine.take_dirty(); // consume the per-region change flags (full repaint below)
-        terminal_size(rows, cols);
+        if (!term->size(rows, cols)) {
+            rows = 24;
+            cols = 80;
+        }
         draw(ui.tree(), rows, cols);
     }
 
     std::cout << "\x1b[H\x1b[2J" << std::flush; // leave a clean screen
     return 0;
-}
+} // term's dtor restores cooked mode here

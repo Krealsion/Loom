@@ -1,6 +1,15 @@
 # A single test binary; the doctest framework is compiled exactly once in
 # doctest_main.cpp. Each suite is registered with CTest so `ctest` reports them
 # individually and `-R <suite>` can target one.
+#
+# Platform gating: the kernel/isolation-dependent test sources, the loadable Shard .so's, the
+# child host, and the cgroup-scoped suites are Linux-only and live behind `if(NOT WIN32)`, so the
+# portable subset builds and runs on Windows. On Linux every gate is taken — the full source set,
+# the full shardlib set, and the full suite list are exactly as before (the gating is invisible).
+#
+# Note: test_capabilities is gated Linux-only because it includes <zen/kernel/kernel.hpp> and loads
+# a real .so via ZEN_SO_SHARD (it exercises capability enforcement through the kernel loader), so it
+# cannot build without the kernel + dlopen — despite "capabilities" reading as portable.
 
 add_executable(zen-tests
     doctest_main.cpp
@@ -16,22 +25,33 @@ add_executable(zen-tests
     test_harness.cpp
     test_breathing.cpp
     test_schema_codec.cpp
-    test_kernel.cpp
     test_author_shape.cpp
     test_author_shard.cpp
-    test_capabilities.cpp
-    test_policy.cpp
-    test_console.cpp
-    test_isolation.cpp)
+    test_console.cpp)
+
+# Kernel/isolation-dependent suites: compiled only where the kernel + sandbox exist.
+if(NOT WIN32)
+    target_sources(zen-tests PRIVATE
+        test_kernel.cpp
+        test_capabilities.cpp
+        test_policy.cpp
+        test_isolation.cpp)
+endif()
 
 target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(zen-tests
-    PRIVATE zen-core zen-switchboard zen-kernel zen-isolation zen-console zen-warnings zen-sanitize)
+    PRIVATE zen-core zen-switchboard zen-console zen-warnings zen-sanitize)
+if(NOT WIN32)
+    target_link_libraries(zen-tests PRIVATE zen-kernel zen-isolation)
+endif()
 
-# ---- Loadable test Shard libraries (.so) for the kernel tests -------------
+# ---- Loadable test Shard libraries (.so) + the child host (Linux-only) ----
+# These are dlopen-loaded by the kernel/isolation/capabilities/policy suites; none exist on Windows.
+if(NOT WIN32)
+
 # One configurable source compiled into several variants, plus a bad-ABI lib.
 function(zen_add_test_shard target)
     add_library(${target} SHARED shardlib/test_shard.cpp)
@@ -112,28 +132,38 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SHARD_HOST_EXE=\"$<TARGET_FILE:zen-shard-host>\"")
 
+endif() # NOT WIN32 (loadable Shard libraries + child host + .so macros)
+
 # doctest's own header trips -Wsign-conversion etc.; it is third-party, so we do
 # not hold it to Zen's warning policy. Mark its include dir as system.
 target_include_directories(zen-tests SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # doctest returns the failed-assertion count as its exit code, so CTest's default
-# exit-status check is the source of truth — no output-scraping needed.
+# exit-status check is the source of truth — no output-scraping needed. The portable
+# suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec kernel author author_shard capabilities console)
+    switchboard harness breathing schema_codec author author_shard console)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
 
-# The isolation and policy suites mount out-of-process Shards under the default
-# resource containment, which needs cgroup-v2 delegation a plain invocation lacks (it
-# lands in the root cgroup). run-under-scope.sh launches the binary inside an
-# unprivileged delegated systemd scope when one is available.
-add_test(NAME isolation COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
-    $<TARGET_FILE:zen-tests> --test-suite=isolation --no-skipped-summary)
-add_test(NAME policy COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
-    $<TARGET_FILE:zen-tests> --test-suite=policy --no-skipped-summary)
+# The kernel/capabilities suites and the cgroup-scoped isolation/policy/all suites are Linux-only.
+if(NOT WIN32)
+    foreach(suite IN ITEMS kernel capabilities)
+        add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
+    endforeach()
 
-# A catch-all that runs everything (also under a scope, since it includes isolation).
-add_test(NAME all COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
-    $<TARGET_FILE:zen-tests>)
+    # The isolation and policy suites mount out-of-process Shards under the default resource
+    # containment, which needs cgroup-v2 delegation a plain invocation lacks (it lands in the root
+    # cgroup). run-under-scope.sh launches the binary inside an unprivileged delegated systemd scope
+    # when one is available.
+    add_test(NAME isolation COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+        $<TARGET_FILE:zen-tests> --test-suite=isolation --no-skipped-summary)
+    add_test(NAME policy COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+        $<TARGET_FILE:zen-tests> --test-suite=policy --no-skipped-summary)
+
+    # A catch-all that runs everything (also under a scope, since it includes isolation).
+    add_test(NAME all COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+        $<TARGET_FILE:zen-tests>)
+endif() # NOT WIN32 (kernel/capabilities/isolation/policy/all suites)
