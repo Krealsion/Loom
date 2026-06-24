@@ -134,12 +134,6 @@ public:
                            const std::map<std::string, FieldValue>& fields,
                            std::string* error = nullptr);
 
-    /// Step-wise builder for the guided walk: begin -> set_field… -> send.
-    bool begin(zen::sb::ShardId target, std::string_view name, std::uint32_t version,
-               std::string* error = nullptr);
-    bool set_field(std::string_view field, const FieldValue& value, std::string* error = nullptr);
-    zen::sb::Ticket send(std::string* error = nullptr);
-
     /// The fate of a previously-submitted Ticket (after pump()).
     SendOutcome outcome(zen::sb::Ticket t) const;
 
@@ -186,12 +180,6 @@ public:
     void pump();
 
 private:
-    struct Compose {
-        zen::sb::ShardId target;
-        std::shared_ptr<const zen::Schema> schema;
-        std::map<std::string, zen::Cell> cells;
-    };
-
     zen::sb::Ticket assemble_and_send(zen::sb::ShardId target,
                                       const std::shared_ptr<const zen::Schema>& schema,
                                       const std::map<std::string, zen::Cell>& cells);
@@ -203,7 +191,6 @@ private:
     zen::sb::ObserverId tap_obs_ = 0;
     std::uint64_t correlation_ = 0;
     std::vector<TapEvent> tap_;
-    std::optional<Compose> compose_;
     Dirty dirty_; // accumulated by record_tap; drained by take_dirty
 };
 

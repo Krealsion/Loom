@@ -5,16 +5,18 @@
 // is emitted as a tree of INTENT and RELATIONSHIP — never absolute position or size. The SAME
 // tree a terminal renderer resolves to box-characters and arrow-key focus, a GUI later resolves
 // to rectangles and a mouse (like HTML: one semantic description, many renderers — a screen
-// reader produces zero pixels from the same DOM). This is the structural guarantee behind "the
+// reader produces zero pixels from the same DOM). This is the structural support behind "the
 // GUI inherits the engine": Widget's member set is closed and geometry-free (no x/y/width/height
 // member exists to write), so layout can only ever happen in a renderer. A name-based
 // compile-time fence below additionally blocks the common coordinate spellings from being
-// re-added by accident (see the note at the fence for its limits — it is one layer, not airtight).
+// re-added by accident — defense in depth, not unrepresentability (int x fails to build, int px
+// compiles clean); see the note at the fence for its limits.
 //
 // The tree is built in the engine LIBRARY from the engine's public domain data (shards, the
 // reply buffer, the tap, the registry-derived guidance) — renderer-agnostic and fully testable
-// with no terminal. A renderer (the headless outline walk here for tests, the full-screen TUI
-// in console_tui.cpp) is the ONLY place positions, sizes, and cells exist.
+// with no terminal. There is ONE real renderer (the full-screen TUI in console_tui.cpp — the only
+// place positions, sizes, and cells exist); a ~50-line test-only outline walk (here) consumes the
+// same tree to PROVE it carries no medium — a renderer-agnosticism proof, not a 2nd production skin.
 
 #include <zen/console/console.hpp>
 
@@ -46,10 +48,12 @@ enum class Overflow : std::uint8_t { Grow, Scroll, Wrap, Truncate };
 /// unused fields are zero-initialized consistently (otherwise two logically-identical nodes
 /// could differ on leftover junk and pollute the == proof and the dirty-by-diff backstop).
 ///
-/// THE BET, MADE STRUCTURAL: there is NO x/y/width/height/row/col member here (a compile-time
-/// fence below makes adding one fail to build). Absolute position is unrepresentable; a renderer
-/// alone decides position. `weight` is a RELATIVE grow hint (0 = natural), never a size — a
-/// renderer may ignore it (the outline renderer does).
+/// THE BET, MADE STRUCTURAL: there is NO x/y/width/height/row/col member here — a closed,
+/// geometry-free member set, with no positional field to write (a name-based fence below also makes
+/// adding one of those names fail to build; defense in depth, not unrepresentability). A renderer
+/// alone decides position. `weight` is a RELATIVE grow hint (0 = natural), never an ABSOLUTE size —
+/// the outline renderer ignores it (proving it not tree content); the TUI resolves it as relative
+/// cells.
 struct Widget {
     WidgetKind kind = WidgetKind::Text;
     std::string region_id;          ///< stable key for dirty/diff (empty = pure decoration)
@@ -62,7 +66,7 @@ struct Widget {
     int selected_index = -1;        ///< List selection: an index INTO items, never a y (-1 = none)
     bool focusable = false;
     bool focused = false;           ///< the focus MARKER (a flag, never a coordinate)
-    std::uint16_t weight = 0;       ///< relative grow hint (0 = natural); never a size
+    std::uint16_t weight = 0;       ///< relative grow hint (0 = natural); never an absolute size
     Overflow overflow = Overflow::Grow;
     std::vector<Widget> children;   ///< child relationship (by value — the tree is one value)
 

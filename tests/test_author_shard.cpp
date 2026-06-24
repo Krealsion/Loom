@@ -86,6 +86,25 @@ public:
     void on(const Gamma& m, au::Mail&) { ++state_.gamma; trail.push_back("gamma:" + std::to_string(m.v)); }
 };
 
+// A shape NO Shard below declares as Emit<...> — used to drive an undeclared emit.
+struct Rogue {
+    std::int64_t v;
+    ZEN_SHAPE(Rogue, 1, ZEN_FIELD(v));
+};
+
+// A trusted-mount Shard whose handler emits its declared Pong (permitted by the auto-grant) AND an
+// undeclared Rogue (which the auto-grant must deny). The emit-enforcement gate is intentionally NOT
+// compile-time, so a handler CAN attempt an undeclared send — that is what makes the runtime denial
+// testable.
+class Leaker : public au::ShardBase<Leaker, CounterState, au::Accept<Ping>, au::Emit<Pong>> {
+public:
+    ShardId target{};
+    void on(const Ping&, au::Mail& mail) {
+        mail.send(target, Pong{1});  // declared in Emit<...> -> permitted
+        mail.send(target, Rogue{2}); // NOT declared -> must be CapabilityDenied
+    }
+};
+
 } // namespace
 
 TEST_SUITE("author_shard") {
@@ -164,6 +183,37 @@ TEST_CASE("a Shard's declared Emit<...> matches what it actually emits") {
     // Collector declares no Emit<...> and emits nothing.
     CHECK(from_collector.empty());
     CHECK(declared_of(c).empty());
+}
+
+TEST_CASE("the mount<> auto-grant denies an emit the Shard did not declare") {
+    // mount<> derives the grant purely from the declared Emit<...> set (allow_to_any per shape). So
+    // a handler that sends an UNDECLARED shape is CapabilityDenied — emit-denial holds on the
+    // auto-grant path too, not just the explicit-grant path (the latter is pinned in test_capabilities).
+    Switchboard bus;
+    ShardId sink = au::mount<Collector>(bus); // accepts Pong (Rogue isn't accepted, but denial is first)
+    ShardId leaker = au::mount<Leaker>(bus);
+    static_cast<Leaker*>(bus.shard(leaker))->target = sink;
+
+    bool rogue_denied = false;
+    bool pong_ok = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.sender != leaker) {
+            return; // the trigger into the Shard is ungated; only its outbound sends are gated
+        }
+        if (e.schema_name == "Rogue" && e.kind == EventKind::Refused &&
+            e.refusal.reason == RefusalReason::CapabilityDenied) {
+            rogue_denied = true;
+        }
+        if (e.schema_name == "Pong" && e.kind == EventKind::Delivered) {
+            pong_ok = true;
+        }
+    });
+
+    bus.send(leaker, Message(au::to_value(Ping{1}))); // host root trigger (ungated)
+    bus.pump();
+
+    CHECK(pong_ok);      // the DECLARED emit went through the auto-grant
+    CHECK(rogue_denied); // the UNDECLARED emit was CapabilityDenied on the auto-grant path
 }
 
 TEST_CASE("the accept-set is derived from the typed handlers; emit-set is reported") {

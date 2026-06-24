@@ -7,6 +7,7 @@
 
 #include <doctest.h>
 
+#include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
 
 #include <zen/isolation/host.hpp>
@@ -258,10 +259,8 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
 
-    if (!host.enforcement().enforceable(Capability::Network)) {
-        WARN("no unprivileged network namespace on this host; skipping the OS-enforced check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
+                            "network is OS-enforced: a no-net child cannot reach the network");
 
     // Sandboxed: the default grant withholds Network, but we DO allow it to send
     // NetResult — so any failure to reach the network is the OS sandbox, not the bus
@@ -303,10 +302,8 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
 TEST_CASE("filesystem is OS-enforced: secret absent, scratch writable, host root read-only") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Filesystem)) {
-        WARN("no unprivileged mount namespace on this host; skipping the OS-enforced fs check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Filesystem},
+                            "filesystem is OS-enforced: secret absent / scratch writable / root RO");
     // A sentinel secret OUTSIDE any granted scope (under /tmp, which the allow-list view
     // does not bind), so the probe proves the secret is ABSENT from the view, not hidden.
     { std::ofstream f("/tmp/zen_b4_secret.txt"); f << "TOPSECRET\n"; }
@@ -374,10 +371,8 @@ TEST_CASE("WriteAnywhere is the honest opt-out: reaches host paths, reported not
 TEST_CASE("a filesystem-contained mount is confirmed in a distinct mount namespace") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Filesystem)) {
-        WARN("no unprivileged mount namespace here; skipping the fs confirmation check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Filesystem},
+                            "filesystem containment confirmed in a distinct mount namespace");
     OutOfProcessResult r = host.mount("c", ZEN_SO_SHARD, Grant{}); // default → fs contained
     REQUIRE_MESSAGE(r.ok, r.error);
     const std::string s = host.containment("c");
@@ -419,10 +414,8 @@ TEST_CASE("filesystem fail-safe + dev-mode: unenforceable refuses by default; de
 TEST_CASE("a memory bomb is OOM-killed within its cgroup; the host survives, then quarantines") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Resources)) {
-        WARN("no cgroup-v2 delegation here; run the isolation suite under a delegated scope");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                            "a memory bomb is OOM-killed within its cgroup");
     Registered rec = register_probe(bus, {pong_schema()});
     int died = 0;
     bus.add_observer([&](const BusEvent& e) {
@@ -459,10 +452,8 @@ TEST_CASE("a memory bomb is OOM-killed within its cgroup; the host survives, the
 TEST_CASE("negative control: the same allocation under a high cap survives (the cap is the cause)") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Resources)) {
-        WARN("no cgroup-v2 delegation here; skipping the resource negative control");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                            "resource negative control: the same allocation under a high cap survives");
     Registered rec = register_probe(bus, {pong_schema()});
     ResourceLimits lim;
     lim.memory_bytes = 512LL * 1024 * 1024; // 512 MiB cap; the same ~200 MiB fits
@@ -479,10 +470,8 @@ TEST_CASE("negative control: the same allocation under a high cap survives (the 
 TEST_CASE("a fork-bomb is bounded by pids.max; the host survives") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Resources)) {
-        WARN("no cgroup-v2 delegation here; skipping the fork-bomb check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                            "a fork-bomb is bounded by pids.max");
     Registered rec = register_probe(bus, {forkresult_schema()});
     std::int64_t forked = -1;
     rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
@@ -512,10 +501,8 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
     SUBCASE("a resource-contained Shard's limits are confirmed") {
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
-        if (!host.enforcement().enforceable(Capability::Resources)) {
-            WARN("no cgroup-v2 delegation here; skipping the resource confirmation");
-            return;
-        }
+        ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                                "a resource-contained Shard's limits are confirmed");
         OutOfProcessResult r = host.mount("rc", ZEN_SO_SHARD, Grant{}); // default → contained
         REQUIRE_MESSAGE(r.ok, r.error);
         const std::string s = host.containment("rc");
@@ -542,10 +529,8 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
     SUBCASE("the memory opt-out uncaps memory but stays pids-bounded") {
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
-        if (!host.enforcement().enforceable(Capability::Resources)) {
-            WARN("no cgroup-v2 delegation here; skipping the memory opt-out check");
-            return;
-        }
+        ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                                "the memory opt-out uncaps memory but stays pids-bounded");
         OutOfProcessResult r = host.mount("u", ZEN_SO_SHARD, Grant{}.with_unlimited_memory());
         REQUIRE_MESSAGE(r.ok, r.error);
         const std::string s = host.containment("u");
@@ -559,10 +544,8 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
 TEST_CASE("no grant licenses a fork-bomb: pids stays bounded even with memory unlimited") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Resources)) {
-        WARN("no cgroup-v2 delegation here; skipping fork-bomb-under-unlimited-memory");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                            "no grant licenses a fork-bomb: pids stays bounded under unlimited memory");
     Registered rec = register_probe(bus, {forkresult_schema()});
     std::int64_t forked = -1;
     rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
@@ -585,10 +568,8 @@ TEST_CASE("no grant licenses a fork-bomb: pids stays bounded even with memory un
 TEST_CASE("the memory opt-out lets a memory-bomb survive the cap that would OOM-kill it") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Resources)) {
-        WARN("no cgroup-v2 delegation here; skipping the memory opt-out survival check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
+                            "the memory opt-out lets a memory-bomb survive the OOM cap");
     Registered rec = register_probe(bus, {pong_schema()});
     Grant g;
     g.allow("Pong", 1, rec.id).with_unlimited_memory(); // memory uncapped; pids still bounded
@@ -636,10 +617,8 @@ TEST_CASE("fail-safe + dev-mode: an unenforceable host refuses by default; dev-m
 TEST_CASE("a contained mount is positively confirmed in a distinct network namespace") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network)) {
-        WARN("network namespace not enforceable here; skipping the confirmation check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
+                            "network containment positively confirmed in a distinct netns");
     OutOfProcessResult r = host.mount("c", ZEN_SO_SHARD, Grant{}); // default grant → contained
     REQUIRE_MESSAGE(r.ok, r.error);
     const std::string status = host.containment("c");
@@ -654,10 +633,8 @@ TEST_CASE("a SURPRISE sandbox-entry failure fails safe: refuses in strict AND de
     // wide-open, and the Shard never runs (untrusted code never started).
     Switchboard probe_bus;
     IsolationHost probe_host(probe_bus, kHostExe);
-    if (!probe_host.enforcement().enforceable(Capability::Network)) {
-        WARN("network not enforceable here; cannot exercise the forced real-entry failure");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(probe_host.enforcement(), {Capability::Network},
+                            "forced real-entry-failure prereq (network must be enforceable to test it)");
 
     SUBCASE("strict mode refuses") {
         Switchboard bus;
@@ -693,6 +670,47 @@ TEST_CASE("unmount tears the child down cleanly and the proxy leaves the bus") {
     Ticket t = bus.send(id, Message(ping(1)));
     bus.pump();
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
+}
+
+// ---- Harness honesty (Part 1): the fail-by-default asymmetry, proven in-suite ----
+
+TEST_CASE("harness honesty: an unprovable security proof FAILS by default, skips only on opt-out") {
+    // No host / no real enforcement needed — exercise the gate's DECISION directly, so this proof
+    // of the asymmetry stays green everywhere. Filesystem forced unenforceable, the others fine.
+    EnforcementReport forced;
+    forced.capabilities.push_back({Capability::Network, true, "forced", ""});
+    forced.capabilities.push_back({Capability::Filesystem, false, "", "forced unavailable for the test"});
+    forced.capabilities.push_back({Capability::Resources, true, "forced", ""});
+
+    std::string missing;
+    const zenh::Gate g = zenh::enforcement_decision(forced, {Capability::Filesystem}, missing);
+    CHECK(missing == capability_name(Capability::Filesystem)); // the message names the missing cap
+
+    if (zenh::require_enforcement_strict()) {
+        CHECK(g == zenh::Gate::FailHard);     // the default on ANY host: an unprovable proof FAILS
+    } else {
+        CHECK(g == zenh::Gate::SkipDegraded); // only ZEN_ALLOW_UNENFORCEABLE=1 => a marked skip
+    }
+
+    // An enforceable capability always proceeds (the count-bumping path) — never a spurious fail.
+    EnforcementReport ok;
+    ok.capabilities.push_back({Capability::Filesystem, true, "forced", ""});
+    std::string none;
+    CHECK(zenh::enforcement_decision(ok, {Capability::Filesystem}, none) == zenh::Gate::Proceed);
+    CHECK(none.empty());
+}
+
+// Keep this LAST in the file: a positive tally so a green can never mean "every OS-enforcement case
+// silently skipped." (Relies on doctest's default registration order; a --order-by=rand run would
+// instead assert the count in a reporter hook.)
+TEST_CASE("enforcement coverage: the OS-enforcement proofs actually executed, not silently skipped") {
+    if (!zenh::require_enforcement_strict() || zenh::degraded_run()) {
+        MESSAGE("degraded run (opt-out set): the enforcement-coverage floor is relaxed");
+        return;
+    }
+    // 12 OS-enforcement guard sites in this suite; on a provisioned host every one executes.
+    MESSAGE("OS-enforcement cases executed: " << zenh::enforced_case_count());
+    CHECK(zenh::enforced_case_count() >= 12);
 }
 
 } // TEST_SUITE
