@@ -352,57 +352,6 @@ zen::sb::Ticket ConsoleEngine::submit(zen::sb::ShardId target, std::string_view 
     return assemble_and_send(target, schema, cells);
 }
 
-bool ConsoleEngine::begin(zen::sb::ShardId target, std::string_view name, std::uint32_t version,
-                          std::string* error) {
-    std::shared_ptr<const zen::Schema> schema = bus_.resolve_schema(name, version);
-    if (!schema) {
-        if (error != nullptr) {
-            *error = "no such registered shape";
-        }
-        return false;
-    }
-    compose_ = Compose{target, std::move(schema), {}};
-    return true;
-}
-
-bool ConsoleEngine::set_field(std::string_view field, const FieldValue& value, std::string* error) {
-    if (!compose_) {
-        if (error != nullptr) {
-            *error = "no compose in progress (call begin first)";
-        }
-        return false;
-    }
-    const zen::Field* f = compose_->schema->find(field);
-    if (f == nullptr) {
-        if (error != nullptr) {
-            *error = "shape has no field '" + std::string(field) + "'";
-        }
-        return false;
-    }
-    std::string err;
-    std::optional<zen::Cell> cell = make_cell(*f, value, err);
-    if (!cell) {
-        if (error != nullptr) {
-            *error = err;
-        }
-        return false;
-    }
-    compose_->cells.insert_or_assign(std::string(field), std::move(*cell));
-    return true;
-}
-
-zen::sb::Ticket ConsoleEngine::send(std::string* error) {
-    if (!compose_) {
-        if (error != nullptr) {
-            *error = "no compose in progress";
-        }
-        return zen::sb::Ticket{};
-    }
-    Compose c = std::move(*compose_);
-    compose_.reset();
-    return assemble_and_send(c.target, c.schema, c.cells);
-}
-
 SendOutcome ConsoleEngine::outcome(zen::sb::Ticket t) const {
     const zen::sb::DeliveryOutcome o = bus_.outcome(t);
     SendOutcome s;

@@ -100,12 +100,17 @@ target_link_libraries(zen_test_net_client PRIVATE zen-core zen-switchboard zen-w
 add_library(zen_test_net_broker SHARED shardlib/net_broker.cpp)
 target_link_libraries(zen_test_net_broker PRIVATE zen-core zen-switchboard zen-warnings zen-sanitize)
 
+# Confused-deputy proof (Part 3): a malicious mod that forges a role-send's wire reply_to to point
+# at a different Shard; the host must ignore it and reply to the stamped sender.
+add_library(zen_test_forge_client SHARED shardlib/forge_client.cpp)
+target_link_libraries(zen_test_forge_client PRIVATE zen-core zen-switchboard zen-warnings zen-sanitize)
+
 set(ZEN_SHARD_LIBS zen_test_shard zen_test_shard_b zen_test_shard_badsnap
     zen_test_shard_badmsg zen_test_shard_v2 zen_test_shard_crasher
     zen_test_shard_silent zen_test_shard_netprobe zen_test_shard_fsprobe
     zen_test_shard_membomb zen_test_shard_forkbomb zen_test_mod_storage
     zen_test_storage_client zen_test_storage_broker zen_test_net_client
-    zen_test_net_broker zen_test_badabi)
+    zen_test_net_broker zen_test_forge_client zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_SHARD_LIBS})
 
 # The isolation tests spawn the real child-host executable.
@@ -129,6 +134,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_STORAGE_BROKER=\"$<TARGET_FILE:zen_test_storage_broker>\""
     "ZEN_SO_NET_CLIENT=\"$<TARGET_FILE:zen_test_net_client>\""
     "ZEN_SO_NET_BROKER=\"$<TARGET_FILE:zen_test_net_broker>\""
+    "ZEN_SO_FORGE_CLIENT=\"$<TARGET_FILE:zen_test_forge_client>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SHARD_HOST_EXE=\"$<TARGET_FILE:zen-shard-host>\"")
 

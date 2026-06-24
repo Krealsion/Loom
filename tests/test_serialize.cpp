@@ -283,6 +283,40 @@ TEST_CASE("trailing bytes after the value are rejected") {
     CHECK(a.first_error().kind == ErrorKind::MalformedBytes);
 }
 
+TEST_CASE("a non-canonical NaN double is rejected") {
+    // The encoder normalizes every NaN to the one canonical bit pattern (0x7FF8000000000000); the
+    // decoder rejects any OTHER NaN payload. Inject a non-canonical NaN (exponent all ones, mantissa
+    // nonzero, but not the canonical pattern) over the float's 8 trailing LE bytes.
+    auto schema = SchemaBuilder("F", 1).field("x", Kind::Float).build();
+    Value v(schema);
+    v.set("x", Cell::real(1.0));
+    std::string bytes = serialize(v); // body tail = the 8 little-endian bytes of the f64
+    const std::uint64_t bad = 0x7FF0000000000001ULL;
+    for (std::size_t i = 0; i < 8; ++i) {
+        bytes[bytes.size() - 8 + i] = static_cast<char>((bad >> (8 * i)) & 0xFFu);
+    }
+    Admission a = admit(parse(bytes), schema);
+    REQUIRE_FALSE(a.ok());
+    CHECK(a.first_error().kind == ErrorKind::MalformedField);
+    CHECK(a.first_error().path == "x");
+}
+
+TEST_CASE("a non-zero padding bit in the presence bitmask is rejected") {
+    // PlayerState has 2 fields, so the 1-byte presence mask uses bits 0..1; bits 2..7 are reserved
+    // and must be zero. The mask is the first body byte (right after the 28-byte header).
+    Value v(fx::PlayerState());
+    v.set("hp", Cell::integer(1)).set("name", Cell::text("Ami"));
+    std::string bytes = serialize(v);
+    const std::size_t mask_off = 3 + 2 + std::string("PlayerState").size() + 4 + 8; // = 28
+    REQUIRE(bytes.size() > mask_off);
+    // Set reserved bit 2, leaving the two real presence bits intact (so the body still parses and
+    // the rejection is specifically the padding-bit check, not a downstream desync).
+    bytes[mask_off] = static_cast<char>(static_cast<unsigned char>(bytes[mask_off]) | 0x04u);
+    Admission a = admit(parse(bytes), fx::PlayerState());
+    REQUIRE_FALSE(a.ok());
+    CHECK(a.first_error().kind == ErrorKind::MalformedBytes);
+}
+
 TEST_CASE("a non-Zen byte string is refused, not crashed") {
     for (const char* junk : {"", "hello", "{\"zen\":1}", "ZN"}) {
         Unverified u = parse(junk);

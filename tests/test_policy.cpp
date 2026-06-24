@@ -1,5 +1,6 @@
 #include <doctest.h>
 
+#include "enforcement_gate.hpp"
 #include "shardlib/net_protocol.hpp"
 #include "shardlib/storage_protocol.hpp"
 #include "switchboard_fixtures.hpp"
@@ -277,12 +278,9 @@ TEST_CASE("the grant-record persists deltas across reload, keyed by content-hash
 TEST_CASE("ask-is-not-a-grant: a mod that asks for the world still lands on the floor") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("the floor is not fully OS-enforceable here; skipping the on-the-floor check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "ask-is-not-a-grant: an authored mod's ask still lands on the floor");
     // The host's grant-record is empty: no delta exists for this mod.
     OutOfProcessResult r = host.mount_mod("greedy", ZEN_SO_MOD_STORAGE);
     REQUIRE_MESSAGE(r.ok, r.error);
@@ -301,12 +299,9 @@ TEST_CASE("ask-is-not-a-grant: a mod that asks for the world still lands on the 
 TEST_CASE("the host holds the pen: a recorded delta — not the ask — raises a mod above the floor") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("the floor is not fully OS-enforceable here; skipping the delta-grant check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "host-holds-the-pen: authority above the floor comes from a recorded delta grant");
     const std::string path = "/tmp/zen_grant_record_pen.json";
     std::remove(path.c_str());
     host.set_grant_record_path(path);
@@ -326,12 +321,9 @@ TEST_CASE("the host holds the pen: a recorded delta — not the ask — raises a
 TEST_CASE("out-of-process role-send reaches the role holder, sender stamped (kEmitToRole seam)") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("the floor is not fully OS-enforceable here; skipping the kEmitToRole seam check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "the out-of-process role-send (kEmitToRole) seam reaches the role holder");
     // An in-process Shard holds the "storage" role and accepts StoragePut — a stand-in
     // for the broker; this stage proves only that the wire seam carries a role-send to
     // its holder with the sender stamped host-side.
@@ -352,15 +344,49 @@ TEST_CASE("out-of-process role-send reaches the role holder, sender stamped (kEm
     CHECK(got_sender == mod.id); // stamped from the connection (link.id), never the wire
 }
 
+TEST_CASE("a forged role-send reply_to cannot redirect a broker's reply (confused-deputy closed)") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), ZEN_FLOOR_CAPS,
+                            "a forged role-send reply_to cannot redirect a broker's reply");
+    const std::string root = "/tmp/zen_storage_forge";
+    std::filesystem::remove_all(root);
+    OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
+    REQUIRE_MESSAGE(broker.ok, broker.error);
+    // A MALICIOUS floored mod: on DoForge it bypasses Mail and emits a role-send StorageGet whose
+    // wire reply_to is forged to point at the victim below.
+    OutOfProcessResult attacker = host.mount_mod("attacker", ZEN_SO_FORGE_CLIENT);
+    REQUIRE_MESSAGE(attacker.ok, attacker.error);
+
+    // An in-process VICTIM that WOULD accept a StorageValue — the forged target. If the host
+    // honored the wire reply_to, the broker's reply would land HERE; it must not.
+    Registered victim = register_probe(bus, {zen::author::schema_of<storage::StorageValue>()});
+
+    std::int64_t delivered_to = -1;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue") {
+            delivered_to = static_cast<std::int64_t>(e.target.value);
+        }
+    });
+
+    // The attacker forges StorageGet{reply_to = victim}. The broker replies StorageValue to its
+    // in_.reply_to, which the host forced to the STAMPED sender (the attacker), not the wire value.
+    bus.send(attacker.id, Message(zen::author::to_value(
+                              storage::DoForge{"k", static_cast<std::int64_t>(victim.id.value)})));
+    REQUIRE(host.run_until([&] { return delivered_to != -1; }, 4000));
+
+    CHECK(delivered_to == static_cast<std::int64_t>(attacker.id.value)); // -> requester (stamped sender)
+    CHECK(delivered_to != static_cast<std::int64_t>(victim.id.value));   // never the forged target
+    CHECK(victim.shard->handled_names.empty());                          // the victim got nothing
+    std::filesystem::remove_all(root);
+}
+
 TEST_CASE("scoping: each mod reads only its own data; B can never read A's (negative control)") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("the floor/broker are not fully OS-enforceable here; skipping the scoping proof");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "storage keyspace scoping by stamped sender (mod-vs-mod negative control)");
     const std::string root = "/tmp/zen_storage_scoping";
     std::filesystem::remove_all(root);
 
@@ -402,12 +428,9 @@ TEST_CASE("scoping: each mod reads only its own data; B can never read A's (nega
 TEST_CASE("floor-without-disk: a None mod persists via the broker, but a direct open fails (syscall)") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("not fully OS-enforceable here; skipping the floor-without-disk proof");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "floor-without-disk: a floored mod persists only via the broker");
     const std::string root = "/tmp/zen_storage_floor";
     std::filesystem::remove_all(root);
     OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
@@ -444,12 +467,9 @@ TEST_CASE("floor-without-disk: a None mod persists via the broker, but a direct 
 TEST_CASE("reload-keeps-state: stored data survives a broker implementation reload; mods still route") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("not fully OS-enforceable here; skipping the reload-keeps-state proof");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "reload keeps persisted state (the broker outlives a mod reload)");
     const std::string root = "/tmp/zen_storage_reload";
     std::filesystem::remove_all(root);
     OutOfProcessResult broker = host.mount_broker("broker", ZEN_SO_STORAGE_BROKER, root);
@@ -492,12 +512,9 @@ TEST_CASE("reload-keeps-state: stored data survives a broker implementation relo
 TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget, the mod stays None") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("not fully OS-enforceable here; skipping the broker-down check");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "broker-down degrades gracefully (NoSuchTarget, not a crash)");
     // Mount then UNMOUNT the broker, so the storage role has no live holder (the
     // crashed/quarantined/unmounted case). The storage schemas stay registered, so the
     // role-send still reaches delivery — and degrades there, not silently.
@@ -529,12 +546,9 @@ TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget
 TEST_CASE("floor denies net: a mod (even one that asks) cannot reach role net without a delta") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("not fully OS-enforceable here; skipping the floor-denies-net proof");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "the floor denies net (net is a recorded delta, granted to none)");
     // The broker is present (so NetRequest is a known schema), but a pure-floor mod has no
     // net role-rule — unlike storage, the floor grants the net role to no one.
     OutOfProcessResult broker = host.mount_net_broker("net", ZEN_SO_NET_BROKER);
@@ -564,12 +578,9 @@ TEST_CASE("floor denies net: a mod (even one that asks) cannot reach role net wi
 TEST_CASE("mediation + negative control: a net-denied mod reaches the allowed host only via the broker") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("not fully OS-enforceable here; skipping the mediation proof");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "net mediation: a net-denied mod reaches loopback only via the broker");
     LoopbackEcho echo;
     REQUIRE(echo.port() > 0);
 
@@ -615,12 +626,9 @@ TEST_CASE("mediation + negative control: a net-denied mod reaches the allowed ho
 TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and never connects") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    if (!host.enforcement().enforceable(Capability::Network) ||
-        !host.enforcement().enforceable(Capability::Filesystem) ||
-        !host.enforcement().enforceable(Capability::Resources)) {
-        WARN("not fully OS-enforceable here; skipping the allow-list scoping proof");
-        return;
-    }
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
+                            ZEN_FLOOR_CAPS,
+                            "net allow-list scoping (the broker validates host:port)");
     OutOfProcessResult broker = host.mount_net_broker("net", ZEN_SO_NET_BROKER);
     REQUIRE_MESSAGE(broker.ok, broker.error);
     const std::string rec = "/tmp/zen_net_scope_grant.json";
@@ -648,6 +656,19 @@ TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and n
     REQUIRE(host.run_until([&] { return got; }, 5000));
     CHECK_FALSE(ok); // refused by the broker's allow-list; the connection is never made
     std::remove(rec.c_str());
+}
+
+// Keep this LAST: a positive tally so a green policy run can never mean "every floor proof silently
+// skipped." (Default doctest registration order; a --order-by=rand run would assert in a reporter.)
+TEST_CASE("enforcement coverage: the floor proofs actually executed, not silently skipped") {
+    if (!zenh::require_enforcement_strict() || zenh::degraded_run()) {
+        MESSAGE("degraded run (opt-out set): the enforcement-coverage floor is relaxed");
+        return;
+    }
+    // 11 full-floor OS-enforcement guard sites in this suite (incl. the forged-reply_to proof); on a
+    // provisioned host all execute.
+    MESSAGE("OS-enforcement cases executed: " << zenh::enforced_case_count());
+    CHECK(zenh::enforced_case_count() >= 11);
 }
 
 } // TEST_SUITE

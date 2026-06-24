@@ -45,6 +45,13 @@ struct Probe { // trigger a direct-disk syscall probe; the result rides back via
     std::int64_t n;
     ZEN_SHAPE(Probe, 1, ZEN_FIELD(n));
 };
+// Drive the forging mod to emit a role-send StorageGet whose WIRE reply_to is forged to point at
+// `victim` (a different Shard's id) — the confused-deputy attack the host must defeat.
+struct DoForge {
+    std::string key;
+    std::int64_t victim; // the ShardId the attacker forges into the role-send's reply_to
+    ZEN_SHAPE(DoForge, 1, ZEN_FIELD(key), ZEN_FIELD(victim));
+};
 
 } // namespace storage
 
