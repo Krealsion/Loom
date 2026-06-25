@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-namespace zen {
+namespace loom {
 
 // ---- Error / Admission ----------------------------------------------------
 
@@ -235,4 +235,4 @@ std::vector<Error> diagnose(const Value& claimant, const Schema& door) {
 
 std::uint64_t gate_invocations() noexcept { return g_gate_calls.load(std::memory_order_relaxed); }
 
-} // namespace zen
+} // namespace loom

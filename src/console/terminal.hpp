@@ -20,7 +20,7 @@
 
 #include <memory>
 
-namespace zen::tui {
+namespace loom {
 
 /// A terminal I/O backend. The concrete backend enters raw mode on construction (gated on
 /// is_interactive) and restores cooked mode in its destructor (RAII).
@@ -43,6 +43,6 @@ public:
 /// symbol selected per platform; the shared TUI contains no platform headers.
 std::unique_ptr<TerminalBackend> make_terminal();
 
-} // namespace zen::tui
+} // namespace loom
 
 #endif // ZEN_CONSOLE_TERMINAL_HPP

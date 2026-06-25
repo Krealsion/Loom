@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-using namespace zen;
+using namespace loom;
 
 // The security property: feeding malformed, random, or hostile bytes to a
 // decoder must never crash, overread, leak, allocate beyond the input, or let an

@@ -1,7 +1,7 @@
 #ifndef ZEN_DETAIL_BASE64_HPP
 #define ZEN_DETAIL_BASE64_HPP
 
-// Internal to zen-core. Standard base64 (RFC 4648, '+' '/' alphabet, '='
+// Internal to loom. Standard base64 (RFC 4648, '+' '/' alphabet, '='
 // padding) for the Bytes kind. Decoding is strict and total: any malformed
 // input is rejected, never crashes.
 
@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-namespace zen::detail {
+namespace loom::detail {
 
 std::string base64_encode(const std::vector<std::uint8_t>& data);
 
@@ -19,6 +19,6 @@ std::string base64_encode(const std::vector<std::uint8_t>& data);
 /// character, misplaced padding).
 bool base64_decode(std::string_view in, std::vector<std::uint8_t>& out);
 
-} // namespace zen::detail
+} // namespace loom::detail
 
 #endif // ZEN_DETAIL_BASE64_HPP

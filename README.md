@@ -1,4 +1,4 @@
-# zen-core
+# loom
 
 The foundational layer of **Zen**: the message-representation and validation
 core every other part of the system links against.
@@ -18,22 +18,22 @@ A second library, **`zen-switchboard`**, builds the first *live* boundary on top
 of the core: an in-process message bus that gates every delivery through the same
 `admit`. See `examples/heartbeat.cpp` and the Switchboard section of `DESIGN.md`.
 
-A third, **`zen-kernel`**, loads Shards from dynamic libraries across a true C
+A third, **`zen-kernel`**, loads Weaves from dynamic libraries across a true C
 ABI: everything a `.so` hands back crosses as bytes and is re-admitted through
 the same gate, so the DLL seam is just another boundary the one gate guards (with
 hot-reload that survives a library swap). See the Kernel section of `DESIGN.md`.
 
-A fourth, header-only **`zen-author`** (`include/zen/author/`), is pure sugar: an
-author writes each shape once as a plain C++ struct (`ZEN_SHAPE`) and the runtime
+A fourth, header-only **weave** layer (`include/zen/weave/`), is pure sugar: a
+maker writes each shape once as a plain C++ struct (`ZEN_SHAPE`) and the runtime
 `Schema`, the typed conversions, and the derived `snapshot`/`revive`/dispatch all
 follow — a struct-derived schema shares a door with the hand-built one by
-content-id. See `examples/heartbeat_authored.cpp` and the authoring section of
+content-id. See `examples/heartbeat_woven.cpp` and the weaving section of
 `DESIGN.md`.
 
-**Capabilities (B1):** every Shard carries a host-assigned **grant** (default
-empty), and the bus authorizes each Shard-originated send against it *before* the
+**Capabilities (B1):** every Weave carries a host-assigned **grant** (default
+empty), and the bus authorizes each Weave-originated send against it *before* the
 gate — a denied send is `CapabilityDenied`, never delivered, and never reaches the
-gate, so "one gate" stays literally true. The kernel's control Shard makes the
+gate, so "one gate" stays literally true. The kernel's control Weave makes the
 load surface a gated message door. See the Capabilities section of `DESIGN.md`.
 
 ```
@@ -80,7 +80,7 @@ The **native** format is canonical binary: compact, positional, schema-guided,
 and byte-identical for equal values (so native bytes are content-addressable).
 `serialize` / `parse` are the native entry points. The original self-describing
 **JSON** format is retained as a compatibility / debug codec under
-`zen::compat::serialize` / `zen::compat::parse` — inspectable, but larger and not
+`loom::compat::serialize` / `loom::compat::parse` — inspectable, but larger and not
 byte-canonical. Both formats funnel through the same gate; deserializing either
 yields an `Unverified` that the same `admit` validates.
 
@@ -96,7 +96,7 @@ deserialize → re-admit. (This is `examples/quickstart.cpp`.)
 #include <iostream>
 
 int main() {
-    using namespace zen;
+    using namespace loom;
 
     // 1. Define a schema (frozen once published).
     auto player = SchemaBuilder("PlayerState", 1)

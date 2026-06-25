@@ -1,17 +1,17 @@
 #ifndef ZEN_SWITCHBOARD_GRANT_HPP
 #define ZEN_SWITCHBOARD_GRANT_HPP
 
-// The capability grant: what a Shard may do. It is the authority the bus checks
-// every Shard-originated send against, default nearly empty. Grants flow from the
+// The capability grant: what a Weave may do. It is the authority the bus checks
+// every Weave-originated send against, default nearly empty. Grants flow from the
 // host (the root of trust) at mount time, out-of-band — there is no in-band path
-// by which a Shard widens its own grant.
+// by which a Weave widens its own grant.
 //
 // One grant is the single source of truth, projected onto whatever boundary the
 // hosting mode provides: in B1 the *message* boundary (send-permissions, enforced
 // here); in B2 the *process* boundary (crash containment); in B3 the *syscall*
 // boundary (the OS-capability flags, enforced by an out-of-process sandbox).
 
-#include <zen/switchboard/message.hpp> // ShardId
+#include <zen/switchboard/message.hpp> // WeaveId
 
 #include <cstdint>
 #include <string>
@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace zen::sb {
+namespace loom {
 
 /// *Hard* (binary) OS-capability flags — enforce-or-refuse, no middle. They govern
 /// instruction-level behaviour a loaded .so can reach directly, which only process
@@ -72,14 +72,14 @@ struct SendRule {
     std::string shape_name; ///< used iff !any_shape
     std::uint32_t shape_version = 0;
     bool any_target = false;
-    ShardId target{};          ///< used iff !any_target and not a role rule
+    WeaveId target{};          ///< used iff !any_target and not a role rule
     std::string target_role{}; ///< non-empty iff a role rule (see Grant::allow_to_role)
 };
 
 /// Resource limits — a *quantitative* capability (B5, enforced via cgroup-v2). `0`
-/// means "use the host-computed conservative default" (bounded so one Shard can't
+/// means "use the host-computed conservative default" (bounded so one Weave can't
 /// starve the host); a positive value is an explicit raise. `unlimited_memory` is the
-/// only opt-out (a trusted compute Shard may use all RAM) and it removes the **memory**
+/// only opt-out (a trusted compute Weave may use all RAM) and it removes the **memory**
 /// cap ONLY: **pids stays bounded** (no grant can license a fork bomb) and cpu stays a
 /// fair-share weight. There is no wholesale "no limits" opt-out.
 struct ResourceLimits {
@@ -89,7 +89,7 @@ struct ResourceLimits {
     bool unlimited_memory = false;  ///< opt out of the MEMORY cap only; pids stays bounded
 };
 
-/// What a Shard may do. Default-constructed = empty: may send nothing, holds no
+/// What a Weave may do. Default-constructed = empty: may send nothing, holds no
 /// OS-capabilities. Minimal authority by default.
 class Grant {
 public:
@@ -98,32 +98,32 @@ public:
     static Grant nothing() { return Grant{}; }
 
     /// May send shape (name, version) to a specific target.
-    Grant& allow(std::string shape_name, std::uint32_t shape_version, ShardId target) {
+    Grant& allow(std::string shape_name, std::uint32_t shape_version, WeaveId target) {
         rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, target});
         return *this;
     }
     /// May send shape (name, version) to any accepter.
     Grant& allow_to_any(std::string shape_name, std::uint32_t shape_version) {
-        rules_.push_back(SendRule{false, std::move(shape_name), shape_version, true, ShardId{}});
+        rules_.push_back(SendRule{false, std::move(shape_name), shape_version, true, WeaveId{}});
         return *this;
     }
     /// May send any shape to a specific target.
-    Grant& allow_any_to(ShardId target) {
+    Grant& allow_any_to(WeaveId target) {
         rules_.push_back(SendRule{true, std::string{}, 0, false, target});
         return *this;
     }
     /// May send any shape to any target (permissive).
     Grant& allow_any() {
-        rules_.push_back(SendRule{true, std::string{}, 0, true, ShardId{}});
+        rules_.push_back(SendRule{true, std::string{}, 0, true, WeaveId{}});
         return *this;
     }
-    /// May send shape (name, version) to whichever Shard currently holds `role`.
-    /// The send names a role, not a ShardId; the role is resolved to its holder at
-    /// delivery, so this rule survives the holder reloading (its ShardId is stable).
+    /// May send shape (name, version) to whichever Weave currently holds `role`.
+    /// The send names a role, not a WeaveId; the role is resolved to its holder at
+    /// delivery, so this rule survives the holder reloading (its WeaveId is stable).
     /// A role rule authorizes only role-targeted sends (see permits_role); it never
-    /// authorizes a direct ShardId send.
+    /// authorizes a direct WeaveId send.
     Grant& allow_to_role(std::string shape_name, std::uint32_t shape_version, std::string role) {
-        rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, ShardId{},
+        rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, WeaveId{},
                                   std::move(role)});
         return *this;
     }
@@ -142,13 +142,13 @@ public:
         fs_path_ = std::move(scoped_path);
         return *this;
     }
-    /// Raise the Shard's resource limits (B5). Any `0` field keeps the host-computed
+    /// Raise the Weave's resource limits (B5). Any `0` field keeps the host-computed
     /// conservative default; positive fields are explicit raises.
     Grant& with_resources(ResourceLimits limits) {
         res_ = limits;
         return *this;
     }
-    /// Opt out of the **memory** cap only (a trusted compute Shard may use all RAM).
+    /// Opt out of the **memory** cap only (a trusted compute Weave may use all RAM).
     /// pids stays bounded (no grant can license a fork bomb) and cpu stays a fair-share
     /// weight — there is no wholesale "no limits" opt-out.
     Grant& with_unlimited_memory() {
@@ -157,7 +157,7 @@ public:
     }
 
     /// True iff some rule permits sending shape (name, version) to `target`.
-    bool permits(std::string_view shape_name, std::uint32_t shape_version, ShardId target) const {
+    bool permits(std::string_view shape_name, std::uint32_t shape_version, WeaveId target) const {
         for (const SendRule& r : rules_) {
             const bool shape_ok =
                 r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version);
@@ -169,10 +169,10 @@ public:
         return false;
     }
 
-    /// True iff some rule permits sending shape (name, version) to a Shard holding
+    /// True iff some rule permits sending shape (name, version) to a Weave holding
     /// `role`. Authorized only by a role rule for the same role (or an any-target
-    /// rule); a plain ShardId rule never authorizes a role-targeted send, just as a
-    /// role rule never authorizes a direct ShardId send (see permits).
+    /// rule); a plain WeaveId rule never authorizes a role-targeted send, just as a
+    /// role rule never authorizes a direct WeaveId send (see permits).
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role) const {
         for (const SendRule& r : rules_) {
@@ -204,6 +204,6 @@ private:
     ResourceLimits res_;           // bounded-by-default resource limits
 };
 
-} // namespace zen::sb
+} // namespace loom
 
 #endif // ZEN_SWITCHBOARD_GRANT_HPP

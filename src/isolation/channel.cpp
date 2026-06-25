@@ -8,7 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace zen::isolation {
+namespace loom {
 
 namespace {
 constexpr std::size_t kMaxBacklog = 64u * 1024u * 1024u; // a peer that won't drain is contained
@@ -115,4 +115,4 @@ void Channel::poll(std::vector<Incoming>& out) {
     }
 }
 
-} // namespace zen::isolation
+} // namespace loom

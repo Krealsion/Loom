@@ -6,7 +6,7 @@
 
 #include <stdexcept>
 
-using namespace zen;
+using namespace loom;
 
 TEST_SUITE("schema") {
 

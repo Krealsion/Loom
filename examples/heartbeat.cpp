@@ -1,6 +1,6 @@
-// The kernel is alive: two Shards on the Switchboard exchange a gated message
+// The kernel is alive: two Weaves on the Switchboard exchange a gated message
 // and a reply, a publish reaches only its accepters, a malformed message is
-// refused at the boundary, and a Shard dies and revives through native bytes —
+// refused at the boundary, and a Weave dies and revives through native bytes —
 // all witnessed by an observer. Public API only.
 
 #include <zen/switchboard.hpp>
@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-using namespace zen;
-using namespace zen::sb;
+using namespace loom;
+using namespace loom;
 
 namespace {
 
@@ -35,8 +35,8 @@ Value ping_value(std::int64_t seq) {
     return v;
 }
 
-// A tiny Shard: counts what it handles; optionally replies with a Pong.
-class Node : public Shard {
+// A tiny Weave: counts what it handles; optionally replies with a Pong.
+class Node : public Weave {
 public:
     explicit Node(std::string name, std::vector<std::shared_ptr<const Schema>> accept, bool reply)
         : name_(std::move(name)), accept_(std::move(accept)), reply_(reply) {}
@@ -91,14 +91,14 @@ int main() {
 
     // The responder replies with Pong, so it is granted that reach; the collector
     // emits nothing and needs no grant.
-    ShardId responder = bus.register_shard(
+    WeaveId responder = bus.register_weave(
         std::make_unique<Node>("responder", std::vector{ping_schema()}, /*reply=*/true),
         Grant{}.allow_to_any("Pong", 1));
-    ShardId collector = bus.register_shard(
+    WeaveId collector = bus.register_weave(
         std::make_unique<Node>("collector", std::vector{pong_schema()}, /*reply=*/false));
 
     std::cout << "directed Ping -> responder (reply_to collector):\n";
-    bus.send(responder, Message(ping_value(7), ShardId{}, collector));
+    bus.send(responder, Message(ping_value(7), WeaveId{}, collector));
     bus.pump();
 
     std::cout << "a malformed Ping is refused at the door:\n";

@@ -2,7 +2,7 @@
 #define ZEN_ISOLATION_SANDBOX_HPP
 
 // B3: the capability detection-and-honesty lattice, and the native enforcement that
-// projects a Shard's OS-capability grant onto a child process at spawn.
+// projects a Weave's OS-capability grant onto a child process at spawn.
 //
 // The rule is absolute: NEVER report enforcement we did not impose. Detection
 // PROBES what this host can actually enforce (it does not assume — it attempts the
@@ -23,7 +23,7 @@
 
 #include <sys/types.h> // pid_t
 
-namespace zen::isolation {
+namespace loom {
 
 /// An OS-capability the host may or may not be able to enforce; each has its own
 /// detection probe. Network is *hard* (binary); Filesystem is *graduated* (a level);
@@ -113,7 +113,7 @@ bool child_mountns_is_isolated(pid_t child) noexcept;
 
 // ---- B5: cgroup-v2 resource containment (all parent-side, ordinary libc) ---------
 
-/// Concrete resource caps to apply to a Shard's cgroup leaf, resolved from the grant
+/// Concrete resource caps to apply to a Weave's cgroup leaf, resolved from the grant
 /// against the host-computed defaults. -1 means "max" (unbounded for that dimension).
 struct ResourceCaps {
     long long memory_max = -1; ///< bytes; -1 = "max"
@@ -122,25 +122,25 @@ struct ResourceCaps {
 };
 
 /// Conservative defaults computed from this host, NOT a config knob: memory = a bounded
-/// fraction of RAM capped at a ceiling (so one Shard can't OOM the host); pids = a fixed
+/// fraction of RAM capped at a ceiling (so one Weave can't OOM the host); pids = a fixed
 /// fork-bomb-stopping number; cpu_weight = a fair share.
 ResourceCaps cgroup_default_caps();
 
 /// Process-global, idempotent: ensure the supervisor hierarchy (drain our delegated
 /// base into a `zen-supervisor` leaf, enable `+memory +pids`) and return the base path
-/// where per-Shard leaves are created. Empty string if cgroup-v2 resource containment
+/// where per-Weave leaves are created. Empty string if cgroup-v2 resource containment
 /// is not enforceable here (no v2, no delegation, no controllers) → caller fails safe.
 const std::string& cgroup_base();
 bool cgroup_memory_available() noexcept; ///< memory controller enabled for leaves
 bool cgroup_pids_available() noexcept;   ///< pids controller enabled for leaves
 bool cgroup_cpu_available() noexcept;    ///< cpu controller enabled for leaves (cpu.weight)
 
-/// Per-Shard leaf lifecycle. `name` is a bare leaf name unique to the Shard.
+/// Per-Weave leaf lifecycle. `name` is a bare leaf name unique to the Weave.
 bool cgroup_create_leaf(const std::string& name, const ResourceCaps& caps);
 bool cgroup_move_pid(const std::string& name, pid_t pid);          ///< move pid into the leaf
 bool cgroup_confirm(const std::string& name, pid_t pid, const ResourceCaps& caps); ///< pid in leaf + limits readback
 void cgroup_remove_leaf(const std::string& name);                 ///< rmdir (after procs reaped)
 
-} // namespace zen::isolation
+} // namespace loom
 
 #endif // ZEN_ISOLATION_SANDBOX_HPP

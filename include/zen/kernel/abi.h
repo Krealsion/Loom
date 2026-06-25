@@ -2,12 +2,12 @@
 #define ZEN_KERNEL_ABI_H
 
 /*
- * The Zen Shard C ABI — the permanent boundary a dynamic library exports.
+ * The Zen Weave C ABI — the permanent boundary a dynamic library exports.
  *
  * Only C crosses this seam: opaque instance handles, plain function pointers,
  * const uint8_t* + size_t byte buffers, and integer status codes. No C++ types,
  * no STL, no std::any, no exceptions. Every Zen value/schema/message crosses as
- * serialized bytes, and the host re-admits those bytes through zen-core's gate
+ * serialized bytes, and the host re-admits those bytes through loom's gate
  * before trusting them — so the DLL boundary is just another boundary the one
  * gate guards.
  *
@@ -45,9 +45,9 @@ typedef struct ZenByteSink {
     void (*write)(void* ctx, const uint8_t* data, size_t len);
 } ZenByteSink;
 
-/* Host callbacks a Shard uses to send/publish from inside handle(). The payload
+/* Host callbacks a Weave uses to send/publish from inside handle(). The payload
  * crosses as serialized message bytes; the host admits it through the gate
- * before routing it on the bus. Shard ids are opaque uint64 values (0 == none).
+ * before routing it on the bus. Weave ids are opaque uint64 values (0 == none).
  * Inputs are valid only for the duration of the call. */
 typedef struct ZenHostApi {
     void* ctx;
@@ -55,21 +55,21 @@ typedef struct ZenHostApi {
                       const uint8_t* payload, size_t len);
     ZenStatus (*publish)(void* ctx, uint64_t reply_to, uint64_t correlation,
                          const uint8_t* payload, size_t len);
-    /* Send to whichever Shard currently holds `role` (Part A's role-addressing). The
+    /* Send to whichever Weave currently holds `role` (Part A's role-addressing). The
      * sender is NOT passed and never rides the wire — the host stamps it from the
      * connection, so a mod cannot impersonate another. `role` is NUL-terminated. */
     ZenStatus (*send_to_role)(void* ctx, const char* role, uint64_t reply_to,
                               uint64_t correlation, const uint8_t* payload, size_t len);
 } ZenHostApi;
 
-/* The single descriptor a Shard library exposes, returned by zen_shard_abi().
+/* The single descriptor a Weave library exposes, returned by zen_weave_abi().
  * Every method works over the opaque instance handle and byte buffers.
  *
  * Buffer ownership:
  *   - library -> host returns go through `sink` (host copies; library frees nothing);
  *   - host -> library inputs are const ptr + len, valid only for the call.
  */
-typedef struct ZenShardAbi {
+typedef struct ZenWeaveAbi {
     uint32_t abi_version;
 
     void* (*create)(void);
@@ -86,11 +86,11 @@ typedef struct ZenShardAbi {
     /* Handle an already-host-gated inbound message; may send/publish via `host`. */
     ZenStatus (*handle)(void* instance, uint64_t sender, uint64_t reply_to, uint64_t correlation,
                         const uint8_t* payload, size_t len, const ZenHostApi* host);
-} ZenShardAbi;
+} ZenWeaveAbi;
 
-/* The one exported symbol every Zen Shard library provides. Returns a pointer to
+/* The one exported symbol every Zen Weave library provides. Returns a pointer to
  * a static descriptor (never freed by the host). */
-const ZenShardAbi* zen_shard_abi(void);
+const ZenWeaveAbi* zen_weave_abi(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

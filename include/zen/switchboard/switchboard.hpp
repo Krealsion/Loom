@@ -6,7 +6,7 @@
 #include <zen/schema.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
-#include <zen/switchboard/shard.hpp>
+#include <zen/switchboard/weave.hpp>
 #include <zen/value.hpp>
 
 #include <cstdint>
@@ -18,14 +18,14 @@
 #include <string_view>
 #include <vector>
 
-namespace zen::sb {
+namespace loom {
 
 /// Why a delivery (or revival) was refused. Conformance refusals carry a
-/// zen-core Error (the gate's verdict); the rest are bus-level routing reasons
+/// loom Error (the gate's verdict); the rest are bus-level routing reasons
 /// the gate never sees.
 enum class RefusalReason : std::uint8_t {
     None = 0,
-    NoSuchTarget,      ///< directed at a ShardId that is not registered
+    NoSuchTarget,      ///< directed at a WeaveId that is not registered
     TargetUnavailable, ///< the target is currently dead (awaiting revival)
     NotAccepted,       ///< the target's accept-set has no schema of this (name, version)
     GateRefused,       ///< routing passed, but admit() refused — see `error`
@@ -35,7 +35,7 @@ enum class RefusalReason : std::uint8_t {
 
 const char* name_of(RefusalReason r) noexcept;
 
-/// A structured refusal. When `reason == GateRefused`, `error` is the zen-core
+/// A structured refusal. When `reason == GateRefused`, `error` is the loom
 /// gate error (kind, field path, expected/actual).
 struct Refusal {
     RefusalReason reason = RefusalReason::None;
@@ -59,8 +59,8 @@ enum class EventKind : std::uint8_t { Delivered, Refused, Died, Revived };
 struct BusEvent {
     EventKind kind = EventKind::Delivered;
     std::uint64_t seq = 0;  ///< delivery seq (0 for lifecycle events)
-    ShardId target{};
-    ShardId sender{};
+    WeaveId target{};
+    WeaveId sender{};
     std::string schema_name;       ///< payload (delivery) or state (lifecycle) schema
     std::uint32_t schema_version = 0;
     Refusal refusal{};             ///< for Refused, and for a failed/fallback Revived
@@ -82,19 +82,19 @@ struct ReviveOutcome {
 
 /// The fixed lifecycle-policy grammar — the ONE schema the Switchboard hard-codes
 /// (its own grammar, not an application type): { max_reloads: Int,
-/// revive_from_last_good: Bool }. A Shard's policy() is validated against this and
+/// revive_from_last_good: Bool }. A Weave's policy() is validated against this and
 /// only these two fields are read.
 std::shared_ptr<const Schema> lifecycle_policy_schema();
 
-/// How a Shard's accept-set is interpreted at delivery. `Listed` (the default): only the
+/// How a Weave's accept-set is interpreted at delivery. `Listed` (the default): only the
 /// explicit `(name, version)` schemas it declares. `AnyRegistered`: a deliberate
-/// capability — the Shard accepts **any registered shape**, gated at delivery against
+/// capability — the Weave accepts **any registered shape**, gated at delivery against
 /// the shape's own registry-resolved schema (an unregistered shape is still refused).
-/// The console uses `AnyRegistered` to receive replies; ordinary Shards do not.
+/// The console uses `AnyRegistered` to receive replies; ordinary Weaves do not.
 enum class AcceptMode { Listed, AnyRegistered };
 
 /// The first live boundary: an in-process message bus that gates every delivery
-/// through zen-core's one validator. It reimplements no validation, schema, or
+/// through loom's one validator. It reimplements no validation, schema, or
 /// serialization logic — it routes Values and calls admit().
 ///
 /// Dispatch is single-threaded and FIFO: send/publish enqueue; pump() drains.
@@ -108,67 +108,67 @@ public:
     Switchboard(const Switchboard&) = delete;
     Switchboard& operator=(const Switchboard&) = delete;
 
-    /// Remove a Shard and hand its ownership back to the caller (or nullptr if
-    /// the id is unknown). Used by hosts that must destroy a Shard — and any
+    /// Remove a Weave and hand its ownership back to the caller (or nullptr if
+    /// the id is unknown). Used by hosts that must destroy a Weave — and any
     /// resources it holds, such as a loaded library instance — in a controlled
-    /// order. Pending deliveries to a removed Shard are refused (NoSuchTarget) at
+    /// order. Pending deliveries to a removed Weave are refused (NoSuchTarget) at
     /// delivery. Its registered schemas remain published.
-    std::unique_ptr<Shard> unregister_shard(ShardId id);
+    std::unique_ptr<Weave> unregister_weave(WeaveId id);
 
-    /// Register a Shard (the bus takes ownership) and return its stable id. Each
+    /// Register a Weave (the bus takes ownership) and return its stable id. Each
     /// accepted schema and the state schema are registered in the bus registry,
-    /// enforcing that all Shards agree on what a given (name, version) means
-    /// (a disagreement throws zen::SchemaConflict). The Shard's initial snapshot
+    /// enforcing that all Weaves agree on what a given (name, version) means
+    /// (a disagreement throws loom::SchemaConflict). The Weave's initial snapshot
     /// must conform to its own schema (it seeds last-known-good); otherwise
     /// std::invalid_argument is thrown.
     ///
-    /// The Shard's authority is its `grant`: every message it originates is
+    /// The Weave's authority is its `grant`: every message it originates is
     /// authorized against it at delivery. The default is the **empty** grant —
-    /// minimal authority — so a Shard that needs to send must be granted that
+    /// minimal authority — so a Weave that needs to send must be granted that
     /// reach by the host at registration (see the grant-defaulting in
-    /// zen::author::mount and the kernel's loaded-Shard grant).
-    ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant);
-    ShardId register_shard(std::unique_ptr<Shard> shard); ///< empty grant
+    /// loom::mount and the kernel's loaded-Weave grant).
+    WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant);
+    WeaveId register_weave(std::unique_ptr<Weave> weave); ///< empty grant
 
-    /// As register_shard(shard, grant), but also bind the Shard to `role` — a named
-    /// capability slot a send may target instead of a ShardId (see send_to_role and
+    /// As register_weave(weave, grant), but also bind the Weave to `role` — a named
+    /// capability slot a send may target instead of a WeaveId (see send_to_role and
     /// Grant::allow_to_role). v1 is singleton: a role has exactly one holder, so
     /// binding a role already held throws std::invalid_argument. The binding
     /// survives the holder reloading (its id is stable) and is cleared on
-    /// unregister_shard.
-    ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant, std::string role);
+    /// unregister_weave.
+    WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant, std::string role);
 
-    /// Register with an accept-mode: `AnyRegistered` makes the Shard accept any
+    /// Register with an accept-mode: `AnyRegistered` makes the Weave accept any
     /// registered shape (gated against the registry-resolved schema at delivery) — a
     /// deliberate capability (the console's reply path), distinct from its grant.
-    ShardId register_shard(std::unique_ptr<Shard> shard, Grant grant, AcceptMode accept_mode);
+    WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant, AcceptMode accept_mode);
 
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
     /// readable after the delivery is pumped.
-    Ticket send(ShardId target, Message msg) override;
+    Ticket send(WeaveId target, Message msg) override;
 
-    /// Enqueue a delivery to every alive Shard whose accept-set includes the
+    /// Enqueue a delivery to every alive Weave whose accept-set includes the
     /// payload's (name, version), in registration order. Returns the recipient
     /// count (0 is legal, not an error). Each delivery is independently gated.
     std::size_t publish(Message msg) override;
 
-    /// Inject a message AS a specific Shard: stamp `as_sender` as the
-    /// authoritative sender and authorize it against that Shard's grant at
-    /// delivery — exactly as if the Shard had sent it through its own ShardBus.
+    /// Inject a message AS a specific Weave: stamp `as_sender` as the
+    /// authoritative sender and authorize it against that Weave's grant at
+    /// delivery — exactly as if the Weave had sent it through its own WeaveBus.
     /// Held only by the host (root authority), this is how a trusted bridge
-    /// re-enters a Shard's output with its identity stamped from the *connection*
+    /// re-enters a Weave's output with its identity stamped from the *connection*
     /// it arrived on, never from the payload — the cross-process form of the
-    /// in-process ShardBus identity-binding. A child claiming a different sender
+    /// in-process WeaveBus identity-binding. A child claiming a different sender
     /// cannot get it.
-    Ticket send_as(ShardId as_sender, ShardId target, Message msg);
-    std::size_t publish_as(ShardId as_sender, Message msg);
+    Ticket send_as(WeaveId as_sender, WeaveId target, Message msg);
+    std::size_t publish_as(WeaveId as_sender, Message msg);
 
     /// Role-addressed sends. send_to_role is the ungated root authority (held only
-    /// by the host); send_as_to_role is the gated path a ShardBus uses — it stamps
+    /// by the host); send_as_to_role is the gated path a WeaveBus uses — it stamps
     /// the authoritative sender and authorizes against that sender's grant *by role*
     /// at delivery (see Grant::permits_role).
     Ticket send_to_role(std::string_view role, Message msg) override;
-    Ticket send_as_to_role(ShardId as_sender, std::string_view role, Message msg);
+    Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
 
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
     /// reentrant call (from within a handler) is a no-op.
@@ -184,81 +184,81 @@ public:
     ObserverId add_observer(Observer obs);
     void remove_observer(ObserverId id);
 
-    // ---- Lifecycle (mechanics reused from zen-core) -----------------------
+    // ---- Lifecycle (mechanics reused from loom) -----------------------
 
-    /// Serialize the Shard's current snapshot to native bytes.
-    std::string snapshot_bytes(ShardId id) const;
+    /// Serialize the Weave's current snapshot to native bytes.
+    std::string snapshot_bytes(WeaveId id) const;
 
-    /// Mark a Shard dead; it stops receiving deliveries until revived. Emits Died.
-    void kill(ShardId id);
+    /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
+    void kill(WeaveId id);
 
-    /// Revive a Shard from candidate bytes: parse -> admit(Unverified, state
+    /// Revive a Weave from candidate bytes: parse -> admit(Unverified, state
     /// schema). On success, revive() and refresh last-known-good. On refusal, the
-    /// Shard's policy() (validated against the fixed grammar) decides whether to
+    /// Weave's policy() (validated against the fixed grammar) decides whether to
     /// fall back to last-known-good. Emits Revived (or Refused).
     ///
     /// This is the **crash-revival** path: it is budgeted (checks/decrements the
-    /// policy's max_reloads) so a crash-thrashing Shard cannot revive forever. A
+    /// policy's max_reloads) so a crash-thrashing Weave cannot revive forever. A
     /// future supervisor calls this on crash.
-    ReviveOutcome reload(ShardId id, std::string_view candidate_bytes);
+    ReviveOutcome reload(WeaveId id, std::string_view candidate_bytes);
 
     /// Intentional state swap (hot-reload of code, not crash recovery): gate the
     /// candidate against the state schema, then revive(), refresh last-known-good,
     /// and mark alive. Unlike reload(), it spends **no budget** (no max_reloads
     /// check or decrement) — a deliberate swap to fixed code must never be blocked
-    /// by a Shard's crash-revival allowance. A gate refusal is a **clean refusal**:
+    /// by a Weave's crash-revival allowance. A gate refusal is a **clean refusal**:
     /// there is no last-known-good fallback (the caller is swapping in known code
     /// and a malformed candidate should fail visibly, not silently roll back).
     /// Emits Revived on success, Refused on a gate refusal.
-    ReviveOutcome swap_state(ShardId id, std::string_view candidate_bytes);
+    ReviveOutcome swap_state(WeaveId id, std::string_view candidate_bytes);
 
     // ---- Queries ----------------------------------------------------------
 
-    std::vector<ShardId> list_shards() const;
-    std::vector<std::shared_ptr<const Schema>> accepted_schemas(ShardId id) const;
+    std::vector<WeaveId> list_weaves() const;
+    std::vector<std::shared_ptr<const Schema>> accepted_schemas(WeaveId id) const;
 
-    /// Resolve a registered schema by identity, across every Shard's accept-set
+    /// Resolve a registered schema by identity, across every Weave's accept-set
     /// and state schema. nullptr if the system knows no such schema. Used by a
     /// host that must gate a value whose schema the system knows but the caller
     /// does not hold (e.g. a message emitted across the library boundary).
     std::shared_ptr<const Schema> resolve_schema(std::string_view name,
                                                  std::uint32_t version) const;
-    Shard* shard(ShardId id);
-    const Shard* shard(ShardId id) const;
-    bool alive(ShardId id) const;
+    Weave* weave(WeaveId id);
+    const Weave* weave(WeaveId id) const;
+    bool alive(WeaveId id) const;
     std::size_t pending() const noexcept { return queue_.size(); }
 
 private:
-    struct ShardRecord {
-        ShardId id{};
-        std::unique_ptr<Shard> shard;
+    struct WeaveRecord {
+        WeaveId id{};
+        std::unique_ptr<Weave> weave;
         std::vector<std::shared_ptr<const Schema>> accept;
         std::shared_ptr<const Schema> state_schema;
         Value last_known_good;
         Grant grant;
         std::uint64_t reloads_used = 0;
         bool alive = true;
-        std::string role{}; ///< the role this Shard holds (empty if none); see roles_
+        std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };
 
     struct Envelope {
         Message msg;
-        ShardId target{};
+        WeaveId target{};
         std::uint64_t seq = 0;
-        bool gated = false;  ///< true => Shard-originated; authorize against the sender's grant
+        bool gated = false;  ///< true => Weave-originated; authorize against the sender's grant
         std::string role{};  ///< non-empty => role-targeted; resolved to a holder at delivery
     };
 
-    // The Bus a handler actually receives: it stamps the handling Shard's identity
-    // onto every send and routes through the *gated* path. A Shard holds only this
+    // The Bus a handler actually receives: it stamps the handling Weave's identity
+    // onto every send and routes through the *gated* path. A Weave holds only this
     // — never the concrete Switchboard — so it cannot send except as itself and
     // subject to its grant. (Switchboard::send/publish, held only by the host, are
     // the ungated root authority.) This split is the trust boundary.
-    class ShardBus : public Bus {
+    class WeaveBus : public Bus {
     public:
-        ShardBus(Switchboard& sb, ShardId self) noexcept : sb_(sb), self_(self) {}
-        Ticket send(ShardId target, Message msg) override {
+        WeaveBus(Switchboard& sb, WeaveId self) noexcept : sb_(sb), self_(self) {}
+        Ticket send(WeaveId target, Message msg) override {
             return sb_.send_as(self_, target, std::move(msg));
         }
         std::size_t publish(Message msg) override { return sb_.publish_as(self_, std::move(msg)); }
@@ -268,10 +268,10 @@ private:
 
     private:
         Switchboard& sb_;
-        ShardId self_;
+        WeaveId self_;
     };
 
-    Ticket enqueue_directed(ShardId target, Message msg, bool gated);
+    Ticket enqueue_directed(WeaveId target, Message msg, bool gated);
     Ticket enqueue_role(std::string role, Message msg, bool gated);
     std::size_t fanout(Message msg, bool gated);
 
@@ -279,16 +279,16 @@ private:
     void emit(const BusEvent& event);
     void record(std::uint64_t seq, Disposition disposition, const Refusal& refusal);
 
-    ShardRecord* find(ShardId id);
-    const ShardRecord* find(ShardId id) const;
-    static const std::shared_ptr<const Schema>* accept_match(const ShardRecord& rec,
+    WeaveRecord* find(WeaveId id);
+    const WeaveRecord* find(WeaveId id) const;
+    static const std::shared_ptr<const Schema>* accept_match(const WeaveRecord& rec,
                                                              std::string_view name,
                                                              std::uint32_t version);
 
     Registry registry_;
-    std::map<std::uint64_t, ShardRecord> shards_;
-    std::map<std::string, ShardId> roles_; ///< role name -> its singleton holder's id
-    std::uint64_t next_shard_id_ = 1;
+    std::map<std::uint64_t, WeaveRecord> weaves_;
+    std::map<std::string, WeaveId> roles_; ///< role name -> its singleton holder's id
+    std::uint64_t next_weave_id_ = 1;
 
     std::deque<Envelope> queue_;
     std::vector<DeliveryOutcome> journal_; ///< indexed by delivery seq (slot 0 unused)
@@ -301,6 +301,6 @@ private:
     bool stop_requested_ = false;
 };
 
-} // namespace zen::sb
+} // namespace loom
 
 #endif // ZEN_SWITCHBOARD_SWITCHBOARD_HPP

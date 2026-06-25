@@ -6,7 +6,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace zen {
+namespace loom {
 namespace {
 
 void validate_typeref(const TypeRef& t) {
@@ -142,4 +142,4 @@ std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t versio
     return std::make_shared<const Schema>(std::move(name), version, std::move(fields));
 }
 
-} // namespace zen
+} // namespace loom

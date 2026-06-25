@@ -1,7 +1,7 @@
 #ifndef ZEN_ZEN_HPP
 #define ZEN_ZEN_HPP
 
-/// zen-core: the self-describing-value-and-gate foundation.
+/// loom: the self-describing-value-and-gate foundation.
 ///
 /// A value carries a reference to the schema it claims to be — typed enough to
 /// be challenged at any boundary, dynamic enough to be built at runtime from a

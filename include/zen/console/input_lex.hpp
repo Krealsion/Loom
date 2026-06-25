@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-namespace zen::console {
+namespace loom {
 
 /// A lexed token. `quoted` is set if the token contained a double-quote — the quote-for-text
 /// rule: a numeric-looking string in quotes (`"5"`) lexes to Text, the bareword (`5`) to Int.
@@ -140,6 +140,6 @@ inline Arg lex_arg(const Token& t) {
     return a;
 }
 
-} // namespace zen::console
+} // namespace loom
 
 #endif // ZEN_CONSOLE_INPUT_LEX_HPP

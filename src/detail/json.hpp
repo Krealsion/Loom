@@ -1,7 +1,7 @@
 #ifndef ZEN_DETAIL_JSON_HPP
 #define ZEN_DETAIL_JSON_HPP
 
-// Internal to zen-core. A small, hardened JSON reader/writer. Zen owns its wire
+// Internal to loom. A small, hardened JSON reader/writer. Zen owns its wire
 // format end to end (no third-party serializer), and this is the only code that
 // touches raw external bytes, so it is written to be total: every input,
 // hostile or truncated, yields either a parse tree or a clean error — never a
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace zen::detail {
+namespace loom::detail {
 
 /// A parsed JSON node. Numbers keep their raw token text so numeric conversion
 /// (and its precision policy) is decided later, by the schema-guided decoder.
@@ -48,6 +48,6 @@ void json_quote(std::string_view s, std::string& out);
 /// True iff `s` is well-formed UTF-8.
 bool valid_utf8(std::string_view s) noexcept;
 
-} // namespace zen::detail
+} // namespace loom::detail
 
 #endif // ZEN_DETAIL_JSON_HPP

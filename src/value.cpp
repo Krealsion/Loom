@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace zen {
+namespace loom {
 
 Cell Cell::integer(std::int64_t v) { return Cell(Storage{std::in_place_type<std::int64_t>, v}); }
 Cell Cell::real(double v) { return Cell(Storage{std::in_place_type<double>, v}); }
@@ -100,4 +100,4 @@ Value construct_blind(std::shared_ptr<const Schema> schema, const CellSource& so
     return v;
 }
 
-} // namespace zen
+} // namespace loom

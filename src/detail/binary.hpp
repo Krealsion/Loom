@@ -1,7 +1,7 @@
 #ifndef ZEN_DETAIL_BINARY_HPP
 #define ZEN_DETAIL_BINARY_HPP
 
-// Internal to zen-core. The low-level primitives of the native binary wire
+// Internal to loom. The low-level primitives of the native binary wire
 // format: little-endian fixed integers, canonical (minimal) LEB128 varints,
 // zigzag for signed ints, and a canonical IEEE-754 binary64 codec. Writers
 // produce the one canonical encoding; readers are total and bounds-checked —
@@ -15,7 +15,7 @@
 #include <string>
 #include <string_view>
 
-namespace zen::detail {
+namespace loom::detail {
 
 // Named caps. Bound recursion and any length/count read from untrusted bytes.
 inline constexpr int kMaxBinaryDepth = 64;            // nested message/list depth
@@ -73,6 +73,6 @@ private:
     std::size_t i_ = 0;
 };
 
-} // namespace zen::detail
+} // namespace loom::detail
 
 #endif // ZEN_DETAIL_BINARY_HPP

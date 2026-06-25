@@ -1,4 +1,4 @@
-// The StorageBroker: an ecosystem Shard (not host code), shipped as a .so and mounted
+// The StorageBroker: an ecosystem Weave (not host code), shipped as a .so and mounted
 // out-of-process at the TCB tier with FsAccess::WriteScoped(storage_root) and role
 // "storage". It holds the real (scoped) disk capability on behalf of untrusted mods
 // that have none, and namespaces each mod's data by the STAMPED sender — mail.sender(),
@@ -7,13 +7,13 @@
 // storage_root). The key is hex-encoded into the filename, so a hostile key (with '/'
 // or "..") cannot escape the sender's subdir. The value is opaque bytes.
 //
-// Storage is SESSION-SCOPED: the sender is the ephemeral runtime ShardId, so a mod's
+// Storage is SESSION-SCOPED: the sender is the ephemeral runtime WeaveId, so a mod's
 // subdir changes across host restarts. Persistent-across-restart needs a first-class
-// Shard identity — the named successor phase.
+// Weave identity — the named successor phase.
 
 #include "storage_protocol.hpp"
 
-#include <zen/author/shard.hpp>
+#include <zen/weave/weave.hpp>
 #include <zen/kernel/export.hpp>
 
 #include <cstdint>
@@ -23,7 +23,7 @@
 
 #include <sys/stat.h>
 
-using namespace zen::author;
+using namespace loom;
 using namespace storage;
 
 namespace {
@@ -44,7 +44,7 @@ std::string hex_key(const std::string& key) {
     return out;
 }
 
-std::string sender_dir(zen::sb::ShardId sender) {
+std::string sender_dir(loom::WeaveId sender) {
     return std::string(kRoot) + "/" + std::to_string(sender.value);
 }
 
@@ -53,7 +53,7 @@ struct BrokerState {
     ZEN_SHAPE(BrokerState, 1, ZEN_FIELD(puts));
 };
 
-class StorageBroker : public ShardBase<StorageBroker, BrokerState, Accept<StoragePut, StorageGet>,
+class StorageBroker : public WeaveBase<StorageBroker, BrokerState, Accept<StoragePut, StorageGet>,
                                        Emit<StorageValue>> {
 public:
     void on(const StoragePut& m, Mail& mail) {
@@ -68,7 +68,7 @@ public:
 
     void on(const StorageGet& m, Mail& mail) {
         const std::string path = sender_dir(mail.sender()) + "/" + hex_key(m.key);
-        zen::Bytes value;
+        loom::Bytes value;
         std::ifstream in(path, std::ios::binary);
         if (in) {
             std::ostringstream ss;
@@ -82,4 +82,4 @@ public:
 
 } // namespace
 
-ZEN_EXPORT_SHARD(StorageBroker)
+ZEN_EXPORT_WEAVE(StorageBroker)

@@ -6,8 +6,8 @@
 // is an IPv4 string — raw TCP, no DNS, no dependency. Shared by the broker .so, the
 // client .so, and the policy test (same content-id across the .so boundary, per the gate).
 
-#include <zen/author/shape.hpp>
-#include <zen/value.hpp> // zen::Bytes
+#include <zen/weave/shape.hpp>
+#include <zen/value.hpp> // loom::Bytes
 
 #include <cstdint>
 #include <string>
@@ -17,12 +17,12 @@ namespace net {
 struct NetRequest {
     std::string host; // IPv4 dotted-quad (no DNS)
     std::int64_t port;
-    zen::Bytes payload;
+    loom::Bytes payload;
     ZEN_SHAPE(NetRequest, 1, ZEN_FIELD(host), ZEN_FIELD(port), ZEN_FIELD(payload));
 };
 struct NetResponse {
     bool ok; // false = refused by the broker's allow-list, or the connection failed
-    zen::Bytes data;
+    loom::Bytes data;
     ZEN_SHAPE(NetResponse, 1, ZEN_FIELD(ok), ZEN_FIELD(data));
 };
 

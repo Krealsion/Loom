@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-namespace zen::sb {
+namespace loom {
 
 // ---- Refusal --------------------------------------------------------------
 
@@ -34,9 +34,9 @@ std::string Refusal::message() const {
     case RefusalReason::None:
         return "no refusal";
     case RefusalReason::NoSuchTarget:
-        return "no such target shard";
+        return "no such target weave";
     case RefusalReason::TargetUnavailable:
-        return "target shard is dead (awaiting revival)";
+        return "target weave is dead (awaiting revival)";
     case RefusalReason::NotAccepted:
         return "target does not accept this schema";
     case RefusalReason::GateRefused:
@@ -66,17 +66,17 @@ Switchboard::Switchboard() {
 
 Switchboard::~Switchboard() = default;
 
-Switchboard::ShardRecord* Switchboard::find(ShardId id) {
-    auto it = shards_.find(id.value);
-    return it == shards_.end() ? nullptr : &it->second;
+Switchboard::WeaveRecord* Switchboard::find(WeaveId id) {
+    auto it = weaves_.find(id.value);
+    return it == weaves_.end() ? nullptr : &it->second;
 }
 
-const Switchboard::ShardRecord* Switchboard::find(ShardId id) const {
-    auto it = shards_.find(id.value);
-    return it == shards_.end() ? nullptr : &it->second;
+const Switchboard::WeaveRecord* Switchboard::find(WeaveId id) const {
+    auto it = weaves_.find(id.value);
+    return it == weaves_.end() ? nullptr : &it->second;
 }
 
-const std::shared_ptr<const Schema>* Switchboard::accept_match(const ShardRecord& rec,
+const std::shared_ptr<const Schema>* Switchboard::accept_match(const WeaveRecord& rec,
                                                               std::string_view name,
                                                               std::uint32_t version) {
     for (const auto& s : rec.accept) {
@@ -87,31 +87,31 @@ const std::shared_ptr<const Schema>* Switchboard::accept_match(const ShardRecord
     return nullptr;
 }
 
-ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming) {
-    return register_shard(std::move(incoming), Grant{}); // empty grant: minimal authority
+WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming) {
+    return register_weave(std::move(incoming), Grant{}); // empty grant: minimal authority
 }
 
-ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant) {
-    return register_shard(std::move(incoming), std::move(grant), std::string{});
+WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant) {
+    return register_weave(std::move(incoming), std::move(grant), std::string{});
 }
 
-ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant, std::string role) {
+WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant, std::string role) {
     if (!incoming) {
-        throw std::invalid_argument("register_shard: shard must be non-null");
+        throw std::invalid_argument("register_weave: weave must be non-null");
     }
     if (!role.empty() && roles_.count(role) != 0) {
-        throw std::invalid_argument("register_shard: role '" + role +
+        throw std::invalid_argument("register_weave: role '" + role +
                                     "' is already held (roles are singletons in this phase)");
     }
 
-    // Record the accept-set, registering each schema so all Shards agree on what
-    // a given (name, version) means (a disagreement throws zen::SchemaConflict).
+    // Record the accept-set, registering each schema so all Weaves agree on what
+    // a given (name, version) means (a disagreement throws loom::SchemaConflict).
     std::vector<std::shared_ptr<const Schema>> accept;
     auto declared = incoming->accepted_schemas();
     accept.reserve(declared.size());
     for (auto& s : declared) {
         if (!s) {
-            throw std::invalid_argument("register_shard: a declared accept schema is null");
+            throw std::invalid_argument("register_weave: a declared accept schema is null");
         }
         accept.push_back(registry_.register_schema(s).schema);
     }
@@ -120,15 +120,15 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant
     Value snap = incoming->snapshot();
     std::shared_ptr<const Schema> state_schema = snap.schema_ptr();
     registry_.register_schema(state_schema);
-    Admission seeded = zen::admit(std::move(snap), *state_schema);
+    Admission seeded = loom::admit(std::move(snap), *state_schema);
     if (!seeded.ok()) {
-        throw std::invalid_argument("register_shard: initial snapshot does not conform to its "
+        throw std::invalid_argument("register_weave: initial snapshot does not conform to its "
                                     "own schema: " +
                                     seeded.first_error().message());
     }
 
-    ShardId id{next_shard_id_++};
-    ShardRecord rec{id,
+    WeaveId id{next_weave_id_++};
+    WeaveRecord rec{id,
                     std::move(incoming),
                     std::move(accept),
                     state_schema,
@@ -137,39 +137,39 @@ ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant
                     0,
                     true,
                     role};
-    shards_.emplace(id.value, std::move(rec));
+    weaves_.emplace(id.value, std::move(rec));
     if (!role.empty()) {
         roles_.emplace(std::move(role), id);
     }
     return id;
 }
 
-ShardId Switchboard::register_shard(std::unique_ptr<Shard> incoming, Grant grant,
+WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant,
                                     AcceptMode accept_mode) {
-    ShardId id = register_shard(std::move(incoming), std::move(grant), std::string{});
+    WeaveId id = register_weave(std::move(incoming), std::move(grant), std::string{});
     if (accept_mode == AcceptMode::AnyRegistered) {
-        auto it = shards_.find(id.value);
-        if (it != shards_.end()) {
+        auto it = weaves_.find(id.value);
+        if (it != weaves_.end()) {
             it->second.accepts_any = true; // accept any registered shape, gated at delivery
         }
     }
     return id;
 }
 
-std::unique_ptr<Shard> Switchboard::unregister_shard(ShardId id) {
-    auto it = shards_.find(id.value);
-    if (it == shards_.end()) {
+std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
+    auto it = weaves_.find(id.value);
+    if (it == weaves_.end()) {
         return nullptr;
     }
     if (!it->second.role.empty()) {
-        roles_.erase(it->second.role); // a role has no holder once its Shard is removed
+        roles_.erase(it->second.role); // a role has no holder once its Weave is removed
     }
-    std::unique_ptr<Shard> released = std::move(it->second.shard);
-    shards_.erase(it);
+    std::unique_ptr<Weave> released = std::move(it->second.weave);
+    weaves_.erase(it);
     return released;
 }
 
-Ticket Switchboard::enqueue_directed(ShardId target, Message msg, bool gated) {
+Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
     journal_.push_back(DeliveryOutcome{}); // Pending at index seq
     queue_.push_back(Envelope{std::move(msg), target, seq, gated});
@@ -179,7 +179,7 @@ Ticket Switchboard::enqueue_directed(ShardId target, Message msg, bool gated) {
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
     journal_.push_back(DeliveryOutcome{}); // Pending at index seq
-    queue_.push_back(Envelope{std::move(msg), ShardId{}, seq, gated, std::move(role)});
+    queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role)});
     return Ticket{seq};
 }
 
@@ -188,8 +188,8 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
     const std::uint32_t version = msg.payload.schema().version();
 
     std::size_t recipients = 0;
-    for (auto& entry : shards_) { // std::map: ascending id == registration order
-        ShardRecord& rec = entry.second;
+    for (auto& entry : weaves_) { // std::map: ascending id == registration order
+        WeaveRecord& rec = entry.second;
         if (!rec.alive) {
             continue;
         }
@@ -206,34 +206,34 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
 }
 
 // Host root authority: held only by the host program, these enqueue ungated.
-Ticket Switchboard::send(ShardId target, Message msg) {
+Ticket Switchboard::send(WeaveId target, Message msg) {
     return enqueue_directed(target, std::move(msg), /*gated=*/false);
 }
 
 std::size_t Switchboard::publish(Message msg) { return fanout(std::move(msg), /*gated=*/false); }
 
-// The gated path a Shard's ShardBus uses, and the host uses to re-enter a
-// child's output: stamp the authoritative sender (a Shard cannot send as anyone
+// The gated path a Weave's WeaveBus uses, and the host uses to re-enter a
+// child's output: stamp the authoritative sender (a Weave cannot send as anyone
 // else) and enqueue gated, to be authorized against that sender's grant at
 // delivery.
-Ticket Switchboard::send_as(ShardId as_sender, ShardId target, Message msg) {
+Ticket Switchboard::send_as(WeaveId as_sender, WeaveId target, Message msg) {
     msg.sender = as_sender;
     return enqueue_directed(target, std::move(msg), /*gated=*/true);
 }
 
-std::size_t Switchboard::publish_as(ShardId as_sender, Message msg) {
+std::size_t Switchboard::publish_as(WeaveId as_sender, Message msg) {
     msg.sender = as_sender;
     return fanout(std::move(msg), /*gated=*/true);
 }
 
 // Role-addressed sends. send_to_role is the host's ungated root authority; the
-// gated form (the ShardBus path) stamps the authoritative sender and is authorized
+// gated form (the WeaveBus path) stamps the authoritative sender and is authorized
 // against that sender's grant by role at delivery.
 Ticket Switchboard::send_to_role(std::string_view role, Message msg) {
     return enqueue_role(std::string(role), std::move(msg), /*gated=*/false);
 }
 
-Ticket Switchboard::send_as_to_role(ShardId as_sender, std::string_view role, Message msg) {
+Ticket Switchboard::send_as_to_role(WeaveId as_sender, std::string_view role, Message msg) {
     msg.sender = as_sender;
     return enqueue_role(std::string(role), std::move(msg), /*gated=*/true);
 }
@@ -260,16 +260,16 @@ void Switchboard::deliver_one(Envelope env) {
     ev.schema_name = env.msg.payload.schema().name();
     ev.schema_version = env.msg.payload.schema().version();
 
-    // Capability authorization — only for Shard-originated (gated) messages, and
+    // Capability authorization — only for Weave-originated (gated) messages, and
     // *before* role resolution and the gate, so a denied message never reaches
     // either. Host-injected (root) messages skip this. This is authorization
     // ("are you allowed to send this"), categorically distinct from the gate's
     // conformance question. A role-targeted send is authorized by *role* (the stable
-    // slot the rule names — unspoofable, reload-stable); a direct send by ShardId.
+    // slot the rule names — unspoofable, reload-stable); a direct send by WeaveId.
     // Authorizing before resolution means an unauthorized sender cannot even learn
     // whether the role is currently held.
     if (env.gated) {
-        const ShardRecord* sender = find(env.msg.sender);
+        const WeaveRecord* sender = find(env.msg.sender);
         const bool permitted =
             sender != nullptr &&
             (env.role.empty()
@@ -286,7 +286,7 @@ void Switchboard::deliver_one(Envelope env) {
     }
 
     // Resolve a role target to its current holder (singleton in this phase). An
-    // unheld role degrades exactly like an unknown ShardId — NoSuchTarget, never the
+    // unheld role degrades exactly like an unknown WeaveId — NoSuchTarget, never the
     // gate — so a crashed/unmounted broker is "unavailable", not a hole.
     if (!env.role.empty()) {
         auto it = roles_.find(env.role);
@@ -302,7 +302,7 @@ void Switchboard::deliver_one(Envelope env) {
         ev.target = env.target;
     }
 
-    ShardRecord* rec = find(env.target);
+    WeaveRecord* rec = find(env.target);
     if (rec == nullptr) {
         const Refusal r{RefusalReason::NoSuchTarget, {}};
         record(env.seq, Disposition::Refused, r);
@@ -322,7 +322,7 @@ void Switchboard::deliver_one(Envelope env) {
 
     const std::shared_ptr<const Schema>* door =
         accept_match(*rec, ev.schema_name, ev.schema_version);
-    // Wildcard-accept (a deliberate capability — the console): a Shard registered
+    // Wildcard-accept (a deliberate capability — the console): a Weave registered
     // AcceptMode::AnyRegistered accepts any shape it does not explicitly list, gated
     // against the shape's OWN registry-resolved schema. An unregistered shape resolves
     // to null and is still refused — an unknown shape reaches no one, not even the
@@ -343,7 +343,7 @@ void Switchboard::deliver_one(Envelope env) {
     // The one gate, live path. admit() consumes the candidate and re-emits it
     // trusted on success; on failure the candidate is dropped and never seen.
     const Schema& door_schema = door != nullptr ? **door : *wildcard_door;
-    Admission a = zen::admit(std::move(env.msg.payload), door_schema);
+    Admission a = loom::admit(std::move(env.msg.payload), door_schema);
     if (!a.ok()) {
         const Refusal r{RefusalReason::GateRefused, a.first_error()};
         record(env.seq, Disposition::Refused, r);
@@ -354,11 +354,11 @@ void Switchboard::deliver_one(Envelope env) {
     }
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
-    // The handler receives a ShardBus bound to its own id — never the concrete
+    // The handler receives a WeaveBus bound to its own id — never the concrete
     // Switchboard — so anything it sends is stamped with its identity and gated
     // against its grant.
-    ShardBus shard_bus(*this, env.target);
-    rec->shard->handle(trusted, shard_bus); // may enqueue further deliveries
+    WeaveBus weave_bus(*this, env.target);
+    rec->weave->handle(trusted, weave_bus); // may enqueue further deliveries
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;
@@ -401,16 +401,16 @@ void Switchboard::remove_observer(ObserverId id) {
     }
 }
 
-std::string Switchboard::snapshot_bytes(ShardId id) const {
-    const ShardRecord* rec = find(id);
+std::string Switchboard::snapshot_bytes(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
     if (rec == nullptr) {
-        throw std::invalid_argument("snapshot_bytes: no such shard");
+        throw std::invalid_argument("snapshot_bytes: no such weave");
     }
-    return zen::serialize(rec->shard->snapshot());
+    return loom::serialize(rec->weave->snapshot());
 }
 
-void Switchboard::kill(ShardId id) {
-    ShardRecord* rec = find(id);
+void Switchboard::kill(WeaveId id) {
+    WeaveRecord* rec = find(id);
     if (rec == nullptr) {
         return;
     }
@@ -423,16 +423,16 @@ void Switchboard::kill(ShardId id) {
     emit(ev);
 }
 
-ReviveOutcome Switchboard::reload(ShardId id, std::string_view candidate_bytes) {
+ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) {
     ReviveOutcome out;
-    ShardRecord* rec = find(id);
+    WeaveRecord* rec = find(id);
     if (rec == nullptr) {
         out.refusal = Refusal{RefusalReason::NoSuchTarget, {}};
         return out;
     }
 
     // The self's lock must itself be a well-formed policy.
-    Admission pol = zen::admit(rec->shard->policy(), *lifecycle_policy_schema());
+    Admission pol = loom::admit(rec->weave->policy(), *lifecycle_policy_schema());
     if (!pol.ok()) {
         out.policy_malformed = true;
         out.refusal = Refusal{RefusalReason::GateRefused, pol.first_error()};
@@ -458,11 +458,11 @@ ReviveOutcome Switchboard::reload(ShardId id, std::string_view candidate_bytes) 
     };
 
     // The bytes path: parse -> admit(Unverified, state schema). Same gate as live.
-    Unverified candidate = zen::parse(candidate_bytes);
-    Admission admitted = zen::admit(candidate, rec->state_schema);
+    Unverified candidate = loom::parse(candidate_bytes);
+    Admission admitted = loom::admit(candidate, rec->state_schema);
     if (admitted.ok()) {
         Value state = std::move(admitted).value();
-        rec->shard->revive(state);
+        rec->weave->revive(state);
         rec->last_known_good = state;
         ++rec->reloads_used;
         rec->alive = true;
@@ -475,7 +475,7 @@ ReviveOutcome Switchboard::reload(ShardId id, std::string_view candidate_bytes) 
     // as its last-known-good.
     out.refusal = Refusal{RefusalReason::GateRefused, admitted.first_error()};
     if (revive_from_last_good) {
-        rec->shard->revive(rec->last_known_good);
+        rec->weave->revive(rec->last_known_good);
         ++rec->reloads_used;
         rec->alive = true;
         out.revived = true;
@@ -494,9 +494,9 @@ ReviveOutcome Switchboard::reload(ShardId id, std::string_view candidate_bytes) 
     return out;
 }
 
-ReviveOutcome Switchboard::swap_state(ShardId id, std::string_view candidate_bytes) {
+ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_bytes) {
     ReviveOutcome out;
-    ShardRecord* rec = find(id);
+    WeaveRecord* rec = find(id);
     if (rec == nullptr) {
         out.refusal = Refusal{RefusalReason::NoSuchTarget, {}};
         return out;
@@ -515,8 +515,8 @@ ReviveOutcome Switchboard::swap_state(ShardId id, std::string_view candidate_byt
 
     // Same gate as the live and crash-revival paths: parse -> admit(Unverified,
     // state schema). No policy is consulted: an intentional swap spends no budget.
-    Unverified candidate = zen::parse(candidate_bytes);
-    Admission admitted = zen::admit(candidate, rec->state_schema);
+    Unverified candidate = loom::parse(candidate_bytes);
+    Admission admitted = loom::admit(candidate, rec->state_schema);
     if (!admitted.ok()) {
         // A clean refusal — no last-known-good fallback for an intentional swap.
         out.refusal = Refusal{RefusalReason::GateRefused, admitted.first_error()};
@@ -525,7 +525,7 @@ ReviveOutcome Switchboard::swap_state(ShardId id, std::string_view candidate_byt
     }
 
     Value state = std::move(admitted).value();
-    rec->shard->revive(state);
+    rec->weave->revive(state);
     rec->last_known_good = state;
     rec->alive = true;
     out.revived = true;
@@ -533,17 +533,17 @@ ReviveOutcome Switchboard::swap_state(ShardId id, std::string_view candidate_byt
     return out;
 }
 
-std::vector<ShardId> Switchboard::list_shards() const {
-    std::vector<ShardId> ids;
-    ids.reserve(shards_.size());
-    for (const auto& entry : shards_) {
+std::vector<WeaveId> Switchboard::list_weaves() const {
+    std::vector<WeaveId> ids;
+    ids.reserve(weaves_.size());
+    for (const auto& entry : weaves_) {
         ids.push_back(entry.second.id);
     }
     return ids;
 }
 
-std::vector<std::shared_ptr<const Schema>> Switchboard::accepted_schemas(ShardId id) const {
-    const ShardRecord* rec = find(id);
+std::vector<std::shared_ptr<const Schema>> Switchboard::accepted_schemas(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
     if (rec == nullptr) {
         return {};
     }
@@ -555,19 +555,19 @@ std::shared_ptr<const Schema> Switchboard::resolve_schema(std::string_view name,
     return registry_.lookup(name, version);
 }
 
-Shard* Switchboard::shard(ShardId id) {
-    ShardRecord* rec = find(id);
-    return rec == nullptr ? nullptr : rec->shard.get();
+Weave* Switchboard::weave(WeaveId id) {
+    WeaveRecord* rec = find(id);
+    return rec == nullptr ? nullptr : rec->weave.get();
 }
 
-const Shard* Switchboard::shard(ShardId id) const {
-    const ShardRecord* rec = find(id);
-    return rec == nullptr ? nullptr : rec->shard.get();
+const Weave* Switchboard::weave(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    return rec == nullptr ? nullptr : rec->weave.get();
 }
 
-bool Switchboard::alive(ShardId id) const {
-    const ShardRecord* rec = find(id);
+bool Switchboard::alive(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
     return rec != nullptr && rec->alive;
 }
 
-} // namespace zen::sb
+} // namespace loom

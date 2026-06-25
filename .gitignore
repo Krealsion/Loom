@@ -4,6 +4,9 @@
 /out/
 cmake-build-*/
 
+# Soul/vision doc — pressure-tested privately before it lands; do not commit yet.
+zen-vision.md
+
 # Editor / OS cruft
 .vscode/
 .idea/

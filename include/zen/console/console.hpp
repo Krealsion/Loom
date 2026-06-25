@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-namespace zen::console {
+namespace loom {
 
 /// A registered shape's identity.
 struct ShapeRef {
@@ -34,9 +34,9 @@ struct ShapeRef {
     std::uint32_t version;
 };
 
-/// A live Shard, as discovery sees it: its id and the shapes it accepts.
-struct ShardInfo {
-    zen::sb::ShardId id;
+/// A live Weave, as discovery sees it: its id and the shapes it accepts.
+struct WeaveInfo {
+    loom::WeaveId id;
     std::vector<ShapeRef> accepts;
 };
 
@@ -56,7 +56,7 @@ struct ShapeDesc {
 
 /// A typed field value for compose-by-name. Stage 1 carries the scalar kinds; Message/
 /// List fields are not composable yet (a required one left unset is caught at the gate).
-using FieldValue = std::variant<std::int64_t, double, std::string, bool, zen::Bytes>;
+using FieldValue = std::variant<std::int64_t, double, std::string, bool, loom::Bytes>;
 
 /// The fate of a submitted message, surfaced from the gate (never a silent mis-send).
 struct SendOutcome {
@@ -71,7 +71,7 @@ struct BufferEntry {
     std::string label;
     std::string name;
     std::uint32_t version;
-    zen::Value value;
+    loom::Value value;
 };
 
 /// A reference to a field of a buffered reply — `$m1.count` → {label "m1", field "count"}.
@@ -94,7 +94,7 @@ struct Arg {
 struct Composed {
     enum class Status { Ready, NeedsInput, Error };
     Status status = Status::Error;
-    zen::sb::Ticket ticket{};            ///< Ready: the assembled, gate-sent message's ticket
+    loom::Ticket ticket{};            ///< Ready: the assembled, gate-sent message's ticket
     std::string error;                   ///< Error: the compose-time verdict
     std::vector<FieldDesc> open_fields;  ///< NeedsInput: the still-unfilled fields
     std::vector<std::string> unplaced;   ///< NeedsInput: args (rendered) the ladder could not place
@@ -103,53 +103,53 @@ struct Composed {
 /// A copied bus event for the operator's window on the live bus (the tap).
 struct TapEvent {
     std::string kind;    ///< "Delivered" / "Refused" / "Died" / "Revived"
-    zen::sb::ShardId target;
-    zen::sb::ShardId sender;
+    loom::WeaveId target;
+    loom::WeaveId sender;
     std::string schema;  ///< the payload/state shape name
     std::string refusal; ///< the refusal reason (empty unless Refused)
 };
 
-class ConsoleShard; // the console's own raw Shard (buffers received Values); defined in the .cpp
+class ConsoleWeave; // the console's own raw Weave (buffers received Values); defined in the .cpp
 
 /// The frontend-agnostic console engine. Construct it over a Switchboard; it registers the
-/// console as an in-process Shard (broad grant + accept-any) and subscribes the tap.
+/// console as an in-process Weave (broad grant + accept-any) and subscribes the tap.
 class ConsoleEngine {
 public:
-    explicit ConsoleEngine(zen::sb::Switchboard& bus);
+    explicit ConsoleEngine(loom::Switchboard& bus);
     ~ConsoleEngine();
     ConsoleEngine(const ConsoleEngine&) = delete;
     ConsoleEngine& operator=(const ConsoleEngine&) = delete;
 
-    zen::sb::ShardId console_id() const noexcept { return console_id_; }
+    loom::WeaveId console_id() const noexcept { return console_id_; }
 
     // ---- Discovery (registry-read; works on shapes the console has never seen) ----
-    std::vector<ShardInfo> shards() const;
+    std::vector<WeaveInfo> weaves() const;
     std::optional<ShapeDesc> describe(std::string_view name, std::uint32_t version) const;
 
     // ---- Compose + gated send ----
     /// One-shot: set fields by name, assemble, and gate-send to `target`. Returns the send
     /// Ticket (the send is enqueued — pump(), then read outcome()). On a compose-time error
     /// (no such shape/field, or a type mismatch) returns an invalid Ticket and sets *error.
-    zen::sb::Ticket submit(zen::sb::ShardId target, std::string_view name, std::uint32_t version,
+    loom::Ticket submit(loom::WeaveId target, std::string_view name, std::uint32_t version,
                            const std::map<std::string, FieldValue>& fields,
                            std::string* error = nullptr);
 
     /// The fate of a previously-submitted Ticket (after pump()).
-    SendOutcome outcome(zen::sb::Ticket t) const;
+    SendOutcome outcome(loom::Ticket t) const;
 
     // ---- Stage 2: references + the assumption ladder (the dataflow brain) ----
     /// Resolve `$label.field` off the indexed buffer to a typed scalar Cell — a reference
     /// *read* of an immutable buffered Value (it cannot mutate the buffer). Returns nullopt
     /// + sets *error on a missing entry, a missing field, or a non-scalar field (Stage 2 is
     /// scalar-only). Independently testable.
-    std::optional<zen::Cell> resolve_ref(const Ref& ref, std::string* error = nullptr) const;
+    std::optional<loom::Cell> resolve_ref(const Ref& ref, std::string* error = nullptr) const;
 
     /// Compose by the assumption ladder: assign literal/reference args (each optionally
     /// named) to the target's fields — named wins, then positional (declaration order), then
     /// type-directed, else NeedsInput (prompt — never guess on genuine ambiguity, never
     /// mis-send). On Ready it assembles and gate-sends (the gate is the unconditional
     /// backstop). A wrong-typed named arg or a bad reference is a clean Error.
-    Composed compose(zen::sb::ShardId target, std::string_view name, std::uint32_t version,
+    Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                      const std::vector<Arg>& args);
 
     // ---- Reply buffer (m1, m2, …) ----
@@ -162,14 +162,14 @@ public:
     /// Per-region change flags for message-driven partial redraw (the retained-mode / Zengine
     /// point): a UI repaints only the regions whose data changed, and the change signal is bus
     /// messages. Set inside the single bus observer (record_tap) as events arrive during pump():
-    /// `buffer` on a reply delivered to the console, `shards` on a Shard dying/reviving, `tap` on
+    /// `buffer` on a reply delivered to the console, `weaves` on a Weave dying/reviving, `tap` on
     /// any bus event. The compose/guidance regions are keystroke-driven (the input loop redraws
     /// them), so they are not tracked here.
     struct Dirty {
-        bool shards = false;
+        bool weaves = false;
         bool buffer = false;
         bool tap = false;
-        bool any() const noexcept { return shards || buffer || tap; }
+        bool any() const noexcept { return weaves || buffer || tap; }
     };
 
     /// Read AND CLEAR the accumulated per-region dirty flags (consume-once, so a renderer pumps
@@ -180,20 +180,20 @@ public:
     void pump();
 
 private:
-    zen::sb::Ticket assemble_and_send(zen::sb::ShardId target,
-                                      const std::shared_ptr<const zen::Schema>& schema,
-                                      const std::map<std::string, zen::Cell>& cells);
-    void record_tap(const zen::sb::BusEvent& e);
+    loom::Ticket assemble_and_send(loom::WeaveId target,
+                                      const std::shared_ptr<const loom::Schema>& schema,
+                                      const std::map<std::string, loom::Cell>& cells);
+    void record_tap(const loom::BusEvent& e);
 
-    zen::sb::Switchboard& bus_;
-    ConsoleShard* shard_ = nullptr; // owned by the bus; non-owning here
-    zen::sb::ShardId console_id_{};
-    zen::sb::ObserverId tap_obs_ = 0;
+    loom::Switchboard& bus_;
+    ConsoleWeave* weave_ = nullptr; // owned by the bus; non-owning here
+    loom::WeaveId console_id_{};
+    loom::ObserverId tap_obs_ = 0;
     std::uint64_t correlation_ = 0;
     std::vector<TapEvent> tap_;
     Dirty dirty_; // accumulated by record_tap; drained by take_dirty
 };
 
-} // namespace zen::console
+} // namespace loom
 
 #endif // ZEN_CONSOLE_CONSOLE_HPP

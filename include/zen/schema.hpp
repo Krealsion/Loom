@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace zen {
+namespace loom {
 
 class Schema;
 
@@ -115,6 +115,6 @@ private:
 std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t version,
                                           std::vector<Field> fields);
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_SCHEMA_HPP

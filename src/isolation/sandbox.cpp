@@ -48,7 +48,7 @@ struct zen_mount_attr {
 } // namespace
 #endif
 
-namespace zen::isolation {
+namespace loom {
 
 const char* capability_name(Capability c) noexcept {
     switch (c) {
@@ -413,7 +413,7 @@ const std::string& cgroup_base() {
             return {}; // root cgroup / no delegation → not enforceable
         }
         // no-internal-processes: drain our base's processes into the supervisor so the
-        // base may enable controllers for its (Shard-leaf) children.
+        // base may enable controllers for its (Weave-leaf) children.
         drain_procs(b + "/cgroup.procs", sup + "/cgroup.procs");
         const std::string ctrls = read_text(b + "/cgroup.controllers");
         std::string want;
@@ -629,4 +629,4 @@ const EnforcementReport& detect_enforcement() {
     return report;
 }
 
-} // namespace zen::isolation
+} // namespace loom

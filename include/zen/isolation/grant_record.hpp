@@ -6,11 +6,11 @@
 // manifest's CapabilityAsk — advice, gated, untrusted); and the host alone decides,
 // recording any grant *delta* here. This is the powerbox's ledger: the host holds
 // the pen. A declaration is never a grant — only a delta recorded here raises a
-// Shard above the floor.
+// Weave above the floor.
 //
 // The record is keyed by the .so *content-hash* (stable across path moves; a rebuild
 // is a new identity, so a recompiled mod re-floors — the honest default). It is TCB
-// data: only the host writes it, never a Shard. It persists as a gated Value in
+// data: only the host writes it, never a Weave. It persists as a gated Value in
 // Zen's JSON (inspectable, editable per-install), funnelled through the same gate as
 // any other value.
 
@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-namespace zen::isolation {
+namespace loom {
 
 // The storage protocol the floor pre-wires every mod to reach. The StorageBroker
 // (Part B) registers under kStorageRole and accepts these exact shapes; pinning the
@@ -43,7 +43,7 @@ inline constexpr const char* kNetRequest = "NetRequest";
 inline constexpr const char* kNetResponse = "NetResponse"; ///< the broker's reply shape
 inline constexpr std::uint32_t kNetProtocolVersion = 1;
 
-/// A capability *delta* the host has granted a specific Shard above the floor. Only
+/// A capability *delta* the host has granted a specific Weave above the floor. Only
 /// the dimensions a delta can raise today are represented; an empty delta is the
 /// floor (no change).
 struct GrantDelta {
@@ -53,7 +53,7 @@ struct GrantDelta {
 };
 
 /// The persisted, per-install grant ledger: content-hash -> delta. A missing file
-/// (or no path) is an empty record — every Shard floors. Only the host mutates it.
+/// (or no path) is an empty record — every Weave floors. Only the host mutates it.
 class GrantRecord {
 public:
     GrantRecord() = default;
@@ -82,6 +82,6 @@ private:
 /// This is identity, not authentication: it names a build, it does not vouch for it.
 std::string so_content_hash(const std::string& so_path);
 
-} // namespace zen::isolation
+} // namespace loom
 
 #endif // ZEN_ISOLATION_GRANT_RECORD_HPP

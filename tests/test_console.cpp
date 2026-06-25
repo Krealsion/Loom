@@ -16,21 +16,21 @@
 // spine; these tests drive its API directly (discover, gate-send, receive replies), so
 // Stage 3's GUI inherits exactly this, only the skin new.
 
-using namespace sbfx;          // Switchboard, ProbeShard, register_probe, ping/pong, RefusalReason, ...
-using namespace zen::console;  // ConsoleEngine, ShardInfo, SendOutcome, FieldValue, ...
-using zen::sb::Disposition;
-using zen::sb::Ticket;
+using namespace sbfx;          // Switchboard, ProbeWeave, register_probe, ping/pong, RefusalReason, ...
+using namespace loom;  // ConsoleEngine, WeaveInfo, SendOutcome, FieldValue, ...
+using loom::Disposition;
+using loom::Ticket;
 
 namespace {
 
 // A shape the console code knows NOTHING about — defined only here, in the test.
-std::shared_ptr<const zen::Schema> widget_schema() {
-    static const auto s = zen::SchemaBuilder("Widget", 1).field("w", zen::Kind::Int).build();
+std::shared_ptr<const loom::Schema> widget_schema() {
+    static const auto s = loom::SchemaBuilder("Widget", 1).field("w", loom::Kind::Int).build();
     return s;
 }
-zen::Value widget(std::int64_t w) {
-    zen::Value v(widget_schema());
-    v.set("w", zen::Cell::integer(w));
+loom::Value widget(std::int64_t w) {
+    loom::Value v(widget_schema());
+    v.set("w", loom::Cell::integer(w));
     return v;
 }
 
@@ -38,25 +38,25 @@ zen::Value widget(std::int64_t w) {
 
 // label (Text) is OPTIONAL and declared first, count (Int) is required and second — so a lone
 // Int fails positional at slot 0 (Text) and is rescued by type-directed into count.
-std::shared_ptr<const zen::Schema> tagged_schema() {
-    static const auto s = zen::SchemaBuilder("Tagged", 1)
-                              .field("label", zen::Kind::Text, /*required=*/false)
-                              .field("count", zen::Kind::Int)
+std::shared_ptr<const loom::Schema> tagged_schema() {
+    static const auto s = loom::SchemaBuilder("Tagged", 1)
+                              .field("label", loom::Kind::Text, /*required=*/false)
+                              .field("count", loom::Kind::Int)
                               .build();
     return s;
 }
 // name (Text, first) then two same-typed Int fields — a lone Int can't go positional (slot 0 is
 // Text) and matches BOTH a and b under type-direction: genuine ambiguity.
-std::shared_ptr<const zen::Schema> mix_schema() {
-    static const auto s = zen::SchemaBuilder("Mix", 1)
-                              .field("name", zen::Kind::Text)
-                              .field("a", zen::Kind::Int)
-                              .field("b", zen::Kind::Int)
+std::shared_ptr<const loom::Schema> mix_schema() {
+    static const auto s = loom::SchemaBuilder("Mix", 1)
+                              .field("name", loom::Kind::Text)
+                              .field("a", loom::Kind::Int)
+                              .field("b", loom::Kind::Int)
                               .build();
     return s;
 }
-std::shared_ptr<const zen::Schema> note_schema() {
-    static const auto s = zen::SchemaBuilder("Note", 1).field("body", zen::Kind::Text).build();
+std::shared_ptr<const loom::Schema> note_schema() {
+    static const auto s = loom::SchemaBuilder("Note", 1).field("body", loom::Kind::Text).build();
     return s;
 }
 
@@ -109,7 +109,7 @@ TEST_CASE("the full participant loop, with NO terminal: discover, gate-send, rep
     // A responder that accepts Ping (and Pong, so Pong is a registered shape the console can
     // resolve at wildcard-delivery) and replies Pong{seq} to the sender's reply_to.
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         if (in.payload.schema().name() == "Ping") {
             b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
         }
@@ -117,7 +117,7 @@ TEST_CASE("the full participant loop, with NO terminal: discover, gate-send, rep
 
     // Discovery sees the responder and its shapes — the console knows none of their meaning.
     bool found = false;
-    for (const ShardInfo& s : engine.shards()) {
+    for (const WeaveInfo& s : engine.weaves()) {
         if (s.id == responder.id) {
             found = true;
         }
@@ -144,7 +144,7 @@ TEST_CASE("gated-send backstop: a malformed command is cleanly refused, no mis-s
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema()});
     bool handled = false;
-    responder.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+    responder.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) { handled = true; };
 
     // Ping{seq} with `seq` (required) left unset — slips compose-time, caught at the gate.
     std::string err;
@@ -158,9 +158,9 @@ TEST_CASE("gated-send backstop: a malformed command is cleanly refused, no mis-s
     CHECK_FALSE(o.delivered);
     CHECK_FALSE(o.reason.empty());            // the gate's verdict is surfaced, not a silent drop
     // Precisely the gate's verdict: a conformance refusal for the missing required field.
-    const zen::sb::DeliveryOutcome raw = bus.outcome(t);
+    const loom::DeliveryOutcome raw = bus.outcome(t);
     CHECK(raw.refusal.reason == RefusalReason::GateRefused);
-    CHECK(raw.refusal.error.kind == zen::ErrorKind::MissingField);
+    CHECK(raw.refusal.error.kind == loom::ErrorKind::MissingField);
     CHECK_FALSE(handled);                     // no silent mis-send: the responder never saw it
     CHECK(engine.buffer_size() == 0);
 }
@@ -170,7 +170,7 @@ TEST_CASE("discovery + drive on a shape the console code has never seen") {
     ConsoleEngine engine(bus);
     // Widget is defined only in this test; the console code has no knowledge of it.
     Registered svc = register_probe(bus, {widget_schema()});
-    svc.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    svc.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(widget(in.payload.get("w")->as_int() + 1))); // echo + 1
     };
 
@@ -199,7 +199,7 @@ TEST_CASE("wildcard-accept buffers a non-pre-declared shape (gated); an unregist
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
 
@@ -214,9 +214,9 @@ TEST_CASE("wildcard-accept buffers a non-pre-declared shape (gated); an unregist
 
     // An UNREGISTERED shape sent to the console is refused (resolve_schema finds nothing) —
     // an unknown shape reaches no one, not even the wildcard console.
-    auto unreg = zen::SchemaBuilder("Unregistered", 1).field("x", zen::Kind::Int).build();
-    zen::Value v(unreg);
-    v.set("x", zen::Cell::integer(9));
+    auto unreg = loom::SchemaBuilder("Unregistered", 1).field("x", loom::Kind::Int).build();
+    loom::Value v(unreg);
+    v.set("x", loom::Cell::integer(9));
     Ticket u = bus.send(engine.console_id(), Message(std::move(v)));
     bus.pump();
     CHECK(bus.outcome(u).disposition == Disposition::Refused);
@@ -234,18 +234,18 @@ TEST_CASE("wildcard-accept gates against the REGISTRY schema, not the payload's 
     // A lying payload: it CLAIMS "Pong" v1 but carries a divergent shape (an extra field),
     // i.e. a different content_id. Wildcard-accept resolves "Pong" v1 to the REGISTERED
     // schema and the gate refuses the mismatch — the payload's self-claim buys nothing.
-    auto lying = zen::SchemaBuilder("Pong", 1)
-                     .field("seq", zen::Kind::Int)
-                     .field("lie", zen::Kind::Text)
+    auto lying = loom::SchemaBuilder("Pong", 1)
+                     .field("seq", loom::Kind::Int)
+                     .field("lie", loom::Kind::Text)
                      .build();
-    zen::Value v(lying);
-    v.set("seq", zen::Cell::integer(1));
-    v.set("lie", zen::Cell::text("gotcha"));
+    loom::Value v(lying);
+    v.set("seq", loom::Cell::integer(1));
+    v.set("lie", loom::Cell::text("gotcha"));
     Ticket u = bus.send(engine.console_id(), Message(std::move(v)));
     bus.pump();
     CHECK(bus.outcome(u).disposition == Disposition::Refused);
     CHECK(bus.outcome(u).refusal.reason == RefusalReason::GateRefused);
-    CHECK(bus.outcome(u).refusal.error.kind == zen::ErrorKind::SchemaMismatch);
+    CHECK(bus.outcome(u).refusal.error.kind == loom::ErrorKind::SchemaMismatch);
     CHECK(engine.buffer_size() == 0); // the lie reached no one — gated against the registry shape
 }
 
@@ -255,7 +255,7 @@ TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW m
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         if (in.payload.schema().name() == "Ping") {
             b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
         }
@@ -271,9 +271,9 @@ TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW m
 
     // The resolver, exercised standalone: $m1.seq → a typed Int Cell carrying 7.
     std::string rerr;
-    std::optional<zen::Cell> cell = engine.resolve_ref(Ref{"m1", "seq"}, &rerr);
+    std::optional<loom::Cell> cell = engine.resolve_ref(Ref{"m1", "seq"}, &rerr);
     REQUIRE_MESSAGE(cell.has_value(), rerr);
-    CHECK(cell->kind() == zen::Kind::Int);
+    CHECK(cell->kind() == loom::Kind::Int);
     CHECK(cell->as_int() == 7);
 
     // The wire: compose a NEW Ping whose seq IS $m1.seq — output→input, by reference.
@@ -287,15 +287,15 @@ TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW m
     REQUIRE(engine.buffer_size() == 2);
     CHECK(engine.buffer_at(2)->name == "Pong");
     CHECK(engine.buffer_at(2)->value.get("seq")->as_int() == 7);
-    CHECK(responder.shard->handled_values.back() == 7); // the 2nd Ping actually carried seq=7
+    CHECK(responder.weave->handled_values.back() == 7); // the 2nd Ping actually carried seq=7
 }
 
 TEST_CASE("ladder rung 1 — named wins: field=value assigns by name, any order") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered svc = register_probe(bus, {tagged_schema()});
-    std::optional<zen::Value> got;
-    svc.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got = in.payload; };
+    std::optional<loom::Value> got;
+    svc.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) { got = in.payload; };
 
     // count given before label, by name — the order is irrelevant to a named assignment.
     Composed c = engine.compose(svc.id, "Tagged", 1,
@@ -313,8 +313,8 @@ TEST_CASE("ladder rung 2 — positional fills open fields in declaration order")
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered svc = register_probe(bus, {tagged_schema()});
-    std::optional<zen::Value> got;
-    svc.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got = in.payload; };
+    std::optional<loom::Value> got;
+    svc.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) { got = in.payload; };
 
     // Bare ["hi"(Text), 5(Int)] → label, count in declaration order; both type-check.
     Composed c = engine.compose(svc.id, "Tagged", 1,
@@ -331,8 +331,8 @@ TEST_CASE("ladder — positional FAILS THROUGH, type-directed lands the value in
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered svc = register_probe(bus, {tagged_schema()});
-    std::optional<zen::Value> got;
-    svc.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got = in.payload; };
+    std::optional<loom::Value> got;
+    svc.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) { got = in.payload; };
 
     // A lone Int 5. Positional would put it in slot 0 (label:Text) — a type mismatch, so
     // positional fails AS A WHOLE and falls through; type-directed sees Int matches only
@@ -351,7 +351,7 @@ TEST_CASE("ladder rung 4 — genuine ambiguity returns NeedsInput and sends NOTH
     ConsoleEngine engine(bus);
     Registered svc = register_probe(bus, {mix_schema()});
     bool handled = false;
-    svc.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+    svc.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) { handled = true; };
 
     // A lone Int 5 against Mix{name:Text, a:Int, b:Int}. Positional fails at slot 0 (Text);
     // type-directed finds 5 fits BOTH a and b — ambiguous. The ladder prompts, never guesses.
@@ -371,7 +371,7 @@ TEST_CASE("gate-backstop: a wrong-typed reference is caught at compose, never mi
     ConsoleEngine engine(bus);
     // m1 ← Pong{seq=7} (an Int we will try to misroute into a Text field).
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
@@ -384,7 +384,7 @@ TEST_CASE("gate-backstop: a wrong-typed reference is caught at compose, never mi
     // both types and refuses at compose; nothing is assembled, nothing is sent.
     Registered notes = register_probe(bus, {note_schema()});
     bool handled = false;
-    notes.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+    notes.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) { handled = true; };
 
     Composed c = engine.compose(notes.id, "Note", 1, {named_ref("body", "m1", "seq")});
     CHECK(c.status == Composed::Status::Error);
@@ -406,7 +406,7 @@ TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, m
 
     // Populate m1 ← Pong{seq=7}.
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
@@ -435,7 +435,7 @@ TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO render
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     // A reply in the buffer (m1) and a partial compose command.
@@ -450,7 +450,7 @@ TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO render
     ui.partial_input = std::to_string(responder.id.value) + " Ping 1";
     const Widget tree = emit_ui_tree(engine, ui);
 
-    // The root is a VStack; the Bus region is an HStack of a Shards List and a Tap Log.
+    // The root is a VStack; the Bus region is an HStack of a Weaves List and a Tap Log.
     CHECK(tree.kind == WidgetKind::VStack);
     CHECK(tree.region_id == "root");
     const Widget* bus_region = find_region(tree, "bus");
@@ -460,10 +460,10 @@ TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO render
     REQUIRE(bus_region->children.size() == 1);
     CHECK(bus_region->children[0].kind == WidgetKind::HStack);
 
-    const Widget* shards = find_region(tree, "shards");
-    REQUIRE(shards != nullptr);
-    CHECK(shards->kind == WidgetKind::List);
-    CHECK(any_item_contains(*shards, "Ping")); // discovery: the responder's shape, shown as data
+    const Widget* weaves = find_region(tree, "weaves");
+    REQUIRE(weaves != nullptr);
+    CHECK(weaves->kind == WidgetKind::List);
+    CHECK(any_item_contains(*weaves, "Ping")); // discovery: the responder's shape, shown as data
 
     const Widget* tap = find_region(tree, "tap");
     REQUIRE(tap != nullptr);
@@ -516,7 +516,7 @@ TEST_CASE("two renderers, one tree: the headless outline reflects the SAME tree 
 
     CHECK(outline.find("VStack") != std::string::npos);
     CHECK(outline.find("Region \"Bus\"") != std::string::npos);
-    CHECK(outline.find("List \"Shards\"") != std::string::npos);
+    CHECK(outline.find("List \"Weaves\"") != std::string::npos);
     CHECK(outline.find("Log \"Tap\"") != std::string::npos);
     CHECK(outline.find("List \"Buffer\"") != std::string::npos);
     CHECK(outline.find("Field") != std::string::npos);
@@ -536,8 +536,8 @@ TEST_CASE("engine-produced guidance advances with the partial command (renderer-
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
     const std::string id = std::to_string(responder.id.value);
 
-    // empty -> choose a shard; a shard id -> its shapes; a shape+version -> its fields.
-    CHECK(guidance_for(engine, "").find("shard") != std::string::npos);
+    // empty -> choose a weave; a weave id -> its shapes; a shape+version -> its fields.
+    CHECK(guidance_for(engine, "").find("weave") != std::string::npos);
     CHECK(guidance_for(engine, id).find("Ping") != std::string::npos);
     CHECK(guidance_for(engine, id + " Ping 1").find("seq") != std::string::npos);
 
@@ -554,7 +554,7 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         if (in.payload.schema().name() == "Ping" && in.payload.get("seq") != nullptr) {
             b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
         }
@@ -588,7 +588,7 @@ TEST_CASE("TUI smoke (headless): scripted semantic actions move focus, compose a
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
-    responder.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     ConsoleUi ui(engine);
@@ -596,11 +596,11 @@ TEST_CASE("TUI smoke (headless): scripted semantic actions move focus, compose a
     // Always exactly one focused node; FocusNext rotates which region is focused.
     CHECK(count_focused(ui.tree()) == 1);
     CHECK(find_region(ui.tree(), "compose")->focused); // starts on the command field
-    ui.dispatch({Action::FocusNext, 0});               // Compose -> Shards
-    CHECK(find_region(ui.tree(), "shards")->focused);
+    ui.dispatch({Action::FocusNext, 0});               // Compose -> Weaves
+    CHECK(find_region(ui.tree(), "weaves")->focused);
     CHECK(count_focused(ui.tree()) == 1);
 
-    // Activate on the shards list prefills the command with the selected shard id and refocuses
+    // Activate on the weaves list prefills the command with the selected weave id and refocuses
     // the command field — the engine-agnostic "begin a send" affordance.
     ui.dispatch({Action::Activate, 0});
     CHECK(ui.state().partial_input == std::to_string(responder.id.value) + " ");
@@ -628,7 +628,7 @@ TEST_CASE("TUI smoke (headless): an ambiguous command surfaces a NeedsInput prom
     // Mix{name:Text, a:Int, b:Int}: a lone Int is ambiguous (fits a AND b) — the ladder prompts.
     Registered svc = register_probe(bus, {mix_schema()});
     bool handled = false;
-    svc.shard->on_handle = [&](const Message&, Bus&, ProbeShard&) { handled = true; };
+    svc.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) { handled = true; };
     ConsoleUi ui(engine);
 
     for (char ch : std::to_string(svc.id.value) + " Mix 1 5") {

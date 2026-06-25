@@ -1,7 +1,7 @@
 #ifndef ZEN_DETAIL_HASH_HPP
 #define ZEN_DETAIL_HASH_HPP
 
-// Internal to zen-core. FNV-1a, 64-bit. Chosen for being tiny, dependency-free,
+// Internal to loom. FNV-1a, 64-bit. Chosen for being tiny, dependency-free,
 // and deterministic across platforms and runs (no seeding) — the content
 // identity of a schema must be the same everywhere, forever. This is NOT a
 // cryptographic hash: it identifies schemas, it does not authenticate bytes.
@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace zen::detail {
+namespace loom::detail {
 
 using Hash64 = std::uint64_t;
 
@@ -60,6 +60,6 @@ private:
     Hash64 h_ = kFnvOffset;
 };
 
-} // namespace zen::detail
+} // namespace loom::detail
 
 #endif // ZEN_DETAIL_HASH_HPP

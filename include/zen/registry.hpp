@@ -12,7 +12,7 @@
 #include <string_view>
 #include <utility>
 
-namespace zen {
+namespace loom {
 
 /// Thrown when a (name, version) already published with one shape is registered
 /// again with a different shape. A published schema is immutable: to change a
@@ -81,6 +81,6 @@ private:
     std::shared_ptr<const Map> current_;
 };
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_REGISTRY_HPP

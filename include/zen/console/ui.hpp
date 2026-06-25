@@ -12,7 +12,7 @@
 // re-added by accident — defense in depth, not unrepresentability (int x fails to build, int px
 // compiles clean); see the note at the fence for its limits.
 //
-// The tree is built in the engine LIBRARY from the engine's public domain data (shards, the
+// The tree is built in the engine LIBRARY from the engine's public domain data (weaves, the
 // reply buffer, the tap, the registry-derived guidance) — renderer-agnostic and fully testable
 // with no terminal. There is ONE real renderer (the full-screen TUI in console_tui.cpp — the only
 // place positions, sizes, and cells exist); a ~50-line test-only outline walk (here) consumes the
@@ -29,7 +29,7 @@
 #include <utility>
 #include <vector>
 
-namespace zen::console {
+namespace loom {
 
 /// The semantic widget kinds. Arrangement: VStack/HStack (children in a vertical/horizontal
 /// RELATIONSHIP — not a grid of cells) and Region (a titled area wrapping one child). Content:
@@ -131,7 +131,7 @@ enum class Action : std::uint8_t {
     FocusPrev,  ///< move focus to the previous focusable region
     SelectUp,   ///< move the selection up within the focused List
     SelectDown, ///< move the selection down within the focused List
-    Activate,   ///< act on the focused selection (e.g. prefill the command with its shard/ref)
+    Activate,   ///< act on the focused selection (e.g. prefill the command with its weave/ref)
     Edit,       ///< type a character into the command field (carried in InputEvent::ch)
     Backspace,  ///< delete the last character of the command field
     Submit,     ///< submit the command field (compose via the ladder + gate-send)
@@ -146,7 +146,7 @@ struct InputEvent {
 
 /// Which region currently holds focus. Three focusable regions cycle under FocusNext/FocusPrev;
 /// the tap log is read-only (not focusable).
-enum class Focus : std::uint8_t { Shards, Buffer, Compose };
+enum class Focus : std::uint8_t { Weaves, Buffer, Compose };
 
 /// The console's presentation/interaction state — what the ENGINE must not own: focus, the
 /// in-progress command line, list selections, and the last compose result to surface. Passed to
@@ -154,7 +154,7 @@ enum class Focus : std::uint8_t { Shards, Buffer, Compose };
 struct UiState {
     Focus focus = Focus::Compose;       ///< start on the command field
     std::string partial_input;          ///< the in-progress compose command line
-    int shard_cursor = 0;               ///< selection index in the Shards list
+    int weave_cursor = 0;               ///< selection index in the Weaves list
     int buffer_cursor = 0;              ///< selection index in the Buffer list
     std::optional<Composed> pending;    ///< last ladder result to surface (NeedsInput / Error)
 };
@@ -163,12 +163,12 @@ struct UiState {
 
 /// The next-choice guidance for a partial command line, derived from the registry + the partial
 /// input — engine-produced, so it is renderer-agnostic (the TUI shows it inline; a GUI shows the
-/// same string as a dropdown). Advances with input: empty -> "choose a shard"; a shard id -> its
+/// same string as a dropdown). Advances with input: empty -> "choose a weave"; a weave id -> its
 /// shapes; a shape+version -> its fields. Reads only the engine's public domain data.
 std::string guidance_for(const ConsoleEngine& engine, std::string_view partial_command);
 
 /// Build the console's current UI tree from the engine's public domain data + the presentation
-/// state: a root VStack of a Bus region (an HStack of a Shards List and a Tap Log), a Buffer
+/// state: a root VStack of a Bus region (an HStack of a Weaves List and a Tap Log), a Buffer
 /// List (m1, m2, ...), and a Compose Field (the partial command + the engine-produced guidance
 /// hint). If `ui.pending` carries a NeedsInput/Error result, the tree gains a prompt region. The
 /// tree is a fresh value each call (retained-mode is the renderer diffing successive trees).
@@ -211,6 +211,6 @@ private:
     UiState ui_;
 };
 
-} // namespace zen::console
+} // namespace loom
 
 #endif // ZEN_CONSOLE_UI_HPP

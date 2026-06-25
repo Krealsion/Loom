@@ -1,7 +1,7 @@
 #ifndef ZEN_ISOLATION_PROTOCOL_HPP
 #define ZEN_ISOLATION_PROTOCOL_HPP
 
-// The parent<->child wire protocol for out-of-process Shard hosting. Frames are
+// The parent<->child wire protocol for out-of-process Weave hosting. Frames are
 // length-prefixed: [u32 payload_len][u8 op][payload]. The payload sub-fields are
 // little-endian and read through a bounds-checked Cursor, so a hostile or
 // truncated frame is rejected, never over-read.
@@ -15,7 +15,7 @@
 #include <string>
 #include <string_view>
 
-namespace zen::isolation {
+namespace loom {
 
 enum class Op : std::uint8_t {
     // child -> parent
@@ -106,6 +106,6 @@ private:
     std::size_t i_ = 0;
 };
 
-} // namespace zen::isolation
+} // namespace loom
 
 #endif // ZEN_ISOLATION_PROTOCOL_HPP

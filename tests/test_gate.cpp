@@ -4,7 +4,7 @@
 
 #include <zen/gate.hpp>
 
-using namespace zen;
+using namespace loom;
 
 namespace {
 

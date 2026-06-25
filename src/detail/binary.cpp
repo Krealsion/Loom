@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace zen::detail {
+namespace loom::detail {
 
 // ---- Writers --------------------------------------------------------------
 
@@ -160,4 +160,4 @@ bool BinReader::take(std::size_t count, std::string_view& out) noexcept {
     return true;
 }
 
-} // namespace zen::detail
+} // namespace loom::detail

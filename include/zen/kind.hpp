@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-namespace zen {
+namespace loom {
 
 /// The primitive grammar of Zen values. This set is a permanent commitment:
 /// every wire format and every schema ever published is expressed in these
@@ -49,6 +49,6 @@ constexpr const char* name_of(Kind k) noexcept {
     return "?";
 }
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_KIND_HPP

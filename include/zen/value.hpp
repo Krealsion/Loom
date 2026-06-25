@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-namespace zen {
+namespace loom {
 
 class Value;
 
@@ -106,6 +106,6 @@ using CellSource = std::function<std::optional<Cell>(const Field&)>;
 /// cannot perform. The result is unvalidated; pass it through the gate.
 Value construct_blind(std::shared_ptr<const Schema> schema, const CellSource& source);
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_VALUE_HPP

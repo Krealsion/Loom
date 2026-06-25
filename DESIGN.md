@@ -1,6 +1,6 @@
-# zen-core — design
+# loom — design
 
-`zen-core` is the self-describing-value-and-gate foundation of Zen. A value
+`loom` is the self-describing-value-and-gate foundation of Zen. A value
 carries a reference to the schema it *claims* to be — typed enough to be
 challenged at any boundary, dynamic enough to be built at runtime from a schema
 that was discovered rather than compiled. Exactly one gate guards every
@@ -19,8 +19,8 @@ domain-specific. Everything in `tests/` named `Move`, `SetColor`, `PlayerState`,
 
 1. **One gate, every boundary.** There is a single structural validator,
    `detail::validate_into` (in `src/gate.cpp`). The live-message path
-   (`zen::admit(Value, Schema)`) and the persisted-bytes path
-   (`zen::admit(Unverified, …)`) both reach it and only it to decide
+   (`loom::admit(Value, Schema)`) and the persisted-bytes path
+   (`loom::admit(Unverified, …)`) both reach it and only it to decide
    conformance. `gate_invocations()` exposes a process counter so a test can
    prove both paths advance the same gate (see `tests/test_integration.cpp`,
    "one gate").
@@ -54,7 +54,7 @@ Headers live under `include/zen/`. Prefer including the specific one;
 | `admission.hpp` | `ErrorKind`, `Error`, `Admission` |
 | `gate.hpp` | `admit(Value, Schema, Report)`, `diagnose`, `Report`, `gate_invocations` |
 | `registry.hpp` | `Registry`, `SchemaConflict` |
-| `serialize.hpp` | native binary `serialize(Value)` / `parse`; `Unverified`; `admit(Unverified, …)`; compat JSON `zen::compat::serialize` / `zen::compat::parse` |
+| `serialize.hpp` | native binary `serialize(Value)` / `parse`; `Unverified`; `admit(Unverified, …)`; compat JSON `loom::compat::serialize` / `loom::compat::parse` |
 
 The surface is deliberately narrow. A foundational library earns trust by being
 unsurprising.
@@ -221,8 +221,8 @@ both Zen's own:
 - **Native** — a canonical binary format (`serialize` / `parse`). Compact,
   positional, schema-guided, and **canonical**: a given `Value` has exactly one
   encoding, so native bytes are content-addressable.
-- **Compat** — the original self-describing JSON text (`zen::compat::serialize` /
-  `zen::compat::parse`). Inspectable for debugging and tooling, but larger and
+- **Compat** — the original self-describing JSON text (`loom::compat::serialize` /
+  `loom::compat::parse`). Inspectable for debugging and tooling, but larger and
   not byte-canonical. Demoted from native; retained, not deleted.
 
 Both produce/consume the same `Unverified` and reach the same gate. The format
@@ -352,7 +352,7 @@ clean — run green under ASan/UBSan.
 
 ## The Switchboard (the first live boundary)
 
-`zen-switchboard` is a separate library that links `zen-core` and builds the
+`zen-switchboard` is a separate library that links `loom` and builds the
 first place where a value actually *crosses* a boundary: an in-process message
 bus. It reimplements no validation, schema, or serialization logic — it routes
 `Value`s and calls `admit()`. The whole point of the core (one gate, untrusted
@@ -360,10 +360,10 @@ until proven) now does real work guarding live delivery.
 
 ### In-memory delivery, gated at the recipient's door
 
-Delivery is in-memory: the bus moves `Value` payloads between in-process Shards.
+Delivery is in-memory: the bus moves `Value` payloads between in-process Weaves.
 Each delivery is validated by `admit(Value, recipient_accept_schema)` — the live
-path of zen-core's *one* validator. The gate runs **at delivery, against the
-recipient's accept-schema**: each Shard's boundary is its own door, so a publish
+path of loom's *one* validator. The gate runs **at delivery, against the
+recipient's accept-schema**: each Weave's boundary is its own door, so a publish
 to N accepters is N independent boundary crossings. The bus writes no validator;
 `gate_invocations()` proves a live delivery advances the same counter the
 persistence (bytes) path does (`tests/test_switchboard.cpp`).
@@ -374,25 +374,25 @@ never reaches the handler — it is recorded and surfaced to observers instead.
 ### The `Message` envelope
 
 A payload `Value` (its own schema is its routing shape) plus routing metadata:
-`sender` (a `ShardId`), an optional `reply_to` `ShardId`, and an optional opaque
+`sender` (a `WeaveId`), an optional `reply_to` `WeaveId`, and an optional opaque
 `correlation` token. Replies are ordinary sends — a handler sends to `reply_to`.
 Synchronous request-and-await is a deliberate seam; the envelope already carries
 what it needs.
 
 ### Addressing: accept-sets, directed, and publish
 
-A Shard declares the schemas it accepts (its accept-set, keyed by
+A Weave declares the schemas it accepts (its accept-set, keyed by
 `(name, version)`). It is reachable two ways:
 
-- `send(ShardId, Message)` — directed. Refused unless the target's accept-set
+- `send(WeaveId, Message)` — directed. Refused unless the target's accept-set
   includes the payload's `(name, version)` **and** the payload passes the gate.
-- `publish(Message)` — by shape. Enqueues one delivery for every alive Shard
+- `publish(Message)` — by shape. Enqueues one delivery for every alive Weave
   whose accept-set includes the payload's shape, in registration order; returns
   the recipient count (`0` is legal, not an error).
 
-The bus owns a `zen::Registry` and registers every accept- and state-schema in
-it, so all Shards must agree on what a given `(name, version)` means — a
-disagreement is a `zen::SchemaConflict` at registration.
+The bus owns a `loom::Registry` and registers every accept- and state-schema in
+it, so all Weaves must agree on what a given `(name, version)` means — a
+disagreement is a `loom::SchemaConflict` at registration.
 
 ### Single-threaded FIFO dispatch; the reentrancy guarantee
 
@@ -413,7 +413,7 @@ the same outcomes as they happen.
 A delivery either conforms or is refused — no partial or best-effort delivery,
 no silent drop. A `Refusal` distinguishes bus-level routing reasons
 (`NoSuchTarget`, `TargetUnavailable`, `NotAccepted`) from a gate refusal
-(`GateRefused`, which carries the zen-core `Error` with its field path and
+(`GateRefused`, which carries the loom `Error` with its field path and
 expected/actual). The two never blur: routing is the bus's, conformance is the
 gate's.
 
@@ -429,11 +429,11 @@ only during the callback; taps copy out the durable fields.)
 
 The Switchboard owns the death→revive cycle and reinvents nothing:
 
-- `snapshot_bytes(id)` serializes the Shard's `snapshot()` with native `serialize`.
+- `snapshot_bytes(id)` serializes the Weave's `snapshot()` with native `serialize`.
 - `kill(id)` marks it dead (it stops receiving deliveries) and emits `Died`.
 - `reload(id, bytes)` runs `parse` → `admit(Unverified, state_schema)` — the
   self-set lock from the first nucleus. On success it calls `revive(state)` and
-  refreshes last-known-good. On refusal, the Shard's `policy()` decides.
+  refreshes last-known-good. On refusal, the Weave's `policy()` decides.
 - `swap_state(id, bytes)` is the **intentional** sibling of `reload`: same gate
   (`parse` → `admit(Unverified, state_schema)`), same `revive` + last-known-good
   refresh, but it spends **no budget** and offers **no** last-known-good fallback —
@@ -441,10 +441,10 @@ The Switchboard owns the death→revive cycle and reinvents nothing:
 
 **Intentional swap ≠ crash revival (only crashes spend the budget).** `reload` is
 the crash-revival path: it is *budgeted* — it reads the policy's `max_reloads` and
-decrements a per-Shard counter, so a Shard that crash-thrashes cannot revive
+decrements a per-Weave counter, so a Weave that crash-thrashes cannot revive
 forever, and on a refused candidate the policy may fall back to last-known-good.
 `swap_state` is the deliberate code-swap path (what the kernel's `reload_from`
-calls): no budget, no fallback. Sharing one counter would be backwards — a Shard
+calls): no budget, no fallback. Sharing one counter would be backwards — a Weave
 that spent its crash-revival allowance could not be hot-swapped to *fixed* code,
 and every deliberate swap would draw down the very budget meant to stop crash
 loops. The two operations are therefore separate methods, not a flag.
@@ -452,29 +452,29 @@ loops. The two operations are therefore separate methods, not a flag.
 The **only** schema the bus hard-codes is its lifecycle-policy grammar —
 `LifecyclePolicy v1 { max_reloads: Int, revive_from_last_good: Bool }`, exposed
 as `lifecycle_policy_schema()`. The bus validates `policy()` against it and reads
-only those two fields; everything else about a Shard is opaque to it.
+only those two fields; everything else about a Weave is opaque to it.
 Last-known-good is the last successfully-admitted snapshot (seeded at
-registration by gating the Shard's initial snapshot, so a Shard is born valid).
+registration by gating the Weave's initial snapshot, so a Weave is born valid).
 
-### Shard contract (a frozen ABI surface)
+### Weave contract (a frozen ABI surface)
 
-`Shard` is an abstract base with exactly five methods — `accepted_schemas`,
+`Weave` is an abstract base with exactly five methods — `accepted_schemas`,
 `handle`, `snapshot`, `policy`, `revive` — kept minimal because it is a future
-ABI surface. It is designed to survive a move to per-Shard mailboxes and
+ABI surface. It is designed to survive a move to per-Weave mailboxes and
 multi-threaded dispatch unchanged: a handler still *receives* a gated message and
 *sends* (which enqueues); only `pump`'s internals would change. The bus owns
-Shards (`register_shard(std::unique_ptr<Shard>)`); a non-owning `shard(ShardId)`
+Weaves (`register_weave(std::unique_ptr<Weave>)`); a non-owning `weave(WeaveId)`
 accessor serves queries and tests. `handle` sends through an abstract `Bus`
-interface (which `Switchboard` implements), so the *same* Shard works whether it
+interface (which `Switchboard` implements), so the *same* Weave works whether it
 is compiled in or loaded from a library — the kernel below relies on this.
 
 ---
 
 ## The Kernel (DLL loading · the C ABI · hot-reload)
 
-`zen-kernel` is the OS/entry-point layer: it loads Shards from dynamic libraries
+`zen-kernel` is the OS/entry-point layer: it loads Weaves from dynamic libraries
 and hosts them on a Switchboard. It reimplements no validation, routing,
-serialization, or lifecycle — it links `zen-core` + `zen-switchboard` and adds
+serialization, or lifecycle — it links `loom` + `zen-switchboard` and adds
 only the library boundary.
 
 ### Bytes are the boundary currency
@@ -483,13 +483,13 @@ The hard, permanent part is the seam. Only **C** crosses it: opaque instance
 handles, plain function pointers, `const uint8_t*` + `size_t` buffers, and
 integer status codes — no C++ types, no STL, no `std::any`, no exceptions. Every
 Zen value/schema/message a library hands back crosses as **serialized bytes**,
-and the host **re-admits those bytes through zen-core's gate** before trusting
+and the host **re-admits those bytes through loom's gate** before trusting
 them. So the DLL boundary is just another boundary the one gate guards, and
 *untrusted-until-proven extends to loaded code for free*: a buggy or hostile
 library can no more inject an unvalidated value than a hostile byte-stream from
 storage can. A test proves a value crossing the DLL seam advances the same
 `gate_invocations()` counter the persistence path does, in both directions
-(a delivery *to* the library Shard and a message *emitted by* it).
+(a delivery *to* the library Weave and a message *emitted by* it).
 
 This also supersedes a rejected prototype — a `std::any`-based service locator
 whose `any_cast<T*>` carried no schema, was UB across the seam, and retained raw
@@ -498,7 +498,7 @@ wrapper survived (GCC default visibility, no `__declspec`).
 
 ### The C ABI (`include/zen/kernel/abi.h`)
 
-One exported symbol, `extern "C" const ZenShardAbi* zen_shard_abi(void)`,
+One exported symbol, `extern "C" const ZenWeaveAbi* zen_weave_abi(void)`,
 returns a static descriptor:
 
 - `uint32_t abi_version` — the ABI's own version (distinct from schema versions);
@@ -509,7 +509,7 @@ returns a static descriptor:
 - `revive` — receive already-host-admitted state bytes.
 - `handle` — receive an already-host-gated inbound message (sender/reply_to/
   correlation + payload bytes) plus a **host callback table** (`ZenHostApi`)
-  through which the Shard `send`/`publish`es by handing the host serialized
+  through which the Weave `send`/`publish`es by handing the host serialized
   message bytes.
 
 **Buffer ownership (the safety property).** Library→host returns go through a
@@ -533,24 +533,24 @@ recursive meta-schema; Message/List nested schemas are referenced by
 referenced schemas first). This is the minimal **schema-as-value** precursor —
 the one place that seam is lightly touched.
 
-### Authoring stays Zen-invisible
+### Weaving stays Zen-invisible
 
-`ZEN_EXPORT_SHARD(MyShard)` (header-only `export.hpp`) generates the descriptor
-and every thunk from a clean C++ `zen::sb::Shard` subclass — the author writes
-the same Shard they would compile in, plus one line, and hand-writes no thunk.
+`ZEN_EXPORT_WEAVE(MyWeave)` (header-only `export.hpp`) generates the descriptor
+and every thunk from a clean C++ `loom::Weave` subclass — the maker writes
+the same Weave they would compile in, plus one line, and hand-writes no thunk.
 The thunks have C language linkage (matching the descriptor's pointer types),
 forward to C++ template helpers, serialize Values to the host sink, rebuild a
-`Bus` that forwards the Shard's `send`/`publish` across the callback table, and
+`Bus` that forwards the Weave's `send`/`publish` across the callback table, and
 **never let a C++ exception cross the seam** (all caught, turned into status
 codes).
 
 ### The host adapter
 
-`HostAdapter` (host-side) **implements the existing `Shard` interface** by
+`HostAdapter` (host-side) **implements the existing `Weave` interface** by
 translating each method to its C thunk: serialize arguments to bytes, call
 across, and on the way back `parse` + `admit` through the gate (manifest,
 snapshot, policy, and every emitted message). From the Switchboard's side it is
-simply a Shard — a loaded Shard mounts, routes, and reloads exactly like a native
+simply a Weave — a loaded Weave mounts, routes, and reloads exactly like a native
 one. The host callbacks resolve an emitted message's schema against the
 Switchboard's system-wide registry (`resolve_schema`) and gate it before routing.
 
@@ -558,13 +558,13 @@ Switchboard's system-wide registry (`resolve_schema`) and gate it before routing
 
 The adapter owns the instance and destroys it (`abi->destroy`) in its destructor;
 the Kernel owns the library handle and closes it **only after** the adapter is
-gone. Unload is therefore: `unregister_shard` (stop delivery, take ownership) →
+gone. Unload is therefore: `unregister_weave` (stop delivery, take ownership) →
 destroy the adapter (→ destroy the instance, library still open) → `close` — no
 call ever lands in a closed library (clean under ASan).
 
-`reload_from(name, new_path)` snapshots the live Shard to **host-owned** bytes,
+`reload_from(name, new_path)` snapshots the live Weave to **host-owned** bytes,
 opens and validates the new library, then swaps `(abi, instance)` **in place
-behind the same adapter and ShardId** (so senders keep their handle), destroys
+behind the same adapter and WeaveId** (so senders keep their handle), destroys
 the old instance while its library is still open, closes the old library, and
 revives the new instance from the snapshot **through the gate**. State survives
 because the snapshot bytes are host-owned, independent of either library. A new
@@ -572,38 +572,38 @@ library whose **state-schema version differs** is a **clean refusal** — the ol
 library keeps running. (This is exactly where the deferred migration layer will
 slot in.) The revive after the swap goes through `Switchboard::swap_state`, the
 **unbudgeted** intentional-swap path, so a deliberate hot-reload neither draws
-down nor is blocked by the Shard's crash-revival budget (see *Intentional swap ≠
+down nor is blocked by the Weave's crash-revival budget (see *Intentional swap ≠
 crash revival* above).
 
 ### The one switchboard change for the kernel, and a note on hosting
 
-The kernel needed two small `Switchboard` additions: `unregister_shard` (to
+The kernel needed two small `Switchboard` additions: `unregister_weave` (to
 destroy an adapter before closing its library) and `resolve_schema` (to gate a
-library's emitted messages against the system registry). `Shard::handle` taking
+library's emitted messages against the system registry). `Weave::handle` taking
 the abstract `Bus` (rather than the concrete `Switchboard`) is what lets one
-Shard be hosted either natively or from a `.so`.
+Weave be hosted either natively or from a `.so`.
 
 **Crash isolation is a non-goal here:** this kernel is in-process, so a crashing
-Shard takes the host down (accepted for now). The wire format already makes the
+Weave takes the host down (accepted for now). The wire format already makes the
 eventual process boundary cheap — in-process (fast) and out-of-process (isolated)
 become the two permanent hosting modes, and a cross-boundary link is just
 `serialize` at the sender and `parse` → `admit` at the receiver, with no change
-to the Shard contract.
+to the Weave contract.
 
 ---
 
-## The authoring layer (schema-from-struct, low ceremony)
+## The weaving layer (schema-from-struct, low ceremony)
 
-`zen-author` (header-only, `include/zen/author/`) is the first layer whose job is
+The **weave** layer (header-only, `include/zen/weave/`) is the first layer whose job is
 to make apparatus *disappear*. It is **pure sugar**: no new schema type, no new
 value type, no second validator, no change to the gate, the wire format, the bus,
 or the kernel. It emits schemas only through `SchemaBuilder` and hands `Value`s to
 the same `admit`. A struct-derived `Foo v1` and a hand-built one are the *same*
-`Schema` — identical content-id, shared door — proven by `tests/test_author_shape.cpp`.
+`Schema` — identical content-id, shared door — proven by `tests/test_weave_shape.cpp`.
 
 ### Schema-from-struct
 
-An author writes a plain C++ struct (real members) plus one in-class line:
+A maker writes a plain C++ struct (real members) plus one in-class line:
 
 ```cpp
 struct Ping {
@@ -619,12 +619,12 @@ name string. From that the layer derives, all through the public API:
 - the runtime `Schema` (`schema_of<T>()`, built once via `SchemaBuilder`), with
   the **Kind deduced from each member's C++ type** (`type_ref_for<M>`):
   `int64_t→Int`, `double→Float`, `std::string→Text`, `bool→Bool`,
-  `zen::Bytes→Bytes`, `std::vector<T>→List<T>` (recursive; a byte vector resolves
+  `loom::Bytes→Bytes`, `std::vector<T>→List<T>` (recursive; a byte vector resolves
   to Bytes first), and a nested registered shape `→Message`;
 - `to_value(const T&)` and `from_value<T>(const Value&)` (the latter assumes an
   already-gated value — conversion to a struct happens *only after* the gate).
 
-The struct stays a plain aggregate; the author never touches a `Cell` or a
+The struct stays a plain aggregate; the maker never touches a `Cell` or a
 `set("...")`, so a field typo is a compile error, not a runtime throw.
 
 ### Explicit version (built now — migration seam #3)
@@ -636,9 +636,9 @@ identity. Omitting the version fails to compile. The whole migration chain keys 
 these stable versions, so this is the one migration seam unsafe to leave loose —
 and it is built.
 
-### Low-ceremony Shard authoring + `mount`
+### Low-ceremony Weave-making + `mount`
 
-`ShardBase<Self, State, Accept<Shapes...>, Emit<Shapes...>>` (CRTP) derives:
+`WeaveBase<Self, State, Accept<Shapes...>, Emit<Shapes...>>` (CRTP) derives:
 `accepted_schemas()` from `Accept<…>`, `snapshot() = to_value(state_)`,
 `revive() = from_value<State>`, and `policy()` from an overridable
 `policy_config()`. Its `handle()` matches the gated payload to an accepted shape
@@ -649,7 +649,7 @@ accept-set is named once, not a third time. `Mail` is the typed send context (it
 carries the inbound envelope): `mail.reply(Pong{…})`, `mail.send(target, T)`,
 `mail.publish(T)` — no `Value`/`Cell`/`Message` ceremony. `mount<Node>(bus)`
 constructs, registers (the derived schemas flow into the registry as usual),
-wires the self-id, and returns the `ShardId` in one call.
+wires the self-id, and returns the `WeaveId` in one call.
 
 **Dispatch selects by true identity (`same_identity`), the same key the bus
 admitted the message under — not by a bare content-id hash.** A delivered payload
@@ -658,7 +658,7 @@ has already passed the gate against the accept-set entry the Switchboard chose b
 `from_value<S>`'s precondition — every field present and well-typed — is
 *guaranteed*, not merely probable. Selecting by `content_id()` *alone* would be a
 latent **null dereference**: `content_id` is a 64-bit FNV hash, and a collision
-*within one Shard's accept-set* would route a message to the wrong `on()`, whose
+*within one Weave's accept-set* would route a message to the wrong `on()`, whose
 `from_value<S>` reads `*v.get(field)` for each of `S`'s fields — and `get()`
 returns null for a field the colliding shape does not carry. `same_identity`
 checks `(name, version)` as well as `content_id`, so it closes that collision —
@@ -669,7 +669,7 @@ handler set is the *same* `Accept<A...>`, **exactly one** handler matches; a
 no-match is an internal-invariant violation, so `handle()` throws a clear
 `std::logic_error` rather than silently dropping the message.
 
-**Ceremony delta** (`examples/heartbeat.cpp` → `heartbeat_authored.cpp`): ~89 → ~58
+**Ceremony delta** (`examples/heartbeat.cpp` → `heartbeat_woven.cpp`): ~89 → ~58
 code lines, and the hand-built schemas, the stringly-typed `set`s, and the
 hand-written `snapshot`/`revive` are *gone* — same observable behavior.
 
@@ -685,7 +685,7 @@ touches only that block.
 ### Reserved (documented, not built)
 
 - **Migration transform registry.** A future registry maps `(name, vA) → (name, vB)`
-  via a function, chainable so a `v1` value walks `v1→v2→v3`. The authoring layer is
+  via a function, chainable so a `v1` value walks `v1→v2→v3`. The weaving layer is
   shaped so such a transform naturally **consumes and produces the typed structs**
   (`Player_v2 migrate(const Player_v1&)`) and is **keyed by content-id** (which
   already exists and is now derivable from a struct). It hooks into the *single*
@@ -694,24 +694,24 @@ touches only that block.
 - **Emit-set (enforcement reserved at `Mail`).** `Emit<Shapes...>` is declared
   alongside `Accept<…>` and surfaced as `emitted_schemas()`, **informational and
   unenforced** for now. `Mail::send`/`reply`/`publish` are the *sole* outbound path
-  for an authored Shard, so **`Mail` is the single reserved chokepoint** where
+  for a woven Weave, so **`Mail` is the single reserved chokepoint** where
   emit-enforcement (a sent `T` must be in `Emit<...>`) would later sit. It stays
-  off **with intent**: a Shard's emit-set is not yet known to be statically
+  off **with intent**: a Weave's emit-set is not yet known to be statically
   enumerable (a router/forwarder may emit shapes chosen at runtime), so the
   substrate must not commit to it. The *declaration* is kept honest by test
-  (`tests/test_author_shard.cpp` pins that each Shard's observed emits equal its
+  (`tests/test_weave.cpp` pins that each Weave's observed emits equal its
   `emitted_schemas()`) meanwhile. Completing the silhouette later (gating against
   the declared contract, drawing the bus wiring graph, feeding a dependency-mapper)
-  needs *no* authoring change. **B1 (capabilities) closes the in-process half of
+  needs *no* weaving change. **B1 (capabilities) closes the in-process half of
   this** — see below.
 
 ---
 
 ## Capabilities (B1): the in-process grant model
 
-Delivery is gated on message *shape*, but a Shard could send anything to anyone.
-B1 closes that: a Shard's reach is a **grant** the host assigns, default nearly
-empty, and the bus authorizes every Shard-originated send against it. (This is
+Delivery is gated on message *shape*, but a Weave could send anything to anyone.
+B1 closes that: a Weave's reach is a **grant** the host assigns, default nearly
+empty, and the bus authorizes every Weave-originated send against it. (This is
 **B1 of two**: B1 is the *message* boundary; **B2 — the next phase — is
 isolation-as-enforcement**, out-of-process hosting that projects the grant onto OS
 sandbox primitives at the *syscall* boundary. The grant is the one source of truth
@@ -723,7 +723,7 @@ A `Grant` (`include/zen/switchboard/grant.hpp`) has two parts:
 
 - **Send-permissions (enforced in B1):** a list of `SendRule`s, each a
   `(shape-selector, target-selector)` where each selector is a specific value or
-  "any" — e.g. "`Pong` to any accepter", "`LoadLibrary` to the control Shard only".
+  "any" — e.g. "`Pong` to any accepter", "`LoadLibrary` to the control Weave only".
 - **OS-capability flags (hard, binary):** `Network` (enforced out-of-process in B3)
   and `SpawnProcess` (reserved). B1 **does not consult** them — they govern
   instruction-level behaviour a loaded `.so` reaches directly, which only process
@@ -733,23 +733,23 @@ A `Grant` (`include/zen/switchboard/grant.hpp`) has two parts:
 
 The default grant is **empty**: minimal authority by default. Grants flow from the
 host (the root of trust) at registration, out-of-band; there is no in-band path by
-which a Shard widens its own grant.
+which a Weave widens its own grant.
 
 ### The trust boundary: `Bus` gates, `Switchboard` is root
 
 The split that already existed *is* the trust boundary. A handler only ever
-receives a `Bus&` — and `deliver_one` now hands it a per-delivery **`ShardBus`**
-bound to the handling Shard's id, *not* the concrete `Switchboard`. The `ShardBus`
-stamps the authoritative sender on every message (a Shard cannot send as anyone
+receives a `Bus&` — and `deliver_one` now hands it a per-delivery **`WeaveBus`**
+bound to the handling Weave's id, *not* the concrete `Switchboard`. The `WeaveBus`
+stamps the authoritative sender on every message (a Weave cannot send as anyone
 else) and enqueues it **gated**. `Switchboard::send`/`publish` — held only by the
 host program — enqueue **ungated** root authority (test setup, the trusted host
-shell). `Mail` wraps the `ShardBus`; the kernel's loaded-Shard host callbacks
-route through the same `ShardBus` — so native and loaded Shards are authorized
+shell). `Mail` wraps the `WeaveBus`; the kernel's loaded-Weave host callbacks
+route through the same `WeaveBus` — so native and loaded Weaves are authorized
 identically, keyed by id.
 
 ### Authorization is a distinct step from the gate
 
-At delivery, for a *gated* (Shard-originated) message and **before** the gate, the
+At delivery, for a *gated* (Weave-originated) message and **before** the gate, the
 bus looks up the **sender's** grant and checks `(target, shape)`. Denied →
 `RefusalReason::CapabilityDenied`: never delivered, and **the gate is not invoked**
 (`gate_invocations()` is unchanged — `tests/test_capabilities.cpp` asserts it).
@@ -760,38 +760,38 @@ there is still exactly one conformance validator, untouched; an authorized,
 well-formed message still passes it. `send`, `publish`, and replies are all
 authorized the same way (uniform-gated; an implicit-reply convenience is a possible
 follow-up). Denials are observable on the tap with sender, attempted shape, and
-attempted target — the supervisor can *see* a Shard overreach.
+attempted target — the supervisor can *see* a Weave overreach.
 
 ### Grant ↔ Emit, and the closed emit seam
 
-`zen::author::mount<Self>(bus)` defaults the grant to the Shard's self-declared
+`loom::mount<Self>(bus)` defaults the grant to the Weave's self-declared
 `Emit<E…>` (each emitted shape → any accepter) — the *trusted* in-process default.
 This **closes the in-process emit-enforcement seam**: delivery now checks a real
-authority, and a Shard that sends a shape outside its declared `Emit` is denied.
-`mount_granted` supplies an explicit grant for an untrusted Shard, whose
+authority, and a Weave that sends a shape outside its declared `Emit` is denied.
+`mount_granted` supplies an explicit grant for an untrusted Weave, whose
 declaration is not trusted. (Emit-set *as a wiring contract* — enumerating a
 runtime router's emits, drawing the graph — remains the deferred seam.)
 
 ### The kernel's message door (the teeth)
 
-The kernel registers a **control Shard** (`include/zen/kernel/control.hpp`)
+The kernel registers a **control Weave** (`include/zen/kernel/control.hpp`)
 accepting `LoadLibrary` / `ReloadLibrary` / `UnloadLibrary` (`ZEN_SHAPE`s) whose
 handlers call the kernel's `load` / `reload_from` / `unload`. Operating the kernel
 is now just sending it messages. The **load capability** — the right to send those
-shapes to the control Shard — is the canonical dangerous grant: a Shard holding it
-drives the kernel by message; one without it is denied at the control Shard's door
+shapes to the control Weave — is the canonical dangerous grant: a Weave holding it
+drives the kernel by message; one without it is denied at the control Weave's door
 (`CapabilityDenied`), gating the single most dangerous surface in the system with
 the same mechanism as everything else.
 
-### Loaded `.so` Shards, and the B1 → B2 → B3 split
+### Loaded `.so` Weaves, and the B1 → B2 → B3 split
 
 A loaded `.so` can bypass the bus and reach syscalls directly, so a restrictive
 *bus* grant on it is not real containment in B1. Containment is staged: **B2**
-(below) puts the Shard in its own **process** — crash isolation and memory
+(below) puts the Weave in its own **process** — crash isolation and memory
 separation — and **B3** adds the **OS sandbox** the reserved OS-capability flags
-drive (the syscall boundary). So the kernel grants loaded Shards **permissive bus
+drive (the syscall boundary). So the kernel grants loaded Weaves **permissive bus
 sends** in B1; the kernel *door* is demonstrated fully gated against **native**
-Shards (the authored mod logic, the console's elevated instance). B1 makes the
+Weaves (the woven mod logic, the console's elevated instance). B1 makes the
 grant *real at the message boundary* and shapes it so B2 can host out-of-process
 and B3 can enforce its OS-relevant parts at the syscall boundary, each with no
 rework.
@@ -800,7 +800,7 @@ rework.
 
 ## Isolation (B2): out-of-process hosting & crash supervision
 
-B2 makes hosting mode a **mount choice**: a Shard can run in a child process,
+B2 makes hosting mode a **mount choice**: a Weave can run in a child process,
 indistinguishable to the bus from an in-process one, and when it crashes the host
 survives, contains the blast, reloads it a bounded number of times, then
 quarantines it. This is the *isolation* half of "capabilities + isolation". It is
@@ -812,14 +812,14 @@ Nothing in the gate, the wire format, the `Value`/`Schema` model, or the
 single-threaded FIFO bus changed in behavior. The only new bus surface is the pair
 `send_as`/`publish_as` (root authority, added in B1's prep), which the host uses to
 re-enter a child's output with its identity stamped **from the connection**. The
-new code is a library (`zen-isolation`) and a child executable (`zen-shard-host`);
-the bus simply hosts one more kind of `Shard`.
+new code is a library (`zen-isolation`) and a child executable (`zen-weave-host`);
+the bus simply hosts one more kind of `Weave`.
 
-### The child is a byte shuttler (`zen-shard-host`)
+### The child is a byte shuttler (`zen-weave-host`)
 
 The child reuses the **kernel C ABI** unchanged: it `dlopen`s the `.so`, gets its
-`zen_shard_abi()`, and drives the same `create`/`describe`/`policy`/`snapshot`/
-`revive`/`handle` thunks. It links **no zen-core** — it neither validates nor
+`zen_weave_abi()`, and drives the same `create`/`describe`/`policy`/`snapshot`/
+`revive`/`handle` thunks. It links **no loom** — it neither validates nor
 interprets values; it only moves bytes between the `.so` and a framed socket. Its
 outbound `Bus` (the `ZenHostApi`) ships the `.so`'s emitted payload bytes as `Emit`
 frames; **gating happens parent-side**. The `.so` is identical to the in-process
@@ -842,16 +842,16 @@ reconstructs, so the host rebuilds the child's accept-set and state schema throu
 ### Sender integrity: stamped from the connection
 
 The `Emit` frame carries **no sender field by construction** — a child has no way
-to express one. The host stamps the proxy's `ShardId` (the identity of the
+to express one. The host stamps the proxy's `WeaveId` (the identity of the
 *connection* the bytes arrived on) via `send_as`/`publish_as`, and the bus then
-authorizes that message against **that Shard's grant** at delivery, yielding
-`CapabilityDenied` on a violation — identical to the in-process `ShardBus` path. A
+authorizes that message against **that Weave's grant** at delivery, yielding
+`CapabilityDenied` on a violation — identical to the in-process `WeaveBus` path. A
 child that wants to send as someone else cannot get it; a child granted nothing
 can emit, but its emissions are denied before the gate.
 
-### The proxy is a `Shard`; the host loop keeps the bus single-threaded
+### The proxy is a `Weave`; the host loop keeps the bus single-threaded
 
-The host-side `OutOfProcessShard` *is* a `Shard` on the bus, so the Switchboard is
+The host-side `OutOfProcessWeave` *is* a `Weave` on the bus, so the Switchboard is
 unchanged. `handle()` serializes the message and ships a `Deliver` frame and
 **returns at once** (fire-and-continue): a slow, flooding, or hung child can never
 block, stall, or OOM the host. `snapshot()`/`policy()` return **host-owned cached**
@@ -874,13 +874,13 @@ asynchrony is the *timing* of a child's reply, which arrives on a later `step`.
 
 ### Supervision: bounded reload, then quarantine
 
-On a child's death the host marks the Shard dead and emits `Died`, then drives the
+On a child's death the host marks the Weave dead and emits `Died`, then drives the
 **existing lifecycle mechanics**: `reload` from the **host-owned snapshot**, which
-is budgeted by the Shard's own `max_reloads`. Reload re-enters through the proxy's
+is budgeted by the Weave's own `max_reloads`. Reload re-enters through the proxy's
 `revive()`, which respawns a fresh child and ships it the last-good state. A child
 that crashes again on `revive` simply dies again next `step`, spending one unit of
 budget each cycle; when the budget is exhausted, `revive` is never called and the
-Shard stays dead — **quarantined**, surfaced on the tap. The host process is never
+Weave stays dead — **quarantined**, surfaced on the tap. The host process is never
 the thing that dies. (Crash-revival is budgeted; intentional hot-reload remains the
 unbudgeted `swap_state` path — B2 reuses both without change.)
 
@@ -924,7 +924,7 @@ wire format, or the supervision loop.
 ### The lattice: detect → apply → know → refuse-or-proceed
 
 The real deliverable is not "configure a namespace" — it is that the system *always
-knows whether it actually sandboxed a Shard*, on every platform, and **never claims
+knows whether it actually sandboxed a Weave*, on every platform, and **never claims
 enforcement it did not impose**. `detect_enforcement()` (`src/isolation/sandbox.cpp`)
 **probes** — it does not assume: it attempts the real unprivileged operation in a
 throwaway child and observes the result, then caches a per-capability
@@ -1018,7 +1018,7 @@ Strictness is **default-on**. When the safe floor for a requested capability can
 imposed on this host, the mount **refuses**, loudly, naming the gap — a forgotten flag
 fails *safe* (refuses), never *open* (runs unprotected silently). **Dev-mode** is the
 human override: it converts those refusals into loud warnings and proceeds, with the
-Shard **visibly marked uncontained** for each unenforced capability (so a WSL/CI box
+Weave **visibly marked uncontained** for each unenforced capability (so a WSL/CI box
 lacking a primitive never blocks development while production stays protected by
 default). It is a deployment-level choice — the same binary, dev box vs prod,
 uninferable by code — which is exactly why it earns a knob. It gates *only* the
@@ -1073,19 +1073,19 @@ filtering, **cgroups** CPU/memory caps, **filesystem** enforcement (B3 ships its
 
 ## Isolation (B4): the filesystem primitive — a graduated capability, mount-namespace enforced
 
-B4 closes the highest-value remaining harm a stranger's Shard can do once the network is
+B4 closes the highest-value remaining harm a stranger's Weave can do once the network is
 shut: reach your **files** — read `~/.ssh` or a password store, destroy data, or plant an
 executable. It is the **first *graduated* capability**: the grant's `FsAccess` level picks
 a point on a safe→dangerous axis, defaulting to the safe end.
 
 ### The level model (allow-list, not deny-list)
 
-The restricted view is an **allow-list** — the Shard sees only what it is granted, built by
+The restricted view is an **allow-list** — the Weave sees only what it is granted, built by
 `pivot_root`-ing into a fresh, minimal, read-only root. A deny-list (hiding sensitive paths)
 fails *open* the moment you forget one; an allow-list fails *closed*. The levels:
 
-- **None** (default) — a minimal read-only view: the dynamic-loader closure and the Shard's
-  own `.so`, nothing writable, no home, no `/tmp`. A default-grant Shard cannot read your
+- **None** (default) — a minimal read-only view: the dynamic-loader closure and the Weave's
+  own `.so`, nothing writable, no home, no `/tmp`. A default-grant Weave cannot read your
   secrets because they are **absent from the view**, not merely hidden.
 - **ReadOnly** — None plus the grant's `scoped_path` bind-mounted read-only.
 - **WriteScoped** — None plus a single writable scratch `tmpfs` at `/scratch`.
@@ -1110,7 +1110,7 @@ no allocation — to build the view:
    `mount_setattr(AT_RECURSIVE, MOUNT_ATTR_RDONLY)` (kernel 5.12+; the bind-then-remount-ro
    alternative is *non-recursive* and would leave submounts writable).
 3. The scratch `tmpfs` for the write levels (`MS_NOEXEC` at `WriteNoExec`).
-4. **Remount the root read-only** so a Shard cannot write — or plant-and-exec — at `/`;
+4. **Remount the root read-only** so a Weave cannot write — or plant-and-exec — at `/`;
    only the scratch submount stays writable. (Without this the writable root tmpfs would
    leak past the read-only/noexec intent — a real gap the behavioural test caught.)
 5. `pivot_root` into the new root, `chdir("/")`, detach the old root.
@@ -1121,7 +1121,7 @@ After the handshake the host **confirms** the child is in a distinct mount names
 (`/proc/<pid>/ns/mnt` inode differs); a failure fails safe (the mount refuses), so
 "contained at level X" rests on confirmation, never inference. Detection **probes** the real
 mechanism (a throwaway child that builds a minimal view); an unenforceable host refuses by
-default, and `set_dev_mode(true)` converts that to a loud warning with the Shard marked
+default, and `set_dev_mode(true)` converts that to a loud warning with the Weave marked
 filesystem-uncontained. A *surprise* entry failure refuses in both modes.
 
 ### Honest scope caveats (in the containment string)
@@ -1145,7 +1145,7 @@ needed. `FsAccess` is now the **single source of truth** for files; the redundan
 The Filesystem detection probe, the per-level mount-namespace view, `/proc/<pid>/ns/mnt`
 confirmation, the honest per-level `containment()` with its caveats, and the cleanup all ship,
 green in Debug and under ASan/UBSan. The OS-enforced proof passes end-to-end: a fs-probe
-Shard's read of a secret outside scope, a write outside `/scratch`, and an `execve` from a
+Weave's read of a secret outside scope, a write outside `/scratch`, and an `execve` from a
 `noexec` scratch all return the OS's `ENOENT`/`EROFS`/`EACCES` — while the probe **still
 emits** its result (sandbox ≠ muzzle) — and `WriteAnywhere` proves the opt-out reaches host
 paths and is reported *not contained*. **Sandboxed-by-default now means network *and* a
@@ -1155,7 +1155,7 @@ restricted filesystem view.** Next: **B5 — cgroups**.
 
 ## Isolation (B5): the resource primitive — a quantitative capability, cgroup-v2 enforced
 
-B5 closes the last threat-model harm: a Shard that **hogs resources** — allocates until the
+B5 closes the last threat-model harm: a Weave that **hogs resources** — allocates until the
 host OOMs, pegs every core, or fork-bombs. It is the **first *quantitative* capability**:
 not binary (network), not a safe→dangerous level (filesystem), but a *limit*. With network
 + filesystem + resources the mechanism ladder covers the mod-ecosystem threat model end to
@@ -1168,11 +1168,11 @@ end. **seccomp is a separate, later decision** (it guards a different tier — k
 `0` means "use the host-computed conservative default," a positive value raises it, and
 `with_unlimited_memory()` is the **only** opt-out — it removes the *memory* cap alone. Defaults
 are **computed from the host, not a config knob** (the stinginess bar): memory = a bounded
-fraction of RAM (1/8) capped at 1 GiB and floored at 128 MiB so one Shard can't OOM the host;
+fraction of RAM (1/8) capped at 1 GiB and floored at 128 MiB so one Weave can't OOM the host;
 pids = 512 (room for threads, stops a bomb); cpu_weight = 100 (fair share, not a hard quota — a
 quota would waste idle cores). **A structural invariant: no grant can license a fork bomb.**
 There is no wholesale "no limits" opt-out; the only opt-out reaches *memory*, and **pids stays
-bounded for every Shard cgroups can reach** (a heavily-parallel Shard raises its pids cap, never
+bounded for every Weave cgroups can reach** (a heavily-parallel Weave raises its pids cap, never
 removes it). A forgotten/empty grant lands on the *bounded* default.
 
 ### cgroup-v2 mechanism (parent-applies-at-the-sync-point)
@@ -1184,16 +1184,16 @@ the attach race: the child runs nothing real until released):
   hierarchy the **no-internal-processes** rule forces: create a `zen-supervisor` leaf, **drain
   the base's processes into it**, then enable `+memory +pids` — **and `+cpu` where the
   controller is delegated** — on the base's `cgroup.subtree_control` (you can't enable
-  controllers on a cgroup that holds processes). Per-Shard leaves are created **alongside** the
+  controllers on a cgroup that holds processes). Per-Weave leaves are created **alongside** the
   supervisor.
-- At **mount**, a per-Shard leaf is created with its limits (`memory.max` unless opted out by
+- At **mount**, a per-Weave leaf is created with its limits (`memory.max` unless opted out by
   grant, `memory.swap.max=0` so swap can't escape the cap, `pids.max` **always**, and
   `cpu.weight` where the cpu controller is delegated — a fair-share weight, set-and-confirmed,
   not a hard cap). At the **sync point** (child unshared, blocked on
   "go") the parent writes the child's pid into the leaf's `cgroup.procs` — moving the whole
   subtree it execs/spawns under the limits — then maps it (if it made a userns), then releases.
   The child consumes nothing until released, so it is in the cgroup before it can.
-- A Shard exceeding `memory.max` is **OOM-killed within its cgroup** by the kernel; the child
+- A Weave exceeding `memory.max` is **OOM-killed within its cgroup** by the kernel; the child
   dies and flows through the **existing** death → bounded-reload → quarantine path unchanged.
   `pids.max` makes `fork()` fail (`EAGAIN`) rather than bomb the host. The leaf is removed on
   teardown (after the process is reaped — `rmdir` needs it empty) and recreated on respawn.
@@ -1219,13 +1219,13 @@ missing controller).
 
 ### Status: built
 
-The Resources detection (establish-the-base probe), the per-Shard cgroup-v2 leaf with
+The Resources detection (establish-the-base probe), the per-Weave cgroup-v2 leaf with
 memory/pids limits (and `cpu.weight` where the cpu controller is delegated) applied at the sync
 point and confirmed (pid-in-leaf + limits read back), leaf cleanup/recreate across
 teardown/respawn, the resolution + dev-mode + fail-safe + the **memory-only opt-out**, and the
-honest per-Shard `containment()` all ship, green in Debug and under ASan/UBSan (the suite runs
+honest per-Weave `containment()` all ship, green in Debug and under ASan/UBSan (the suite runs
 under a delegated scope). The OS-enforced proof passes **with its negative control**: a
-memory-bomb Shard under a 64 MiB cap is **OOM-killed within its cgroup** (the host survives and
+memory-bomb Weave under a 64 MiB cap is **OOM-killed within its cgroup** (the host survives and
 quarantines it), while the *same* allocation under a 512 MiB cap **survives** — proving the cap,
 not the allocation, is the cause; and a fork-bomb is **bounded by `pids.max`** (≤64 of its 4000
 attempts). **The structural invariant is pinned: a fork-bomb stays bounded *even with
@@ -1244,7 +1244,7 @@ ladder is **complete for the threat model**; what remains is a **deliberate secc
 
 The B-series built **mechanism** — a grant projected onto an OS-enforced boundary. This phase
 builds the **policy that produces the grant**, in the **powerbox / object-capability** shape:
-a privileged capability (real disk) is held by a small, hard-rooted **broker** Shard; an
+a privileged capability (real disk) is held by a small, hard-rooted **broker** Weave; an
 untrusted mod never holds the raw capability — it holds only a *send-rule to talk to the
 broker*, which mediates and scopes by the authoritative sender the bus already stamps. The
 core barely changes; the broker is *ecosystem*. **Both parts are built**: Part A the reusable
@@ -1253,22 +1253,22 @@ grant-policy core hooks (ask, floor + grant-record, role-addressing), Part B the
 
 ### The wall: advice, not authority (ask ≠ grant)
 
-A Shard may **ask** for capabilities; the **host alone** decides the grant. The ask is
+A Weave may **ask** for capabilities; the **host alone** decides the grant. The ask is
 *conformance data* — gated, untrusted, surfaced — never authority. This is Pillar 1
 (conformance ≠ authorization) applied to the policy layer, and it is kept absolute.
 
 - **The ask, in the manifest.** `zen.Manifest` is bumped to **v2** with an optional
   `requests` field carrying a `zen.CapabilityAsk` (`network`, a `filesystem` level name,
-  `roles`). It is optional — a Shard with no ask emits no section and admits unchanged; and
+  `roles`). It is optional — a Weave with no ask emits no section and admits unchanged; and
   bumping the version (not mutating v1 in place) preserves the invariant that a published
   `(name, version)` is a frozen shape. The ask rides the manifest through the **same
   meta-schema gate** as the accept-set and state schema (`schema_codec.hpp`); nothing in the
   path lets a declaration become a grant.
-- **The author macro.** `ZEN_ASK(.network = true, .filesystem = "write-scoped", .roles =
-  {"storage"})` is a `ZEN_SHAPE`-sibling on `ShardBase`: it shadows a floor default
+- **The maker macro.** `ZEN_ASK(.network = true, .filesystem = "write-scoped", .roles =
+  {"storage"})` is a `ZEN_SHAPE`-sibling on `WeaveBase`: it shadows a floor default
   (`ask_config()` → empty) with designated initializers, defaulting to nothing. The export
   layer reads it only if present (`if constexpr (requires { s->zen_requested_capabilities(); })`),
-  so a bare `Shard` without it simply has no ask.
+  so a bare `Weave` without it simply has no ask.
 - **The kernel ignores the ask; the host reads it only as advice.** The kernel never consults the
   manifest ask for anything — it is never an input to a grant. Only the **host** reads it, purely as
   advice: `IsolationHost::declared_ask(name)` surfaces what the mod *wanted*; the gap between it and
@@ -1286,7 +1286,7 @@ A Shard may **ask** for capabilities; the **host alone** decides the grant. The 
 - **The grant-record (the host holds the pen).** A persisted, per-install ledger keyed by the
   mod's **`.so` content-hash** (FNV-1a — stable across path moves, so a rebuild is a new
   identity and re-floors, the honest default) maps identity → a granted **delta** above the
-  floor. It is **TCB data**: only the host writes it (`record_grant_delta`), never a Shard;
+  floor. It is **TCB data**: only the host writes it (`record_grant_delta`), never a Weave;
   it persists as a gated `Value` in Zen's JSON (inspectable, editable per-install). This
   stands in for the consent UX (deferred). Proven: with an empty record a greedy mod floors;
   with a recorded network delta the *same* mod mounts `network: granted` — the pen, not the
@@ -1294,18 +1294,18 @@ A Shard may **ask** for capabilities; the **host alone** decides the grant. The 
 
 ### Role-addressing (the seam, baked in, resolved trivially)
 
-Power is a granted send-rule to a **role**, not a `ShardId`:
+Power is a granted send-rule to a **role**, not a `WeaveId`:
 
-- A Shard may be **registered under a role** (`register_shard(shard, grant, "storage")`); v1
+- A Weave may be **registered under a role** (`register_weave(weave, grant, "storage")`); v1
   is **singleton** — a role has exactly one holder, and binding a held role throws.
 - A send may target a **role** (`Bus::send_to_role`); a grant may permit `shape → role`
   (`Grant::allow_to_role` / `permits_role`). Authorization is **by role** — the stable slot
   the rule names — decided in `deliver_one` **before** the role is resolved to a holder, so
   an unauthorized sender cannot even learn whether the role is held, and a role-rule and a
-  ShardId-rule are **distinct walls** (neither authorizes the other's send).
-- The role resolves to its holder at delivery; the holder's `ShardId` is **stable across
+  WeaveId-rule are **distinct walls** (neither authorizes the other's send).
+- The role resolves to its holder at delivery; the holder's `WeaveId` is **stable across
   reload**, so a role send-rule survives the broker reloading. An **unheld role degrades to
-  `NoSuchTarget`** — exactly like an unknown ShardId, never the gate: a crashed/unmounted
+  `NoSuchTarget`** — exactly like an unknown WeaveId, never the gate: a crashed/unmounted
   broker is *unavailable*, not a hole.
 - **Out-of-process role-send (Part B).** A new wire frame `Op::EmitRole` (role + reply_to +
   correlation + payload, **no sender**) and a `ZenHostApi::send_to_role` callback close the
@@ -1322,15 +1322,15 @@ Power is a granted send-rule to a **role**, not a `ShardId`:
   ephemeral tmpfs it binds without one. Still least-privilege — the broker reaches only that
   one dir, never the host home — but the data survives. A mod is `FsAccess::None` and never
   gets a `scoped_path`; the path cannot leak to it.
-- **The StorageBroker** (an *ecosystem* Shard, not host code). Host-mounted out-of-process via
+- **The StorageBroker** (an *ecosystem* Weave, not host code). Host-mounted out-of-process via
   `mount_broker` at the TCB tier: `WriteScoped(storage_root)` only, permitted to reply
   `StorageValue` to any mod, registered under role `"storage"`. It accepts
   `StoragePut{key,value}` / `StorageGet{key}` → `StorageValue{value}`, and derives the keyspace
   from the **stamped sender** (`mail.sender()`) — `storage_root/<sender>/<hex(key)>` — never a
   payload field, so a mod reaches only its own data and a hostile key cannot escape its subdir.
   Value is opaque bytes. A **hot-reloadable singleton**: `reload()` re-spawns the child in
-  place keeping ShardId/grant/role; the on-disk data is durable regardless.
-- **Session-scoped, stated honestly.** The sender is the *ephemeral* runtime `ShardId`, so a
+  place keeping WeaveId/grant/role; the on-disk data is durable regardless.
+- **Session-scoped, stated honestly.** The sender is the *ephemeral* runtime `WeaveId`, so a
   mod's subdir changes across host restarts — storage is **session-scoped**, not
   save-across-restart. `containment()` says so (the persistent-bind fs note). Persistent
   identity is the named successor phase.
@@ -1346,7 +1346,7 @@ storage. A mod that needs the network reaches it **only through a broker**, neve
   closing the deferred roles extension. Critically, that delta grants the **role send-rule only,
   not `os_cap::Network`**: the mod stays OS-network-denied (no-interface netns), powerless to
   `connect()` directly; it reaches the network solely by messaging the broker.
-- **The NetworkBroker** (an *ecosystem* Shard). Host-mounted via `mount_net_broker` at the TCB
+- **The NetworkBroker** (an *ecosystem* Weave). Host-mounted via `mount_net_broker` at the TCB
   tier with `os_cap::Network` (so it runs in the host netns, real network), `FsAccess::None`,
   bounded resources, role `"net"`, permitted to reply `NetResponse` to any mod. Protocol:
   `NetRequest{host,port,payload}` → `NetResponse{ok,data}`. It **validates `host:port` against an
@@ -1367,10 +1367,10 @@ storage. A mod that needs the network reaches it **only through a broker**, neve
   its reach at the kernel) — the defense-in-depth for the higher-trust broker, whose scoping is
   software-only today. **Per-mod network policy** (different mods reach different destinations,
   keyed by `mail.sender()`) — v1 is a broker-level allow-list.
-- **First-class persistent Shard identity** — the **save-file successor**: a stable identity
-  (beyond the ephemeral `ShardId` and the `.so` content-hash) that lets storage survive a host
+- **First-class persistent Weave identity** — the **save-file successor**: a stable identity
+  (beyond the ephemeral `WeaveId` and the `.so` content-hash) that lets storage survive a host
   restart. Storage is honestly session-scoped until this lands.
-- **Authority-transfer** — promoting a *different* Shard into a broker role (loud, user-gated,
+- **Authority-transfer** — promoting a *different* Weave into a broker role (loud, user-gated,
   with a state handoff + transition-window quiescing). P1/P2 ship **reload-in-place only**.
 - **The concurrent-instance version resolver** — multiple versioned holders of a role resolved
   by a send-time constraint. The role-target is real from day one; the resolver is a later
@@ -1413,7 +1413,7 @@ dataflow/reference layer (Stage 2) and the rich TUI (Stage 3) are named successo
 ### The engine / frontend split (the durable spine)
 
 The `ConsoleEngine` (`zen-console`) is **frontend-agnostic and fully testable with no terminal**.
-It returns **domain data** — lists of shards, field descriptors, received `Value`s, the buffer —
+It returns **domain data** — lists of weaves, field descriptors, received `Value`s, the buffer —
 never formatted text and **never a widget tree**. The terminal is the first **replaceable skin**:
 it formats that data as plain text. Care and correctness live in the engine; a GUI later inherits
 it whole and only the skin is new. (UI-as-data is Stage 3, born from felt behavior; when it comes
@@ -1421,9 +1421,9 @@ it will describe **intent and relationship, never absolute position/size**.)
 
 ### Discovery-first; the console presumes nothing
 
-The engine drives shapes it has never seen: `shards()` enumerates live Shards (id + accept-set);
+The engine drives shapes it has never seen: `weaves()` enumerates live Weaves (id + accept-set);
 `describe(name, version)` reads a shape's fields from the **registry**. So a person explores with
-no prior knowledge, and a *new* Shard with *new* shapes is immediately drivable. The console bakes
+no prior knowledge, and a *new* Weave with *new* shapes is immediately drivable. The console bakes
 in **no opinion** about what a shape means — the kernel holds grammar not answers, and the console
 must too. This is how emergence is protected.
 
@@ -1438,30 +1438,30 @@ mis-sent. Compose-time makes it smart; send-time makes it safe — the same one-
 
 ### Wildcard-accept (the one bus change): accept-any-known-shape, gated
 
-A normal Shard's accept-set is specific `(name, version)` matches, so a reply of an unanticipated
-shape would be refused `NotAccepted` — but the console must receive **whatever** a Shard replies.
-`register_shard(…, AcceptMode::AnyRegistered)` is a deliberate, opt-in capability: on a shape it
+A normal Weave's accept-set is specific `(name, version)` matches, so a reply of an unanticipated
+shape would be refused `NotAccepted` — but the console must receive **whatever** a Weave replies.
+`register_weave(…, AcceptMode::AnyRegistered)` is a deliberate, opt-in capability: on a shape it
 does not explicitly list, the bus **resolves the payload's claimed `(name, version)` from the
 registry and admits against that registered schema**. An *unregistered* shape resolves to null and
 is still refused — an unknown shape reaches no one, not even the console. It widens the door set; it
 **never skips the gate**, and a payload claiming a registered shape but carrying a different
-content_id is still caught (SchemaMismatch). Ordinary Shards (`Listed`, the default) are unchanged.
+content_id is still caught (SchemaMismatch). Ordinary Weaves (`Listed`, the default) are unchanged.
 
 ### The console as a participant, not an exception
 
-The console is registered **in-process** as a raw `zen::sb::Shard` (it does not dispatch by shape;
+The console is registered **in-process** as a raw `loom::Weave` (it does not dispatch by shape;
 its generic handler buffers every received `Value` into an indexed buffer — `m1`, `m2`, …,
 retrievable by index, the substrate the Stage-2 `$m1.field` references read from). It is the
 **most-granted** participant — broad send (`Grant{}.allow_any()`), wildcard-accept, the observer
 tap, and discovery (registry read) — but each is a deliberate **grant**, not a bypass: its sends go
 through the *gated* `send_as` path, bounded by its grant, never the ungated root authority. The
 operator's hands on the bus — powerful, still a participant. (Discovery via a direct bus query is
-pragmatic here; "discovery as messages to a registry Shard" is a noted future purification.)
+pragmatic here; "discovery as messages to a registry Weave" is a noted future purification.)
 
 ### Status: Stage 1 built
 
 `zen-console`'s `ConsoleEngine` (discovery, compose-by-named-field, gated send, the reply buffer,
-the tap), the console-as-Shard (broad grant + `AnyRegistered`), the wildcard-accept bus capability,
+the tap), the console-as-Weave (broad grant + `AnyRegistered`), the wildcard-accept bus capability,
 and a plain terminal REPL all ship, green in Debug and under ASan/UBSan. The four proofs pass
 **frontend-free**: the **participant loop** (discover → gate-send → reply read back from the
 buffer), the **gated-send backstop** (a malformed command → a clean `GateRefused`/`MissingField`,
@@ -1575,7 +1575,7 @@ value type with a defaulted `operator==`, so the whole tree is **one value**: tr
 in tests and diffable by `region_id` for retained-mode partial redraw.
 
 **One real renderer, plus a test-only proof of renderer-agnosticism.** The engine library builds the
-tree from its **public domain data** (`shards()`, the reply buffer, the tap, registry-derived
+tree from its **public domain data** (`weaves()`, the reply buffer, the tap, registry-derived
 guidance) — a fresh value each call, renderer-agnostic, fully testable with no terminal. There is
 **one real (production) renderer**, the full-screen **TUI** (`src/console/console_tui.cpp`), which
 lays the tree out to a character grid (hand-rolled ANSI + POSIX termios raw mode, **no ncurses, no
@@ -1588,19 +1588,19 @@ that a GUI later is just another renderer of the same description — like a scr
 browser over one HTML DOM.
 
 **Engine-produced guidance, the live guided-input.** As the operator types a partial command
-(`<shard id> <Shape> <version> [args]`), the `Field`'s hint shows the **next choice** —
+(`<weave id> <Shape> <version> [args]`), the `Field`'s hint shows the **next choice** —
 `guidance_for(partial)`, derived by the engine from the registry + the partial input (empty →
-"choose a shard"; an id → its shapes; a shape+version → its fields). The guidance is
+"choose a weave"; an id → its shapes; a shape+version → its fields). The guidance is
 engine-produced, so it is renderer-agnostic (the GUI shows the same string as a dropdown). The
 Stage-1 show-then-choose, now a live interaction.
 
 **Retained-mode, message-driven dirty-tracking (the Zengine idea's home).** The change signal is
 **bus messages**: the single bus observer (`record_tap`) sets per-region dirty flags as events
-arrive during `pump()` — `buffer` on a reply delivered to the console, `shards` on a Shard
+arrive during `pump()` — `buffer` on a reply delivered to the console, `weaves` on a Weave
 dying/reviving, `tap` on any event — drained by `take_dirty()`. A reply arriving patches the
 buffer pane; a tap event patches the tap log. (The current single-threaded TUI consults the flags
 then full-repaints each frame, which is correct and cheap at terminal sizes; the flags are the
-mechanism a future async/multi-shard or GUI renderer uses for true per-region partial redraw —
+mechanism a future async/multi-weave or GUI renderer uses for true per-region partial redraw —
 minimal cell-diffing is the named refinement.)
 
 **Symmetric input seam.** Input is factored as renderer-agnostic semantic **actions**
@@ -1614,7 +1614,7 @@ tests.
 headless outline renderer, the `ConsoleUi` controller + semantic-action input, and the full-screen
 termios TUI all ship, green in Debug and under ASan/UBSan. The proofs pass **frontend-free**: the
 **tree's semantic structure asserted with no renderer** (a `VStack` of a Bus `Region` [`HStack` of
-a Shards `List` + a Tap `Log`], a Buffer `List` with `m1`, a Compose `Field` carrying the engine's
+a Weaves `List` + a Tap `Log`], a Buffer `List` with `m1`, a Compose `Field` carrying the engine's
 guidance); **no geometry member on `Widget`** (the closed member set + the name-based compile-time
 fence on ~10 coordinate spellings, plus a runtime structural-`==` proof — defense in depth, not
 unrepresentability); **one tree, two consumers** (the test-only outline walk reflects the same tree
@@ -1623,10 +1623,10 @@ input**; a **bus message driving a buffer-pane
 update** (a reply dirties + grows the buffer; a refusal dirties only the tap); and a **TUI smoke
 test** (scripted actions move focus, compose a guided send, buffer the reply; an ambiguous command
 surfaces a `NeedsInput` prompt region and sends nothing). Named successors: a **general
-Shard-emitted-UI protocol** (any Shard describes its own UI as a tree the console/host renders —
+Weave-emitted-UI protocol** (any Weave describes its own UI as a tree the console/host renders —
 the vocabulary is built general *for* this, but the console validates it first); the **GUI
 renderer** (the same tree to pixels); **geometric/canvas UIs** (geometric by nature — they bridge
-at the sandboxed-Shard *fabric* level, not the semantic-rendering level); and the **result-graph
+at the sandboxed-Weave *fabric* level, not the semantic-rendering level); and the **result-graph
 buffer** (Stage 2's seam — the flat `m1,m2…` buffer becoming an addressable result-graph).
 
 ### The terminal-backend seam (cross-platform frontends)
@@ -1663,14 +1663,14 @@ terminal-free.
   UI-as-data proof). What remains *Josh-verified in CLion* is only the **interactive raw-mode TUI
   behavior** (arrow/Tab focus, Enter/Backspace edits, resize reflow, bare-ESC-vs-arrow disambiguation,
   clean exit) — which a non-interactive shell cannot drive.
-- **Trusted-code, in-process, no containment surface.** The Windows TUI runs **in-process Shards
+- **Trusted-code, in-process, no containment surface.** The Windows TUI runs **in-process Weaves
   only** — there is no `IsolationHost` in the TUI build (the sandbox is Linux/WSL, by design), so
   this phase adds **no out-of-process hosting and no containment surface**. The Windows TUI is the
   trusted-code console (you trust what you run); containment honesty and the relocate-to-WSL flow
   belong to the WSL-bridge phase, where hosting actually enters.
 
-**CMake platform-gating.** `zen-kernel`, `zen-isolation`, `zen-shard-host`, and the Linux-only test
-sources/shardlibs/suites (`test_kernel`, `test_capabilities`, `test_policy`, `test_isolation`, the
+**CMake platform-gating.** `zen-kernel`, `zen-isolation`, `zen-weave-host`, and the Linux-only test
+sources/weavelibs/suites (`test_kernel`, `test_capabilities`, `test_policy`, `test_isolation`, the
 loadable `.so`s, the `isolation`/`policy`/`all` ctest entries) are gated behind `if(NOT WIN32)`, so
 the portable subset (core, switchboard, console, both terminal frontends, and the portable suites
 incl. **console**) configures on Windows. On Linux every gate is taken — the full target set and
@@ -1688,7 +1688,7 @@ seam** (the shared `draw()` writes the frame to stdout — fine for POSIX + Wind
 backend will route output over the wire, the natural extension being a `write()`/`flush()` pair),
 and **the TUI owns the I/O loop synchronously** (blocking `read_byte` + a timeout-read maps cleanly
 onto `recv`/`poll`, but a fully async transport would invert loop ownership). Separately, the
-platform gate makes the **native-Windows Shard-loading** port a *visible* seam (`dlopen` →
+platform gate makes the **native-Windows Weave-loading** port a *visible* seam (`dlopen` →
 `LoadLibrary` in the kernel) — hooked right there, but deferred to a trigger that likely **never
 fires**, because WSL-hosting dominates native execution for anything needing the sandbox.
 
@@ -1703,7 +1703,7 @@ fires**, because WSL-hosting dominates native execution for anything needing the
 
 - **Codegen marriage.** A build-time generator should emit, from one schema
   definition, *both* a compiled C++ struct (zero-overhead static path) *and* this
-  runtime `Schema`. The authoring layer is the **first half** of this: a shape
+  runtime `Schema`. The weaving layer is the **first half** of this: a shape
   declared once already yields the runtime `Schema` and typed accessors, sharing a
   door with the hand-built equivalent by content-id. The remaining half (a
   zero-overhead static path sharing the same door) is reachable from here
@@ -1719,7 +1719,7 @@ fires**, because WSL-hosting dominates native execution for anything needing the
   stable identity.
 
 - **Behavioral contracts (kept faith).** `admit` checks *shape*, not
-  *faithfulness*: a Shard that declares one policy and behaves against it passes
+  *faithfulness*: a Weave that declares one policy and behaves against it passes
   shape validation cleanly. This is a known, accepted gap. The place a
   behavioral-contract check would sit is the boundary itself — after structural
   `admit` succeeds, before the value is acted on — e.g. an optional
@@ -1738,18 +1738,18 @@ fires**, because WSL-hosting dominates native execution for anything needing the
   would resolve `(name, claimed_version, content_id) → door` and transcode the
   decoded value, then submit it to the same `validate_into`.
 
-- **Multi-threaded dispatch (per-Shard mailboxes).** The single-threaded FIFO
+- **Multi-threaded dispatch (per-Weave mailboxes).** The single-threaded FIFO
   loop is an implementation of the dispatcher, not part of the contract. The
-  `Shard` surface (receive a gated message; send, which enqueues) is identical
-  under per-Shard mailboxes and worker threads — only `pump`'s internals change.
-  Nothing in the Shard ABI or the `Message` envelope forecloses it.
+  `Weave` surface (receive a gated message; send, which enqueues) is identical
+  under per-Weave mailboxes and worker threads — only `pump`'s internals change.
+  Nothing in the Weave ABI or the `Message` envelope forecloses it.
 
 - **Request/response correlation and await.** The envelope already carries
   `reply_to` and `correlation`; replies work today as ordinary sends. A
   synchronous `request(...)` that blocks until a correlated reply arrives is a
   layer over the same enqueue/deliver path — not built here.
 
-- **Schema-as-value over the bus.** A Shard answering "what do you accept?" with
+- **Schema-as-value over the bus.** A Weave answering "what do you accept?" with
   its schemas rendered *as* `Value`s (the reflection seam above) turns the bus
   self-documenting and is the path to the IDE-as-a-node. `accepted_schemas()` and
   the observer hook are the surfaces it would build on.
@@ -1763,35 +1763,35 @@ fires**, because WSL-hosting dominates native execution for anything needing the
 - **Cross-boundary delivery (process / DLL).** In-process delivery moves `Value`s
   directly; a cross-boundary link would serialize at the sender and `parse` →
   `admit(Unverified, door)` at the receiver — the bytes path that already exists
-  in zen-core — with no change to the Shard contract.
+  in loom — with no change to the Weave contract.
 
 - **Crash isolation via per-process hosting.** Surviving a segfault in a loaded
-  Shard needs the Shard in its own process under supervision (IPC). The C ABI's
+  Weave needs the Weave in its own process under supervision (IPC). The C ABI's
   bytes-as-currency is already the cross-process currency, so in-process (fast)
   and out-of-process (isolated) become the two permanent hosting modes behind the
-  same `Shard` contract — the next phase, not built here.
+  same `Weave` contract — the next phase, not built here.
 
 - **Migration at the version-mismatch reload point.** Today a new library whose
   state-schema version differs is a clean refusal. The migration layer slots in
   exactly there: resolve `(name, claimed_version, content_id) → door`, transcode
   the host-owned snapshot, and revive through the same gate.
 
-- **Cross-language libraries.** The C ABI is *designed* to admit a Shard authored
+- **Cross-language libraries.** The C ABI is *designed* to admit a Weave woven
   in another language: it exports only C, and Zen values cross as bytes. Only a
-  C++-authored test library is built now, but nothing in the descriptor or the
-  buffer discipline forecloses a Rust/C/other author.
+  C++-woven test library is built now, but nothing in the descriptor or the
+  buffer discipline forecloses a Rust/C/other maker.
 
 - **Full schema-as-value.** The accepted-schemas manifest is the minimal
   precursor: schemas already round-trip as gated Values. Generalizing it lets the
-  console introspect the whole system and a Shard answer "what do you accept?"
+  console introspect the whole system and a Weave answer "what do you accept?"
   with schemas rendered as Values.
 
 ---
 
 ## Level 0 hardening — closed seams and the seam-readiness review
 
-Before Shard-based "Level 1" development begins — at which point every Level 0
-surface a Shard touches gets expensive to move — one tightening pass closed the
+Before Weave-based "Level 1" development begins — at which point every Level 0
+surface a Weave touches gets expensive to move — one tightening pass closed the
 handful of seams whose shape is *proven* and that Level 1 will immediately lean
 on, and **left the rest open on purpose**. The discipline is symmetric: closing a
 seam before its shape is proven is the same mistake as leaving a sharp one open.
@@ -1799,7 +1799,7 @@ seam before its shape is proven is the same mistake as leaving a sharp one open.
 ### Closed in this pass (code)
 
 1. **Dispatch selector → true `same_identity`; the `same_identity` misnomer
-   closed.** `ShardBase::handle` selects the handler the same way the bus selected
+   closed.** `WeaveBase::handle` selects the handler the same way the bus selected
    the door — by `same_identity` (`name == && version == && content_id ==`), not
    by a bare content-id hash — a null-deref fix (see *Schema and content
    identity*). In the same spirit, the public `same_identity` helper itself was
@@ -1837,9 +1837,9 @@ and couples the substrate to a guess:
 | Seam | Verdict | Why not yet |
 |---|---|---|
 | Migration transform registry | not-ready | the transform signature and keying need a real cross-version case to fix; reject-by-default holds until then |
-| Emit enforcement (as a wiring *contract*) | partly closed in B1 | capability-gated delivery now authorizes every send against a real grant (Emit-defaulted for trusted Shards), so the *in-process* emit gate is live; emit-set *as an enumerated contract / wiring graph* is still deferred (a runtime router's emits are not statically known) |
+| Emit enforcement (as a wiring *contract*) | partly closed in B1 | capability-gated delivery now authorizes every send against a real grant (Emit-defaulted for trusted Weaves), so the *in-process* emit gate is live; emit-set *as an enumerated contract / wiring graph* is still deferred (a runtime router's emits are not statically known) |
 | Schema-as-value beyond the manifest precursor | not-ready | only the manifest slice is exercised; the general "schema of schemas" has no consumer yet |
-| Multi-threaded dispatch (per-Shard mailboxes) | not-ready | single-threaded FIFO is correct and sufficient; the `Shard` contract already survives the swap, so early closure buys nothing |
+| Multi-threaded dispatch (per-Weave mailboxes) | not-ready | single-threaded FIFO is correct and sufficient; the `Weave` contract already survives the swap, so early closure buys nothing |
 | Request/response await | not-ready | replies-as-sends works; a blocking `request()` has no caller yet |
 | Content-id fast-path | not-ready (intentionally untaken) | kept off so "one gate, every delivery" stays literally true |
 | Cross-boundary / cross-process delivery | not-ready | the bytes path exists; there is no second process to talk to yet |

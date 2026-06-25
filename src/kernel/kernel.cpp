@@ -17,7 +17,7 @@
 #include <dlfcn.h>
 #endif
 
-namespace zen::kernel {
+namespace loom {
 
 namespace {
 
@@ -32,7 +32,7 @@ void* lib_open(const std::string& path, std::string& error) {
     return h;
 #else
     ::dlerror();
-    // RTLD_LOCAL keeps the library's symbols (including its own copy of zen-core)
+    // RTLD_LOCAL keeps the library's symbols (including its own copy of loom)
     // out of the global namespace, so the host and the library never interpose.
     void* h = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (h == nullptr) {
@@ -67,18 +67,18 @@ std::string_view as_view(const std::uint8_t* data, std::size_t len) {
 }
 
 // Resolve and validate the descriptor exported by a loaded library.
-const ZenShardAbi* fetch_abi(void* lib, std::string& error) {
-    void* sym = lib_symbol(lib, "zen_shard_abi");
+const ZenWeaveAbi* fetch_abi(void* lib, std::string& error) {
+    void* sym = lib_symbol(lib, "zen_weave_abi");
     if (sym == nullptr) {
-        error = "library does not export zen_shard_abi";
+        error = "library does not export zen_weave_abi";
         return nullptr;
     }
-    using AbiFn = const ZenShardAbi* (*)(void);
+    using AbiFn = const ZenWeaveAbi* (*)(void);
     AbiFn fn = nullptr;
     std::memcpy(&fn, &sym, sizeof(fn)); // object->function pointer, the -Wpedantic-clean way
-    const ZenShardAbi* abi = fn();
+    const ZenWeaveAbi* abi = fn();
     if (abi == nullptr) {
-        error = "zen_shard_abi returned null";
+        error = "zen_weave_abi returned null";
         return nullptr;
     }
     if (abi->abi_version != ZEN_ABI_VERSION) {
@@ -92,13 +92,13 @@ const ZenShardAbi* fetch_abi(void* lib, std::string& error) {
 // ---- host callbacks the library calls during handle() ---------------------
 
 // Binds a running delivery so the library's emitted messages are resolved, gated,
-// and routed exactly as a native Shard's are. `gated` is the per-delivery
-// ShardBus (it stamps the loaded Shard's id and authorizes against its grant);
+// and routed exactly as a native Weave's are. `gated` is the per-delivery
+// WeaveBus (it stamps the loaded Weave's id and authorizes against its grant);
 // `sb` is the Switchboard, used only for the read-only schema resolution. Valid
 // only for the duration of the handle() call.
 struct HostCtx {
-    zen::sb::Bus* gated;
-    zen::sb::Switchboard* sb;
+    loom::Bus* gated;
+    loom::Switchboard* sb;
 };
 
 } // namespace
@@ -111,76 +111,76 @@ static void zen_host_sink(void* ctx, const std::uint8_t* data, std::size_t len) 
     static_cast<std::string*>(ctx)->append(reinterpret_cast<const char*>(data), len);
 }
 
-// A library Shard sends/publishes by handing the host serialized payload bytes.
+// A library Weave sends/publishes by handing the host serialized payload bytes.
 // The host admits them through the gate (the DLL-seam boundary) before routing.
 static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t reply_to,
                                std::uint64_t correlation, const std::uint8_t* payload,
                                std::size_t len) {
     auto* h = static_cast<HostCtx*>(ctx);
-    zen::Unverified u = zen::parse(zen::kernel::as_view(payload, len));
-    std::shared_ptr<const zen::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
         return ZEN_ERR_UNKNOWN_SCHEMA;
     }
-    zen::Admission a = zen::admit(u, door); // the DLL-seam gate, host-side
+    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
     if (!a.ok()) {
         return ZEN_ERR_REFUSED;
     }
-    // Route through the gated ShardBus (it stamps the loaded Shard's id and
-    // authorizes against its grant), exactly as a native Shard's send is.
-    h->gated->send(zen::sb::ShardId{target},
-                   zen::sb::Message(std::move(a).value(), zen::sb::ShardId{},
-                                    zen::sb::ShardId{reply_to}, correlation));
+    // Route through the gated WeaveBus (it stamps the loaded Weave's id and
+    // authorizes against its grant), exactly as a native Weave's send is.
+    h->gated->send(loom::WeaveId{target},
+                   loom::Message(std::move(a).value(), loom::WeaveId{},
+                                    loom::WeaveId{reply_to}, correlation));
     return ZEN_OK;
 }
 
 static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64_t correlation,
                                   const std::uint8_t* payload, std::size_t len) {
     auto* h = static_cast<HostCtx*>(ctx);
-    zen::Unverified u = zen::parse(zen::kernel::as_view(payload, len));
-    std::shared_ptr<const zen::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
         return ZEN_ERR_UNKNOWN_SCHEMA;
     }
-    zen::Admission a = zen::admit(u, door);
+    loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
         return ZEN_ERR_REFUSED;
     }
-    h->gated->publish(zen::sb::Message(std::move(a).value(), zen::sb::ShardId{},
-                                       zen::sb::ShardId{reply_to}, correlation));
+    h->gated->publish(loom::Message(std::move(a).value(), loom::WeaveId{},
+                                       loom::WeaveId{reply_to}, correlation));
     return ZEN_OK;
 }
 
-// A library Shard sends to a role the same way: hand the host serialized bytes + the
-// role; the host admits, stamps the loaded Shard's id, and routes by role.
+// A library Weave sends to a role the same way: hand the host serialized bytes + the
+// role; the host admits, stamps the loaded Weave's id, and routes by role.
 static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_t reply_to,
                                        std::uint64_t correlation, const std::uint8_t* payload,
                                        std::size_t len) {
     auto* h = static_cast<HostCtx*>(ctx);
-    zen::Unverified u = zen::parse(zen::kernel::as_view(payload, len));
-    std::shared_ptr<const zen::Schema> door =
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
         return ZEN_ERR_UNKNOWN_SCHEMA;
     }
-    zen::Admission a = zen::admit(u, door);
+    loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
         return ZEN_ERR_REFUSED;
     }
-    h->gated->send_to_role(role, zen::sb::Message(std::move(a).value(), zen::sb::ShardId{},
-                                                  zen::sb::ShardId{reply_to}, correlation));
+    h->gated->send_to_role(role, loom::Message(std::move(a).value(), loom::WeaveId{},
+                                                  loom::WeaveId{reply_to}, correlation));
     return ZEN_OK;
 }
 
 } // extern "C"
 
-// ---- the host adapter: a Shard backed by a library instance ---------------
+// ---- the host adapter: a Weave backed by a library instance ---------------
 
-class HostAdapter final : public zen::sb::Shard {
+class HostAdapter final : public loom::Weave {
 public:
-    HostAdapter(const ZenShardAbi* abi, void* instance,
+    HostAdapter(const ZenWeaveAbi* abi, void* instance,
                 std::vector<std::shared_ptr<const Schema>> accepted,
-                std::shared_ptr<const Schema> state_schema, zen::sb::Switchboard* bus)
+                std::shared_ptr<const Schema> state_schema, loom::Switchboard* bus)
         : abi_(abi), instance_(instance), accepted_(std::move(accepted)),
           state_schema_(std::move(state_schema)), bus_(bus) {}
 
@@ -190,12 +190,12 @@ public:
         }
     }
 
-    void set_self(zen::sb::ShardId id) { self_ = id; }
+    void set_self(loom::WeaveId id) { self_ = id; }
     const std::shared_ptr<const Schema>& state_schema() const { return state_schema_; }
 
     // Swap the backing library in place (hot-reload), destroying the old
     // instance while the old library is still open.
-    void rebind(const ZenShardAbi* new_abi, void* new_instance) {
+    void rebind(const ZenWeaveAbi* new_abi, void* new_instance) {
         if (abi_ != nullptr && instance_ != nullptr) {
             abi_->destroy(instance_);
         }
@@ -207,9 +207,9 @@ public:
         return accepted_;
     }
 
-    void handle(const zen::sb::Message& in, zen::sb::Bus& bus) override {
-        const std::string bytes = zen::serialize(in.payload);
-        // `bus` is the per-delivery ShardBus (it gates by this loaded Shard's id);
+    void handle(const loom::Message& in, loom::Bus& bus) override {
+        const std::string bytes = loom::serialize(in.payload);
+        // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_};
         ZenHostApi api{&ctx, &zen_host_send, &zen_host_publish, &zen_host_send_to_role};
@@ -219,7 +219,7 @@ public:
                      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
     }
 
-    zen::Value snapshot() const override {
+    loom::Value snapshot() const override {
         std::string bytes;
         ZenByteSink sink{&bytes, &zen_host_sink};
         const ZenStatus st = abi_->snapshot(instance_, sink);
@@ -229,18 +229,18 @@ public:
         return admit_bytes(bytes, state_schema_, "snapshot");
     }
 
-    zen::Value policy() const override {
+    loom::Value policy() const override {
         std::string bytes;
         ZenByteSink sink{&bytes, &zen_host_sink};
         const ZenStatus st = abi_->policy(instance_, sink);
         if (st != ZEN_OK) {
             throw DllBoundaryError("library policy() failed with status " + std::to_string(st));
         }
-        return admit_bytes(bytes, zen::sb::lifecycle_policy_schema(), "policy");
+        return admit_bytes(bytes, loom::lifecycle_policy_schema(), "policy");
     }
 
-    void revive(const zen::Value& state) override {
-        const std::string bytes = zen::serialize(state);
+    void revive(const loom::Value& state) override {
+        const std::string bytes = loom::serialize(state);
         const ZenStatus st = abi_->revive(
             instance_, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
         if (st != ZEN_OK) {
@@ -249,10 +249,10 @@ public:
     }
 
 private:
-    zen::Value admit_bytes(const std::string& bytes, const std::shared_ptr<const Schema>& door,
+    loom::Value admit_bytes(const std::string& bytes, const std::shared_ptr<const Schema>& door,
                            const char* what) const {
-        zen::Unverified u = zen::parse(bytes);
-        zen::Admission a = zen::admit(u, door); // the DLL-seam gate, host-side
+        loom::Unverified u = loom::parse(bytes);
+        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
         if (!a.ok()) {
             throw DllBoundaryError(std::string("library ") + what + " refused by the gate: " +
                                    a.first_error().message());
@@ -260,17 +260,17 @@ private:
         return std::move(a).value();
     }
 
-    const ZenShardAbi* abi_;
+    const ZenWeaveAbi* abi_;
     void* instance_;
     std::vector<std::shared_ptr<const Schema>> accepted_;
     std::shared_ptr<const Schema> state_schema_;
-    zen::sb::Switchboard* bus_;
-    zen::sb::ShardId self_{};
+    loom::Switchboard* bus_;
+    loom::WeaveId self_{};
 };
 
 // ---- Kernel ----------------------------------------------------------------
 
-Kernel::Kernel(zen::sb::Switchboard& bus) : bus_(bus) {}
+Kernel::Kernel(loom::Switchboard& bus) : bus_(bus) {}
 
 Kernel::~Kernel() {
     std::vector<std::string> names;
@@ -283,22 +283,22 @@ Kernel::~Kernel() {
     }
 }
 
-Kernel::Manifest Kernel::reconstruct(const ZenShardAbi* abi, void* instance) {
+Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     std::string bytes;
     ZenByteSink sink{&bytes, &zen_host_sink};
     const ZenStatus st = abi->describe(instance, sink);
     if (st != ZEN_OK) {
         throw DllBoundaryError("library describe() failed with status " + std::to_string(st));
     }
-    zen::Unverified u = zen::parse(bytes);
-    zen::Admission a = zen::admit(u, manifest_schema()); // the gate, for the schema descriptor
+    loom::Unverified u = loom::parse(bytes);
+    loom::Admission a = loom::admit(u, manifest_schema()); // the gate, for the schema descriptor
     if (!a.ok()) {
         throw DllBoundaryError("library manifest refused by the gate: " + a.first_error().message());
     }
-    const zen::Value& manifest = a.value();
+    const loom::Value& manifest = a.value();
 
     Manifest result;
-    for (const zen::Cell& c : manifest.get("accepted")->as_list()) {
+    for (const loom::Cell& c : manifest.get("accepted")->as_list()) {
         auto s = decode_schema(*c.as_message(), registry_);
         registry_.register_schema(s); // enforces cross-library schema agreement
         result.accepted.push_back(std::move(s));
@@ -317,7 +317,7 @@ LoadResult Kernel::load(const std::string& name, const std::string& path) {
     if (lib == nullptr) {
         return {false, {}, "open failed: " + error};
     }
-    const ZenShardAbi* abi = fetch_abi(lib, error);
+    const ZenWeaveAbi* abi = fetch_abi(lib, error);
     if (abi == nullptr) {
         lib_close(lib);
         return {false, {}, error};
@@ -339,9 +339,9 @@ LoadResult Kernel::load(const std::string& name, const std::string& path) {
         // A loaded .so can bypass the bus and reach syscalls directly, so a
         // restrictive *bus* grant on it is not real containment in B1 — that is
         // B2's OS sandbox (which the grant's reserved OS-capability flags drive).
-        // B1 grants loaded Shards permissive bus sends; the kernel *door* (the load
-        // capability) is fully gated against native Shards.
-        zen::sb::ShardId id = bus_.register_shard(std::move(adapter), zen::sb::Grant{}.allow_any());
+        // B1 grants loaded Weaves permissive bus sends; the kernel *door* (the load
+        // capability) is fully gated against native Weaves.
+        loom::WeaveId id = bus_.register_weave(std::move(adapter), loom::Grant{}.allow_any());
         raw->set_self(id);
         libs_.emplace(name, Loaded{name, lib, abi, raw, id});
         return {true, id, ""};
@@ -369,7 +369,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     try {
         snapshot = bus_.snapshot_bytes(rec.id); // host-owned, independent of either library
     } catch (const std::exception& e) {
-        return {false, false, false, std::string("snapshot of the live shard failed: ") + e.what()};
+        return {false, false, false, std::string("snapshot of the live weave failed: ") + e.what()};
     }
 
     std::string error;
@@ -377,7 +377,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (new_lib == nullptr) {
         return {false, false, false, "open failed: " + error};
     }
-    const ZenShardAbi* new_abi = fetch_abi(new_lib, error);
+    const ZenWeaveAbi* new_abi = fetch_abi(new_lib, error);
     if (new_abi == nullptr) {
         lib_close(new_lib);
         return {false, false, false, error};
@@ -405,7 +405,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         return {true, false, true, "state schema version mismatch; reload refused"};
     }
 
-    // Commit: swap the library behind the same adapter/ShardId. rebind destroys
+    // Commit: swap the library behind the same adapter/WeaveId. rebind destroys
     // the old instance while the old library is still open.
     void* old_lib = rec.lib;
     rec.adapter->rebind(new_abi, new_inst);
@@ -415,8 +415,8 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // Revive the new instance from the host-owned snapshot, through the gate.
     // This is an intentional code swap, not crash recovery, so it uses the
     // unbudgeted swap_state path: a deliberate hot-reload must never be blocked by
-    // (or draw down) the Shard's crash-revival allowance.
-    zen::sb::ReviveOutcome ro = bus_.swap_state(rec.id, snapshot);
+    // (or draw down) the Weave's crash-revival allowance.
+    loom::ReviveOutcome ro = bus_.swap_state(rec.id, snapshot);
 
     lib_close(old_lib); // the old instance is already gone; no live pointer remains
 
@@ -436,15 +436,15 @@ bool Kernel::unload(const std::string& name) {
 
     // Destroy the adapter (and, in its dtor, the library instance) BEFORE closing
     // the library — so no call ever lands in a closed library.
-    std::unique_ptr<zen::sb::Shard> adapter = bus_.unregister_shard(rec.id);
+    std::unique_ptr<loom::Weave> adapter = bus_.unregister_weave(rec.id);
     adapter.reset();
     lib_close(rec.lib);
     return true;
 }
 
-zen::sb::ShardId Kernel::shard_id(const std::string& name) const {
+loom::WeaveId Kernel::weave_id(const std::string& name) const {
     auto it = libs_.find(name);
-    return it == libs_.end() ? zen::sb::ShardId{} : it->second.id;
+    return it == libs_.end() ? loom::WeaveId{} : it->second.id;
 }
 
 bool Kernel::is_loaded(const std::string& name) const { return libs_.count(name) != 0; }
@@ -458,4 +458,4 @@ std::vector<std::string> Kernel::loaded() const {
     return names;
 }
 
-} // namespace zen::kernel
+} // namespace loom

@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace zen::detail {
+namespace loom::detail {
 
 namespace {
 
@@ -122,4 +122,4 @@ bool base64_decode(std::string_view in, std::vector<std::uint8_t>& out) {
     return true;
 }
 
-} // namespace zen::detail
+} // namespace loom::detail

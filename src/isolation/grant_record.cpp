@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace zen::isolation {
+namespace loom {
 
 namespace {
 
@@ -22,19 +22,19 @@ namespace {
 // gated Value like everything else — the record funnels through the same admit(). v2
 // adds `roles` (the broker roles a mod may reach beyond the floor's storage); bumping
 // the version rather than mutating v1 keeps the project's frozen-(name,version) invariant.
-std::shared_ptr<const zen::Schema> grant_entry_schema() {
-    static const auto s = zen::SchemaBuilder("zen.GrantEntry", 2)
-                              .field("content_hash", zen::Kind::Text)
-                              .field("network", zen::Kind::Bool)
-                              .field("filesystem", zen::Kind::Text)
-                              .list("roles", zen::type_of(zen::Kind::Text))
+std::shared_ptr<const loom::Schema> grant_entry_schema() {
+    static const auto s = loom::SchemaBuilder("zen.GrantEntry", 2)
+                              .field("content_hash", loom::Kind::Text)
+                              .field("network", loom::Kind::Bool)
+                              .field("filesystem", loom::Kind::Text)
+                              .list("roles", loom::type_of(loom::Kind::Text))
                               .build();
     return s;
 }
 
-std::shared_ptr<const zen::Schema> grant_record_schema() {
-    static const auto s = zen::SchemaBuilder("zen.GrantRecord", 1)
-                              .list("entries", zen::type_message(grant_entry_schema()))
+std::shared_ptr<const loom::Schema> grant_record_schema() {
+    static const auto s = loom::SchemaBuilder("zen.GrantRecord", 1)
+                              .list("entries", loom::type_message(grant_entry_schema()))
                               .build();
     return s;
 }
@@ -59,7 +59,7 @@ std::string so_content_hash(const std::string& so_path) {
         throw std::runtime_error(std::string("so_content_hash: ") + e.what());
     }
     // FNV-1a, 64-bit — deterministic across runs and machines. This is a separate id
-    // space from zen-core's schema content-id (no relation intended); it identifies a
+    // space from loom's schema content-id (no relation intended); it identifies a
     // .so build and nothing more.
     std::uint64_t h = 1469598103934665603ULL;
     for (char ch : bytes) {
@@ -82,22 +82,22 @@ void GrantRecord::load(std::string path) {
     try {
         bytes = read_file(path_);
     } catch (const std::exception&) {
-        return; // a missing file is an empty record: every Shard floors
+        return; // a missing file is an empty record: every Weave floors
     }
     if (bytes.empty()) {
         return; // an empty file is also an empty record (e.g. a freshly-touched path)
     }
-    zen::Unverified u = zen::compat::parse(bytes);
-    zen::Admission a = zen::admit(u, grant_record_schema());
+    loom::Unverified u = loom::compat::parse(bytes);
+    loom::Admission a = loom::admit(u, grant_record_schema());
     if (!a.ok()) {
         throw std::runtime_error("grant record refused: " + a.first_error().message());
     }
-    for (const zen::Cell& c : a.value().get("entries")->as_list()) {
-        const zen::Value& e = *c.as_message();
+    for (const loom::Cell& c : a.value().get("entries")->as_list()) {
+        const loom::Value& e = *c.as_message();
         GrantDelta d;
         d.network = e.get("network")->as_bool();
         d.filesystem = e.get("filesystem")->as_text();
-        for (const zen::Cell& role : e.get("roles")->as_list()) {
+        for (const loom::Cell& role : e.get("roles")->as_list()) {
             d.roles.push_back(role.as_text());
         }
         deltas_[e.get("content_hash")->as_text()] = std::move(d);
@@ -118,24 +118,24 @@ void GrantRecord::persist() const {
     if (path_.empty()) {
         return; // in-memory only
     }
-    zen::Value v(grant_record_schema());
-    std::vector<zen::Cell> entries;
+    loom::Value v(grant_record_schema());
+    std::vector<loom::Cell> entries;
     entries.reserve(deltas_.size());
     for (const auto& [hash, d] : deltas_) {
-        zen::Value e(grant_entry_schema());
-        e.set("content_hash", zen::Cell::text(hash));
-        e.set("network", zen::Cell::boolean(d.network));
-        e.set("filesystem", zen::Cell::text(d.filesystem));
-        std::vector<zen::Cell> roles;
+        loom::Value e(grant_entry_schema());
+        e.set("content_hash", loom::Cell::text(hash));
+        e.set("network", loom::Cell::boolean(d.network));
+        e.set("filesystem", loom::Cell::text(d.filesystem));
+        std::vector<loom::Cell> roles;
         roles.reserve(d.roles.size());
         for (const std::string& role : d.roles) {
-            roles.push_back(zen::Cell::text(role));
+            roles.push_back(loom::Cell::text(role));
         }
-        e.set("roles", zen::Cell::list(std::move(roles)));
-        entries.push_back(zen::Cell::message(std::move(e)));
+        e.set("roles", loom::Cell::list(std::move(roles)));
+        entries.push_back(loom::Cell::message(std::move(e)));
     }
-    v.set("entries", zen::Cell::list(std::move(entries)));
-    const std::string json = zen::compat::serialize(v);
+    v.set("entries", loom::Cell::list(std::move(entries)));
+    const std::string json = loom::compat::serialize(v);
 
     // Write to a temp file then atomically rename into place. The record is TCB data
     // the host's startup depends on: a partial or failed write (ENOSPC, crash) must
@@ -160,4 +160,4 @@ void GrantRecord::persist() const {
     }
 }
 
-} // namespace zen::isolation
+} // namespace loom

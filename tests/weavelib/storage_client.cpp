@@ -1,4 +1,4 @@
-// A storage-client "mod": authored with ShardBase, mounted on the floor
+// A storage-client "mod": woven with WeaveBase, mounted on the floor
 // (FsAccess::None, no network), holding only the floor's storage role send-rules. It
 // persists and retrieves purely by messaging the "storage" broker — zero disk. The
 // test drives it with DoPut/DoGet/Probe and reads the broker's StorageValue replies
@@ -6,7 +6,7 @@
 
 #include "storage_protocol.hpp"
 
-#include <zen/author/shard.hpp>
+#include <zen/weave/weave.hpp>
 #include <zen/kernel/export.hpp>
 
 #include <cerrno>
@@ -16,7 +16,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-using namespace zen::author;
+using namespace loom;
 using namespace storage;
 
 namespace {
@@ -26,7 +26,7 @@ struct ClientState {
     ZEN_SHAPE(ClientState, 1, ZEN_FIELD(replies));
 };
 
-class StorageClient : public ShardBase<StorageClient, ClientState,
+class StorageClient : public WeaveBase<StorageClient, ClientState,
                                        Accept<DoPut, DoGet, Probe, StorageValue>,
                                        Emit<StoragePut, StorageGet>> {
 public:
@@ -49,7 +49,7 @@ public:
             code = 0; // it succeeded — the floor leaked disk (the proof would catch this)
         }
         const std::string s = std::to_string(code);
-        mail.send_to_role("storage", StoragePut{"__probe__", zen::Bytes(s.begin(), s.end())});
+        mail.send_to_role("storage", StoragePut{"__probe__", loom::Bytes(s.begin(), s.end())});
     }
 
     void on(const StorageValue&, Mail&) { ++state_.replies; }
@@ -57,4 +57,4 @@ public:
 
 } // namespace
 
-ZEN_EXPORT_SHARD(StorageClient)
+ZEN_EXPORT_WEAVE(StorageClient)
