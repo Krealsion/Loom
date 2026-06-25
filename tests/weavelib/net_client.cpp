@@ -1,4 +1,4 @@
-// A net-client "mod": authored with ShardBase, mounted on the floor. A mod that needs
+// A net-client "mod": woven with WeaveBase, mounted on the floor. A mod that needs
 // network (a multiplayer mod, say) reaches it ONLY through the NetworkBroker — never as
 // a raw grant. With a recorded `net` delta it holds the net role send-rule (it may *talk
 // to* the broker) but NOT os_cap::Network: it stays OS-network-denied (no-interface
@@ -9,7 +9,7 @@
 
 #include "net_protocol.hpp"
 
-#include <zen/author/shard.hpp>
+#include <zen/weave/weave.hpp>
 #include <zen/kernel/export.hpp>
 
 #include <cerrno>
@@ -21,7 +21,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-using namespace zen::author;
+using namespace loom;
 using namespace net;
 
 namespace {
@@ -49,7 +49,7 @@ struct ClientState {
     ZEN_SHAPE(ClientState, 1, ZEN_FIELD(replies));
 };
 
-class NetClient : public ShardBase<NetClient, ClientState, Accept<DoNet, NetResponse>,
+class NetClient : public WeaveBase<NetClient, ClientState, Accept<DoNet, NetResponse>,
                                    Emit<NetRequest>> {
 public:
     // A net-needing mod declares it wants network + the net role. Advice only: without a
@@ -61,11 +61,11 @@ public:
         // errno through the broker's echo so the round-trip witnesses both halves.
         const std::int64_t code = direct_connect_errno(m.host, m.port);
         const std::string s = std::to_string(code);
-        mail.send_to_role("net", NetRequest{m.host, m.port, zen::Bytes(s.begin(), s.end())});
+        mail.send_to_role("net", NetRequest{m.host, m.port, loom::Bytes(s.begin(), s.end())});
     }
     void on(const NetResponse&, Mail&) { ++state_.replies; }
 };
 
 } // namespace
 
-ZEN_EXPORT_SHARD(NetClient)
+ZEN_EXPORT_WEAVE(NetClient)

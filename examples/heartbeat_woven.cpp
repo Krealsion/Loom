@@ -1,18 +1,18 @@
-// The heartbeat, rewritten on the authoring layer. Compare with heartbeat.cpp:
-// Ping/Pong/Counter are plain structs declared once, the Shards are typed
+// The heartbeat, rewritten on the weaving layer. Compare with heartbeat.cpp:
+// Ping/Pong/Counter are plain structs declared once, the Weaves are typed
 // handlers with derived snapshot/revive, and each is mounted in one call. No
 // stringly-typed set(), no hand-built schema, no hand-written snapshot/revive.
 
-#include <zen/author.hpp>
+#include <zen/weave.hpp>
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
 #include <iostream>
 #include <string>
 
-using namespace zen;
-using namespace zen::sb;
-namespace au = zen::author;
+using namespace loom;
+using namespace loom;
+namespace au = loom;
 
 namespace {
 
@@ -29,7 +29,7 @@ struct Count {
     ZEN_SHAPE(Count, 1, ZEN_FIELD(handled));
 };
 
-class Responder : public au::ShardBase<Responder, Count, au::Accept<Ping>, au::Emit<Pong>> {
+class Responder : public au::WeaveBase<Responder, Count, au::Accept<Ping>, au::Emit<Pong>> {
 public:
     void on(const Ping& p, au::Mail& mail) {
         ++state_.handled;
@@ -38,7 +38,7 @@ public:
     }
 };
 
-class Collector : public au::ShardBase<Collector, Count, au::Accept<Pong>> {
+class Collector : public au::WeaveBase<Collector, Count, au::Accept<Pong>> {
 public:
     void on(const Pong& p, au::Mail&) {
         ++state_.handled;
@@ -58,11 +58,11 @@ int main() {
         std::cout << "    [tap] " << kind << " " << e.schema_name << "\n";
     });
 
-    ShardId responder = au::mount<Responder>(bus);
-    ShardId collector = au::mount<Collector>(bus);
+    WeaveId responder = au::mount<Responder>(bus);
+    WeaveId collector = au::mount<Collector>(bus);
 
     std::cout << "directed Ping -> responder (reply_to collector):\n";
-    bus.send(responder, Message(au::to_value(Ping{7}), ShardId{}, collector));
+    bus.send(responder, Message(au::to_value(Ping{7}), WeaveId{}, collector));
     bus.pump();
 
     std::cout << "responder dies and revives from its own (derived) snapshot:\n";

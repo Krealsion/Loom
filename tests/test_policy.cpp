@@ -1,8 +1,8 @@
 #include <doctest.h>
 
 #include "enforcement_gate.hpp"
-#include "shardlib/net_protocol.hpp"
-#include "shardlib/storage_protocol.hpp"
+#include "weavelib/net_protocol.hpp"
+#include "weavelib/storage_protocol.hpp"
 #include "switchboard_fixtures.hpp"
 
 #include <zen/isolation/grant_record.hpp>
@@ -27,21 +27,21 @@
 
 // The policy phase (P1). Part A's core hooks, proven on their own:
 //   - role-addressing: a send may name a *role* (a stable capability slot) instead
-//     of a ShardId; the role resolves to its singleton holder at delivery, and a
-//     grant of "shape -> role" is a distinct authority from "shape -> ShardId".
+//     of a WeaveId; the role resolves to its singleton holder at delivery, and a
+//     grant of "shape -> role" is a distinct authority from "shape -> WeaveId".
 // Part B's StorageBroker proofs (scoping, floor-without-disk, reload-keeps-state)
 // build on top of these and land in this same suite.
 
 using namespace sbfx;
-using namespace zen::isolation;
-using zen::sb::Disposition;
-using zen::sb::Ticket;
+using namespace loom;
+using loom::Disposition;
+using loom::Ticket;
 
 namespace {
 
-const std::string kHostExe = ZEN_SHARD_HOST_EXE;
+const std::string kHostExe = ZEN_WEAVE_HOST_EXE;
 
-zen::Bytes bytes_of(const std::string& s) { return zen::Bytes(s.begin(), s.end()); }
+loom::Bytes bytes_of(const std::string& s) { return loom::Bytes(s.begin(), s.end()); }
 
 // A tiny loopback TCP echo listener on an ephemeral port, in a background thread (the
 // host netns — so the granted broker can reach it, while a netns'd mod cannot). For the
@@ -109,14 +109,14 @@ private:
     std::atomic<bool> stop_{false};
 };
 
-// Register a ProbeShard bound to a role (a singleton capability slot), via the
-// role-binding register_shard overload. Like register_probe otherwise.
+// Register a ProbeWeave bound to a role (a singleton capability slot), via the
+// role-binding register_weave overload. Like register_probe otherwise.
 Registered register_probe_role(Switchboard& bus,
                                std::vector<std::shared_ptr<const Schema>> accept, std::string role,
                                Grant grant = Grant{}.allow_any()) {
-    auto owned = std::make_unique<ProbeShard>(std::move(accept));
-    ProbeShard* raw = owned.get();
-    ShardId id = bus.register_shard(std::move(owned), std::move(grant), std::move(role));
+    auto owned = std::make_unique<ProbeWeave>(std::move(accept));
+    ProbeWeave* raw = owned.get();
+    WeaveId id = bus.register_weave(std::move(owned), std::move(grant), std::move(role));
     return {id, raw};
 }
 
@@ -140,31 +140,31 @@ TEST_CASE("a send addressed to a role reaches the role's holder, authorized by a
     Switchboard bus;
     Registered storage = register_probe_role(bus, {ping_schema()}, "storage");
     // The sender accepts Tick; on Tick it sends a Ping to role "storage". Its grant
-    // permits exactly that — Ping -> role "storage" — never a ShardId.
+    // permits exactly that — Ping -> role "storage" — never a WeaveId.
     Registered sender =
         register_probe(bus, {tick_schema()}, 2, true, Grant{}.allow_to_role("Ping", 1, "storage"));
-    sender.shard->on_handle = [](const Message&, Bus& b, ProbeShard&) {
+    sender.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
         b.send_to_role("storage", Message(ping(5)));
     };
     bus.send(sender.id, Message(tick(1))); // host trigger (ungated root authority)
     bus.pump();
-    REQUIRE(storage.shard->handled_names.size() == 1);
-    CHECK(storage.shard->handled_names[0] == "Ping");
-    CHECK(storage.shard->handled_values[0] == 5);
+    REQUIRE(storage.weave->handled_names.size() == 1);
+    CHECK(storage.weave->handled_names[0] == "Ping");
+    CHECK(storage.weave->handled_values[0] == 5);
 }
 
 TEST_CASE("a role send the grant does not permit is denied, even when the role is held") {
     Switchboard bus;
     Registered storage = register_probe_role(bus, {ping_schema()}, "storage");
     Registered sender = register_probe(bus, {tick_schema()}, 2, true, Grant::nothing());
-    sender.shard->on_handle = [](const Message&, Bus& b, ProbeShard&) {
+    sender.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
         b.send_to_role("storage", Message(ping(5)));
     };
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
     bus.send(sender.id, Message(tick(1)));
     bus.pump();
-    CHECK(storage.shard->handled_names.empty()); // never delivered
+    CHECK(storage.weave->handled_names.empty()); // never delivered
     CHECK(tap_has(tap, EventKind::Refused, RefusalReason::CapabilityDenied, "Ping"));
 }
 
@@ -174,7 +174,7 @@ TEST_CASE("authorization precedes resolution: an unauthorized sender cannot prob
     // refused CapabilityDenied (authorization, decided first) — NOT NoSuchTarget —
     // so it cannot even learn whether the role is currently held.
     Registered sender = register_probe(bus, {tick_schema()}, 2, true, Grant::nothing());
-    sender.shard->on_handle = [](const Message&, Bus& b, ProbeShard&) {
+    sender.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
         b.send_to_role("storage", Message(ping(1)));
     };
     std::vector<TapRecord> tap;
@@ -185,33 +185,33 @@ TEST_CASE("authorization precedes resolution: an unauthorized sender cannot prob
     CHECK_FALSE(tap_has(tap, EventKind::Refused, RefusalReason::NoSuchTarget, "Ping"));
 }
 
-TEST_CASE("a ShardId grant does not authorize a role send (the role wall is its own wall)") {
+TEST_CASE("a WeaveId grant does not authorize a role send (the role wall is its own wall)") {
     Switchboard bus;
     Registered storage = register_probe_role(bus, {ping_schema()}, "storage");
-    // Granted Ping -> the holder's *ShardId* directly. A role-addressed send to the
+    // Granted Ping -> the holder's *WeaveId* directly. A role-addressed send to the
     // very same holder is still denied: a direct-id rule never authorizes a role send.
     Registered sender =
         register_probe(bus, {tick_schema()}, 2, true, Grant{}.allow("Ping", 1, storage.id));
-    sender.shard->on_handle = [](const Message&, Bus& b, ProbeShard&) {
+    sender.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
         b.send_to_role("storage", Message(ping(5)));
     };
     bus.send(sender.id, Message(tick(1)));
     bus.pump();
-    CHECK(storage.shard->handled_names.empty());
+    CHECK(storage.weave->handled_names.empty());
 }
 
-TEST_CASE("a role rule does not authorize a direct ShardId send to the same holder") {
+TEST_CASE("a role rule does not authorize a direct WeaveId send to the same holder") {
     Switchboard bus;
     Registered storage = register_probe_role(bus, {ping_schema()}, "storage");
     Registered sender =
         register_probe(bus, {tick_schema()}, 2, true, Grant{}.allow_to_role("Ping", 1, "storage"));
-    const ShardId holder = storage.id;
-    sender.shard->on_handle = [holder](const Message&, Bus& b, ProbeShard&) {
+    const WeaveId holder = storage.id;
+    sender.weave->on_handle = [holder](const Message&, Bus& b, ProbeWeave&) {
         b.send(holder, Message(ping(5))); // direct to the resolved id, bypassing the role
     };
     bus.send(sender.id, Message(tick(1)));
     bus.pump();
-    CHECK(storage.shard->handled_names.empty());
+    CHECK(storage.weave->handled_names.empty());
 }
 
 TEST_CASE("a role with no live holder degrades to NoSuchTarget — unavailable, not a hole") {
@@ -228,21 +228,21 @@ TEST_CASE("a role binding survives the holder reloading; the role rule keeps rou
     Registered storage = register_probe_role(bus, {ping_schema()}, "storage");
     Registered sender =
         register_probe(bus, {tick_schema()}, 2, true, Grant{}.allow_to_role("Ping", 1, "storage"));
-    sender.shard->on_handle = [](const Message&, Bus& b, ProbeShard&) {
+    sender.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
         b.send_to_role("storage", Message(ping(7)));
     };
     bus.send(sender.id, Message(tick(1)));
     bus.pump();
-    REQUIRE(storage.shard->handled_names.size() == 1);
+    REQUIRE(storage.weave->handled_names.size() == 1);
 
-    // Hot-swap the holder's implementation: same ShardId, same role binding.
+    // Hot-swap the holder's implementation: same WeaveId, same role binding.
     const std::string saved = bus.snapshot_bytes(storage.id);
     bus.swap_state(storage.id, saved);
     CHECK(bus.alive(storage.id));
 
     bus.send(sender.id, Message(tick(2)));
     bus.pump();
-    CHECK(storage.shard->handled_names.size() == 2); // still routed after the reload
+    CHECK(storage.weave->handled_names.size() == 2); // still routed after the reload
 }
 
 TEST_CASE("a role is a singleton in this phase: binding a role already held is refused") {
@@ -280,7 +280,7 @@ TEST_CASE("ask-is-not-a-grant: a mod that asks for the world still lands on the 
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
                             ZEN_FLOOR_CAPS,
-                            "ask-is-not-a-grant: an authored mod's ask still lands on the floor");
+                            "ask-is-not-a-grant: a woven mod's ask still lands on the floor");
     // The host's grant-record is empty: no delta exists for this mod.
     OutOfProcessResult r = host.mount_mod("greedy", ZEN_SO_MOD_STORAGE);
     REQUIRE_MESSAGE(r.ok, r.error);
@@ -324,23 +324,23 @@ TEST_CASE("out-of-process role-send reaches the role holder, sender stamped (kEm
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(),
                             ZEN_FLOOR_CAPS,
                             "the out-of-process role-send (kEmitToRole) seam reaches the role holder");
-    // An in-process Shard holds the "storage" role and accepts StoragePut — a stand-in
+    // An in-process Weave holds the "storage" role and accepts StoragePut — a stand-in
     // for the broker; this stage proves only that the wire seam carries a role-send to
     // its holder with the sender stamped host-side.
     Registered holder =
-        register_probe_role(bus, {zen::author::schema_of<storage::StoragePut>()}, "storage");
-    zen::sb::ShardId got_sender{};
-    holder.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) { got_sender = in.sender; };
+        register_probe_role(bus, {loom::schema_of<storage::StoragePut>()}, "storage");
+    loom::WeaveId got_sender{};
+    holder.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) { got_sender = in.sender; };
 
     // Mount the storage-client mod out-of-process on the floor (FsAccess::None).
     OutOfProcessResult mod = host.mount_mod("client", ZEN_SO_STORAGE_CLIENT);
     REQUIRE_MESSAGE(mod.ok, mod.error);
 
     // Drive a DoPut -> the mod's handler calls Mail::send_to_role("storage", StoragePut).
-    bus.send(mod.id, Message(zen::author::to_value(storage::DoPut{"save", zen::Bytes{'x'}})));
-    REQUIRE(host.run_until([&] { return !holder.shard->handled_names.empty(); }, 2000));
+    bus.send(mod.id, Message(loom::to_value(storage::DoPut{"save", loom::Bytes{'x'}})));
+    REQUIRE(host.run_until([&] { return !holder.weave->handled_names.empty(); }, 2000));
 
-    CHECK(holder.shard->handled_names.back() == "StoragePut");
+    CHECK(holder.weave->handled_names.back() == "StoragePut");
     CHECK(got_sender == mod.id); // stamped from the connection (link.id), never the wire
 }
 
@@ -360,7 +360,7 @@ TEST_CASE("a forged role-send reply_to cannot redirect a broker's reply (confuse
 
     // An in-process VICTIM that WOULD accept a StorageValue — the forged target. If the host
     // honored the wire reply_to, the broker's reply would land HERE; it must not.
-    Registered victim = register_probe(bus, {zen::author::schema_of<storage::StorageValue>()});
+    Registered victim = register_probe(bus, {loom::schema_of<storage::StorageValue>()});
 
     std::int64_t delivered_to = -1;
     bus.add_observer([&](const BusEvent& e) {
@@ -371,13 +371,13 @@ TEST_CASE("a forged role-send reply_to cannot redirect a broker's reply (confuse
 
     // The attacker forges StorageGet{reply_to = victim}. The broker replies StorageValue to its
     // in_.reply_to, which the host forced to the STAMPED sender (the attacker), not the wire value.
-    bus.send(attacker.id, Message(zen::author::to_value(
+    bus.send(attacker.id, Message(loom::to_value(
                               storage::DoForge{"k", static_cast<std::int64_t>(victim.id.value)})));
     REQUIRE(host.run_until([&] { return delivered_to != -1; }, 4000));
 
     CHECK(delivered_to == static_cast<std::int64_t>(attacker.id.value)); // -> requester (stamped sender)
     CHECK(delivered_to != static_cast<std::int64_t>(victim.id.value));   // never the forged target
-    CHECK(victim.shard->handled_names.empty());                          // the victim got nothing
+    CHECK(victim.weave->handled_names.empty());                          // the victim got nothing
     std::filesystem::remove_all(root);
 }
 
@@ -404,16 +404,16 @@ TEST_CASE("scoping: each mod reads only its own data; B can never read A's (nega
     bus.add_observer([&got](const BusEvent& e) {
         if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue" &&
             e.payload != nullptr) {
-            const zen::Bytes& v = e.payload->get("value")->as_bytes();
+            const loom::Bytes& v = e.payload->get("value")->as_bytes();
             got[e.target.value] = std::string(v.begin(), v.end());
         }
     });
 
     // Both mods write the SAME key "save" with different secrets, then read it back.
-    bus.send(a.id, Message(zen::author::to_value(storage::DoPut{"save", bytes_of("secretA")})));
-    bus.send(a.id, Message(zen::author::to_value(storage::DoGet{"save"})));
-    bus.send(b.id, Message(zen::author::to_value(storage::DoPut{"save", bytes_of("secretB")})));
-    bus.send(b.id, Message(zen::author::to_value(storage::DoGet{"save"})));
+    bus.send(a.id, Message(loom::to_value(storage::DoPut{"save", bytes_of("secretA")})));
+    bus.send(a.id, Message(loom::to_value(storage::DoGet{"save"})));
+    bus.send(b.id, Message(loom::to_value(storage::DoPut{"save", bytes_of("secretB")})));
+    bus.send(b.id, Message(loom::to_value(storage::DoGet{"save"})));
     REQUIRE(host.run_until([&] { return got.count(a.id.value) && got.count(b.id.value); }, 4000));
 
     CHECK(got[a.id.value] == "secretA"); // A reads its own
@@ -446,7 +446,7 @@ TEST_CASE("floor-without-disk: a None mod persists via the broker, but a direct 
     bus.add_observer([&](const BusEvent& e) {
         if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue" &&
             e.payload != nullptr && e.target == mod.id) {
-            const zen::Bytes& v = e.payload->get("value")->as_bytes();
+            const loom::Bytes& v = e.payload->get("value")->as_bytes();
             probe = std::string(v.begin(), v.end());
             have = true;
         }
@@ -454,8 +454,8 @@ TEST_CASE("floor-without-disk: a None mod persists via the broker, but a direct 
     // Probe: the mod attempts a DIRECT file open (must fail at the syscall level) and
     // carries the errno back THROUGH the broker — proving "no disk of my own" and
     // "persists via messages alone" in one round-trip.
-    bus.send(mod.id, Message(zen::author::to_value(storage::Probe{1})));
-    bus.send(mod.id, Message(zen::author::to_value(storage::DoGet{"__probe__"})));
+    bus.send(mod.id, Message(loom::to_value(storage::Probe{1})));
+    bus.send(mod.id, Message(loom::to_value(storage::DoGet{"__probe__"})));
     REQUIRE(host.run_until([&] { return have; }, 4000));
 
     REQUIRE_FALSE(probe.empty());      // the broker round-trip succeeded (persisted via messages)
@@ -482,18 +482,18 @@ TEST_CASE("reload-keeps-state: stored data survives a broker implementation relo
     bus.add_observer([&](const BusEvent& e) {
         if (e.kind == EventKind::Delivered && e.schema_name == "StorageValue" &&
             e.payload != nullptr && e.target == mod.id) {
-            const zen::Bytes& v = e.payload->get("value")->as_bytes();
+            const loom::Bytes& v = e.payload->get("value")->as_bytes();
             got = std::string(v.begin(), v.end());
             have = true;
         }
     });
 
-    bus.send(mod.id, Message(zen::author::to_value(storage::DoPut{"k", bytes_of("persisted")})));
-    bus.send(mod.id, Message(zen::author::to_value(storage::DoGet{"k"})));
+    bus.send(mod.id, Message(loom::to_value(storage::DoPut{"k", bytes_of("persisted")})));
+    bus.send(mod.id, Message(loom::to_value(storage::DoGet{"k"})));
     REQUIRE(host.run_until([&] { return have; }, 4000));
     REQUIRE(got == "persisted");
 
-    // Reload the broker's implementation in place: same ShardId, role, grant; fresh
+    // Reload the broker's implementation in place: same WeaveId, role, grant; fresh
     // child; the on-disk data is durable.
     REQUIRE(host.reload("broker"));
     CHECK(host.is_mounted("broker"));
@@ -502,7 +502,7 @@ TEST_CASE("reload-keeps-state: stored data survives a broker implementation relo
     // still correctly scoped, routed by role to the reloaded broker.
     have = false;
     got.clear();
-    bus.send(mod.id, Message(zen::author::to_value(storage::DoGet{"k"})));
+    bus.send(mod.id, Message(loom::to_value(storage::DoGet{"k"})));
     REQUIRE(host.run_until([&] { return have; }, 4000));
     CHECK(got == "persisted");
 
@@ -533,7 +533,7 @@ TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget
             refused = true;
         }
     });
-    bus.send(mod.id, Message(zen::author::to_value(storage::DoPut{"k", bytes_of("x")})));
+    bus.send(mod.id, Message(loom::to_value(storage::DoPut{"k", bytes_of("x")})));
     REQUIRE(host.run_until([&] { return refused; }, 2000));
     // The mod's authorized storage send is simply undelivered — storage is *unavailable*,
     // not a disk leak. The mod is still FsAccess::None.
@@ -568,7 +568,7 @@ TEST_CASE("floor denies net: a mod (even one that asks) cannot reach role net wi
             denied = true;
         }
     });
-    bus.send(mod.id, Message(zen::author::to_value(net::DoNet{"127.0.0.1", 9})));
+    bus.send(mod.id, Message(loom::to_value(net::DoNet{"127.0.0.1", 9})));
     REQUIRE(host.run_until([&] { return denied; }, 2000));
     // ...yet the floor holds: CapabilityDenied to role net (ask is not a grant), and the
     // mod is OS-network-denied — net is a deliberate delta, not the floor.
@@ -606,12 +606,12 @@ TEST_CASE("mediation + negative control: a net-denied mod reaches the allowed ho
         if (e.kind == EventKind::Delivered && e.schema_name == "NetResponse" &&
             e.payload != nullptr && e.target == mod.id) {
             ok = e.payload->get("ok")->as_bool();
-            const zen::Bytes& d = e.payload->get("data")->as_bytes();
+            const loom::Bytes& d = e.payload->get("data")->as_bytes();
             echoed = std::string(d.begin(), d.end());
             got = true;
         }
     });
-    bus.send(mod.id, Message(zen::author::to_value(net::DoNet{"127.0.0.1", echo.port()})));
+    bus.send(mod.id, Message(loom::to_value(net::DoNet{"127.0.0.1", echo.port()})));
     REQUIRE(host.run_until([&] { return got; }, 5000));
 
     CHECK(ok); // reached the allowed loopback listener THROUGH the broker
@@ -652,7 +652,7 @@ TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and n
     // 203.0.113.0/24 is TEST-NET-3 (documentation/unroutable) — not on the broker's
     // loopback-only allow-list. A fast ok=false is itself evidence the broker refused
     // BEFORE connecting (a passthrough would stall on the unroutable address).
-    bus.send(mod.id, Message(zen::author::to_value(net::DoNet{"203.0.113.1", 80})));
+    bus.send(mod.id, Message(loom::to_value(net::DoNet{"203.0.113.1", 80})));
     REQUIRE(host.run_until([&] { return got; }, 5000));
     CHECK_FALSE(ok); // refused by the broker's allow-list; the connection is never made
     std::remove(rec.c_str());

@@ -2,7 +2,7 @@
 
 **Purpose.** This ledger exists to keep a clean line between what is *implemented* and
 what is only *designed*, so work can continue without confusion and so neither the
-author nor any assistant later mistakes architecture-we-permit for code-that-exists.
+maker nor any assistant later mistakes architecture-we-permit for code-that-exists.
 Everything under "Built" ships and is verified. The pillars in §2 are the **design
 record**: some have since been built in phases (B1, B2) — their **Status** lines mark
 exactly what — and the rest is design the current codebase *allows*, not a line of it
@@ -21,21 +21,21 @@ to match — a security proof that cannot run **fails** rather than skipping gre
 
 | Layer | What it is | Status |
 |---|---|---|
-| `zen-core` | self-describing value + the one gate. Schema (7 frozen kinds, FNV content-id), Value (positional), `admit` (the sole validator), Registry (immutable `(name,version)`), serialization (native canonical binary + compat JSON), `Unverified` (untrusted-until-proven). | built |
-| `zen-switchboard` | in-process bus, first live boundary. Gated delivery (admit at delivery vs the recipient's accept-schema), single-threaded FIFO `pump` with reentrancy guard, observer tap, `Shard` interface, lifecycle (`snapshot`/`kill`/`reload` + `swap_state`), abstract `Bus`. | built |
-| `zen-kernel` | DLL loading across a true C ABI. Versioned descriptor, `ZenByteSink` ownership (no cross-allocator free, no host pointer into library memory), host adapter (a loaded Shard *is* a `Shard`), bytes-as-currency re-admitted through the gate, validate-then-commit hot-reload, safe teardown, manifest-as-gated-Value (the minimal schema-as-value precursor). | built |
-| `zen-author` (header-only) | low-ceremony authoring. `ZEN_SHAPE` (schema-from-struct, Kind deduced from C++ type, version required), `ShardBase` (typed handlers, derived accept-set / snapshot / revive, `Mail` as the sole outbound path), `mount<>()`. | built |
+| `loom` | self-describing value + the one gate. Schema (7 frozen kinds, FNV content-id), Value (positional), `admit` (the sole validator), Registry (immutable `(name,version)`), serialization (native canonical binary + compat JSON), `Unverified` (untrusted-until-proven). | built |
+| `zen-switchboard` | in-process bus, first live boundary. Gated delivery (admit at delivery vs the recipient's accept-schema), single-threaded FIFO `pump` with reentrancy guard, observer tap, `Weave` interface, lifecycle (`snapshot`/`kill`/`reload` + `swap_state`), abstract `Bus`. | built |
+| `zen-kernel` | DLL loading across a true C ABI. Versioned descriptor, `ZenByteSink` ownership (no cross-allocator free, no host pointer into library memory), host adapter (a loaded Weave *is* a `Weave`), bytes-as-currency re-admitted through the gate, validate-then-commit hot-reload, safe teardown, manifest-as-gated-Value (the minimal schema-as-value precursor). | built |
+| the **weave** layer (header-only) | low-ceremony weaving. `ZEN_SHAPE` (schema-from-struct, Kind deduced from C++ type, version required), `WeaveBase` (typed handlers, derived accept-set / snapshot / revive, `Mail` as the sole outbound path), `mount<>()`. | built |
 | Level 0 hardening | dispatch selector → `(name,version)` (null-deref fix), loud no-match, `swap_state` split from the crash-revival budget, emit-honesty by test with `Mail` reserved as the enforcement chokepoint, `content_id`-site grep sweep, seam-readiness review. `same_identity` strengthened to true `(name,version,content_id)` identity. | built |
-| Capabilities **(B1)** — `grant.hpp` + switchboard + kernel door | the in-process grant model. Per-Shard `Grant` (send-rule selectors over shape→target, plus reserved OS-capability flags); capability-gated delivery (the `ShardBus` a handler receives stamps its identity and authorizes against its grant *before* the gate → `CapabilityDenied`); `Switchboard::send/publish` are the ungated host root, the gated `ShardBus` is all a Shard ever holds; public `send_as`/`publish_as` (host re-enters a Shard's output with the sender stamped from the connection); the kernel's `LoadLibrary` door is itself a gated capability, demonstrated against native Shards. | built |
-| Isolation **(B2)** — `zen-isolation` library + `zen-shard-host` child | out-of-process hosting + crash supervision. A Shard runs in a child process, indistinguishable to the bus (a proxy that *is* a `Shard`); framed, bounded, defensive unix-socket IPC (per-frame + backlog caps, EOF = death, never blocks the host); the child reuses the kernel C ABI and links no zen-core (a byte shuttler); child output is re-admitted through the one gate host-side with the sender stamped from the connection; a single-threaded `step()` (drain IPC → `pump` → supervise) keeps the bus's FIFO/reentrancy intact; on crash, bounded reload from the host-owned snapshot then quarantine. **Isolated, not sandboxed** — the grant's OS-capability flags stay inert (that is B3). | built |
+| Capabilities **(B1)** — `grant.hpp` + switchboard + kernel door | the in-process grant model. Per-Weave `Grant` (send-rule selectors over shape→target, plus reserved OS-capability flags); capability-gated delivery (the `WeaveBus` a handler receives stamps its identity and authorizes against its grant *before* the gate → `CapabilityDenied`); `Switchboard::send/publish` are the ungated host root, the gated `WeaveBus` is all a Weave ever holds; public `send_as`/`publish_as` (host re-enters a Weave's output with the sender stamped from the connection); the kernel's `LoadLibrary` door is itself a gated capability, demonstrated against native Weaves. | built |
+| Isolation **(B2)** — `zen-isolation` library + `zen-weave-host` child | out-of-process hosting + crash supervision. A Weave runs in a child process, indistinguishable to the bus (a proxy that *is* a `Weave`); framed, bounded, defensive unix-socket IPC (per-frame + backlog caps, EOF = death, never blocks the host); the child reuses the kernel C ABI and links no loom (a byte shuttler); child output is re-admitted through the one gate host-side with the sender stamped from the connection; a single-threaded `step()` (drain IPC → `pump` → supervise) keeps the bus's FIFO/reentrancy intact; on crash, bounded reload from the host-owned snapshot then quarantine. **Isolated, not sandboxed** — the grant's OS-capability flags stay inert (that is B3). | built |
 | OS sandbox **(B3)** — `zen-isolation/sandbox` + native enforcement | the detect→apply→know→refuse-or-proceed **honesty lattice** and the first real syscall-level enforcement. `detect_enforcement()` **probes** (never assumes) what this host can impose, per-capability; the **Network** flag is enforced by launching a child into a no-interface user+net namespace (native `fork`+`unshare(CLONE_NEWUSER+CLONE_NEWNET)`, sandboxed branch only — `posix_spawn` unchanged when Network is granted), so a child without the grant gets `ENETUNREACH` from a real `connect()` regardless of what the `.so` links; `containment()` is generated from what was *actually* imposed and **positively confirmed** (the child's `/proc/<pid>/ns/net` inode differs from the host's — verified, not inferred; never a false claim); a *surprise* real-entry failure refuses in **both** strict and dev mode (no run-while-claiming-contained path); per-capability resolution + an iterating `containment()` make B4 "a probe + an enforcement call"; a default-strict **dev-mode** knob converts a *known-gap* refusal into a visibly-uncontained warning; hard-vs-graduated capability vocabulary (`FsAccess`, safe default) reserves filesystem's home. | built |
-| Filesystem sandbox **(B4)** — `zen-isolation/sandbox` mount-ns view | the **first graduated capability**, enforced by a private mount namespace. The grant's `FsAccess` level (None → ReadOnly → WriteScoped → WriteNoExec → WriteAnywhere, default `None`) picks a point on a safe→dangerous axis; the child `pivot_root`s into an **allow-list** view (fresh tmpfs root, the loader closure + its own `.so` bind-mounted read-only via `mount_setattr(AT_RECURSIVE)`, an optional scratch tmpfs, root remounted read-only — built **private-first** to stop reverse mount propagation), so a stranger's Shard cannot read your `$HOME` secrets (they are *absent*, not hidden), cannot write outside `/scratch` (`EROFS`/`EACCES`), and at `WriteNoExec` cannot `execve` what it writes (`EACCES`); `WriteAnywhere` is the honest opt-out (reported *not contained, by grant*). Confirmed via a distinct `/proc/<pid>/ns/mnt` inode + the same fail-safe/dev-mode/surprise-failure discipline; the OS verdict is proven on the bus (the fs-probe still emits — sandbox ≠ muzzle). `FsAccess` is now the single source of truth (the binary `FilesystemRead/Write` flags were removed). **The map regression fix:** this host refuses a child's self-map, so the **parent** writes the child's uid/gid maps over a pipe handshake (which also hardened B3's netns entry). | built |
-| Resource containment **(B5)** — `zen-isolation/sandbox` cgroup-v2 | the **first quantitative capability** (a *limit*), enforced via a per-Shard cgroup-v2 leaf — completing the threat-model ladder (network + filesystem + resources). The grant's `ResourceLimits` (memory/pids/cpu) default to **host-computed conservative** values (no knob): memory = RAM/8 capped 1 GiB / floored 128 MiB, pids = 512, cpu_weight = 100; `with_unlimited_memory()` is the **only** opt-out — it removes the memory cap alone (**pids stays bounded — no grant can license a fork bomb**; a structural invariant, not a default). The host discovers its **delegated** base, builds the no-internal-processes hierarchy (drain into a `zen-supervisor` leaf, enable `+memory +pids`, and `+cpu` where delegated), and at the spawn **sync point** the parent moves the child's pid into its leaf before release. A memory bomb is **OOM-killed within its cgroup** (host survives → reload-then-quarantine, proven with a granted-survives **negative control**); a fork-bomb is bounded by `pids.max` — **even under `with_unlimited_memory()`** (the headline invariant proof). Confirmed via `/proc/<pid>/cgroup` + limits read-back; fail-safe/dev-mode as usual — resources **never resolve to `Granted`** (a leaf with at-least-pids is always created when cgroups work). **Delegation is invocation-dependent** — a plain `wsl bash` lands in the root cgroup (no delegation → fail-safe refuse), so the suite runs under a delegated scope (`run-under-scope.sh`); `cpu.weight` is set-and-confirmed where the cpu controller is delegated, honestly reported absent on this host (which delegates only memory+pids). An absolute `cpu.max` quota is a named future opt-in. | built |
+| Filesystem sandbox **(B4)** — `zen-isolation/sandbox` mount-ns view | the **first graduated capability**, enforced by a private mount namespace. The grant's `FsAccess` level (None → ReadOnly → WriteScoped → WriteNoExec → WriteAnywhere, default `None`) picks a point on a safe→dangerous axis; the child `pivot_root`s into an **allow-list** view (fresh tmpfs root, the loader closure + its own `.so` bind-mounted read-only via `mount_setattr(AT_RECURSIVE)`, an optional scratch tmpfs, root remounted read-only — built **private-first** to stop reverse mount propagation), so a stranger's Weave cannot read your `$HOME` secrets (they are *absent*, not hidden), cannot write outside `/scratch` (`EROFS`/`EACCES`), and at `WriteNoExec` cannot `execve` what it writes (`EACCES`); `WriteAnywhere` is the honest opt-out (reported *not contained, by grant*). Confirmed via a distinct `/proc/<pid>/ns/mnt` inode + the same fail-safe/dev-mode/surprise-failure discipline; the OS verdict is proven on the bus (the fs-probe still emits — sandbox ≠ muzzle). `FsAccess` is now the single source of truth (the binary `FilesystemRead/Write` flags were removed). **The map regression fix:** this host refuses a child's self-map, so the **parent** writes the child's uid/gid maps over a pipe handshake (which also hardened B3's netns entry). | built |
+| Resource containment **(B5)** — `zen-isolation/sandbox` cgroup-v2 | the **first quantitative capability** (a *limit*), enforced via a per-Weave cgroup-v2 leaf — completing the threat-model ladder (network + filesystem + resources). The grant's `ResourceLimits` (memory/pids/cpu) default to **host-computed conservative** values (no knob): memory = RAM/8 capped 1 GiB / floored 128 MiB, pids = 512, cpu_weight = 100; `with_unlimited_memory()` is the **only** opt-out — it removes the memory cap alone (**pids stays bounded — no grant can license a fork bomb**; a structural invariant, not a default). The host discovers its **delegated** base, builds the no-internal-processes hierarchy (drain into a `zen-supervisor` leaf, enable `+memory +pids`, and `+cpu` where delegated), and at the spawn **sync point** the parent moves the child's pid into its leaf before release. A memory bomb is **OOM-killed within its cgroup** (host survives → reload-then-quarantine, proven with a granted-survives **negative control**); a fork-bomb is bounded by `pids.max` — **even under `with_unlimited_memory()`** (the headline invariant proof). Confirmed via `/proc/<pid>/cgroup` + limits read-back; fail-safe/dev-mode as usual — resources **never resolve to `Granted`** (a leaf with at-least-pids is always created when cgroups work). **Delegation is invocation-dependent** — a plain `wsl bash` lands in the root cgroup (no delegation → fail-safe refuse), so the suite runs under a delegated scope (`run-under-scope.sh`); `cpu.weight` is set-and-confirmed where the cpu controller is delegated, honestly reported absent on this host (which delegates only memory+pids). An absolute `cpu.max` quota is a named future opt-in. | built |
 | Policy **P1–P2** — the powerbox (Storage, then Network brokers) | the first **policy** layer (§2.6): *where a grant comes from*, proven with two brokers on two capabilities. **The ask** (advice, never authority): manifest **v2** `requests` → `zen.CapabilityAsk` + an ergonomic `ZEN_ASK`, gated like the accept-set; `declared_ask` surfaces it but the grant is unmoved. **The floor + grant-record:** `mount_mod` floors an unknown mod (default `Grant` + a send-rule to the storage **role**); authority above the floor comes only from a persisted, **content-hash-keyed** JSON grant-record the host writes (`record_grant_delta`, TCB-only — the host's pen). **Role-addressing:** register under a role, `send_to_role`, `allow_to_role`/`permits_role`, **authorize-by-role *before* resolution**, singleton, reload-stable, unheld-role → `NoSuchTarget`. **The broker:** a new sender-less `Op::EmitRole` frame + `ZenHostApi::send_to_role` close the out-of-process seam (sender stamped from `link.id`, never the wire); persistent-`WriteScoped` binds `storage_root` writable (TCB-only; mods stay `None`); the out-of-process **StorageBroker** (role `"storage"`) scopes each mod's keyspace by the stamped sender. Proven end to end with negative controls: mod-vs-mod scoping, floor-without-disk, ask-is-not-a-grant, reload-keeps-state; broker-down → `NoSuchTarget`. **Session-scoped** (keyed by the ephemeral sender), stated honestly in `containment()`; first-class persistent identity (save-files) is the named successor. **P2** generalizes the powerbox to a second capability (network): `GrantDelta` gains `roles`; the floor grants storage to all but **net to none** (net is a recorded delta — and only the role send-rule, never `os_cap::Network`, so a net mod stays OS-network-denied and reaches the net solely through the broker); the out-of-process **NetworkBroker** (`os_cap::Network`, `FsAccess::None`, role `"net"`) validates `host:port` against a **software allow-list** (NOT OS — the higher-trust broker, honestly reported) and does raw TCP. Negative controls: mediation (a net-denied mod reaches the allowed loopback listener *only* via the broker; its own `connect()` → ENETUNREACH), allow-list scoping, floor-denies-net. | built |
-| Console **Stage 1** — `zen-console` engine + a plain terminal (the first **doing-layer** component; §2.1) | the first thing a *human* uses: a message-native bus participant. The **engine** (`ConsoleEngine`) is **frontend-agnostic and fully testable with no terminal** — it returns **domain data** (shards, field descriptors, received Values, the buffer), never formatted text or a widget tree; the terminal is a throwaway skin a GUI later replaces, inheriting the engine whole. **Discovery-first:** `shards`/`describe` read the registry, so it drives shapes it has never seen. **Two layers:** the registry *guides* at compose-time (fields/types, `construct_blind`); the **gate enforces** at send-time (`send_as` → admit; a missing field is a clean `GateRefused`, never a mis-send). **Wildcard-accept** (`AcceptMode::AnyRegistered`) — the one bus change: accept any *registered* shape, **gated against the registry-resolved schema** (unregistered → refused, reaches no one); opt-in, ordinary Shards unchanged. The console is an in-process raw Shard buffering every reply (`m1`,`m2`,…), the **most-granted participant** (broad `allow_any` send + wildcard-accept + tap + discovery) but each a **grant**, not a bypass — sends go through the gated `send_as`. Proven frontend-free: participant loop, gated-send backstop, discovery on an unseen shape, wildcard-accept + unregistered-refusal. Successors: **Stage 2** (dataflow/`$m1.field` + assumption ladder), **Stage 3** (UI-as-data TUI). | built |
+| Console **Stage 1** — `zen-console` engine + a plain terminal (the first **doing-layer** component; §2.1) | the first thing a *human* uses: a message-native bus participant. The **engine** (`ConsoleEngine`) is **frontend-agnostic and fully testable with no terminal** — it returns **domain data** (weaves, field descriptors, received Values, the buffer), never formatted text or a widget tree; the terminal is a throwaway skin a GUI later replaces, inheriting the engine whole. **Discovery-first:** `weaves`/`describe` read the registry, so it drives shapes it has never seen. **Two layers:** the registry *guides* at compose-time (fields/types, `construct_blind`); the **gate enforces** at send-time (`send_as` → admit; a missing field is a clean `GateRefused`, never a mis-send). **Wildcard-accept** (`AcceptMode::AnyRegistered`) — the one bus change: accept any *registered* shape, **gated against the registry-resolved schema** (unregistered → refused, reaches no one); opt-in, ordinary Weaves unchanged. The console is an in-process raw Weave buffering every reply (`m1`,`m2`,…), the **most-granted participant** (broad `allow_any` send + wildcard-accept + tap + discovery) but each a **grant**, not a bypass — sends go through the gated `send_as`. Proven frontend-free: participant loop, gated-send backstop, discovery on an unseen shape, wildcard-accept + unregistered-refusal. Successors: **Stage 2** (dataflow/`$m1.field` + assumption ladder), **Stage 3** (UI-as-data TUI). | built |
 | Console **Stage 2** — the dataflow layer (`zen-console`: references + the assumption ladder; §2.1) | turns the console into a **dataflow surface** — the text-mode prototype of the flowchart crown. **A reference is a wire:** `$mN.field` reads a scalar `Cell` off an immutable buffered `Value` and routes it into a new message (output→input by typing). Resolution is the **engine**'s (`resolve_ref`, standalone-tested; the label format `mN` is the engine's, the terminal only lexes `$label.field`); a reference only ever **reads** the buffer, errors clean on missing entry/field/empty. Scalar-only this stage. **The assumption ladder** (`compose` over a list of literal/reference args, each optionally `field=`-named): **named wins → positional (declaration order, fails *as a whole* and falls through on any mismatch) → type-directed (unique open field per arg) → prompt**; a still-open required field also prompts. `NeedsInput` is **structured data** (open fields + unplaced args), never a printed string. Coercion is narrow: a numeric literal widens Int→Float, a reference matches its resolved type exactly. **The gate is the backstop that lets the ladder guess fearlessly** — a wrong-typed value is caught (at compose, since the engine knows both types; the gate the unconditional floor beneath), never a silent mis-send. The terminal lexes narrowest-type literals / `$mN.field` / `field=value` (quote to force Text: `"5"` text, `5` Int) and renders the prompt plainly. Proven frontend-free: reference round-trip, each ladder rung incl. positional fall-through + prompt-on-ambiguous, gate-backstop on a wrong-typed reference, reference errors. Successor: **Stage 3** (UI-as-data TUI — intent and relationship, never absolute position/size). | built |
-| Console **Stage 3** — UI-as-data: the renderer-agnostic widget tree (`zen-console` + a termios TUI; §2.1) | the doing-layer's **capstone**: the console's OWN interface becomes **data**, giving "the GUI inherits the engine" real structural support. The engine library emits a **semantic widget tree** (intent + relationship) built from its public domain data; the *same tree* a terminal renderer resolves to box-characters a GUI later resolves to pixels (one description, many renderers — like an HTML DOM and a screen reader). **THE BET, made structural:** **no geometry member on `Widget`** (a closed, geometry-free member set — no `x`/`y`/`w`/`h` field to write) **+ a name-based compile-time tripwire** on ~10 coordinate spellings (`int x` fails to build; `int px` compiles clean — **defense in depth, not unrepresentability**); layout happens **only in a renderer**. Vocabulary (small, general, used here only for the console): `VStack`/`HStack`/`Region`; `List`/`Log`/`Text`/`Field`; an **overflow policy** + a **focus marker** + a **weight** *relative* grow-hint (never an *absolute* size). `Widget` is one value type with defaulted `==` → the tree is **one value**, headlessly assertable and region-diffable. **One real renderer + a renderer-agnosticism proof:** the full-screen **termios TUI** (`console_tui.cpp`, hand-rolled ANSI, NO ncurses/no new dep) is the only production renderer and the only place cells exist; a ~50-line test-only `render_outline` walk consumes the same tree to prove it carries no medium (ignores `weight`; the TUI resolves `weight` as a relative size in cells). **Guidance is engine-produced** (`guidance_for(partial)` advances empty→shard→shapes→fields, carried in the `Field` hint). **Message-driven dirty:** the single bus observer (`record_tap`) sets per-region flags (`buffer` on a reply to the console, `shards` on death/revival, `tap` on any event), drained by `take_dirty()` — the Zengine retained-mode idea, change-signal = bus messages. **Symmetric input seam:** renderer-agnostic semantic actions (`FocusNext`/`Activate`/`Edit`/`Submit`/…) the `ConsoleUi` controller applies; the raw-key→action map is the TUI's only terminal-coupled code, so a GUI inherits input too. Proven frontend-free: tree structure; no geometry member (fence + structural-`==`); one-tree-two-consumers; guidance advances; a bus message drives the buffer pane; a scripted-action TUI smoke incl. the NeedsInput prompt. Green in Debug + ASan/UBSan. Successors: a **general Shard-emitted-UI protocol**, the **GUI renderer**, geometric/fabric-level UIs, the **result-graph buffer**. | built |
-| Console **— the terminal-backend seam + a Windows backend** (cross-platform TUI; §2.1) | extracts the TUI's only platform-specific code into a **`TerminalBackend` seam** (`terminal.hpp`, in the TUI exe, NOT the engine) — `is_interactive`/`size`/`read_byte`/`read_byte_timeout` + RAII raw-mode; `make_terminal()` is the one per-platform symbol. **POSIX backend = the existing termios/ioctl code MOVED, behavior-identical** (the safety property: Linux preserved by construction, not rewritten); **Windows backend = the Win32 Console API by-the-book** (VT input/output so the *same* ANSI renderer + escape-key parsing run unchanged; `srWindow` size; graceful VT-unavailable fallback). `console_tui.cpp` is now **platform-header-free**; `zen-console` stays terminal-free. **Build-verify division** (the cpu-seam arrangement): Linux is *proven* green (ctest 20/20 Debug + ASan/UBSan, TUI smoke unchanged), the Windows backend is *best-effort, Josh-verified in CLion*. **CMake gates** `zen-kernel`/`zen-isolation`/`zen-shard-host` + the Linux-only test sources/shardlibs/suites (incl. `test_capabilities`, which loads a real `.so` via the kernel) behind `if(NOT WIN32)` so the portable subset configures on Windows — **invisible on Linux** (full target/suite set unchanged). **Trusted-code, in-process, NO containment surface** (no `IsolationHost` in the TUI build — the sandbox is Linux/WSL; containment honesty belongs to the WSL-bridge phase). **Seams appreciated:** this seam is the hook the **WSL remote console** (a socket `TerminalBackend`) and the **GUI** (another renderer) plug into; flagged for the remote phase — **output not yet behind the seam** (`draw()`→stdout; a socket backend wants a `write()`/`flush()`) and **the TUI owns the I/O loop** (sync blocking-read; async would invert it); and the gate exposes **native-Windows `.dll` loading** (`dlopen`→`LoadLibrary`) as a hooked-but-probably-never seam (WSL-hosting dominates). | Linux built/green; Windows Josh-verified |
+| Console **Stage 3** — UI-as-data: the renderer-agnostic widget tree (`zen-console` + a termios TUI; §2.1) | the doing-layer's **capstone**: the console's OWN interface becomes **data**, giving "the GUI inherits the engine" real structural support. The engine library emits a **semantic widget tree** (intent + relationship) built from its public domain data; the *same tree* a terminal renderer resolves to box-characters a GUI later resolves to pixels (one description, many renderers — like an HTML DOM and a screen reader). **THE BET, made structural:** **no geometry member on `Widget`** (a closed, geometry-free member set — no `x`/`y`/`w`/`h` field to write) **+ a name-based compile-time tripwire** on ~10 coordinate spellings (`int x` fails to build; `int px` compiles clean — **defense in depth, not unrepresentability**); layout happens **only in a renderer**. Vocabulary (small, general, used here only for the console): `VStack`/`HStack`/`Region`; `List`/`Log`/`Text`/`Field`; an **overflow policy** + a **focus marker** + a **weight** *relative* grow-hint (never an *absolute* size). `Widget` is one value type with defaulted `==` → the tree is **one value**, headlessly assertable and region-diffable. **One real renderer + a renderer-agnosticism proof:** the full-screen **termios TUI** (`console_tui.cpp`, hand-rolled ANSI, NO ncurses/no new dep) is the only production renderer and the only place cells exist; a ~50-line test-only `render_outline` walk consumes the same tree to prove it carries no medium (ignores `weight`; the TUI resolves `weight` as a relative size in cells). **Guidance is engine-produced** (`guidance_for(partial)` advances empty→weave→shapes→fields, carried in the `Field` hint). **Message-driven dirty:** the single bus observer (`record_tap`) sets per-region flags (`buffer` on a reply to the console, `weaves` on death/revival, `tap` on any event), drained by `take_dirty()` — the Zengine retained-mode idea, change-signal = bus messages. **Symmetric input seam:** renderer-agnostic semantic actions (`FocusNext`/`Activate`/`Edit`/`Submit`/…) the `ConsoleUi` controller applies; the raw-key→action map is the TUI's only terminal-coupled code, so a GUI inherits input too. Proven frontend-free: tree structure; no geometry member (fence + structural-`==`); one-tree-two-consumers; guidance advances; a bus message drives the buffer pane; a scripted-action TUI smoke incl. the NeedsInput prompt. Green in Debug + ASan/UBSan. Successors: a **general Weave-emitted-UI protocol**, the **GUI renderer**, geometric/fabric-level UIs, the **result-graph buffer**. | built |
+| Console **— the terminal-backend seam + a Windows backend** (cross-platform TUI; §2.1) | extracts the TUI's only platform-specific code into a **`TerminalBackend` seam** (`terminal.hpp`, in the TUI exe, NOT the engine) — `is_interactive`/`size`/`read_byte`/`read_byte_timeout` + RAII raw-mode; `make_terminal()` is the one per-platform symbol. **POSIX backend = the existing termios/ioctl code MOVED, behavior-identical** (the safety property: Linux preserved by construction, not rewritten); **Windows backend = the Win32 Console API by-the-book** (VT input/output so the *same* ANSI renderer + escape-key parsing run unchanged; `srWindow` size; graceful VT-unavailable fallback). `console_tui.cpp` is now **platform-header-free**; `zen-console` stays terminal-free. **Build-verify division** (the cpu-seam arrangement): Linux is *proven* green (ctest 20/20 Debug + ASan/UBSan, TUI smoke unchanged), the Windows backend is *best-effort, Josh-verified in CLion*. **CMake gates** `zen-kernel`/`zen-isolation`/`zen-weave-host` + the Linux-only test sources/weavelibs/suites (incl. `test_capabilities`, which loads a real `.so` via the kernel) behind `if(NOT WIN32)` so the portable subset configures on Windows — **invisible on Linux** (full target/suite set unchanged). **Trusted-code, in-process, NO containment surface** (no `IsolationHost` in the TUI build — the sandbox is Linux/WSL; containment honesty belongs to the WSL-bridge phase). **Seams appreciated:** this seam is the hook the **WSL remote console** (a socket `TerminalBackend`) and the **GUI** (another renderer) plug into; flagged for the remote phase — **output not yet behind the seam** (`draw()`→stdout; a socket backend wants a `write()`/`flush()`) and **the TUI owns the I/O loop** (sync blocking-read; async would invert it); and the gate exposes **native-Windows `.dll` loading** (`dlopen`→`LoadLibrary`) as a hooked-but-probably-never seam (WSL-hosting dominates). | Linux built/green; Windows Josh-verified |
 
 The spine holds across every boundary: one gate everywhere, untrusted-until-proven,
 immutable published schemas, the kernel holds grammar not answers. The content-id
@@ -57,18 +57,18 @@ remaining OS-capability primitives (seccomp, cgroups, filesystem) still to come;
 is **still wholly design**.
 Anything marked *designed, not built* is design the codebase allows — not a line of it written.
 
-### 2.1 The console (the first human-facing Shard)
+### 2.1 The console (the first human-facing Weave)
 
-A Shard authored entirely in the low-ceremony layer plus a thin frontend; it mostly
+A Weave woven entirely in the low-ceremony layer plus a thin frontend; it mostly
 *spends* what the substrate already banked.
 
-- **Discovery-first.** Browse Shards → view a Shard's accepted message shapes → fill
+- **Discovery-first.** Browse Weaves → view a Weave's accepted message shapes → fill
   fields → send. Discovery is not a beginner's crutch; it is the single source the
-  whole interaction derives from (`list_shards` → `accepted_schemas` → walk the shape →
+  whole interaction derives from (`list_weaves` → `accepted_schemas` → walk the shape →
   `send`). Knowing the command path *is* knowing the system, because the path names the
-  Shard it talks to and the shape it sends.
+  Weave it talks to and the shape it sends.
 - **Speed-runnable guided, one path two speeds.** There is one canonical command path
-  (shard → message → fields). Guided = walk it slowly with the bus answering each step;
+  (weave → message → fields). Guided = walk it slowly with the bus answering each step;
   speed-run = supply the whole path up front; partial = the engine asks only for the
   gaps. Not two modes — one path, and your speed along it is how much of it you already
   hold in your head.
@@ -80,8 +80,8 @@ A Shard authored entirely in the low-ceremony layer plus a thin frontend; it mos
   exactly what the engine already computes to ask its next question.
 - **Terminal-first, flipbook rendering.** v1 is a terminal using a live-redrawn prompt
   region (raw mode, read every char, repaint the current line + a derived panel below it
-  while committed history scrolls up — the readline technique). The shard column shows a
-  red "no such shard" the instant you typo, because the engine resolves the partial path
+  while committed history scrolls up — the readline technique). The weave column shows a
+  red "no such weave" the instant you typo, because the engine resolves the partial path
   against the live registry each keystroke. GUI (SDL3 / ImGui) is a *later, separate*
   phase and merely *another frontend* on the same engine.
 - **Observer + injector, not reply-receiver.** The console watches the tap (delivered
@@ -96,7 +96,7 @@ TUI on top — see the Stage 3 paragraph below). The
 engine/frontend boundary (above) is realized: `zen-console`'s `ConsoleEngine` is frontend-agnostic
 and fully testable with no terminal, returning domain data a throwaway terminal formats as text.
 Discovery-first / host-don't-presume hold (it drives shapes it has never seen, via
-`shards`/`describe` off the registry). **The "observer + injector, *not* reply-receiver" bullet above
+`weaves`/`describe` off the registry). **The "observer + injector, *not* reply-receiver" bullet above
 is now superseded:** that deferred capability question ("a console accepting arbitrary shapes") is
 answered — the console *does* receive replies, into an indexed buffer (`m1`,`m2`,…), via
 **wildcard-accept** (`AcceptMode::AnyRegistered`): accept-any-*registered*-shape, **gated against the
@@ -132,32 +132,32 @@ renderer + a renderer-agnosticism proof**: the full-screen **termios TUI** (`con
 hand-rolled ANSI, no ncurses, no new dep) is the only production renderer and the *only* place cells
 exist; a ~50-line test-only `render_outline` walk consumes the same tree to prove it carries no
 medium (it ignores `weight`; the TUI resolves `weight` as a relative size in cells).
-**Guidance is engine-produced** (`guidance_for(partial)` advances empty→shard→shapes→fields, carried
+**Guidance is engine-produced** (`guidance_for(partial)` advances empty→weave→shapes→fields, carried
 in the `Field`'s hint). **Message-driven dirty**: the single bus observer (`record_tap`) sets
-per-region flags (`buffer` on a reply to the console, `shards` on death/revival, `tap` on any event),
+per-region flags (`buffer` on a reply to the console, `weaves` on death/revival, `tap` on any event),
 drained by `take_dirty()` — the retained-mode / Zengine idea, the change-signal being bus messages.
 **Symmetric input seam**: renderer-agnostic semantic actions (`FocusNext`/`Activate`/`Edit`/`Submit`/
 …) the `ConsoleUi` controller applies; the raw-key→action map is the TUI's only terminal-coupled
 code, so a GUI inherits input too. The proofs pass frontend-free (tree structure; no geometry member
 via the fence + a structural-`==` test; one-tree-two-consumers; guidance advances; a bus message
 drives the buffer pane; a scripted-action TUI smoke incl. the NeedsInput prompt).
-Named successors: a **general Shard-emitted-UI protocol** (any Shard emits its own UI tree — the
+Named successors: a **general Weave-emitted-UI protocol** (any Weave emits its own UI tree — the
 vocabulary is built general *for* it, validated by the console first), the **GUI renderer**,
-**geometric/canvas UIs** (bridge at the sandboxed-Shard fabric level, not semantic rendering), and
+**geometric/canvas UIs** (bridge at the sandboxed-Weave fabric level, not semantic rendering), and
 the **result-graph buffer** (Stage 2's flat-`mN` seam).
 
 ### 2.2 Pillar 1 — Capabilities / grants (the silhouette, made enforceable)
 
 The kernel grants **capabilities, not permissions**, and the default grant is nearly
-empty. A Shard's reach into the world is its silhouette: which message shapes it may
+empty. A Weave's reach into the world is its silhouette: which message shapes it may
 send, to which targets, plus the dangerous OS-relevant grants (ask the kernel to load
 more code, touch the filesystem, reach the network).
 
 - The bitcoin-miner reframe: arbitrary code is not the danger — *ambient authority* is.
-  Capabilities make most bad behavior **unsayable** (a Shard with no network grant cannot
+  Capabilities make most bad behavior **unsayable** (a Weave with no network grant cannot
   reach the network over the bus; the only things it can *do* are send granted messages).
 - This answers "should the kernel accept messages": **yes** — the kernel exposes a
-  control surface as a Shard-like participant (`LoadLibrary` / `ReloadLibrary` /
+  control surface as a Weave-like participant (`LoadLibrary` / `ReloadLibrary` /
   `UnloadLibrary`), reachable and discoverable like anything else, so operating the system
   is the same gesture as using it. But that surface is the single most dangerous
   capability there is, so it **cannot be ambient** — the right to send the kernel a
@@ -170,7 +170,7 @@ more code, touch the filesystem, reach the network).
   That gap is closed only by Pillar 2 (process isolation in B2, the OS sandbox in B3).
 
 **Status: built as B1** (in-process). The grant, capability-gated delivery
-(`CapabilityDenied` before the gate), the trusted-`ShardBus`-vs-root-`Switchboard`
+(`CapabilityDenied` before the gate), the trusted-`WeaveBus`-vs-root-`Switchboard`
 split, and the kernel's gated load-door all ship and are tested. What is *not* yet
 enforced: the grant's **OS-capability flags** — they are recorded on the grant and
 shaped for the sandbox, but inert until B3 makes them absolute at the syscall boundary.
@@ -187,15 +187,15 @@ with its OS-relevant parts deferred — not weakened — to the isolation phases
 > over-claim (call a process boundary a sandbox) or to wait on the fiddly syscall work before
 > delivering any containment at all.
 
-The instruction-layer gap (a Shard with an empty grant can statically link or `dlopen`
+The instruction-layer gap (a Weave with an empty grant can statically link or `dlopen`
 a networking library and call `connect()` directly, outside the kernel's knowledge) has a
 **two-step** answer.
 
 **Built as B2 — process isolation (containment, not a sandbox).** Out-of-process, the OS
 boundary means a child **cannot touch host memory** and a crash **cannot take the host
 down**: the host detects the death, contains it, reloads from a host-owned snapshot bounded
-by `max_reloads`, then quarantines. Hosting is a per-Shard mount choice; the bus cannot tell
-a hosted Shard from a native one; the grant is still enforced at the **message** boundary
+by `max_reloads`, then quarantines. Hosting is a per-Weave mount choice; the bus cannot tell
+a hosted Weave from a native one; the grant is still enforced at the **message** boundary
 (child output is gated host-side, sender stamped from the connection). What B2 deliberately
 does **not** do is enforce the grant's OS-capability flags — it reports its containment
 honestly as *"isolated, not sandboxed,"* and the flags stay inert. That honesty is
@@ -217,11 +217,11 @@ permanent **detect → apply → know → refuse-or-proceed** structure the rest
 - **The unification:** the grant is one source of truth projected onto whatever
   boundaries the hosting mode provides. In-process it's bus-enforced (partial, advisory
   below the bus). Out-of-process it's *also* syscall-enforced (absolute). So
-  crash-isolation (survive a Shard segfault) and capability-*enforcement* (make "no
+  crash-isolation (survive a Weave segfault) and capability-*enforcement* (make "no
   network" absolute) are the **same out-of-process move viewed twice**.
-- **Mode maps onto trust, and the grant decides the mode.** A first-party Shard you
+- **Mode maps onto trust, and the grant decides the mode.** A first-party Weave you
   compiled → in-process (fast, bus-enforced, vetting is the tool). An untrusted
-  mod-authored Shard → out-of-process under an OS sandbox scoped to its grant (slower,
+  mod-woven Weave → out-of-process under an OS sandbox scoped to its grant (slower,
   OS-enforced; the linked-libcurl trick fails because the process has no network).
   Process isolation makes the transitive-vetting problem **moot** for OS-relevant
   capabilities — the sandbox contains the whole process whatever it loads.
@@ -236,9 +236,9 @@ permanent **detect → apply → know → refuse-or-proceed** structure the rest
 - **Honest limits:** sandbox config is real work (seccomp is fiddly; namespaces are
   robust because coarse). Not every capability has an OS shadow (bus-only grants like "may
   send DamageEvent" stay bus-enforced). Out-of-process costs IPC + serialize-at-the-boundary
-  — which is *why* bytes-as-currency was built, and why isolation is per-Shard, not the
+  — which is *why* bytes-as-currency was built, and why isolation is per-Weave, not the
   default. And the grant *decision* is irreducible trust: a granted network capability is
-  real power. The honest sentence is *"Zen makes a Shard's power minimal-by-default,
+  real power. The honest sentence is *"Zen makes a Weave's power minimal-by-default,
   explicit, observable, and — out-of-process — OS-enforced; the trust in a granted
   capability is yours to give, and giving it is real."* Not a sandbox in-process; not
   "arbitrary code made harmless" even out-of-process.
@@ -249,7 +249,7 @@ B3 (the detection lattice; native `fork`+`unshare` no-interface network namespac
 honest `containment()`; default-strict dev-mode override; parent-writes-maps handshake), B4
 (the graduated `FsAccess` filesystem capability: a private mount-namespace allow-list view,
 confirmed via `/proc/<pid>/ns/mnt`), and B5 (the quantitative `ResourceLimits` capability: a
-per-Shard cgroup-v2 leaf with memory/pids caps applied at the sync point, confirmed via
+per-Weave cgroup-v2 leaf with memory/pids caps applied at the sync point, confirmed via
 `/proc/<pid>/cgroup` + read-back) all ship and are tested in Debug and under ASan/UBSan — a
 child without the Network grant gets `ENETUNREACH` from a real `connect()`, a restricted child
 gets `ENOENT`/`EROFS`/`EACCES` on out-of-scope files, a memory bomb is OOM-killed within its
@@ -267,8 +267,8 @@ polling the bus every frame.
   frame — so **push, not pull**: combat publishes `HPChanged{current,max}` when it
   changes, the display caches it and renders the cache at native speed, and most frames
   carry zero bus traffic. Flipping pull → push makes most of the per-frame cost evaporate.
-- **For genuinely high-frequency cross-Shard reads** (a transform a dozen systems read
-  every frame): a Shard publishes a value into a **typed, read-only slot the runtime
+- **For genuinely high-frequency cross-Weave reads** (a transform a dozen systems read
+  every frame): a Weave publishes a value into a **typed, read-only slot the runtime
   mediates**, and readers hold a **handle, not a pointer**. The handle yields the current
   value with no per-read message (a deref, not a round-trip); it is schema'd (no
   reinterpreting bytes); and — the property a raw pointer can never have — its lifetime is
@@ -277,17 +277,17 @@ polling the bus every frame.
   switchboard — is an unsettled detail; what matters is mediation by something that tracks
   lifetime.)*
 - `VarStorage` (the old prototype) is the right *shape* — a handle yielding a current
-  value while abstracting the backing. The cross-Shard evolution changes only the backing:
+  value while abstracting the backing. The cross-Weave evolution changes only the backing:
   "gated published slot" instead of a raw pointer or arbitrary function. In-process *within
-  one Shard*, `VarStorage` as-is is fine — it's C++, use pointers freely.
-- **Decision: no raw pointers across Shards.** A raw-pointer Shard can't be isolated
+  one Weave*, `VarStorage` as-is is fine — it's C++, use pointers freely.
+- **Decision: no raw pointers across Weaves.** A raw-pointer Weave can't be isolated
   (pointers don't cross a process boundary → forces in-process, forecloses the sandbox),
   can't be safely hot-reloaded (dangles on swap), is invisible to the tap (loses the
   observability that made the miner detectable), and is write-capable unless you're
   perfect. Blessing it would *contract* potential, not expand it — and once a raw-pointer
   mode is marketed as "fast," it becomes the default reach and the ecosystem loses the Zen
   properties through convenience. **Not forbidden**, though: two trusted first-party
-  in-process Shards may share a pointer by mutual agreement like any two objects in one
+  in-process Weaves may share a pointer by mutual agreement like any two objects in one
   address space; the runtime neither provides nor blocks it; doing so steps outside the
   guarantees, knowingly — symmetric with the linked-libcurl case. The safe path is the
   easy default; stepping off is a deliberate, named exception.
@@ -309,13 +309,13 @@ They are one model: **a grant, projected onto the boundary its hosting mode prov
 will make the **syscall** boundary real. The model below is unchanged — it is now partly
 built rather than wholly designed.)*
 
-- The **grant** (Pillar 1) is the single source of truth for what a Shard may do.
+- The **grant** (Pillar 1) is the single source of truth for what a Weave may do.
 - The **hosting mode** is decided by trust (Pillar 2): full-trust in-process → fast,
   bus-enforced, vetting is the tool; isolated out-of-process → crash-contained now (B2),
   OS-enforced and scoped to the grant once sandboxed (B3).
 - The mode determines which **enforcement boundaries** apply (bus-only vs bus + syscall)
   *and* which **access mechanisms** are even available (Pillar 3): holding a slot handle is
-  itself a grant, and an isolated Shard **cannot** hold one (no shared address space) — so
+  itself a grant, and an isolated Weave **cannot** hold one (no shared address space) — so
   it gets push-messages instead. Which is a second reason push is the right default and
   slots are the trusted-in-process optimization.
 
@@ -323,7 +323,7 @@ built rather than wholly designed.)*
 
 The B-series answered *what a grant enforces*; this phase answers *where a grant comes from*,
 in the **powerbox / object-capability** shape: a privileged capability is held by a small,
-hard-rooted **broker** Shard, and an untrusted mod gets only a send-rule to *talk to* the
+hard-rooted **broker** Weave, and an untrusted mod gets only a send-rule to *talk to* the
 broker, never the raw capability. The spine:
 
 - **Advice, not authority.** A mod may *ask* (the manifest's `requests`); the host alone
@@ -390,16 +390,16 @@ kernel-control-over-the-bus the hot path, which forces capability-gating before 
 is safe to expose. The two options, kept for the record:
 
 - **Option A — console first.** Ship the human instrument sooner; the console manages the
-  kernel via a direct, trusted C++ call (both are floor-level), and drives loaded Shards
+  kernel via a direct, trusted C++ call (both are floor-level), and drives loaded Weaves
   over the bus. Capability + isolation comes after.
 - **Option B — capability + isolation layer first.** Build the kernel's message door plus
   the bus's "may you send this to them" gate (and the in-process/out-of-process hosting
   split), with demand-loading as the proving ground; the console is then born *on top* as
   the first grant-holder, in the real model.
 
-**Resolved: B** — the author's call, made. The console's *value* (discover and drive a
+**Resolved: B** — the maker's call, made. The console's *value* (discover and drive a
 live system) doesn't strictly need kernel-control-as-messages, but the demand-loading case
-showed the capability layer is the real spine of everything multi-Shard, and being born
+showed the capability layer is the real spine of everything multi-Weave, and being born
 holding a real grant beats retrofitting one. The counter-argument for A was real (the
 console feels half-real until "operate the kernel like everything else" is true, and the
 human instrument in hand sooner accelerates everything) — but B won, and B1 + B2 + B3 now

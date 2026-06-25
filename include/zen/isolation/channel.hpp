@@ -2,7 +2,7 @@
 #define ZEN_ISOLATION_CHANNEL_HPP
 
 // A non-blocking, length-framed byte channel over a unix-domain socket fd — the
-// parent side of a parent<->child Shard-host link. It is bounded and defensive:
+// parent side of a parent<->child Weave-host link. It is bounded and defensive:
 // a frame larger than the cap, or an outbound backlog over the cap (a peer not
 // draining), marks the channel failed — a misbehaving child is contained, never
 // allowed to block, hang, or OOM the host. EOF (peer closed) is observable and
@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-namespace zen::isolation {
+namespace loom {
 
 struct Incoming {
     Op op = Op::Hello;
@@ -57,6 +57,6 @@ private:
     bool eof_ = false;
 };
 
-} // namespace zen::isolation
+} // namespace loom
 
 #endif // ZEN_ISOLATION_CHANNEL_HPP

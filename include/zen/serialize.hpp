@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace zen {
+namespace loom {
 
 class Registry;
 class Unverified;
@@ -108,6 +108,6 @@ Unverified parse(std::string_view bytes) noexcept;
 
 } // namespace compat
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_SERIALIZE_HPP

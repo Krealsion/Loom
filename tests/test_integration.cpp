@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-using namespace zen;
+using namespace loom;
 
 // The three proof-of-concept scenes, reproduced as assertions over the public
 // API only. No domain type lives in the library; every schema here is a test
@@ -40,7 +40,7 @@ TEST_CASE("A: well-formed admitted; missing field refused; wrong claim refused")
 }
 
 // ---------------------------------------------------------------------------
-// Scene B: the console builds a message for a Shard it has never seen.
+// Scene B: the console builds a message for a Weave it has never seen.
 // ---------------------------------------------------------------------------
 TEST_CASE("B: a runtime-discovered schema is blind-constructed and admitted") {
     // The schema "arrives from a DLL": nothing was compiled to know it. We learn
@@ -75,7 +75,7 @@ TEST_CASE("B: a runtime-discovered schema is blind-constructed and admitted") {
 // ---------------------------------------------------------------------------
 namespace {
 
-struct Shard {
+struct Weave {
     std::string name;
     std::shared_ptr<const Schema> state_schema; // the lock the self chose
     Value policy;                               // self-declared; kernel-checked
@@ -86,7 +86,7 @@ struct Shard {
 // Revive from a *serialized* candidate: it counts only if it round-trips through
 // bytes and passes the gate against the self-chosen lock. The kernel never
 // understands what the state means — it only judges shape.
-bool revive_from_bytes(Shard& s, const std::string& candidate_bytes,
+bool revive_from_bytes(Weave& s, const std::string& candidate_bytes,
                        const Schema& policy_door) {
     // The policy is itself validated as a value against a schema the library does
     // not hard-code.
@@ -113,10 +113,10 @@ bool revive_from_bytes(Shard& s, const std::string& candidate_bytes,
 
 } // namespace
 
-TEST_CASE("C: a Shard is revived only through the same gate persistence uses") {
+TEST_CASE("C: a Weave is revived only through the same gate persistence uses") {
     // Value has no default constructor (it always carries a schema), so the
-    // Shard is built whole, with its lock and selves already shaped.
-    Shard ami{"Ami", fx::PlayerState(), Value(fx::ReloadPolicy()), Value(fx::PlayerState()), 0};
+    // Weave is built whole, with its lock and selves already shaped.
+    Weave ami{"Ami", fx::PlayerState(), Value(fx::ReloadPolicy()), Value(fx::PlayerState()), 0};
     ami.policy.set("max_reloads", Cell::integer(2));
     ami.policy.set("revive_from_last_good", Cell::boolean(true));
     ami.last_known_good.set("hp", Cell::integer(20)).set("name", Cell::text("Ami"));
@@ -138,7 +138,7 @@ TEST_CASE("C: a Shard is revived only through the same gate persistence uses") {
     std::string corrupt_bytes = serialize(corrupt); // hp absent on the wire
     // Confirm directly that no trusted value escapes the gate.
     CHECK_FALSE(admit(parse(corrupt_bytes), fx::PlayerState()).ok());
-    // The Shard falls back to last-known-good (the self permitted it).
+    // The Weave falls back to last-known-good (the self permitted it).
     CHECK(revive_from_bytes(ami, corrupt_bytes, *fx::ReloadPolicy()));
     CHECK(ami.last_known_good.get("hp")->as_int() == 30); // unchanged: still the good self
     CHECK(ami.reloads_used == 2);

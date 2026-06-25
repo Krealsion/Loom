@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace zen::console {
+namespace loom {
 
 // ---- Named constructors (the only sanctioned Widget construction path) ----
 
@@ -170,24 +170,24 @@ std::string render_outline(const Widget& root) {
 std::string guidance_for(const ConsoleEngine& engine, std::string_view partial_command) {
     const std::vector<Token> toks = tokenize(std::string(partial_command));
     if (toks.empty()) {
-        return "choose a shard: type its id, then <Shape> <version> [args]";
+        return "choose a weave: type its id, then <Shape> <version> [args]";
     }
     std::uint64_t id = 0;
     if (!parse_u64(toks[0].text, id)) {
-        return "expected a shard id, got '" + toks[0].text + "'";
+        return "expected a weave id, got '" + toks[0].text + "'";
     }
-    const std::vector<ShardInfo> shards = engine.shards();
-    const ShardInfo* found = nullptr;
-    for (const ShardInfo& s : shards) {
+    const std::vector<WeaveInfo> weaves = engine.weaves();
+    const WeaveInfo* found = nullptr;
+    for (const WeaveInfo& s : weaves) {
         if (s.id.value == id) {
             found = &s;
         }
     }
     if (found == nullptr) {
-        return "no such shard: " + toks[0].text;
+        return "no such weave: " + toks[0].text;
     }
     if (toks.size() == 1) {
-        std::string out = "shard " + toks[0].text + " accepts:";
+        std::string out = "weave " + toks[0].text + " accepts:";
         for (const ShapeRef& a : found->accepts) {
             out += " " + a.name + " v" + std::to_string(a.version);
         }
@@ -215,18 +215,18 @@ std::string guidance_for(const ConsoleEngine& engine, std::string_view partial_c
 // ---- Tree emission ----
 
 Widget emit_ui_tree(const ConsoleEngine& engine, const UiState& ui) {
-    // Shards list.
-    std::vector<std::string> shard_items;
-    for (const ShardInfo& s : engine.shards()) {
-        std::string line = "shard " + std::to_string(s.id.value) + ":";
+    // Weaves list.
+    std::vector<std::string> weave_items;
+    for (const WeaveInfo& s : engine.weaves()) {
+        std::string line = "weave " + std::to_string(s.id.value) + ":";
         for (const ShapeRef& a : s.accepts) {
             line += " " + a.name + " v" + std::to_string(a.version);
         }
-        shard_items.push_back(std::move(line));
+        weave_items.push_back(std::move(line));
     }
-    Widget shards = list("shards", "Shards", std::move(shard_items),
-                         ui.focus == Focus::Shards ? ui.shard_cursor : -1,
-                         /*focusable=*/true, /*focused=*/ui.focus == Focus::Shards);
+    Widget weaves = list("weaves", "Weaves", std::move(weave_items),
+                         ui.focus == Focus::Weaves ? ui.weave_cursor : -1,
+                         /*focusable=*/true, /*focused=*/ui.focus == Focus::Weaves);
 
     // Tap log.
     std::vector<std::string> tap_items;
@@ -241,7 +241,7 @@ Widget emit_ui_tree(const ConsoleEngine& engine, const UiState& ui) {
     Widget taplog = log_widget("tap", "Tap", std::move(tap_items));
 
     Widget bus =
-        region("bus", "Bus", hstack("bus-row", {std::move(shards), std::move(taplog)}));
+        region("bus", "Bus", hstack("bus-row", {std::move(weaves), std::move(taplog)}));
 
     // Buffer list (m1, m2, ...).
     std::vector<std::string> buf_items;
@@ -292,22 +292,22 @@ namespace {
 
 Focus next_focus(Focus f) {
     switch (f) {
-    case Focus::Shards:
+    case Focus::Weaves:
         return Focus::Buffer;
     case Focus::Buffer:
         return Focus::Compose;
     case Focus::Compose:
-        return Focus::Shards;
+        return Focus::Weaves;
     }
     return Focus::Compose;
 }
 
 Focus prev_focus(Focus f) {
     switch (f) {
-    case Focus::Shards:
+    case Focus::Weaves:
         return Focus::Compose;
     case Focus::Buffer:
-        return Focus::Shards;
+        return Focus::Weaves;
     case Focus::Compose:
         return Focus::Buffer;
     }
@@ -331,7 +331,7 @@ void ConsoleUi::submit_command() {
     std::uint64_t id = 0;
     std::uint64_t ver = 0;
     if (!parse_u64(toks[0].text, id) || !parse_u64(toks[2].text, ver) || ver > 0xFFFFFFFFull) {
-        error("bad shard id or version");
+        error("bad weave id or version");
         return;
     }
     std::vector<Arg> args;
@@ -339,7 +339,7 @@ void ConsoleUi::submit_command() {
         args.push_back(lex_arg(toks[i]));
     }
     Composed c =
-        engine_.compose(zen::sb::ShardId{id}, toks[1].text, static_cast<std::uint32_t>(ver), args);
+        engine_.compose(loom::WeaveId{id}, toks[1].text, static_cast<std::uint32_t>(ver), args);
     const bool ready = c.status == Composed::Status::Ready;
     ui_.pending = std::move(c);
     if (ready) {
@@ -357,8 +357,8 @@ void ConsoleUi::dispatch(const InputEvent& ev) {
         ui_.focus = prev_focus(ui_.focus);
         break;
     case Action::SelectUp:
-        if (ui_.focus == Focus::Shards && ui_.shard_cursor > 0) {
-            --ui_.shard_cursor;
+        if (ui_.focus == Focus::Weaves && ui_.weave_cursor > 0) {
+            --ui_.weave_cursor;
         } else if (ui_.focus == Focus::Buffer && ui_.buffer_cursor > 0) {
             --ui_.buffer_cursor;
         }
@@ -367,10 +367,10 @@ void ConsoleUi::dispatch(const InputEvent& ev) {
         // Clamp against the live item count here — the controller is the ONLY writer of UiState
         // (a renderer takes the tree by const& and cannot clamp), so an out-of-range cursor would
         // otherwise make the selection silently vanish on the next emit.
-        if (ui_.focus == Focus::Shards) {
-            const int n = static_cast<int>(engine_.shards().size());
-            if (ui_.shard_cursor + 1 < n) {
-                ++ui_.shard_cursor;
+        if (ui_.focus == Focus::Weaves) {
+            const int n = static_cast<int>(engine_.weaves().size());
+            if (ui_.weave_cursor + 1 < n) {
+                ++ui_.weave_cursor;
             }
         } else if (ui_.focus == Focus::Buffer) {
             const int n = static_cast<int>(engine_.buffer_size());
@@ -380,12 +380,12 @@ void ConsoleUi::dispatch(const InputEvent& ev) {
         }
         break;
     case Action::Activate:
-        if (ui_.focus == Focus::Shards) {
-            const std::vector<ShardInfo> shards = engine_.shards();
-            if (ui_.shard_cursor >= 0 &&
-                static_cast<std::size_t>(ui_.shard_cursor) < shards.size()) {
+        if (ui_.focus == Focus::Weaves) {
+            const std::vector<WeaveInfo> weaves = engine_.weaves();
+            if (ui_.weave_cursor >= 0 &&
+                static_cast<std::size_t>(ui_.weave_cursor) < weaves.size()) {
                 ui_.partial_input =
-                    std::to_string(shards[static_cast<std::size_t>(ui_.shard_cursor)].id.value) + " ";
+                    std::to_string(weaves[static_cast<std::size_t>(ui_.weave_cursor)].id.value) + " ";
                 ui_.focus = Focus::Compose; // move to the command line, pre-filled
             }
         } else if (ui_.focus == Focus::Buffer) {
@@ -422,4 +422,4 @@ void ConsoleUi::dispatch(const InputEvent& ev) {
 
 Widget ConsoleUi::tree() const { return emit_ui_tree(engine_, ui_); }
 
-} // namespace zen::console
+} // namespace loom

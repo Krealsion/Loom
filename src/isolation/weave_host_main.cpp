@@ -1,7 +1,7 @@
-// zen-shard-host: the child process that runs one Shard out-of-process. It reuses
+// zen-weave-host: the child process that runs one Weave out-of-process. It reuses
 // the kernel C ABI directly — load the .so, get its descriptor, drive the same
 // create/describe/snapshot/policy/revive/handle thunks — and bridges to the parent
-// over a framed socket. The Shard's outbound Bus is a stub: its send/publish ship
+// over a framed socket. The Weave's outbound Bus is a stub: its send/publish ship
 // Emit frames; gating happens parent-side. The .so is unchanged and does not know
 // it is out-of-process.
 //
@@ -25,7 +25,7 @@
 
 namespace {
 
-using namespace zen::isolation;
+using namespace loom;
 
 int g_sock = -1;
 
@@ -117,7 +117,7 @@ ZenStatus ship_emit_role(const char* role, std::uint64_t reply_to, std::uint64_t
     return ZEN_OK;
 }
 
-bool emit_snapshot(const ZenShardAbi* abi, void* instance) {
+bool emit_snapshot(const ZenWeaveAbi* abi, void* instance) {
     std::string snap;
     ZenByteSink sink{&snap, &sink_to_string};
     if (abi->snapshot(instance, sink) != ZEN_OK) {
@@ -160,14 +160,14 @@ int main(int argc, char** argv) {
     if (lib == nullptr) {
         return 3;
     }
-    void* sym = ::dlsym(lib, "zen_shard_abi");
+    void* sym = ::dlsym(lib, "zen_weave_abi");
     if (sym == nullptr) {
         return 4;
     }
-    using AbiFn = const ZenShardAbi* (*)(void);
+    using AbiFn = const ZenWeaveAbi* (*)(void);
     AbiFn abi_fn = nullptr;
     std::memcpy(&abi_fn, &sym, sizeof(abi_fn));
-    const ZenShardAbi* abi = abi_fn();
+    const ZenWeaveAbi* abi = abi_fn();
     if (abi == nullptr || abi->abi_version != ZEN_ABI_VERSION) {
         return 5;
     }

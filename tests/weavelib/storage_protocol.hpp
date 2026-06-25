@@ -6,8 +6,8 @@
 // TU derives the same content-id from the same ZEN_SHAPE, so they agree across the
 // .so boundary exactly as the gate requires.
 
-#include <zen/author/shape.hpp>
-#include <zen/value.hpp> // zen::Bytes
+#include <zen/weave/shape.hpp>
+#include <zen/value.hpp> // loom::Bytes
 
 #include <cstdint>
 #include <string>
@@ -19,7 +19,7 @@ namespace storage {
 // which the floor pre-wires every mod to reach.
 struct StoragePut {
     std::string key;
-    zen::Bytes value;
+    loom::Bytes value;
     ZEN_SHAPE(StoragePut, 1, ZEN_FIELD(key), ZEN_FIELD(value));
 };
 struct StorageGet {
@@ -27,14 +27,14 @@ struct StorageGet {
     ZEN_SHAPE(StorageGet, 1, ZEN_FIELD(key));
 };
 struct StorageValue {
-    zen::Bytes value; // empty = the key was absent for this sender
+    loom::Bytes value; // empty = the key was absent for this sender
     ZEN_SHAPE(StorageValue, 1, ZEN_FIELD(value));
 };
 
 // ---- test-control shapes (the test drives the client mod with these) ------
 struct DoPut {
     std::string key;
-    zen::Bytes value;
+    loom::Bytes value;
     ZEN_SHAPE(DoPut, 1, ZEN_FIELD(key), ZEN_FIELD(value));
 };
 struct DoGet {
@@ -46,10 +46,10 @@ struct Probe { // trigger a direct-disk syscall probe; the result rides back via
     ZEN_SHAPE(Probe, 1, ZEN_FIELD(n));
 };
 // Drive the forging mod to emit a role-send StorageGet whose WIRE reply_to is forged to point at
-// `victim` (a different Shard's id) — the confused-deputy attack the host must defeat.
+// `victim` (a different Weave's id) — the confused-deputy attack the host must defeat.
 struct DoForge {
     std::string key;
-    std::int64_t victim; // the ShardId the attacker forges into the role-send's reply_to
+    std::int64_t victim; // the WeaveId the attacker forges into the role-send's reply_to
     ZEN_SHAPE(DoForge, 1, ZEN_FIELD(key), ZEN_FIELD(victim));
 };
 

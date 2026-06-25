@@ -1,6 +1,6 @@
 #include <doctest.h>
 
-#include <zen/author.hpp>
+#include <zen/weave.hpp>
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
-using namespace zen;
-using namespace zen::sb;
-namespace au = zen::author;
+using namespace loom;
+using namespace loom;
+namespace au = loom;
 
 namespace {
 
@@ -32,9 +32,9 @@ struct CollectorState {
     ZEN_SHAPE(CollectorState, 1, ZEN_FIELD(count), ZEN_FIELD(last));
 };
 
-// Accepts Ping, replies Pong, counts handled messages as its state. The author
+// Accepts Ping, replies Pong, counts handled messages as its state. The maker
 // writes only the handler and (optionally) the policy.
-class Responder : public au::ShardBase<Responder, CounterState, au::Accept<Ping>, au::Emit<Pong>> {
+class Responder : public au::WeaveBase<Responder, CounterState, au::Accept<Ping>, au::Emit<Pong>> {
 public:
     void on(const Ping& p, au::Mail& mail) {
         ++state_.count;
@@ -46,7 +46,7 @@ public:
     void set_count(std::int64_t c) { state_.count = c; }
 };
 
-class Collector : public au::ShardBase<Collector, CollectorState, au::Accept<Pong>> {
+class Collector : public au::WeaveBase<Collector, CollectorState, au::Accept<Pong>> {
 public:
     void on(const Pong& p, au::Mail&) {
         ++state_.count;
@@ -78,7 +78,7 @@ struct RouteLog {
 
 // Records which handler fired and the value it saw, so a test can prove each
 // shape lands in its own handler and in no other.
-class Router : public au::ShardBase<Router, RouteLog, au::Accept<Alpha, Beta, Gamma>> {
+class Router : public au::WeaveBase<Router, RouteLog, au::Accept<Alpha, Beta, Gamma>> {
 public:
     std::vector<std::string> trail;
     void on(const Alpha& m, au::Mail&) { ++state_.alpha; trail.push_back("alpha:" + std::to_string(m.v)); }
@@ -86,19 +86,19 @@ public:
     void on(const Gamma& m, au::Mail&) { ++state_.gamma; trail.push_back("gamma:" + std::to_string(m.v)); }
 };
 
-// A shape NO Shard below declares as Emit<...> — used to drive an undeclared emit.
+// A shape NO Weave below declares as Emit<...> — used to drive an undeclared emit.
 struct Rogue {
     std::int64_t v;
     ZEN_SHAPE(Rogue, 1, ZEN_FIELD(v));
 };
 
-// A trusted-mount Shard whose handler emits its declared Pong (permitted by the auto-grant) AND an
+// A trusted-mount Weave whose handler emits its declared Pong (permitted by the auto-grant) AND an
 // undeclared Rogue (which the auto-grant must deny). The emit-enforcement gate is intentionally NOT
 // compile-time, so a handler CAN attempt an undeclared send — that is what makes the runtime denial
 // testable.
-class Leaker : public au::ShardBase<Leaker, CounterState, au::Accept<Ping>, au::Emit<Pong>> {
+class Leaker : public au::WeaveBase<Leaker, CounterState, au::Accept<Ping>, au::Emit<Pong>> {
 public:
-    ShardId target{};
+    WeaveId target{};
     void on(const Ping&, au::Mail& mail) {
         mail.send(target, Pong{1});  // declared in Emit<...> -> permitted
         mail.send(target, Rogue{2}); // NOT declared -> must be CapabilityDenied
@@ -107,17 +107,17 @@ public:
 
 } // namespace
 
-TEST_SUITE("author_shard") {
+TEST_SUITE("weave") {
 
 TEST_CASE("typed handlers dispatch the right struct and reply with plain structs") {
     Switchboard bus;
-    ShardId responder = au::mount<Responder>(bus);
-    ShardId collector = au::mount<Collector>(bus);
+    WeaveId responder = au::mount<Responder>(bus);
+    WeaveId collector = au::mount<Collector>(bus);
 
-    bus.send(responder, Message(au::to_value(Ping{42}), /*sender=*/ShardId{}, /*reply_to=*/collector));
+    bus.send(responder, Message(au::to_value(Ping{42}), /*sender=*/WeaveId{}, /*reply_to=*/collector));
     bus.pump();
 
-    auto* c = static_cast<Collector*>(bus.shard(collector));
+    auto* c = static_cast<Collector*>(bus.weave(collector));
     REQUIRE(c != nullptr);
     CHECK(c->received() == 1);
     CHECK(c->last() == 42);
@@ -125,7 +125,7 @@ TEST_CASE("typed handlers dispatch the right struct and reply with plain structs
 
 TEST_CASE("each accepted shape routes to its own handler and to no other") {
     Switchboard bus;
-    ShardId rid = au::mount<Router>(bus);
+    WeaveId rid = au::mount<Router>(bus);
 
     // Deliver one of each accepted shape, with distinguishable payloads.
     bus.send(rid, Message(au::to_value(Alpha{10})));
@@ -133,7 +133,7 @@ TEST_CASE("each accepted shape routes to its own handler and to no other") {
     bus.send(rid, Message(au::to_value(Gamma{30})));
     bus.pump();
 
-    auto* r = static_cast<Router*>(bus.shard(rid));
+    auto* r = static_cast<Router*>(bus.weave(rid));
     REQUIRE(r != nullptr);
     // Each shape landed in exactly its own handler, in delivery order — no shape
     // leaked into another handler, none was silently dropped.
@@ -143,13 +143,13 @@ TEST_CASE("each accepted shape routes to its own handler and to no other") {
     CHECK(r->trail[2] == "gamma:30");
 }
 
-TEST_CASE("a Shard's declared Emit<...> matches what it actually emits") {
+TEST_CASE("a Weave's declared Emit<...> matches what it actually emits") {
     Switchboard bus;
-    ShardId responder = au::mount<Responder>(bus);
-    ShardId collector = au::mount<Collector>(bus);
+    WeaveId responder = au::mount<Responder>(bus);
+    WeaveId collector = au::mount<Collector>(bus);
 
     // The bus tap carries each delivery's sender, so we can collect the set of
-    // shapes a given Shard actually put on the wire (a refused emit still counts).
+    // shapes a given Weave actually put on the wire (a refused emit still counts).
     std::set<std::string> from_responder;
     std::set<std::string> from_collector;
     bus.add_observer([&](const BusEvent& e) {
@@ -163,19 +163,19 @@ TEST_CASE("a Shard's declared Emit<...> matches what it actually emits") {
         }
     });
 
-    bus.send(responder, Message(au::to_value(Ping{1}), ShardId{}, collector));
-    bus.send(responder, Message(au::to_value(Ping{2}), ShardId{}, collector));
+    bus.send(responder, Message(au::to_value(Ping{1}), WeaveId{}, collector));
+    bus.send(responder, Message(au::to_value(Ping{2}), WeaveId{}, collector));
     bus.pump();
 
-    auto declared_of = [](auto* shard) {
+    auto declared_of = [](auto* weave) {
         std::set<std::string> names;
-        for (const auto& s : shard->emitted_schemas()) {
+        for (const auto& s : weave->emitted_schemas()) {
             names.insert(s->name());
         }
         return names;
     };
-    auto* r = static_cast<Responder*>(bus.shard(responder));
-    auto* c = static_cast<Collector*>(bus.shard(collector));
+    auto* r = static_cast<Responder*>(bus.weave(responder));
+    auto* c = static_cast<Collector*>(bus.weave(collector));
 
     // Responder declares Emit<Pong> and emits exactly Pong — no more, no less.
     CHECK(from_responder == std::set<std::string>{"Pong"});
@@ -185,20 +185,20 @@ TEST_CASE("a Shard's declared Emit<...> matches what it actually emits") {
     CHECK(declared_of(c).empty());
 }
 
-TEST_CASE("the mount<> auto-grant denies an emit the Shard did not declare") {
+TEST_CASE("the mount<> auto-grant denies an emit the Weave did not declare") {
     // mount<> derives the grant purely from the declared Emit<...> set (allow_to_any per shape). So
     // a handler that sends an UNDECLARED shape is CapabilityDenied — emit-denial holds on the
     // auto-grant path too, not just the explicit-grant path (the latter is pinned in test_capabilities).
     Switchboard bus;
-    ShardId sink = au::mount<Collector>(bus); // accepts Pong (Rogue isn't accepted, but denial is first)
-    ShardId leaker = au::mount<Leaker>(bus);
-    static_cast<Leaker*>(bus.shard(leaker))->target = sink;
+    WeaveId sink = au::mount<Collector>(bus); // accepts Pong (Rogue isn't accepted, but denial is first)
+    WeaveId leaker = au::mount<Leaker>(bus);
+    static_cast<Leaker*>(bus.weave(leaker))->target = sink;
 
     bool rogue_denied = false;
     bool pong_ok = false;
     bus.add_observer([&](const BusEvent& e) {
         if (e.sender != leaker) {
-            return; // the trigger into the Shard is ungated; only its outbound sends are gated
+            return; // the trigger into the Weave is ungated; only its outbound sends are gated
         }
         if (e.schema_name == "Rogue" && e.kind == EventKind::Refused &&
             e.refusal.reason == RefusalReason::CapabilityDenied) {
@@ -218,14 +218,14 @@ TEST_CASE("the mount<> auto-grant denies an emit the Shard did not declare") {
 
 TEST_CASE("the accept-set is derived from the typed handlers; emit-set is reported") {
     Switchboard bus;
-    ShardId responder = au::mount<Responder>(bus);
+    WeaveId responder = au::mount<Responder>(bus);
 
     auto acc = bus.accepted_schemas(responder);
     REQUIRE(acc.size() == 1);
     CHECK(acc[0]->name() == "Ping");
     CHECK(acc[0]->content_id() == au::schema_of<Ping>()->content_id());
 
-    auto* r = static_cast<Responder*>(bus.shard(responder));
+    auto* r = static_cast<Responder*>(bus.weave(responder));
     auto emitted = r->emitted_schemas();
     REQUIRE(emitted.size() == 1);
     CHECK(emitted[0]->name() == "Pong");
@@ -233,15 +233,15 @@ TEST_CASE("the accept-set is derived from the typed handlers; emit-set is report
 
 TEST_CASE("snapshot/revive are derived; state round-trips through the gate") {
     Switchboard bus;
-    ShardId responder = au::mount<Responder>(bus);
-    ShardId collector = au::mount<Collector>(bus);
+    WeaveId responder = au::mount<Responder>(bus);
+    WeaveId collector = au::mount<Collector>(bus);
 
     for (int i = 0; i < 3; ++i) {
-        bus.send(responder, Message(au::to_value(Ping{1}), ShardId{}, collector));
+        bus.send(responder, Message(au::to_value(Ping{1}), WeaveId{}, collector));
     }
     bus.pump();
 
-    auto* r = static_cast<Responder*>(bus.shard(responder));
+    auto* r = static_cast<Responder*>(bus.weave(responder));
     CHECK(r->count() == 3);
 
     // The bus snapshots via the derived snapshot(); revive via the derived revive().
@@ -254,7 +254,7 @@ TEST_CASE("snapshot/revive are derived; state round-trips through the gate") {
 
 TEST_CASE("a derived policy reaches the bus") {
     Switchboard bus;
-    ShardId responder = au::mount<Responder>(bus);
+    WeaveId responder = au::mount<Responder>(bus);
     // Responder declares max_reloads = 2; a third corrupt reload (after two good
     // ones) is exhausted.
     std::string snap = bus.snapshot_bytes(responder);

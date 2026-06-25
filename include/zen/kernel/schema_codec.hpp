@@ -3,7 +3,7 @@
 
 // Crossing a Schema over the C ABI without C++ types: a Schema is encoded *as a
 // Value* of a fixed meta-schema (the minimal schema-as-value precursor), so it
-// travels as ordinary bytes and is re-admitted through zen-core's gate just like
+// travels as ordinary bytes and is re-admitted through loom's gate just like
 // any other value before the host reconstructs it. This header is shared by the
 // library (encode) and the host (decode); each side has its own copy, and they
 // agree only on the bytes.
@@ -27,9 +27,9 @@
 #include <string>
 #include <vector>
 
-namespace zen::kernel {
+namespace loom {
 
-/// A Shard's *ask*: the capabilities it requests of the host. This is advice, not
+/// A Weave's *ask*: the capabilities it requests of the host. This is advice, not
 /// authority — conformance data carried in the manifest and gated like the
 /// accept-set, which the host reads to know what to surface. A declaration never
 /// becomes a grant; the host (via the floor-factory + grant-record) decides alone.
@@ -81,7 +81,7 @@ inline std::shared_ptr<const Schema> capability_ask_schema() {
 inline std::shared_ptr<const Schema> manifest_schema() {
     // v2 adds the optional `requests` (the ask). Bumping the version — rather than
     // mutating v1 in place — keeps the project invariant that a published (name,
-    // version) is a frozen shape. `requests` is optional: a Shard with no ask omits
+    // version) is a frozen shape. `requests` is optional: a Weave with no ask omits
     // it, so the floor manifest still admits unchanged.
     static const auto s = SchemaBuilder("zen.Manifest", 2)
                               .list("accepted", type_message(schema_desc_schema()))
@@ -244,6 +244,6 @@ inline CapabilityAsk decode_capability_ask(const Value& v) {
     return ask;
 }
 
-} // namespace zen::kernel
+} // namespace loom
 
 #endif // ZEN_KERNEL_SCHEMA_CODEC_HPP

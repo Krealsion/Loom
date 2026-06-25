@@ -45,16 +45,16 @@ enum class Gate { Proceed, FailHard, SkipDegraded };
 /// The pure decision (no doctest side effect, so it is itself directly testable): every capability
 /// enforceable -> Proceed; otherwise FailHard by default, or SkipDegraded under the opt-out. Names
 /// the missing capabilities in `missing_out`.
-inline Gate enforcement_decision(const zen::isolation::EnforcementReport& rep,
-                                 std::initializer_list<zen::isolation::Capability> caps,
+inline Gate enforcement_decision(const loom::EnforcementReport& rep,
+                                 std::initializer_list<loom::Capability> caps,
                                  std::string& missing_out) {
     std::string missing;
-    for (zen::isolation::Capability c : caps) {
+    for (loom::Capability c : caps) {
         if (!rep.enforceable(c)) {
             if (!missing.empty()) {
                 missing += ", ";
             }
-            missing += zen::isolation::capability_name(c);
+            missing += loom::capability_name(c);
         }
     }
     if (missing.empty()) {

@@ -15,7 +15,7 @@
 
 #include <memory>
 
-namespace zen::tui {
+namespace loom {
 namespace {
 
 class WindowsTerminal final : public TerminalBackend {
@@ -132,6 +132,6 @@ private:
 
 std::unique_ptr<TerminalBackend> make_terminal() { return std::make_unique<WindowsTerminal>(); }
 
-} // namespace zen::tui
+} // namespace loom
 
 #endif // _WIN32

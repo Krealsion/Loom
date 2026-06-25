@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace zen {
+namespace loom {
 
 /// How thoroughly the gate reports.
 enum class Report : std::uint8_t {
@@ -35,6 +35,6 @@ std::vector<Error> diagnose(const Value& claimant, const Schema& door);
 /// through the very same gate. Not a stability guarantee; for observability.
 std::uint64_t gate_invocations() noexcept;
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_GATE_HPP

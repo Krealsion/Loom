@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <vector>
 
-using namespace zen;
-using namespace zen::sb;
+using namespace loom;
+using namespace loom;
 using namespace sbfx;
 
 namespace {
@@ -25,10 +25,10 @@ TEST_SUITE("switchboard") {
 TEST_CASE("registration records the accept-set and is queryable") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema(), greet_schema()});
-    REQUIRE(bus.list_shards().size() == 1);
-    CHECK(bus.list_shards()[0] == r.id);
+    REQUIRE(bus.list_weaves().size() == 1);
+    CHECK(bus.list_weaves()[0] == r.id);
     CHECK(bus.accepted_schemas(r.id).size() == 2);
-    CHECK(bus.shard(r.id) != nullptr);
+    CHECK(bus.weave(r.id) != nullptr);
     CHECK(bus.alive(r.id));
 }
 
@@ -39,8 +39,8 @@ TEST_CASE("a directed send to an accepting target is delivered and gated") {
     CHECK(bus.outcome(t).disposition == Disposition::Pending); // deferred until pump
     bus.pump();
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
-    REQUIRE(r.shard->handled_values.size() == 1);
-    CHECK(r.shard->handled_values[0] == 7);
+    REQUIRE(r.weave->handled_values.size() == 1);
+    CHECK(r.weave->handled_values[0] == 7);
 }
 
 TEST_CASE("a send whose shape the target does not accept is refused, handler untouched") {
@@ -50,12 +50,12 @@ TEST_CASE("a send whose shape the target does not accept is refused, handler unt
     bus.pump();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NotAccepted);
-    CHECK(r.shard->handled_names.empty());
+    CHECK(r.weave->handled_names.empty());
 }
 
 TEST_CASE("a directed send to an unknown target is refused") {
     Switchboard bus;
-    Ticket t = bus.send(ShardId{9999}, Message(ping(1)));
+    Ticket t = bus.send(WeaveId{9999}, Message(ping(1)));
     bus.pump();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
@@ -70,9 +70,9 @@ TEST_CASE("publish reaches every accepter in registration order; non-accepters g
     std::size_t recipients = bus.publish(Message(ping(5)));
     CHECK(recipients == 2);
     bus.pump();
-    CHECK(a.shard->handled_values.size() == 1);
-    CHECK(b.shard->handled_values.size() == 1);
-    CHECK(c.shard->handled_values.empty());
+    CHECK(a.weave->handled_values.size() == 1);
+    CHECK(b.weave->handled_values.size() == 1);
+    CHECK(c.weave->handled_values.empty());
 }
 
 TEST_CASE("publish with zero accepters is legal: recipient count 0, no delivery") {
@@ -91,7 +91,7 @@ TEST_CASE("a fixed sequence of sends is delivered FIFO, reproducibly") {
         bus.send(r.id, Message(ping(i)));
     }
     bus.pump();
-    CHECK(r.shard->handled_values == std::vector<std::int64_t>{1, 2, 3, 4, 5});
+    CHECK(r.weave->handled_values == std::vector<std::int64_t>{1, 2, 3, 4, 5});
 }
 
 TEST_CASE("a handler that sends during handling causes a later delivery, never a nested one") {
@@ -109,20 +109,20 @@ TEST_CASE("a handler that sends during handling causes a later delivery, never a
         --re.depth;
     };
 
-    a.shard->on_handle = [&re, bid = b.id](const Message&, Bus& bus_, ProbeShard&) {
+    a.weave->on_handle = [&re, bid = b.id](const Message&, Bus& bus_, ProbeWeave&) {
         ++re.depth;
         re.max = std::max(re.max, re.depth);
         bus_.send(bid, Message(pong(99))); // enqueues; must not deliver now
         --re.depth;
     };
-    b.shard->on_handle = [&track](const Message&, Bus&, ProbeShard&) { track(); };
+    b.weave->on_handle = [&track](const Message&, Bus&, ProbeWeave&) { track(); };
 
     bus.send(a.id, Message(ping(1)));
     bus.pump();
 
     CHECK(re.max == 1); // delivery never nested
-    REQUIRE(b.shard->handled_values.size() == 1);
-    CHECK(b.shard->handled_values[0] == 99); // the during-handle send was delivered, later
+    REQUIRE(b.weave->handled_values.size() == 1);
+    CHECK(b.weave->handled_values[0] == 99); // the during-handle send was delivered, later
 }
 
 TEST_CASE("the live delivery path funnels through the same gate as persistence") {
@@ -165,12 +165,12 @@ TEST_CASE("an observer taps deliveries and refusals without being a recipient") 
     CHECK(tap[2].error_kind == ErrorKind::MissingField);
 }
 
-TEST_CASE("two shards declaring the same (name,version) with different shapes conflict") {
+TEST_CASE("two weaves declaring the same (name,version) with different shapes conflict") {
     Switchboard bus;
     reg(bus, {ping_schema()});
     auto impostor = SchemaBuilder("Ping", 1).field("seq", Kind::Text).build(); // different shape
-    auto bad = std::make_unique<ProbeShard>(std::vector<std::shared_ptr<const Schema>>{impostor});
-    CHECK_THROWS_AS(bus.register_shard(std::move(bad)), zen::SchemaConflict);
+    auto bad = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{impostor});
+    CHECK_THROWS_AS(bus.register_weave(std::move(bad)), loom::SchemaConflict);
 }
 
 } // TEST_SUITE

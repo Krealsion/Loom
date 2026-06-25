@@ -1,4 +1,4 @@
-// The smallest end-to-end use of zen-core: define a schema, register it, build a
+// The smallest end-to-end use of loom: define a schema, register it, build a
 // value, admit it at the bus, serialize to the native binary format, read it back
 // as Unverified, and re-admit through the same gate. The compat JSON codec is
 // shown as the human-readable / debug view. Uses only the public API.
@@ -9,7 +9,7 @@
 #include <iostream>
 
 int main() {
-    using namespace zen;
+    using namespace loom;
 
     // 1. Define a schema (frozen once published).
     auto player = SchemaBuilder("PlayerState", 1)

@@ -1,4 +1,4 @@
-// The B2 milestone: a Shard hosted out-of-process is indistinguishable to the bus
+// The B2 milestone: a Weave hosted out-of-process is indistinguishable to the bus
 // from one hosted in-process, a crashing child is contained (host survives, bounded
 // reload, then quarantine), and the process boundary is gated exactly like every
 // other boundary — malformed child output is gate-refused, an emitted message is
@@ -20,22 +20,22 @@
 #include <string>
 #include <vector>
 
-using namespace zen;
-using namespace zen::sb;
-using namespace zen::kernel;
-using namespace zen::isolation;
+using namespace loom;
+using namespace loom;
+using namespace loom;
+using namespace loom;
 using namespace sbfx;
 
 namespace {
-const std::string kHostExe = ZEN_SHARD_HOST_EXE;
+const std::string kHostExe = ZEN_WEAVE_HOST_EXE;
 
-// Matches the net-probe shard's emitted shape (NetResult{code}); the child reports
+// Matches the net-probe weave's emitted shape (NetResult{code}); the child reports
 // the connect() errno here so a test can read it off the bus.
 std::shared_ptr<const Schema> netresult_schema() {
     static const auto s = SchemaBuilder("NetResult", 1).field("code", Kind::Int).build();
     return s;
 }
-// Matches the fs-probe shard's emitted shape (B4): the errno of each filesystem reach.
+// Matches the fs-probe weave's emitted shape (B4): the errno of each filesystem reach.
 std::shared_ptr<const Schema> fsresult_schema() {
     static const auto s = SchemaBuilder("FsResult", 1)
                               .field("secret_read", Kind::Int)
@@ -45,7 +45,7 @@ std::shared_ptr<const Schema> fsresult_schema() {
                               .build();
     return s;
 }
-// Matches the fork-bomb shard's emitted shape (B5): how many forks succeeded.
+// Matches the fork-bomb weave's emitted shape (B5): how many forks succeeded.
 std::shared_ptr<const Schema> forkresult_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
     return s;
@@ -63,29 +63,29 @@ TEST_CASE("out-of-process delivery and reply are indistinguishable from in-proce
     Registered rec_out = register_probe(bus, {pong_schema()});
 
     // The very same .so, mounted both ways onto the same bus.
-    LoadResult in = kernel.load("in", ZEN_SO_SHARD);
+    LoadResult in = kernel.load("in", ZEN_SO_WEAVE);
     REQUIRE_MESSAGE(in.ok, in.error);
     Grant g;
     g.allow("Pong", 1, rec_out.id); // it needs exactly: send Pong to its recorder
-    OutOfProcessResult out = host.mount("out", ZEN_SO_SHARD, std::move(g));
+    OutOfProcessResult out = host.mount("out", ZEN_SO_WEAVE, std::move(g));
     REQUIRE_MESSAGE(out.ok, out.error);
     CHECK(bus.alive(out.id));
 
     // Same Ping to each; same reply expected.
-    bus.send(in.id, Message(ping(42), ShardId{}, rec_in.id));
-    bus.send(out.id, Message(ping(42), ShardId{}, rec_out.id));
+    bus.send(in.id, Message(ping(42), WeaveId{}, rec_in.id));
+    bus.send(out.id, Message(ping(42), WeaveId{}, rec_out.id));
 
     const bool done = host.run_until(
         [&] {
-            return !rec_in.shard->handled_names.empty() && !rec_out.shard->handled_names.empty();
+            return !rec_in.weave->handled_names.empty() && !rec_out.weave->handled_names.empty();
         },
         2000);
     REQUIRE(done);
 
-    CHECK(rec_in.shard->handled_names[0] == "Pong");
-    CHECK(rec_out.shard->handled_names[0] == rec_in.shard->handled_names[0]);
-    CHECK(rec_out.shard->handled_values[0] == rec_in.shard->handled_values[0]);
-    CHECK(rec_out.shard->handled_values[0] == 42);
+    CHECK(rec_in.weave->handled_names[0] == "Pong");
+    CHECK(rec_out.weave->handled_names[0] == rec_in.weave->handled_names[0]);
+    CHECK(rec_out.weave->handled_values[0] == rec_in.weave->handled_values[0]);
+    CHECK(rec_out.weave->handled_values[0] == 42);
 }
 
 TEST_CASE("the sender of a child's emitted message is stamped from the connection") {
@@ -93,7 +93,7 @@ TEST_CASE("the sender of a child's emitted message is stamped from the connectio
     IsolationHost host(bus, kHostExe);
     Registered recorder = register_probe(bus, {pong_schema()});
 
-    ShardId seen_sender{};
+    WeaveId seen_sender{};
     bus.add_observer([&](const BusEvent& e) {
         if (e.kind == EventKind::Delivered && e.schema_name == "Pong") {
             seen_sender = e.sender;
@@ -102,11 +102,11 @@ TEST_CASE("the sender of a child's emitted message is stamped from the connectio
 
     Grant g;
     g.allow("Pong", 1, recorder.id);
-    OutOfProcessResult r = host.mount("worker", ZEN_SO_SHARD, std::move(g));
+    OutOfProcessResult r = host.mount("worker", ZEN_SO_WEAVE, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
 
-    bus.send(r.id, Message(ping(5), ShardId{}, recorder.id));
-    REQUIRE(host.run_until([&] { return !recorder.shard->handled_names.empty(); }, 2000));
+    bus.send(r.id, Message(ping(5), WeaveId{}, recorder.id));
+    REQUIRE(host.run_until([&] { return !recorder.weave->handled_names.empty(); }, 2000));
 
     // The Emit frame carries no sender field by construction; the host stamps the
     // proxy's id from the connection the bytes arrived on. The child cannot forge it.
@@ -123,12 +123,12 @@ TEST_CASE("a malformed message emitted by a child is refused by the host gate, n
     OutOfProcessResult r = host.mount("bad", ZEN_SO_BADMSG, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
 
-    bus.send(r.id, Message(ping(1), ShardId{}, recorder.id));
+    bus.send(r.id, Message(ping(1), WeaveId{}, recorder.id));
     // Step well past the round-trip; had the Pong been admitted, it would have arrived.
     (void)host.run_until([] { return false; }, 80);
 
     // The child emitted a Pong missing 'seq'; the host gate refused it host-side.
-    CHECK(recorder.shard->handled_names.empty());
+    CHECK(recorder.weave->handled_names.empty());
     CHECK(host.is_mounted("bad"));      // the host shrugged it off
     CHECK_FALSE(host.quarantined("bad"));
 }
@@ -142,10 +142,10 @@ TEST_CASE("a child's emitted message is authorized against its grant: Capability
     bus.add_observer([&](const BusEvent& e) { taps.push_back(to_record(e)); });
 
     // Mount with the EMPTY grant — minimal authority, may send nothing.
-    OutOfProcessResult r = host.mount("muzzled", ZEN_SO_SHARD, Grant{});
+    OutOfProcessResult r = host.mount("muzzled", ZEN_SO_WEAVE, Grant{});
     REQUIRE_MESSAGE(r.ok, r.error);
 
-    bus.send(r.id, Message(ping(3), ShardId{}, recorder.id));
+    bus.send(r.id, Message(ping(3), WeaveId{}, recorder.id));
     (void)host.run_until(
         [&] {
             for (const TapRecord& t : taps) {
@@ -164,7 +164,7 @@ TEST_CASE("a child's emitted message is authorized against its grant: Capability
         }
     }
     CHECK(denied);                              // authorization, before the gate
-    CHECK(recorder.shard->handled_names.empty()); // and it never reached the recorder
+    CHECK(recorder.weave->handled_names.empty()); // and it never reached the recorder
 }
 
 TEST_CASE("a crashing child is contained: the host survives, reloads, then quarantines") {
@@ -189,13 +189,13 @@ TEST_CASE("a crashing child is contained: the host survives, reloads, then quara
     REQUIRE_MESSAGE(r.ok, r.error);
 
     // It is healthy first: a benign ping is answered.
-    bus.send(r.id, Message(ping(1), ShardId{}, recorder.id));
-    REQUIRE(host.run_until([&] { return !recorder.shard->handled_names.empty(); }, 2000));
+    bus.send(r.id, Message(ping(1), WeaveId{}, recorder.id));
+    REQUIRE(host.run_until([&] { return !recorder.weave->handled_names.empty(); }, 2000));
 
     // The magic ping aborts the child mid-handle. The host must not crash: it
     // reloads from the host-owned snapshot; the reloaded child aborts again on
-    // revive; after the budget (3) is spent the Shard is quarantined.
-    bus.send(r.id, Message(ping(0xDEAD), ShardId{}, recorder.id));
+    // revive; after the budget (3) is spent the Weave is quarantined.
+    bus.send(r.id, Message(ping(0xDEAD), WeaveId{}, recorder.id));
     const bool quarantined = host.run_until([&] { return host.quarantined("crasher"); }, 5000);
 
     REQUIRE(quarantined);
@@ -204,15 +204,15 @@ TEST_CASE("a crashing child is contained: the host survives, reloads, then quara
     CHECK(revived >= 1);          // and came back at least once before exhausting its budget
     CHECK(host.containment("crasher").find("quarantined") != std::string::npos);
 
-    // The host process is alive and well: a freshly mounted Shard still works.
+    // The host process is alive and well: a freshly mounted Weave still works.
     Registered rec2 = register_probe(bus, {pong_schema()});
     Grant g2;
     g2.allow("Pong", 1, rec2.id);
-    OutOfProcessResult r2 = host.mount("fresh", ZEN_SO_SHARD, std::move(g2));
+    OutOfProcessResult r2 = host.mount("fresh", ZEN_SO_WEAVE, std::move(g2));
     REQUIRE_MESSAGE(r2.ok, r2.error);
-    bus.send(r2.id, Message(ping(7), ShardId{}, rec2.id));
-    REQUIRE(host.run_until([&] { return !rec2.shard->handled_names.empty(); }, 2000));
-    CHECK(rec2.shard->handled_values.back() == 7);
+    bus.send(r2.id, Message(ping(7), WeaveId{}, rec2.id));
+    REQUIRE(host.run_until([&] { return !rec2.weave->handled_names.empty(); }, 2000));
+    CHECK(rec2.weave->handled_values.back() == 7);
 }
 
 TEST_CASE("the host never blocks on a child: a silent child cannot stall the bus") {
@@ -225,16 +225,16 @@ TEST_CASE("the host never blocks on a child: a silent child cannot stall the bus
 
     // An in-process worker that DOES reply, so we can observe the bus still serving.
     Registered worker = register_probe(bus, {ping_schema()});
-    worker.shard->on_handle = [](const Message& in, Bus& b, ProbeShard&) {
+    worker.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
 
     // Send the silent child a Ping it will never answer, and the worker one it will.
-    bus.send(silent.id, Message(ping(1), ShardId{}, recorder.id));
-    bus.send(worker.id, Message(ping(99), ShardId{}, recorder.id));
+    bus.send(silent.id, Message(ping(1), WeaveId{}, recorder.id));
+    bus.send(worker.id, Message(ping(99), WeaveId{}, recorder.id));
 
-    REQUIRE(host.run_until([&] { return !recorder.shard->handled_names.empty(); }, 500));
-    CHECK(recorder.shard->handled_values.back() == 99); // served despite the silent child
+    REQUIRE(host.run_until([&] { return !recorder.weave->handled_names.empty(); }, 500));
+    CHECK(recorder.weave->handled_values.back() == 99); // served despite the silent child
 }
 
 TEST_CASE("honest containment status: generated from what was actually imposed") {
@@ -247,7 +247,7 @@ TEST_CASE("honest containment status: generated from what was actually imposed")
     // it succeeds whether or not this host can enforce a namespace).
     Grant g;
     g.with_os_capabilities(os_cap::Network);
-    OutOfProcessResult r = host.mount("w", ZEN_SO_SHARD, std::move(g));
+    OutOfProcessResult r = host.mount("w", ZEN_SO_WEAVE, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
 
     const std::string status = host.containment("w");
@@ -267,7 +267,7 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     // grant (the gate/authorization let the result through).
     std::int64_t contained_code = 1; // sentinel: stays 1 only if no result arrives
     Registered rec1 = register_probe(bus, {netresult_schema()});
-    rec1.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+    rec1.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         contained_code = in.payload.get("code")->as_int();
     };
     Grant sandboxed;
@@ -276,15 +276,15 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     REQUIRE_MESSAGE(s.ok, s.error);
     CHECK(host.containment("contained").find("network: contained") != std::string::npos);
 
-    bus.send(s.id, Message(ping(1), ShardId{}, rec1.id));
-    REQUIRE(host.run_until([&] { return !rec1.shard->handled_names.empty(); }, 2000));
-    CHECK(rec1.shard->handled_names.back() == "NetResult"); // it still emitted (sandbox != muzzle)
+    bus.send(s.id, Message(ping(1), WeaveId{}, rec1.id));
+    REQUIRE(host.run_until([&] { return !rec1.weave->handled_names.empty(); }, 2000));
+    CHECK(rec1.weave->handled_names.back() == "NetResult"); // it still emitted (sandbox != muzzle)
     CHECK(contained_code == ENETUNREACH); // no interface → unreachable, enforced by the OS
 
     // Granted Network: the same probe now reaches the stack (port closed → refused).
     std::int64_t granted_code = 0;
     Registered rec2 = register_probe(bus, {netresult_schema()});
-    rec2.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+    rec2.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         granted_code = in.payload.get("code")->as_int();
     };
     Grant granted;
@@ -293,8 +293,8 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     REQUIRE_MESSAGE(g.ok, g.error);
     CHECK(host.containment("granted").find("network: granted") != std::string::npos);
 
-    bus.send(g.id, Message(ping(1), ShardId{}, rec2.id));
-    REQUIRE(host.run_until([&] { return !rec2.shard->handled_names.empty(); }, 2000));
+    bus.send(g.id, Message(ping(1), WeaveId{}, rec2.id));
+    REQUIRE(host.run_until([&] { return !rec2.weave->handled_names.empty(); }, 2000));
     CHECK(granted_code != ENETUNREACH);  // it CAN reach the network
     CHECK(granted_code == ECONNREFUSED); // specifically: stack reachable, nothing listening
 }
@@ -314,7 +314,7 @@ TEST_CASE("filesystem is OS-enforced: secret absent, scratch writable, host root
     std::int64_t secret = -1, scratch = -1, outside = -1, noexec = -1;
     auto run_probe = [&](const char* name, Grant grant) {
         Registered rec = register_probe(bus, {fsresult_schema()});
-        rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+        rec.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
             secret = in.payload.get("secret_read")->as_int();
             scratch = in.payload.get("scratch_write")->as_int();
             outside = in.payload.get("outside_write")->as_int();
@@ -323,9 +323,9 @@ TEST_CASE("filesystem is OS-enforced: secret absent, scratch writable, host root
         grant.allow("FsResult", 1, rec.id);
         OutOfProcessResult r = host.mount(name, ZEN_SO_FSPROBE, std::move(grant));
         REQUIRE_MESSAGE(r.ok, r.error);
-        bus.send(r.id, Message(ping(1), ShardId{}, rec.id));
-        REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 3000));
-        CHECK(rec.shard->handled_names.back() == "FsResult"); // it still emitted: sandbox != muzzle
+        bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
+        REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 3000));
+        CHECK(rec.weave->handled_names.back() == "FsResult"); // it still emitted: sandbox != muzzle
     };
 
     SUBCASE("WriteScoped: scratch writable, secret absent, host root read-only") {
@@ -353,7 +353,7 @@ TEST_CASE("WriteAnywhere is the honest opt-out: reaches host paths, reported not
 
     Registered rec = register_probe(bus, {fsresult_schema()});
     std::int64_t secret = -1;
-    rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+    rec.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         secret = in.payload.get("secret_read")->as_int();
     };
     Grant g;
@@ -363,8 +363,8 @@ TEST_CASE("WriteAnywhere is the honest opt-out: reaches host paths, reported not
     CHECK(host.containment("wa").find("WriteAnywhere") != std::string::npos);
     CHECK(host.containment("wa").find("not contained") != std::string::npos);
 
-    bus.send(r.id, Message(ping(1), ShardId{}, rec.id));
-    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 3000));
+    bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 3000));
     CHECK(secret == 0); // unrestricted: it CAN read the host secret — real power, by grant
 }
 
@@ -373,7 +373,7 @@ TEST_CASE("a filesystem-contained mount is confirmed in a distinct mount namespa
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Filesystem},
                             "filesystem containment confirmed in a distinct mount namespace");
-    OutOfProcessResult r = host.mount("c", ZEN_SO_SHARD, Grant{}); // default → fs contained
+    OutOfProcessResult r = host.mount("c", ZEN_SO_WEAVE, Grant{}); // default → fs contained
     REQUIRE_MESSAGE(r.ok, r.error);
     const std::string s = host.containment("c");
     CHECK(s.find("filesystem: contained") != std::string::npos);
@@ -393,7 +393,7 @@ TEST_CASE("filesystem fail-safe + dev-mode: unenforceable refuses by default; de
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
         host.override_enforcement_for_test(forced());
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{}); // default → wants fs contained
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{}); // default → wants fs contained
         CHECK_FALSE(r.ok);
         CHECK(r.error.find("filesystem") != std::string::npos);
         CHECK_FALSE(host.is_mounted("x"));
@@ -403,7 +403,7 @@ TEST_CASE("filesystem fail-safe + dev-mode: unenforceable refuses by default; de
         IsolationHost host(bus, kHostExe);
         host.override_enforcement_for_test(forced());
         host.set_dev_mode(true);
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{});
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         REQUIRE_MESSAGE(r.ok, r.error);
         const std::string s = host.containment("x");
         CHECK(s.find("filesystem: NOT CONTAINED") != std::string::npos);
@@ -432,21 +432,21 @@ TEST_CASE("a memory bomb is OOM-killed within its cgroup; the host survives, the
     REQUIRE_MESSAGE(r.ok, r.error);
     CHECK(host.containment("bomb").find("resources: contained") != std::string::npos);
 
-    bus.send(r.id, Message(ping(1), ShardId{}, rec.id));
+    bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
     const bool quarantined = host.run_until([&] { return host.quarantined("bomb"); }, 8000);
     REQUIRE(quarantined);
     CHECK(died >= 1);                        // OOM-killed (within its cgroup) at least once
-    CHECK(rec.shard->handled_names.empty()); // killed before it could reply
+    CHECK(rec.weave->handled_names.empty()); // killed before it could reply
 
-    // The host is unharmed: a fresh Shard still works.
+    // The host is unharmed: a fresh Weave still works.
     Registered rec2 = register_probe(bus, {pong_schema()});
     Grant g2;
     g2.allow("Pong", 1, rec2.id);
-    OutOfProcessResult r2 = host.mount("fresh", ZEN_SO_SHARD, std::move(g2));
+    OutOfProcessResult r2 = host.mount("fresh", ZEN_SO_WEAVE, std::move(g2));
     REQUIRE_MESSAGE(r2.ok, r2.error);
-    bus.send(r2.id, Message(ping(7), ShardId{}, rec2.id));
-    REQUIRE(host.run_until([&] { return !rec2.shard->handled_names.empty(); }, 2000));
-    CHECK(rec2.shard->handled_values.back() == 7);
+    bus.send(r2.id, Message(ping(7), WeaveId{}, rec2.id));
+    REQUIRE(host.run_until([&] { return !rec2.weave->handled_names.empty(); }, 2000));
+    CHECK(rec2.weave->handled_values.back() == 7);
 }
 
 TEST_CASE("negative control: the same allocation under a high cap survives (the cap is the cause)") {
@@ -461,9 +461,9 @@ TEST_CASE("negative control: the same allocation under a high cap survives (the 
     g.allow("Pong", 1, rec.id).with_resources(lim);
     OutOfProcessResult r = host.mount("roomy", ZEN_SO_MEMBOMB, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
-    bus.send(r.id, Message(ping(5), ShardId{}, rec.id));
-    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 3000));
-    CHECK(rec.shard->handled_names.back() == "Pong"); // survived → the cap, not the alloc, kills
+    bus.send(r.id, Message(ping(5), WeaveId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 3000));
+    CHECK(rec.weave->handled_names.back() == "Pong"); // survived → the cap, not the alloc, kills
     CHECK_FALSE(host.quarantined("roomy"));
 }
 
@@ -474,17 +474,17 @@ TEST_CASE("a fork-bomb is bounded by pids.max; the host survives") {
                             "a fork-bomb is bounded by pids.max");
     Registered rec = register_probe(bus, {forkresult_schema()});
     std::int64_t forked = -1;
-    rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+    rec.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         forked = in.payload.get("forked")->as_int();
     };
     ResourceLimits lim;
-    lim.pids = 64; // the shard tries 4000 forks; the cap must bound it
+    lim.pids = 64; // the weave tries 4000 forks; the cap must bound it
     Grant g;
     g.allow("ForkResult", 1, rec.id).with_resources(lim);
     OutOfProcessResult r = host.mount("forkbomb", ZEN_SO_FORKBOMB, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
-    bus.send(r.id, Message(ping(1), ShardId{}, rec.id));
-    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 5000));
+    bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 5000));
     CHECK(forked > 0);
     CHECK(forked <= 64); // bounded by pids.max, not the 4000 it attempted
 }
@@ -498,12 +498,12 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
         return rep;
     };
 
-    SUBCASE("a resource-contained Shard's limits are confirmed") {
+    SUBCASE("a resource-contained Weave's limits are confirmed") {
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
         ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
-                                "a resource-contained Shard's limits are confirmed");
-        OutOfProcessResult r = host.mount("rc", ZEN_SO_SHARD, Grant{}); // default → contained
+                                "a resource-contained Weave's limits are confirmed");
+        OutOfProcessResult r = host.mount("rc", ZEN_SO_WEAVE, Grant{}); // default → contained
         REQUIRE_MESSAGE(r.ok, r.error);
         const std::string s = host.containment("rc");
         CHECK(s.find("resources: contained") != std::string::npos);
@@ -513,7 +513,7 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
         host.override_enforcement_for_test(forced());
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{});
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         CHECK_FALSE(r.ok);
         CHECK(r.error.find("resource") != std::string::npos);
     }
@@ -522,7 +522,7 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
         IsolationHost host(bus, kHostExe);
         host.override_enforcement_for_test(forced());
         host.set_dev_mode(true);
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{});
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         REQUIRE_MESSAGE(r.ok, r.error);
         CHECK(host.containment("x").find("resources: NOT CONTAINED") != std::string::npos);
     }
@@ -531,7 +531,7 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
         IsolationHost host(bus, kHostExe);
         ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Resources},
                                 "the memory opt-out uncaps memory but stays pids-bounded");
-        OutOfProcessResult r = host.mount("u", ZEN_SO_SHARD, Grant{}.with_unlimited_memory());
+        OutOfProcessResult r = host.mount("u", ZEN_SO_WEAVE, Grant{}.with_unlimited_memory());
         REQUIRE_MESSAGE(r.ok, r.error);
         const std::string s = host.containment("u");
         CHECK(s.find("resources: contained") != std::string::npos);     // Enforced, never Granted
@@ -548,19 +548,19 @@ TEST_CASE("no grant licenses a fork-bomb: pids stays bounded even with memory un
                             "no grant licenses a fork-bomb: pids stays bounded under unlimited memory");
     Registered rec = register_probe(bus, {forkresult_schema()});
     std::int64_t forked = -1;
-    rec.shard->on_handle = [&](const Message& in, Bus&, ProbeShard&) {
+    rec.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         forked = in.payload.get("forked")->as_int();
     };
     ResourceLimits lim;
-    lim.pids = 64; // the shard tries 4000 forks; pids.max must still bound it
+    lim.pids = 64; // the weave tries 4000 forks; pids.max must still bound it
     Grant g;
     g.allow("ForkResult", 1, rec.id).with_resources(lim).with_unlimited_memory();
     OutOfProcessResult r = host.mount("fb", ZEN_SO_FORKBOMB, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
     // Memory is uncapped by the grant, yet the leaf still carries a real pids.max.
     CHECK(host.containment("fb").find("memory unlimited-by-grant") != std::string::npos);
-    bus.send(r.id, Message(ping(1), ShardId{}, rec.id));
-    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 5000));
+    bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 5000));
     CHECK(forked > 0);
     CHECK(forked <= 64); // bounded by pids.max — the memory opt-out did NOT remove it
 }
@@ -576,9 +576,9 @@ TEST_CASE("the memory opt-out lets a memory-bomb survive the cap that would OOM-
     OutOfProcessResult r = host.mount("um", ZEN_SO_MEMBOMB, std::move(g));
     REQUIRE_MESSAGE(r.ok, r.error);
     CHECK(host.containment("um").find("pids<=") != std::string::npos); // still pids-bounded
-    bus.send(r.id, Message(ping(5), ShardId{}, rec.id));
-    REQUIRE(host.run_until([&] { return !rec.shard->handled_names.empty(); }, 3000));
-    CHECK(rec.shard->handled_names.back() == "Pong"); // survived the ~200 MiB alloc (uncapped)
+    bus.send(r.id, Message(ping(5), WeaveId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 3000));
+    CHECK(rec.weave->handled_names.back() == "Pong"); // survived the ~200 MiB alloc (uncapped)
     CHECK_FALSE(host.quarantined("um"));
 }
 
@@ -593,7 +593,7 @@ TEST_CASE("fail-safe + dev-mode: an unenforceable host refuses by default; dev-m
         IsolationHost host(bus, kHostExe);
         host.override_enforcement_for_test(forced);
 
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{});
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         CHECK_FALSE(r.ok);
         CHECK(r.error.find("refused") != std::string::npos);
         CHECK(r.error.find("network") != std::string::npos);
@@ -606,7 +606,7 @@ TEST_CASE("fail-safe + dev-mode: an unenforceable host refuses by default; dev-m
         host.override_enforcement_for_test(forced);
         host.set_dev_mode(true);
 
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{});
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         REQUIRE_MESSAGE(r.ok, r.error);
         const std::string status = host.containment("x");
         CHECK(status.find("NOT CONTAINED") != std::string::npos);
@@ -619,7 +619,7 @@ TEST_CASE("a contained mount is positively confirmed in a distinct network names
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
                             "network containment positively confirmed in a distinct netns");
-    OutOfProcessResult r = host.mount("c", ZEN_SO_SHARD, Grant{}); // default grant → contained
+    OutOfProcessResult r = host.mount("c", ZEN_SO_WEAVE, Grant{}); // default grant → contained
     REQUIRE_MESSAGE(r.ok, r.error);
     const std::string status = host.containment("c");
     CHECK(status.find("network: contained") != std::string::npos);
@@ -630,7 +630,7 @@ TEST_CASE("a SURPRISE sandbox-entry failure fails safe: refuses in strict AND de
     // The probe passes (Network IS enforceable here), but the *real* entry is forced
     // to fail at spawn — the catastrophic path to rule out. It must refuse in BOTH
     // modes: a surprise failure of an INTENDED enforcement never downgrades to running
-    // wide-open, and the Shard never runs (untrusted code never started).
+    // wide-open, and the Weave never runs (untrusted code never started).
     Switchboard probe_bus;
     IsolationHost probe_host(probe_bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(probe_host.enforcement(), {Capability::Network},
@@ -640,7 +640,7 @@ TEST_CASE("a SURPRISE sandbox-entry failure fails safe: refuses in strict AND de
         Switchboard bus;
         IsolationHost host(bus, kHostExe);
         host.force_entry_failure_for_test(true);
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{}); // default → intends contained
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{}); // default → intends contained
         CHECK_FALSE(r.ok);
         CHECK_FALSE(host.is_mounted("x"));
     }
@@ -649,7 +649,7 @@ TEST_CASE("a SURPRISE sandbox-entry failure fails safe: refuses in strict AND de
         IsolationHost host(bus, kHostExe);
         host.set_dev_mode(true);
         host.force_entry_failure_for_test(true);
-        OutOfProcessResult r = host.mount("x", ZEN_SO_SHARD, Grant{});
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         CHECK_FALSE(r.ok);
         CHECK_FALSE(host.is_mounted("x"));
     }
@@ -659,9 +659,9 @@ TEST_CASE("unmount tears the child down cleanly and the proxy leaves the bus") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
 
-    OutOfProcessResult r = host.mount("w", ZEN_SO_SHARD, Grant{});
+    OutOfProcessResult r = host.mount("w", ZEN_SO_WEAVE, Grant{});
     REQUIRE_MESSAGE(r.ok, r.error);
-    const ShardId id = r.id;
+    const WeaveId id = r.id;
     CHECK(bus.alive(id));
 
     host.unmount("w");

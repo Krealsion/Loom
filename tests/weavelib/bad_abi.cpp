@@ -5,8 +5,8 @@
 #include <zen/kernel/abi.h>
 #include <zen/kernel/export.hpp> // for ZEN_KERNEL_EXPORT
 
-extern "C" ZEN_KERNEL_EXPORT const ZenShardAbi* zen_shard_abi(void) {
-    static const ZenShardAbi abi = {
+extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
+    static const ZenWeaveAbi abi = {
         ZEN_ABI_VERSION + 1000u, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
     return &abi;
 }

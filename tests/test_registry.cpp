@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-using namespace zen;
+using namespace loom;
 
 TEST_SUITE("registry") {
 

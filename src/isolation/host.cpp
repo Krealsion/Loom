@@ -28,7 +28,7 @@
 
 extern char** environ;
 
-namespace zen::isolation {
+namespace loom {
 
 namespace {
 
@@ -73,7 +73,7 @@ bool wait_for_hello(Channel& ch, Incoming& out, int timeout_ms) {
     }
 }
 
-// Process-global unique suffix for per-Shard cgroup leaf names (hosts share the base).
+// Process-global unique suffix for per-Weave cgroup leaf names (hosts share the base).
 std::atomic<unsigned long long> g_leaf_counter{0};
 
 // ---- B4 restricted-view plan (built in the parent; run by the fork-child) --------
@@ -135,7 +135,7 @@ bool ensure_host_dir(const std::string& path) {
 // The allow-list view for `level`: private-first, a tmpfs root, the loader closure
 // and the exe/.so dirs bound read-only, a scratch tmpfs for the write levels, then
 // pivot_root into it. Nothing of the host home is bound, so secrets are absent.
-MountPlan build_view_plan(zen::sb::FsAccess level, const std::string& scoped_path,
+MountPlan build_view_plan(loom::FsAccess level, const std::string& scoped_path,
                           const std::string& exe_path, const std::string& so_path,
                           const std::string& root) {
     MountPlan p;
@@ -157,24 +157,24 @@ MountPlan build_view_plan(zen::sb::FsAccess level, const std::string& scoped_pat
     if (!so_dir.empty() && !so_under_exe) {
         bind_ro_ops(p, root, so_dir); // the .so, if it lives elsewhere
     }
-    if (level == zen::sb::FsAccess::ReadOnly && !scoped_path.empty()) {
+    if (level == loom::FsAccess::ReadOnly && !scoped_path.empty()) {
         bind_ro_ops(p, root, scoped_path); // the granted tree, read-only
     }
-    if (level == zen::sb::FsAccess::WriteScoped && !scoped_path.empty()) {
+    if (level == loom::FsAccess::WriteScoped && !scoped_path.empty()) {
         // Persistent-scoped write (TCB-only — the StorageBroker): bind the host's
         // persistent storage dir writable at /scratch instead of the ephemeral tmpfs.
         // Still least-privilege — only this one dir is reachable, never the host home —
         // but the data survives. A mod is FsAccess::None and never gets a scoped_path.
         p.push_back({MountOp::Kind::Mkdir, root + "/scratch", "", "", 0});
         p.push_back({MountOp::Kind::Mount, scoped_path, root + "/scratch", "", MS_BIND});
-    } else if (level == zen::sb::FsAccess::WriteScoped || level == zen::sb::FsAccess::WriteNoExec) {
-        const unsigned long f = (level == zen::sb::FsAccess::WriteNoExec) ? MS_NOEXEC : 0;
+    } else if (level == loom::FsAccess::WriteScoped || level == loom::FsAccess::WriteNoExec) {
+        const unsigned long f = (level == loom::FsAccess::WriteNoExec) ? MS_NOEXEC : 0;
         p.push_back({MountOp::Kind::Mkdir, root + "/scratch", "", "", 0});
         p.push_back({MountOp::Kind::Mount, "tmpfs", root + "/scratch", "tmpfs", f});
     }
 
     // The view root itself is now read-only (its mountpoints were created above), so a
-    // Shard cannot write — or plant-and-exec — at "/"; only the scratch submount (if
+    // Weave cannot write — or plant-and-exec — at "/"; only the scratch submount (if
     // any) stays writable, with its own flags. Without this the read-only/noexec intent
     // would leak through the writable root tmpfs.
     p.push_back({MountOp::Kind::Mount, root, root, "", MS_REMOUNT | MS_RDONLY});
@@ -252,26 +252,26 @@ std::string describe_resolution(const CapabilityResolution& r) {
 
 } // namespace
 
-// ---- the proxy: a Shard, on the bus, backed by a child process ---------------
+// ---- the proxy: a Weave, on the bus, backed by a child process ---------------
 //
-// To the Switchboard this is an ordinary Shard. handle() serializes and ships the
+// To the Switchboard this is an ordinary Weave. handle() serializes and ships the
 // message to the child and returns at once (fire-and-continue — a slow or hung
 // child never blocks the bus). snapshot()/policy() return the host-owned cached
 // values refreshed from the child's proactive Snapshot frames. revive() (re)spawns
 // the child if dead and ships the state.
-class OutOfProcessShard final : public zen::sb::Shard {
+class OutOfProcessWeave final : public loom::Weave {
 public:
-    OutOfProcessShard(IsolationHost* host, IsolationHost::Link* link) : host_(host), link_(link) {}
+    OutOfProcessWeave(IsolationHost* host, IsolationHost::Link* link) : host_(host), link_(link) {}
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
         return link_->accept;
     }
-    void handle(const zen::sb::Message& in, zen::sb::Bus& /*bus*/) override {
+    void handle(const loom::Message& in, loom::Bus& /*bus*/) override {
         host_->ship_deliver(*link_, in);
     }
-    zen::Value snapshot() const override { return *link_->snapshot_value; }
-    zen::Value policy() const override { return *link_->policy_value; }
-    void revive(const zen::Value& state) override { host_->respawn_and_revive(*link_, state); }
+    loom::Value snapshot() const override { return *link_->snapshot_value; }
+    loom::Value policy() const override { return *link_->policy_value; }
+    void revive(const loom::Value& state) override { host_->respawn_and_revive(*link_, state); }
 
 private:
     IsolationHost* host_;
@@ -280,8 +280,8 @@ private:
 
 // ---- IsolationHost -----------------------------------------------------------
 
-IsolationHost::IsolationHost(zen::sb::Switchboard& bus, std::string shard_host_exe)
-    : bus_(bus), exe_(std::move(shard_host_exe)), enforcement_(detect_enforcement()) {}
+IsolationHost::IsolationHost(loom::Switchboard& bus, std::string weave_host_exe)
+    : bus_(bus), exe_(std::move(weave_host_exe)), enforcement_(detect_enforcement()) {}
 
 IsolationHost::~IsolationHost() {
     std::vector<std::string> names;
@@ -470,7 +470,7 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     // Part 3: positively confirm the sandbox actually took before any "contained"
     // claim rests on it — the child is provably in a network namespace distinct from
     // the host (inferred → verified). A failure here fails safe: the caller tears the
-    // child down and the mount refuses, so there is no path where a Shard runs while
+    // child down and the mount refuses, so there is no path where a Weave runs while
     // its status claims contained-but-the-namespace-was-not-entered. This also closes
     // the probe-passed-but-real-entry-failed window for free.
     if (sandbox_net && !child_netns_is_isolated(link.pid)) {
@@ -503,20 +503,20 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
     // Manifest -> the child's accept-set + state schema, re-admitted through the
     // gate against the kernel's meta-schema and reconstructed exactly as a loaded
     // library's manifest is.
-    zen::Unverified um = zen::parse(manifest);
-    zen::Admission am = zen::admit(um, zen::kernel::manifest_schema());
+    loom::Unverified um = loom::parse(manifest);
+    loom::Admission am = loom::admit(um, loom::manifest_schema());
     if (!am.ok()) {
         throw std::runtime_error("manifest refused: " + am.first_error().message());
     }
-    const zen::Value& mv = am.value();
+    const loom::Value& mv = am.value();
 
     std::vector<std::shared_ptr<const Schema>> accept;
-    for (const zen::Cell& c : mv.get("accepted")->as_list()) {
-        auto s = zen::kernel::decode_schema(*c.as_message(), registry_);
+    for (const loom::Cell& c : mv.get("accepted")->as_list()) {
+        auto s = loom::decode_schema(*c.as_message(), registry_);
         registry_.register_schema(s); // cross-mount agreement on (name, version)
         accept.push_back(std::move(s));
     }
-    auto state = zen::kernel::decode_schema(*mv.get("state")->as_message(), registry_);
+    auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
     registry_.register_schema(state);
     link.accept = std::move(accept);
     link.state_schema = state;
@@ -525,21 +525,21 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
     // to know what to surface), not authority. Decode and record it; the grant is
     // decided by the floor-factory + grant-record, never by this declaration. Absent
     // (the floor case) leaves requested_caps empty.
-    if (const zen::Cell* rq = mv.get("requests")) {
-        link.requested_caps = zen::kernel::decode_capability_ask(*rq->as_message());
+    if (const loom::Cell* rq = mv.get("requests")) {
+        link.requested_caps = loom::decode_capability_ask(*rq->as_message());
     }
 
     // Policy -> cached, validated against the fixed lifecycle grammar.
-    zen::Unverified up = zen::parse(policy);
-    zen::Admission ap = zen::admit(up, zen::sb::lifecycle_policy_schema());
+    loom::Unverified up = loom::parse(policy);
+    loom::Admission ap = loom::admit(up, loom::lifecycle_policy_schema());
     if (!ap.ok()) {
         throw std::runtime_error("policy refused: " + ap.first_error().message());
     }
     link.policy_value = std::move(ap).value();
 
     // Initial snapshot -> cached as host-owned last-known-good (value + bytes).
-    zen::Unverified us = zen::parse(snapshot);
-    zen::Admission as = zen::admit(us, link.state_schema);
+    loom::Unverified us = loom::parse(snapshot);
+    loom::Admission as = loom::admit(us, link.state_schema);
     if (!as.ok()) {
         throw std::runtime_error("snapshot refused: " + as.first_error().message());
     }
@@ -547,7 +547,7 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
     link.snapshot_bytes = snapshot;
 }
 
-std::optional<zen::kernel::CapabilityAsk>
+std::optional<loom::CapabilityAsk>
 IsolationHost::declared_ask(const std::string& name) const {
     auto it = links_.find(name);
     if (it == links_.end()) {
@@ -566,27 +566,27 @@ OutOfProcessResult IsolationHost::mount_mod(const std::string& name, const std::
     // The floor: minimal authority (no network, FsAccess::None, bounded resources,
     // empty sends) plus the one reach that makes a mod useful on messages alone — a
     // send-rule to the storage broker role. Least-privilege: storage shapes only.
-    zen::sb::Grant grant;
+    loom::Grant grant;
     grant.allow_to_role(kStoragePut, kStorageProtocolVersion, kStorageRole);
     grant.allow_to_role(kStorageGet, kStorageProtocolVersion, kStorageRole);
 
     // Apply any host-recorded delta for this identity. The *ask* is NOT consulted
-    // here: only what the host has written into the grant-record raises a Shard above
+    // here: only what the host has written into the grant-record raises a Weave above
     // the floor. A declaration is never a grant.
     const GrantDelta delta = grant_record_.lookup(hash);
     if (delta.network) {
-        grant.with_os_capabilities(zen::sb::os_cap::Network);
+        grant.with_os_capabilities(loom::os_cap::Network);
     }
     if (!delta.filesystem.empty()) {
-        zen::sb::FsAccess level = zen::sb::FsAccess::None;
+        loom::FsAccess level = loom::FsAccess::None;
         if (delta.filesystem == "read-only") {
-            level = zen::sb::FsAccess::ReadOnly;
+            level = loom::FsAccess::ReadOnly;
         } else if (delta.filesystem == "write-scoped") {
-            level = zen::sb::FsAccess::WriteScoped;
+            level = loom::FsAccess::WriteScoped;
         } else if (delta.filesystem == "write-no-exec") {
-            level = zen::sb::FsAccess::WriteNoExec;
+            level = loom::FsAccess::WriteNoExec;
         } else if (delta.filesystem == "write-anywhere") {
-            level = zen::sb::FsAccess::WriteAnywhere;
+            level = loom::FsAccess::WriteAnywhere;
         }
         grant.with_filesystem(level);
     }
@@ -620,8 +620,8 @@ OutOfProcessResult IsolationHost::mount_broker(const std::string& name, const st
     // TCB-tier grant: WriteScoped to storage_root ONLY (the persistent bind — disk, but
     // contained to that one dir), plus the authority to reply StorageValue to any mod.
     // Registered under role "storage" so floored mods reach it by role-addressing.
-    zen::sb::Grant grant;
-    grant.with_filesystem(zen::sb::FsAccess::WriteScoped, storage_root);
+    loom::Grant grant;
+    grant.with_filesystem(loom::FsAccess::WriteScoped, storage_root);
     grant.allow_to_any(kStorageValue, kStorageProtocolVersion);
     return mount(name, so_path, std::move(grant), kStorageRole);
 }
@@ -632,8 +632,8 @@ OutOfProcessResult IsolationHost::mount_net_broker(const std::string& name,
     // (no disk), bounded resources, permitted to reply NetResponse to any mod, role "net".
     // Per-destination scoping is the broker's own software allow-list, NOT OS-enforced —
     // the higher-trust broker. No mod reaches "net" without a recorded delta.
-    zen::sb::Grant grant;
-    grant.with_os_capabilities(zen::sb::os_cap::Network);
+    loom::Grant grant;
+    grant.with_os_capabilities(loom::os_cap::Network);
     grant.allow_to_any(kNetResponse, kNetProtocolVersion);
     return mount(name, so_path, std::move(grant), kNetRole);
 }
@@ -645,14 +645,14 @@ bool IsolationHost::reload(const std::string& name) {
     }
     Link& link = *it->second;
     // Re-spawn a fresh child from the same .so and re-revive from the host-owned
-    // snapshot. The bus registration (ShardId, grant, role) is untouched, so routing
+    // snapshot. The bus registration (WeaveId, grant, role) is untouched, so routing
     // and role-addressing survive; a broker's on-disk data is durable regardless.
     respawn_and_revive(link, *link.snapshot_value);
     return link.channel != nullptr;
 }
 
 OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,
-                                        zen::sb::Grant grant, const std::string& role) {
+                                        loom::Grant grant, const std::string& role) {
     if (links_.count(name) != 0) {
         return {false, {}, "already mounted: " + name};
     }
@@ -668,7 +668,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         using Outcome = CapabilityResolution::Outcome;
         CapabilityResolution net;
         net.capability = Capability::Network;
-        if (grant.has_os_capability(zen::sb::os_cap::Network)) {
+        if (grant.has_os_capability(loom::os_cap::Network)) {
             net.outcome = Outcome::Granted; // real power, granted on purpose
         } else if (enforcement_.enforceable(Capability::Network)) {
             net.outcome = Outcome::Enforced; // no-interface namespace; confirmed post-spawn
@@ -676,7 +676,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             net.outcome = Outcome::Uncontained;
             std::fprintf(stderr,
                          "[zen-isolation] WARNING: '%s' mounted network-UNCONTAINED — this host "
-                         "cannot enforce network isolation and dev-mode is on. The Shard can "
+                         "cannot enforce network isolation and dev-mode is on. The Weave can "
                          "reach the network despite withholding the Network grant.\n",
                          name.c_str());
         } else {
@@ -693,16 +693,16 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         using Outcome = CapabilityResolution::Outcome;
         CapabilityResolution fs;
         fs.capability = Capability::Filesystem;
-        const zen::sb::FsAccess level = grant.filesystem();
-        fs.note = zen::sb::fs_access_name(level);
-        if (level == zen::sb::FsAccess::WriteScoped && !grant.filesystem_path().empty()) {
+        const loom::FsAccess level = grant.filesystem();
+        fs.note = loom::fs_access_name(level);
+        if (level == loom::FsAccess::WriteScoped && !grant.filesystem_path().empty()) {
             // The persistent-scoped-write extension: a writable bind to one host dir
             // that SURVIVES (vs the ephemeral tmpfs). Honest about its limit — a broker
             // keying by the ephemeral sender is session-scoped, not save-across-restart.
             fs.note = "write-scoped (persistent storage bind; session-scoped: keyed by the "
                       "ephemeral sender, not save-across-restart)";
         }
-        if (level == zen::sb::FsAccess::WriteAnywhere) {
+        if (level == loom::FsAccess::WriteAnywhere) {
             fs.outcome = Outcome::Granted; // the opt-out: unrestricted host fs, by grant
         } else if (enforcement_.enforceable(Capability::Filesystem)) {
             fs.outcome = Outcome::Enforced; // None/ReadOnly/WriteScoped/WriteNoExec → mount-ns view
@@ -719,7 +719,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             fs.outcome = Outcome::Uncontained;
             std::fprintf(stderr,
                          "[zen-isolation] WARNING: '%s' mounted filesystem-UNCONTAINED — this host "
-                         "cannot enforce filesystem isolation and dev-mode is on. The Shard can "
+                         "cannot enforce filesystem isolation and dev-mode is on. The Weave can "
                          "read and write the host filesystem despite a restricted grant.\n",
                          name.c_str());
         } else {
@@ -735,7 +735,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         using Outcome = CapabilityResolution::Outcome;
         CapabilityResolution rc;
         rc.capability = Capability::Resources;
-        const zen::sb::ResourceLimits& lim = grant.resources();
+        const loom::ResourceLimits& lim = grant.resources();
         if (enforcement_.enforceable(Capability::Resources)) {
             // Always Enforced when cgroups work: a leaf with at-least-pids bounded.
             // There is no wholesale opt-out — no grant can license a fork bomb. The
@@ -756,7 +756,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
                 caps.cpu_weight = lim.cpu_weight;
             }
             link->cg_caps = caps;
-            link->cg_leaf = "zen-shard-" + std::to_string(g_leaf_counter++);
+            link->cg_leaf = "zen-weave-" + std::to_string(g_leaf_counter++);
             rc.note = (caps.memory_max < 0
                            ? std::string("memory unlimited-by-grant")
                            : "memory<=" + std::to_string(caps.memory_max / (1024 * 1024)) + "MiB") +
@@ -766,7 +766,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             std::fprintf(stderr,
                          "[zen-isolation] WARNING: '%s' mounted resource-UNCONTAINED — this host "
                          "cannot enforce cgroup-v2 limits (no delegated subtree) and dev-mode is "
-                         "on. The Shard can exhaust host memory/pids/cpu.\n",
+                         "on. The Weave can exhaust host memory/pids/cpu.\n",
                          name.c_str());
         } else {
             return {false, {},
@@ -792,11 +792,11 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         return {false, {}, std::string("handshake refused by the gate: ") + e.what()};
     }
 
-    auto proxy = std::make_unique<OutOfProcessShard>(this, link.get());
-    OutOfProcessShard* raw = proxy.get();
-    zen::sb::ShardId id;
+    auto proxy = std::make_unique<OutOfProcessWeave>(this, link.get());
+    OutOfProcessWeave* raw = proxy.get();
+    loom::WeaveId id;
     try {
-        id = bus_.register_shard(std::move(proxy), std::move(grant), role);
+        id = bus_.register_weave(std::move(proxy), std::move(grant), role);
     } catch (const std::exception& e) {
         teardown_child(*link);
         return {false, {}, std::string("register refused: ") + e.what()};
@@ -807,11 +807,11 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
     return {true, id, ""};
 }
 
-void IsolationHost::ship_deliver(Link& link, const zen::sb::Message& in) {
+void IsolationHost::ship_deliver(Link& link, const loom::Message& in) {
     if (!link.channel) {
         return; // no live child (dead/quarantined); the delivery is dropped
     }
-    const std::string bytes = zen::serialize(in.payload);
+    const std::string bytes = loom::serialize(in.payload);
     std::string frame;
     put_u64(frame, in.sender.value);
     put_u64(frame, in.reply_to.value);
@@ -820,7 +820,7 @@ void IsolationHost::ship_deliver(Link& link, const zen::sb::Message& in) {
     link.channel->queue(Op::Deliver, frame); // flushed on the next step()
 }
 
-void IsolationHost::respawn_and_revive(Link& link, const zen::Value& state) {
+void IsolationHost::respawn_and_revive(Link& link, const loom::Value& state) {
     if (link.channel) {
         teardown_child(link); // a stale child should not exist here; be safe
     }
@@ -829,7 +829,7 @@ void IsolationHost::respawn_and_revive(Link& link, const zen::Value& state) {
         teardown_child(link); // spawn failed; recover() detects via a null channel
         return;
     }
-    const std::string bytes = zen::serialize(state);
+    const std::string bytes = loom::serialize(state);
     link.channel->queue(Op::Revive, bytes); // child applies it, then ships a Snapshot
 }
 
@@ -848,25 +848,25 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
 
         // Re-admit the child's output through the one gate, host-side, exactly as
         // the kernel does for a loaded library's emitted message.
-        zen::Unverified u = zen::parse(payload);
+        loom::Unverified u = loom::parse(payload);
         std::shared_ptr<const Schema> door = bus_.resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
             return; // a schema the system does not know -> drop (cannot be gated)
         }
-        zen::Admission a = zen::admit(u, door);
+        loom::Admission a = loom::admit(u, door);
         if (!a.ok()) {
             return; // gate-refused (malformed/hostile child output) -> drop
         }
         // The sender is stamped from the connection (link.id), never from the
         // payload — the child has no way to express a sender. send_as/publish_as
-        // then authorize against this Shard's grant at delivery (CapabilityDenied
-        // on a violation), identical to the in-process ShardBus path.
-        zen::sb::Message msg(std::move(a).value(), zen::sb::ShardId{}, zen::sb::ShardId{reply_to},
+        // then authorize against this Weave's grant at delivery (CapabilityDenied
+        // on a violation), identical to the in-process WeaveBus path.
+        loom::Message msg(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
                              correlation);
         if (kind == kEmitPublish) {
             (void)bus_.publish_as(link.id, std::move(msg));
         } else {
-            (void)bus_.send_as(link.id, zen::sb::ShardId{target}, std::move(msg));
+            (void)bus_.send_as(link.id, loom::WeaveId{target}, std::move(msg));
         }
         return;
     }
@@ -881,13 +881,13 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         }
         const std::string_view payload = cursor.rest();
 
-        zen::Unverified u = zen::parse(payload);
+        loom::Unverified u = loom::parse(payload);
         std::shared_ptr<const Schema> door =
             bus_.resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
             return; // a schema the system does not know -> drop (cannot be gated)
         }
-        zen::Admission a = zen::admit(u, door);
+        loom::Admission a = loom::admit(u, door);
         if (!a.ok()) {
             return; // gate-refused (malformed/hostile child output) -> drop
         }
@@ -895,11 +895,11 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         // the EmitRole frame carries no sender field. The reply address of a role-send
         // (a request to a broker) is ALWAYS the stamped sender: a child-supplied
         // reply_to is ignored, so a mod cannot make a broker reply to another
-        // (guessable) ShardId — a confused deputy that would reintroduce a sender-like
+        // (guessable) WeaveId — a confused deputy that would reintroduce a sender-like
         // field a mod could fiddle with. send_as_to_role then authorizes by role at
         // delivery (Part A).
         (void)reply_to; // reserved in the frame; not trusted for routing a role-send reply
-        zen::sb::Message msg(std::move(a).value(), zen::sb::ShardId{}, link.id, correlation);
+        loom::Message msg(std::move(a).value(), loom::WeaveId{}, link.id, correlation);
         (void)bus_.send_as_to_role(link.id, std::string(role), std::move(msg));
         return;
     }
@@ -908,8 +908,8 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         // A fresh post-handle/post-revive snapshot. Admit it host-side; on success
         // it becomes the host-owned last-known-good. A malformed snapshot is
         // ignored — the previous good one stands.
-        zen::Unverified u = zen::parse(frame.payload);
-        zen::Admission a = zen::admit(u, link.state_schema);
+        loom::Unverified u = loom::parse(frame.payload);
+        loom::Admission a = loom::admit(u, link.state_schema);
         if (!a.ok()) {
             return;
         }
@@ -925,9 +925,9 @@ void IsolationHost::recover(Link& link) {
     // snapshot. reload() checks/decrements the policy's max_reloads and, when the
     // budget allows, calls proxy->revive() — which respawns a fresh child and ships
     // the state. When the budget is exhausted, revive() is never called and the
-    // Shard stays dead: quarantine.
+    // Weave stays dead: quarantine.
     teardown_child(link);
-    const zen::sb::ReviveOutcome ro = bus_.reload(link.id, link.snapshot_bytes);
+    const loom::ReviveOutcome ro = bus_.reload(link.id, link.snapshot_bytes);
     if (ro.revived && link.channel) {
         link.dead = false;
         link.death_signaled = false;
@@ -1024,7 +1024,7 @@ void IsolationHost::unmount(const std::string& name) {
     Link& link = *it->second;
     // Drop the proxy from the bus first (so no further delivery lands on it), then
     // stop the child. The proxy holds a Link* so it must die before the Link.
-    std::unique_ptr<zen::sb::Shard> proxy = bus_.unregister_shard(link.id);
+    std::unique_ptr<loom::Weave> proxy = bus_.unregister_weave(link.id);
     teardown_child(link);
     proxy.reset();
     links_.erase(it);
@@ -1087,4 +1087,4 @@ std::string IsolationHost::containment(const std::string& name) const {
     return head + body + " syscalls: not enforced (seccomp is a separate, later decision).";
 }
 
-} // namespace zen::isolation
+} // namespace loom

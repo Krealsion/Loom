@@ -1,22 +1,22 @@
-// A real Shard, authored as a clean C++ zen::sb::Shard subclass and shipped as a
-// .so with a single ZEN_EXPORT_SHARD line. No senses, no std::any — the same
-// Shard one would compile in. Compile-time switches produce adversarial variants
+// A real Weave, woven as a clean C++ loom::Weave subclass and shipped as a
+// .so with a single ZEN_EXPORT_WEAVE line. No senses, no std::any — the same
+// Weave one would compile in. Compile-time switches produce adversarial variants
 // for the kernel's harness and the isolation host's harness:
-//   ZEN_SHARD_MALFORMED_SNAPSHOT  — emit a snapshot missing a required field
-//   ZEN_SHARD_MALFORMED_MESSAGE   — emit a message missing a required field
-//   ZEN_SHARD_STATE_V2            — bump the state schema version (reload mismatch)
-//   ZEN_SHARD_CRASH_ON_MAGIC      — abort mid-handle on the magic seq 0xDEAD
-//   ZEN_SHARD_CRASH_ON_REVIVE     — abort on revive (drives reload-then-quarantine)
-//   ZEN_SHARD_LOW_RELOADS         — max_reloads = 3 (fast crash-budget exhaustion)
-//   ZEN_SHARD_SILENT              — handle never replies (liveness: cannot stall host)
-//   ZEN_SHARD_NET_PROBE           — on handle, attempt a TCP connect and report the
+//   ZEN_WEAVE_MALFORMED_SNAPSHOT  — emit a snapshot missing a required field
+//   ZEN_WEAVE_MALFORMED_MESSAGE   — emit a message missing a required field
+//   ZEN_WEAVE_STATE_V2            — bump the state schema version (reload mismatch)
+//   ZEN_WEAVE_CRASH_ON_MAGIC      — abort mid-handle on the magic seq 0xDEAD
+//   ZEN_WEAVE_CRASH_ON_REVIVE     — abort on revive (drives reload-then-quarantine)
+//   ZEN_WEAVE_LOW_RELOADS         — max_reloads = 3 (fast crash-budget exhaustion)
+//   ZEN_WEAVE_SILENT              — handle never replies (liveness: cannot stall host)
+//   ZEN_WEAVE_NET_PROBE           — on handle, attempt a TCP connect and report the
 //                                   errno (B3: proves the sandbox blocks the network)
-//   ZEN_SHARD_FS_PROBE            — on handle, probe filesystem reach (read a secret,
+//   ZEN_WEAVE_FS_PROBE            — on handle, probe filesystem reach (read a secret,
 //                                   write in/out of scratch, exec from scratch) and
 //                                   report each errno (B4: proves the mount-ns view)
-//   ZEN_SHARD_MEM_BOMB            — on handle (and revive), allocate a large resident
+//   ZEN_WEAVE_MEM_BOMB            — on handle (and revive), allocate a large resident
 //                                   block to trip memory.max (B5: OOM-kill containment)
-//   ZEN_SHARD_FORK_BOMB           — on handle, fork until it can't and report the count
+//   ZEN_WEAVE_FORK_BOMB           — on handle, fork until it can't and report the count
 //                                   (B5: proves pids.max bounds a fork-bomb)
 
 #include <zen/kernel/export.hpp>
@@ -28,7 +28,7 @@
 #include <memory>
 #include <vector>
 
-#ifdef ZEN_SHARD_NET_PROBE
+#ifdef ZEN_WEAVE_NET_PROBE
 #include <arpa/inet.h>
 #include <cerrno>
 #include <netinet/in.h>
@@ -36,7 +36,7 @@
 #include <unistd.h>
 #endif
 
-#ifdef ZEN_SHARD_FS_PROBE
+#ifdef ZEN_WEAVE_FS_PROBE
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -45,18 +45,18 @@
 #include <unistd.h>
 #endif
 
-#if defined(ZEN_SHARD_MEM_BOMB)
+#if defined(ZEN_WEAVE_MEM_BOMB)
 #include <cstring>
 #endif
 
-#if defined(ZEN_SHARD_FORK_BOMB)
+#if defined(ZEN_WEAVE_FORK_BOMB)
 #include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
-using namespace zen;
-using namespace zen::sb;
+using namespace loom;
+using namespace loom;
 
 namespace {
 
@@ -86,7 +86,7 @@ std::shared_ptr<const Schema> ping_schema() {
     return s;
 }
 std::shared_ptr<const Schema> counter_schema() {
-#ifdef ZEN_SHARD_STATE_V2
+#ifdef ZEN_WEAVE_STATE_V2
     static const auto s = SchemaBuilder("Counter", 2)
                               .field("count", Kind::Int)
                               .field("note", Kind::Text, /*required=*/false)
@@ -98,7 +98,7 @@ std::shared_ptr<const Schema> counter_schema() {
 }
 
 // Accepts Ping, replies Pong, and counts what it has handled as its state.
-class TestShard : public Shard {
+class TestWeave : public Weave {
 public:
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
         return {ping_schema()};
@@ -106,19 +106,19 @@ public:
 
     void handle(const Message& in, Bus& bus) override {
         const std::int64_t seq = in.payload.get("seq")->as_int();
-#ifdef ZEN_SHARD_CRASH_ON_MAGIC
+#ifdef ZEN_WEAVE_CRASH_ON_MAGIC
         if (seq == 0xDEAD) {
             std::abort(); // crash mid-handle; the isolation host must contain this
         }
 #endif
         ++count_;
-#if defined(ZEN_SHARD_SILENT)
+#if defined(ZEN_WEAVE_SILENT)
         (void)seq;
-        (void)bus; // a deliberately silent Shard: it never replies
-#elif defined(ZEN_SHARD_MALFORMED_MESSAGE)
+        (void)bus; // a deliberately silent Weave: it never replies
+#elif defined(ZEN_WEAVE_MALFORMED_MESSAGE)
         (void)seq;
         bus.send(in.reply_to, Message(Value(pong_schema()))); // 'seq' deliberately absent
-#elif defined(ZEN_SHARD_NET_PROBE)
+#elif defined(ZEN_WEAVE_NET_PROBE)
         (void)seq;
         // Instruction-level reach: open a TCP socket directly — the exact move a bus
         // grant cannot stop and only an OS sandbox can. Report the errno class so the
@@ -139,7 +139,7 @@ public:
         Value result(netresult_schema());
         result.set("code", Cell::integer(code));
         bus.send(in.reply_to, Message(std::move(result)));
-#elif defined(ZEN_SHARD_FS_PROBE)
+#elif defined(ZEN_WEAVE_FS_PROBE)
         (void)seq;
         // Instruction-level filesystem reach: read a secret outside the view, write
         // inside scratch, write outside it, and execute from scratch. Each reports its
@@ -190,7 +190,7 @@ public:
         result.set("outside_write", Cell::integer(outside));
         result.set("noexec_exec", Cell::integer(noexec));
         bus.send(in.reply_to, Message(std::move(result)));
-#elif defined(ZEN_SHARD_MEM_BOMB)
+#elif defined(ZEN_WEAVE_MEM_BOMB)
         // Allocate a large resident block to trip memory.max. Held (not freed) so RSS
         // stays high; below the cgroup cap the kernel OOM-kills us mid-handle (the Pong
         // below is only reached if we survived — proving the kill is the cap).
@@ -206,7 +206,7 @@ public:
             pong.set("seq", Cell::integer(seq));
             bus.send(in.reply_to, Message(std::move(pong)));
         }
-#elif defined(ZEN_SHARD_FORK_BOMB)
+#elif defined(ZEN_WEAVE_FORK_BOMB)
         (void)seq;
         // Fork until the kernel refuses (pids.max), counting successes, then clean up.
         // Bounded ⇒ pids.max held; unbounded would fork the whole loop.
@@ -244,7 +244,7 @@ public:
 
     Value snapshot() const override {
         Value v(counter_schema());
-#ifndef ZEN_SHARD_MALFORMED_SNAPSHOT
+#ifndef ZEN_WEAVE_MALFORMED_SNAPSHOT
         v.set("count", Cell::integer(count_));
 #endif
         return v;
@@ -252,7 +252,7 @@ public:
 
     Value policy() const override {
         Value v(lifecycle_policy_schema());
-#ifdef ZEN_SHARD_LOW_RELOADS
+#ifdef ZEN_WEAVE_LOW_RELOADS
         v.set("max_reloads", Cell::integer(3));
 #else
         v.set("max_reloads", Cell::integer(8));
@@ -262,10 +262,10 @@ public:
     }
 
     void revive(const Value& state) override {
-#ifdef ZEN_SHARD_CRASH_ON_REVIVE
+#ifdef ZEN_WEAVE_CRASH_ON_REVIVE
         (void)state;
         std::abort(); // crash on revive; drives bounded reload-then-quarantine
-#elif defined(ZEN_SHARD_MEM_BOMB)
+#elif defined(ZEN_WEAVE_MEM_BOMB)
         (void)state;
         // Re-OOM on revive so a memory bomb exhausts its reload budget and quarantines.
         const std::size_t bomb = 200UL * 1024 * 1024;
@@ -285,4 +285,4 @@ private:
 
 } // namespace
 
-ZEN_EXPORT_SHARD(TestShard)
+ZEN_EXPORT_WEAVE(TestWeave)

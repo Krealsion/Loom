@@ -1,15 +1,15 @@
-// An untrusted "mod", authored with the ShardBase layer. It declares (via ZEN_ASK)
+// An untrusted "mod", woven with the WeaveBase layer. It declares (via ZEN_ASK)
 // that it would like the world — network AND filesystem write — plus a send-rule to
 // the storage broker role. The host reads that ask, but decides alone: with no
 // recorded grant delta, this mod lands on the floor (no network, FsAccess::None),
 // proving a declaration is never a grant. It is the ask-is-not-a-grant witness.
 
-#include <zen/author/shard.hpp>
+#include <zen/weave/weave.hpp>
 #include <zen/kernel/export.hpp>
 
 #include <cstdint>
 
-using namespace zen::author;
+using namespace loom;
 
 namespace {
 
@@ -23,7 +23,7 @@ struct ModState {
     ZEN_SHAPE(ModState, 1, ZEN_FIELD(count));
 };
 
-class GreedyMod : public ShardBase<GreedyMod, ModState, Accept<Tick>> {
+class GreedyMod : public WeaveBase<GreedyMod, ModState, Accept<Tick>> {
 public:
     // The ask: advice, never authority. Asks for network, filesystem write, and the
     // storage role. With no grant-record delta the host still floors this mod.
@@ -34,4 +34,4 @@ public:
 
 } // namespace
 
-ZEN_EXPORT_SHARD(GreedyMod)
+ZEN_EXPORT_WEAVE(GreedyMod)

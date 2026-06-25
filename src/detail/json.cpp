@@ -1,6 +1,6 @@
 #include "detail/json.hpp"
 
-namespace zen::detail {
+namespace loom::detail {
 
 const JsonValue* JsonValue::find(std::string_view key) const noexcept {
     for (const auto& m : members) {
@@ -502,4 +502,4 @@ bool valid_utf8(std::string_view s) noexcept {
     return true;
 }
 
-} // namespace zen::detail
+} // namespace loom::detail

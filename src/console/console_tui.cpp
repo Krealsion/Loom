@@ -25,39 +25,39 @@
 
 namespace {
 
-using namespace zen::console;
+using namespace loom;
 
 // ---- A demo responder so a standalone TUI has something to drive ----
-std::shared_ptr<const zen::Schema> greet_schema() {
-    static const auto s = zen::SchemaBuilder("Greet", 1).field("msg", zen::Kind::Text).build();
+std::shared_ptr<const loom::Schema> greet_schema() {
+    static const auto s = loom::SchemaBuilder("Greet", 1).field("msg", loom::Kind::Text).build();
     return s;
 }
-class Greeter final : public zen::sb::Shard {
+class Greeter final : public loom::Weave {
 public:
-    std::vector<std::shared_ptr<const zen::Schema>> accepted_schemas() const override {
+    std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
         return {greet_schema()};
     }
-    void handle(const zen::sb::Message& in, zen::sb::Bus& bus) override {
-        zen::Value v(greet_schema());
-        v.set("msg", zen::Cell::text(in.payload.get("msg")->as_text()));
-        bus.send(in.reply_to, zen::sb::Message(std::move(v)));
+    void handle(const loom::Message& in, loom::Bus& bus) override {
+        loom::Value v(greet_schema());
+        v.set("msg", loom::Cell::text(in.payload.get("msg")->as_text()));
+        bus.send(in.reply_to, loom::Message(std::move(v)));
     }
-    zen::Value snapshot() const override {
-        zen::Value v(state_schema());
-        v.set("n", zen::Cell::integer(0));
+    loom::Value snapshot() const override {
+        loom::Value v(state_schema());
+        v.set("n", loom::Cell::integer(0));
         return v;
     }
-    zen::Value policy() const override {
-        zen::Value v(zen::sb::lifecycle_policy_schema());
-        v.set("max_reloads", zen::Cell::integer(0));
-        v.set("revive_from_last_good", zen::Cell::boolean(true));
+    loom::Value policy() const override {
+        loom::Value v(loom::lifecycle_policy_schema());
+        v.set("max_reloads", loom::Cell::integer(0));
+        v.set("revive_from_last_good", loom::Cell::boolean(true));
         return v;
     }
-    void revive(const zen::Value&) override {}
+    void revive(const loom::Value&) override {}
 
 private:
-    static std::shared_ptr<const zen::Schema> state_schema() {
-        static const auto s = zen::SchemaBuilder("GreeterState", 1).field("n", zen::Kind::Int).build();
+    static std::shared_ptr<const loom::Schema> state_schema() {
+        static const auto s = loom::SchemaBuilder("GreeterState", 1).field("n", loom::Kind::Int).build();
         return s;
     }
 };
@@ -255,7 +255,7 @@ void draw(const Widget& root, int rows, int cols) {
 // raw-byte -> Action table is the ONLY terminal-coupled input code; the controller and engine
 // never see a raw key. Escape continuations are read through the backend's timed read, so this is
 // platform-agnostic. `c` is a byte value (0..255); the caller guarantees c >= 0.
-bool map_key(int c, zen::tui::TerminalBackend& term, InputEvent& out) {
+bool map_key(int c, loom::TerminalBackend& term, InputEvent& out) {
     const unsigned char u = static_cast<unsigned char>(c);
     if (u == 24) { // Ctrl-X
         return false;
@@ -313,12 +313,12 @@ bool map_key(int c, zen::tui::TerminalBackend& term, InputEvent& out) {
 } // namespace
 
 int main() {
-    zen::sb::Switchboard bus;
+    loom::Switchboard bus;
     ConsoleEngine engine(bus);
-    bus.register_shard(std::make_unique<Greeter>(), zen::sb::Grant{}.allow_any());
+    bus.register_weave(std::make_unique<Greeter>(), loom::Grant{}.allow_any());
 
     ConsoleUi ui(engine);
-    std::unique_ptr<zen::tui::TerminalBackend> term = zen::tui::make_terminal(); // enters raw mode
+    std::unique_ptr<loom::TerminalBackend> term = loom::make_terminal(); // enters raw mode
 
     int rows = 24, cols = 80;
     if (!term->size(rows, cols)) {

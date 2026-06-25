@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace zen {
+namespace loom {
 
 // Native binary envelope constants. These bytes are a frozen, on-the-wire
 // commitment: the magic and format version identify the format to a reader that
@@ -956,4 +956,4 @@ Unverified parse(std::string_view bytes) noexcept {
 
 } // namespace compat
 
-} // namespace zen
+} // namespace loom

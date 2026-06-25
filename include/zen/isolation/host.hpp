@@ -1,21 +1,21 @@
 #ifndef ZEN_ISOLATION_HOST_HPP
 #define ZEN_ISOLATION_HOST_HPP
 
-// Out-of-process Shard hosting. IsolationHost spawns a child zen-shard-host per
-// Shard, bridges it to the bus through a proxy that *is* a Shard (so the
+// Out-of-process Weave hosting. IsolationHost spawns a child zen-weave-host per
+// Weave, bridges it to the bus through a proxy that *is* a Weave (so the
 // Switchboard is unchanged), and supervises it: crash detection → bounded reload
 // from a host-owned snapshot → quarantine. Everything is single-threaded — the
 // only async is the child's reply *timing* — so the bus's FIFO and reentrancy
 // guarantees hold. The Switchboard must outlive the host.
 //
-// Honest containment (B3): an out-of-process Shard is *isolated* (process boundary:
+// Honest containment (B3): an out-of-process Weave is *isolated* (process boundary:
 // crash-contained, cannot touch host memory) and, when its grant withholds the
 // Network capability and this host can enforce it, also *network-sandboxed* (the
 // child runs with no network interface, so connect() fails at the syscall level).
-// containment() is generated from what was ACTUALLY imposed per Shard — it never
+// containment() is generated from what was ACTUALLY imposed per Weave — it never
 // claims enforcement it did not apply. When the safe floor cannot be enforced the
 // mount fails safe (refuses) unless dev-mode is on, in which case it proceeds with
-// the Shard visibly marked uncontained.
+// the Weave visibly marked uncontained.
 
 #include <zen/isolation/channel.hpp>
 #include <zen/isolation/grant_record.hpp>
@@ -35,13 +35,13 @@
 
 #include <sys/types.h> // pid_t
 
-namespace zen::isolation {
+namespace loom {
 
-class OutOfProcessShard;
+class OutOfProcessWeave;
 
 struct OutOfProcessResult {
     bool ok = false;
-    zen::sb::ShardId id{};
+    loom::WeaveId id{};
     std::string error;
 };
 
@@ -63,23 +63,23 @@ struct CapabilityResolution {
 
 class IsolationHost {
 public:
-    /// `shard_host_exe` is the path to the zen-shard-host child executable.
-    IsolationHost(zen::sb::Switchboard& bus, std::string shard_host_exe);
+    /// `weave_host_exe` is the path to the zen-weave-host child executable.
+    IsolationHost(loom::Switchboard& bus, std::string weave_host_exe);
     ~IsolationHost();
 
     IsolationHost(const IsolationHost&) = delete;
     IsolationHost& operator=(const IsolationHost&) = delete;
 
-    /// Mount a Shard out-of-process from `so_path` under `name`, with `grant`.
+    /// Mount a Weave out-of-process from `so_path` under `name`, with `grant`.
     /// Spawns a child, handshakes (reconstructs its schemas, caches its initial
     /// snapshot and policy), and registers the proxy on the bus.
     ///
     /// B3: if the grant withholds os_cap::Network, the child is launched into a
     /// no-interface network namespace (OS-enforced). If that cannot be enforced on
     /// this host, the mount refuses (fail-safe) unless dev-mode is on — then it
-    /// proceeds with the Shard marked network-uncontained.
+    /// proceeds with the Weave marked network-uncontained.
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
-                             zen::sb::Grant grant, const std::string& role = "");
+                             loom::Grant grant, const std::string& role = "");
 
     /// Mount the StorageBroker out-of-process at the TCB tier: host-granted
     /// FsAccess::WriteScoped to `storage_root` ONLY (the persistent-scoped-write
@@ -113,15 +113,15 @@ public:
     /// floor-factory consults it for deltas; record_grant_delta writes to it.
     void set_grant_record_path(const std::string& path);
 
-    /// Record (replace) a capability delta for a Shard identity (its .so
+    /// Record (replace) a capability delta for a Weave identity (its .so
     /// content-hash, from so_content_hash) and persist it. This is the host holding
-    /// the pen — the stand-in for the consent UX (deferred). The host, never a Shard,
+    /// the pen — the stand-in for the consent UX (deferred). The host, never a Weave,
     /// decides; only a delta recorded here raises a mod above the floor.
     void record_grant_delta(const std::string& content_hash, GrantDelta delta);
 
     /// Dev-mode (default off = strict): converts a fail-safe refusal — when a
     /// requested capability cannot be enforced on this host — into a loud warning,
-    /// proceeding with the Shard visibly marked uncontained for that capability. A
+    /// proceeding with the Weave visibly marked uncontained for that capability. A
     /// deployment-level choice (dev box vs prod); the one knob B3 introduces.
     void set_dev_mode(bool on) noexcept { dev_mode_ = on; }
     bool dev_mode() const noexcept { return dev_mode_; }
@@ -153,8 +153,8 @@ public:
 
     void unmount(const std::string& name);
 
-    /// Reload a mounted Shard's implementation IN PLACE: re-spawn its child (from the
-    /// same .so) and re-revive from the host-owned snapshot, keeping the SAME ShardId,
+    /// Reload a mounted Weave's implementation IN PLACE: re-spawn its child (from the
+    /// same .so) and re-revive from the host-owned snapshot, keeping the SAME WeaveId,
     /// grant, and role — so routing (role-addressing included) and reload-stable
     /// send-rules survive. A broker's on-disk data is durable independently of this.
     /// Returns false if `name` is not mounted or the respawn failed.
@@ -162,20 +162,20 @@ public:
 
     bool is_mounted(const std::string& name) const;
     bool quarantined(const std::string& name) const;
-    /// The honest containment level of a hosted Shard.
+    /// The honest containment level of a hosted Weave.
     std::string containment(const std::string& name) const;
 
-    /// The capability ask the Shard's manifest declared, or nullopt if it asked for
+    /// The capability ask the Weave's manifest declared, or nullopt if it asked for
     /// nothing (or is not mounted). This is the host reading the *advice* — what the
-    /// Shard wanted — distinct from what it was granted; the gap between this and
+    /// Weave wanted — distinct from what it was granted; the gap between this and
     /// containment() is the advice-vs-authority wall made observable.
-    std::optional<zen::kernel::CapabilityAsk> declared_ask(const std::string& name) const;
+    std::optional<loom::CapabilityAsk> declared_ask(const std::string& name) const;
 
 private:
     struct Link {
         std::string name;
         std::string so_path;
-        zen::sb::ShardId id{};
+        loom::WeaveId id{};
         std::unique_ptr<Channel> channel; // null when no live child
         pid_t pid = -1;
         std::vector<std::shared_ptr<const Schema>> accept;
@@ -183,22 +183,22 @@ private:
         std::optional<Value> snapshot_value; // last good admitted snapshot (host-owned)
         std::string snapshot_bytes;          // its canonical bytes, for revival
         std::optional<Value> policy_value;
-        std::optional<zen::kernel::CapabilityAsk> requested_caps; // the manifest's ask (advice)
-        OutOfProcessShard* proxy = nullptr;
+        std::optional<loom::CapabilityAsk> requested_caps; // the manifest's ask (advice)
+        OutOfProcessWeave* proxy = nullptr;
         std::vector<CapabilityResolution> resolutions; // per-capability, resolved at mount
         MountPlan fs_plan;     // precomputed restricted-view plan (empty if fs not sandboxed)
         std::string fs_root;   // the mkdtemp'd new-root dir (for teardown), empty otherwise
-        std::string cg_leaf;   // the per-Shard cgroup leaf name (empty if resources not contained)
+        std::string cg_leaf;   // the per-Weave cgroup leaf name (empty if resources not contained)
         ResourceCaps cg_caps;  // the resolved resource caps applied to the leaf
         bool dead = false;
         bool death_signaled = false;
         bool quarantined = false;
     };
 
-    friend class OutOfProcessShard;
+    friend class OutOfProcessWeave;
 
     // Proxy-facing operations.
-    void ship_deliver(Link& link, const zen::sb::Message& in);
+    void ship_deliver(Link& link, const loom::Message& in);
     void respawn_and_revive(Link& link, const Value& state);
 
     // Spawn a child for `link`, wait for its Hello; optionally return its bytes.
@@ -216,9 +216,9 @@ private:
     static bool filesystem_sandboxed(const Link& link);
     static bool resources_contained(const Link& link);
 
-    zen::sb::Switchboard& bus_;
+    loom::Switchboard& bus_;
     std::string exe_;
-    zen::Registry registry_; // reconstructed child schemas (decode deps + resolution)
+    loom::Registry registry_; // reconstructed child schemas (decode deps + resolution)
     std::map<std::string, std::unique_ptr<Link>> links_;
     EnforcementReport enforcement_;    // what this host can actually impose (detected once)
     GrantRecord grant_record_;         // per-install ledger of grant deltas above the floor
@@ -240,6 +240,6 @@ bool IsolationHost::run_until(Pred predicate, int max_steps) {
     return predicate();
 }
 
-} // namespace zen::isolation
+} // namespace loom
 
 #endif // ZEN_ISOLATION_HOST_HPP

@@ -1,6 +1,6 @@
 #include <doctest.h>
 
-#include <zen/author/shape.hpp>
+#include <zen/weave/shape.hpp>
 #include <zen/serialize.hpp>
 #include <zen/zen.hpp>
 
@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-using namespace zen;
-namespace au = zen::author;
+using namespace loom;
+namespace au = loom;
 
 namespace {
 
@@ -25,7 +25,7 @@ struct Everything {
     double f;
     std::string t;
     bool b;
-    zen::Bytes y;
+    loom::Bytes y;
     Inner nested;
     std::vector<std::int64_t> ints;
     std::vector<Inner> inners;
@@ -56,7 +56,7 @@ struct Player {
 
 } // namespace
 
-TEST_SUITE("author") {
+TEST_SUITE("weave_shape") {
 
 TEST_CASE("a struct-derived schema is byte-identical to the hand-built one") {
     auto hand = SchemaBuilder("Foo", 1).field("a", Kind::Int).field("b", Kind::Text).build();
@@ -85,7 +85,7 @@ TEST_CASE("a differing struct under the same (name, version) is a SchemaConflict
     Registry reg;
     reg.register_schema(au::schema_of<Foo>());
     auto impostor = SchemaBuilder("Foo", 1).field("a", Kind::Float).build(); // different shape
-    CHECK_THROWS_AS(reg.register_schema(impostor), zen::SchemaConflict);
+    CHECK_THROWS_AS(reg.register_schema(impostor), loom::SchemaConflict);
 }
 
 TEST_CASE("every kind round-trips through the gated wire path") {
@@ -94,7 +94,7 @@ TEST_CASE("every kind round-trips through the gated wire path") {
     e.f = 0.1;
     e.t = "h\xC3\xA9llo";
     e.b = true;
-    e.y = zen::Bytes{0, 1, 2, 255};
+    e.y = loom::Bytes{0, 1, 2, 255};
     e.nested = Inner{42};
     e.ints = {1, 2, 3};
     e.inners = {Inner{10}, Inner{20}};

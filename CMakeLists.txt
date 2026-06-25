@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(zen-core
+project(loom
     VERSION 0.1.0
     DESCRIPTION "Self-describing-value-and-gate core for Zen"
     LANGUAGES CXX)
@@ -15,7 +15,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# The kernel loads Shards from shared libraries, which statically link the core.
+# The kernel loads Weaves from shared libraries, which statically link the core.
 # Build everything position-independent so the static libraries can be pulled
 # into a .so.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -45,7 +45,7 @@ endif()
 
 # ---- The library ----------------------------------------------------------
 
-add_library(zen-core
+add_library(loom
     src/schema.cpp
     src/value.cpp
     src/gate.cpp
@@ -55,16 +55,16 @@ add_library(zen-core
     src/detail/base64.cpp
     src/detail/binary.cpp)
 
-target_include_directories(zen-core
+target_include_directories(loom
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_compile_features(zen-core PUBLIC cxx_std_20)
-target_link_libraries(zen-core
+target_compile_features(loom PUBLIC cxx_std_20)
+target_link_libraries(loom
     PUBLIC  zen-sanitize
     PRIVATE zen-warnings)
 
-add_library(zen::core ALIAS zen-core)
+add_library(loom::core ALIAS loom)
 
 # ---- The switchboard (the first live boundary) ----------------------------
 
@@ -76,19 +76,19 @@ target_include_directories(zen-switchboard
 
 target_compile_features(zen-switchboard PUBLIC cxx_std_20)
 target_link_libraries(zen-switchboard
-    PUBLIC  zen-core zen-sanitize
+    PUBLIC  loom zen-sanitize
     PRIVATE zen-warnings)
 
-add_library(zen::switchboard ALIAS zen-switchboard)
+add_library(loom::switchboard ALIAS zen-switchboard)
 
 # ---- Linux-only substrate: the kernel + isolation (POSIX dlopen, namespaces, cgroups) ----------
 #
 # These depend on POSIX/Linux facilities (dlfcn dynamic loading, fork, mount/pid/net namespaces,
 # cgroup-v2) and are gated behind a platform check so the portable subset (core, switchboard,
 # console, both terminal frontends) configures on Windows. SEAM APPRECIATION: the gate makes the
-# "Linux-only targets" a visible seam — native Windows .dll Shard loading (dlopen -> LoadLibrary)
+# "Linux-only targets" a visible seam — native Windows .dll Weave loading (dlopen -> LoadLibrary)
 # is a clean future addition hooked right here, but its trigger (wanting native Windows execution
-# of sandboxed Shards) likely never fires, because WSL-hosting is the security story. Hooked,
+# of sandboxed Weaves) likely never fires, because WSL-hosting is the security story. Hooked,
 # deferred to a probably-never trigger. On Linux every gate below is taken — nothing changes.
 if(NOT WIN32)
 
@@ -101,13 +101,13 @@ target_include_directories(zen-kernel
 
 target_compile_features(zen-kernel PUBLIC cxx_std_20)
 target_link_libraries(zen-kernel
-    PUBLIC  zen-core zen-switchboard zen-sanitize
+    PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings ${CMAKE_DL_LIBS})
 
-add_library(zen::kernel ALIAS zen-kernel)
+add_library(loom::kernel ALIAS zen-kernel)
 
-# Isolation (out-of-process Shard hosting + crash supervision). The host-side library: the IPC
-# channel, the proxy Shard, and the supervisor. It reuses the kernel's header-only schema codec to
+# Isolation (out-of-process Weave hosting + crash supervision). The host-side library: the IPC
+# channel, the proxy Weave, and the supervisor. It reuses the kernel's header-only schema codec to
 # reconstruct a child's schemas; it does not depend on the kernel's compiled code.
 add_library(zen-isolation
     src/isolation/channel.cpp
@@ -120,10 +120,10 @@ target_include_directories(zen-isolation
 
 target_compile_features(zen-isolation PUBLIC cxx_std_20)
 target_link_libraries(zen-isolation
-    PUBLIC  zen-core zen-switchboard zen-sanitize
+    PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings)
 
-add_library(zen::isolation ALIAS zen-isolation)
+add_library(loom::isolation ALIAS zen-isolation)
 
 endif() # NOT WIN32 (kernel + isolation)
 
@@ -140,15 +140,15 @@ target_include_directories(zen-console
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(zen-console PUBLIC cxx_std_20)
 target_link_libraries(zen-console
-    PUBLIC  zen-core zen-switchboard zen-sanitize
+    PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings)
-add_library(zen::console ALIAS zen-console)
+add_library(loom::console ALIAS zen-console)
 
 # The terminal frontend — a thin, throwaway REPL over the engine (Stage 1-2; a GUI replaces
 # only this later). Exercises discovery / guided send / one-liner / buffer / tap as text.
 add_executable(zen-console-term src/console/console_term.cpp)
 target_link_libraries(zen-console-term
-    PRIVATE zen-console zen-switchboard zen-core zen-warnings zen-sanitize)
+    PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
 # The full-screen TUI frontend (Stage 3) — the SECOND renderer of the same widget tree, this one to
 # terminal cells (hand-rolled ANSI, NO ncurses, no new dependency). The layout/draw/key-mapping is
@@ -163,22 +163,22 @@ else()
     target_sources(zen-console-tui PRIVATE src/console/terminal_posix.cpp)
 endif()
 target_link_libraries(zen-console-tui
-    PRIVATE zen-console zen-switchboard zen-core zen-warnings zen-sanitize)
+    PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
-# The child executable: runs one Shard out-of-process via the kernel C ABI. It is a byte shuttler —
-# it deliberately does NOT link zen-core; it speaks the wire format only through the protocol header
+# The child executable: runs one Weave out-of-process via the kernel C ABI. It is a byte shuttler —
+# it deliberately does NOT link loom; it speaks the wire format only through the protocol header
 # and lets the host gate everything. Linux-only (the sandbox/hosting is POSIX; see the gate above).
 if(NOT WIN32)
-add_executable(zen-shard-host
-    src/isolation/shard_host_main.cpp)
+add_executable(zen-weave-host
+    src/isolation/weave_host_main.cpp)
 
-target_include_directories(zen-shard-host
+target_include_directories(zen-weave-host
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_compile_features(zen-shard-host PRIVATE cxx_std_20)
-target_link_libraries(zen-shard-host
+target_compile_features(zen-weave-host PRIVATE cxx_std_20)
+target_link_libraries(zen-weave-host
     PRIVATE zen-warnings zen-sanitize ${CMAKE_DL_LIBS})
-endif() # NOT WIN32 (zen-shard-host)
+endif() # NOT WIN32 (zen-weave-host)
 
 # ---- Tests ----------------------------------------------------------------
 

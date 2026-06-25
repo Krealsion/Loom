@@ -7,8 +7,8 @@
 #include <memory>
 #include <vector>
 
-using namespace zen;
-using namespace zen::kernel;
+using namespace loom;
+using namespace loom;
 
 namespace {
 

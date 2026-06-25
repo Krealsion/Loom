@@ -14,7 +14,7 @@
 #include <cstdlib>
 #include <memory>
 
-namespace zen::tui {
+namespace loom {
 namespace {
 
 class PosixTerminal final : public TerminalBackend {
@@ -102,4 +102,4 @@ bool PosixTerminal::s_have_saved = false;
 
 std::unique_ptr<TerminalBackend> make_terminal() { return std::make_unique<PosixTerminal>(); }
 
-} // namespace zen::tui
+} // namespace loom

@@ -1,7 +1,7 @@
 #ifndef ZEN_TESTS_SWITCHBOARD_FIXTURES_HPP
 #define ZEN_TESTS_SWITCHBOARD_FIXTURES_HPP
 
-// Dummy message schemas and an adversarial/cooperative probe Shard for the
+// Dummy message schemas and an adversarial/cooperative probe Weave for the
 // Switchboard tests. As always, these domain types live only in the tests; the
 // bus and the kernel hard-code none of them.
 
@@ -16,16 +16,16 @@
 
 namespace sbfx {
 
-using namespace zen;
-using zen::sb::Bus;
-using zen::sb::BusEvent;
-using zen::sb::EventKind;
-using zen::sb::Grant;
-using zen::sb::Message;
-using zen::sb::RefusalReason;
-using zen::sb::Shard;
-using zen::sb::ShardId;
-using zen::sb::Switchboard;
+using namespace loom;
+using loom::Bus;
+using loom::BusEvent;
+using loom::EventKind;
+using loom::Grant;
+using loom::Message;
+using loom::RefusalReason;
+using loom::Weave;
+using loom::WeaveId;
+using loom::Switchboard;
 
 // ---- message schemas ------------------------------------------------------
 
@@ -72,16 +72,16 @@ inline Value tick(std::int64_t n) {
     return v;
 }
 
-// ---- a flexible probe Shard ----------------------------------------------
+// ---- a flexible probe Weave ----------------------------------------------
 
 // Accepts a configured schema set; records what it handles; runs an optional
 // hook so a test can make it reply, flood, or sabotage from inside a handler.
 // Its persistable state is a Counter{count}; its policy is the fixed grammar.
-class ProbeShard : public Shard {
+class ProbeWeave : public Weave {
 public:
-    using Hook = std::function<void(const Message&, Bus&, ProbeShard&)>;
+    using Hook = std::function<void(const Message&, Bus&, ProbeWeave&)>;
 
-    explicit ProbeShard(std::vector<std::shared_ptr<const Schema>> accept,
+    explicit ProbeWeave(std::vector<std::shared_ptr<const Schema>> accept,
                         std::int64_t max_reloads = 2, bool revive_from_last_good = true)
         : accept_(std::move(accept)), max_reloads_(max_reloads),
           revive_from_last_good_(revive_from_last_good) {}
@@ -117,7 +117,7 @@ public:
     }
 
     Value policy() const override {
-        Value v(zen::sb::lifecycle_policy_schema());
+        Value v(loom::lifecycle_policy_schema());
         v.set("max_reloads", Cell::integer(max_reloads_));
         v.set("revive_from_last_good", Cell::boolean(revive_from_last_good_));
         return v;
@@ -138,7 +138,7 @@ private:
 // valid only during the callback, so taps copy out the durable fields).
 struct TapRecord {
     EventKind kind;
-    ShardId target;
+    WeaveId target;
     std::string schema;
     RefusalReason reason;
     ErrorKind error_kind;
@@ -150,11 +150,11 @@ inline TapRecord to_record(const BusEvent& e) {
                      e.refusal.error.kind, e.from_last_known_good};
 }
 
-// Register a ProbeShard and hand back both its id and a non-owning pointer (the
-// bus owns the Shard; tests still want to read/configure the concrete object).
+// Register a ProbeWeave and hand back both its id and a non-owning pointer (the
+// bus owns the Weave; tests still want to read/configure the concrete object).
 struct Registered {
-    ShardId id;
-    ProbeShard* shard;
+    WeaveId id;
+    ProbeWeave* weave;
 };
 
 // The probe is a trusted in-process test fixture; by default it is granted
@@ -165,9 +165,9 @@ inline Registered register_probe(Switchboard& bus,
                                  std::int64_t max_reloads = 2,
                                  bool revive_from_last_good = true,
                                  Grant grant = Grant{}.allow_any()) {
-    auto owned = std::make_unique<ProbeShard>(std::move(accept), max_reloads, revive_from_last_good);
-    ProbeShard* raw = owned.get();
-    ShardId id = bus.register_shard(std::move(owned), std::move(grant));
+    auto owned = std::make_unique<ProbeWeave>(std::move(accept), max_reloads, revive_from_last_good);
+    ProbeWeave* raw = owned.get();
+    WeaveId id = bus.register_weave(std::move(owned), std::move(grant));
     return {id, raw};
 }
 

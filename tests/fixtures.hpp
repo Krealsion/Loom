@@ -11,9 +11,9 @@
 
 namespace fx {
 
-using zen::Kind;
-using zen::Schema;
-using zen::SchemaBuilder;
+using loom::Kind;
+using loom::Schema;
+using loom::SchemaBuilder;
 
 // A 2-D movement message.
 inline std::shared_ptr<const Schema> Move() {
@@ -41,7 +41,7 @@ inline std::shared_ptr<const Schema> SetColor() {
     return s;
 }
 
-// A Shard's persisted state — the lock the self chooses (scene C).
+// A Weave's persisted state — the lock the self chooses (scene C).
 inline std::shared_ptr<const Schema> PlayerState() {
     static const auto s = SchemaBuilder("PlayerState", 1)
                               .field("hp", Kind::Int)
@@ -76,8 +76,8 @@ inline std::shared_ptr<const Schema> Blob() {
 inline std::shared_ptr<const Schema> Inventory() {
     static const auto s = SchemaBuilder("Inventory", 1)
                               .field("owner", Kind::Text)
-                              .list("items", zen::type_of(Kind::Text))
-                              .list("counts", zen::type_of(Kind::Int))
+                              .list("items", loom::type_of(Kind::Text))
+                              .list("counts", loom::type_of(Kind::Int))
                               .build();
     return s;
 }
@@ -87,7 +87,7 @@ inline std::shared_ptr<const Schema> Squad() {
     static const auto s = SchemaBuilder("Squad", 1)
                               .field("name", Kind::Text)
                               .message("leader", PlayerState())
-                              .list("members", zen::type_message(PlayerState()))
+                              .list("members", loom::type_message(PlayerState()))
                               .build();
     return s;
 }

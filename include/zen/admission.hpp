@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace zen {
+namespace loom {
 
 /// A machine-readable classification of why a claimant was refused. Stable:
 /// consumers (e.g. the console) may switch on these.
@@ -65,6 +65,6 @@ private:
     std::vector<Error> errors_;
 };
 
-} // namespace zen
+} // namespace loom
 
 #endif // ZEN_ADMISSION_HPP

@@ -3,7 +3,7 @@
 #include <mutex>
 #include <utility>
 
-namespace zen {
+namespace loom {
 
 namespace {
 std::string conflict_what(const std::string& name, std::uint32_t version) {
@@ -63,4 +63,4 @@ bool Registry::contains(std::string_view name, std::uint32_t version) const {
 
 std::size_t Registry::size() const { return snapshot()->size(); }
 
-} // namespace zen
+} // namespace loom
