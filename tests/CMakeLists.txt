@@ -27,7 +27,8 @@ add_executable(zen-tests
     test_schema_codec.cpp
     test_weave_shape.cpp
     test_weave.cpp
-    test_console.cpp)
+    test_console.cpp
+    test_bridge.cpp)
 
 # Kernel/isolation-dependent suites: compiled only where the kernel + sandbox exist.
 if(NOT WIN32)
@@ -43,7 +44,7 @@ target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(zen-tests
-    PRIVATE loom zen-switchboard zen-console zen-warnings zen-sanitize)
+    PRIVATE loom zen-switchboard zen-console zen-bridge zen-warnings zen-sanitize)
 if(NOT WIN32)
     target_link_libraries(zen-tests PRIVATE zen-kernel zen-isolation)
 endif()
@@ -149,7 +150,7 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # exit-status check is the source of truth — no output-scraping needed. The portable
 # suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec weave_shape weave console)
+    switchboard harness breathing schema_codec weave_shape weave console bridge)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()

@@ -263,7 +263,7 @@ void ConsoleEngine::record_tap(const loom::BusEvent& e) {
     }
 }
 
-ConsoleEngine::Dirty ConsoleEngine::take_dirty() noexcept {
+Dirty ConsoleEngine::take_dirty() noexcept {
     Dirty d = dirty_;
     dirty_ = Dirty{};
     return d;
@@ -285,19 +285,23 @@ std::vector<WeaveInfo> ConsoleEngine::weaves() const {
     return out;
 }
 
+ShapeDesc describe_schema(const loom::Schema& schema) {
+    ShapeDesc d;
+    d.name = schema.name();
+    d.version = schema.version();
+    for (const loom::Field& f : schema.fields()) {
+        d.fields.push_back({f.name, type_string(f.type), f.required});
+    }
+    return d;
+}
+
 std::optional<ShapeDesc> ConsoleEngine::describe(std::string_view name,
                                                  std::uint32_t version) const {
     std::shared_ptr<const loom::Schema> schema = bus_.resolve_schema(name, version);
     if (!schema) {
         return std::nullopt;
     }
-    ShapeDesc d;
-    d.name = schema->name();
-    d.version = schema->version();
-    for (const loom::Field& f : schema->fields()) {
-        d.fields.push_back({f.name, type_string(f.type), f.required});
-    }
-    return d;
+    return describe_schema(*schema);
 }
 
 loom::Ticket ConsoleEngine::assemble_and_send(
@@ -378,7 +382,17 @@ std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t one_based_index)
 
 void ConsoleEngine::pump() { bus_.pump(); }
 
+std::shared_ptr<const loom::Schema> ConsoleEngine::resolve_schema(std::string_view name,
+                                                                 std::uint32_t version) const {
+    return bus_.resolve_schema(name, version); // the in-process engine reads the bus's registry
+}
+
 std::optional<loom::Cell> ConsoleEngine::resolve_ref(const Ref& ref, std::string* error) const {
+    return resolve_ref_from(*this, ref, error); // shared with the remote console (both have buffer_at)
+}
+
+std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& ref,
+                                           std::string* error) {
     const auto fail = [&](const std::string& m) -> std::optional<loom::Cell> {
         if (error != nullptr) {
             *error = m;
@@ -399,7 +413,7 @@ std::optional<loom::Cell> ConsoleEngine::resolve_ref(const Ref& ref, std::string
     } catch (...) {
         return fail("bad reference label '" + ref.label + "'");
     }
-    std::optional<BufferEntry> entry = buffer_at(n);
+    std::optional<BufferEntry> entry = console.buffer_at(n);
     if (!entry) {
         return fail("no such buffer entry: " + ref.label);
     }
@@ -417,13 +431,20 @@ std::optional<loom::Cell> ConsoleEngine::resolve_ref(const Ref& ref, std::string
 
 Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
                                 std::uint32_t version, const std::vector<Arg>& args) {
+    // This engine IS the LadderHost; the ladder logic is shared with the remote console so the
+    // ~150 lines of placement intricacy are not duplicated across transports.
+    return run_compose_ladder(*this, target, name, version, args);
+}
+
+Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,
+                            std::uint32_t version, const std::vector<Arg>& args) {
     Composed result;
     const auto error = [&](const std::string& m) {
         result.status = Composed::Status::Error;
         result.error = m;
         return result;
     };
-    std::shared_ptr<const loom::Schema> schema = bus_.resolve_schema(name, version);
+    std::shared_ptr<const loom::Schema> schema = host.resolve_schema(name, version);
     if (!schema) {
         return error("no such registered shape: " + std::string(name) + " v" +
                      std::to_string(version));
@@ -435,7 +456,7 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
     for (const Arg& a : args) {
         if (const Ref* ref = std::get_if<Ref>(&a.value)) {
             std::string rerr;
-            std::optional<loom::Cell> cell = resolve_ref(*ref, &rerr);
+            std::optional<loom::Cell> cell = host.resolve_ref(*ref, &rerr);
             if (!cell) {
                 return error(rerr);
             }
@@ -579,7 +600,7 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
 
     // Ready: assemble + gate-send (the gate is the unconditional backstop).
     result.status = Composed::Status::Ready;
-    result.ticket = assemble_and_send(target, schema, assigned);
+    result.ticket = host.assemble_and_send(target, schema, assigned);
     return result;
 }
 

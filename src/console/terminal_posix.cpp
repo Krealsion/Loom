@@ -11,6 +11,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
 
@@ -82,6 +84,25 @@ public:
         tcsetattr(STDIN_FILENO, TCSANOW, &cur); // restore the blocking VMIN=1/VTIME=0 mode
         return n == 1 ? static_cast<int>(c) : -1;
     }
+
+    void write(std::string_view bytes) override {
+        // Direct, unbuffered write to stdout — the raw equivalent of `std::cout << frame`. Loop over
+        // partial writes; retry EINTR; a real I/O error just drops the rest (best-effort, as the old
+        // ostream path was). STDOUT in raw mode is blocking, so EAGAIN does not arise here.
+        std::size_t off = 0;
+        while (off < bytes.size()) {
+            const ssize_t w = ::write(STDOUT_FILENO, bytes.data() + off, bytes.size() - off);
+            if (w > 0) {
+                off += static_cast<std::size_t>(w);
+            } else if (w < 0 && errno == EINTR) {
+                continue;
+            } else {
+                break; // error: drop the rest, like a failed ostream
+            }
+        }
+    }
+
+    void flush() override {} // ::write goes straight to the kernel; nothing is buffered here
 
 private:
     static void restore_atexit() {

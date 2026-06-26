@@ -167,7 +167,7 @@ std::string render_outline(const Widget& root) {
 
 // ---- Engine-produced guidance ----
 
-std::string guidance_for(const ConsoleEngine& engine, std::string_view partial_command) {
+std::string guidance_for(const Console& engine, std::string_view partial_command) {
     const std::vector<Token> toks = tokenize(std::string(partial_command));
     if (toks.empty()) {
         return "choose a weave: type its id, then <Shape> <version> [args]";
@@ -214,7 +214,7 @@ std::string guidance_for(const ConsoleEngine& engine, std::string_view partial_c
 
 // ---- Tree emission ----
 
-Widget emit_ui_tree(const ConsoleEngine& engine, const UiState& ui) {
+Widget emit_ui_tree(const Console& engine, const UiState& ui) {
     // Weaves list.
     std::vector<std::string> weave_items;
     for (const WeaveInfo& s : engine.weaves()) {

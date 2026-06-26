@@ -10,15 +10,18 @@
 // Seam appreciation: this boundary is the hook the next two frontends plug into. The WSL remote
 // console becomes "another TerminalBackend" (a socket transport, not a parallel codebase); the GUI
 // becomes another renderer of the same widget tree, inheriting the same discipline (platform behind
-// a seam, engine kept pure). Two things to know before that lands cleanly (flagged, not yet built):
-//   - OUTPUT is not yet behind this seam: the shared draw() still writes the rendered frame to
-//     stdout (fine for POSIX + Windows VT). A remote backend must route output through here too —
-//     the natural extension is a write()/flush() pair, deferred to the remote phase.
-//   - The TUI owns the I/O LOOP synchronously (read_byte -> dispatch -> draw). A blocking read with
-//     a timeout-read for escape disambiguation maps cleanly onto a socket (recv / poll), but a
-//     fully async transport would want to invert loop ownership. Noted for the remote phase.
+// a seam, engine kept pure). The remote phase brought OUTPUT behind the seam too:
+//   - write()/flush() now carry the rendered frame: the POSIX/Windows backends write stdout; a
+//     socket backend that ships the frame on the wire is the clean extension this enables (decision
+//     #3's "remote is just a backend") — HOOKED, not built (no consumer yet: the remote console
+//     renders client-side off the operator-protocol, so it draws to its own real terminal).
+//   - The TUI's synchronous read_byte loop is, for the remote client, generalized into a
+//     single-threaded multiplexer over {input source, socket} with the same per-read deadline
+//     read_byte_timeout already models. The bus stays single-threaded FIFO; the multiplexer is the
+//     CLIENT's readiness-to-receive-from-many-sources, never bus concurrency.
 
 #include <memory>
+#include <string_view>
 
 namespace loom {
 
@@ -37,6 +40,14 @@ public:
     /// bare ESC (Cancel) from an escape sequence (ESC [ A ...) without blocking. Contract: callers
     /// pass a positive ms; ms<=0 is a non-blocking poll (return at once, -1 if nothing is ready).
     virtual int read_byte_timeout(int ms) = 0;
+
+    /// Write the rendered frame bytes to the output. Unlike the reads, this is NOT gated on
+    /// is_interactive (a piped run still emits output) — it mirrors the old `std::cout << frame`.
+    /// The POSIX/Windows backends write stdout directly; a socket backend would write the wire.
+    virtual void write(std::string_view bytes) = 0;
+    /// Flush any buffered output. The direct-to-stdout backends are unbuffered, so this is a no-op;
+    /// a buffered or socket backend overrides it. (Paired with write() to mirror `<< std::flush`.)
+    virtual void flush() = 0;
 };
 
 /// Platform factory: constructs the backend, entering raw mode (gated on is_interactive). The only
