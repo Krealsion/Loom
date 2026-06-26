@@ -1,0 +1,6 @@
+# Normalize line endings. Zen builds/tests under WSL+GCC, so text files are stored AND checked out
+# as LF on every platform — this pre-empts the core.autocrlf=true CRLF churn that bit the rename
+# pass (a Windows checkout silently turned the working tree CRLF; shell scripts then failed under
+# WSL bash). `text=auto` lets git treat files as text and normalize on commit; `eol=lf` forces LF
+# on checkout regardless of a user's autocrlf setting.
+* text=auto eol=lf
