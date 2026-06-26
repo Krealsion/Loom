@@ -13,7 +13,9 @@
 
 #include <windows.h>
 
+#include <cstddef>
 #include <memory>
+#include <string_view>
 
 namespace loom {
 namespace {
@@ -119,6 +121,24 @@ public:
             return read_byte(); // a key-down is queued: ReadFile yields its VT byte(s) without blocking
         }
     }
+
+    void write(std::string_view bytes) override {
+        // Direct write to the console output handle — the raw equivalent of `std::cout << frame`,
+        // with VT processing enabled so the renderer's ANSI escapes are interpreted. Loop over
+        // partial writes; a real error just drops the rest (best-effort, as the old ostream path was).
+        std::size_t off = 0;
+        while (off < bytes.size()) {
+            const DWORD chunk =
+                static_cast<DWORD>(bytes.size() - off > 0xFFFFu ? 0xFFFFu : bytes.size() - off);
+            DWORD wrote = 0;
+            if (WriteFile(h_out_, bytes.data() + off, chunk, &wrote, nullptr) == 0 || wrote == 0) {
+                break; // error or zero progress: drop the rest, like a failed ostream
+            }
+            off += wrote;
+        }
+    }
+
+    void flush() override {} // WriteFile goes straight to the console; nothing is buffered here
 
 private:
     HANDLE h_in_ = nullptr;

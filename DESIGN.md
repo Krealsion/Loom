@@ -1694,6 +1694,147 @@ fires**, because WSL-hosting dominates native execution for anything needing the
 
 ---
 
+## The remote-operator bridge — the WSL crossing (the first thing across the host boundary)
+
+The console's engine is a bus participant; a *remote* operator is the **same pattern as an
+out-of-process weave** — a proxy that *is* a participant, bridging a socket to the bus — pointed at an
+**operator** instead of a hosted weave. The bridge makes a Windows console drive a WSL-hosted bus
+across the real kernel boundary, and it is the first time anything in Zen crosses the host boundary as
+a participant. Built **complete**; both altitudes (the local mechanism and the real Windows→WSL
+crossing) are **proven**.
+
+### The architecture: fat-client + an operator-protocol of messages
+
+A remote console **cannot hold a `Switchboard&`** across a socket, so the engine runs **client-side**
+and its three host interactions — discovery, the tap, and sends — become an **operator-protocol of
+framed messages** the host *answers* and *streams*. This is the twice-deferred *discovery-as-messages*
+purification, pulled in now by completeness (a complete remote operator needs all three over the wire,
+and the only honest way is as messages). It **purifies invariant 1**: discovery and the tap stop being
+privileged host-side methods and become messages a granted participant sends, gated like everything
+else.
+
+- **The frontend is unified across transports.** The console's frontend surface was extracted into a
+  `loom::Console` interface (`weaves`/`describe`/`compose`/`buffer*`/`tap`/`take_dirty`/`pump`); the
+  in-process `ConsoleEngine` implements it directly, and a client-side `RemoteConsole` implements it
+  over the socket. The **same** `ConsoleUi` + the **same** shared renderer (`tui_render.cpp`) drive
+  both — `zen-console-remote` is `zen-console-tui` with the engine behind a socket and the loop
+  inverted. The assumption ladder (`run_compose_ladder`), the reference resolver (`resolve_ref_from`),
+  and the shape describer (`describe_schema`) are shared free functions, so the ladder is not
+  duplicated across transports. The in-process console stays **direct** (no serialization) — the
+  unification is at the interface, not forced through bytes.
+- **The send is an out-of-process `Emit`.** Compose runs client-side against a schema fetched over the
+  wire (`Describe` → an encoded `Schema`, reconstructed with the schema codec — the IPC currency) and
+  the local reply buffer (filled by `Delivered` frames); the assembled message is serialized and
+  shipped as a `Send` frame the host **re-admits through the one gate and `send_as`-stamps** — exactly
+  the `IsolationHost::handle_child_frame` Emit path, pointed at an operator.
+
+### The connect-authority chokepoint (model A, hook for B/C)
+
+The WSL host and the connecting side are **one trust domain the operator controls**, so reachability
+of the bridge socket **is** authority — a party that can reach it holds operator power, exactly as a
+local operator at the host does. Every connection's acquisition of power routes through **one
+function**, `authorize_connection(connection) → OperatorGrant`, which **today returns full grant,
+always**. That chokepoint is the *entire* connect-authority future-proofing: when the trigger fires —
+*model B* (a bearer capability token: possession-is-authorization, ocap-style, no identity) or *model
+C* (per-connection graduated/differential grants, **where "Weaver" is born**, at the first relation
+needing differential persistent authority — i.e. the first place authorization needs *authentication*,
+the identity phase) — **only that function changes**, and the operator wielding the grant is untouched.
+
+### Provenance: the sender is stamped from the connection, never the wire
+
+The proxy stamps the operator's sender **from the connection** (the proxy's `WeaveId`), never from the
+wire payload — exactly as a child's sender is stamped from its link. A remote operator may send *any*
+message (it holds operator grant), but its **sender is the bridge's stamp**, so provenance stays honest
+even for the most-granted participant; `reply_to` is likewise forced to the operator (so its replies
+route back to it, and a forged `reply_to` cannot redirect them — the confused-deputy guard, the same
+posture as `EmitRole`). The `Send` frame carries `wire_sender`/`wire_reply_to` fields the bridge
+**always overwrites** — an honest client sets them to 0; a malicious one forges them, and the stamp
+wins. This is pinned by a test that **forges the wire frame** a raw client manufactures (the honest
+`RemoteConsole` cannot express the attack) and proves the connection-stamped id is what the bus saw —
+the unsayable-attack discipline, mirroring the `forge_client` confused-deputy pin.
+
+### Loop ownership: an event-driven single-threaded multiplexer (NOT threaded dispatch)
+
+The transport drives. Input is **one event source among several**: a socket delivers bytes when the
+*far side* decides, the tap pushes events unbidden, and **disconnect is an event with no `read` to
+return it** — an absence the loop must notice. A synchronous block-on-read cannot represent any of
+that. The bridge server is a **single-threaded multiplexer**: `bridge_wait_readable` (a `select` over
+{listener, connection fds}) waits for any source, then `step()` accepts / drains / dispatches / pumps
+/ flushes / reaps. The client multiplexer waits over {terminal input, socket} the same way (POSIX
+`select`; the Windows `WaitForSingleObject` deadline-loop — the generalization of `read_byte_timeout`).
+**Critically, this is the client's readiness-to-receive, not bus concurrency:** the bus stays
+single-threaded FIFO, operator sends enter through the one gated path, and `pump()` processes them in
+order — no threads added, the reentrancy guard untouched. (Multi-threaded dispatch remains a separate,
+deferred maybe/never seam; conflating it here would be a real error.) **Disconnect is handled as an
+event** — a closed/killed peer surfaces as a readable-then-EOF socket, and `reap_dead()` unregisters
+its proxy gracefully, proven by both a closed socket and a real `SIGKILL` of a forked peer process.
+
+### Output behind the seam; the transport
+
+`TerminalBackend` gained a `write()`/`flush()` pair (output behind the seam, was a direct `std::cout`);
+the POSIX/Windows backends write stdout. The socket-*frame*-output backend it enables is **hooked, not
+built** — no consumer yet (the remote console renders client-side off the operator-protocol and draws
+to its own real terminal). The transport (`BridgeChannel`) mirrors the proven isolation `Channel`
+(non-blocking, length-framed, bounded, EOF-observable) but is **portable**: one `#ifdef` splits
+recv/send/close/set-nonblocking and the socket setup between POSIX and Winsock, because the Windows
+console connects across the boundary. **AF_UNIX** is the fast local (WSL↔WSL) transport; **AF_INET
+127.0.0.1** is the real Windows↔WSL crossing (WSL2 forwards localhost). The protocol reuses the
+portable wire primitives (`put_u*`, `Cursor`, `kMaxFrameLen`).
+
+### Honest containment
+
+The bridge's containment honesty states it plainly: **the security boundary is the reachability of the
+bridge socket** — a party that can reach it holds operator power; securing that reachability (don't
+expose the bridge to an untrusted network — it binds `127.0.0.1`) is a **deployment responsibility**,
+not something the bridge enforces, and it does **not authenticate connectors**. The same honest posture
+as "a local operator is trusted," stated for the remote case. Threat tier unchanged: **abuse, not
+escape**.
+
+### Status: built and proven (both altitudes)
+
+Targets: `zen-bridge` (portable: transport + server + `RemoteConsole`), `zen-bridge-host` (the WSL
+demo host), `zen-bridge-probe` (a non-interactive crossing prover), `zen-console-remote` (the
+interactive console), `zen-tui` (the shared renderer + terminal seam, linked by both consoles). Proven:
+the **local mechanism** — the operator-protocol (discovery + tap + send as messages), the event-driven
+multiplexer, the proxy-participant + connection-stamped sender against a forged frame, and
+disconnect-as-an-event (close + a real `SIGKILL`) — green on the `bridge` suite (6 cases/59 assertions)
+**Debug + ASan under the scope, `-Werror` clean**, *and* natively on Windows via MinGW (the portable
+suite, the fork-kill case excepted). And the **real Windows→WSL crossing**: a MinGW-built Windows
+process (`zen-bridge-probe.exe`, and the interactive `zen-console-remote.exe`) drives the WSL-hosted
+bus across the boundary — discovery + describe + gate-send + the echoed reply + the tap + a graceful
+disconnect — proven end-to-end (a step up from the prior phases: no Josh-verified-only half, except the
+interactive raw-mode *input* on Windows, which stays the established CLion-verified division).
+
+### Relocation — verified to fall out, the one seam it pulls named
+
+Relocation (*"this weave is `uncontained` here → host it in WSL → it runs sandboxed without skipping a
+beat"*) was **not built** — this phase **verified the litmus** against what the bridge made real. The
+honest decomposition: relocation is (a) snapshot the weave's state — **exists** (`IsolationHost` already
+host-owns snapshots; state crosses as bytes); (b) ship it across the boundary — **now real** (the
+bridge proved the cross-kernel ship); (c) revive in a WSL-hosted sandbox keeping the same identity —
+**exists** (`mount`/`respawn_and_revive`, identity-preserving); and (d) **re-point everyone messaging
+it to the new location**. (d) is the seam — and it falls out as **"a message + a policy-weave"**: a
+**forwarding proxy-participant on the old bus** (the *exact* pattern this phase generalized — a proxy
+bridging a socket to another bus) keeps existing `WeaveId` references working by forwarding. So
+relocation needs **nothing new in the runtime**. The cleaner long-term refinement — **location-transparent
+addressing** (invariant 3, contract-addressing pointed at *location*: the same contract-address
+resolving to a different host, so senders resolve the new location *directly* instead of via a
+forwarding hop) — is named as the seam **relocation** will pull, not built speculatively. The confirmed
+crossing is the latent capability relocation cashes in; its litmus is now **behaviorally checkable**,
+not merely reasoned-about.
+
+### Seams appreciated (latent power)
+
+The **chokepoint** hooks B/C (graduated operator authority — the grant model generalizing to people);
+**location-transparent addressing** hooks relocation and later multi-runtime coexistence (a Python
+weave, a GUI weave, and a sandboxed weave coexisting by address regardless of where they run); the
+**event-driven loop** is the ontology-fix the GUI, relocation, and any async transport inherit with no
+refit (paying it here, while the only consumer is the bridge, is why they are cheap later); the
+**socket-frame `TerminalBackend`** (host-rendered output over the wire) is hooked-not-built; and a
+neutral shared `wire.hpp` (the two protocols' framing primitives) is a clean future factoring.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in

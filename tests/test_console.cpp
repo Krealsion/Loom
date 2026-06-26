@@ -566,7 +566,7 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
     Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err);
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
-    const ConsoleEngine::Dirty d1 = engine.take_dirty();
+    const Dirty d1 = engine.take_dirty();
     CHECK(d1.buffer);            // the bus drove a buffer change
     CHECK(d1.tap);               // and the tap log
     UiState ui;
@@ -579,7 +579,7 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
     Ticket bad = engine.submit(responder.id, "Ping", 1, {}, &err);
     REQUIRE(bad.valid());
     engine.pump();
-    const ConsoleEngine::Dirty d2 = engine.take_dirty();
+    const Dirty d2 = engine.take_dirty();
     CHECK(d2.tap);
     CHECK_FALSE(d2.buffer);      // nothing was delivered to the console
 }

@@ -150,20 +150,68 @@ add_executable(zen-console-term src/console/console_term.cpp)
 target_link_libraries(zen-console-term
     PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
-# The full-screen TUI frontend (Stage 3) — the SECOND renderer of the same widget tree, this one to
-# terminal cells (hand-rolled ANSI, NO ncurses, no new dependency). The layout/draw/key-mapping is
-# the ONLY place positions and cells exist; the render/controller logic lives in zen-console so it
-# is reused and headlessly testable. All platform terminal control lives behind the TerminalBackend
-# seam (terminal.hpp): a POSIX backend on non-Windows, a Win32 Console backend on Windows. The
-# shared console_tui.cpp is platform-header-free; make_terminal() is the only per-platform symbol.
-add_executable(zen-console-tui src/console/console_tui.cpp)
+# The shared TUI renderer + the TerminalBackend seam, as a small library BOTH consoles link: the
+# in-process TUI and the remote console differ ONLY in transport + I/O loop, never in rendering. The
+# renderer (tui_render.cpp) lays the SAME renderer-agnostic widget tree out to cells — the only place
+# positions and cells exist; the render/controller logic lives in zen-console so it stays headlessly
+# testable. All platform terminal control lives behind the seam (terminal.hpp): a POSIX backend on
+# non-Windows, a Win32 Console backend on Windows; make_terminal() is the only per-platform symbol.
+add_library(zen-tui STATIC src/console/tui_render.cpp)
 if(WIN32)
-    target_sources(zen-console-tui PRIVATE src/console/terminal_windows.cpp)
+    target_sources(zen-tui PRIVATE src/console/terminal_windows.cpp)
 else()
-    target_sources(zen-console-tui PRIVATE src/console/terminal_posix.cpp)
+    target_sources(zen-tui PRIVATE src/console/terminal_posix.cpp)
 endif()
+target_link_libraries(zen-tui
+    PUBLIC  zen-console zen-sanitize
+    PRIVATE zen-warnings)
+
+# The full-screen TUI frontend (in-process): local wiring + a demo responder over the shared renderer.
+add_executable(zen-console-tui src/console/console_tui.cpp)
 target_link_libraries(zen-console-tui
-    PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
+    PRIVATE zen-tui zen-console zen-switchboard loom zen-warnings zen-sanitize)
+
+# ---- The remote-operator bridge (operator-protocol transport; server + remote console land here) --
+#
+# PORTABLE on purpose: the operator-protocol crosses the host boundary, so the transport builds on
+# BOTH the WSL host (POSIX sockets) and the Windows client (Winsock — ws2_32). AF_UNIX is the fast
+# WSL<->WSL inner loop; AF_INET 127.0.0.1 is the real Windows->WSL crossing (WSL2 forwards localhost).
+# The engine runs CLIENT-side (RemoteConsole, a Console impl over the wire); the host registers a
+# proxy-participant per operator and answers discovery / streams the tap / stamps + re-admits sends.
+add_library(zen-bridge
+    src/bridge/channel.cpp
+    src/bridge/server.cpp
+    src/bridge/remote_console.cpp)
+target_include_directories(zen-bridge
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_features(zen-bridge PUBLIC cxx_std_20)
+target_link_libraries(zen-bridge
+    PUBLIC  loom zen-switchboard zen-console zen-sanitize
+    PRIVATE zen-warnings)
+if(WIN32)
+    target_link_libraries(zen-bridge PUBLIC ws2_32)
+endif()
+add_library(loom::bridge ALIAS zen-bridge)
+
+# The WSL-side host: a bus + one demo weave + the BridgeServer, listening for remote operators. The
+# WSL end of the Windows->WSL crossing. Portable (it is the bus side, all in-process), but in practice
+# run on the WSL host.
+add_executable(zen-bridge-host src/bridge/bridge_host_main.cpp)
+target_link_libraries(zen-bridge-host PRIVATE zen-bridge zen-switchboard loom zen-warnings zen-sanitize)
+
+# A NON-interactive remote operator that drives the protocol end-to-end and prints PASS/FAIL — the
+# crossing proof. PORTABLE on purpose: built via MinGW on Windows, it connects to a WSL-hosted
+# zen-bridge-host across the real boundary (TCP localhost).
+add_executable(zen-bridge-probe src/bridge/bridge_probe_main.cpp)
+target_link_libraries(zen-bridge-probe PRIVATE zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
+
+# The interactive remote-operator console: the SAME ConsoleUi + shared renderer as the in-process
+# TUI, with the engine behind a socket (RemoteConsole) and the loop an event-driven multiplexer over
+# {input, socket}. PORTABLE — built via MinGW on Windows, it is the Windows console driving a
+# WSL-hosted bus across the boundary.
+add_executable(zen-console-remote src/console/console_remote.cpp)
+target_link_libraries(zen-console-remote
+    PRIVATE zen-tui zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
 # The child executable: runs one Weave out-of-process via the kernel C ABI. It is a byte shuttler —
 # it deliberately does NOT link loom; it speaks the wire format only through the protocol header

@@ -165,14 +165,14 @@ struct UiState {
 /// input — engine-produced, so it is renderer-agnostic (the TUI shows it inline; a GUI shows the
 /// same string as a dropdown). Advances with input: empty -> "choose a weave"; a weave id -> its
 /// shapes; a shape+version -> its fields. Reads only the engine's public domain data.
-std::string guidance_for(const ConsoleEngine& engine, std::string_view partial_command);
+std::string guidance_for(const Console& engine, std::string_view partial_command);
 
 /// Build the console's current UI tree from the engine's public domain data + the presentation
 /// state: a root VStack of a Bus region (an HStack of a Weaves List and a Tap Log), a Buffer
 /// List (m1, m2, ...), and a Compose Field (the partial command + the engine-produced guidance
 /// hint). If `ui.pending` carries a NeedsInput/Error result, the tree gains a prompt region. The
 /// tree is a fresh value each call (retained-mode is the renderer diffing successive trees).
-Widget emit_ui_tree(const ConsoleEngine& engine, const UiState& ui);
+Widget emit_ui_tree(const Console& engine, const UiState& ui);
 
 // ---- The headless outline renderer (the second renderer — the bet's structural proof) ----
 
@@ -191,7 +191,7 @@ std::string render_outline(const Widget& root);
 /// dataflow/interaction brain is proven with no terminal and the GUI inherits it whole.
 class ConsoleUi {
 public:
-    explicit ConsoleUi(ConsoleEngine& engine) : engine_(engine) {}
+    explicit ConsoleUi(Console& engine) : engine_(engine) {}
 
     /// Apply one semantic action (the only mutation path). Submit composes via the ladder and
     /// pumps; the result is surfaced via the tree (Ready -> reply buffered; NeedsInput/Error ->
@@ -202,12 +202,12 @@ public:
     Widget tree() const;
 
     const UiState& state() const noexcept { return ui_; }
-    ConsoleEngine& engine() noexcept { return engine_; }
+    Console& engine() noexcept { return engine_; }
 
 private:
     void submit_command(); ///< parse the command line, run the ladder, surface the result
 
-    ConsoleEngine& engine_;
+    Console& engine_;
     UiState ui_;
 };
 
