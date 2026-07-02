@@ -247,7 +247,7 @@ bool tui_map_key(int c, loom::TerminalBackend& term, InputEvent& out) {
         out = {Action::Edit, static_cast<char>(c)};
         return true;
     }
-    out = {Action::FocusNext, 0}; // benign no-op-ish for unknown control bytes
+    out = {Action::None, 0}; // a true no-op for unknown control bytes (Ctrl-A no longer cycles focus)
     return true;
 }
 

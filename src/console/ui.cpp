@@ -350,6 +350,8 @@ void ConsoleUi::submit_command() {
 
 void ConsoleUi::dispatch(const InputEvent& ev) {
     switch (ev.action) {
+    case Action::None:
+        break; // a true no-op — an unknown control byte changes nothing
     case Action::FocusNext:
         ui_.focus = next_focus(ui_.focus);
         break;

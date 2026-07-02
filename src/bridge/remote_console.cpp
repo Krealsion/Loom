@@ -63,6 +63,17 @@ bool RemoteConsole::await(const std::function<bool()>& done, int timeout_ms) con
     }
 }
 
+void RemoteConsole::push_bridge_refused(const std::string& reason) const {
+    // An honestly-named NON-bus tap kind: the send (or reply) never entered the bus, so we do NOT
+    // forge a bus event for it — the distinct kind string IS the honesty. It renders in the existing
+    // tap log with zero new UI surface. (target/sender/schema stay empty: there is no bus event.)
+    TapEvent t;
+    t.kind = "BridgeRefused";
+    t.refusal = reason;
+    tap_.push_back(std::move(t));
+    dirty_.tap = true;
+}
+
 void RemoteConsole::process(const BridgeIncoming& f) const {
     switch (f.op) {
     case BridgeOp::Welcome: {
@@ -149,9 +160,23 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         Cursor cur(f.payload);
         std::string_view name;
         std::uint32_t ver = 0;
-        if (cur.bytes(name) && cur.u32(ver)) {
-            schema_absent_.insert({std::string(name), ver});
+        if (!(cur.bytes(name) && cur.u32(ver))) {
+            break;
         }
+        const std::string sname(name);
+        schema_absent_.insert({sname, ver});
+        // Drain any pending Delivered now known-absent — its Value can never be built. Surface each.
+        std::vector<std::string> keep;
+        for (std::string& bytes : pending_delivered_) {
+            loom::Unverified pu = loom::parse(bytes);
+            if (pu.claimed_name() == sname && pu.claimed_version() == ver) {
+                push_bridge_refused("dropped a reply for no-such-schema " + sname + " v" +
+                                    std::to_string(ver));
+            } else {
+                keep.push_back(std::move(bytes));
+            }
+        }
+        pending_delivered_.swap(keep);
         break;
     }
     case BridgeOp::Delivered: {
@@ -167,6 +192,13 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
                 dirty_.buffer = true;
             }
         } else if (ch_) {
+            if (pending_delivered_.size() >= kMaxPendingDelivered) {
+                // Bound what the host can make us hold: past the cap, drop this reply and surface it
+                // rather than fetch-and-stash unboundedly (even a host is not trusted to be finite).
+                push_bridge_refused("dropped a reply: pending-overflow (>" +
+                                    std::to_string(kMaxPendingDelivered) + " unknown-schema replies)");
+                break;
+            }
             std::string body;
             put_bytes(body, u.claimed_name());
             put_u32(body, u.claimed_version());
@@ -198,6 +230,17 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         t.refusal = std::string(refusal);
         tap_.push_back(std::move(t));
         dirty_.tap = true;
+        break;
+    }
+    case BridgeOp::SendRefused: {
+        // A Send the host dropped before the bus (no tap event exists) — surface it honestly.
+        Cursor cur(f.payload);
+        std::uint64_t correlation = 0;
+        std::string_view reason;
+        if (cur.u64(correlation) && cur.bytes(reason)) {
+            (void)correlation; // reserved: a future consumer correlates a send to its refusal
+            push_bridge_refused(std::string(reason));
+        }
         break;
     }
     // client->host opcodes never arrive at the client; ignore.

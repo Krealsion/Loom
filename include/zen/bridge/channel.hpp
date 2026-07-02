@@ -55,6 +55,11 @@ public:
     bool eof() const noexcept { return eof_; }
     bool done() const noexcept { return failed_ || eof_; }
 
+    /// Mark the channel failed so the existing done()/reap path tears it down — the explicit
+    /// affordance a protocol-level violation (a frame before the handshake) uses to sever a
+    /// connection without inventing a parallel teardown.
+    void fail() noexcept { failed_ = true; }
+
     /// Buffer a frame for sending; flush() writes it. An over-cap backlog fails the channel.
     void queue(BridgeOp op, std::string_view payload);
 

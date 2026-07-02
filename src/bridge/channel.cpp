@@ -10,6 +10,12 @@
 #include <string>
 
 #ifdef _WIN32
+// WSAPoll needs Windows Vista+ (_WIN32_WINNT >= 0x0600); set a floor if the toolchain left it lower
+// or unset, BEFORE winsock2.h so the declaration is visible. (MinGW's default varies by version.)
+#if !defined(_WIN32_WINNT) || (_WIN32_WINNT < 0x0600)
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
@@ -18,6 +24,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -341,35 +348,33 @@ socket_t bridge_connect_unix(const std::string&, std::string* err) {
 #endif
 
 bool bridge_wait_readable(const std::vector<socket_t>& socks, int timeout_ms) {
-    fd_set rfds;
-    FD_ZERO(&rfds);
-#ifndef _WIN32
-    socket_t maxfd = 0; // POSIX select needs nfds = maxfd+1; Winsock ignores it
+    // poll/WSAPoll, not select: no FD_SETSIZE ceiling, so a reconnecting fd-hog cannot walk the
+    // server into undefined behavior (greedy is in the threat tier). timeout is in milliseconds
+    // directly (negative = indefinite) — poll's own contract, no timeval dance.
+#ifdef _WIN32
+    using poll_fd_t = WSAPOLLFD;
+#else
+    using poll_fd_t = struct pollfd;
 #endif
+    std::vector<poll_fd_t> fds;
+    fds.reserve(socks.size());
     for (socket_t s : socks) {
         if (s == kInvalidSocket) {
             continue;
         }
-#ifdef _WIN32
-        FD_SET(static_cast<SOCKET>(s), &rfds);
-#else
-        FD_SET(s, &rfds);
-        if (s > maxfd) {
-            maxfd = s;
-        }
-#endif
+        poll_fd_t p{};
+        p.fd = native(s); // int on POSIX, SOCKET on Winsock — matches each pollfd.fd type
+        p.events = POLLIN;
+        p.revents = 0;
+        fds.push_back(p);
     }
-    timeval tv{};
-    timeval* ptv = nullptr;
-    if (timeout_ms >= 0) {
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        ptv = &tv;
+    if (fds.empty()) {
+        return false; // nothing to wait on (WSAPoll rejects a zero-length set; the callers never do)
     }
 #ifdef _WIN32
-    const int n = ::select(0, &rfds, nullptr, nullptr, ptv); // nfds ignored on Winsock
+    const int n = ::WSAPoll(fds.data(), static_cast<ULONG>(fds.size()), timeout_ms);
 #else
-    const int n = ::select(static_cast<int>(maxfd) + 1, &rfds, nullptr, nullptr, ptv);
+    const int n = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), timeout_ms);
 #endif
     return n > 0;
 }

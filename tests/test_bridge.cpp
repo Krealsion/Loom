@@ -17,7 +17,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -135,6 +137,48 @@ struct Host {
     }
 };
 
+// A shape the test bus NEVER registers -> resolve_schema returns null -> "unknown schema" refusal.
+std::shared_ptr<const loom::Schema> unknown_schema() {
+    static const auto s =
+        loom::SchemaBuilder("NopeUnknownShape", 1).field("x", loom::Kind::Int).build();
+    return s;
+}
+
+// Build a raw Send frame: [u8 kind][u64 wire_sender][u64 target][u64 wire_reply_to][u64 corr][payload].
+std::string make_send_frame(std::uint64_t wire_sender, std::uint64_t target,
+                            std::uint64_t wire_reply_to, std::uint64_t correlation,
+                            std::string_view payload) {
+    std::string frame;
+    put_u8(frame, kEmitSend);
+    put_u64(frame, wire_sender);
+    put_u64(frame, target);
+    put_u64(frame, wire_reply_to);
+    put_u64(frame, correlation);
+    frame.append(payload);
+    return frame;
+}
+
+// Two connected raw sockets over TCP loopback (for driving a RemoteConsole against a fake host).
+std::pair<socket_t, socket_t> two_sockets() {
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    const socket_t client = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(client != kInvalidSocket, err);
+    socket_t accepted = kInvalidSocket;
+    for (int i = 0; i < 500 && accepted == kInvalidSocket; ++i) {
+        bool wb = false;
+        accepted = bridge_accept(listener, &wb, &err);
+        if (accepted == kInvalidSocket) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    REQUIRE(accepted != kInvalidSocket);
+    bridge_close(listener);
+    return {client, accepted};
+}
+
 } // namespace
 
 TEST_SUITE_BEGIN("bridge");
@@ -232,6 +276,41 @@ TEST_CASE("transport: a closed peer surfaces as eof (the disconnect-as-an-event 
     CHECK(got[0].op == BridgeOp::Welcome);
     CHECK(got[0].payload == "hi");
 }
+
+#ifndef _WIN32
+TEST_CASE("transport: framed messages round-trip over AF_UNIX (decision #4's local transport, POSIX)") {
+    // AF_UNIX gains its live consumer: DESIGN.md/decision-#4 say the fast local loop IS unix, so
+    // exercise it. (The crossing uses TCP; AF_UNIX is POSIX-only, hence the gate.)
+    const std::string path = "/tmp/zen-bridge-hygiene-af-unix.sock";
+    std::string err;
+    const socket_t listener = bridge_listen_unix(path, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const socket_t client = bridge_connect_unix(path, &err);
+    REQUIRE_MESSAGE(client != kInvalidSocket, err);
+    socket_t accepted = kInvalidSocket;
+    for (int i = 0; i < 500 && accepted == kInvalidSocket; ++i) {
+        bool wb = false;
+        accepted = bridge_accept(listener, &wb, &err);
+        if (accepted == kInvalidSocket) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    REQUIRE(accepted != kInvalidSocket);
+    bridge_close(listener);
+
+    BridgeChannel a(client);
+    BridgeChannel b(accepted);
+    a.queue(BridgeOp::Hello, "");
+    a.queue(BridgeOp::Send, "over a unix socket");
+    a.flush();
+    const std::vector<BridgeIncoming> got = drain(b, 2);
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].op == BridgeOp::Hello);
+    CHECK(got[1].op == BridgeOp::Send);
+    CHECK(got[1].payload == "over a unix socket");
+    ::unlink(path.c_str());
+}
+#endif // _WIN32
 
 // ---- the operator-protocol (discovery + tap + send as messages) --------------------------------
 
@@ -368,6 +447,287 @@ TEST_CASE("operator-protocol: the sender is stamped from the connection — a FO
     CHECK(got_reply);
 }
 
+// ---- hygiene: the squared edges ----------------------------------------------------------------
+
+TEST_CASE("hygiene: the connection cap sheds past kMax (a reconnecting fd-hog is contained)") {
+    loom::Switchboard bus;
+    const loom::WeaveId gid =
+        bus.register_weave(std::make_unique<RecordingGreeter>(), loom::Grant{}.allow_any());
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    BridgeServer server(bus, listener);
+
+    const std::size_t over = BridgeServer::kMaxOperatorConnections + 1;
+    std::vector<std::unique_ptr<BridgeChannel>> clients;
+    for (std::size_t i = 0; i < over; ++i) {
+        const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
+        REQUIRE_MESSAGE(cs != kInvalidSocket, err);
+        auto ch = std::make_unique<BridgeChannel>(cs);
+        std::string hello;
+        put_u32(hello, kBridgeProtocolVersion);
+        ch->queue(BridgeOp::Hello, hello);
+        ch->flush();
+        clients.push_back(std::move(ch));
+        server.step(); // drain the accept queue each connect so the listen backlog never overflows
+    }
+    for (int i = 0; i < 2000 && server.declined_count() == 0; ++i) {
+        server.step();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(server.connection_count() == BridgeServer::kMaxOperatorConnections);
+    CHECK(server.declined_count() == 1);
+
+    // The cap bounds the BUS, not just conns_: exactly kMax proxies (plus the greeter).
+    std::size_t proxies = 0;
+    for (loom::WeaveId id : bus.list_weaves()) {
+        if (id.value != gid.value) {
+            ++proxies;
+        }
+    }
+    CHECK(proxies == BridgeServer::kMaxOperatorConnections);
+
+    // Exactly one client — the shed one — observes a closed socket.
+    std::size_t shed = 0;
+    for (int round = 0; round < 500 && shed == 0; ++round) {
+        for (auto& ch : clients) {
+            std::vector<BridgeIncoming> fr;
+            ch->poll(fr);
+        }
+        for (auto& ch : clients) {
+            if (ch->done()) {
+                ++shed;
+            }
+        }
+        if (shed == 0) {
+            server.step();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    CHECK(shed == 1);
+}
+
+TEST_CASE("hygiene: a valid frame BEFORE Hello severs the connection (anti-Postel)") {
+    loom::Switchboard bus;
+    auto g = std::make_unique<RecordingGreeter>();
+    RecordingGreeter* greeter = g.get();
+    const loom::WeaveId gid = bus.register_weave(std::move(g), loom::Grant{}.allow_any());
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    BridgeServer server(bus, listener);
+
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, err);
+    {
+        BridgeChannel raw(cs);
+        // A WELL-FORMED Greet Send — the violation is the ORDERING (before Hello), not the frame.
+        loom::Value greet(greet_schema());
+        greet.set("msg", loom::Cell::text("premature"));
+        raw.queue(BridgeOp::Send, make_send_frame(0, gid.value, 0, 1, loom::serialize(greet)));
+        raw.flush();
+        bool accepted_once = false;
+        for (int i = 0; i < 1000; ++i) {
+            server.step();
+            if (server.connection_count() >= 1) {
+                accepted_once = true;
+            }
+            if (accepted_once && server.connection_count() == 0) {
+                break; // severed + reaped
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    CHECK(greeter->last_sender() == 0); // the pre-Hello Send never reached send_as
+    CHECK(server.connection_count() == 0);
+    CHECK(bus.list_weaves().size() == 1u); // the proxy was unregistered — only the greeter remains
+}
+
+TEST_CASE("hygiene: hostile Sends post-Hello are refused (SendRefused), the connection survives") {
+    Host h;
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
+    BridgeChannel raw(cs);
+    std::string hello;
+    put_u32(hello, kBridgeProtocolVersion);
+    raw.queue(BridgeOp::Hello, hello);
+    raw.flush();
+    REQUIRE(wait_until(
+        [&] {
+            std::vector<BridgeIncoming> fr;
+            raw.poll(fr);
+            for (const BridgeIncoming& f : fr) {
+                if (f.op == BridgeOp::Welcome) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+
+    // Wait for the next SendRefused frame and return its reason (correlation parsed to reach it).
+    auto refusal_reason = [&]() -> std::string {
+        std::string reason;
+        bool got = false;
+        (void)wait_until(
+            [&] {
+                std::vector<BridgeIncoming> fr;
+                raw.poll(fr);
+                for (const BridgeIncoming& f : fr) {
+                    if (f.op == BridgeOp::SendRefused) {
+                        Cursor c(f.payload);
+                        std::uint64_t corr = 0;
+                        std::string_view r;
+                        if (c.u64(corr) && c.bytes(r)) {
+                            reason = std::string(r);
+                            got = true;
+                        }
+                    }
+                }
+                return got;
+            },
+            2000);
+        return reason;
+    };
+
+    // 1. Truncated header (too short to parse the Send header -> correlation 0).
+    raw.queue(BridgeOp::Send, std::string("\x00", 1));
+    raw.flush();
+    CHECK(refusal_reason().find("malformed Send header") != std::string::npos);
+
+    // 2. Unknown schema: a well-formed Value of a shape the bus never registered.
+    loom::Value unk(unknown_schema());
+    unk.set("x", loom::Cell::integer(1));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 2, loom::serialize(unk)));
+    raw.flush();
+    CHECK(refusal_reason().find("unknown schema") != std::string::npos);
+
+    // 3. A Greet v1 CLAIM over a garbage body (header intact, body truncated -> the gate refuses).
+    loom::Value greet(greet_schema());
+    greet.set("msg", loom::Cell::text("x"));
+    std::string bad = loom::serialize(greet);
+    REQUIRE(bad.size() > 1);
+    bad.resize(bad.size() - 1);
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 3, bad));
+    raw.flush();
+    CHECK(refusal_reason().find("gate refused") != std::string::npos);
+
+    // Not one hostile Send reached the bus.
+    CHECK(h.greeter->last_sender() == 0);
+
+    // The connection SURVIVED (per-frame refusals are non-fatal): a subsequent honest Send delivers.
+    greet.set("msg", loom::Cell::text("ok"));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 4, loom::serialize(greet)));
+    raw.flush();
+    CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
+}
+
+TEST_CASE("hygiene: a hostile host cannot inject an unbuildable reply — it is refused, not buffered") {
+    // The forge is NECESSARY: an honest BridgeServer NEVER ships a Delivered whose schema it has not
+    // published — it stamps replies from real bus Values whose schemas ARE registered. Only a FAKE
+    // host can manufacture a Delivered-without-a-registered-schema, so the client's defense is
+    // testable only by forging the host. (If an honest server could express it, that would be a finding.)
+    const std::pair<socket_t, socket_t> pair = two_sockets();
+    RemoteConsole rc(pair.first, /*handshake_timeout_ms=*/0); // non-blocking: the test drives both ends
+    BridgeChannel host(pair.second);
+
+    std::string welcome;
+    put_u64(welcome, 7);
+    put_u32(welcome, kBridgeProtocolVersion);
+    host.queue(BridgeOp::Welcome, welcome);
+    host.flush();
+    REQUIRE(wait_until(
+        [&] {
+            host.flush();
+            rc.pump();
+            return rc.connected();
+        },
+        2000));
+
+    loom::Value unk(unknown_schema());
+    unk.set("x", loom::Cell::integer(9));
+    host.queue(BridgeOp::Delivered, loom::serialize(unk));
+    host.flush();
+
+    // The client requests Describe (pending the reply); the fake host answers SchemaNone.
+    bool answered = false;
+    for (int i = 0; i < 1000 && !answered; ++i) {
+        rc.pump();
+        std::vector<BridgeIncoming> fr;
+        host.poll(fr);
+        for (const BridgeIncoming& f : fr) {
+            if (f.op == BridgeOp::Describe) {
+                Cursor c(f.payload);
+                std::string_view name;
+                std::uint32_t ver = 0;
+                if (c.bytes(name) && c.u32(ver)) {
+                    std::string body;
+                    put_bytes(body, name);
+                    put_u32(body, ver);
+                    host.queue(BridgeOp::SchemaNone, body);
+                    host.flush();
+                    answered = true;
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(answered);
+    for (int i = 0; i < 200; ++i) {
+        rc.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(rc.buffer_size() == 0); // the unbuildable reply never entered the buffer
+    bool refused = false;
+    for (const TapEvent& e : rc.tap()) {
+        if (e.kind == "BridgeRefused") {
+            refused = true;
+        }
+    }
+    CHECK(refused);
+}
+
+TEST_CASE("hygiene: the client bounds pending replies a hostile host can pile up") {
+    const std::pair<socket_t, socket_t> pair = two_sockets();
+    RemoteConsole rc(pair.first, /*handshake_timeout_ms=*/0);
+    BridgeChannel host(pair.second);
+    std::string welcome;
+    put_u64(welcome, 7);
+    put_u32(welcome, kBridgeProtocolVersion);
+    host.queue(BridgeOp::Welcome, welcome);
+    host.flush();
+    REQUIRE(wait_until(
+        [&] {
+            host.flush();
+            rc.pump();
+            return rc.connected();
+        },
+        2000));
+
+    // Flood kMaxPendingDelivered + 1 unknown-schema Delivereds BEFORE answering any Describe.
+    loom::Value unk(unknown_schema());
+    unk.set("x", loom::Cell::integer(1));
+    const std::string bytes = loom::serialize(unk);
+    for (std::size_t i = 0; i < RemoteConsole::kMaxPendingDelivered + 1; ++i) {
+        host.queue(BridgeOp::Delivered, bytes);
+    }
+    host.flush();
+    for (int i = 0; i < 500; ++i) {
+        rc.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(rc.buffer_size() == 0);
+    bool overflow = false;
+    for (const TapEvent& e : rc.tap()) {
+        if (e.kind == "BridgeRefused" && e.refusal.find("pending-overflow") != std::string::npos) {
+            overflow = true;
+        }
+    }
+    CHECK(overflow);
+}
+
 // ---- disconnect handled as an event (no hang) --------------------------------------------------
 
 TEST_CASE("operator-protocol: a vanished peer is reaped as an event (the server unregisters its proxy)") {
@@ -410,6 +770,8 @@ TEST_CASE("operator-protocol: a vanished peer is reaped as an event (the server 
         }
     }
     CHECK(reaped);
+    // The proxy was UNREGISTERED from the bus (not just dropped from conns_) — only the greeter remains.
+    CHECK(bus.list_weaves().size() == 1u);
 }
 
 #ifndef _WIN32
@@ -468,6 +830,8 @@ TEST_CASE("operator-protocol: a SIGKILLed operator PROCESS is reaped as an event
         }
     }
     CHECK(reaped);
+    // The proxy was UNREGISTERED from the bus (not just dropped from conns_) — only the greeter remains.
+    CHECK(bus.list_weaves().size() == 1u);
 }
 #endif // _WIN32
 

@@ -41,10 +41,11 @@ endif()
 
 target_include_directories(zen-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-    ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/console) # tui_render.hpp / terminal.hpp for the tui_map_key pin
 
 target_link_libraries(zen-tests
-    PRIVATE loom zen-switchboard zen-console zen-bridge zen-warnings zen-sanitize)
+    PRIVATE loom zen-switchboard zen-console zen-bridge zen-tui zen-warnings zen-sanitize)
 if(NOT WIN32)
     target_link_libraries(zen-tests PRIVATE zen-kernel zen-isolation)
 endif()
