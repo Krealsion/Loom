@@ -1,6 +1,7 @@
 #include <doctest.h>
 
 #include "switchboard_fixtures.hpp"
+#include "tui_render.hpp" // the shared renderer's tui_map_key, for the Action::None pin
 
 #include <zen/console/console.hpp>
 #include <zen/console/ui.hpp>
@@ -11,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // The Console engine, proven with NO terminal — the headline. The engine is the durable
 // spine; these tests drive its API directly (discover, gate-send, receive replies), so
@@ -643,6 +645,37 @@ TEST_CASE("TUI smoke (headless): an ambiguous command surfaces a NeedsInput prom
     engine.pump();
     CHECK_FALSE(handled);                        // nothing was sent — no mis-send
     CHECK(engine.buffer_size() == 0);
+}
+
+TEST_CASE("input: an unknown control byte maps to Action::None and changes nothing (headless)") {
+    // A stub backend: tui_map_key touches it only for ESC continuations, not for a plain control byte.
+    struct StubBackend final : loom::TerminalBackend {
+        bool is_interactive() const override { return false; }
+        bool size(int&, int&) override { return false; }
+        int read_byte() override { return -1; }
+        int read_byte_timeout(int) override { return -1; }
+        void write(std::string_view) override {}
+        void flush() override {}
+    } term;
+
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    ConsoleUi ui(engine);
+    const UiState before = ui.state();
+
+    // Ctrl-A (0x01): an unknown control byte. Before this pass it mapped to FocusNext (Ctrl-A cycled
+    // focus); now it is a TRUE no-op — mapped to Action::None, dispatched as nothing.
+    InputEvent ev;
+    REQUIRE(tui_map_key(1, term, ev));
+    CHECK(ev.action == Action::None);
+    ui.dispatch(ev);
+
+    const UiState& after = ui.state();
+    CHECK(after.focus == before.focus);
+    CHECK(after.partial_input == before.partial_input);
+    CHECK(after.weave_cursor == before.weave_cursor);
+    CHECK(after.buffer_cursor == before.buffer_cursor);
+    CHECK(after.pending.has_value() == before.pending.has_value());
 }
 
 } // TEST_SUITE

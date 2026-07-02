@@ -68,9 +68,15 @@ public:
                                    const std::shared_ptr<const loom::Schema>& schema,
                                    const std::map<std::string, loom::Cell>& cells) override;
 
+    /// The most Delivered frames whose schema is not yet known that the client will hold at once. Same
+    /// principle as the transport's kMaxBacklog: bound what a peer can make you hold — even a
+    /// more-trusted peer (a host). Past it, a Delivered is dropped and surfaced, never silently kept.
+    static constexpr std::size_t kMaxPendingDelivered = 64;
+
 private:
     void pump_once() const;                      // flush + poll + process (mutates the caches)
     void process(const BridgeIncoming& f) const; // one pushed frame -> a cache update
+    void push_bridge_refused(const std::string& reason) const; // a "BridgeRefused" tap line
     bool await(const std::function<bool()>& done, int timeout_ms) const;
     std::shared_ptr<const loom::Schema> fetch_schema(std::string_view name,
                                                      std::uint32_t version) const;

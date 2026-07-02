@@ -43,9 +43,17 @@ enum class BridgeOp : std::uint8_t {
     Weaves = 17,     ///< [u32 n]{[u64 id][u32 m]{[bytes name][u32 version]}} — the live weave set
     Schema = 18,     ///< [bytes encoded_schema] (schema_codec) — reply to Describe (found)
     SchemaNone = 19, ///< [bytes name][u32 version] — reply to Describe (no such registered shape)
-    Delivered = 20,  ///< [bytes payload] — a reply Value delivered to the operator (fills the buffer)
+    Delivered = 20,  ///< [bytes payload] — a reply Value delivered to the operator (fills the buffer).
+                     ///< Deliberately does NOT echo a correlation: no consumer correlates a reply to a
+                     ///< send yet (a reply's own reply_to already routed it here). Reserved, not
+                     ///< forgotten — SendRefused DOES carry one because its pin consumes it.
     Tap = 21,        ///< a copied bus event for the operator's window on the live bus:
                      ///<   [u8 kind][u64 target][u64 sender][bytes schema][u32 version][bytes refusal]
+    SendRefused = 22, ///< [u64 correlation][bytes reason] — the operator's Send was dropped BEFORE the
+                      ///< bus (malformed header / unknown schema / gate-refused), so no tap event
+                      ///< exists for it. Per-frame and NON-fatal (distinct from a pre-Hello severance);
+                      ///< correlation is 0 when the header did not parse far enough to yield one. The
+                      ///< client surfaces it as a "BridgeRefused" tap kind — honestly NOT a bus event.
 };
 
 /// Tap event kinds on the wire (mirrors loom::EventKind, fixed so the client need not link the bus).
@@ -54,8 +62,10 @@ inline constexpr std::uint8_t kTapRefused = 1;
 inline constexpr std::uint8_t kTapDied = 2;
 inline constexpr std::uint8_t kTapRevived = 3;
 
-/// The operator-protocol version (bumped on any wire-shape change; Hello/Welcome carry it).
-inline constexpr std::uint32_t kBridgeProtocolVersion = 1;
+/// The operator-protocol version (bumped on any wire change — shape OR vocabulary; Hello/Welcome
+/// carry it). v2 added SendRefused; the addition is compatible in both directions, but the bump is
+/// policy literalism while nothing is deployed.
+inline constexpr std::uint32_t kBridgeProtocolVersion = 2;
 
 } // namespace loom
 

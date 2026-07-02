@@ -34,6 +34,7 @@ public:
         return {greet_schema()};
     }
     void handle(const loom::Message& in, loom::Bus& bus) override {
+        std::printf("Greeter: got %s\n", in.payload.get("msg")->as_text().c_str());
         loom::Value v(greet_schema());
         const loom::Cell* m = in.payload.get("msg");
         v.set("msg", loom::Cell::text(m != nullptr ? m->as_text() : std::string()));

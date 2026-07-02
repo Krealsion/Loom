@@ -72,8 +72,18 @@ private:
 
 OperatorGrant authorize_connection(socket_t /*connection*/) {
     // Model A: the WSL host and the connecting side are ONE trust domain the operator controls, so
-    // reachability of the bridge socket IS authority. Full grant, always — today. This single
-    // function is the entire connect-authority future-proofing (models B/C change ONLY this).
+    // reachability of the bridge socket IS authority. Full grant, always — today.
+    //
+    // The B/C future-proofing is this function PLUS the one call in accept_new that consumes its
+    // result — the `register_weave(..., Grant{}.allow_any(), AnyRegistered)` line. Together they are
+    // the whole seam: model B (a bearer token — possession-is-authorization, no identity) makes the
+    // *unauthorized-connection forge* sayable, and its pin must prove a connect that FAILS the token
+    // registers NO proxy and processes NO frame; model C (per-connection graduated/differential
+    // grants) narrows the `allow_any()` per operator — where "Weaver" is born (the first differential,
+    // persistent, per-person authority, i.e. the first place authorization needs authentication).
+    // Note under model A: operator proxies are hidden from discovery but ARE addressable (their
+    // small-integer WeaveIds) — harmless while every operator is the same principal, but a
+    // cross-principal channel the identity phase must treat as surface.
     return OperatorGrant{/*authorized=*/true};
 }
 
@@ -107,9 +117,17 @@ void BridgeServer::accept_new() {
         if (s == kInvalidSocket) {
             break; // nothing pending (would_block) or a transient error: try again next step
         }
+        if (conns_.size() >= kMaxOperatorConnections) {
+            // Shed past the cap: accept (so the OS pending queue clears) then close, and count it. A
+            // reconnecting fd-hog is contained — greedy, per the threat tier, includes this — and the
+            // shedding is observable via declined_count(), never silent.
+            bridge_close(s);
+            ++declined_;
+            continue;
+        }
         const OperatorGrant grant = authorize_connection(s);
         if (!grant.authorized) {
-            bridge_close(s); // the chokepoint declined (never happens today)
+            bridge_close(s); // the chokepoint declined (never happens today; sayable under model B)
             continue;
         }
         auto conn = std::make_unique<Conn>();
@@ -156,7 +174,22 @@ void BridgeServer::push_weaves(Conn& c) {
     c.ch->queue(BridgeOp::Weaves, body);
 }
 
+void BridgeServer::send_refused(Conn& c, std::uint64_t correlation, const std::string& reason) {
+    // A Send dropped BEFORE the bus (no tap event exists for it) — surface its fate. Per-frame and
+    // non-fatal: the connection stays alive; only a pre-Hello violation severs.
+    std::string body;
+    put_u64(body, correlation);
+    put_bytes(body, reason);
+    c.ch->queue(BridgeOp::SendRefused, body);
+}
+
 void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
+    // The handshake is load-bearing: a frame before Hello completes is broken or hostile — sever
+    // (mark the channel failed; the existing done()/reap_dead path tears it down). Anti-Postel.
+    if (!c.handshook && f.op != BridgeOp::Hello) {
+        c.ch->fail();
+        return;
+    }
     switch (f.op) {
     case BridgeOp::Hello: {
         Cursor cur(f.payload);
@@ -204,21 +237,28 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
         std::uint64_t correlation = 0;
         if (!cur.u8(kind) || !cur.u64(wire_sender) || !cur.u64(target) || !cur.u64(wire_reply_to) ||
             !cur.u64(correlation)) {
-            break; // malformed Send header -> drop
+            // The header didn't parse far enough to yield a correlation -> 0. No dark drop.
+            send_refused(c, 0, "malformed Send header");
+            break;
         }
         const std::string_view payload = cur.rest();
 
         // Re-admit the operator's output through the ONE gate, host-side, exactly as the kernel does
-        // for a loaded library's emitted message and the isolation host does for a child's Emit.
+        // for a loaded library's emitted message and the isolation host does for a child's Emit. Each
+        // of the three drop paths emits SendRefused (per-frame, non-fatal) so no fate is dark.
         loom::Unverified u = loom::parse(payload);
         std::shared_ptr<const loom::Schema> door =
             bus_.resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
-            break; // a schema the system does not know -> drop (cannot be gated)
+            send_refused(c, correlation,
+                         "unknown schema: " + u.claimed_name() + " v" +
+                             std::to_string(u.claimed_version()));
+            break; // a schema the system does not know -> cannot be gated
         }
         loom::Admission a = loom::admit(u, door);
         if (!a.ok()) {
-            break; // gate-refused (malformed/hostile operator output) -> drop
+            send_refused(c, correlation, "gate refused: " + a.first_error().message());
+            break; // gate-refused (malformed/hostile operator output)
         }
         // STAMP the sender + reply_to from the CONNECTION (c.id), NEVER the wire. An honest client
         // sets wire_sender/wire_reply_to to 0; a malicious one forges them, and the bridge stamps
@@ -235,14 +275,14 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
         }
         break;
     }
-    // host->client opcodes (Welcome/Weaves/Schema/SchemaNone/Delivered/Tap) and unknowns: a client
-    // does not send these; ignore them inbound.
+    // host->client opcodes and unknowns: a client does not send these; ignore them inbound.
     case BridgeOp::Welcome:
     case BridgeOp::Weaves:
     case BridgeOp::Schema:
     case BridgeOp::SchemaNone:
     case BridgeOp::Delivered:
     case BridgeOp::Tap:
+    case BridgeOp::SendRefused:
         break;
     }
 }
@@ -274,14 +314,18 @@ void BridgeServer::on_tap(const loom::BusEvent& e) {
     put_bytes(body, refusal);
 
     // Every operator sees the whole-bus tap (each is the most-granted participant; one trust domain).
+    // This is COPY-ONLY (event fields already in `e`) — safe from inside a pump() observer callback,
+    // exactly as the in-process record_tap is.
     for (auto& c : conns_) {
         c->ch->queue(BridgeOp::Tap, body);
     }
-    // A Died/Revived changes who is on the bus -> refresh each operator's weave list.
+    // A Died/Revived changes who is on the bus -> the weave list needs a refresh. But push_weaves
+    // READS the bus registry (list_weaves/accepted_schemas), and reading the registry from inside an
+    // observer callback mid-pump() is NOT a stated Switchboard guarantee (record_tap deliberately
+    // only copies). So DEFER: flag it here, push after pump() returns (step()), where the reads are
+    // plainly outside dispatch. The bridge does not lean on an unstated bus property.
     if (e.kind == loom::EventKind::Died || e.kind == loom::EventKind::Revived) {
-        for (auto& c : conns_) {
-            push_weaves(*c);
-        }
+        weaves_dirty_ = true;
     }
 }
 
@@ -314,9 +358,19 @@ void BridgeServer::step() {
         c->ch->poll(frames);
         for (const BridgeIncoming& f : frames) {
             on_frame(*c, f);
+            if (c->ch->done()) {
+                break; // a pre-Hello severance (B) failed this channel — stop processing its batch
+            }
         }
     }
     bus_.pump(); // proxies fire-and-continue (ship Delivered); the tap observer streams Tap
+    // Drain the deferred weave-list refresh (E): the registry reads happen HERE, outside dispatch.
+    if (weaves_dirty_) {
+        for (auto& c : conns_) {
+            push_weaves(*c);
+        }
+        weaves_dirty_ = false;
+    }
     for (auto& c : conns_) {
         c->ch->flush();
     }

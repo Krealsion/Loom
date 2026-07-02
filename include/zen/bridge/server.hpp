@@ -78,17 +78,25 @@ public:
     void stop() noexcept { stop_ = true; }
 
     std::size_t connection_count() const noexcept { return conns_.size(); }
+    /// How many connections were shed for exceeding the cap (accepted-then-closed). A reconnecting
+    /// fd-hog is contained (greedy is in the threat tier) and its shedding is observable, not silent.
+    std::size_t declined_count() const noexcept { return declined_; }
+
+    /// The most operators served at once. A stated, pinned bound far below every platform limit — 33
+    /// loopback sockets is cheap even on Windows. Past it, accept_new sheds (accept-then-close).
+    static constexpr std::size_t kMaxOperatorConnections = 32;
 
 private:
     struct Conn {
         std::unique_ptr<BridgeChannel> ch;
         loom::WeaveId id{};             ///< the proxy's bus id == the operator's STAMPED sender
         OperatorProxy* proxy = nullptr; ///< owned by the bus; non-owning here
-        bool handshook = false;
+        bool handshook = false;         ///< load-bearing: a non-Hello frame before this severs (B)
     };
 
     void accept_new();
     void on_frame(Conn& c, const BridgeIncoming& f);
+    void send_refused(Conn& c, std::uint64_t correlation, const std::string& reason);
     void push_weaves(Conn& c);
     void on_tap(const loom::BusEvent& e);
     void reap_dead();
@@ -98,6 +106,8 @@ private:
     std::vector<std::unique_ptr<Conn>> conns_;
     std::set<std::uint64_t> proxy_ids_; ///< operator proxies are hands on the bus, not send targets
     loom::ObserverId tap_obs_ = 0;
+    std::size_t declined_ = 0;   ///< connections shed for the cap
+    bool weaves_dirty_ = false;  ///< a Died/Revived seen in the tap; push a fresh Weaves after pump (E)
     bool stop_ = false;
 };
 

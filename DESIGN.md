@@ -1709,9 +1709,16 @@ A remote console **cannot hold a `Switchboard&`** across a socket, so the engine
 and its three host interactions — discovery, the tap, and sends — become an **operator-protocol of
 framed messages** the host *answers* and *streams*. This is the twice-deferred *discovery-as-messages*
 purification, pulled in now by completeness (a complete remote operator needs all three over the wire,
-and the only honest way is as messages). It **purifies invariant 1**: discovery and the tap stop being
-privileged host-side methods and become messages a granted participant sends, gated like everything
-else.
+and the only honest way is as messages). It **purifies invariant 1** — with a precise scope. A remote
+operator's **sends** are value-carrying: they meet the one gate at admission on the receiving (host)
+side (`send_as` re-admits the assembled Value, exactly as an out-of-process weave's Emit does). The
+protocol's **control frames** (discovery requests, the tap subscription) are *not* gated Values — they
+are `Cursor` bounds-checked wire frames the host answers; and **host-side discovery stays the bridge's
+own granted direct reads** of the registry (the same broad grant the in-process console holds), not a
+bus message it sends to itself. So "discovery becomes messages" means the *operator* asks over the wire
+and the host answers on its behalf. The deeper purification — **discovery as a literal bus weave** (a
+discovery participant the operator queries by an ordinary *gated* message) — is newly named here and
+pulled by nothing yet.
 
 - **The frontend is unified across transports.** The console's frontend surface was extracted into a
   `loom::Console` interface (`weaves`/`describe`/`compose`/`buffer*`/`tap`/`take_dirty`/`pump`); the
@@ -1734,11 +1741,18 @@ The WSL host and the connecting side are **one trust domain the operator control
 of the bridge socket **is** authority — a party that can reach it holds operator power, exactly as a
 local operator at the host does. Every connection's acquisition of power routes through **one
 function**, `authorize_connection(connection) → OperatorGrant`, which **today returns full grant,
-always**. That chokepoint is the *entire* connect-authority future-proofing: when the trigger fires —
-*model B* (a bearer capability token: possession-is-authorization, ocap-style, no identity) or *model
-C* (per-connection graduated/differential grants, **where "Weaver" is born**, at the first relation
-needing differential persistent authority — i.e. the first place authorization needs *authentication*,
-the identity phase) — **only that function changes**, and the operator wielding the grant is untouched.
+always**. The seam is that function **plus the one call in `accept_new` that consumes its result** —
+the `register_weave(std::move(proxy), Grant{}.allow_any(), AnyRegistered)` line. Together they are the
+*entire* connect-authority future-proofing: when the trigger fires — *model B* (a bearer capability
+token: possession-is-authorization, ocap-style, no identity) or *model C* (per-connection
+graduated/differential grants that narrow the `allow_any()` per operator, **where "Weaver" is born**,
+at the first relation needing differential persistent authority — i.e. the first place authorization
+needs *authentication*, the identity phase) — **only those two points change**, and the operator
+wielding the grant is untouched. Model B makes the *unauthorized-connection forge* sayable: its pin
+must prove a connect that fails the token registers no proxy and processes no frame. (Note under model
+A: operator proxies are hidden from discovery but *are* addressable by their small-integer `WeaveId`s —
+harmless while every operator is the same principal, but a cross-principal channel the identity phase
+must treat as surface.)
 
 ### Provenance: the sender is stamped from the connection, never the wire
 
@@ -1758,16 +1772,34 @@ the unsayable-attack discipline, mirroring the `forge_client` confused-deputy pi
 The transport drives. Input is **one event source among several**: a socket delivers bytes when the
 *far side* decides, the tap pushes events unbidden, and **disconnect is an event with no `read` to
 return it** — an absence the loop must notice. A synchronous block-on-read cannot represent any of
-that. The bridge server is a **single-threaded multiplexer**: `bridge_wait_readable` (a `select` over
-{listener, connection fds}) waits for any source, then `step()` accepts / drains / dispatches / pumps
-/ flushes / reaps. The client multiplexer waits over {terminal input, socket} the same way (POSIX
-`select`; the Windows `WaitForSingleObject` deadline-loop — the generalization of `read_byte_timeout`).
-**Critically, this is the client's readiness-to-receive, not bus concurrency:** the bus stays
-single-threaded FIFO, operator sends enter through the one gated path, and `pump()` processes them in
-order — no threads added, the reentrancy guard untouched. (Multi-threaded dispatch remains a separate,
-deferred maybe/never seam; conflating it here would be a real error.) **Disconnect is handled as an
-event** — a closed/killed peer surfaces as a readable-then-EOF socket, and `reap_dead()` unregisters
-its proxy gracefully, proven by both a closed socket and a real `SIGKILL` of a forked peer process.
+that. The bridge server is a **single-threaded multiplexer**: `bridge_wait_readable` (**`poll` on
+POSIX / `WSAPoll` on Winsock** — no `FD_SETSIZE` ceiling, so a reconnecting fd-hog cannot walk the
+server into UB; *greedy* is in the threat tier) waits for any source, then `step()` accepts / drains /
+dispatches / pumps / flushes / reaps. The client multiplexer waits over {terminal input, socket} the
+same way (POSIX `poll`; the Windows `WaitForSingleObject` deadline-loop — the generalization of
+`read_byte_timeout`). **Critically, this is the client's readiness-to-receive, not bus concurrency:**
+the bus stays single-threaded FIFO, operator sends enter through the one gated path, and `pump()`
+processes them in order — no threads added, the reentrancy guard untouched. (Multi-threaded dispatch
+remains a separate, deferred maybe/never seam; conflating it here would be a real error.) **Disconnect
+is handled as an event** — a closed/killed peer surfaces as a readable-then-EOF socket, and
+`reap_dead()` unregisters its proxy gracefully, proven by both a closed socket and a real `SIGKILL` of
+a forked peer process.
+
+**Squared edges (bounds stated + pinned; no dark fates).** A stated **connection cap**
+(`kMaxOperatorConnections = 32`): `accept_new` sheds past it (accept-then-close, counted by
+`declined_count()`), so a reconnecting fd-hog is contained and the shedding is observable, not silent.
+The **handshake is load-bearing** — a frame other than `Hello` before `Hello` completes *severs* the
+connection (marks the channel failed; the existing `reap_dead` path takes it), anti-Postel. The three
+payload-level drops on the `Send` path (malformed header / unknown schema / gate-refused) — the only
+dark fates, since everything after `send_as` is tap-visible — now emit a **`SendRefused`** frame
+(per-frame, non-fatal), which the client surfaces as a `"BridgeRefused"` tap kind (honestly *not* a bus
+event — the send never entered the bus). And the client **bounds what a host can make it hold**
+(`kMaxPendingDelivered = 64` on the fetch-the-reply-schema queue, drained on `SchemaNone`) — the
+`kMaxBacklog` principle applied to a more-trusted peer. The **observer stays copy-only**: `on_tap`
+copies event fields (safe mid-`pump()`), but the weave-list refresh — a bus *registry read* — is
+**deferred** to after `pump()` returns (a `needs-push` flag drained in `step()`), because
+reads-during-dispatch is not a *stated* Switchboard guarantee (the in-process `record_tap` copies only;
+the bridge does not lean on an unstated bus property).
 
 ### Output behind the seam; the transport
 
@@ -1797,31 +1829,37 @@ demo host), `zen-bridge-probe` (a non-interactive crossing prover), `zen-console
 interactive console), `zen-tui` (the shared renderer + terminal seam, linked by both consoles). Proven:
 the **local mechanism** — the operator-protocol (discovery + tap + send as messages), the event-driven
 multiplexer, the proxy-participant + connection-stamped sender against a forged frame, and
-disconnect-as-an-event (close + a real `SIGKILL`) — green on the `bridge` suite (6 cases/59 assertions)
-**Debug + ASan under the scope, `-Werror` clean**, *and* natively on Windows via MinGW (the portable
-suite, the fork-kill case excepted). And the **real Windows→WSL crossing**: a MinGW-built Windows
+disconnect-as-an-event (close + a real `SIGKILL`) — green on the `bridge` suite (12 cases / 135
+assertions) **Debug + ASan under the scope, `-Werror` clean**, *and* natively on Windows via MinGW (10
+cases there — the fork-kill and AF_UNIX cases are POSIX-gated). And the **real Windows→WSL crossing**: a MinGW-built Windows
 process (`zen-bridge-probe.exe`, and the interactive `zen-console-remote.exe`) drives the WSL-hosted
 bus across the boundary — discovery + describe + gate-send + the echoed reply + the tap + a graceful
 disconnect — proven end-to-end (a step up from the prior phases: no Josh-verified-only half, except the
 interactive raw-mode *input* on Windows, which stays the established CLion-verified division).
 
-### Relocation — verified to fall out, the one seam it pulls named
+### Relocation — argued to fall out (true by construction, not yet pinned); the one primitive it needs
 
 Relocation (*"this weave is `uncontained` here → host it in WSL → it runs sandboxed without skipping a
-beat"*) was **not built** — this phase **verified the litmus** against what the bridge made real. The
-honest decomposition: relocation is (a) snapshot the weave's state — **exists** (`IsolationHost` already
-host-owns snapshots; state crosses as bytes); (b) ship it across the boundary — **now real** (the
-bridge proved the cross-kernel ship); (c) revive in a WSL-hosted sandbox keeping the same identity —
-**exists** (`mount`/`respawn_and_revive`, identity-preserving); and (d) **re-point everyone messaging
-it to the new location**. (d) is the seam — and it falls out as **"a message + a policy-weave"**: a
-**forwarding proxy-participant on the old bus** (the *exact* pattern this phase generalized — a proxy
-bridging a socket to another bus) keeps existing `WeaveId` references working by forwarding. So
-relocation needs **nothing new in the runtime**. The cleaner long-term refinement — **location-transparent
-addressing** (invariant 3, contract-addressing pointed at *location*: the same contract-address
-resolving to a different host, so senders resolve the new location *directly* instead of via a
-forwarding hop) — is named as the seam **relocation** will pull, not built speculatively. The confirmed
-crossing is the latent capability relocation cashes in; its litmus is now **behaviorally checkable**,
-not merely reasoned-about.
+beat"*) was **not built** — this phase **argued the litmus** against what the bridge made real (an
+argument true by construction, *not yet pinned by a test*). The honest decomposition: relocation is (a)
+snapshot the weave's state — **exists** (`IsolationHost` already host-owns snapshots; state crosses as
+bytes); (b) ship it across the boundary — **now real** (the bridge proved the cross-kernel ship); (c)
+revive in a WSL-hosted sandbox keeping the same identity — **exists** (`mount`/`respawn_and_revive`,
+identity-preserving); and (d) **re-point everyone messaging it to the new location**.
+
+(d) is the seam — and reading the Switchboard sharpens the earlier "zero new runtime" claim to **one
+honest primitive, not zero.** A forwarding proxy on the old bus would need to sit *behind the departed
+weave's `WeaveId`* so existing senders reach it — but **no Switchboard operation binds a replacement
+participant behind an existing id**: `register_weave` always mints a fresh id (`WeaveId
+id{next_weave_id_++}`), and `reload`/`swap_state` are id-preserving *but* `admit` the candidate against
+the record's **unchanged** `state_schema` (a divergent shape is gate-refused, never bound). So
+relocation's (d) costs exactly **one new primitive** — either a `WeaveId`-rebind (put a new
+participant, possibly with an evolved state shape, behind an existing id), or **location-transparent
+addressing** (invariant 3, contract-addressing pointed at *location*: senders address by a stable
+contract-address that resolves to wherever the weave currently is, so the id need not be preserved at
+all). The latter is the cleaner long-term answer, named as the seam **relocation** will pull, not built
+speculatively. The confirmed crossing is the latent capability relocation cashes in; its litmus is now
+**behaviorally checkable**, not merely reasoned-about — *one new primitive, then pinned.*
 
 ### Seams appreciated (latent power)
 

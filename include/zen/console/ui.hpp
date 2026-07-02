@@ -127,6 +127,7 @@ Widget field(std::string prompt, std::string value, std::string hint, bool focus
 // clicks/keys onto the same set — so a future GUI inherits the input abstraction too. The
 // raw-key -> Action mapping is the ONLY terminal-coupled code, and it lives in the TUI alone.
 enum class Action : std::uint8_t {
+    None,       ///< a true no-op: an unknown/unhandled key maps here (dispatched as nothing)
     FocusNext,  ///< move focus to the next focusable region
     FocusPrev,  ///< move focus to the previous focusable region
     SelectUp,   ///< move the selection up within the focused List
@@ -140,7 +141,7 @@ enum class Action : std::uint8_t {
 
 /// One input event: a semantic action, plus a character for Edit.
 struct InputEvent {
-    Action action = Action::FocusNext;
+    Action action = Action::None;
     char ch = 0;
 };
 
