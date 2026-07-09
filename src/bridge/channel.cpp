@@ -202,6 +202,25 @@ void bridge_close(socket_t sock) {
 #endif
 }
 
+void bridge_send_raw(socket_t sock, std::string_view bytes) {
+    // Best-effort raw write (reuses the same platform send() as flush()); loops over partial/EAGAIN.
+    // Test-only: the only path that can put a MALFORMED transport frame on the wire.
+    if (sock == kInvalidSocket) {
+        return;
+    }
+    std::size_t off = 0;
+    while (off < bytes.size()) {
+        const long n = raw_send(sock, bytes.data() + off, bytes.size() - off);
+        if (n > 0) {
+            off += static_cast<std::size_t>(n);
+        } else if (n < 0 && (last_would_block() || last_interrupted())) {
+            continue;
+        } else {
+            break; // peer gone / error: nothing more we can do in a test helper
+        }
+    }
+}
+
 namespace {
 
 void set_err(std::string* err, const char* msg) {

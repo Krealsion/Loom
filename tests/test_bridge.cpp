@@ -728,6 +728,247 @@ TEST_CASE("hygiene: the client bounds pending replies a hostile host can pile up
     CHECK(overflow);
 }
 
+// ---- malformed-input hardening: three forged frames (coverage, not a fix) ----------------------
+//
+// An honest RemoteConsole composes against a real schema, so it can NEVER emit a malformed frame —
+// a test through the honest client cannot reach these paths at all. So each case FORGES the hostile
+// wire-frame by hand via a raw BridgeChannel (Cases 1-2) or bridge_send_raw (Case 3's lying length),
+// exactly as the sender-forge test does. Four assertions each: rejected / no-leak / connection-
+// survives / no-hang-crash-desync — the cluster that makes these BRIDGE tests, not just admit() tests.
+// (This is NOT a fuzzer: three representative frames pin the mechanism; wire-fuzzing is the seam tied
+// to actual off-host network exposure, which the bridge is explicitly not built for.)
+
+TEST_CASE("hardening (value, known schema): a corrupt body is gate-refused, no leak, connection survives") {
+    Host h;
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
+    BridgeChannel raw(cs);
+    std::string hello;
+    put_u32(hello, kBridgeProtocolVersion);
+    raw.queue(BridgeOp::Hello, hello);
+    raw.flush();
+    REQUIRE(wait_until(
+        [&] {
+            std::vector<BridgeIncoming> fr;
+            raw.poll(fr);
+            for (const BridgeIncoming& f : fr) {
+                if (f.op == BridgeOp::Welcome) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+
+    auto next_refusal = [&]() -> std::string {
+        std::string reason;
+        (void)wait_until(
+            [&] {
+                std::vector<BridgeIncoming> fr;
+                raw.poll(fr);
+                for (const BridgeIncoming& f : fr) {
+                    if (f.op == BridgeOp::SendRefused) {
+                        Cursor c(f.payload);
+                        std::uint64_t corr = 0;
+                        std::string_view r;
+                        if (c.u64(corr) && c.bytes(r)) {
+                            reason = std::string(r);
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            },
+            2000);
+        return reason;
+    };
+
+    // Forge a well-FRAMED Send whose payload claims Greet v1 (REGISTERED) but whose body is corrupt for
+    // that schema: resolve_schema finds Greet, then admit() refuses the body -> the "gate refused"
+    // branch (admit's malformed-value path). The header/claim stay intact so this is NOT Case 2's
+    // unknown-schema branch.
+    loom::Value greet(greet_schema());
+    greet.set("msg", loom::Cell::text("hardening"));
+    std::string body = loom::serialize(greet);
+    REQUIRE(body.size() > 2);
+    body.resize(body.size() - 2); // truncate the body; the field can no longer decode
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 11, body));
+    raw.flush();
+
+    CHECK(next_refusal().find("gate refused") != std::string::npos); // (1) rejected, admit branch named
+    CHECK(h.greeter->last_sender() == 0);                            // (2) no leak — the weave never saw it
+
+    // (3)+(4) connection survives + stream in sync: a subsequent HONEST Send delivers.
+    greet.set("msg", loom::Cell::text("ok"));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 12, loom::serialize(greet)));
+    raw.flush();
+    CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
+}
+
+TEST_CASE("hardening (value, unknown schema): a distinct branch is refused, no leak, connection survives") {
+    Host h;
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
+    BridgeChannel raw(cs);
+    std::string hello;
+    put_u32(hello, kBridgeProtocolVersion);
+    raw.queue(BridgeOp::Hello, hello);
+    raw.flush();
+    REQUIRE(wait_until(
+        [&] {
+            std::vector<BridgeIncoming> fr;
+            raw.poll(fr);
+            for (const BridgeIncoming& f : fr) {
+                if (f.op == BridgeOp::Welcome) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+
+    // A well-formed Value of a shape the bus NEVER registered: resolve_schema returns null -> the
+    // "unknown schema" branch, DISTINCT from Case 1's admit-refused branch (both pinned so neither
+    // stands in for the other). Forged by hand — the honest client only composes registered shapes.
+    loom::Value unk(unknown_schema());
+    unk.set("x", loom::Cell::integer(42));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 21, loom::serialize(unk)));
+    raw.flush();
+
+    std::string reason;
+    REQUIRE(wait_until(
+        [&] {
+            std::vector<BridgeIncoming> fr;
+            raw.poll(fr);
+            for (const BridgeIncoming& f : fr) {
+                if (f.op == BridgeOp::SendRefused) {
+                    Cursor c(f.payload);
+                    std::uint64_t corr = 0;
+                    std::string_view r;
+                    if (c.u64(corr) && c.bytes(r)) {
+                        reason = std::string(r);
+                    }
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+    CHECK(reason.find("unknown schema") != std::string::npos); // (1) rejected, the resolve-null branch
+    CHECK(h.greeter->last_sender() == 0);                       // (2) no leak
+
+    // (3)+(4) survives + in sync: an honest Send delivers.
+    loom::Value greet(greet_schema());
+    greet.set("msg", loom::Cell::text("ok"));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 22, loom::serialize(greet)));
+    raw.flush();
+    CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
+}
+
+TEST_CASE("hardening (framing): garbage at the transport layer — the framer, not admit(), handles it") {
+    // The important case: a frame malformed at the PROTOCOL level. admit() never sees this — it is the
+    // BridgeChannel FRAMER that must handle it. Single-threaded so connection_count() is deterministic.
+    loom::Switchboard bus;
+    auto g = std::make_unique<RecordingGreeter>();
+    RecordingGreeter* greeter = g.get();
+    const loom::WeaveId gid = bus.register_weave(std::move(g), loom::Grant{}.allow_any());
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    BridgeServer server(bus, listener);
+
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, err);
+    BridgeChannel raw(cs);
+    {
+        std::string hello;
+        put_u32(hello, kBridgeProtocolVersion);
+        raw.queue(BridgeOp::Hello, hello); // handshake first (a bogus op BEFORE Hello would sever)
+        raw.flush();
+    }
+    bool up = false;
+    for (int i = 0; i < 1000 && !up; ++i) {
+        server.step();
+        if (server.connection_count() >= 1) {
+            up = true;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    REQUIRE(up);
+
+    // A COMPLETE, well-framed frame whose OPCODE is garbage (200 — not a BridgeOp). queue() writes an
+    // honest length, so the framer parses it in-bounds and advances correctly; on_frame's switch
+    // matches no case -> the frame is dropped with no effect. admit() never sees it.
+    raw.queue(static_cast<BridgeOp>(200), std::string("garbage-opcode-body"));
+    raw.flush();
+    for (int i = 0; i < 100; ++i) {
+        server.step(); // give the bogus frame time to arrive + be processed
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(server.connection_count() == 1);  // (3) the connection SURVIVES garbage framing
+    CHECK(bus.list_weaves().size() == 2u);  //     the proxy is still registered (greeter + 1 proxy)
+    CHECK(greeter->last_sender() == 0);     // (2) no leak — nothing reached the weave
+
+    // (4) NO DESYNC: a subsequent well-formed Send on the SAME connection still delivers.
+    loom::Value greet(greet_schema());
+    greet.set("msg", loom::Cell::text("after-garbage"));
+    raw.queue(BridgeOp::Send, make_send_frame(0, gid.value, 0, 31, loom::serialize(greet)));
+    raw.flush();
+    bool delivered = false;
+    for (int i = 0; i < 1000 && !delivered; ++i) {
+        server.step();
+        if (greeter->last_sender() != 0) {
+            delivered = true;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    CHECK(delivered);                       // (1)+(4) the framer stayed in sync across the bad frame
+    CHECK(server.connection_count() == 1);
+
+    // (4, over-read safety) The framer's LENGTH parser — the real buffer-over-read risk, which admit()
+    // never reaches. Forge a length header that LIES (queue() cannot; bridge_send_raw can). ASan is the
+    // judge: substr(pos+5, len) is guarded by len<=kMaxFrameLen and inbox_.size()-pos>=5+len.
+    {
+        // (a) len claims 16 MiB (UNDER the 64 MiB cap) but sends 3 bytes -> the framer WAITS: it must
+        //     deliver no frame and NOT over-read (never touch bytes it does not have).
+        const std::pair<socket_t, socket_t> p = two_sockets();
+        BridgeChannel framer(p.second);
+        std::string lie;
+        put_u32(lie, 0x01000000u); // 16 MiB
+        put_u8(lie, static_cast<std::uint8_t>(BridgeOp::Hello));
+        lie.append("abc");
+        bridge_send_raw(p.first, lie);
+        std::vector<BridgeIncoming> frames;
+        for (int i = 0; i < 100 && frames.empty() && !framer.done(); ++i) {
+            framer.poll(frames);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        CHECK(frames.empty());        // no bogus frame delivered from the lie
+        CHECK_FALSE(framer.failed()); // under the cap: it waits (graceful), it does not fail or over-read
+        bridge_close(p.first);
+
+        // (b) len OVER the 64 MiB cap -> the framer fails the channel CLEANLY (the defensive cap; a
+        //     reap follows). No over-read, no hang.
+        const std::pair<socket_t, socket_t> q = two_sockets();
+        BridgeChannel framer2(q.second);
+        std::string over;
+        put_u32(over, kMaxFrameLen + 1u);
+        put_u8(over, static_cast<std::uint8_t>(BridgeOp::Hello));
+        bridge_send_raw(q.first, over);
+        std::vector<BridgeIncoming> f2;
+        for (int i = 0; i < 100 && !framer2.done(); ++i) {
+            framer2.poll(f2);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        CHECK(f2.empty());
+        CHECK(framer2.failed()); // len > kMaxFrameLen -> clean failure (no over-read, no hang)
+        bridge_close(q.first);
+    }
+}
+
 // ---- disconnect handled as an event (no hang) --------------------------------------------------
 
 TEST_CASE("operator-protocol: a vanished peer is reaped as an event (the server unregisters its proxy)") {
