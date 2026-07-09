@@ -114,6 +114,12 @@ socket_t bridge_connect_tcp(const std::string& host, std::uint16_t port, std::st
 /// Close a socket (platform close/closesocket). Safe on kInvalidSocket.
 void bridge_close(socket_t sock);
 
+/// TEST SEAM ONLY: write raw bytes to a socket, bypassing BridgeChannel's framing. This is the only
+/// way to forge a MALFORMED transport frame (queue() always writes an honest length prefix), so the
+/// malformed-framing hardening tests can prove the framer handles a lying length / bogus frame without
+/// over-read, hang, or desync. Not part of the operator-protocol; no production caller.
+void bridge_send_raw(socket_t sock, std::string_view bytes);
+
 /// Block in select() until any socket in `socks` is readable, or `timeout_ms` elapses (negative =
 /// indefinite). Returns true if at least one is ready, false on timeout. This is the event-driven
 /// wait — a socket becomes readable when the FAR side decides, and a closed peer is readable-then-EOF,
