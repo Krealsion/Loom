@@ -14,6 +14,8 @@
 // drive (discover, send, see a reply buffered). In a real deployment, Weaves arrive on the
 // bus by other means; the console drives whatever is there.
 
+#include "zen/weave/poke_weave.hpp"
+
 #include <zen/console/console.hpp>
 #include <zen/console/input_lex.hpp>
 #include <zen/switchboard.hpp>
@@ -260,6 +262,7 @@ int main() {
 
     // Mount a demo greeter so the terminal has something to drive.
     bus.register_weave(std::make_unique<Greeter>(), loom::Grant{}.allow_any());
+    bus.register_weave(std::make_unique<loom::PokeWeave>(), loom::Grant{}.allow_any());
 
     std::cout << "zen console (stage 2). commands: weaves | describe <Shape> <v> | "
                  "send [<id> [<Shape> <v> [args ...]]] | buffer | show <mN> | tap | quit\n"
