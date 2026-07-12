@@ -216,15 +216,28 @@ TEST_CASE("the mount<> auto-grant denies an emit the Weave did not declare") {
     CHECK(rogue_denied); // the UNDECLARED emit was CapabilityDenied on the auto-grant path
 }
 
-TEST_CASE("the accept-set is derived from the typed handlers; emit-set is reported") {
+TEST_CASE("the accept-set is the typed handlers plus the universal poke doors; emit-set stays "
+          "the maker's declaration") {
     Switchboard bus;
     WeaveId responder = au::mount<Responder>(bus);
 
+    // The maker's doors (from Accept<...>) plus the four substrate poke doors
+    // every woven Weave answers (the inspect-the-structure floor, always on).
     auto acc = bus.accepted_schemas(responder);
-    REQUIRE(acc.size() == 1);
+    std::set<std::string> door_names;
+    for (const auto& s : acc) {
+        door_names.insert(s->name());
+    }
+    CHECK(door_names == std::set<std::string>{"Ping", "zen.PokeDescribe", "zen.PokeRead",
+                                              "zen.PokeWrite", "zen.PokeResetState"});
+    REQUIRE(acc.size() == 5);
     CHECK(acc[0]->name() == "Ping");
     CHECK(acc[0]->content_id() == au::schema_of<Ping>()->content_id());
 
+    // emitted_schemas() remains the MAKER's declared Emit<...> alone — the
+    // construction layer's poke answers are substrate machinery, granted
+    // separately by mount() (allow_poke_answers), never smuggled into the
+    // maker's declaration.
     auto* r = static_cast<Responder*>(bus.weave(responder));
     auto emitted = r->emitted_schemas();
     REQUIRE(emitted.size() == 1);

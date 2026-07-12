@@ -11,6 +11,7 @@
 //     after the gate has blessed the Value.
 // No stringly-typed set(), no hand-built schema, no hand-written snapshot/revive.
 
+#include <zen/weave/poke.hpp>
 #include <zen/weave/shape.hpp>
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/switchboard.hpp>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace loom {
@@ -46,14 +48,17 @@ struct LifecyclePolicy {
 /// and lets a Weave reply/send/publish with plain structs — no Value, no Cell,
 /// no Message construction.
 ///
-/// Mail::send/reply/publish are the **sole** outbound path for a woven Weave.
-/// That makes Mail the single reserved chokepoint where emit-enforcement (gating
-/// a sent T against the Weave's declared Emit<...>) will one day live. It is
-/// deliberately NOT enforced now: it is not yet known whether every Weave's
-/// emit-set is statically enumerable (a router/forwarder may emit shapes chosen
-/// at runtime), so closing that gate before its shape is proven would couple the
-/// substrate to a guess. The declaration is kept honest by test instead; the
-/// gate is left off with intent.
+/// Mail::send/reply/publish are the **sole** outbound path for a woven Weave's
+/// MAKER code. That makes Mail the single reserved chokepoint where
+/// emit-enforcement (gating a sent T against the Weave's declared Emit<...>)
+/// will one day live. It is deliberately NOT enforced now: it is not yet known
+/// whether every Weave's emit-set is statically enumerable (a router/forwarder
+/// may emit shapes chosen at runtime), so closing that gate before its shape is
+/// proven would couple the substrate to a guess. The declaration is kept honest
+/// by test instead; the gate is left off with intent. (The construction layer's
+/// own poke answers go directly through the bus — substrate machinery, not a
+/// maker emission — so a future Mail emit-gate would not, and should not,
+/// govern them; their authority is still the grant, see allow_poke_answers.)
 class Mail {
 public:
     Mail(loom::Bus& bus, const loom::Message& in, loom::WeaveId self)
@@ -104,9 +109,34 @@ class WeaveBase;
 
 template <class Self, class State, class... A, class... E>
 class WeaveBase<Self, State, Accept<A...>, Emit<E...>> : public loom::Weave {
+    // The zen.Poke* protocol shapes are the construction layer's own doors:
+    // every woven Weave answers them from its declared access model, and the
+    // maker cannot intercept them — which is what makes an answered structure
+    // trustworthy (a WeaveBase weave cannot lie about what it is). Listing one in
+    // Accept<...> would declare a handler that can never fire. The is_base_of
+    // terms also reject an inheriting alias (`struct D : PokeDescribe {}`), whose
+    // derived schema shares the protocol content-id.
+    static_assert((!is_poke_protocol_shape<A> && ...) &&
+                      (!std::is_base_of_v<PokeDescribe, A> && ...) &&
+                      (!std::is_base_of_v<PokeRead, A> && ...) &&
+                      (!std::is_base_of_v<PokeWrite, A> && ...) &&
+                      (!std::is_base_of_v<PokeResetState, A> && ...),
+                  "loom: the zen.Poke* protocol shapes are answered by the construction layer; "
+                  "do not list them in Accept<...>");
+
 public:
-    std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
-        return {schema_of<A>()...};
+    /// The maker's declared doors plus the four universal poke doors (the
+    /// inspect-the-structure floor — every woven Weave is inspectable). `final`:
+    /// a maker uses on()-handlers, never a hand-rolled accept-set, and making
+    /// this non-overridable is what keeps the poke doors honestly advertised (a
+    /// weave that wants raw control implements loom::Weave directly, and then
+    /// transparently advertises no doors it will not answer).
+    std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const final {
+        std::vector<std::shared_ptr<const loom::Schema>> out{schema_of<A>()...};
+        for (auto& s : poke_door_schemas()) {
+            out.push_back(std::move(s));
+        }
+        return out;
     }
 
     /// The shapes this Weave declares it emits. Informational (the reserved hook);
@@ -126,7 +156,26 @@ public:
         return v;
     }
 
-    void handle(const loom::Message& in, loom::Bus& bus) override {
+    void handle(const loom::Message& in, loom::Bus& bus) final {
+        // `final` is load-bearing, not tidiness: the Switchboard dispatches every
+        // delivery through the loom::Weave vtable, so if a Self subclass could
+        // override handle() it would shadow this and bypass try_poke — answering
+        // pokes however it liked (or not at all). Sealing it makes "a WeaveBase
+        // weave answers its poke doors truthfully" a fact, not a hope. (A maker
+        // wanting custom dispatch implements loom::Weave directly; that weave
+        // simply advertises no poke doors — transparent, not a lie.)
+        //
+        // Caught here (Self is complete by the time this body is instantiated):
+        // a bare ZEN_EXPOSE();/ZEN_HIDE(); misplaced in the weave class instead
+        // of the State struct silently no-ops — a fail-open for HIDE. Refuse it.
+        static_assert(!(has_whole_state_tag<Self>() && !has_whole_state_tag<State>()),
+                      "loom: a bare ZEN_EXPOSE();/ZEN_HIDE(); belongs inside the State struct "
+                      "(the ZEN_SHAPE type), not the weave class — it is read from the state type");
+        // The substrate's poke doors are answered here, before maker dispatch,
+        // from the state shape's declared access model (see poke.hpp).
+        if (try_poke(in, bus)) {
+            return;
+        }
         Self* self = static_cast<Self*>(this);
         Mail mail(bus, in, self_);
         // A delivered message has passed the gate against one accepted schema, and
@@ -198,6 +247,57 @@ private:
         self->on(from_value<S>(in.payload), mail);
         return true;
     }
+
+    // ---- the poke doors (substrate-answered; see poke.hpp) -----------------
+
+    /// Send a poke answer to the requester: reply_to if given, else the
+    /// stamped sender. A poke with neither (a root fire-and-forget) has
+    /// nowhere to answer and is performed/refused silently by design — the
+    /// requester chose not to listen. The send is an ordinary gated send: the
+    /// bus stamps this Weave as sender and checks ITS grant. It takes NO path
+    /// around the gate (invariant 7). The grant rule mount() adds
+    /// (allow_poke_answers) is exactly the kind an Emit<...> declaration confers
+    /// — so a mount()ed weave's own maker code may likewise emit the four answer
+    /// shapes; that is inert (they carry no capability, and the only consumers —
+    /// the console and the Poke weave — treat an unsolicited answer as data /
+    /// drop it on a sender mismatch). A finer per-send principal is the
+    /// sub-weave-identity seam the auth phase pulls, not this one.
+    template <class Answer>
+    void answer_poke(const loom::Message& in, loom::Bus& bus, const Answer& answer) {
+        const loom::WeaveId to = in.reply_to.valid() ? in.reply_to : in.sender;
+        if (!to.valid()) {
+            return;
+        }
+        bus.send(to, loom::Message(to_value(answer), self_, self_, in.correlation));
+    }
+
+    /// Answer the four protocol shapes from the declared access model. Matched
+    /// the same way dispatch_to matches (same_identity against the gated
+    /// payload), so a delivered poke request converts safely.
+    bool try_poke(const loom::Message& in, loom::Bus& bus) {
+        const loom::Schema& shape = in.payload.schema();
+        if (loom::same_identity(*schema_of<PokeDescribe>(), shape)) {
+            answer_poke(in, bus, poke_structure<State>());
+            return true;
+        }
+        if (loom::same_identity(*schema_of<PokeRead>(), shape)) {
+            const PokeRead req = from_value<PokeRead>(in.payload);
+            std::visit([&](const auto& a) { answer_poke(in, bus, a); },
+                       poke_read(state_, req.field));
+            return true;
+        }
+        if (loom::same_identity(*schema_of<PokeWrite>(), shape)) {
+            const PokeWrite req = from_value<PokeWrite>(in.payload);
+            std::visit([&](const auto& a) { answer_poke(in, bus, a); },
+                       poke_write(state_, req.field, req.value));
+            return true;
+        }
+        if (loom::same_identity(*schema_of<PokeResetState>(), shape)) {
+            std::visit([&](const auto& a) { answer_poke(in, bus, a); }, poke_reset(state_));
+            return true;
+        }
+        return false;
+    }
 };
 
 /// The grant a Weave's declared Emit<...> implies: it may send each emitted shape
@@ -215,21 +315,28 @@ loom::Grant emit_default_grant(const Weave& weave) {
     return grant;
 }
 
-/// Construct a trusted Weave, grant it its declared Emit set, register it (its
-/// derived schemas flow into the registry as usual), wire its self-id, and return
-/// its WeaveId — registration + policy + lifecycle + authority in one call.
+/// Construct a trusted Weave, grant it its declared Emit set plus the poke
+/// answers (the construction layer answers pokes; the trusted mount grants
+/// those answers delivery), register it (its derived schemas flow into the
+/// registry as usual), wire its self-id, and return its WeaveId —
+/// registration + policy + lifecycle + authority in one call.
 template <class Self, class... Args>
 loom::WeaveId mount(loom::Switchboard& bus, Args&&... args) {
     auto weave = std::make_unique<Self>(std::forward<Args>(args)...);
     Self* raw = weave.get();
     loom::Grant grant = emit_default_grant(*raw);
+    loom::allow_poke_answers(grant);
     loom::WeaveId id = bus.register_weave(std::move(weave), std::move(grant));
     raw->zen_set_self(id);
     return id;
 }
 
 /// As mount(), but with an explicit host-supplied grant (for an untrusted Weave,
-/// whose self-declared Emit is not trusted as its authority).
+/// whose self-declared Emit is not trusted as its authority). The grant is used
+/// AS GIVEN — including for the construction layer's poke answers: a host that
+/// wants this Weave's pokes answerable adds allow_poke_answers(grant); without
+/// it, poke requests still arrive (and are enforced) but the answers are
+/// CapabilityDenied at delivery, visible on the tap.
 template <class Self, class... Args>
 loom::WeaveId mount_granted(loom::Switchboard& bus, loom::Grant grant, Args&&... args) {
     auto weave = std::make_unique<Self>(std::forward<Args>(args)...);

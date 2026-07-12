@@ -694,8 +694,11 @@ touches only that block.
 - **Emit-set (enforcement reserved at `Mail`).** `Emit<Shapes...>` is declared
   alongside `Accept<…>` and surfaced as `emitted_schemas()`, **informational and
   unenforced** for now. `Mail::send`/`reply`/`publish` are the *sole* outbound path
-  for a woven Weave, so **`Mail` is the single reserved chokepoint** where
-  emit-enforcement (a sent `T` must be in `Emit<...>`) would later sit. It stays
+  for a woven Weave's **maker code**, so **`Mail` is the single reserved chokepoint** where
+  emit-enforcement (a sent `T` must be in `Emit<...>`) would later sit. (The
+  construction layer's own poke answers go directly through the gated bus —
+  substrate machinery, not a maker emission; a future `Mail` emit-gate would not
+  govern them, and their authority is still the grant — see the Poke section.) It stays
   off **with intent**: a Weave's emit-set is not yet known to be statically
   enumerable (a router/forwarder may emit shapes chosen at runtime), so the
   substrate must not commit to it. The *declaration* is kept honest by test
@@ -1870,6 +1873,122 @@ weave, a GUI weave, and a sandboxed weave coexisting by address regardless of wh
 refit (paying it here, while the only consumer is the bridge, is why they are cheap later); the
 **socket-frame `TerminalBackend`** (host-rendered output over the wire) is hooked-not-built; and a
 neutral shared `wire.hpp` (the two protocols' framing primitives) is a clean future factoring.
+
+---
+
+## The Poke weave — live inspect/manipulate under the `ZEN_EXPOSE`/`ZEN_HIDE` access model
+
+The first debugging capability, built without a debugger: **poke by message, never past the
+weave boundary.** The Poke weave is an ordinary participant with no special powers — it
+inspects and manipulates other weaves by *sending them messages*, and the enforcement lives
+in the **target's own construction layer**. A weave that didn't expose something cannot be
+poked into it; that is the safety property, not a limitation. (The "call a function directly
+with provided values" power is real but deliberately elsewhere: it arrives with the
+auth/identity phase as *authority + inclusion* — "having a, not being a" — never as a
+privileged debugger. Message-poking is *a* poke path, not the only one.)
+
+### The access model (`ZEN_EXPOSE` / `ZEN_HIDE`, in `weave/shape.hpp`)
+
+Two author-control tags around a sensible default. **With no tag a field is read-exposed
+(inspectable) and write-hidden (not manipulable).** `ZEN_EXPOSE` opts *in* to write;
+`ZEN_HIDE` opts *out* of raw read — the value becomes message-only ("don't scrape my raw
+counter mid-update; ask me"). Each tag has one spelling and two scopes: field scope replaces
+`ZEN_FIELD` in the registration list (`ZEN_SHAPE(S, 1, ZEN_EXPOSE(rate), ZEN_HIDE(raw),
+ZEN_FIELD(label))`), and **whole-state scope** is a bare `ZEN_EXPOSE();`/`ZEN_HIDE();` inside
+the state struct (the `ZEN_SHAPE` type — *not* the weave class; `WeaveBase` `static_assert`s a
+misplacement, which would otherwise silently no-op — a fail-open for `HIDE`) —
+**whole-state IS apply-to-all** (`shape_access_bits()` OR'd onto every field at derivation;
+one primitive, two spellings — pinned by a test comparing the two spellings' derived tables).
+Whole-state detection is **value-checked, not presence-checked** (a nested `requires`): a
+`zen_expose_all = false`, or a field merely named like the flag, does *not* widen access — the
+dangerous direction never fails open (pinned). The bits ride `FieldEntry` and are
+**deliberately invisible to `build_schema()`**: a tagged struct derives a byte-identical
+schema — same content-id — as an untagged twin (pinned against a hand-built `SchemaBuilder`
+equivalent). The tags are
+authored metadata *beside* the shape, never part of wire identity; they seed the
+introspection system without touching invariant 3.
+
+**The honesty boundary (load-bearing): the tags govern value access only.** Neither tag can
+hide a field's existence, name, type, or its own tag-state — `access_of<T>()` returns every
+field, nothing filters it, and hiding a value is itself declared, inspectable metadata.
+There is no way to make state invisible; a weave cannot lie about what it is.
+
+### The doors (substrate-answered, in `WeaveBase`)
+
+Every woven weave gains four **substrate doors** appended to its accept-set —
+`zen.PokeDescribe` → `zen.PokeStructure` (identity + *every* field's name/type/tag-state),
+`zen.PokeRead` → `zen.PokeValue`|`zen.PokeRefused`, `zen.PokeWrite` →
+`zen.PokeAck`|`zen.PokeRefused`, `zen.PokeResetState` (default-construct the state; requires
+*every* field writable) — answered by `handle()` **before maker dispatch**, from pure
+standalone-tested functions (`poke_structure/read/write/reset` in `weave/poke.hpp`) over the
+declared access model. **A `WeaveBase` weave cannot intercept them**, and that is enforced,
+not merely asked: `handle()` and `accepted_schemas()` are `final` (a `Self` subclass cannot
+override them to answer pokes dishonestly or drop the doors from its advertisement), and a
+`static_assert` refuses the protocol shapes — or an inheriting alias of one — in
+`Accept<...>`. So an answered structure is trustworthy. (A maker who wants raw dispatch
+implements `loom::Weave` directly — trusted in-process code that then *transparently
+advertises no doors it will not answer*; the dishonest case this closes is "advertise the
+doors via `WeaveBase`, then lie in the answers.") Every refusal is an honest answer carrying
+its reason — never silence (the one exception: a poke with no reply address and no sender
+has nowhere to answer, by the asker's choice).
+Values cross the boundary **as text**, converted against the field's *declared kind* at the
+target (`to_chars`/`from_chars`, exact and locale-free): a bad literal is a clean refusal,
+never a mis-write, and the shapes stay console-composable today. **Scalar fields only this
+phase** — a non-scalar field is fully visible in the structure, just not message-read/
+written yet.
+
+**No path around the gate.** A poke answer is an ordinary *gated* send checked against the
+answering weave's grant: `mount()` adds `allow_poke_answers` (plain `Grant::allow_to_any`
+rules — the same kind an `Emit<...>` declaration confers) alongside the Emit-derived grant,
+while `mount_granted` stays sovereign — an ungranted weave's answers are `CapabilityDenied`
+at delivery, visible on the tap (pinned: the substrate's own answering machinery bows to the
+host's grant). This is a real, if minor, grant the maker's own code shares (it may now emit
+those four answer shapes too) — precisely as declaring `Emit<PokeValue>` would grant it —
+and it is **inert**: the shapes carry no capability, and the only consumers (the console and
+the Poke weave) treat an unsolicited answer as data or drop it on a sender mismatch. A finer
+*per-send* principal (separating the substrate's answer from the maker's own sends under one
+`WeaveId`) is the sub-weave-identity seam the auth phase pulls, not this one.
+`emitted_schemas()` remains the maker's declaration alone. Host-side authority
+(`snapshot_bytes`, `swap_state`, root sends) is untouched and out of scope: the host owns
+its weaves; `ZEN_HIDE` binds the *message plane*.
+
+### The Poke weave (`weave/poke_weave.hpp`)
+
+An ordinary `WeaveBase` participant: accepts four operator **commands** (`zen.PokeInspect/
+PokeGet/PokeSet/PokeReset{target,…}` — a command names a third party; a protocol message
+arriving at a weave means "you"), forwards the matching protocol shape to the target with a
+fresh `seq` correlation, and relays the answer to the original asker (taken from the
+command's `reply_to`-else-stamped-sender, never its payload) with the original correlation.
+**A relayed answer must come from the poked target:** the relay matches pending pokes by
+correlation *and* the bus-stamped sender — an ordinary participant *can* emit a
+perfectly-shaped forged `zen.PokeValue` (sayable through the honest API, and the test says
+it), but it cannot speak *as* the target, so the forgery is dropped and the pending poke
+stays parked. Pending pokes are honest state (a `zen.PokePending` list — itself
+poke-inspectable), bounded at 64 with oldest-shed; a forwarded poke whose answer never
+comes (no such target, a raw non-woven weave with no doors, an answer-denied grant) parks
+until shed, with the underlying refusal on the tap — a participant cannot observe the fate
+of its own sends today, a named seam this phase does not build.
+
+Driven **end-to-end from the existing console with zero console changes** (pinned): the
+operator composes `zen.PokeInspect 3` at the Poke weave, the structure lands in the buffer
+with the hidden field visible *as hidden*; `zen.PokeSet` on an exposed field acks and the
+write is live; on an un-exposed field the refusal comes back with its reason; the hidden
+value refuses a raw read while the target's own front-door query still serves it computed —
+**the message interface stays sovereign; the tags never touch the front door.** The
+protocol shapes are ordinary messages: the console can also poke a target directly, no Poke
+weave involved (pinned by stamped-sender).
+
+### Scope + seams (hooked, not built)
+
+Out-of-process pokes (a sandboxed `.so` weave now *accepts* the doors via its manifest, but
+its kernel-decided grant does not include the answer shapes, so answers are denied until a
+host grants them — consistent, tap-visible, unexercised); the authorized-direct-call path
+(auth-phase trigger); composed/granular tag rules (`expose-all-except`, both-tags-on-one-
+field at field scope — weave-scope-one + field-scope-other says it today); non-scalar
+poke I/O (the structure already lists those fields honestly); send-fate observability for
+participants; registering declared emissions at mount (today a reply shape reaches the
+console's wildcard-accept only if some accepter lists it — the console suite pins that as
+intended; the Poke weave's accept-set is what registers the answer grammar in practice).
 
 ---
 
