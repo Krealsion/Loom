@@ -2047,14 +2047,27 @@ sugar (what a maker writes against); `zen/weave.hpp` — the umbrella include.
 
 ### Scope + seams (hooked, not built)
 
-The **standard-shape follow-on**: the storage broker (`StorageValue{value: Bytes}` — a
-bytes payload, so it stays bespoke by the rule unless/until a bytes result earns its way
-into the standard set; its empty-bytes-means-absent sentinel could become an honest
-`zen.Refused`), the net broker (`NetResponse{ok, data}` — an ok-flag + payload combo that
-could split into `zen.Result`|`zen.Refused`), and the bridge's `SendRefused` (a socket-layer
-framed op, not a bus shape — adopting the vocabulary there is a design question, not a
-mechanical swap) all reinvent ack/refusal today; migrating them is named, mechanical
-follow-up, deliberately not this phase. Also: out-of-process pokes (a sandboxed `.so` weave now *accepts* the doors via its manifest, but
+The **standard-shape follow-on** (sharpened by a whole-repo shape audit): the storage
+broker (`StorageValue{value: Bytes}` — a bytes payload, so it stays bespoke by the rule
+unless/until a bytes result earns its way into the standard set; its empty-bytes-means-
+absent sentinel conflates two images — a *stored empty value* and an *absent key* are
+indistinguishable — and the absent case could become an honest `zen.Refused`; **`StoragePut`
+has no reply at all** — a persistence write whose disk failure the client never learns →
+`zen.Ack`|`zen.Refused`), the net broker (`NetResponse{ok, data}` — the ok-flag is an
+inline refusal-bit carrying **no reason**: an allow-list refusal and a TCP connect failure
+are byte-identical replies, an incomplete image → split into a result|`zen.Refused{reason}`),
+and the bridge's `SendRefused` (a socket-layer framed op, not a bus shape — adopting the
+vocabulary there is a design question, not a mechanical swap) all reinvent ack/refusal
+today; migrating them is named, mechanical follow-up, deliberately not this phase. The
+audit's sharpest find is the **kernel control weave** (`kernel/control.hpp`): the canonical
+dangerous surface performs load/reload/unload and **discards the outcome**
+(`(void)kernel_->load(...)` — `LoadResult{ok, id, error}` / `ReloadResult`'s
+version-mismatch never reach the sender). The standard replies + `mount()`'s existing
+answer grant make honest outcomes nearly free (`zen.Result{id}`|`zen.Refused{error}`), but
+replying is a *behavior change*, not a collapse — its trigger is the first operator who
+drives the kernel from the console and needs to see what happened. Whether a **bytes
+result** joins the standard set (three of the four sites carry `Bytes`, which `zen.Result`'s
+text field cannot) is the follow-on phase's one real design decision. Also: out-of-process pokes (a sandboxed `.so` weave now *accepts* the doors via its manifest, but
 its kernel-decided grant does not include the answer shapes, so answers are denied until a
 host grants them — consistent, tap-visible, unexercised); the authorized-direct-call path
 (auth-phase trigger); composed/granular tag rules (`expose-all-except`, both-tags-on-one-
