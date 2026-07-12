@@ -15,7 +15,7 @@
 #include <zen/kernel/abi.h>
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/serialize.hpp>
-#include <zen/switchboard/weave.hpp>
+#include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
 
 #include <cstddef>

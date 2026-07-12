@@ -1917,9 +1917,11 @@ There is no way to make state invisible; a weave cannot lie about what it is.
 
 Every woven weave gains four **substrate doors** appended to its accept-set —
 `zen.PokeDescribe` → `zen.PokeStructure` (identity + *every* field's name/type/tag-state),
-`zen.PokeRead` → `zen.PokeValue`|`zen.PokeRefused`, `zen.PokeWrite` →
-`zen.PokeAck`|`zen.PokeRefused`, `zen.PokeResetState` (default-construct the state; requires
-*every* field writable) — answered by `handle()` **before maker dispatch**, from pure
+`zen.PokeRead` → `zen.Result`|`zen.Refused`, `zen.PokeWrite` →
+`zen.Ack`|`zen.Refused`, `zen.PokeResetState` (default-construct the state; requires
+*every* field writable) — the replies are the **standard shapes** (see "The standard reply
+shapes" below), not a poke dialect; only `zen.PokeStructure` stays bespoke — answered by
+`handle()` **before maker dispatch**, from pure
 standalone-tested functions (`poke_structure/read/write/reset` in `weave/poke.hpp`) over the
 declared access model. **A `WeaveBase` weave cannot intercept them**, and that is enforced,
 not merely asked: `handle()` and `accepted_schemas()` are `final` (a `Self` subclass cannot
@@ -1943,9 +1945,15 @@ rules — the same kind an `Emit<...>` declaration confers) alongside the Emit-d
 while `mount_granted` stays sovereign — an ungranted weave's answers are `CapabilityDenied`
 at delivery, visible on the tap (pinned: the substrate's own answering machinery bows to the
 host's grant). This is a real, if minor, grant the maker's own code shares (it may now emit
-those four answer shapes too) — precisely as declaring `Emit<PokeValue>` would grant it —
-and it is **inert**: the shapes carry no capability, and the only consumers (the console and
-the Poke weave) treat an unsolicited answer as data or drop it on a sender mismatch. A finer
+those four answer shapes too) — precisely as declaring `Emit<Result>` would grant it —
+and it is **inert** not by enumerating today's consumers but by the **standing consumer
+obligation** (recorded in `standard_shapes.hpp`, since the standard replies are universal
+vocabulary any granted participant can emit): a consumer of a standard reply matches each
+arrival against its own outstanding requests by **correlation and bus-stamped sender**
+(`loom::relay` implements exactly this wall) and treats an unsolicited answer as data at
+best. Makers whose own code replies with a standard shape still declare it in `Emit<...>`
+— the ride-along grant is the answering machinery's, and the carve-out (an undeclared
+standard-reply emit *is* deliverable under `mount()`) is pinned as known, not latent. A finer
 *per-send* principal (separating the substrate's answer from the maker's own sends under one
 `WeaveId`) is the sub-weave-identity seam the auth phase pulls, not this one.
 `emitted_schemas()` remains the maker's declaration alone. Host-side authority
@@ -1959,11 +1967,14 @@ PokeGet/PokeSet/PokeReset{target,…}` — a command names a third party; a prot
 arriving at a weave means "you"), forwards the matching protocol shape to the target with a
 fresh `seq` correlation, and relays the answer to the original asker (taken from the
 command's `reply_to`-else-stamped-sender, never its payload) with the original correlation.
+That forward/relay dance is the **standard request/reply relay pattern** (`weave/relay.hpp`)
+— `loom::forward`/`loom::relay` over a `loom::RelayState` — and the Poke weave's whole state
+*is* the relay bookkeeping; its handlers are one-liners.
 **A relayed answer must come from the poked target:** the relay matches pending pokes by
 correlation *and* the bus-stamped sender — an ordinary participant *can* emit a
-perfectly-shaped forged `zen.PokeValue` (sayable through the honest API, and the test says
+perfectly-shaped forged `zen.Result` (sayable through the honest API, and the test says
 it), but it cannot speak *as* the target, so the forgery is dropped and the pending poke
-stays parked. Pending pokes are honest state (a `zen.PokePending` list — itself
+stays parked. Pending pokes are honest state (a `zen.RelayPending` list — itself
 poke-inspectable), bounded at 64 with oldest-shed; a forwarded poke whose answer never
 comes (no such target, a raw non-woven weave with no doors, an answer-denied grant) parks
 until shed, with the underlying refusal on the tap — a participant cannot observe the fate
@@ -1978,9 +1989,72 @@ value refuses a raw read while the target's own front-door query still serves it
 protocol shapes are ordinary messages: the console can also poke a target directly, no Poke
 weave involved (pinned by stamped-sender).
 
+### The standard reply shapes (`weave/standard_shapes.hpp`)
+
+One vocabulary for the answers every protocol sends, so a reader recognizes a reply
+instantly instead of re-learning each protocol's dialect. **The rule (the
+least-complete-information razor, applied to replies): standardize the contentless and
+simple-payload replies — ack / refusal / result; keep a bespoke reply type ONLY where the
+reply carries genuinely protocol-specific structure whose absence would break the image.**
+Test each field by its absence: if removing it leaves the reader *confused*, it is
+load-bearing; if merely *less-informed*, it is sediment.
+
+- **`loom::Ack`** (`zen.Ack`) carries **nothing** — "done." A reply's correlation already
+  ties it to its request, so the correlation carries *what* was done. Zero fields is the
+  complete image.
+- **`loom::Refused`** (`zen.Refused`) carries **one field** — "no, and here is why." A
+  refusal without its reason is an incomplete image; the reason is written self-contained,
+  for a stranger. (Deliberately *not* named `Error`: `loom::Error` is the gate's admission
+  error — a malformed claim, a fault — while a `zen.Refused` is a deliberate answer by
+  policy; the two must not read as one thing. "Refused" is also the word the protocols had
+  already independently converged on — `PokeRefused`, `SendRefused` — canonized.)
+- **`loom::Result`** (`zen.Result`) carries **the payload**, as text — "here is what you
+  asked for." (Not named `Value`: `loom::Value` is the substrate's value type itself.)
+
+They are ordinary shapes — registered, gated, content-id'd, hand-registered with the
+substrate's `zen.` prefix — and every protocol using them derives the same schema from the
+same struct: one content-id everywhere, by construction (pinned against hand-built twins).
+Because the vocabulary is universal, it comes with a **consumer obligation** (recorded in
+the header): accepting a standard reply obliges matching correlation **and** bus-stamped
+sender against your own outstanding requests; an unsolicited reply is data at best.
+Producers still declare standard replies in `Emit<...>` like any shape they send.
+The poke protocol's original `PokeValue{field,type,value}` / `PokeAck{op,field}` /
+`PokeRefused{op,field,reason}` collapsed into them: the `op`/`field`/`type` members restated
+what the reply's correlation, the request itself, and the structure (`zen.PokeDescribe`)
+already carried. `zen.PokeStructure` **survives by the razor** — a weave's full structure
+(identity + every field's name/type/tag-state) is genuinely protocol-specific; remove its
+fields and the reader is *confused*, not merely less-informed.
+
+### The request/reply relay pattern (`weave/relay.hpp`)
+
+The command→forward→answer dance every fronting weave repeats, expressed once:
+`loom::forward(mail, state, target, req)` stamps a fresh `seq` on the forward and remembers
+who asked (from routing metadata, never the payload) in a bounded `loom::RelayState`;
+`loom::relay(mail, state, answer)` sends a correlated answer on to the original asker —
+**only if its bus-stamped sender is the forwarded-to target** (the anti-forgery wall,
+written once in the substrate). It carries only what the pattern needs — the correlation
+bookkeeping and the two moves; no expected-reply-type registry, no timeouts, no knobs — and
+it removes bookkeeping, never the contract: the maker's `Accept<...>`/`Emit<...>`
+declarations stay visible on the weave.
+
+### The weave-layer files (the naming fix)
+
+Three files once read as "weave.hpp" at three layers; the raw contract is now
+`switchboard/weave_contract.hpp`, so the layers are legible at a glance:
+`zen/switchboard/weave_contract.hpp` — the raw `Weave` contract (the frozen five-method
+virtual ABI the bus dispatches through); `zen/weave/weave.hpp` — the `WeaveBase` authoring
+sugar (what a maker writes against); `zen/weave.hpp` — the umbrella include.
+
 ### Scope + seams (hooked, not built)
 
-Out-of-process pokes (a sandboxed `.so` weave now *accepts* the doors via its manifest, but
+The **standard-shape follow-on**: the storage broker (`StorageValue{value: Bytes}` — a
+bytes payload, so it stays bespoke by the rule unless/until a bytes result earns its way
+into the standard set; its empty-bytes-means-absent sentinel could become an honest
+`zen.Refused`), the net broker (`NetResponse{ok, data}` — an ok-flag + payload combo that
+could split into `zen.Result`|`zen.Refused`), and the bridge's `SendRefused` (a socket-layer
+framed op, not a bus shape — adopting the vocabulary there is a design question, not a
+mechanical swap) all reinvent ack/refusal today; migrating them is named, mechanical
+follow-up, deliberately not this phase. Also: out-of-process pokes (a sandboxed `.so` weave now *accepts* the doors via its manifest, but
 its kernel-decided grant does not include the answer shapes, so answers are denied until a
 host grants them — consistent, tap-visible, unexercised); the authorized-direct-call path
 (auth-phase trigger); composed/granular tag rules (`expose-all-except`, both-tags-on-one-

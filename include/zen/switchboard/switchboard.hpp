@@ -6,7 +6,7 @@
 #include <zen/schema.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
-#include <zen/switchboard/weave.hpp>
+#include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
 
 #include <cstdint>
