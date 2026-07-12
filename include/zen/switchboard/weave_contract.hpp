@@ -1,5 +1,5 @@
-#ifndef ZEN_SWITCHBOARD_WEAVE_HPP
-#define ZEN_SWITCHBOARD_WEAVE_HPP
+#ifndef ZEN_SWITCHBOARD_WEAVE_CONTRACT_HPP
+#define ZEN_SWITCHBOARD_WEAVE_CONTRACT_HPP
 
 #include <zen/schema.hpp>
 #include <zen/switchboard/bus.hpp>
@@ -12,6 +12,10 @@
 namespace loom {
 
 /// The Weave contract — the unit that lives behind a boundary on the bus.
+///
+/// (The three weave-layer headers, at a glance: THIS file is the raw contract
+/// the bus dispatches through; zen/weave/weave.hpp is the WeaveBase authoring
+/// sugar a maker writes against; zen/weave.hpp is the umbrella include.)
 ///
 /// This is a deliberately minimal, frozen ABI surface (virtual dispatch): the
 /// five methods below are all the Switchboard needs, and they are designed to
@@ -59,4 +63,4 @@ protected:
 
 } // namespace loom
 
-#endif // ZEN_SWITCHBOARD_WEAVE_HPP
+#endif // ZEN_SWITCHBOARD_WEAVE_CONTRACT_HPP

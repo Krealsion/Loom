@@ -13,7 +13,7 @@
 
 #include <zen/switchboard/bus.hpp>
 #include <zen/switchboard/message.hpp>
-#include <zen/switchboard/weave.hpp>
+#include <zen/switchboard/weave_contract.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
 #endif // ZEN_SWITCHBOARD_HPP

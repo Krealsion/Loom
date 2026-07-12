@@ -128,9 +128,9 @@ public:
 };
 
 // The forger: an ordinary granted participant that emits an answer-SHAPED
-// message, trying to speak for a poked target. Emitting the shape is sayable
-// through the honest API on purpose — the wall is the Poke weave's
-// stamped-sender check, and that is what the test pins.
+// message (a standard zen.Result), trying to speak for a poked target.
+// Emitting the shape is sayable through the honest API on purpose — the wall
+// is the relay's stamped-sender check, and that is what the test pins.
 struct NudgeState {
     std::int64_t z = 0;
     ZEN_SHAPE(NudgeState, 1, ZEN_FIELD(z));
@@ -140,32 +140,36 @@ struct Nudge {
     ZEN_SHAPE(Nudge, 1, ZEN_FIELD(seq));
 };
 class FalseVoice
-    : public au::WeaveBase<FalseVoice, NudgeState, au::Accept<Nudge>, au::Emit<au::PokeValue>> {
+    : public au::WeaveBase<FalseVoice, NudgeState, au::Accept<Nudge>, au::Emit<au::Result>> {
 public:
     au::WeaveId poke_weave{};
     std::uint64_t forged_corr = 0;
     void on(const Nudge&, au::Mail& mail) {
-        mail.send(poke_weave, au::PokeValue{"rate", "Int", "999"}, forged_corr);
+        mail.send(poke_weave, au::Result{"999"}, forged_corr);
     }
 };
 
-// Register a probe that keeps full answer payloads (ProbeWeave records names
-// only; the hook copies the Values out).
+// Register a probe that keeps full answer payloads + the correlation each
+// answer arrived with (ProbeWeave records names only; the hook copies out).
+// The correlation matters: it is the datum that lets the contentless standard
+// replies be complete (the correlation carries the "what").
 struct AnswerLog {
     sbfx::Registered reg{};
     std::vector<loom::Value> got;
+    std::vector<std::uint64_t> corr;
 };
 AnswerLog register_answer_probe(Switchboard& bus) {
     AnswerLog log;
     log.reg = sbfx::register_probe(bus, {au::schema_of<au::PokeStructure>(),
-                                         au::schema_of<au::PokeValue>(),
-                                         au::schema_of<au::PokeAck>(),
-                                         au::schema_of<au::PokeRefused>()});
+                                         au::schema_of<au::Result>(),
+                                         au::schema_of<au::Ack>(),
+                                         au::schema_of<au::Refused>()});
     return log;
 }
 void capture(AnswerLog& log) {
     log.reg.weave->on_handle = [&log](const Message& in, Bus&, sbfx::ProbeWeave&) {
         log.got.push_back(in.payload);
+        log.corr.push_back(in.correlation);
     };
 }
 
@@ -182,6 +186,33 @@ std::string text_field(const loom::Value& v, const char* field) {
 } // namespace
 
 TEST_SUITE("poke") {
+
+// ---- the standard reply shapes (the shared vocabulary) ----------------------
+
+TEST_CASE("the standard reply shapes are ordinary shapes: registered, versioned, one identity") {
+    // The razor made concrete: Ack carries nothing (the correlation carries
+    // the what), Refused carries only its reason, Result carries only its
+    // payload.
+    const auto ack = au::schema_of<au::Ack>();
+    CHECK(ack->name() == "zen.Ack");
+    CHECK(ack->fields().empty());
+    const auto refused = au::schema_of<au::Refused>();
+    CHECK(refused->name() == "zen.Refused");
+    REQUIRE(refused->fields().size() == 1);
+    CHECK(refused->fields()[0].name == "reason");
+    const auto result = au::schema_of<au::Result>();
+    CHECK(result->name() == "zen.Result");
+    REQUIRE(result->fields().size() == 1);
+    CHECK(result->fields()[0].name == "value");
+
+    // Same content-id as a hand-built twin: the standard shapes go through
+    // SchemaBuilder like any shape — shared vocabulary, not special-cased.
+    CHECK(SchemaBuilder("zen.Ack", 1).build()->content_id() == ack->content_id());
+    CHECK(SchemaBuilder("zen.Refused", 1).field("reason", Kind::Text).build()->content_id() ==
+          refused->content_id());
+    CHECK(SchemaBuilder("zen.Result", 1).field("value", Kind::Text).build()->content_id() ==
+          result->content_id());
+}
 
 // ---- the access model, standalone (pure functions, no bus) -----------------
 
@@ -210,16 +241,17 @@ TEST_CASE("the default with no tag: a field is read-exposed and write-hidden") {
     MetricsState s;
     s.label = "steady";
 
-    // Read is free and universal — no tag needed.
+    // Read is free and universal — no tag needed. The answer is a standard
+    // zen.Result carrying only the payload; the field's declared type lives
+    // in the structure (zen.PokeDescribe), not restated per read.
     const auto read = au::poke_read(s, "label");
-    REQUIRE(std::holds_alternative<au::PokeValue>(read));
-    CHECK(std::get<au::PokeValue>(read).value == "steady");
-    CHECK(std::get<au::PokeValue>(read).type == "Text");
+    REQUIRE(std::holds_alternative<au::Result>(read));
+    CHECK(std::get<au::Result>(read).value == "steady");
 
     // Write is opt-in — an untagged field refuses, with the reason stated.
     const auto write = au::poke_write(s, "label", "hijacked");
-    REQUIRE(std::holds_alternative<au::PokeRefused>(write));
-    CHECK(std::get<au::PokeRefused>(write).reason ==
+    REQUIRE(std::holds_alternative<au::Refused>(write));
+    CHECK(std::get<au::Refused>(write).reason ==
           "field 'label' is not exposed (ZEN_EXPOSE opts a field into manipulation)");
     CHECK(s.label == "steady"); // untouched
 }
@@ -228,13 +260,14 @@ TEST_CASE("ZEN_EXPOSE opts a field into manipulation; the literal parses against
           "kind") {
     MetricsState s;
     const auto ok = au::poke_write(s, "rate", "42");
-    REQUIRE(std::holds_alternative<au::PokeAck>(ok));
+    REQUIRE(std::holds_alternative<au::Ack>(ok));
     CHECK(s.rate == 42);
 
-    // A bad literal is a clean refusal, never a mis-write.
+    // A bad literal is a clean refusal, never a mis-write. The reason names
+    // the field: every refusal reason is self-contained, without exception.
     const auto bad = au::poke_write(s, "rate", "fast");
-    REQUIRE(std::holds_alternative<au::PokeRefused>(bad));
-    CHECK(std::get<au::PokeRefused>(bad).reason == "value \"fast\" does not parse as Int");
+    REQUIRE(std::holds_alternative<au::Refused>(bad));
+    CHECK(std::get<au::Refused>(bad).reason == "field 'rate': value \"fast\" does not parse as Int");
     CHECK(s.rate == 42);
 }
 
@@ -244,8 +277,8 @@ TEST_CASE("ZEN_HIDE gates the value, never the existence: the structure stays co
 
     // The raw read is refused...
     const auto read = au::poke_read(s, "raw_total");
-    REQUIRE(std::holds_alternative<au::PokeRefused>(read));
-    CHECK(std::get<au::PokeRefused>(read).reason ==
+    REQUIRE(std::holds_alternative<au::Refused>(read));
+    CHECK(std::get<au::Refused>(read).reason ==
           "field 'raw_total' is hidden (ZEN_HIDE): its value is message-only — ask the weave "
           "through its own interface");
 
@@ -310,16 +343,17 @@ TEST_CASE("reset restores the default state, and only when every field is writab
     f.a = 100;
     f.b = 200;
     const auto ok = au::poke_reset(f);
-    REQUIRE(std::holds_alternative<au::PokeAck>(ok));
+    REQUIRE(std::holds_alternative<au::Ack>(ok));
     CHECK(f.a == 7); // the default-constructed values
     CHECK(f.b == 9);
 
     MetricsState m;
     m.rate = 5;
     const auto refused = au::poke_reset(m);
-    REQUIRE(std::holds_alternative<au::PokeRefused>(refused));
-    CHECK(std::get<au::PokeRefused>(refused).field == "raw_total");
-    CHECK(std::get<au::PokeRefused>(refused).reason ==
+    REQUIRE(std::holds_alternative<au::Refused>(refused));
+    // The blocking field is not in the fieldless request, so the reason names
+    // it — the one reason field carries the complete image.
+    CHECK(std::get<au::Refused>(refused).reason ==
           "field 'raw_total' is not exposed — reset rewrites every field, so it requires a "
           "fully-exposed weave");
     CHECK(m.rate == 5); // untouched
@@ -335,11 +369,11 @@ TEST_CASE("a non-scalar field is fully visible in the structure but not message-
     CHECK(st.fields[1].writable); // the tag-state is honest even when the op is unsupported
 
     const auto read = au::poke_read(s, "items");
-    REQUIRE(std::holds_alternative<au::PokeRefused>(read));
-    CHECK(std::get<au::PokeRefused>(read).reason ==
+    REQUIRE(std::holds_alternative<au::Refused>(read));
+    CHECK(std::get<au::Refused>(read).reason ==
           "field 'items' has kind List<Int> — only scalar fields are message-readable this phase");
     const auto write = au::poke_write(s, "items", "[1,2]");
-    REQUIRE(std::holds_alternative<au::PokeRefused>(write));
+    REQUIRE(std::holds_alternative<au::Refused>(write));
 }
 
 // ---- the doors on the bus (the target's construction layer answers) --------
@@ -350,17 +384,22 @@ TEST_CASE("a poke is an ordinary gated message: the substrate doors answer on th
     AnswerLog asker = register_answer_probe(bus);
     capture(asker);
 
-    // Describe, read, write — root-sent with the probe as the reply address.
-    bus.send(metrics, Message(au::to_value(au::PokeDescribe{}), WeaveId{}, asker.reg.id));
-    bus.send(metrics, Message(au::to_value(au::PokeRead{"rate"}), WeaveId{}, asker.reg.id));
-    bus.send(metrics, Message(au::to_value(au::PokeWrite{"rate", "42"}), WeaveId{}, asker.reg.id));
+    // Describe, read, write — root-sent with the probe as the reply address,
+    // each under its own correlation.
+    bus.send(metrics, Message(au::to_value(au::PokeDescribe{}), WeaveId{}, asker.reg.id, 5));
+    bus.send(metrics, Message(au::to_value(au::PokeRead{"rate"}), WeaveId{}, asker.reg.id, 6));
+    bus.send(metrics,
+             Message(au::to_value(au::PokeWrite{"rate", "42"}), WeaveId{}, asker.reg.id, 7));
     bus.pump();
 
     REQUIRE(asker.got.size() == 3);
     CHECK(asker.got[0].schema().name() == "zen.PokeStructure");
-    CHECK(asker.got[1].schema().name() == "zen.PokeValue");
+    CHECK(asker.got[1].schema().name() == "zen.Result");
     CHECK(text_field(asker.got[1], "value") == "0");
-    CHECK(asker.got[2].schema().name() == "zen.PokeAck");
+    CHECK(asker.got[2].schema().name() == "zen.Ack");
+    // Each answer echoes its request's correlation — the datum that makes a
+    // contentless zen.Ack a complete image. Pinned, not believed.
+    CHECK(asker.corr == std::vector<std::uint64_t>{5, 6, 7});
 
     // The write actually landed in the live weave.
     auto* m = static_cast<MetricsWeave*>(bus.weave(metrics));
@@ -383,13 +422,13 @@ TEST_CASE("the access model holds on the wire: hidden read and un-exposed write 
     bus.pump();
 
     REQUIRE(asker.got.size() == 2);
-    CHECK(asker.got[0].schema().name() == "zen.PokeRefused");
-    CHECK(text_field(asker.got[0], "op") == "read");
+    CHECK(asker.got[0].schema().name() == "zen.Refused");
     CHECK(text_field(asker.got[0], "reason") ==
           "field 'raw_total' is hidden (ZEN_HIDE): its value is message-only — ask the weave "
           "through its own interface");
-    CHECK(asker.got[1].schema().name() == "zen.PokeRefused");
-    CHECK(text_field(asker.got[1], "op") == "write");
+    CHECK(asker.got[1].schema().name() == "zen.Refused");
+    CHECK(text_field(asker.got[1], "reason") ==
+          "field 'label' is not exposed (ZEN_EXPOSE opts a field into manipulation)");
     CHECK(m->label() == "steady"); // the wall held
 }
 
@@ -437,7 +476,7 @@ TEST_CASE("answering pokes confers no authority: an ungranted weave's answer is 
         if (r.schema == "zen.PokeRead" && r.kind == EventKind::Delivered) {
             request_delivered = true;
         }
-        if (r.schema == "zen.PokeValue" && r.kind == EventKind::Refused &&
+        if (r.schema == "zen.Result" && r.kind == EventKind::Refused &&
             r.reason == RefusalReason::CapabilityDenied) {
             answer_denied = true;
         }
@@ -485,13 +524,18 @@ TEST_CASE("the Poke weave relays: command in, protocol out, answer back to the a
     REQUIRE(asker.got.size() == 4);
     CHECK(asker.got[0].schema().name() == "zen.PokeStructure");
     CHECK(text_field(asker.got[0], "state_schema") == "MetricsState");
-    CHECK(asker.got[1].schema().name() == "zen.PokeAck");
-    CHECK(asker.got[2].schema().name() == "zen.PokeValue");
+    CHECK(asker.got[1].schema().name() == "zen.Ack");
+    CHECK(asker.got[2].schema().name() == "zen.Result");
     CHECK(text_field(asker.got[2], "value") == "42");
     // Reset is refused: MetricsState is not fully exposed. A refusal is an
-    // answer, and it relays like one.
-    CHECK(asker.got[3].schema().name() == "zen.PokeRefused");
-    CHECK(text_field(asker.got[3], "op") == "reset");
+    // answer, and it relays like one — the reason names the blocking field.
+    CHECK(asker.got[3].schema().name() == "zen.Refused");
+    CHECK(text_field(asker.got[3], "reason") ==
+          "field 'raw_total' is not exposed — reset rewrites every field, so it requires a "
+          "fully-exposed weave");
+    // The relay restored each asker's ORIGINAL correlation (not its own seq) —
+    // the load-bearing half of "the correlation carries the what". Pinned.
+    CHECK(asker.corr == std::vector<std::uint64_t>{11, 12, 13, 14});
 
     CHECK(static_cast<MetricsWeave*>(bus.weave(metrics))->rate() == 42);
 
@@ -519,16 +563,30 @@ TEST_CASE("a forged answer is not the target's voice: relay requires the stamped
     bus.pump();
     CHECK(asker.got.empty()); // nothing answered; the pending poke is parked
 
-    // The forger emits a perfectly-shaped zen.PokeValue with the pending
+    // The forger emits a perfectly-shaped zen.Result with the pending
     // correlation (seq 1). Emitting the SHAPE is sayable through the honest
-    // API — the wall is the Poke weave's stamped-sender check.
+    // API — the wall is the relay's stamped-sender check.
     auto* voice = static_cast<FalseVoice*>(bus.weave(liar));
     voice->poke_weave = poke;
     voice->forged_corr = 1;
+
+    // Pin that the forged frame actually REACHES the relay: it must be
+    // DELIVERED to the Poke weave, so the non-relay below is provably the
+    // relay's own stamped-sender wall — not some upstream delivery refusal
+    // that would leave this test green while the wall went untested.
+    bool forged_delivered = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.schema_name == "zen.Result" &&
+            e.sender == liar && e.target == poke) {
+            forged_delivered = true;
+        }
+    });
+
     bus.send(liar, Message(au::to_value(Nudge{1})));
     bus.pump();
 
     // Not relayed: the stamped sender (the forger) is not the poked target.
+    CHECK(forged_delivered); // the frame reached the relay...
     CHECK(asker.got.empty());
     const loom::Value snap = bus.weave(poke)->snapshot();
     CHECK(snap.get("pending")->as_list().size() == 1); // still parked, not consumed
@@ -598,7 +656,7 @@ TEST_CASE("driven from the console, end to end: inspect, manipulate, and honest 
     REQUIRE(set_ok.status == Composed::Status::Ready);
     engine.pump();
     REQUIRE(engine.buffer_size() == 2);
-    CHECK(engine.buffer_at(2)->name == "zen.PokeAck");
+    CHECK(engine.buffer_at(2)->name == "zen.Ack");
     CHECK(static_cast<MetricsWeave*>(bus.weave(metrics))->rate() == 42);
 
     // ...and is REFUSED on the un-exposed field, with the reason in hand.
@@ -606,7 +664,7 @@ TEST_CASE("driven from the console, end to end: inspect, manipulate, and honest 
     REQUIRE(set_no.status == Composed::Status::Ready);
     engine.pump();
     REQUIRE(engine.buffer_size() == 3);
-    CHECK(engine.buffer_at(3)->name == "zen.PokeRefused");
+    CHECK(engine.buffer_at(3)->name == "zen.Refused");
     CHECK(text_field(engine.buffer_at(3)->value, "reason") ==
           "field 'label' is not exposed (ZEN_EXPOSE opts a field into manipulation)");
 
@@ -615,7 +673,7 @@ TEST_CASE("driven from the console, end to end: inspect, manipulate, and honest 
     REQUIRE(get_hidden.status == Composed::Status::Ready);
     engine.pump();
     REQUIRE(engine.buffer_size() == 4);
-    CHECK(engine.buffer_at(4)->name == "zen.PokeRefused");
+    CHECK(engine.buffer_at(4)->name == "zen.Refused");
 
     // ...while the weave's own front door still serves it, computed.
     std::string err;
@@ -635,20 +693,20 @@ TEST_CASE("the protocol shapes are ordinary messages: the console can poke a tar
     // console is just a granted participant. (A consumer of the answer shapes
     // must exist for the console's wildcard-accept to admit them — normally
     // the Poke weave's accept-set does that job; here a probe stands in.)
-    sbfx::register_probe(bus, {au::schema_of<au::PokeValue>()});
+    sbfx::register_probe(bus, {au::schema_of<au::Result>()});
 
     Composed c = engine.compose(metrics, "zen.PokeRead", 1, {lit("rate")});
     REQUIRE(c.status == Composed::Status::Ready);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
-    CHECK(engine.buffer_at(1)->name == "zen.PokeValue");
+    CHECK(engine.buffer_at(1)->name == "zen.Result");
     CHECK(text_field(engine.buffer_at(1)->value, "value") == "0");
 
     // Directness, pinned: the answer's stamped sender is the TARGET itself —
     // no intermediary spoke for it.
     bool direct = false;
     for (const auto& t : engine.tap()) {
-        if (t.kind == "Delivered" && t.schema == "zen.PokeValue" && t.sender == metrics) {
+        if (t.kind == "Delivered" && t.schema == "zen.Result" && t.sender == metrics) {
             direct = true;
         }
     }

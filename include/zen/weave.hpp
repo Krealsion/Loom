@@ -11,7 +11,9 @@
 
 #include <zen/weave/poke.hpp>
 #include <zen/weave/poke_weave.hpp>
+#include <zen/weave/relay.hpp>
 #include <zen/weave/shape.hpp>
+#include <zen/weave/standard_shapes.hpp>
 #include <zen/weave/weave.hpp>
 
 #endif // ZEN_WEAVE_HPP

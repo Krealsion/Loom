@@ -1,8 +1,10 @@
 #ifndef ZEN_WEAVE_WEAVE_HPP
 #define ZEN_WEAVE_WEAVE_HPP
 
-// Low-ceremony Weave-making. A maker writes only their state struct, their
-// message structs (as ZEN_SHAPEs), and what to do per message — a typed handler
+// Low-ceremony Weave-making (the authoring layer; the raw contract it sugars
+// is zen/switchboard/weave_contract.hpp, and zen/weave.hpp is the umbrella).
+// A maker writes only their state struct, their message structs (as
+// ZEN_SHAPEs), and what to do per message — a typed handler
 // `void on(const Ping&, Mail&)`. Everything else is derived:
 //   - accepted_schemas() from the Accept<...> list (named once),
 //   - snapshot()/revive() from the State struct,
@@ -258,10 +260,15 @@ private:
     /// around the gate (invariant 7). The grant rule mount() adds
     /// (allow_poke_answers) is exactly the kind an Emit<...> declaration confers
     /// — so a mount()ed weave's own maker code may likewise emit the four answer
-    /// shapes; that is inert (they carry no capability, and the only consumers —
-    /// the console and the Poke weave — treat an unsolicited answer as data /
-    /// drop it on a sender mismatch). A finer per-send principal is the
-    /// sub-weave-identity seam the auth phase pulls, not this one.
+    /// shapes; that is inert not by enumeration of today's consumers but by the
+    /// standing consumer obligation (standard_shapes.hpp): a consumer of the
+    /// standard replies matches correlation + bus-stamped sender against its own
+    /// requests and treats an unsolicited answer as data at best. (Makers whose
+    /// own code replies with a standard shape still declare it in Emit<...> —
+    /// the ride-along grant is the answering machinery's, not a license to leave
+    /// the silhouette silent; pinned as a known carve-out in the weave suite.)
+    /// A finer per-send principal is the sub-weave-identity seam the auth phase
+    /// pulls, not this one.
     template <class Answer>
     void answer_poke(const loom::Message& in, loom::Bus& bus, const Answer& answer) {
         const loom::WeaveId to = in.reply_to.valid() ? in.reply_to : in.sender;

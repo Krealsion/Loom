@@ -6,21 +6,28 @@
 //
 // Every woven Weave (WeaveBase) answers four substrate doors —
 //   zen.PokeDescribe    -> zen.PokeStructure   (the full structure + tag-state)
-//   zen.PokeRead        -> zen.PokeValue | zen.PokeRefused
-//   zen.PokeWrite       -> zen.PokeAck   | zen.PokeRefused
-//   zen.PokeResetState  -> zen.PokeAck   | zen.PokeRefused
+//   zen.PokeRead        -> zen.Result | zen.Refused
+//   zen.PokeWrite       -> zen.Ack    | zen.Refused
+//   zen.PokeResetState  -> zen.Ack    | zen.Refused
 // — from its state shape's declared access model (ZEN_EXPOSE / ZEN_HIDE, see
 // shape.hpp). A poke is an ordinary gated message; a poker is an ordinary
 // participant; a weave that didn't expose something cannot be poked into it.
 // That is the safety property, not a limitation.
 //
+// The replies are the STANDARD shapes (standard_shapes.hpp), not a poke
+// dialect: an ack's correlation already says what was acked, a refusal's
+// reason is written self-contained, a result's payload is the image. Only
+// zen.PokeStructure stays bespoke — a weave's full structure is genuinely
+// protocol-specific; remove its fields and the reader is confused, not merely
+// less-informed.
+//
 // The two honesty properties this header enforces:
 //   - NO SECRET STATE: zen.PokeDescribe lists EVERY field — name, type, and
 //     tag-state — regardless of tags. ZEN_HIDE gates a value, never existence.
 //   - NO SILENT FATE: every read/write/reset that is not performed is answered
-//     with a zen.PokeRefused carrying the reason.
+//     with a zen.Refused carrying the reason.
 //
-// Values cross this boundary as text (`zen.PokeValue.value`,
+// Values cross this boundary as text (`zen.Result.value`,
 // `zen.PokeWrite.value`), converted against the FIELD'S OWN DECLARED KIND at
 // the target — a bad literal is a clean refusal, never a mis-write. Scalar
 // fields only this phase (Int/Float/Text/Bool); a non-scalar field is still
@@ -32,6 +39,7 @@
 // debugger. Message-poking is *a* poke path, not *the only* one.
 
 #include <zen/weave/shape.hpp>
+#include <zen/weave/standard_shapes.hpp>
 #include <zen/switchboard/grant.hpp>
 
 #include <charconv>
@@ -120,42 +128,11 @@ struct PokeStructure {
     }
 };
 
-/// The answer to a permitted zen.PokeRead: the value, rendered as text.
-struct PokeValue {
-    std::string field;
-    std::string type;
-    std::string value;
-    using ZenSelf = PokeValue;
-    static constexpr const char* zen_name = "zen.PokeValue";
-    static constexpr std::uint32_t zen_version = 1;
-    static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(field), ZEN_FIELD(type), ZEN_FIELD(value));
-    }
-};
-
-/// The answer to a performed zen.PokeWrite / zen.PokeResetState.
-struct PokeAck {
-    std::string op;
-    std::string field;
-    using ZenSelf = PokeAck;
-    static constexpr const char* zen_name = "zen.PokeAck";
-    static constexpr std::uint32_t zen_version = 1;
-    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(op), ZEN_FIELD(field)); }
-};
-
-/// The answer to any poke the access model does not permit: op, field, and an
-/// honest reason. A refusal is an answer, never silence.
-struct PokeRefused {
-    std::string op;
-    std::string field;
-    std::string reason;
-    using ZenSelf = PokeRefused;
-    static constexpr const char* zen_name = "zen.PokeRefused";
-    static constexpr std::uint32_t zen_version = 1;
-    static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(op), ZEN_FIELD(field), ZEN_FIELD(reason));
-    }
-};
+// The reply shapes zen.Result / zen.Ack / zen.Refused live in
+// standard_shapes.hpp — they are the shared vocabulary, not a poke dialect.
+// (The bespoke zen.PokeValue/PokeAck/PokeRefused this protocol first shipped
+// with collapsed into them: their op/field members restated what the reply's
+// correlation and the refusal's self-contained reason already carried.)
 
 /// True for the four request shapes the construction layer itself answers.
 /// WeaveBase refuses (at compile time) to let a maker Accept<> these: the
@@ -172,10 +149,11 @@ inline std::vector<std::shared_ptr<const Schema>> poke_door_schemas() {
             schema_of<PokeResetState>()};
 }
 
-/// The four answer shapes the construction layer emits when poked.
+/// The four answer shapes the construction layer emits when poked: the
+/// bespoke structure plus the three standard replies.
 inline std::vector<std::shared_ptr<const Schema>> poke_answer_schemas() {
-    return {schema_of<PokeStructure>(), schema_of<PokeValue>(), schema_of<PokeAck>(),
-            schema_of<PokeRefused>()};
+    return {schema_of<PokeStructure>(), schema_of<Result>(), schema_of<Ack>(),
+            schema_of<Refused>()};
 }
 
 /// Allow a Weave's poke ANSWERS. The construction layer does the answering,
@@ -272,26 +250,27 @@ PokeStructure poke_structure() {
 
 namespace detail {
 
+// The refusal reasons are written self-contained (they name the field and
+// what to do about it): with op/field folded into the prose, zen.Refused's one
+// reason field carries the complete image on its own.
+
 template <class State, class C, class M>
 bool poke_read_field(const State& state, const FieldEntry<C, M>& fe, std::uint8_t shape_bits,
-                     std::string_view field, std::variant<PokeValue, PokeRefused>& out) {
+                     std::string_view field, std::variant<Result, Refused>& out) {
     if (field != fe.name) {
         return false;
     }
     const std::uint8_t bits = static_cast<std::uint8_t>(fe.access | shape_bits);
     if ((bits & access::kHide) != 0) {
-        out = PokeRefused{"read", std::string(field),
-                          "field '" + std::string(field) +
-                              "' is hidden (ZEN_HIDE): its value is message-only — ask the weave "
-                              "through its own interface"};
+        out = Refused{"field '" + std::string(field) +
+                      "' is hidden (ZEN_HIDE): its value is message-only — ask the weave "
+                      "through its own interface"};
     } else if constexpr (is_poke_scalar<M>) {
-        out = PokeValue{std::string(field), poke_type_name(type_ref_for<M>::get()),
-                        poke_render(state.*(fe.ptr))};
+        out = Result{poke_render(state.*(fe.ptr))};
     } else {
-        out = PokeRefused{"read", std::string(field),
-                          "field '" + std::string(field) + "' has kind " +
-                              poke_type_name(type_ref_for<M>::get()) +
-                              " — only scalar fields are message-readable this phase"};
+        out = Refused{"field '" + std::string(field) + "' has kind " +
+                      poke_type_name(type_ref_for<M>::get()) +
+                      " — only scalar fields are message-readable this phase"};
     }
     return true;
 }
@@ -299,30 +278,27 @@ bool poke_read_field(const State& state, const FieldEntry<C, M>& fe, std::uint8_
 template <class State, class C, class M>
 bool poke_write_field(State& state, const FieldEntry<C, M>& fe, std::uint8_t shape_bits,
                       std::string_view field, std::string_view value,
-                      std::variant<PokeAck, PokeRefused>& out) {
+                      std::variant<Ack, Refused>& out) {
     if (field != fe.name) {
         return false;
     }
     const std::uint8_t bits = static_cast<std::uint8_t>(fe.access | shape_bits);
     if ((bits & access::kExpose) == 0) {
-        out = PokeRefused{"write", std::string(field),
-                          "field '" + std::string(field) +
-                              "' is not exposed (ZEN_EXPOSE opts a field into manipulation)"};
+        out = Refused{"field '" + std::string(field) +
+                      "' is not exposed (ZEN_EXPOSE opts a field into manipulation)"};
     } else if constexpr (is_poke_scalar<M>) {
         M parsed{};
         if (poke_parse(value, parsed)) {
             state.*(fe.ptr) = std::move(parsed);
-            out = PokeAck{"write", std::string(field)};
+            out = Ack{};
         } else {
-            out = PokeRefused{"write", std::string(field),
-                              "value \"" + std::string(value) + "\" does not parse as " +
-                                  poke_type_name(type_ref_for<M>::get())};
+            out = Refused{"field '" + std::string(field) + "': value \"" + std::string(value) +
+                          "\" does not parse as " + poke_type_name(type_ref_for<M>::get())};
         }
     } else {
-        out = PokeRefused{"write", std::string(field),
-                          "field '" + std::string(field) + "' has kind " +
-                              poke_type_name(type_ref_for<M>::get()) +
-                              " — only scalar fields are message-writable this phase"};
+        out = Refused{"field '" + std::string(field) + "' has kind " +
+                      poke_type_name(type_ref_for<M>::get()) +
+                      " — only scalar fields are message-writable this phase"};
     }
     return true;
 }
@@ -333,9 +309,8 @@ bool poke_write_field(State& state, const FieldEntry<C, M>& fe, std::uint8_t sha
 /// field is readable (the default — no tag needed); a hidden field's value is
 /// message-only and refused here.
 template <Shape State>
-std::variant<PokeValue, PokeRefused> poke_read(const State& state, std::string_view field) {
-    std::variant<PokeValue, PokeRefused> result = PokeRefused{
-        "read", std::string(field),
+std::variant<Result, Refused> poke_read(const State& state, std::string_view field) {
+    std::variant<Result, Refused> result = Refused{
         "no field '" + std::string(field) + "' — zen.PokeDescribe lists the structure"};
     constexpr std::uint8_t shape_bits = shape_access_bits<State>();
     std::apply(
@@ -349,10 +324,9 @@ std::variant<PokeValue, PokeRefused> poke_read(const State& state, std::string_v
 /// Write one field under the access model: only a ZEN_EXPOSEd field is
 /// manipulable; the text literal is parsed against the field's declared kind.
 template <Shape State>
-std::variant<PokeAck, PokeRefused> poke_write(State& state, std::string_view field,
-                                              std::string_view value) {
-    std::variant<PokeAck, PokeRefused> result = PokeRefused{
-        "write", std::string(field),
+std::variant<Ack, Refused> poke_write(State& state, std::string_view field,
+                                      std::string_view value) {
+    std::variant<Ack, Refused> result = Refused{
         "no field '" + std::string(field) + "' — zen.PokeDescribe lists the structure"};
     constexpr std::uint8_t shape_bits = shape_access_bits<State>();
     std::apply(
@@ -376,17 +350,18 @@ std::variant<PokeAck, PokeRefused> poke_write(State& state, std::string_view fie
 /// touched. So an exposed std::vector is reset-clearable though not
 /// poke_write-settable: same access model, a more capable transport.
 template <Shape State>
-std::variant<PokeAck, PokeRefused> poke_reset(State& state) {
+std::variant<Ack, Refused> poke_reset(State& state) {
     for (const FieldAccess& f : access_of<State>()) {
         if (!f.writable) {
-            return PokeRefused{"reset", f.name,
-                               "field '" + f.name +
-                                   "' is not exposed — reset rewrites every field, so it requires "
-                                   "a fully-exposed weave"};
+            // The blocking field is information the REQUEST does not carry
+            // (zen.PokeResetState is fieldless), so the reason names it.
+            return Refused{"field '" + f.name +
+                           "' is not exposed — reset rewrites every field, so it requires "
+                           "a fully-exposed weave"};
         }
     }
     state = State{};
-    return PokeAck{"reset", ""};
+    return Ack{};
 }
 
 } // namespace loom

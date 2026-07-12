@@ -105,6 +105,20 @@ public:
     }
 };
 
+// The carve-out pair: a maker whose handler emits an UNDECLARED standard reply
+// (zen.Refused — empty Emit<> on purpose), and a sink that accepts it.
+class StandardLeaker
+    : public au::WeaveBase<StandardLeaker, CounterState, au::Accept<Ping>, au::Emit<>> {
+public:
+    WeaveId target{};
+    void on(const Ping&, au::Mail& mail) { mail.send(target, au::Refused{"undeclared"}); }
+};
+class RefusedSink
+    : public au::WeaveBase<RefusedSink, CounterState, au::Accept<au::Refused>, au::Emit<>> {
+public:
+    void on(const au::Refused&, au::Mail&) { ++state_.count; }
+};
+
 } // namespace
 
 TEST_SUITE("weave") {
@@ -186,9 +200,11 @@ TEST_CASE("a Weave's declared Emit<...> matches what it actually emits") {
 }
 
 TEST_CASE("the mount<> auto-grant denies an emit the Weave did not declare") {
-    // mount<> derives the grant purely from the declared Emit<...> set (allow_to_any per shape). So
-    // a handler that sends an UNDECLARED shape is CapabilityDenied — emit-denial holds on the
-    // auto-grant path too, not just the explicit-grant path (the latter is pinned in test_capabilities).
+    // mount<> derives the grant from the declared Emit<...> set (allow_to_any per shape) PLUS the
+    // four poke-answer shapes (allow_poke_answers — the construction layer's answering machinery;
+    // that carve-out is pinned as known in the next case). So a handler that sends an UNDECLARED
+    // shape outside that set is CapabilityDenied — emit-denial holds on the auto-grant path too,
+    // not just the explicit-grant path (the latter is pinned in test_capabilities).
     Switchboard bus;
     WeaveId sink = au::mount<Collector>(bus); // accepts Pong (Rogue isn't accepted, but denial is first)
     WeaveId leaker = au::mount<Leaker>(bus);
@@ -214,6 +230,38 @@ TEST_CASE("the mount<> auto-grant denies an emit the Weave did not declare") {
 
     CHECK(pong_ok);      // the DECLARED emit went through the auto-grant
     CHECK(rogue_denied); // the UNDECLARED emit was CapabilityDenied on the auto-grant path
+}
+
+TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is deliverable under "
+          "mount<>") {
+    // mount<>'s ride-along allow_poke_answers grant covers the standard replies
+    // (zen.Ack/zen.Refused/zen.Result + zen.PokeStructure) for every trusted
+    // weave, because the construction layer answers pokes with them. Since the
+    // same shapes are now the universal reply vocabulary, a maker's own
+    // UNDECLARED emit of one rides that grant — deliverable with an empty
+    // Emit<>. This is a KNOWN carve-out from "the silhouette is the grant",
+    // recorded here so it is never latent: makers who reply with a standard
+    // shape still declare it in Emit<...> (the standing rule in
+    // standard_shapes.hpp), and the reserved Mail emit-gate would close this
+    // for maker sends the day it lands — at which point this pin flips.
+    Switchboard bus;
+    WeaveId sink = au::mount<RefusedSink>(bus);
+    WeaveId leaker = au::mount<StandardLeaker>(bus);
+    static_cast<StandardLeaker*>(bus.weave(leaker))->target = sink;
+
+    bool refused_delivered = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.sender == leaker && e.schema_name == "zen.Refused" &&
+            e.kind == EventKind::Delivered) {
+            refused_delivered = true;
+        }
+    });
+
+    bus.send(leaker, Message(au::to_value(Ping{1}))); // host root trigger (ungated)
+    bus.pump();
+
+    CHECK(refused_delivered); // undeclared, yet delivered: the carve-out, on the record
+    CHECK(static_cast<RefusedSink*>(bus.weave(sink))->snapshot().get("count")->as_int() == 1);
 }
 
 TEST_CASE("the accept-set is the typed handlers plus the universal poke doors; emit-set stays "
