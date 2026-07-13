@@ -34,13 +34,27 @@ namespace loom {
 /// The semantic widget kinds. Arrangement: VStack/HStack (children in a vertical/horizontal
 /// RELATIONSHIP — not a grid of cells) and Region (a titled area wrapping one child). Content:
 /// List (an ordered set of selectable lines), Log (an append-oriented sequence), Text (static
-/// text), Field (an input affordance carrying an engine-produced guidance hint).
-enum class WidgetKind : std::uint8_t { VStack, HStack, Region, List, Log, Text, Field };
+/// text), Field (an input affordance carrying an engine-produced guidance hint). Composition:
+/// Slot (a typed OPEN HOLE a component leaves to be filled later — see component.hpp; its
+/// children are the design-time placeholder preview).
+enum class WidgetKind : std::uint8_t { VStack, HStack, Region, List, Log, Text, Field, Slot };
+
+/// Stable spelling of a widget kind — the vocabulary's public contract (it is the wire spelling
+/// a serialized component carries; see component.hpp). Do not rename these.
+const char* name_of(WidgetKind k) noexcept;
+/// Parse a stable spelling back to its kind; nullopt for an unknown spelling (the decode path
+/// REFUSES unknown kinds — there is no silent-blank fate from the wire).
+std::optional<WidgetKind> widget_kind_from(std::string_view spelling) noexcept;
 
 /// Cross-cutting overflow POLICY (how content exceeding its area behaves), resolved per-renderer
 /// in that medium's own units (rows for the terminal, pixels for a GUI). It is a policy, NEVER a
 /// size.
 enum class Overflow : std::uint8_t { Grow, Scroll, Wrap, Truncate };
+
+/// Stable spelling of an overflow policy (the wire spelling; see component.hpp).
+const char* name_of(Overflow o) noexcept;
+/// Parse a stable spelling back to its policy; nullopt for an unknown spelling.
+std::optional<Overflow> overflow_from(std::string_view spelling) noexcept;
 
 /// One node of the widget tree. A single value type: copyable and DEEPLY comparable (defaulted
 /// ==), so the whole tree is one value — trivially asserted in tests and diffable by region for
@@ -58,17 +72,39 @@ struct Widget {
     WidgetKind kind = WidgetKind::Text;
     std::string region_id;          ///< stable key for dirty/diff (empty = pure decoration)
     std::string title;              ///< Region / List / Log heading
-    std::string content;            ///< Text body
+    std::string content;            ///< Text body (in a schematic: the design-time placeholder)
     std::string prompt;             ///< Field label
     std::string value;              ///< Field current (in-progress) value
     std::string hint;               ///< Field engine-produced next-choice guidance
-    std::vector<std::string> items; ///< List rows / Log lines (pre-rendered domain text)
+    std::vector<std::string> items; ///< List rows / Log lines (pre-rendered domain text;
+                                    ///< in a schematic: the design-time placeholder rows)
     int selected_index = -1;        ///< List selection: an index INTO items, never a y (-1 = none)
-    bool focusable = false;
+
+    // Abstract interaction INTENT — what the operator may DO here, never which key/gesture does
+    // it (the renderer maps its medium onto these: the TUI keys, a GUI clicks/drags). These
+    // replaced `focusable`: no renderer ever read it, and focus-eligibility is derivable
+    // (a node you can act on is a node you can focus) — the intent is the load-bearing fact.
+    bool activatable = false;       ///< the node can be acted on (Activate on its selection)
+    bool editable = false;          ///< the node accepts text editing (a Field's nature)
+    bool reorderable = false;       ///< the node's items may be reordered (declared intent;
+                                    ///< no built renderer consumes it yet — the Builder composes it)
+
     bool focused = false;           ///< the focus MARKER (a flag, never a coordinate)
     std::uint16_t weight = 0;       ///< relative grow hint (0 = natural); never an absolute size
     Overflow overflow = Overflow::Grow;
-    std::vector<Widget> children;   ///< child relationship (by value — the tree is one value)
+
+    // Component-vocabulary fields (see component.hpp; all default-empty on live console trees).
+    std::string from_field;         ///< data binding: the contract field feeding this node's
+                                    ///< content/items ("" = static). Declared, not yet resolved —
+                                    ///< live binding is a later phase; design-time shows placeholder.
+    std::string route_to;           ///< navigation intent: the view address an Activate should
+                                    ///< route to ("" = none). The routing RUNTIME is a later phase.
+    std::string slot_name;          ///< Slot: the open hole's name ("" on non-slots)
+    std::string slot_accepts;       ///< Slot: what may fill it — "Component", "Route", or a
+                                    ///< scalar Kind spelling ("Int"/"Float"/"Text"/"Bool")
+
+    std::vector<Widget> children;   ///< child relationship (by value — the tree is one value);
+                                    ///< on a Slot: the design-time placeholder preview
 
     friend bool operator==(const Widget&, const Widget&) = default;
 };
@@ -115,12 +151,18 @@ Widget vstack(std::string region_id, std::vector<Widget> children);
 Widget hstack(std::string region_id, std::vector<Widget> children);
 Widget region(std::string region_id, std::string title, Widget child);
 Widget list(std::string region_id, std::string title, std::vector<std::string> items,
-            int selected_index, bool focusable, bool focused, Overflow overflow = Overflow::Scroll);
+            int selected_index, bool activatable, bool focused,
+            Overflow overflow = Overflow::Scroll);
 Widget log_widget(std::string region_id, std::string title, std::vector<std::string> entries,
                   Overflow overflow = Overflow::Scroll);
 Widget text_widget(std::string content);
-Widget field(std::string prompt, std::string value, std::string hint, bool focusable,
-             bool focused);
+/// A Field is an input affordance by nature: it is always `editable` (a non-editable value
+/// display is a Text). Interaction intent is still DECLARED on the node — the constructor is
+/// where the declaration happens.
+Widget field(std::string prompt, std::string value, std::string hint, bool focused);
+/// A typed open hole (see component.hpp for the design-time constructor that fills its
+/// placeholder preview with stress values). `accepts` declares what may fill it.
+Widget slot(std::string slot_name, std::string accepts, std::vector<Widget> placeholder);
 
 // ---- Input: renderer-agnostic semantic actions (symmetric with the output tree) ----
 // What the operator MEANS, not which key. The TUI maps raw keys onto these; a GUI maps

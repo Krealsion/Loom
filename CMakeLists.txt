@@ -132,10 +132,13 @@ endif() # NOT WIN32 (kernel + isolation)
 # A message-native bus participant — discover, compose, gate-send, receive replies into an
 # indexed buffer — built frontend-agnostic so the terminal (now) and a GUI (later) reuse
 # this engine unchanged. Stage 3 adds the UI-as-data layer (ui.cpp): a renderer-agnostic
-# semantic widget tree the engine emits and any renderer consumes. Depends only on the bus + core.
+# semantic widget tree the engine emits and any renderer consumes. The UI-Builder vocabulary
+# (component.cpp) evolves that SAME tree into components-with-typed-slots that serialize as
+# gated Values (zen.ui.*). Depends only on the bus + core.
 add_library(zen-console
     src/console/console.cpp
-    src/console/ui.cpp)
+    src/console/ui.cpp
+    src/console/component.cpp)
 target_include_directories(zen-console
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(zen-console PUBLIC cxx_std_20)

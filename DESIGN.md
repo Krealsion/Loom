@@ -1632,6 +1632,11 @@ renderer** (the same tree to pixels); **geometric/canvas UIs** (geometric by nat
 at the sandboxed-Weave *fabric* level, not the semantic-rendering level); and the **result-graph
 buffer** (Stage 2's seam — the flat `m1,m2…` buffer becoming an addressable result-graph).
 
+*(The vocabulary described above has since been **evolved in place** by the UI-Builder component
+phase — interaction intent replacing `focusable`, the `Slot` kind, bindings/routes, and
+serialization as gated Values. This section stays as the Stage-3 record; the current vocabulary
+is §"The UI-Builder component vocabulary".)*
+
 ### The terminal-backend seam (cross-platform frontends)
 
 The console's engine and UI-as-data layers are pure portable C++; the *only* platform-specific code
@@ -2076,6 +2081,122 @@ poke I/O (the structure already lists those fields honestly); send-fate observab
 participants; registering declared emissions at mount (today a reply shape reaches the
 console's wildcard-accept only if some accepter lists it — the console suite pins that as
 intended; the Poke weave's accept-set is what registers the answer grammar in practice).
+
+---
+
+## The UI-Builder component vocabulary (Phase A — the semantic tree, evolved; shapes only)
+
+The UI Builder produces **components: schematics with typed slots** — reusable UI that is
+incomplete *by design*, declaring the data shape it consumes and leaving open holes to be bound
+later. This phase built **only the vocabulary** (`include/zen/console/component.hpp` + the
+evolved `ui.hpp`): the shapes, their serialization as gated Values, and the unification with the
+console's existing widget tree. No renderer (SDL2 is the next phase), no Builder panels, no live
+binding, no routing/presenter runtime.
+
+### ONE tree, evolved — not a second vocabulary
+
+The console's `Widget` tree **is** the component tree; this phase evolved it in place. What
+changed on the node vocabulary itself:
+
+- **Abstract interaction intent** — `activatable` / `editable` / `reorderable` flags: what the
+  operator may *do* here, never which key or gesture does it (the TUI maps keys, a GUI maps
+  clicks onto the same declarations; `reorderable` is declared intent no built renderer consumes
+  yet). These **replaced `focusable`**, which the least-complete-information razor cut: no
+  renderer or controller ever read it, and focus-eligibility is derivable from interaction
+  intent — the intent is the load-bearing fact, the eligibility was sediment.
+- **A new node kind `Slot`** — a typed open hole (`slot_name` + `slot_accepts`: `"Component"`,
+  `"Route"`, or a scalar Kind spelling). A slot is a *position* in the tree, so it is a node,
+  not a side-table; its `children` are the design-time placeholder preview.
+- **Data binding** — `from_field` names the contract field feeding a node's content/items
+  (declared, not yet resolved: live binding is the Inspector phase's; design-time shows
+  placeholder). **Route addressability** — a component's `name` is its address; a node's
+  `route_to` declares navigation intent; the routing *runtime* is deferred.
+- The stable spellings (`name_of(WidgetKind)` / `name_of(Overflow)` + parsers) became public
+  contract — they are the wire spellings, and an unknown spelling is **refused on decode**,
+  never a silent blank.
+
+The TUI still renders the evolved tree (the standing renderer-agnosticism proof), gaining only a
+`Slot` projection (`[slot name: accepts T]` + the placeholder beneath). The outline proof now
+*prints* interaction intent, bindings, routes, and slots — they are the tree's **meaning** — and
+still *ignores* `weight`/overflow — they are renderer **hints**. That two-renderer discipline
+(meaning shows, hints don't) is pinned in the component suite.
+
+### A schematic is data: components serialize as gated Values
+
+`zen.ui.Node` v1 / `zen.ui.Component` v1 / `zen.ui.Presenter` v1 (hand-registered blocks, like
+the standard reply shapes, so the substrate's dotted prefix is unspellable by a maker's macro).
+A component round-trips `to_value → serialize → parse → admit → from_value` through the **same
+single validator as the bus path** — no second format, no bespoke codec. "A schematic shared is
+a toy others can play with" is thereby mechanical: save, send, load, gate.
+
+**The wire form is flat.** A schema cannot reference itself (immutable published schemas), and
+nested-Message decoding is depth-capped — so the tree crosses as a flat `nodes` list whose
+`children` are indices (node 0 the root; pre-order is `flatten()`'s canonical layout, not a
+decode requirement — any valid-tree layout rebuilds deterministically). `flatten()`/`tree_of()`
+are the lossless pair **within `kMaxUiDepth`** (flatten of a deeper tree yields a component
+`tree_of` refuses — the bound is pinned, not hidden), with the round-trip pinned by `Widget`'s
+structural `==` on real trees including the console's own live tree and a maximal
+every-field-non-default node pair (the mutation pin for codec omissions).
+
+**Honest layering (load-bearing):** the gate proves *shape-conformance*; it cannot see
+*tree-ness*. Whether the flat list is actually a tree — indices in range, every node reached
+exactly once, no cycles or orphans, known spellings, sane ranges (`contract_version` a u32),
+depth ≤ 256, and per-kind **child arity** (a Region wraps exactly one child; List/Log/Text/Field
+carry none — child structure is where the TUI and the outline would otherwise silently
+*diverge*, so it is tree structure and is refused; per-kind-unused *scalar* fields stay lenient
+and round-trip verbatim — canonical authoring zeroes them; a strict field-canonicality check is
+a named seam awaiting a consumer) — is the vocabulary's own decode check: `tree_of()` **refuses
+with a reason** naming the offending node. The component suite forges hostile shape-conforming
+frames — a detached cycle, a two-parent child, a root back-edge, unknown spellings, out-of-range
+integers, arity violations, a 300-deep chain — and **every class runs the full wire path**: the
+real gate admits it, `tree_of` refuses it (the unsayable-attack discipline applied to the
+vocabulary, pinned per class). The TUI's weight `split()` was hardened to 64-bit accumulation
+alongside — a wire-legal wide-and-heavy stack could wrap the old 32-bit weight sum.
+
+### Contracts, the view/presenter split, and stress placeholders
+
+- **Data contracts.** A component declares the shape it consumes as `(contract_name,
+  contract_version)` — registry-resolved identity, like every schema agreement in Zen.
+  `check_bindings(component, contract_schema)` makes typed slots *checkable*: every
+  `from_field` must name a real contract field of a displayable kind (Text/Field ↔ scalars,
+  List/Log ↔ List fields **with scalar elements** — rows are text, a `List<Bytes>` has no row
+  form; containers bind nothing), a Slot's `accepts` must be a known type, slots must be named
+  **uniquely** (filled by name later — a nameless or duplicate hole is unfillable), and
+  `route_to` requires `activatable` (a route that can never fire is a dead declaration).
+  Pinning the contract's *content-id* into the component is the migration/identity layer's
+  business — a named seam.
+- **The view/presenter split, as separable data.** A component is pure display: it declares
+  what it consumes but **never names what feeds it**. `zen.ui.Presenter{view, source_role}`
+  is a distinct value binding a source (by *role* — the persistable addressing; never a
+  session-scoped WeaveId) to a view (by name). Pinned at the schema level: the component
+  schema has no source field, the presenter schema has no tree. This is what lets a crashed
+  program-weave *not* take the UI down with it later — the source dying is an event the
+  display can outlive; the presenter runtime is a later phase.
+- **Stress placeholders are the default.** Design-time previews use the value that *reveals
+  the seam*: `stress_text()` (a long paragraph + an unbroken 64-char word), `stress_number()`
+  (`-9223372036854775808`, the widest Int spelling), `stress_rows()` (the empty list — the
+  zero-case), `stress_nested()` (a deep alternating-stack ladder). The design-time
+  constructors (`bound_text`/`bound_field`/`bound_list`/`open_slot`) pick them **by
+  default** — no happy-path preview exists to pick. ASCII on purpose (the TUI is
+  byte-per-cell); the Unicode stress case arrives with a renderer that can draw it. A
+  hand-chosen fill-out example-data section is a named follow-on.
+
+### Status: built (Phase A)
+
+Suite `component` (15 cases / 193 assertions): schema twins pinned against hand-built
+`SchemaBuilder` equivalents; the gate round-trip incl. canonical-bytes re-serialization and the
+Registry path; the console's live emitted tree crossing the wire bit-for-bit (ONE tree pinned);
+the gate-admits/`tree_of`-refuses hostile-frame matrix, **every class through the real gate**;
+the maximal every-field-non-default round-trip; accept-side boundary edges (weight 65535,
+`selected_index` INT_MAX, a cursor over an empty list); the bounded-lossless pin; stress
+defaults; outline-reads-as-intent (weight AND overflow pinned as outline-ignored hints); the
+TUI projecting a rebuilt schematic; the split's schema-level separability; the binding checks.
+Green Debug + ASan/UBSan under the delegated scope and on the Windows/MinGW portable subset. Named successors (not built): the **SDL2 renderer** (Phase B — same tree to pixels; it
+also pulls lifting the vocabulary out of the console target when a non-console consumer
+arrives), the **Builder panels** (Phase C — palette/canvas/inspector composing these shapes),
+**live data binding** (the Inspector phase), the **routing runtime**, the **presenter runtime**
+(subscription, update application, crash-as-event), the **fill-out example-data section**, and
+**contract-content-id pinning** (identity/migration phase).
 
 ---
 

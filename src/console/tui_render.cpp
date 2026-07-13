@@ -49,14 +49,17 @@ struct Rect {
 };
 
 // Split a length into n parts proportional to weights (0 => natural/equal share). Guards the
-// all-zero (total==0) case so we never divide by zero.
+// all-zero (total==0) case so we never divide by zero. The accumulators are 64-bit on purpose:
+// a wire-arrived tree may legally carry up to the list cap of children each at weight 65535,
+// and a 32-bit weight sum would wrap (mis-splitting the area; the signed `used` accumulation
+// could then overflow — UB). With 64-bit sums each part is <= total, so `used` stays small.
 std::vector<int> split(int total, const std::vector<std::uint16_t>& weights) {
     const std::size_t n = weights.size();
     std::vector<int> out(n, 0);
     if (n == 0 || total <= 0) {
         return out;
     }
-    std::uint32_t wsum = 0;
+    std::uint64_t wsum = 0;
     for (std::uint16_t w : weights) {
         wsum += w;
     }
@@ -70,9 +73,10 @@ std::vector<int> split(int total, const std::vector<std::uint16_t>& weights) {
     }
     int used = 0;
     for (std::size_t i = 0; i < n; ++i) {
-        const int part = static_cast<int>(static_cast<std::uint32_t>(total) * weights[i] / wsum);
+        const int part =
+            static_cast<int>(static_cast<std::uint64_t>(total) * weights[i] / wsum);
         out[i] = part;
-        used += part;
+        used += part; // each part <= total (w_i <= wsum), and the parts sum to <= total
     }
     out[n - 1] += total - used; // give rounding slack to the last part
     return out;
@@ -109,25 +113,32 @@ void layout_lines(const Widget& node, Rect area, Grid& grid) {
     }
 }
 
+void layout(const Widget& node, Rect area, Grid& grid);
+
+// Stack children vertically within `area`, apportioning height by their relative weights.
+// Shared by VStack and by Slot (whose placeholder preview stacks beneath its marker line).
+void layout_children_vertically(const Widget& node, Rect area, Grid& grid) {
+    std::vector<std::uint16_t> weights;
+    weights.reserve(node.children.size());
+    for (const Widget& c : node.children) {
+        weights.push_back(c.weight);
+    }
+    const std::vector<int> heights = split(area.height, weights);
+    int row = area.top;
+    for (std::size_t i = 0; i < node.children.size(); ++i) {
+        layout(node.children[i], Rect{row, area.left, heights[i], area.width}, grid);
+        row += heights[i];
+    }
+}
+
 void layout(const Widget& node, Rect area, Grid& grid) {
     if (area.height <= 0 || area.width <= 0) {
         return;
     }
     switch (node.kind) {
-    case WidgetKind::VStack: {
-        std::vector<std::uint16_t> weights;
-        weights.reserve(node.children.size());
-        for (const Widget& c : node.children) {
-            weights.push_back(c.weight);
-        }
-        const std::vector<int> heights = split(area.height, weights);
-        int row = area.top;
-        for (std::size_t i = 0; i < node.children.size(); ++i) {
-            layout(node.children[i], Rect{row, area.left, heights[i], area.width}, grid);
-            row += heights[i];
-        }
+    case WidgetKind::VStack:
+        layout_children_vertically(node, area, grid);
         break;
-    }
     case WidgetKind::HStack: {
         std::vector<std::uint16_t> weights;
         weights.reserve(node.children.size());
@@ -173,6 +184,15 @@ void layout(const Widget& node, Rect area, Grid& grid) {
         if (area.height > 1 && !node.hint.empty()) {
             grid.put(area.top + 1, area.left, "  (" + node.hint + ")", area.width);
         }
+        break;
+    }
+    case WidgetKind::Slot: {
+        // A typed open hole: a marker line, then the design-time placeholder preview beneath it
+        // (a component previews with STRESS values until the slot is bound — see component.hpp).
+        std::string marker = "[slot " + node.slot_name + ": accepts " + node.slot_accepts + "]";
+        grid.put(area.top, area.left, marker, area.width);
+        layout_children_vertically(
+            node, Rect{area.top + 1, area.left, area.height - 1, area.width}, grid);
         break;
     }
     } // no default (exhaustive by -Wswitch under -Werror)
