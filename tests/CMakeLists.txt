@@ -29,6 +29,7 @@ add_executable(zen-tests
     test_weave.cpp
     test_poke.cpp
     test_console.cpp
+    test_component.cpp
     test_bridge.cpp)
 
 # Kernel/isolation-dependent suites: compiled only where the kernel + sandbox exist.
@@ -152,7 +153,7 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # exit-status check is the source of truth — no output-scraping needed. The portable
 # suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec weave_shape weave poke console bridge)
+    switchboard harness breathing schema_codec weave_shape weave poke console component bridge)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()

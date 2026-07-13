@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -44,14 +45,14 @@ Widget region(std::string region_id, std::string title, Widget child) {
 }
 
 Widget list(std::string region_id, std::string title, std::vector<std::string> items,
-            int selected_index, bool focusable, bool focused, Overflow overflow) {
+            int selected_index, bool activatable, bool focused, Overflow overflow) {
     Widget w;
     w.kind = WidgetKind::List;
     w.region_id = std::move(region_id);
     w.title = std::move(title);
     w.items = std::move(items);
     w.selected_index = selected_index;
-    w.focusable = focusable;
+    w.activatable = activatable;
     w.focused = focused;
     w.overflow = overflow;
     return w;
@@ -75,21 +76,29 @@ Widget text_widget(std::string content) {
     return w;
 }
 
-Widget field(std::string prompt, std::string value, std::string hint, bool focusable,
-             bool focused) {
+Widget field(std::string prompt, std::string value, std::string hint, bool focused) {
     Widget w;
     w.kind = WidgetKind::Field;
     w.prompt = std::move(prompt);
     w.value = std::move(value);
     w.hint = std::move(hint);
-    w.focusable = focusable;
+    w.editable = true; // a Field IS an input affordance — the intent is declared, always
     w.focused = focused;
     return w;
 }
 
-namespace {
+Widget slot(std::string slot_name, std::string accepts, std::vector<Widget> placeholder) {
+    Widget w;
+    w.kind = WidgetKind::Slot;
+    w.slot_name = std::move(slot_name);
+    w.slot_accepts = std::move(accepts);
+    w.children = std::move(placeholder); // the design-time preview, rendered until bound
+    return w;
+}
 
-const char* kind_name(WidgetKind k) {
+// ---- Stable spellings (the vocabulary's public contract; also the wire spellings) ----
+
+const char* name_of(WidgetKind k) noexcept {
     switch (k) {
     case WidgetKind::VStack:
         return "VStack";
@@ -105,17 +114,57 @@ const char* kind_name(WidgetKind k) {
         return "Text";
     case WidgetKind::Field:
         return "Field";
+    case WidgetKind::Slot:
+        return "Slot";
     } // no default: a new WidgetKind must be handled here (-Wswitch under -Werror)
     return "?";
 }
 
-// Walk the tree into an indented outline. DELIBERATELY ignores `weight` (it is a hint, not a
-// size). The label per node carries the salient semantic content so a test can assert structure.
+std::optional<WidgetKind> widget_kind_from(std::string_view spelling) noexcept {
+    for (WidgetKind k : {WidgetKind::VStack, WidgetKind::HStack, WidgetKind::Region,
+                         WidgetKind::List, WidgetKind::Log, WidgetKind::Text, WidgetKind::Field,
+                         WidgetKind::Slot}) {
+        if (spelling == name_of(k)) {
+            return k;
+        }
+    }
+    return std::nullopt;
+}
+
+const char* name_of(Overflow o) noexcept {
+    switch (o) {
+    case Overflow::Grow:
+        return "Grow";
+    case Overflow::Scroll:
+        return "Scroll";
+    case Overflow::Wrap:
+        return "Wrap";
+    case Overflow::Truncate:
+        return "Truncate";
+    } // no default (exhaustive by -Wswitch under -Werror)
+    return "?";
+}
+
+std::optional<Overflow> overflow_from(std::string_view spelling) noexcept {
+    for (Overflow o : {Overflow::Grow, Overflow::Scroll, Overflow::Wrap, Overflow::Truncate}) {
+        if (spelling == name_of(o)) {
+            return o;
+        }
+    }
+    return std::nullopt;
+}
+
+namespace {
+
+// Walk the tree into an indented outline. DELIBERATELY ignores `weight` and `overflow` (hints a
+// renderer resolves, not tree content) — but DOES print interaction intent, bindings, routes,
+// and slots: those are the tree's MEANING, so the outline proves they are content, not medium.
+// The label per node carries the salient semantic content so a test can assert structure.
 void outline_into(const Widget& node, int depth, std::string& out) {
     for (int i = 0; i < depth; ++i) {
         out += "  ";
     }
-    out += kind_name(node.kind);
+    out += name_of(node.kind);
     if (node.focused) {
         out += "*"; // the focus marker — a flag, rendered as an annotation, never a position
     }
@@ -133,10 +182,30 @@ void outline_into(const Widget& node, int depth, std::string& out) {
     case WidgetKind::Field:
         out += " " + node.prompt + " value=\"" + node.value + "\" hint=\"" + node.hint + "\"";
         break;
+    case WidgetKind::Slot:
+        out += " \"" + node.slot_name + "\" accepts=" + node.slot_accepts;
+        break;
     case WidgetKind::VStack:
     case WidgetKind::HStack:
         break;
     } // no default (exhaustive by -Wswitch)
+
+    // Interaction intent + wiring read as part of the outline: "a list, of rows, activatable".
+    if (node.activatable) {
+        out += " (activatable)";
+    }
+    if (node.editable) {
+        out += " (editable)";
+    }
+    if (node.reorderable) {
+        out += " (reorderable)";
+    }
+    if (!node.from_field.empty()) {
+        out += " from=" + node.from_field;
+    }
+    if (!node.route_to.empty()) {
+        out += " -> " + node.route_to;
+    }
     out += "\n";
 
     // List/Log items render as indented child lines (an index INTO items, ">" marks selection).
@@ -226,7 +295,7 @@ Widget emit_ui_tree(const Console& engine, const UiState& ui) {
     }
     Widget weaves = list("weaves", "Weaves", std::move(weave_items),
                          ui.focus == Focus::Weaves ? ui.weave_cursor : -1,
-                         /*focusable=*/true, /*focused=*/ui.focus == Focus::Weaves);
+                         /*activatable=*/true, /*focused=*/ui.focus == Focus::Weaves);
 
     // Tap log.
     std::vector<std::string> tap_items;
@@ -253,11 +322,11 @@ Widget emit_ui_tree(const Console& engine, const UiState& ui) {
     }
     Widget buffer = list("buffer", "Buffer", std::move(buf_items),
                          ui.focus == Focus::Buffer ? ui.buffer_cursor : -1,
-                         /*focusable=*/true, /*focused=*/ui.focus == Focus::Buffer);
+                         /*activatable=*/true, /*focused=*/ui.focus == Focus::Buffer);
 
     // Compose field: the partial command + the engine-produced next-choice guidance.
     Widget compose = field("compose>", ui.partial_input, guidance_for(engine, ui.partial_input),
-                           /*focusable=*/true, /*focused=*/ui.focus == Focus::Compose);
+                           /*focused=*/ui.focus == Focus::Compose);
     compose.region_id = "compose"; // identity (for focus/diff), not geometry
 
     std::vector<Widget> root_children;
