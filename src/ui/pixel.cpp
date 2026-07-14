@@ -298,10 +298,15 @@ struct Layouter {
             const int inner = area.w - 2 * m.pad;
             switch (node.overflow) {
             case Overflow::Wrap: {
-                // REAL wrap — the hint the TUI ignores, this projection honors.
+                // REAL wrap — the hint the TUI ignores, this projection honors. Emission is
+                // bounded to the lines the area can SHOW (+1 partial): the clip would hide the
+                // rest anyway, but an executor still pays to rasterize every command — a
+                // wire-legal huge text in a short node must not become millions of draws.
                 const std::vector<std::string> lines = px_wrap(node.content, inner, m);
+                const std::size_t visible =
+                    static_cast<std::size_t>(area.h / m.line_height) + 1;
                 push_clip(area);
-                for (std::size_t k = 0; k < lines.size(); ++k) {
+                for (std::size_t k = 0; k < lines.size() && k < visible; ++k) {
                     text_cmd(area.x + m.pad,
                              area.y + static_cast<int>(k) * m.line_height, lines[k],
                              PxRole::Body);
@@ -383,8 +388,18 @@ struct Layouter {
 } // namespace
 
 PxScene px_layout(const Widget& root, PxRect viewport, const PxMetrics& m) {
+    // Sanitize the injected metrics: the layout divides by line_height (row capacities, line
+    // budgets), so a zero or negative value from a misconfigured renderer must degrade to a
+    // 1px line, never integer-divide-by-zero.
+    PxMetrics safe = m;
+    if (safe.line_height < 1) {
+        safe.line_height = 1;
+    }
+    if (safe.pad < 0) {
+        safe.pad = 0;
+    }
     PxScene scene;
-    Layouter l{m, scene};
+    Layouter l{safe, scene};
     l.fill_cmd(viewport, PxRole::Background);
     l.layout(root, viewport);
     return scene;

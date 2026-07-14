@@ -304,6 +304,25 @@ TEST_CASE("degenerate areas stay defined: a squeezed list with a huge legal curs
     }
     CHECK(inside);
     CHECK(count_op(t, PxCmd::Op::PushClip) == count_op(t, PxCmd::Op::PopClip));
+
+    // A huge wrapped text in a SHORT node emits only the visible lines (+1 partial), never the
+    // whole flood — the clip would hide the rest, but an executor still pays per command, and
+    // a wire-legal giant content must not become millions of draws.
+    std::string huge;
+    for (int i = 0; i < 2000; ++i) {
+        huge += "word ";
+    }
+    Widget flood = text_widget(huge);
+    flood.overflow = Overflow::Wrap;
+    const PxScene f = px_layout(flood, PxRect{0, 0, 100, 30}, m); // 3 lines fit (+1 partial)
+    CHECK(count_op(f, PxCmd::Op::Text) <= 4);
+    CHECK(count_op(f, PxCmd::Op::Text) >= 3); // and the visible ones ARE there
+
+    // Hostile metrics degrade, never divide-by-zero: line_height 0 is clamped to 1px.
+    PxMetrics degenerate = fixed_metrics();
+    degenerate.line_height = 0;
+    const PxScene d = px_layout(squeezed, PxRect{0, 0, 100, 15}, degenerate);
+    CHECK_FALSE(d.cmds.empty()); // laid out (15 one-px lines), no UB — the clamp held
 }
 
 TEST_CASE("the pure layout is deterministic: same tree, same metrics, same scene") {
