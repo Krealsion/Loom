@@ -9,6 +9,7 @@
 #include <climits>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -348,7 +349,8 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
     const std::string contract_label =
         contract.name() + " v" + std::to_string(contract.version());
 
-    std::vector<std::string> seen_slot_names;
+    std::set<std::string> seen_slot_names; // log-time membership: a hostile many-slot
+                                           // component must not turn the checker quadratic
     for (std::size_t i = 0; i < component.nodes.size(); ++i) {
         const UiNode& n = component.nodes[i];
         const std::optional<WidgetKind> kind = widget_kind_from(n.kind);
@@ -368,15 +370,9 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
             // A slot is filled BY NAME later — a nameless or ambiguous hole cannot be filled.
             if (n.slot_name.empty()) {
                 problems.push_back(at(i) + ": a slot with no name cannot be filled");
-            } else {
-                for (const std::string& seen : seen_slot_names) {
-                    if (seen == n.slot_name) {
-                        problems.push_back(at(i) + ": duplicate slot name '" + n.slot_name +
-                                           "' — filling by name would be ambiguous");
-                        break;
-                    }
-                }
-                seen_slot_names.push_back(n.slot_name);
+            } else if (!seen_slot_names.insert(n.slot_name).second) {
+                problems.push_back(at(i) + ": duplicate slot name '" + n.slot_name +
+                                   "' — filling by name would be ambiguous");
             }
         }
 
