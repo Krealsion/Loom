@@ -10,7 +10,7 @@
 
 #include "terminal.hpp"
 
-#include <zen/console/ui.hpp>
+#include <zen/ui/tree.hpp>
 
 namespace loom {
 

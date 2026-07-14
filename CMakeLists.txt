@@ -127,23 +127,49 @@ add_library(loom::isolation ALIAS zen-isolation)
 
 endif() # NOT WIN32 (kernel + isolation)
 
+# ---- The UI vocabulary (zen-ui) — the Loom's semantic tree, in its own target -----------
+#
+# The renderer-agnostic widget tree + the UI-Builder component vocabulary (components with
+# typed slots serializing as gated Values, zen.ui.*). Lifted out of the console (Phase B):
+# the vocabulary depends ONLY on the core (schemas/values/gate) — never on the console, the
+# bus, or any renderer. The console EMITS this tree; the TUI and the SDL renderer PROJECT it;
+# the outline walk proves it carries no medium. Everyone consumes; nobody owns.
+add_library(zen-ui
+    src/ui/tree.cpp
+    src/ui/component.cpp)
+target_include_directories(zen-ui
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_features(zen-ui PUBLIC cxx_std_20)
+target_link_libraries(zen-ui
+    PUBLIC  loom zen-sanitize
+    PRIVATE zen-warnings)
+add_library(loom::ui ALIAS zen-ui)
+
+# The PIXEL projection's logic — one renderer's layout brain (tree -> draw commands), kept
+# SDL-free so it is provable in the ordinary suite on every platform (incl. Windows/MinGW,
+# where the SDL skin does not build). The SDL target below merely executes these commands.
+add_library(zen-ui-pixel src/ui/pixel.cpp)
+target_compile_features(zen-ui-pixel PUBLIC cxx_std_20)
+target_link_libraries(zen-ui-pixel
+    PUBLIC  zen-ui zen-sanitize
+    PRIVATE zen-warnings)
+add_library(loom::ui-pixel ALIAS zen-ui-pixel)
+
 # ---- Console (the first doing-layer component: the engine, then a terminal) ------------
 #
 # A message-native bus participant — discover, compose, gate-send, receive replies into an
 # indexed buffer — built frontend-agnostic so the terminal (now) and a GUI (later) reuse
-# this engine unchanged. Stage 3 adds the UI-as-data layer (ui.cpp): a renderer-agnostic
-# semantic widget tree the engine emits and any renderer consumes. The UI-Builder vocabulary
-# (component.cpp) evolves that SAME tree into components-with-typed-slots that serialize as
-# gated Values (zen.ui.*). Depends only on the bus + core.
+# this engine unchanged. Stage 3 adds the UI-as-data layer (ui.cpp): the console emits its
+# own interface as the zen-ui semantic tree (a consumer of the vocabulary, not its owner).
+# Depends on the bus + core + the UI vocabulary.
 add_library(zen-console
     src/console/console.cpp
-    src/console/ui.cpp
-    src/console/component.cpp)
+    src/console/ui.cpp)
 target_include_directories(zen-console
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(zen-console PUBLIC cxx_std_20)
 target_link_libraries(zen-console
-    PUBLIC  loom zen-switchboard zen-sanitize
+    PUBLIC  loom zen-switchboard zen-ui zen-sanitize
     PRIVATE zen-warnings)
 add_library(loom::console ALIAS zen-console)
 
@@ -165,14 +191,95 @@ if(WIN32)
 else()
     target_sources(zen-tui PRIVATE src/console/terminal_posix.cpp)
 endif()
+# The renderer consumes the VOCABULARY, not the console — the same one-way dependency the SDL
+# renderer has. (The console frontends link zen-tui AND zen-console side by side.)
 target_link_libraries(zen-tui
-    PUBLIC  zen-console zen-sanitize
+    PUBLIC  zen-ui zen-sanitize
     PRIVATE zen-warnings)
 
 # The full-screen TUI frontend (in-process): local wiring + a demo responder over the shared renderer.
 add_executable(zen-console-tui src/console/console_tui.cpp)
 target_link_libraries(zen-console-tui
     PRIVATE zen-tui zen-console zen-switchboard loom zen-warnings zen-sanitize)
+
+# ---- The SDL2 projection (the second real renderer: same tree, to pixels) ---------------
+#
+# GATED: only the SDL renderer target needs SDL2 — the vocabulary, the pixel-layout logic,
+# the console, the bus, and the core stay SDL-free and portable. WSL/Linux-first (default ON
+# there, OFF on Windows — the flagged platform decision; the vocabulary + pixel logic still
+# build and test on Windows). Prefers a system SDL2; otherwise fetches PINNED release
+# tarballs (static SDL2 + SDL2_ttf with its vendored FreeType) so nothing is installed on the
+# host and the checksum is part of the build.
+if(WIN32)
+    set(zen_sdl_default OFF)
+else()
+    set(zen_sdl_default ON)
+endif()
+option(ZEN_SDL "Build the SDL2 renderer, its demo, and its dummy-driver tests" ${zen_sdl_default})
+
+if(ZEN_SDL)
+    find_package(SDL2 CONFIG QUIET)
+    find_package(SDL2_ttf CONFIG QUIET)
+    if(NOT (TARGET SDL2::SDL2 OR TARGET SDL2::SDL2-static) OR
+       NOT (TARGET SDL2_ttf::SDL2_ttf OR TARGET SDL2_ttf::SDL2_ttf-static))
+        # On WSL building from a Windows-mounted checkout (/mnt/...), the 9p filesystem cannot
+        # hold the symlinks inside SDL's tarball (and compiles dependencies slowly) — keep the
+        # fetched trees on the WSL-native filesystem instead. Only the MODULE DEFAULT is
+        # replaced (the FetchContent module pre-defines FETCHCONTENT_BASE_DIR when included,
+        # so a bare NOT-DEFINED check never fires); a user's own choice is respected. Keyed
+        # per build dir: build/ and build-san/ must not share dependency OBJECTS (different
+        # flags), only re-download the same pinned tarball.
+        if(CMAKE_SOURCE_DIR MATCHES "^/mnt/"
+           AND (CMAKE_HOST_SYSTEM_VERSION MATCHES "[Mm]icrosoft" OR DEFINED ENV{WSL_DISTRO_NAME}))
+            get_filename_component(zen_bindir_name "${CMAKE_BINARY_DIR}" NAME)
+            if(NOT DEFINED FETCHCONTENT_BASE_DIR
+               OR FETCHCONTENT_BASE_DIR STREQUAL "${CMAKE_BINARY_DIR}/_deps")
+                set(FETCHCONTENT_BASE_DIR "$ENV{HOME}/.cache/zen-fetch/${zen_bindir_name}"
+                    CACHE PATH
+                    "FetchContent trees (WSL-native: drvfs cannot hold SDL's symlinks)" FORCE)
+                message(STATUS "zen: FetchContent trees under ${FETCHCONTENT_BASE_DIR} "
+                               "(drvfs symlink workaround)")
+            endif()
+        endif()
+        include(FetchContent)
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
+        set(SDL2TTF_SAMPLES OFF CACHE BOOL "" FORCE)
+        set(SDL2TTF_INSTALL OFF CACHE BOOL "" FORCE)
+        set(BUILD_SHARED_LIBS OFF)
+        FetchContent_Declare(sdl2_fetched
+            URL https://github.com/libsdl-org/SDL/releases/download/release-2.30.11/SDL2-2.30.11.tar.gz
+            URL_HASH SHA256=8b8d4aef2038533da814965220f88f77d60dfa0f32685f80ead65e501337da7f)
+        FetchContent_Declare(sdl2_ttf_fetched
+            URL https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-2.22.0.tar.gz
+            URL_HASH SHA256=d48cbd1ce475b9e178206bf3b72d56b66d84d44f64ac05803328396234d67723)
+        FetchContent_MakeAvailable(sdl2_fetched sdl2_ttf_fetched)
+    endif()
+    if(TARGET SDL2::SDL2-static)
+        set(zen_sdl2_lib SDL2::SDL2-static)
+    else()
+        set(zen_sdl2_lib SDL2::SDL2)
+    endif()
+    if(TARGET SDL2_ttf::SDL2_ttf-static)
+        set(zen_sdl2_ttf_lib SDL2_ttf::SDL2_ttf-static)
+    else()
+        set(zen_sdl2_ttf_lib SDL2_ttf::SDL2_ttf)
+    endif()
+
+    # The skin: executes the pixel layout's commands, maps raw SDL events to semantic
+    # InputEvents. The ONLY target that sees SDL.
+    add_library(zen-ui-sdl src/ui/sdl/sdl_ui.cpp)
+    target_link_libraries(zen-ui-sdl
+        PUBLIC  zen-ui-pixel ${zen_sdl2_lib} ${zen_sdl2_ttf_lib} zen-sanitize
+        PRIVATE zen-warnings)
+
+    # The preview window (Josh's visual verify): stress-placeholder trees, input-as-messages.
+    add_executable(zen-ui-sdl-demo src/ui/sdl/sdl_demo.cpp)
+    target_link_libraries(zen-ui-sdl-demo
+        PRIVATE zen-ui-sdl zen-ui zen-warnings zen-sanitize)
+endif()
 
 # ---- The remote-operator bridge (operator-protocol transport; server + remote console land here) --
 #

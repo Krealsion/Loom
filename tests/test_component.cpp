@@ -4,9 +4,9 @@
 #include "terminal.hpp"   // TerminalBackend, for the capture-backend TUI pin
 #include "tui_render.hpp" // tui_draw — the TUI laying out the evolved vocabulary
 
-#include <zen/console/component.hpp>
 #include <zen/console/console.hpp>
 #include <zen/console/ui.hpp>
+#include <zen/ui/component.hpp>
 #include <zen/gate.hpp>
 #include <zen/registry.hpp>
 #include <zen/serialize.hpp>
