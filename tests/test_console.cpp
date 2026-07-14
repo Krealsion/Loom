@@ -624,6 +624,39 @@ TEST_CASE("TUI smoke (headless): scripted semantic actions move focus, compose a
     CHECK(count_focused(tree) == 1);
 }
 
+TEST_CASE("SelectAt names a row directly (the pointer's act), under the same single-writer clamp") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    (void)register_probe(bus, {ping_schema()});
+    (void)register_probe(bus, {mix_schema()});
+    (void)register_probe(bus, {note_schema()}); // three weaves -> indices 0..2 are real
+    ConsoleUi ui(engine);
+
+    ui.dispatch({Action::FocusNext, 0}); // Compose -> Weaves
+    CHECK(ui.state().focus == Focus::Weaves);
+
+    // A pointer names row 2 where keys would walk to it — the shared input vocabulary's one
+    // Phase B addition, given real console semantics.
+    ui.dispatch({Action::SelectAt, 0, 2});
+    CHECK(ui.state().weave_cursor == 2);
+    const Widget tree = ui.tree(); // bind first — a pointer into the temporary would dangle
+    const Widget* weaves = find_region(tree, "weaves");
+    REQUIRE(weaves != nullptr);
+    CHECK(weaves->selected_index == 2);
+
+    // The single-writer clamp: an out-of-range index is ignored, never stored (same discipline
+    // as SelectDown — the controller is the only UiState writer).
+    ui.dispatch({Action::SelectAt, 0, 99});
+    CHECK(ui.state().weave_cursor == 2);
+    ui.dispatch({Action::SelectAt, 0, -7});
+    CHECK(ui.state().weave_cursor == 2);
+
+    // On the buffer list the same action drives the buffer cursor (empty buffer: ignored).
+    ui.dispatch({Action::FocusNext, 0}); // Weaves -> Buffer
+    ui.dispatch({Action::SelectAt, 0, 0});
+    CHECK(ui.state().buffer_cursor == 0); // unchanged default — no row 0 exists to select
+}
+
 TEST_CASE("TUI smoke (headless): an ambiguous command surfaces a NeedsInput prompt region, sends nothing") {
     Switchboard bus;
     ConsoleEngine engine(bus);

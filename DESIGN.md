@@ -1557,7 +1557,8 @@ renderer resolves to box-characters, a GUI later resolves to rectangles. This is
 inherits the engine" stops being a slogan and gets real structural support.
 
 **The bet, made structural: no geometry member exists on `Widget`, plus a compile-time tripwire.**
-The widget types (`include/zen/console/ui.hpp`) express **intent and relationship — never
+The widget types (now `include/zen/ui/tree.hpp` — lifted to the zen-ui target in Phase B; the
+Stage-3 record below describes their console-era home) express **intent and relationship — never
 coordinates or sizes**. There is no `x`/`y`/`width`/`height`/`row`/`col` member on a `Widget`, and a
 name-based compile-time fence (member-detection `static_assert`s on ~10 coordinate spellings + an
 `equality_comparable` guard) makes *adding* one of those names fail to build. This is **defense in
@@ -2088,7 +2089,8 @@ intended; the Poke weave's accept-set is what registers the answer grammar in pr
 
 The UI Builder produces **components: schematics with typed slots** — reusable UI that is
 incomplete *by design*, declaring the data shape it consumes and leaving open holes to be bound
-later. This phase built **only the vocabulary** (`include/zen/console/component.hpp` + the
+later. This phase built **only the vocabulary** (`include/zen/console/component.hpp` at the
+time — since lifted to `include/zen/ui/component.hpp` in Phase B — + the
 evolved `ui.hpp`): the shapes, their serialization as gated Values, and the unification with the
 console's existing widget tree. No renderer (SDL2 is the next phase), no Builder panels, no live
 binding, no routing/presenter runtime.
@@ -2191,12 +2193,110 @@ the maximal every-field-non-default round-trip; accept-side boundary edges (weig
 `selected_index` INT_MAX, a cursor over an empty list); the bounded-lossless pin; stress
 defaults; outline-reads-as-intent (weight AND overflow pinned as outline-ignored hints); the
 TUI projecting a rebuilt schematic; the split's schema-level separability; the binding checks.
-Green Debug + ASan/UBSan under the delegated scope and on the Windows/MinGW portable subset. Named successors (not built): the **SDL2 renderer** (Phase B — same tree to pixels; it
-also pulls lifting the vocabulary out of the console target when a non-console consumer
-arrives), the **Builder panels** (Phase C — palette/canvas/inspector composing these shapes),
-**live data binding** (the Inspector phase), the **routing runtime**, the **presenter runtime**
+Green Debug + ASan/UBSan under the delegated scope and on the Windows/MinGW portable subset.
+Named successors (not built): the **SDL2 renderer** (Phase B — same tree to pixels; it also
+pulls lifting the vocabulary out of the console target when a non-console consumer arrives),
+the **Builder panels** (Phase C — palette/canvas/inspector composing these shapes), **live
+data binding** (the Inspector phase), the **routing runtime**, the **presenter runtime**
 (subscription, update application, crash-as-event), the **fill-out example-data section**, and
 **contract-content-id pinning** (identity/migration phase).
+
+---
+
+## The SDL2 projection (Phase B — same tree, to pixels; the agnosticism test made real)
+
+Phase A proved renderer-agnosticism *by the shape*; with only the TUI consuming the tree, a
+skeptic could still say the vocabulary grew up around its home medium. Phase B is the real
+test: **a second, radically different renderer — pixels, a mouse, real fonts — consuming the
+identical tree.** The headline result: **the SDL renderer needed ZERO additions to the node
+vocabulary.** Every node kind, every field, every hint projected to pixels as-is. The one
+shared-vocabulary addition the phase made is on the INPUT side — `Action::SelectAt` (+
+`InputEvent::index`): the pointer medium's basic act is *naming* a row where keys can only
+*walk* to one. That is intent ("select THIS row"), not medium (a terminal with mouse reporting
+could emit it); the console's controller gives it real semantics under the same single-writer
+clamp as SelectDown. No SDL-only node field exists — the litmus held.
+
+### The vocabulary-target lift (the seam Phase A named, pulled by its trigger)
+
+The tree + component vocabulary now lives in **its own target `zen-ui`** (`include/zen/ui/
+tree.hpp` + `ui/component.hpp`), depending only on the core — never on the console, the bus,
+or any renderer. The console is a *consumer* (its `console/ui.hpp` keeps what is genuinely the
+console's: `UiState`/`Focus`, `guidance_for`, `emit_ui_tree`, `ConsoleUi`); the TUI's `zen-tui`
+now links `zen-ui`, not `zen-console` — the same one-way dependency the SDL renderer has. A
+boring, behavior-identical move: identical suite counts on all three environments were the
+safety proof.
+
+### The projection split: a suite-provable brain, a thin SDL skin
+
+The renderer is split exactly the way the TUI is:
+
+- **`zen-ui-pixel`** (`include/zen/ui/pixel.hpp`) — the layout *brain*: tree → paint-ordered
+  **draw commands** (`Fill`/`Text`/`PushClip`/`PopClip`, with semantic `PxRole`s so the command
+  list stays theme-free) + **interactive targets** (rect → node/row) for pointer hit-testing.
+  Pure and SDL-free: text metrics are *injected* (`PxMetrics`), so the whole projection logic
+  is deterministic and pinned in the ordinary suite on every platform — including Windows,
+  where the SDL skin doesn't build. Pixel geometry exists ONLY here and below, as cells exist
+  only in the TUI's Grid.
+- **`zen-ui-sdl`** (`src/ui/sdl/`, gated) — the *skin*: a window, TTF-backed metrics, a
+  command executor (surface → texture → copy, the Zengine-borrowed path with its leaks fixed),
+  and `sdl_map_event` — raw SDL events to the SAME semantic `InputEvent`s `tui_map_key`
+  produces. **Abstract interaction maps to the medium in the renderer, never in the tree:**
+  `activatable` → click-to-select (`SelectAt`) / double-click-to-`Activate`; `editable` →
+  `SDL_TEXTINPUT` as byte-`Edit`s (UTF-8 sequences reassemble exactly); keys mirror the TUI's
+  bindings. The controller/engine never see an `SDL_Event`.
+- **`zen-ui-sdl-demo`** — Josh's visual verify: renders the stress-placeholder schematic
+  (Phase A defaults + the Unicode case) with a demo-only input shim; the SDL *console
+  frontend* (`ConsoleUi` over the engine with this renderer) falls out nearly free and is a
+  named seam, deliberately not built (render, don't operate — this phase's scope).
+
+### Overflow made real, and the Unicode stress case
+
+The overflow policy — the hint the TUI ignores (it aliases Wrap/Truncate to Grow) — gets its
+**real meaning** here: `Wrap` lays a Text node out as greedy word-wrapped lines that
+hard-break inside an over-wide word only at a **codepoint boundary** (never mid-UTF-8-
+sequence); `Truncate` ellipsizes at a codepoint boundary; `Grow` stays natural-size. One tree,
+one renderer ignoring the hint, one honoring it — pinned from both sides (the outline equality
+on overflow-only differences, and the wrapped/truncated/grown command shapes). The stress
+canon gained **`stress_text_unicode()`** (CJK, emoji, a combining sequence, an RTL run, an
+unbroken mixed-script word — spelled as explicit UTF-8 byte escapes so no editor can reshape
+it): the DEFAULT placeholders stay ASCII (they must stress every projection, not mojibake
+one), and the Unicode value is the graphical renderers' additional case. What glyphs *look*
+like (shaping, bidi) is the text stack's affair; the pins are "never break, never split".
+
+### Gating and platform decision
+
+**SDL2 is a dependency of the SDL renderer target ONLY** — the vocabulary, pixel logic,
+console, bus, and core stay SDL-free (pinned by Windows/MinGW building and running the `pixel`
+suite with no SDL present). The target is **WSL/Linux-first** (`ZEN_SDL` defaults ON there,
+OFF on Windows): prefers a system SDL2, else fetches **pinned release tarballs by checksum**
+(static SDL2 2.30.11 + SDL2_ttf 2.22.0 with vendored FreeType) — nothing installs on the host.
+On WSL building from a `/mnt` checkout, the fetched trees live on the WSL-native filesystem
+(drvfs cannot hold SDL's internal symlinks; keyed per build dir so Debug and ASan objects
+never mix). The dummy-driver smoke (`SDL_VIDEODRIVER=dummy`) runs the FULL pipeline — real
+SDL video, real TTF metrics, executed commands — headless in the suite; on-screen pixels are
+Josh's visual verify (the established division).
+
+### Status: built (Phase B)
+
+Suite `pixel` (SDL-free, every platform incl. Windows-without-SDL): wrap greedy, space-
+preferring, codepoint-safe on the Unicode gauntlet (reassembly + no-line-starts-mid-codepoint
+pins); truncate boundary-safe with a clean-prefix pin; the one-tree-two-media command shape
+(paint order, focus/selection fills before their text, clip balance, interactive targets);
+overflow-made-real (wrap lines / ellipsis / natural size) against the outline's pinned
+hint-blindness; the slot marker + placeholder preview; hit-testing to the named row; weight
+splitting pixels exactly as it splits cells; layout determinism. Suite `sdl` (dummy-driver,
+where the SDL target builds): the full pipeline headless — real SDL video, real TTF metrics,
+executed commands, the emoji surviving un-split, the executor's clip stack balanced — plus
+raw-SDL-events → semantic InputEvents (click→SelectAt with the row index, double-click→
+Activate, UTF-8 TEXTINPUT reassembling exactly through byte-Edits, quit as the one false
+return — the tui_map_key contract shape). The TUI stays alive as the continuing second
+projection, and the console suites are count-identical to Phase A (the lift's boring-move
+proof). Green Debug + ASan/UBSan under the delegated scope; Windows/MinGW portable green
+without SDL. Named successors (not built): the **Builder panels** (Phase C), **live binding**
+(Inspector), the **routing/presenter runtimes**, the **SDL console frontend** (ConsoleUi over
+the engine with this renderer — nearly free), **focus-by-pointer** (a FocusTo-style event, cut
+by the razor until a frontend needs it), and **richer text** (kerning-aware wrap, real
+bidi/shaping, codepoint-aware Edit).
 
 ---
 

@@ -1,8 +1,8 @@
-// UI-as-data (Stage 3) implementation: the widget named-constructors, the engine-side guidance
-// and tree emission (renderer-agnostic, built from the engine's public domain data), the
-// headless outline renderer (the second renderer that proves the tree bakes in no medium), and
-// the renderer-agnostic UI controller. NOTHING here knows about cells, coordinates, or termios —
-// layout is the renderer's job alone.
+// UI-as-data (Stage 3), the console-side implementation: the engine-side guidance and tree
+// emission (renderer-agnostic, built from the engine's public domain data) and the renderer-
+// agnostic UI controller. The tree vocabulary itself (constructors, spellings, the outline
+// proof) lives in zen/ui (src/ui/tree.cpp) — the console consumes it. NOTHING here knows about
+// cells, pixels, coordinates, or termios — layout is the renderer's job alone.
 
 #include <zen/console/ui.hpp>
 
@@ -16,223 +16,6 @@
 #include <vector>
 
 namespace loom {
-
-// ---- Named constructors (the only sanctioned Widget construction path) ----
-
-Widget vstack(std::string region_id, std::vector<Widget> children) {
-    Widget w;
-    w.kind = WidgetKind::VStack;
-    w.region_id = std::move(region_id);
-    w.children = std::move(children);
-    return w;
-}
-
-Widget hstack(std::string region_id, std::vector<Widget> children) {
-    Widget w;
-    w.kind = WidgetKind::HStack;
-    w.region_id = std::move(region_id);
-    w.children = std::move(children);
-    return w;
-}
-
-Widget region(std::string region_id, std::string title, Widget child) {
-    Widget w;
-    w.kind = WidgetKind::Region;
-    w.region_id = std::move(region_id);
-    w.title = std::move(title);
-    w.children.push_back(std::move(child));
-    return w;
-}
-
-Widget list(std::string region_id, std::string title, std::vector<std::string> items,
-            int selected_index, bool activatable, bool focused, Overflow overflow) {
-    Widget w;
-    w.kind = WidgetKind::List;
-    w.region_id = std::move(region_id);
-    w.title = std::move(title);
-    w.items = std::move(items);
-    w.selected_index = selected_index;
-    w.activatable = activatable;
-    w.focused = focused;
-    w.overflow = overflow;
-    return w;
-}
-
-Widget log_widget(std::string region_id, std::string title, std::vector<std::string> entries,
-                  Overflow overflow) {
-    Widget w;
-    w.kind = WidgetKind::Log;
-    w.region_id = std::move(region_id);
-    w.title = std::move(title);
-    w.items = std::move(entries);
-    w.overflow = overflow;
-    return w;
-}
-
-Widget text_widget(std::string content) {
-    Widget w;
-    w.kind = WidgetKind::Text;
-    w.content = std::move(content);
-    return w;
-}
-
-Widget field(std::string prompt, std::string value, std::string hint, bool focused) {
-    Widget w;
-    w.kind = WidgetKind::Field;
-    w.prompt = std::move(prompt);
-    w.value = std::move(value);
-    w.hint = std::move(hint);
-    w.editable = true; // a Field IS an input affordance — the intent is declared, always
-    w.focused = focused;
-    return w;
-}
-
-Widget slot(std::string slot_name, std::string accepts, std::vector<Widget> placeholder) {
-    Widget w;
-    w.kind = WidgetKind::Slot;
-    w.slot_name = std::move(slot_name);
-    w.slot_accepts = std::move(accepts);
-    w.children = std::move(placeholder); // the design-time preview, rendered until bound
-    return w;
-}
-
-// ---- Stable spellings (the vocabulary's public contract; also the wire spellings) ----
-
-const char* name_of(WidgetKind k) noexcept {
-    switch (k) {
-    case WidgetKind::VStack:
-        return "VStack";
-    case WidgetKind::HStack:
-        return "HStack";
-    case WidgetKind::Region:
-        return "Region";
-    case WidgetKind::List:
-        return "List";
-    case WidgetKind::Log:
-        return "Log";
-    case WidgetKind::Text:
-        return "Text";
-    case WidgetKind::Field:
-        return "Field";
-    case WidgetKind::Slot:
-        return "Slot";
-    } // no default: a new WidgetKind must be handled here (-Wswitch under -Werror)
-    return "?";
-}
-
-std::optional<WidgetKind> widget_kind_from(std::string_view spelling) noexcept {
-    for (WidgetKind k : {WidgetKind::VStack, WidgetKind::HStack, WidgetKind::Region,
-                         WidgetKind::List, WidgetKind::Log, WidgetKind::Text, WidgetKind::Field,
-                         WidgetKind::Slot}) {
-        if (spelling == name_of(k)) {
-            return k;
-        }
-    }
-    return std::nullopt;
-}
-
-const char* name_of(Overflow o) noexcept {
-    switch (o) {
-    case Overflow::Grow:
-        return "Grow";
-    case Overflow::Scroll:
-        return "Scroll";
-    case Overflow::Wrap:
-        return "Wrap";
-    case Overflow::Truncate:
-        return "Truncate";
-    } // no default (exhaustive by -Wswitch under -Werror)
-    return "?";
-}
-
-std::optional<Overflow> overflow_from(std::string_view spelling) noexcept {
-    for (Overflow o : {Overflow::Grow, Overflow::Scroll, Overflow::Wrap, Overflow::Truncate}) {
-        if (spelling == name_of(o)) {
-            return o;
-        }
-    }
-    return std::nullopt;
-}
-
-namespace {
-
-// Walk the tree into an indented outline. DELIBERATELY ignores `weight` and `overflow` (hints a
-// renderer resolves, not tree content) — but DOES print interaction intent, bindings, routes,
-// and slots: those are the tree's MEANING, so the outline proves they are content, not medium.
-// The label per node carries the salient semantic content so a test can assert structure.
-void outline_into(const Widget& node, int depth, std::string& out) {
-    for (int i = 0; i < depth; ++i) {
-        out += "  ";
-    }
-    out += name_of(node.kind);
-    if (node.focused) {
-        out += "*"; // the focus marker — a flag, rendered as an annotation, never a position
-    }
-    switch (node.kind) {
-    case WidgetKind::Region:
-        out += " \"" + node.title + "\"";
-        break;
-    case WidgetKind::List:
-    case WidgetKind::Log:
-        out += " \"" + node.title + "\"";
-        break;
-    case WidgetKind::Text:
-        out += " \"" + node.content + "\"";
-        break;
-    case WidgetKind::Field:
-        out += " " + node.prompt + " value=\"" + node.value + "\" hint=\"" + node.hint + "\"";
-        break;
-    case WidgetKind::Slot:
-        out += " \"" + node.slot_name + "\" accepts=" + node.slot_accepts;
-        break;
-    case WidgetKind::VStack:
-    case WidgetKind::HStack:
-        break;
-    } // no default (exhaustive by -Wswitch)
-
-    // Interaction intent + wiring read as part of the outline: "a list, of rows, activatable".
-    if (node.activatable) {
-        out += " (activatable)";
-    }
-    if (node.editable) {
-        out += " (editable)";
-    }
-    if (node.reorderable) {
-        out += " (reorderable)";
-    }
-    if (!node.from_field.empty()) {
-        out += " from=" + node.from_field;
-    }
-    if (!node.route_to.empty()) {
-        out += " -> " + node.route_to;
-    }
-    out += "\n";
-
-    // List/Log items render as indented child lines (an index INTO items, ">" marks selection).
-    if (node.kind == WidgetKind::List || node.kind == WidgetKind::Log) {
-        for (std::size_t i = 0; i < node.items.size(); ++i) {
-            for (int d = 0; d < depth + 1; ++d) {
-                out += "  ";
-            }
-            const bool sel = node.selected_index >= 0 &&
-                             static_cast<std::size_t>(node.selected_index) == i;
-            out += sel ? "> " : "- ";
-            out += node.items[i];
-            out += "\n";
-        }
-    }
-    for (const Widget& child : node.children) {
-        outline_into(child, depth + 1, out);
-    }
-}
-
-} // namespace
-
-std::string render_outline(const Widget& root) {
-    std::string out;
-    outline_into(root, 0, out);
-    return out;
-}
 
 // ---- Engine-produced guidance ----
 
@@ -447,6 +230,21 @@ void ConsoleUi::dispatch(const InputEvent& ev) {
             const int n = static_cast<int>(engine_.buffer_size());
             if (ui_.buffer_cursor + 1 < n) {
                 ++ui_.buffer_cursor;
+            }
+        }
+        break;
+    case Action::SelectAt:
+        // The pointer medium's basic selection act: select a SPECIFIC row of the focused list.
+        // Same single-writer clamp discipline as SelectDown (an out-of-range index is ignored,
+        // never stored). Which region a click lands in is the frontend's to resolve into focus
+        // first — focus-by-pointer is a named seam for the frontend that needs it.
+        if (ev.index >= 0) {
+            if (ui_.focus == Focus::Weaves &&
+                ev.index < static_cast<int>(engine_.weaves().size())) {
+                ui_.weave_cursor = ev.index;
+            } else if (ui_.focus == Focus::Buffer &&
+                       ev.index < static_cast<int>(engine_.buffer_size())) {
+                ui_.buffer_cursor = ev.index;
             }
         }
         break;

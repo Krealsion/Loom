@@ -4,7 +4,7 @@
 // decode layer AFTER the gate — the gate proves shape-conformance; THIS proves tree-ness, and
 // it refuses with a reason instead of trusting (no silent-blank fate from the wire).
 
-#include <zen/console/component.hpp>
+#include <zen/ui/component.hpp>
 
 #include <climits>
 #include <cstdint>
@@ -223,10 +223,29 @@ TreeResult tree_of(const UiComponent& component) {
 std::string stress_text() {
     // A long paragraph plus one unbroken 64-char word: enough to blow past any sane column
     // width (overflow stress) and to defeat word-wrap (unbreakable-width stress). ASCII only —
-    // the TUI is byte-per-cell; the Unicode stress case arrives with a renderer that can draw it.
+    // the DEFAULT placeholder must stress layout in every projection (the TUI is byte-per-cell);
+    // the Unicode case is the graphical renderers' additional value, below.
     return "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor "
            "incididunt ut labore et dolore magna aliqua, quis nostrud exercitation ullamco. "
            "Pneumonoultramicroscopicsilicovolcanoconiosis0123456789abcdefghij";
+}
+
+std::string stress_text_unicode() {
+    // The wide-glyph / multi-byte gauntlet, spelled as explicit UTF-8 byte escapes so the
+    // source file stays pure ASCII (no editor/codepage can silently reshape it):
+    //   - CJK run (wide glyphs):        织机の糸を編む (E7 BB 87 ...)
+    //   - emoji (4-byte sequences):     🧶🧵 (F0 9F A7 B6, F0 9F A7 B5)
+    //   - combining sequence:           cafe + U+0301 (combining acute -> "café")
+    //   - RTL run (bidi input):         مرحبا (Arabic "marhaba")
+    //   - an unbroken mixed-script word to defeat wrap the way the ASCII canon's word does.
+    // A pixel renderer must not break on any of it: no crash, no mid-codepoint split. What the
+    // glyphs LOOK like (shaping, bidi order) is the text stack's affair, not this pin's.
+    return "Unicode stress: "
+           "\xE7\xBB\x87\xE6\x9C\xBA\xE3\x81\xAE\xE7\xB3\xB8\xE3\x82\x92\xE7\xB7\xA8\xE3\x82\x80 "
+           "\xF0\x9F\xA7\xB6\xF0\x9F\xA7\xB5 "
+           "caf\x65\xCC\x81 "
+           "\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7 "
+           "Zen\xE7\xB9\x94\xF0\x9F\xA7\xB6loom\xE3\x81\xAE\xE7\xB3\xB8weave0123456789";
 }
 
 std::string stress_number() {

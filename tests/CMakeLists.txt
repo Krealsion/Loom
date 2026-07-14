@@ -30,6 +30,7 @@ add_executable(zen-tests
     test_poke.cpp
     test_console.cpp
     test_component.cpp
+    test_pixel.cpp
     test_bridge.cpp)
 
 # Kernel/isolation-dependent suites: compiled only where the kernel + sandbox exist.
@@ -47,7 +48,8 @@ target_include_directories(zen-tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/console) # tui_render.hpp / terminal.hpp for the tui_map_key pin
 
 target_link_libraries(zen-tests
-    PRIVATE loom zen-switchboard zen-console zen-bridge zen-tui zen-warnings zen-sanitize)
+    PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-bridge zen-tui
+            zen-warnings zen-sanitize)
 if(NOT WIN32)
     target_link_libraries(zen-tests PRIVATE zen-kernel zen-isolation)
 endif()
@@ -153,10 +155,26 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # exit-status check is the source of truth — no output-scraping needed. The portable
 # suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec weave_shape weave poke console component bridge)
+    switchboard harness breathing schema_codec weave_shape weave poke console component
+    pixel bridge)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
+
+# The SDL skin's smoke: a SEPARATE binary (zen-tests stays SDL-free) that runs the full
+# pipeline headless under SDL's dummy video driver — real SDL, real TTF metrics, no display.
+# Registered only when the gated SDL renderer is built; the projection LOGIC is pinned
+# SDL-free in the `pixel` suite above, which runs everywhere.
+if(TARGET zen-ui-sdl)
+    add_executable(zen-sdl-tests doctest_main.cpp test_sdl.cpp)
+    target_include_directories(zen-sdl-tests SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+    target_include_directories(zen-sdl-tests PRIVATE ${CMAKE_SOURCE_DIR})
+    target_link_libraries(zen-sdl-tests
+        PRIVATE zen-ui-sdl zen-ui-pixel zen-ui zen-warnings zen-sanitize)
+    add_test(NAME sdl COMMAND zen-sdl-tests --no-skipped-summary)
+    set_tests_properties(sdl PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+endif()
 
 # The kernel/capabilities suites and the cgroup-scoped isolation/policy/all suites are Linux-only.
 if(NOT WIN32)

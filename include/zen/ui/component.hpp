@@ -1,5 +1,5 @@
-#ifndef ZEN_CONSOLE_COMPONENT_HPP
-#define ZEN_CONSOLE_COMPONENT_HPP
+#ifndef ZEN_UI_COMPONENT_HPP
+#define ZEN_UI_COMPONENT_HPP
 
 // The UI-Builder component vocabulary (Phase A — the shapes only; no renderer, no Builder UI,
 // no live binding, no routing/presenter runtime).
@@ -59,7 +59,7 @@
 // starting with Widget::focusable, which no renderer ever read (focus-eligibility is derivable
 // from interaction intent).
 
-#include <zen/console/ui.hpp>
+#include <zen/ui/tree.hpp>
 #include <zen/kind.hpp>
 #include <zen/schema.hpp>
 #include <zen/weave/shape.hpp>
@@ -208,11 +208,18 @@ TreeResult tree_of(const UiComponent& component);
 //
 // Design-time previews default to the value that REVEALS the seam, not the happy value: a
 // too-long text (width blowout / wrap), the widest number, the empty list (zero-case layout),
-// a deep ladder (nesting). ASCII on purpose — the TUI is a byte-per-cell renderer; a Unicode
-// stress case arrives with the renderer that can draw it (named seam, SDL2 phase).
+// a deep ladder (nesting). The DEFAULTS stay ASCII on purpose — the TUI is a byte-per-cell
+// renderer and the default placeholder must stress layout in EVERY projection, not mojibake
+// one of them. The Unicode case is the graphical renderers' ADDITIONAL stress value, provided
+// here (the canon is shared vocabulary) and exercised by the pixel projection.
 
 /// A long paragraph plus one unbroken 64-char word: overflow + unbreakable-width stress.
 std::string stress_text();
+/// The graphical-renderer stress text: CJK width, emoji, a combining sequence, an RTL run, and
+/// an unbroken mixed-script word — the cases a byte-per-cell terminal cannot draw. A pixel
+/// renderer must not BREAK on these (no crash, no mid-codepoint split); correct BIDI/shaping
+/// is the text stack's own affair, not what this pins.
+std::string stress_text_unicode();
 /// "-9223372036854775808" — the widest canonical Int spelling (sign + 19 digits).
 std::string stress_number();
 /// The empty list: does the layout survive nothing?
@@ -252,4 +259,4 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
 
 } // namespace loom
 
-#endif // ZEN_CONSOLE_COMPONENT_HPP
+#endif // ZEN_UI_COMPONENT_HPP
