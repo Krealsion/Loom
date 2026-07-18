@@ -98,7 +98,11 @@ cmake -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
 ```
 
 The **exported surface is deliberately smaller than the build tree**: `loom::core`
-and `loom::switchboard`, plus the headers they need. The UI vocabulary, the console,
+and `loom::switchboard`, plus the headers they need. (The package also defines
+`loom::sanitize` and `loom::warnings` — two INTERFACE targets that *must* ride the
+export set because they survive in the libraries' link interface. They are plumbing,
+not surface: `warnings` is carried `LINK_ONLY`, so the Loom's `-Werror` and
+`-Wconversion` never reach your sources.) The UI vocabulary, the console,
 the TUI, the bridge and the SDL skin build here today but are Zengine-destined —
 each moves out in its own port phase — so exporting them now would publish a surface
 about to be relocated. The kernel and isolation *are* the Loom's, but they are
