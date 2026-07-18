@@ -20,6 +20,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # into a .so.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Standard install layout (lib/, include/, bin/). Pulled in here rather than beside the install
+# rules because the exported targets below carry an INSTALL_INTERFACE include path.
+include(GNUInstallDirs)
+
 option(ZEN_WERROR    "Treat warnings as errors (CI default)"        ON)
 option(ZEN_SANITIZE  "Build with -fsanitize=address,undefined"     OFF)
 option(ZEN_BUILD_TESTS    "Build the test suite"                    ON)
@@ -57,6 +61,7 @@ add_library(loom
 
 target_include_directories(loom
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_compile_features(loom PUBLIC cxx_std_20)
@@ -72,7 +77,8 @@ add_library(zen-switchboard
     src/switchboard/switchboard.cpp)
 
 target_include_directories(zen-switchboard
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 target_compile_features(zen-switchboard PUBLIC cxx_std_20)
 target_link_libraries(zen-switchboard
@@ -347,4 +353,89 @@ endif()
 
 if(ZEN_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+# ---- The consumer surface: install + export (find_package(loom)) ----------------------
+#
+# Zengine is the Loom's first external consumer, and it consumes by the STRANGER'S path — a
+# find_package() against an installed package, never a sibling include. That is the point of
+# the split: every rough edge in this surface hits the house before it hits a guest.
+#
+# Exported deliberately SMALLER than what the build tree offers: only the substrate that is
+# Loom's forever. The UI trio, the console, the TUI, the bridge and the SDL skin are
+# Zengine-destined (each moves in its own port phase), so exporting them now would publish a
+# surface we are about to relocate. The kernel and isolation ARE Loom's, but they are
+# Linux-only and no consumer hosts a Weave yet; they join the export when a hosting consumer
+# appears. SEAM APPRECIATION: the export set is the honest answer to "what is public", and
+# the gap between it and the build tree is a visible, intentional seam — a consumer that
+# leans on an unexported target fails on the DEFAULT path, which is exactly where we want
+# that mistake to surface.
+#
+# EXPORT_NAME gives the installed targets the SAME spellings as the in-tree ALIASes
+# (loom::core, loom::switchboard). That identity is what makes a consumer's sibling-source
+# override a true drop-in: the same names resolve either way, so the two paths cannot silently
+# diverge in what they mean.
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(loom_default_install ON)
+else()
+    set(loom_default_install OFF)
+endif()
+option(LOOM_INSTALL "Generate the install/export rules for find_package(loom)"
+       ${loom_default_install})
+
+if(LOOM_INSTALL)
+    include(CMakePackageConfigHelpers)
+
+    set_target_properties(loom            PROPERTIES EXPORT_NAME core)
+    set_target_properties(zen-switchboard PROPERTIES EXPORT_NAME switchboard)
+    set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
+    set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
+
+    # zen-sanitize is a PUBLIC dependency of both libraries, and zen-warnings survives in a
+    # static library's link interface as $<LINK_ONLY:>; both must therefore ride in the same
+    # export set or the export fails to generate. They are INTERFACE targets, so nothing is
+    # installed for them beyond the target definition — and LINK_ONLY is what keeps Loom's
+    # -Werror/-Wconversion from leaking onto a consumer's own sources.
+    install(TARGETS loom zen-switchboard zen-sanitize zen-warnings
+        EXPORT loomTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    # The exported header closure, verified self-contained: the core, the switchboard, and the
+    # weave-authoring headers. The unexported targets' headers stay home — with ONE exception:
+    # zen/weave/weave.hpp reaches for the header-only zen/kernel/schema_codec.hpp, which itself
+    # needs only registry/schema/value. It ships without the kernel library it is filed under.
+    install(DIRECTORY include/zen/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zen
+        FILES_MATCHING
+            PATTERN "*.hpp"
+            PATTERN "bridge"    EXCLUDE
+            PATTERN "console"   EXCLUDE
+            PATTERN "isolation" EXCLUDE
+            PATTERN "kernel"    EXCLUDE
+            PATTERN "ui"        EXCLUDE)
+    install(FILES include/zen/kernel/schema_codec.hpp
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zen/kernel)
+
+    install(EXPORT loomTargets
+        FILE loomTargets.cmake
+        NAMESPACE loom::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loomConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/loomConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/loomConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/loomConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/loomConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
 endif()

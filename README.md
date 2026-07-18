@@ -74,6 +74,66 @@ ctest --test-dir build-san
 The library builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
 -Wsign-conversion -Werror`, and the suite is green under the sanitizers.
 
+## Consuming loom from another project
+
+`loom` installs as a CMake package, so a separate project consumes it the way it
+would any third-party library — no sibling includes, no vendoring:
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+cmake --install build --prefix /path/to/prefix
+```
+
+```cmake
+find_package(loom 0.1 REQUIRED)
+
+add_executable(my_weave main.cpp)
+target_link_libraries(my_weave PRIVATE loom::core)          # values, schemas, the gate
+# target_link_libraries(my_weave PRIVATE loom::switchboard) # ...and the live bus
+```
+
+```sh
+cmake -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
+```
+
+The **exported surface is deliberately smaller than the build tree**: `loom::core`
+and `loom::switchboard`, plus the headers they need. The UI vocabulary, the console,
+the TUI, the bridge and the SDL skin build here today but are Zengine-destined —
+each moves out in its own port phase — so exporting them now would publish a surface
+about to be relocated. The kernel and isolation *are* the Loom's, but they are
+Linux-only and no consumer hosts a Weave yet; they join the export when a hosting
+consumer appears.
+
+Exported target names match the in-tree aliases exactly, so a consumer can swap a
+sibling-source build (`add_subdirectory`) for the installed package without touching
+a single `target_link_libraries` line.
+
+## Where this lives
+
+The Loom is one of two repositories under a shared `Zen/` root:
+
+```
+Zen/
+  Loom/        this repo — the substrate, everyone's
+  Zengine/     the default set of weaves; the Loom's first external consumer
+  playground/  your own weaves
+```
+
+Zengine consumes the Loom by the stranger's path, which is what keeps the dependency
+arrow un-invertible: **the Loom's build cannot see Zengine.** Rough edges in the
+public surface therefore hit the house before they hit a guest.
+
+**Per-repo green.** The Loom's suite runs in the Loom; Zengine's lane runs Zengine's
+tests against its pinned/installed Loom and does *not* re-run this suite — a
+dependency's proof rides its version. Every report-back states which repo's green was
+proven; "green" must never silently mean "green in one of two." *Today-note:* the Loom
+is still under active development, so its delegated-scope suite runs here every phase;
+the don't-re-prove economy arrives as the Loom stabilizes.
+
+Assistant sessions are launched from the `Zen/` root, never from inside a sub-repo —
+the memory graph is keyed to that path. Run git per-repo (`git -C Loom status`).
+
 ## Wire formats
 
 The **native** format is canonical binary: compact, positional, schema-guided,

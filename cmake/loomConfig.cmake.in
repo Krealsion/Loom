@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+# The Loom's consumer surface. Consuming this package gives you the substrate that is Loom's
+# forever — loom::core (values, schemas, the gate) and loom::switchboard (the live boundary) —
+# with the same target spellings the in-tree ALIASes use, so a sibling-source override is a
+# drop-in replacement for this package.
+
+include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
+
+check_required_components(loom)
