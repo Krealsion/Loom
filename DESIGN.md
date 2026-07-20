@@ -2399,6 +2399,104 @@ rebind (pulled only by felt window); multi-multiplicity roles; the conflict-tria
 
 ---
 
+## The letter — cooperative handoff (Manager 1b)
+
+1a proved the floor: swap-with-reset, an honest window, loud refusals. What could not
+yet happen was **continuity across succession** — a differently-shaped successor
+inheriting what its predecessor knew. Reload transplants state across the *same* shape;
+the letter **converses** across a different one. The predecessor writes a letter to its
+heir.
+
+The protocol is **Loomstd-tier** and lives in `weave/lifecycle.hpp` beside the standard
+reply shapes — deliberately **not** kernel-homed. It is universal lifecycle conversation
+any weave may choose to have; the Weave Manager is *a* consumer of it, not its owner.
+
+**Two walls gave the design its shape, and both are 1a's own pins rather than guesses.**
+
+**W1 — the letter dies with its sender.** A gated message is authorized by looking its
+sender up at *delivery* time, so a fire-and-forget graceful swap (ask, then immediately
+queue unload+load) would post the letter into the void: the incumbent's reply would be
+an in-flight send from a weave about to be unregistered, refused `CapabilityDenied`.
+The graceful path is therefore **two-stage by construction** — ask, *receive the
+letter*, and only then unload. The suite reads the ordering off the bus's own tape:
+`PrepareShutdown` delivered → `Bequest` delivered → **then** `UnloadRole`, with zero
+`CapabilityDenied` refusals of `zen.Bequest`.
+
+**W2 — the Manager cannot push.** Delivering arbitrary domain shapes to an heir would
+need shape grants unknowable at mount, and `allow_any` on the steward is exactly the
+transitive reach its broker note refuses. So delivery is **pull: the heir claims.** The
+steward is granted the two *lifecycle* shapes and nothing else — it can conduct a
+succession without being able to say a single domain word. Pull is also **gap-agnostic
+by construction**, which is the protocol's law: *the letter must not know the gap.*
+Nothing in it assumes immediacy, wall-clock, or that the predecessor's `WeaveId` still
+means anything. The letter waits; the heir asks when it wakes — a microsecond or a
+month. An heir reaches the steward by its well-known **role** (`zen.manager`), because a
+weave that just woke knows nothing else that outlives a swap.
+
+**Messages only, no state blob.** A deliberate deviation from the original
+`{state, wake_messages[]}` sketch: a state blob would be a second, shadow transplant
+path with none of reload's shape agreement — precisely the quiet growth of "reload" into
+"replace" the two ops exist to prevent. A weave that wants its state to carry says so
+**in its own vocabulary, as an item**.
+
+**The items are bytes, and the gate stays the sole admitter.** A list cannot hold
+heterogeneous messages: a List's element is ONE `TypeRef`, and the gate pins a nested
+Message to a single schema by `content_id`. So the letter is a `List<Bytes>`, each item
+serialized by the predecessor and **re-admitted through the real gate by the heir when
+it reads it** (`claim_item`). The escape hatch buys heterogeneity without buying a
+second admission path — inherited mail is untrusted input like any other.
+
+**The participation check.** The steward asks the door `QueryRole{role}` **before**
+asking the incumbent anything, so a weave that never declared `zen.PrepareShutdown` is
+never waited on — it simply falls through to the 1a hard swap, automatically. The answer
+comes from data the kernel already holds (the manifest it reconstructs at load, plus the
+bus's published accept-set); **no Switchboard API was added.** `holder == 0` honestly
+conflates "unheld" with "held by a native weave" — the kernel cannot see a native
+weave's accepts, no caller needs the distinction, and both are non-participants.
+
+**The non-participation floor, both ends.** An incumbent that never declared → hard
+swap. An heir that never claims → fresh start, safe, letter held and visible. An
+incumbent that *declared* and then never replies wedges **its own** swap only; the
+escape is a second, non-graceful `SwapWeave` — the ordinary op, not a knob. There is
+**no timeout machinery**, on doctrine.
+
+**What the steward keeps.** The letter store is bounded, keyed by role, latest-only (a
+newer swap replaces an unclaimed letter), answered exactly once, authorized only from
+the weave recorded as that role's successor, and **poke-inspectable** — the steward
+keeps no secret mail. A letter whose load *failed* is discarded: no successor exists to
+authorize a claim, and unclaimable mail is a leak wearing the costume of a feature. That
+does mean a failed graceful swap loses the letter along with the incumbent — the honest
+extension of 1a's failed-swap friction, pinned rather than papered over.
+
+`graceful` is a **field** on `SwapWeave` (v2), not a sibling op: this is the same
+machine with one extra stage in front of it, and a sibling would duplicate role/name/path
+and let the two drift. (Contrast `SwapWeave` vs `ReloadWeave`, which are different
+*mechanisms* and so are different ops.)
+
+`loom::forward_for` generalizes `relay.hpp`'s `forward` for multi-stage orchestration:
+when the answer that finally satisfies the asker is triggered by some *other* weave's
+message, the inbound `Mail` no longer describes the asker, so the caller supplies the
+asker and correlation it captured earlier. `forward` is now expressed in terms of it,
+behavior-identical (the `poke` suite is count-identical at 157 assertions — the
+boring-diff proof).
+
+Suite `manager`: 27 cases / 447 assertions; the Loomstd vocabulary's own round-trip and
+gate-refusal pin lives in the **portable** `weave` suite on purpose — a header that
+claims to be portable while only ever compiling behind `if(NOT WIN32)` is a claim nothing
+checks. Green Debug + ASan/UBSan under the delegated scope; Windows MinGW portable
+195 cases / 80209 assertions.
+
+**Named successor — the snapshot opt-out satellite ships as 1c** (the prompt's own
+cut-order). Pricing it surfaced the reason it deserves its own phase:
+`OutOfProcessWeave::snapshot()` returns the host-owned cached value, so under a `Never`
+policy that cache would hold only the *handshake* snapshot and silently serve stale state
+as current — a vacuous-green of exactly the kind the honesty lattice exists to prevent.
+Deciding what `snapshot()` means under `Never`, and making `containment()` attest the
+degradation, is a real honesty-lattice decision in the most safety-critical subsystem,
+not a flag.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in

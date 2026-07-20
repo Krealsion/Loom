@@ -62,6 +62,33 @@ struct RelayState {
 /// it ever comes, is then treated as unsolicited and dropped).
 inline constexpr std::size_t kMaxRelayPending = 64;
 
+/// Forward `req` to `target` on behalf of an asker captured EARLIER. The
+/// explicit form, for a multi-stage orchestration: when the answer that will
+/// finally satisfy the asker is triggered by some *other* weave's message, the
+/// inbound Mail no longer describes the asker, so the caller supplies the asker
+/// and correlation it recorded when the request first arrived. The
+/// routing-metadata-not-payload discipline is unchanged — it simply moves to
+/// wherever the caller first captured them.
+///
+/// Also allocates the sequence number, so a caller running a chain of its own
+/// can draw correlations from this one counter and never collide with a relay.
+template <class Req>
+std::int64_t forward_for(Mail& mail, RelayState& s, std::int64_t target, const Req& req,
+                         WeaveId asker, std::uint64_t corr) {
+    if (!asker.valid()) {
+        return 0;
+    }
+    const std::int64_t seq = ++s.next_seq;
+    if (s.pending.size() >= kMaxRelayPending) {
+        s.pending.erase(s.pending.begin());
+    }
+    s.pending.push_back(RelayPending{seq, target, static_cast<std::int64_t>(asker.value),
+                                     static_cast<std::int64_t>(corr)});
+    mail.send(WeaveId{static_cast<std::uint64_t>(target)}, req,
+              static_cast<std::uint64_t>(seq));
+    return seq;
+}
+
 /// Forward `req` to `target`, remembering who asked so the answer can be
 /// relayed back. The asker is taken from the inbound command's routing
 /// metadata (reply_to if given, else the bus-stamped sender) — never from its
@@ -70,17 +97,7 @@ inline constexpr std::size_t kMaxRelayPending = 64;
 template <class Req>
 void forward(Mail& mail, RelayState& s, std::int64_t target, const Req& req) {
     const WeaveId asker = mail.reply_to().valid() ? mail.reply_to() : mail.sender();
-    if (!asker.valid()) {
-        return;
-    }
-    const std::int64_t seq = ++s.next_seq;
-    if (s.pending.size() >= kMaxRelayPending) {
-        s.pending.erase(s.pending.begin());
-    }
-    s.pending.push_back(RelayPending{seq, target, static_cast<std::int64_t>(asker.value),
-                                     static_cast<std::int64_t>(mail.correlation())});
-    mail.send(WeaveId{static_cast<std::uint64_t>(target)}, req,
-              static_cast<std::uint64_t>(seq));
+    (void)forward_for(mail, s, target, req, asker, mail.correlation());
 }
 
 /// Relay `answer` to the asker of the pending forward it correlates to,

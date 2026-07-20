@@ -79,6 +79,26 @@ public:
     /// truth here: it is the thing that bound the role.
     std::string role_of(const std::string& name) const;
 
+    /// What a role's holder is, as far as the kernel can honestly say.
+    struct RoleQuery {
+        loom::WeaveId holder{}; ///< the kernel-loaded holder, or 0 — see below
+        bool accepts = false;   ///< holder declares (shape_name, shape_version) in its accept-set
+    };
+
+    /// Ask whether the holder of `role` declares a given shape in its accept-set —
+    /// the "will you converse?" question, answered from data the kernel already
+    /// reconstructs at load plus the bus's own published accept-set.
+    ///
+    /// `holder == 0` means **no kernel-loaded weave holds this role**, which
+    /// conflates two states the kernel genuinely cannot tell apart: the role is
+    /// unheld, or it is held by a NATIVE (host-mounted) weave whose accept-set the
+    /// kernel never saw. Distinguishing them would need a role-holder query the
+    /// Switchboard does not expose, and no caller needs the distinction: both are
+    /// non-participants, and both take the same path. Native weaves are the host's
+    /// own business.
+    RoleQuery query_role(const std::string& role, const std::string& shape_name,
+                         std::uint32_t shape_version) const;
+
 private:
     struct Loaded {
         std::string name;
