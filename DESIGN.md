@@ -2300,6 +2300,105 @@ bidi/shaping, codepoint-aware Edit).
 
 ---
 
+## The Weave Manager — the lifecycle steward
+
+Operating the system used to be a *different gesture* from using it. Using it meant
+sending messages; operating it — load, reload, unload — meant the host calling C++ on
+its `Kernel`. That asymmetry is the thing this phase removes: **operating the system
+becomes the same gesture as using it.**
+
+**The door answers.** `ControlWeave` (`kernel/control.hpp`) already turned the kernel's
+dangerous surface into an accept-set gated by the sender's `load_capability`. But it
+*discarded every outcome* — `(void)kernel_->reload_from(...)`. The single most
+dangerous surface in the system was also the only one that answered nothing, so a
+reload's state-schema mismatch — a real, deliberate, well-shaped refusal — died as an
+unread C++ return value. Every op now replies with a standard shape
+(`standard_shapes.hpp`) to `reply_to`-else-stamped-sender, echoing the correlation:
+`LoadLibrary → zen.Result{id} | zen.Refused{why}`, `ReloadLibrary`/`UnloadLibrary`/
+`UnloadRole → zen.Ack | zen.Refused{why}`, `ListLibraries → zen.Result{"a,b@role"}`.
+The door's `Emit<...>` declares all three, so its authority to answer is an ordinary
+emit-default grant — nothing rides the poke carve-out.
+
+**The Manager is an ordinary participant.** `WeaveManager` (`kernel/manager.hpp`) is a
+`WeaveBase` weave whose whole state is `RelayState` — the relay bookkeeping and nothing
+else, itself poke-inspectable. It accepts four ops (`zen.LoadWeave`, `zen.SwapWeave`,
+`zen.ReloadWeave`, `zen.ListLoaded`), forwards each to the door with `loom::relay`
+(its second real consumer), and relays the answer to the original asker under the
+asker's own correlation. **No privilege:** its authority over the kernel is exactly
+`load_capability(control)` — target-scoped to the door — assembled by the host at
+mount and handed in whole (`manager_capability`). Any participant could hold that same
+grant and drive the door with no Manager in the path; the `manager` suite pins that
+directly. It is *replaceable default tooling* — orchestration, never exclusivity — and
+the host keeps the pen: the Manager cannot widen its own grant, cannot reach the
+`Kernel` object, and cannot register or kill anything itself.
+
+**The door executes primitives; the orchestrator composes.** `SwapWeave` is the
+composite that justifies the Manager's existence: it is *not* a kernel primitive. Had
+`SwapRole` been added to the door instead, replacing the Manager would not let you
+change swap policy. The composite belongs to the orchestrator.
+
+**Swap and reload are two ops, deliberately.** They are different machines and deserve
+different names. `ReloadWeave` is reload-**in-place**: same weave, same `WeaveId`,
+state snapshotted and transplanted through the gate; a differently-shaped library is a
+clean refusal and the incumbent runs on. `SwapWeave` **replaces the role holder**: the
+incumbent is unloaded, a successor is loaded into the role, state starts fresh; a
+differently-shaped successor is the *normal case*. Folding them into one op would
+invite exactly the quiet growth of "reload" into "replace" that the two names prevent.
+
+**Addressing is role-first.** A consumer that must survive its provider being replaced
+addresses it by **role**, never by `WeaveId` — the successor is a different weave with
+a different id, and only the role slot carries the consumer's reach across. `Kernel::load`
+therefore gained an optional `role`, because registration is the only moment a role
+*can* be bound (`Switchboard::register_weave` is the sole binder, and roles are
+singletons). Binding a role already held is a clean `LoadResult` failure, not a throw.
+
+**The swap window, stated honestly.** Swap issues two messages — `UnloadRole{role}`,
+then `LoadLibrary{name, path, role}` — and the bus's single-threaded FIFO, non-reentrant
+dispatch guarantees the order. Three properties, all pinned:
+
+- **Inbound traffic already queued still reaches the incumbent.** The swap's own
+  messages go to the *tail*, so a role-send enqueued before them resolves against the
+  incumbent. A swap does not steal traffic already addressed to the role.
+- **The incumbent's in-flight *replies* die with it.** A gated message is authorized by
+  looking its sender up at *delivery* time, so once the incumbent is unregistered its
+  still-queued answers fail the `sender != nullptr` term and are refused
+  `CapabilityDenied`. Fail-closed and correct, but real: an in-flight request to the
+  incumbent can be answered into the void. This is a property of unregistering **any**
+  live weave mid-queue, not something the swap invented — the swap is simply the first
+  op that makes it routine. It is the concrete thing an invisible/atomic rebind would
+  have to solve, and the honest reason that refinement is named rather than dismissed.
+- **A failed swap leaves the role unheld**, the asker gets the `Refused` with its
+  reason, and sends to the empty slot refuse cleanly (`NoSuchTarget`, exactly as an
+  unmounted provider does) — the optional-participation floor doing its job. Felt
+  friction, admitted at floor tier.
+
+**One request, one answer.** The unload half of a swap is deliberately fire-and-forget
+(correlation 0, which no relay sequence can equal — they start at 1), so its reply is
+dropped by the consumer obligation rather than relayed. That is not a dark fate: its
+outcome is fully subsumed by the load's. If the role was unheld, the unload "fails" and
+the load then binds it — precisely what was asked. And because the unload is
+**role-addressed**, it cannot destroy a weave the asker did not name: the only thing it
+can unload is the role's holder. Both are pinned.
+
+**Homing (the `schema_codec` lesson, applied prospectively).** The Manager must speak
+the door's wire shapes, which live in un-exported kernel headers. It therefore homes
+**inside** `include/zen/kernel/` — already excluded from the install — so **no exported
+header reaches an un-exported one**. Zero new export edges; the Manager joins the
+installed surface at the same trigger the kernel does (a hosting consumer).
+
+**Loading is path-addressed, honestly.** Naming a weave by the file it lives in is what
+the kernel can do today; content-addressed identity belongs to the identity phase.
+`ListLoaded` is answered from the kernel's own live map, never a Manager ledger — there
+is no cache here that could drift from the loading authority's truth.
+
+Suite `manager`: 16 cases / 171 assertions, green Debug + ASan/UBSan under the delegated
+scope; Linux-gated with the rest of the kernel, and the Windows portable subset is
+count-identical (194 / 80203). Named successors (not built): `PrepareShutdown` + the
+cooperative handoff letter (1b, Loomstd-homed); snapshot configurability; invisible/atomic
+rebind (pulled only by felt window); multi-multiplicity roles; the conflict-triage brain.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in

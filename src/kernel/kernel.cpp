@@ -308,7 +308,8 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     return result;
 }
 
-LoadResult Kernel::load(const std::string& name, const std::string& path) {
+LoadResult Kernel::load(const std::string& name, const std::string& path,
+                        const std::string& role) {
     if (libs_.count(name) != 0) {
         return {false, {}, "already loaded: " + name};
     }
@@ -341,9 +342,14 @@ LoadResult Kernel::load(const std::string& name, const std::string& path) {
         // B2's OS sandbox (which the grant's reserved OS-capability flags drive).
         // B1 grants loaded Weaves permissive bus sends; the kernel *door* (the load
         // capability) is fully gated against native Weaves.
-        loom::WeaveId id = bus_.register_weave(std::move(adapter), loom::Grant{}.allow_any());
+        // A non-empty role binds the slot here, at the only moment it can be
+        // bound. register_weave throws if the role is already held; that throw is
+        // caught below and becomes a clean LoadResult failure — the incumbent
+        // keeps its role and its life.
+        loom::WeaveId id =
+            bus_.register_weave(std::move(adapter), loom::Grant{}.allow_any(), role);
         raw->set_self(id);
-        libs_.emplace(name, Loaded{name, lib, abi, raw, id});
+        libs_.emplace(name, Loaded{name, lib, abi, raw, id, role});
         return {true, id, ""};
     } catch (const std::exception& e) {
         if (!adapter_built) {
@@ -442,9 +448,26 @@ bool Kernel::unload(const std::string& name) {
     return true;
 }
 
+bool Kernel::unload_role(const std::string& role) {
+    if (role.empty()) {
+        return false; // "no role" is not a role; never unload an unbound weave by it
+    }
+    for (const auto& entry : libs_) {
+        if (entry.second.role == role) {
+            return unload(entry.first); // the unregister releases the role slot
+        }
+    }
+    return false;
+}
+
 loom::WeaveId Kernel::weave_id(const std::string& name) const {
     auto it = libs_.find(name);
     return it == libs_.end() ? loom::WeaveId{} : it->second.id;
+}
+
+std::string Kernel::role_of(const std::string& name) const {
+    auto it = libs_.find(name);
+    return it == libs_.end() ? std::string{} : it->second.role;
 }
 
 bool Kernel::is_loaded(const std::string& name) const { return libs_.count(name) != 0; }

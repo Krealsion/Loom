@@ -112,7 +112,16 @@ public:
     /// the id is unknown). Used by hosts that must destroy a Weave — and any
     /// resources it holds, such as a loaded library instance — in a controlled
     /// order. Pending deliveries to a removed Weave are refused (NoSuchTarget) at
-    /// delivery. Its registered schemas remain published.
+    /// delivery. Its registered schemas remain published, and any role it held is
+    /// released — the slot is free for a successor.
+    ///
+    /// Symmetrically, and less obviously: pending deliveries *from* a removed
+    /// Weave are refused too, as CapabilityDenied. A gated message is authorized
+    /// by looking its sender's grant up at DELIVERY time, so a sender that no
+    /// longer exists cannot be authorized and the message fails closed. An
+    /// unregistered Weave's in-flight replies therefore die with it. That is the
+    /// safe direction to fail, but it is a real effect a caller unloading a live
+    /// participant should expect (see the manager suite, which pins it).
     std::unique_ptr<Weave> unregister_weave(WeaveId id);
 
     /// Register a Weave (the bus takes ownership) and return its stable id. Each

@@ -37,6 +37,7 @@ add_executable(zen-tests
 if(NOT WIN32)
     target_sources(zen-tests PRIVATE
         test_kernel.cpp
+        test_manager.cpp
         test_capabilities.cpp
         test_policy.cpp
         test_isolation.cpp)
@@ -178,7 +179,7 @@ endif()
 
 # The kernel/capabilities suites and the cgroup-scoped isolation/policy/all suites are Linux-only.
 if(NOT WIN32)
-    foreach(suite IN ITEMS kernel capabilities)
+    foreach(suite IN ITEMS kernel manager capabilities)
         add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
     endforeach()
 
