@@ -76,10 +76,15 @@ private:
     void persist() const;
 };
 
-/// A deterministic content-hash (FNV-1a, 64-bit, lowercase hex) of the file at
-/// `so_path`. Stable across runs and machines, so a persisted key survives a host
-/// restart (unlike std::hash). Throws std::runtime_error if the file cannot be read.
-/// This is identity, not authentication: it names a build, it does not vouch for it.
+/// A deterministic content-hash (SHA-256 truncated to 128 bits, lowercase hex) of the
+/// file at `so_path`. Stable across runs and machines, so a persisted key survives a
+/// host restart (unlike std::hash). Throws std::runtime_error if the file cannot be
+/// read. It is content-addressed AND collision-resistant: because this key alone
+/// decides a mod's authority above the floor, a weak hash would let an attacker forge a
+/// second build onto an existing grant — so it is a cryptographic digest, not FNV
+/// (audit F-1). It is still identity, not authentication: it names a build by its bytes;
+/// it does not vouch for its author. A persistent, *signed* author identity is the
+/// identity phase's job — unchanged by this.
 std::string so_content_hash(const std::string& so_path);
 
 } // namespace loom

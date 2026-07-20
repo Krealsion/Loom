@@ -61,6 +61,40 @@ TEST_CASE("a directed send to an unknown target is refused") {
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
 
+TEST_CASE("the delivery journal is a bounded ring: recent outcomes survive, ancient ones are evicted") {
+    // Audit F-6: journal_ used to retain one outcome per message EVER enqueued — a
+    // linear leak in lifetime throughput, and a bus is precisely the component that
+    // runs for weeks. It is now a fixed-capacity ring of kJournalCapacity slots.
+    // Flood far past the bound and show the journal keeps a recent window intact (no
+    // live correlation lost) while the footprint stays bounded (an out-of-window ticket
+    // has been evicted — the journal did NOT keep one slot per message sent).
+    Switchboard bus;
+    constexpr std::uint64_t cap = Switchboard::kJournalCapacity;
+    const std::uint64_t flood = cap * 3; // three windows' worth of traffic
+
+    Ticket first{}, recent{}, edge_in{}, edge_out{};
+    for (std::uint64_t i = 0; i < flood; ++i) {
+        Ticket t = bus.send(WeaveId{9999}, Message(ping(static_cast<std::int64_t>(i)))); // no such target
+        const std::uint64_t seq = i + 1; // seqs start at 1
+        if (seq == 1) first = t;                     // ancient: 3x the window old by the end
+        if (seq == flood - cap) edge_out = t;        // one slot past the retained window
+        if (seq == flood - cap + 1) edge_in = t;     // the oldest slot still inside the window
+        recent = t;
+        bus.pump(); // drain fully each time — the leak was in the journal, not the queue
+    }
+
+    // In-window tickets still report their true fate — correlation is preserved.
+    CHECK(bus.outcome(recent).disposition == Disposition::Refused);
+    CHECK(bus.outcome(recent).refusal.reason == RefusalReason::NoSuchTarget);
+    CHECK(bus.outcome(edge_in).disposition == Disposition::Refused); // oldest retained: kept
+
+    // Out-of-window tickets have been evicted — the observable proof the ring is
+    // bounded (it did not retain all `flood` outcomes). An evicted seq reads Pending,
+    // exactly as an unknown seq does.
+    CHECK(bus.outcome(edge_out).disposition == Disposition::Pending); // one past the window
+    CHECK(bus.outcome(first).disposition == Disposition::Pending);    // ancient
+}
+
 TEST_CASE("publish reaches every accepter in registration order; non-accepters get nothing") {
     Switchboard bus;
     Registered a = reg(bus, {ping_schema()});

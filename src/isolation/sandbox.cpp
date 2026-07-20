@@ -62,6 +62,24 @@ const char* capability_name(Capability c) noexcept {
     return "?";
 }
 
+std::string resource_note(const ResourceCaps& caps, bool memory_enforceable) {
+    // Mirror cgroup_create_leaf exactly: memory.max is written only where the memory
+    // controller is delegated. Rendering "memory<=NMiB" when it is not would claim a
+    // cap we never set — the one thing the honesty lattice forbids (audit F-20).
+    std::string mem;
+    if (caps.memory_max < 0) {
+        mem = "memory unlimited-by-grant"; // opted out by grant; nothing to impose
+    } else if (memory_enforceable) {
+        mem = "memory<=" + std::to_string(caps.memory_max / (1024 * 1024)) + "MiB";
+    } else {
+        mem = "memory UNCAPPED (no memory controller delegated — not enforceable on this host)";
+    }
+    // pids is the fork-bomb stop and is delegated wherever any cgroup subtree is (the
+    // detection posture this note is reached from); rendered unconditionally. The
+    // symmetric memory-only-delegation case is tracked as a face-up observation.
+    return mem + ", pids<=" + std::to_string(caps.pids_max);
+}
+
 const CapabilityStatus* EnforcementReport::find(Capability c) const noexcept {
     for (const CapabilityStatus& s : capabilities) {
         if (s.capability == c) {

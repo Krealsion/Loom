@@ -235,9 +235,11 @@ std::string describe_resolution(const CapabilityResolution& r) {
                        (r.confirmed ? " (confirmed: pid in leaf, limits read back)" : "") +
                        "; honest scope: pids.max ALWAYS bounds a fork-bomb (no grant licenses "
                        "one); a memory cap OOM-kills within the cgroup (the host survives and "
-                       "reloads-then-quarantines) unless opted out by grant (still pids-bounded); "
-                       "cpu.weight is a fair-share weight (set-and-confirmed where the cpu "
-                       "controller is delegated, absent otherwise), not a hard cap";
+                       "reloads-then-quarantines) where the memory controller is delegated and "
+                       "not opted out by grant — otherwise memory is uncapped (named so in the "
+                       "note above), still pids-bounded; cpu.weight is a fair-share weight "
+                       "(set-and-confirmed where the cpu controller is delegated, absent "
+                       "otherwise), not a hard cap";
             case Outcome::Granted:
                 // Resources never resolve to Granted (there is no wholesale opt-out — pids is
                 // always bounded). Kept only for switch-exhaustiveness; defensive if ever hit.
@@ -757,10 +759,11 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             }
             link->cg_caps = caps;
             link->cg_leaf = "zen-weave-" + std::to_string(g_leaf_counter++);
-            rc.note = (caps.memory_max < 0
-                           ? std::string("memory unlimited-by-grant")
-                           : "memory<=" + std::to_string(caps.memory_max / (1024 * 1024)) + "MiB") +
-                      ", pids<=" + std::to_string(caps.pids_max);
+            // Built from what a leaf will ACTUALLY impose, not from the computed caps:
+            // where the memory controller is not delegated, create_leaf never writes
+            // memory.max, so the note must say memory is uncapped, not claim a cap it
+            // never set (audit F-20 — the honesty lattice's one absolute rule).
+            rc.note = resource_note(caps, cgroup_memory_available());
         } else if (dev_mode_) {
             rc.outcome = Outcome::Uncontained;
             std::fprintf(stderr,

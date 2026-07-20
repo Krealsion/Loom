@@ -171,9 +171,14 @@ TEST_CASE("a list count beyond the cap is rejected, not allocated") {
     CHECK(a.first_error().kind == ErrorKind::MalformedField);
 }
 
-TEST_CASE("pathological binary nesting is bounded by the depth cap, not the stack") {
-    // A deeply List-nested schema used as the door; a body of all-0x01 counts
-    // would recurse forever but the depth cap stops it cleanly.
+TEST_CASE("pathological binary nesting in a VALUE body is bounded by the depth cap, not the stack") {
+    // Scope: this covers the VALUE-admission path only. The door schema is built
+    // in-process by make_schema, so decode_type is never exercised here — the hostile
+    // input is the 200-deep-nested value *body*, which serialize.cpp's kMaxBinaryDepth
+    // stops during admit(). The sibling hazard — a hostile *schema descriptor* whose
+    // flat token stream decodes into a deep type — lives on the decode_type path and is
+    // pinned in test_schema_codec.cpp ("decode_schema refuses a pathologically deep
+    // type-token stream…"); a green here never proved anything about that (audit F-19).
     TypeRef t = type_of(Kind::Int);
     for (int i = 0; i < 200; ++i) {
         t = type_list(t);

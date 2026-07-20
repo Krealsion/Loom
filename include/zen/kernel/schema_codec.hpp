@@ -176,7 +176,28 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
 // (unresolved nested schema, malformed type) — those throw and the host turns
 // them into a clean load refusal.
 
-inline TypeRef decode_type(const Cell::Array& tokens, std::size_t& i, const Registry& deps) {
+// The type-token stream is flat: its length is bounded by the list cap
+// (kMaxListCount, ~1M), *not* by the value-tree depth cap. But decode_type
+// recurses once per List token, so a field typed List<List<…>> nested tens of
+// thousands deep — cheap to encode, well under any frame cap — would drive the
+// host's reconstruction stack to a SIGSEGV that no try/catch can catch, at mount
+// time, before the mod runs a single message. This cap refuses such a descriptor
+// on the way down (before the recursive call), turning it into an ordinary thrown
+// refusal that every decode_schema call site already converts to a clean Refused.
+//
+// The bound mirrors detail::kMaxBinaryDepth (64), and the mirror is principled,
+// not cosmetic: a *value* nested deeper than kMaxBinaryDepth can never be
+// serialized or admitted, so a *type* nested deeper than it could only ever
+// describe values the gate already rejects — refusing it costs no legitimate
+// schema. Kept in sync with kMaxBinaryDepth by hand: this public header must not
+// reach into src/detail, and schema_codec must stay in the portable subset.
+inline constexpr int kMaxTypeDepth = 64;
+
+inline TypeRef decode_type(const Cell::Array& tokens, std::size_t& i, const Registry& deps,
+                           int depth = 0) {
+    if (depth > kMaxTypeDepth) {
+        throw std::runtime_error("schema descriptor: type nesting exceeds depth cap");
+    }
     if (i >= tokens.size()) {
         throw std::runtime_error("schema descriptor: truncated type-token stream");
     }
@@ -203,7 +224,7 @@ inline TypeRef decode_type(const Cell::Array& tokens, std::size_t& i, const Regi
         return type_message(ref);
     }
     case Kind::List:
-        return type_list(decode_type(tokens, i, deps));
+        return type_list(decode_type(tokens, i, deps, depth + 1));
     default:
         return type_of(kind);
     }

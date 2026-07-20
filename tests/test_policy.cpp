@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -273,6 +274,39 @@ TEST_CASE("the grant-record persists deltas across reload, keyed by content-hash
         CHECK_FALSE(rec.lookup("an-unknown-id").network); // an unknown identity -> the floor
     }
     std::remove(path.c_str());
+}
+
+TEST_CASE("so_content_hash is a truncated SHA-256 (NIST vectors); a content change changes the key") {
+    // Audit F-1: the grant key is now a cryptographic digest (SHA-256 truncated to 128
+    // bits), not FNV-1a — because this key ALONE decides a mod's authority above the
+    // floor, and FNV's ~2^32 birthday resistance was cheap to forge a second build onto
+    // an existing grant. Pin it to FIPS 180-4 known-answer vectors so the in-tree
+    // SHA-256 is proven correct, not merely trusted, then confirm the security property:
+    // any content change changes the key (a rebuilt mod re-floors — the honest default).
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "zen_f1_kat";
+    fs::create_directories(dir);
+    const auto hash_of = [&](const std::string& name, const std::string& content) {
+        const fs::path p = dir / name;
+        {
+            std::ofstream o(p, std::ios::binary | std::ios::trunc);
+            o.write(content.data(), static_cast<std::streamsize>(content.size()));
+        }
+        return so_content_hash(p.string());
+    };
+
+    // FIPS 180-4 example messages, SHA-256 truncated to the first 128 bits (32 hex).
+    CHECK(hash_of("abc", "abc") == "ba7816bf8f01cfea414140de5dae2223");
+    CHECK(hash_of("two_block", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+          "248d6a61d20638b8e5c026930c3e6039"); // spans the pad boundary: exercises 2 blocks
+
+    // The defining property: one flipped byte yields a different key.
+    const std::string a = hash_of("v1", "the-mods-bytes-and-then-some-v1");
+    const std::string b = hash_of("v2", "the-mods-bytes-and-then-some-v2");
+    CHECK(a != b);
+    CHECK(a.size() == 32); // 128 bits, lowercase hex
+
+    fs::remove_all(dir);
 }
 
 TEST_CASE("ask-is-not-a-grant: a mod that asks for the world still lands on the floor") {

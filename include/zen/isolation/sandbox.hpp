@@ -135,6 +135,15 @@ bool cgroup_memory_available() noexcept; ///< memory controller enabled for leav
 bool cgroup_pids_available() noexcept;   ///< pids controller enabled for leaves
 bool cgroup_cpu_available() noexcept;    ///< cpu controller enabled for leaves (cpu.weight)
 
+/// The honest one-line resource note for a leaf with these caps. It must state only
+/// what cgroup_create_leaf will TRULY impose: memory.max is written only where the
+/// memory controller is delegated, so where `memory_enforceable` is false the note
+/// says memory is UNCAPPED rather than claim a computed-but-never-set cap. This is
+/// the lattice's one absolute rule — never report enforcement we did not impose
+/// (audit F-20: a pids-only host reported `memory<=…` while memory ran uncapped).
+/// Pure and portable, so the honesty is unit-testable without a live cgroup.
+std::string resource_note(const ResourceCaps& caps, bool memory_enforceable);
+
 /// Per-Weave leaf lifecycle. `name` is a bare leaf name unique to the Weave.
 bool cgroup_create_leaf(const std::string& name, const ResourceCaps& caps);
 bool cgroup_move_pid(const std::string& name, pid_t pid);          ///< move pid into the leaf
