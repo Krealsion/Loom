@@ -406,7 +406,12 @@ non-reentrancy (a shared depth counter that never exceeds 1).
 Because `send` enqueues, a delivery's fate is read *after* `pump()`:
 `send` returns a `Ticket`, and `outcome(Ticket)` yields
 `Delivered` / `Refused{Refusal}` (or `Pending` before the pump). Live taps see
-the same outcomes as they happen.
+the same outcomes as they happen. The outcome journal is a **bounded ring**
+(`kJournalCapacity`, seq-tagged slots): it retains the most recent window of outcomes,
+not one per message ever sent, so a bus running for weeks stays bounded by design rather
+than by lifetime throughput (audit F-6). Every consumer reads a `Ticket` in the same
+`submit`→`pump`→`outcome` breath, far inside the window; a `Ticket` older than the window
+(or never issued) reads `Pending`.
 
 ### Refusals are structured and observable
 
@@ -840,7 +845,15 @@ registry, and `admit`ted — only then is it routed. Malformed or hostile bytes 
 refused and dropped; they never reach a recipient and never crash the host. The
 manifest crosses as the same gated **schema-as-value** descriptor the kernel
 reconstructs, so the host rebuilds the child's accept-set and state schema through
-`admit` + `decode_schema`.
+`admit` + `decode_schema`. **Reconstruction is depth-bounded.** A type reference is a
+*flat* token stream — bounded by the list cap, not the value-tree depth cap — so a
+malicious manifest could type a field `List<List<…>>` tens of thousands deep, pass the
+gate, then drive `decode_type`'s per-`List` recursion to a host **stack overflow at mount
+time, before the mod runs** (a SIGSEGV no `try/catch` catches; audit F-19). `decode_type`
+now caps nesting at `kMaxTypeDepth` (mirroring `kMaxBinaryDepth=64` — a type nested deeper
+could only describe values the gate already rejects) and **refuses on the way down**, so a
+hostile descriptor becomes an ordinary `Refused` at every `decode_schema` call site
+(out-of-process mount, in-process load, and the bridge peer).
 
 ### Sender integrity: stamped from the connection
 
@@ -1237,9 +1250,16 @@ lets a bomb survive the cap that would OOM a default-capped one — no grant can
 bomb. `cpu.weight` is **set-and-confirmed where the cpu controller is delegated** (present but
 unexercised on this WSL host, which delegates only memory+pids — honestly reported absent), a
 *fair-share weight, never a hard cap*; an absolute `cpu.max` quota is a possible **future
-opt-in**, not built. `containment()` now leaves **only syscalls** unenforced. The mechanism
-ladder is **complete for the threat model**; what remains is a **deliberate seccomp decision**
-(kernel-exploit-escape defense) — the policy phases (P1, the StorageBroker) have since shipped.
+opt-in**, not built. **Memory is reported the same honest way as cpu:** the containment note
+prints `memory<=…` only where the memory controller is delegated (`cgroup_memory_available()`),
+and positively states memory is *uncapped* where it is not — `cgroup_create_leaf` writes
+`memory.max` only when the controller is present, so the note must never claim a cap it did not
+set (the honesty lattice's one absolute rule; audit F-20). `containment()` now leaves **only
+syscalls** unenforced. The mechanism ladder is **complete for the threat model** — as a
+*mechanism* set, and conditionally: the OS-enforced rungs need userns + delegated cgroup-v2, and
+where the host lacks them a mount **fails safe (refuses)** outside dev-mode. What remains is a
+**deliberate seccomp decision** (kernel-exploit-escape defense) — the policy phases (P1, the
+StorageBroker) have since shipped.
 
 ---
 
@@ -1287,11 +1307,18 @@ A Weave may **ask** for capabilities; the **host alone** decides the grant. The 
   retrieve on messages alone, with zero disk access. It never holds a raw privileged
   capability; it holds only a send-rule to the broker that does.
 - **The grant-record (the host holds the pen).** A persisted, per-install ledger keyed by the
-  mod's **`.so` content-hash** (FNV-1a — stable across path moves, so a rebuild is a new
-  identity and re-floors, the honest default) maps identity → a granted **delta** above the
-  floor. It is **TCB data**: only the host writes it (`record_grant_delta`), never a Weave;
-  it persists as a gated `Value` in Zen's JSON (inspectable, editable per-install). This
-  stands in for the consent UX (deferred). Proven: with an empty record a greedy mod floors;
+  mod's **`.so` content-hash** (**SHA-256 truncated to 128 bits** — stable across path moves, so
+  a rebuild is a new identity and re-floors, the honest default) maps identity → a granted
+  **delta** above the floor. The key is a **cryptographic** digest, not FNV-1a: because this key
+  alone decides a mod's authority above the floor, a weak hash would let an attacker forge a
+  second build onto an existing grant — FNV's ~2^32 collision resistance was too weak to name a
+  security-relevant identity (audit F-1). It is still content-addressing, not authentication: it
+  names a build by its bytes; a *signed* author identity remains the identity phase's job. It is
+  **TCB data**: only the host writes it (`record_grant_delta`), never a Weave; it persists as a
+  gated `Value` in Zen's JSON (inspectable, editable per-install), written **durably** — the temp
+  file is `fsync`'d before the atomic `rename`, and the directory `fsync`'d after, so a crash
+  cannot leave the ledger's name pointing at unsynced bytes and brick the host's next load (audit
+  F-8). This stands in for the consent UX (deferred). Proven: with an empty record a greedy mod floors;
   with a recorded network delta the *same* mod mounts `network: granted` — the pen, not the
   declaration, is the authority.
 
@@ -2706,3 +2733,14 @@ C++20, builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
 -Wsign-conversion -Werror`. Verified with GCC 11.4 (Ubuntu 22.04 via WSL);
 targets the C++20 floor and avoids features that require GCC 12+. The suite is
 green in Debug and under `-fsanitize=address,undefined`.
+
+**Precondition — the `isolation` and `policy` suites need a delegated cgroup-v2
+scope.** ctest launches them via `tests/run-under-scope.sh`
+(`systemd-run --user --scope -p Delegate=yes`), because real B3–B5 enforcement needs
+an unprivileged user namespace plus a delegated cgroup subtree. Run those suites
+without such a scope (a plain `wsl bash` lands in the root cgroup) and the
+OS-enforcement cases **fail hard by design**, naming the missing capability — the
+harness will not report a pass it did not earn (`tests/enforcement_gate.hpp`). Set
+`ZEN_ALLOW_UNENFORCEABLE=1` to convert those into marked-degraded skips on a host that
+genuinely cannot enforce. The portable suites need none of this and run everywhere,
+including the Windows/MinGW build.

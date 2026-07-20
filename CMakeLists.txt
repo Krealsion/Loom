@@ -122,7 +122,8 @@ add_library(zen-isolation
     src/isolation/sandbox.cpp)
 
 target_include_directories(zen-isolation
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src) # detail/sha256.hpp (grant-key digest), like loom
 
 target_compile_features(zen-isolation PUBLIC cxx_std_20)
 target_link_libraries(zen-isolation

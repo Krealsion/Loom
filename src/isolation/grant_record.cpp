@@ -5,6 +5,8 @@
 #include <zen/serialize.hpp>
 #include <zen/value.hpp>
 
+#include "detail/sha256.hpp" // the grant-key digest (audit F-1); no external crypto dep
+
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -13,6 +15,11 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+// Durable-write path (host-side, POSIX; this library is never built on Windows).
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace loom {
 
@@ -49,6 +56,63 @@ std::string read_file(const std::string& path) {
     return ss.str();
 }
 
+// Write `data` to `path` and fsync it: the bytes are on stable storage before this
+// returns, so a later rename of `path` cannot become durable ahead of its contents.
+// Throws (and removes the temp file) on any failure. POSIX only — std::ofstream gives
+// no fd to fsync, which is precisely why the durability claim went unbacked before.
+void write_file_synced(const std::string& path, const std::string& data) {
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        throw std::runtime_error("grant record: cannot write '" + path + "'");
+    }
+    std::size_t off = 0;
+    while (off < data.size()) {
+        const ssize_t n = ::write(fd, data.data() + off, data.size() - off);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            (void)::close(fd);
+            (void)std::remove(path.c_str());
+            throw std::runtime_error("grant record: failed writing '" + path + "'");
+        }
+        off += static_cast<std::size_t>(n);
+    }
+    int rc = 0;
+    do {
+        rc = ::fsync(fd);
+    } while (rc != 0 && errno == EINTR);
+    if (rc != 0) {
+        (void)::close(fd);
+        (void)std::remove(path.c_str());
+        throw std::runtime_error("grant record: cannot fsync '" + path + "'");
+    }
+    if (::close(fd) != 0) {
+        (void)std::remove(path.c_str());
+        throw std::runtime_error("grant record: cannot close '" + path + "'");
+    }
+}
+
+// Best-effort fsync of the directory holding `path`, so the rename INTO it survives a
+// crash. Best-effort by design: the file contents are already fsync'd, so a failure
+// here cannot lose a recorded delta — it only weakens the rename's durability — so it
+// does not throw and abort a grant the host has already decided to make.
+void fsync_parent_dir(const std::string& path) {
+    const auto slash = path.find_last_of('/');
+    const std::string dir = (slash == std::string::npos) ? std::string(".")
+                            : (slash == 0 ? std::string("/") : path.substr(0, slash));
+    const int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dfd < 0) {
+        return;
+    }
+    int rc = 0;
+    do {
+        rc = ::fsync(dfd);
+    } while (rc != 0 && errno == EINTR);
+    (void)rc;
+    (void)::close(dfd);
+}
+
 } // namespace
 
 std::string so_content_hash(const std::string& so_path) {
@@ -58,21 +122,14 @@ std::string so_content_hash(const std::string& so_path) {
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("so_content_hash: ") + e.what());
     }
-    // FNV-1a, 64-bit — deterministic across runs and machines. This is a separate id
-    // space from loom's schema content-id (no relation intended); it identifies a
-    // .so build and nothing more.
-    std::uint64_t h = 1469598103934665603ULL;
-    for (char ch : bytes) {
-        h ^= static_cast<std::uint64_t>(static_cast<unsigned char>(ch));
-        h *= 1099511628211ULL;
-    }
-    static const char* const hex = "0123456789abcdef";
-    std::string out(16, '0');
-    for (int i = 15; i >= 0; --i) {
-        out[static_cast<std::size_t>(i)] = hex[h & 0xFU];
-        h >>= 4;
-    }
-    return out;
+    // SHA-256 truncated to 128 bits (32 lowercase-hex chars) — deterministic across
+    // runs and machines. This keys a security-relevant identity (an above-floor grant),
+    // so it must be COLLISION-RESISTANT, not merely a fast name: FNV-1a (the prior key)
+    // offered only ~2^32 birthday resistance, cheap for a determined attacker to forge a
+    // second .so onto an existing grant (audit F-1). Truncated SHA-256 raises that to
+    // ~2^128 second-preimage / ~2^64 collision. Still content-addressing, not
+    // authentication — a *signed* author identity remains the identity phase's job.
+    return loom::detail::sha256_hex_prefix(bytes, 16);
 }
 
 void GrantRecord::load(std::string path) {
@@ -137,27 +194,21 @@ void GrantRecord::persist() const {
     v.set("entries", loom::Cell::list(std::move(entries)));
     const std::string json = loom::compat::serialize(v);
 
-    // Write to a temp file then atomically rename into place. The record is TCB data
-    // the host's startup depends on: a partial or failed write (ENOSPC, crash) must
-    // never corrupt the live ledger — a corrupt ledger would throw on the next load()
-    // and brick the host. rename(2) is atomic within a filesystem; the stream is
-    // checked so a silent failure surfaces rather than losing a recorded delta.
+    // Write to a temp file, fsync its CONTENTS, atomically rename into place, then fsync
+    // the directory so the rename itself is durable. The record is TCB data the host's
+    // startup depends on: a partial, torn, or unsynced write (ENOSPC, power loss) must
+    // never corrupt the live ledger — a corrupt ledger throws on the next load() and
+    // bricks the host. rename(2) is atomic within a filesystem, but without the
+    // content-fsync a crash could make the rename durable while the data blocks are not,
+    // leaving the ledger's name pointing at empty/torn bytes. The two fsyncs close that
+    // window — this is the durability the temp-file-then-rename dance exists to deliver.
     const std::string tmp = path_ + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            throw std::runtime_error("grant record: cannot write '" + tmp + "'");
-        }
-        out.write(json.data(), static_cast<std::streamsize>(json.size()));
-        out.flush();
-        if (!out.good()) {
-            throw std::runtime_error("grant record: failed writing '" + tmp + "'");
-        }
-    }
+    write_file_synced(tmp, json);
     if (std::rename(tmp.c_str(), path_.c_str()) != 0) {
         (void)std::remove(tmp.c_str());
         throw std::runtime_error("grant record: cannot replace '" + path_ + "'");
     }
+    fsync_parent_dir(path_);
 }
 
 } // namespace loom

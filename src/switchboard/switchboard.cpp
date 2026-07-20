@@ -61,7 +61,10 @@ std::shared_ptr<const Schema> lifecycle_policy_schema() {
 // ---- Switchboard ----------------------------------------------------------
 
 Switchboard::Switchboard() {
-    journal_.push_back(DeliveryOutcome{}); // slot 0 is unused; seqs start at 1
+    // A fixed-size ring, allocated once: the journal's footprint is bounded by
+    // kJournalCapacity for the life of the bus, never by how many messages it ever
+    // carries (audit F-6). Slots start seq=0 ("never written"); real seqs start at 1.
+    journal_.assign(kJournalCapacity, JournalSlot{});
 }
 
 Switchboard::~Switchboard() = default;
@@ -171,14 +174,14 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
 
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
-    journal_.push_back(DeliveryOutcome{}); // Pending at index seq
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     queue_.push_back(Envelope{std::move(msg), target, seq, gated});
     return Ticket{seq};
 }
 
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
-    journal_.push_back(DeliveryOutcome{}); // Pending at index seq
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role)});
     return Ticket{seq};
 }
@@ -197,7 +200,7 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
             continue;
         }
         const std::uint64_t seq = next_seq_++;
-        journal_.push_back(DeliveryOutcome{});
+        journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
         queue_.push_back(Envelope{
             Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id, seq, gated});
         ++recipients;
@@ -239,8 +242,13 @@ Ticket Switchboard::send_as_to_role(WeaveId as_sender, std::string_view role, Me
 }
 
 void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refusal& refusal) {
-    if (seq < journal_.size()) {
-        journal_[static_cast<std::size_t>(seq)] = DeliveryOutcome{disposition, refusal};
+    JournalSlot& slot = journal_[seq % kJournalCapacity];
+    if (slot.seq == seq) {
+        // Still the slot's owner. If a wrap past kJournalCapacity already evicted this
+        // seq (only possible when a single pump outruns the window), the guard leaves
+        // the newer owner untouched and this outcome is simply forgotten — never
+        // misattributed. Read-immediately consumers never reach that depth.
+        slot.outcome = DeliveryOutcome{disposition, refusal};
     }
 }
 
@@ -380,10 +388,14 @@ void Switchboard::pump() {
 }
 
 DeliveryOutcome Switchboard::outcome(Ticket t) const {
-    if (t.seq == 0 || t.seq >= journal_.size()) {
-        return DeliveryOutcome{};
+    if (t.seq == 0 || t.seq >= next_seq_) {
+        return DeliveryOutcome{}; // the invalid ticket, or a seq never issued
     }
-    return journal_[static_cast<std::size_t>(t.seq)];
+    const JournalSlot& slot = journal_[t.seq % kJournalCapacity];
+    if (slot.seq != t.seq) {
+        return DeliveryOutcome{}; // evicted: older than the retained window (Pending, as for unknown)
+    }
+    return slot.outcome;
 }
 
 ObserverId Switchboard::add_observer(Observer obs) {

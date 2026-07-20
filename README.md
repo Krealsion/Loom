@@ -74,6 +74,16 @@ ctest --test-dir build-san
 The library builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
 -Wsign-conversion -Werror`, and the suite is green under the sanitizers.
 
+**The `isolation` and `policy` suites need a delegated cgroup-v2 scope** — real OS
+containment requires an unprivileged user namespace plus a delegated cgroup subtree, so
+these suites are launched via `tests/run-under-scope.sh` (which ctest invokes for them).
+Run outside such a scope — e.g. a plain `wsl bash` in the root cgroup — the OS-enforcement
+cases **fail hard by design**, naming the missing capability, rather than pass having
+verified nothing (see `tests/enforcement_gate.hpp`). On a host that genuinely cannot
+enforce, `ZEN_ALLOW_UNENFORCEABLE=1` converts those into marked-degraded skips. The
+portable suites (core, switchboard, bridge, …) need none of this and run everywhere,
+including the Windows/MinGW build.
+
 ## Consuming loom from another project
 
 `loom` installs as a CMake package, so a separate project consumes it the way it

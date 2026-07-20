@@ -9,6 +9,7 @@
 #include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -185,8 +186,19 @@ public:
     void run() { pump(); }
     void stop() noexcept { stop_requested_ = true; }
 
-    /// The fate of a previously-issued Ticket (Pending until pumped).
+    /// The fate of a previously-issued Ticket (Pending until pumped). The journal
+    /// retains only the most recent `kJournalCapacity` outcomes (see below), so a
+    /// Ticket older than that window — or one never issued — reads as Pending. Every
+    /// consumer reads within the same submit→pump→outcome cycle, far inside the window.
     DeliveryOutcome outcome(Ticket t) const;
+
+    /// The delivery journal is a bounded ring: it keeps the outcomes of the last
+    /// `kJournalCapacity` deliveries, not one per message ever sent. A bus is exactly
+    /// the component that runs for weeks, so its footprint must be bounded by design,
+    /// never by lifetime throughput (audit F-6). The window is far larger than any
+    /// real outstanding-ticket count (a Ticket is read right after its pump), so
+    /// eviction never touches a live read; published and pinned, like kMaxRelayPending.
+    static constexpr std::size_t kJournalCapacity = 1024;
 
     /// Register an observer/tap; it is notified of every delivery and lifecycle
     /// event. Returns an id for removal.
@@ -300,7 +312,16 @@ private:
     std::uint64_t next_weave_id_ = 1;
 
     std::deque<Envelope> queue_;
-    std::vector<DeliveryOutcome> journal_; ///< indexed by delivery seq (slot 0 unused)
+
+    /// One retained delivery outcome, tagged with the seq that owns it. The tag makes
+    /// ring reuse unambiguous: record()/outcome() act on journal_[seq % kJournalCapacity]
+    /// only while its `seq` still matches — a later wrap evicts the old owner, and a
+    /// read of an evicted (or never-issued) seq is Pending, exactly as an unknown seq.
+    struct JournalSlot {
+        std::uint64_t seq = 0; ///< 0 = never written (real seqs start at 1)
+        DeliveryOutcome outcome;
+    };
+    std::vector<JournalSlot> journal_; ///< ring of the last kJournalCapacity outcomes, by seq % cap
     std::uint64_t next_seq_ = 1;
 
     std::vector<std::pair<ObserverId, Observer>> observers_;

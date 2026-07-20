@@ -4,7 +4,9 @@
 #include <zen/serialize.hpp>
 #include <zen/zen.hpp>
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 using namespace loom;
@@ -21,6 +23,37 @@ std::shared_ptr<const Schema> round_trip(const std::shared_ptr<const Schema>& s,
     Admission a = admit(u, schema_desc_schema());
     REQUIRE_MESSAGE(a.ok(), (a.ok() ? "" : a.first_error().message()));
     return decode_schema(a.value(), deps);
+}
+
+// A schema descriptor whose single field's type is a FLAT stream of `n` List
+// tokens followed by one Int token — i.e. List<List<…Int>> nested n deep, exactly
+// what a hostile .so's describe() could emit. Built directly as tokens (not via
+// encode_schema of a real n-deep type), because the whole point is that the token
+// stream is flat: its length is bounded only by kMaxListCount (~1M), never by any
+// value-depth cap, so it stays tiny and passes the meta-schema gate. Returns the
+// serialized descriptor bytes — the same bytes the host admits then reconstructs.
+std::string deep_list_descriptor_bytes(int n) {
+    std::vector<Cell> tokens;
+    tokens.reserve(static_cast<std::size_t>(n) + 1);
+    for (int k = 0; k < n; ++k) {
+        Value list_tok(type_token_schema());
+        list_tok.set("kind", Cell::integer(static_cast<std::int64_t>(Kind::List)));
+        tokens.push_back(Cell::message(std::move(list_tok)));
+    }
+    Value int_tok(type_token_schema());
+    int_tok.set("kind", Cell::integer(static_cast<std::int64_t>(Kind::Int)));
+    tokens.push_back(Cell::message(std::move(int_tok)));
+
+    Value fd(field_desc_schema());
+    fd.set("name", Cell::text("x"));
+    fd.set("required", Cell::boolean(true));
+    fd.set("type", Cell::list(std::move(tokens)));
+
+    Value desc(schema_desc_schema());
+    desc.set("name", Cell::text("Evil"));
+    desc.set("version", Cell::integer(1));
+    desc.set("fields", Cell::list({Cell::message(std::move(fd))}));
+    return serialize(desc);
 }
 
 } // namespace
@@ -89,6 +122,46 @@ TEST_CASE("a manifest carries the accept-set and state schema") {
     CHECK(rebuilt[0]->content_id() == ping->content_id());
     CHECK(rebuilt[1]->content_id() == pong->content_id());
     CHECK(state->content_id() == counter->content_id());
+}
+
+TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead of "
+          "overflowing the host stack") {
+    // Audit F-19 (sign-off blocker). The type-token stream is FLAT, so its length is
+    // capped by kMaxListCount (~1M), NOT by the value-depth cap — a field typed
+    // List<List<…Int>> nested tens of thousands deep encodes to a small descriptor that
+    // PASSES the meta-schema gate, then, before the cap, drove decode_type to recurse
+    // once per List token and SIGSEGV'd the trusted host at mount time, uncatchable.
+    //
+    // This exercises the REAL decode path — hand-built descriptor -> gate -> decode_schema,
+    // the exact bytes host.cpp/kernel.cpp/remote_console.cpp feed. (The in-process
+    // make_schema path never calls decode_type; a green there proved nothing about this.)
+
+    SUBCASE("exactly at the cap still decodes — the bound does not reject legitimate nesting") {
+        std::string bytes = deep_list_descriptor_bytes(kMaxTypeDepth); // 64 nested lists
+        Unverified u = parse(bytes);
+        Admission a = admit(u, schema_desc_schema());
+        REQUIRE(a.ok());
+        Registry deps;
+        CHECK_NOTHROW(decode_schema(a.value(), deps));
+    }
+
+    SUBCASE("one past the cap is refused cleanly, not crashed") {
+        std::string bytes = deep_list_descriptor_bytes(kMaxTypeDepth + 1); // 65 nested lists
+        Unverified u = parse(bytes);
+        Admission a = admit(u, schema_desc_schema());
+        REQUIRE(a.ok()); // the gate admits it: the depth is invisible to the meta-schema
+        Registry deps;
+        CHECK_THROWS_AS(decode_schema(a.value(), deps), std::runtime_error);
+    }
+
+    SUBCASE("the auditor's ceiling case N=100000, formerly a SIGSEGV, now refuses cleanly") {
+        std::string bytes = deep_list_descriptor_bytes(100000);
+        Unverified u = parse(bytes);
+        Admission a = admit(u, schema_desc_schema());
+        REQUIRE(a.ok()); // ~200 KB, well under the frame cap — admitted, as the auditor saw
+        Registry deps;
+        CHECK_THROWS_AS(decode_schema(a.value(), deps), std::runtime_error);
+    }
 }
 
 TEST_CASE("a descriptor that lies about its shape is refused by the meta-schema gate") {

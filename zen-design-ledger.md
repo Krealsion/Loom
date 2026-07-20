@@ -59,6 +59,14 @@ The grant is now projected onto **real** boundaries — the message boundary (B1
 process boundary (B2), and the syscall/kernel boundary for Network (B3), the filesystem
 (B4), and resources (B5). The mechanism ladder is **complete for the threat model**; only
 syscalls (seccomp) remain — a **deliberate later decision**, not an assumed phase.
+**The guarantee is real but conditional, and the condition is load-bearing:** the OS-enforced
+rungs (B3–B5) require an unprivileged user namespace **plus** a delegated cgroup-v2 subtree.
+Where the host has them, containment is real and positively confirmed; where it does not, the
+host **fails safe — it refuses to mount an untrusted mod** (outside dev-mode, which proceeds
+visibly uncontained). B1's in-process boundary is a **cooperative** one, not a cage. "Complete
+for the threat model" names the *mechanism* set, not an unconditional promise on every host.
+
+| **Audit response — the honesty-and-containment pass** (2026-07-20 cold-eyes audit; `docs/audits/2026-07-20/`) | **restoring the two promises the project rests on: containment holds, and the system never claims a guarantee it did not deliver.** Closes the confirmed load-bearing findings from an independent cold read; the auditor's own repros became regression gold. **Spine (never cut): F-19** — the sign-off blocker. A manifest's type-token stream is *flat* (bounded by the list cap, NOT the value-depth cap), so a field typed `List<List<…>>` ~100k deep passed the gate then drove `decode_type`'s per-`List` recursion to a **host stack overflow at mount time, before the mod runs** — a SIGSEGV no `try/catch` catches, reachable at three `decode_schema` call sites (out-of-process mount, in-process load, bridge peer; grep-confirmed complete). Fixed with a `kMaxTypeDepth` cap (mirrors `kMaxBinaryDepth=64` — a type nested deeper could only describe values the gate already rejects) **refused on the way down**, so a hostile descriptor is an ordinary `Refused` at every site. The green-is-not-correct lesson, earned again: the existing `test_fuzz` "deep nesting" case built via in-process `make_schema` and **never called `decode_type`** — a vacuous green that named itself as covering schema depth; the new pin exercises the REAL gate→`decode_schema` path and re-runs the auditor's **N=100000** ceiling (was exit 139, now a clean refusal at the exact `kMaxTypeDepth` boundary: 64 decodes, 65 refuses). **F-20** — the honesty-lattice breach: on a `pids`-but-not-`memory` host, `detect_enforcement` reported Resources enforceable and the containment note printed `memory<=…MiB` while `cgroup_create_leaf` **skipped** `memory.max` (controller undelegated) — enforcement claimed, never imposed, the one thing the lattice forbids. Fixed by routing the note through a pure `resource_note(caps, cgroup_memory_available())` that mirrors what a leaf *actually* writes (memory positively named UNCAPPED where undelegated), the same shape the cpu clause already had. **Real cracks: F-6** — `Switchboard::journal_` retained one `DeliveryOutcome` per message **ever enqueued** (a linear leak in lifetime throughput — a bus runs for weeks); now a bounded seq-tagged ring (`kJournalCapacity=1024`), the recent window intact, ancient tickets evicted-to-`Pending` (every consumer reads in the same `submit`→`pump`→`outcome` breath — verified across all consumers, only the console reads the journal in production). **F-8** — grant-record `persist()`'s comment claimed crash-durability the code didn't deliver (`rename` without `fsync`); now a POSIX durable write (temp `fsync`'d before the atomic `rename`, dir `fsync`'d after). **F-1** — the above-floor grant key was FNV-1a (~2^32 collision resistance, keying a security-relevant identity); replaced with an **in-tree SHA-256/128** (`src/detail/sha256.hpp`, no external crypto dep — the dependency question investigated and answered face-up, pinned to NIST vectors incl. the 2-block path), content-addressed AND collision-resistant, a *signed* author identity still the identity phase's job. **F-2/F-7 truth-in-labeling:** "complete for the threat model" qualified with its load-bearing condition (userns + delegated cgroup-v2, else fail-safe-refuse) across README/ledger/DESIGN; the stale `run-under-scope.sh` "WARN-skip" comment corrected to the fail-HARD reality + the ctest delegated-scope precondition documented. Backlog (F-3/4/5/21/22 + the F-2 startup-probe follow-on) recorded so nothing evaporates; **F-23 banked as a positive regression pin** (the bridge verifier did not leak root authority). **Green both lanes:** WSL Debug 26/26 + ASan/UBSan 26/26; MinGW portable re-proven (the `kMaxTypeDepth` cap and journal ring run everywhere — schema_codec 6/25, switchboard 12/41 on Windows; the isolation pins stay Linux-gated), `-Werror` clean throughout. | built |
 
 ---
 
@@ -259,7 +267,10 @@ permanent **detect → apply → know → refuse-or-proceed** structure the rest
   "arbitrary code made harmless" even out-of-process.
 
 **Status: B2 built; B3 (Network), B4 (Filesystem), B5 (Resources) built — the mechanism
-ladder is complete for the threat model.** B2 (out-of-process hosting + crash supervision),
+ladder is complete for the threat model** (as a *mechanism* set; the OS-enforced rungs are
+environment-conditional — real containment needs userns + delegated cgroup-v2, else the host
+fails safe and refuses, or dev-mode proceeds visibly uncontained). B2 (out-of-process hosting +
+crash supervision),
 B3 (the detection lattice; native `fork`+`unshare` no-interface network namespace; generated
 honest `containment()`; default-strict dev-mode override; parent-writes-maps handshake), B4
 (the graduated `FsAccess` filesystem capability: a private mount-namespace allow-list view,
@@ -417,7 +428,9 @@ concurrency; conflating them would be a real error.
 (capabilities), **B2** (isolation), **B3** (the OS sandbox — Network primitive + the honesty
 lattice), **B4** (the filesystem primitive — graduated `FsAccess`, mount-namespace allow-list
 view), **B5** (the resource primitive — quantitative `ResourceLimits`, cgroup-v2 leaves). The
-mechanism ladder is now complete for the threat model; the **policy phases** are underway —
+mechanism ladder is now complete for the threat model (conditionally: the OS-enforced rungs
+need userns + delegated cgroup-v2, else the host fails safe and refuses — the guarantee is real
+but names its condition); the **policy phases** are underway —
 **P1 (the StorageBroker) and P2 (the NetworkBroker) both ship** (§2.6), proving the powerbox
 general across two capabilities — and **seccomp** remains a deliberate later decision. The
 named successors are first-class persistent identity (save-files), authority-transfer, and the

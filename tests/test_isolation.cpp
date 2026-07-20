@@ -489,6 +489,38 @@ TEST_CASE("a fork-bomb is bounded by pids.max; the host survives") {
     CHECK(forked <= 64); // bounded by pids.max, not the 4000 it attempted
 }
 
+TEST_CASE("resource note honesty: a memory cap is claimed only where the controller is delegated") {
+    // Audit F-20 — the honesty lattice's one absolute rule: never report enforcement we
+    // did not impose. cgroup_create_leaf writes memory.max ONLY where the memory
+    // controller is delegated, so the note must NOT print `memory<=…` on a host that
+    // cannot enforce it (the pids-only posture the auditor reproduced live in
+    // sec2_probe.cpp). resource_note is a pure function, so this pins the honesty on any
+    // detection posture without needing a live pids-without-memory cgroup base.
+    ResourceCaps caps;
+    caps.memory_max = 256 * 1024 * 1024; // a computed 256 MiB cap
+    caps.pids_max = 64;
+
+    SUBCASE("full-resources posture: the memory cap is named honestly") {
+        const std::string note = resource_note(caps, /*memory_enforceable=*/true);
+        CHECK(note.find("memory<=256MiB") != std::string::npos);
+        CHECK(note.find("pids<=64") != std::string::npos);
+        CHECK(note.find("UNCAPPED") == std::string::npos);
+    }
+    SUBCASE("pids-only posture: memory is positively stated uncapped, never claimed capped") {
+        const std::string note = resource_note(caps, /*memory_enforceable=*/false);
+        CHECK(note.find("memory<=") == std::string::npos);  // never claims a cap it cannot impose
+        CHECK(note.find("UNCAPPED") != std::string::npos);  // positively states memory uncapped
+        CHECK(note.find("pids<=64") != std::string::npos);  // pids is still honestly bounded
+    }
+    SUBCASE("a grant opt-out reads distinctly from an unenforceable host, honest either way") {
+        ResourceCaps opted = caps;
+        opted.memory_max = -1; // unlimited-by-grant (an intentional opt-out, not a host limit)
+        CHECK(resource_note(opted, true).find("unlimited-by-grant") != std::string::npos);
+        // even opted-out, an unenforceable host must never imply a cap exists
+        CHECK(resource_note(opted, false).find("memory<=") == std::string::npos);
+    }
+}
+
 TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out") {
     const auto forced = [] {
         EnforcementReport rep;
