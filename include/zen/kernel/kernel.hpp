@@ -48,7 +48,13 @@ public:
     Kernel& operator=(const Kernel&) = delete;
 
     /// Load `path`, mount its Weave on the bus under `name`, and return its id.
-    LoadResult load(const std::string& name, const std::string& path);
+    /// A non-empty `role` binds the loaded Weave to that role slot — load is the
+    /// only moment a role CAN be bound (Switchboard::register_weave is the sole
+    /// binder, and roles are singletons), so a role-addressed consumer's reach
+    /// across a replacement is decided here. Binding a role already held is a
+    /// clean LoadResult failure, not a throw: the incumbent keeps it.
+    LoadResult load(const std::string& name, const std::string& path,
+                    const std::string& role = "");
 
     /// Hot-reload `name` from `new_path`: snapshot the live Weave to host-owned
     /// bytes, swap the library behind the same WeaveId, and revive from the
@@ -60,9 +66,18 @@ public:
     /// order, leaving no live pointer into the closed library.
     bool unload(const std::string& name);
 
+    /// Unload whichever loaded library holds `role` (false if none does). The
+    /// role is released by the unregister itself — the Switchboard clears a
+    /// role when its holder is removed — so the slot is free for a successor.
+    bool unload_role(const std::string& role);
+
     loom::WeaveId weave_id(const std::string& name) const;
     bool is_loaded(const std::string& name) const;
     std::vector<std::string> loaded() const;
+
+    /// The role `name` was loaded under, or empty. The kernel's own map is the
+    /// truth here: it is the thing that bound the role.
+    std::string role_of(const std::string& name) const;
 
 private:
     struct Loaded {
@@ -71,6 +86,7 @@ private:
         const ZenWeaveAbi* abi = nullptr;
         HostAdapter* adapter = nullptr; // owned by the Switchboard
         loom::WeaveId id{};
+        std::string role{}; ///< the role slot it was bound to (empty if none)
     };
 
     struct Manifest {
