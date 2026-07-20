@@ -29,6 +29,7 @@
 // primitives into a different policy.
 
 #include <zen/weave.hpp>
+#include <zen/weave/lifecycle.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/switchboard.hpp>
 
@@ -76,6 +77,31 @@ struct ListLibraries {
     ZEN_SHAPE(ListLibraries, 1);
 };
 
+/// Ask about a role's holder: who it is, and whether it declares
+/// `zen.PrepareShutdown` — i.e. whether it will converse about its own
+/// succession. The steward asks this BEFORE asking anything of the incumbent,
+/// so a weave that never opted in is never waited on.
+struct QueryRole {
+    std::string role;
+    ZEN_SHAPE(QueryRole, 1, ZEN_FIELD(role));
+};
+
+/// The answer. Bespoke rather than a standard reply, by the least-complete-
+/// information razor: BOTH fields are load-bearing and their absence breaks the
+/// image. `converses` alone cannot be acted on — a steward that asks an
+/// incumbent for its letter must know which weave's stamped sender to require on
+/// the way back, or it cannot tell the letter from a forgery. `holder` alone
+/// cannot be acted on either. Two facts, one decision.
+///
+/// `holder == 0` means no KERNEL-LOADED weave holds the role — unheld, or held
+/// by a native weave the kernel cannot see into (Kernel::query_role documents
+/// why the two are not worth distinguishing). Either way: non-participant.
+struct RoleInfo {
+    std::int64_t holder;
+    bool converses;
+    ZEN_SHAPE(RoleInfo, 1, ZEN_FIELD(holder), ZEN_FIELD(converses));
+};
+
 /// The control Weave's state: how many operations it has performed.
 struct ControlState {
     std::int64_t ops;
@@ -88,8 +114,8 @@ struct ControlState {
 class ControlWeave
     : public loom::WeaveBase<ControlWeave, ControlState,
                              loom::Accept<LoadLibrary, ReloadLibrary, UnloadLibrary, UnloadRole,
-                                          ListLibraries>,
-                             loom::Emit<loom::Result, loom::Ack, loom::Refused>> {
+                                          ListLibraries, QueryRole>,
+                             loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo>> {
 public:
     explicit ControlWeave(Kernel& kernel) : kernel_(&kernel) {}
 
@@ -151,6 +177,13 @@ public:
         answer(mail, loom::Result{out});
     }
 
+    void on(const QueryRole& m, loom::Mail& mail) {
+        ++state_.ops;
+        const Kernel::RoleQuery q =
+            kernel_->query_role(m.role, PrepareShutdown::zen_name, PrepareShutdown::zen_version);
+        answer(mail, RoleInfo{static_cast<std::int64_t>(q.holder.value), q.accepts});
+    }
+
 private:
     /// Answer the asker: reply_to if given, else the bus-stamped sender, echoing
     /// the request's correlation. A request with neither (a root fire-and-forget)
@@ -185,6 +218,7 @@ inline loom::Grant load_capability(loom::WeaveId control) {
     g.allow(UnloadLibrary::zen_name, UnloadLibrary::zen_version, control);
     g.allow(UnloadRole::zen_name, UnloadRole::zen_version, control);
     g.allow(ListLibraries::zen_name, ListLibraries::zen_version, control);
+    g.allow(QueryRole::zen_name, QueryRole::zen_version, control);
     return g;
 }
 

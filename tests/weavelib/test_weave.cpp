@@ -18,9 +18,16 @@
 //                                   block to trip memory.max (B5: OOM-kill containment)
 //   ZEN_WEAVE_FORK_BOMB           — on handle, fork until it can't and report the count
 //                                   (B5: proves pids.max bounds a fork-bomb)
+//   ZEN_WEAVE_BEQUEATHS           — accepts zen.PrepareShutdown and answers with a
+//                                   zen.Bequest carrying its live count as an item
+//                                   (1b: the predecessor that writes a letter)
+//   ZEN_WEAVE_HEIR                — a DIFFERENTLY-SHAPED successor (Counter v2) that
+//                                   claims by role on first wake and folds what it
+//                                   inherits into its own count (1b: the heir)
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
+#include <zen/weave/lifecycle.hpp>
 #include <zen/zen.hpp>
 
 #include <cstdint>
@@ -86,7 +93,7 @@ std::shared_ptr<const Schema> ping_schema() {
     return s;
 }
 std::shared_ptr<const Schema> counter_schema() {
-#ifdef ZEN_WEAVE_STATE_V2
+#if defined(ZEN_WEAVE_STATE_V2) || defined(ZEN_WEAVE_HEIR)
     static const auto s = SchemaBuilder("Counter", 2)
                               .field("count", Kind::Int)
                               .field("note", Kind::Text, /*required=*/false)
@@ -101,10 +108,64 @@ std::shared_ptr<const Schema> counter_schema() {
 class TestWeave : public Weave {
 public:
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
+#if defined(ZEN_WEAVE_BEQUEATHS) || defined(ZEN_WEAVE_WEDGED)
+        // Declaring zen.PrepareShutdown IS the opt-in: it is what the steward
+        // reads (via the kernel's manifest) to decide whether to hold a ceremony.
+        return {ping_schema(), schema_of<loom::PrepareShutdown>()};
+#elif defined(ZEN_WEAVE_HEIR)
+        return {ping_schema(), schema_of<loom::Bequest>(), schema_of<loom::Refused>()};
+#else
         return {ping_schema()};
+#endif
     }
 
     void handle(const Message& in, Bus& bus) override {
+#if defined(ZEN_WEAVE_BEQUEATHS)
+        if (in.payload.schema().name() == loom::PrepareShutdown::zen_name) {
+            // The letter: what this weave wants its heir to know, said in its own
+            // vocabulary. It has no idea what shape its successor is — only what
+            // it itself has to say.
+            loom::Bequest letter;
+            letter.role = "spawner";
+            Value carried(ping_schema());
+            carried.set("seq", Cell::integer(count_));
+            letter.items.push_back(loom::bequeath_item_value(carried));
+            bus.send(in.sender, Message(loom::to_value(letter), WeaveId{}, WeaveId{},
+                                        in.correlation));
+            return;
+        }
+#elif defined(ZEN_WEAVE_WEDGED)
+        if (in.payload.schema().name() == loom::PrepareShutdown::zen_name) {
+            (void)bus;
+            return; // declared the ceremony, then says nothing — the honest wedge
+        }
+#elif defined(ZEN_WEAVE_HEIR)
+        if (in.payload.schema().name() == loom::Bequest::zen_name) {
+            const loom::Bequest letter = loom::from_value<loom::Bequest>(in.payload);
+            for (const loom::Bytes& item : letter.items) {
+                // Every item is re-admitted through the real gate before a field
+                // is touched: inherited mail is untrusted input like any other.
+                Unverified u = parse(std::string_view(
+                    reinterpret_cast<const char*>(item.data()), item.size()));
+                Admission a = admit(u, ping_schema());
+                if (a.ok()) {
+                    count_ += a.value().get("seq")->as_int();
+                }
+            }
+            return;
+        }
+        if (in.payload.schema().name() == loom::Refused::zen_name) {
+            return; // nothing was left for us; start fresh, which is already true
+        }
+        if (!claimed_) {
+            // The heir asks when it WAKES — not when it was born, and with no
+            // idea how long the letter has been waiting. It reaches the steward
+            // by role because that is the only address it can know.
+            claimed_ = true;
+            bus.send_to_role(loom::kManagerRole,
+                             Message(loom::to_value(loom::ClaimBequest{"spawner"})));
+        }
+#endif
         const std::int64_t seq = in.payload.get("seq")->as_int();
 #ifdef ZEN_WEAVE_CRASH_ON_MAGIC
         if (seq == 0xDEAD) {
@@ -281,6 +342,9 @@ public:
 
 private:
     std::int64_t count_ = 0;
+#if defined(ZEN_WEAVE_HEIR)
+    bool claimed_ = false; // transient: waking asks once, and only once
+#endif
 };
 
 } // namespace

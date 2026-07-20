@@ -76,6 +76,12 @@ zen_add_test_weave(zen_test_weave_v2 ZEN_WEAVE_STATE_V2)
 zen_add_test_weave(zen_test_weave_crasher
     ZEN_WEAVE_CRASH_ON_MAGIC ZEN_WEAVE_CRASH_ON_REVIVE ZEN_WEAVE_LOW_RELOADS)
 zen_add_test_weave(zen_test_weave_silent ZEN_WEAVE_SILENT)
+# 1b (the letter): a predecessor that declares zen.PrepareShutdown and writes a
+# Bequest, and a DIFFERENTLY-SHAPED heir (Counter v2) that claims by role on wake.
+zen_add_test_weave(zen_test_weave_bequeaths ZEN_WEAVE_BEQUEATHS)
+zen_add_test_weave(zen_test_weave_heir ZEN_WEAVE_HEIR)
+# ...and one that declares the ceremony then never answers: the honest wedge.
+zen_add_test_weave(zen_test_weave_wedged ZEN_WEAVE_WEDGED)
 # B3: a child that reaches for the network directly, to prove the OS sandbox blocks it.
 zen_add_test_weave(zen_test_weave_netprobe ZEN_WEAVE_NET_PROBE)
 # B4: a child that reaches for the filesystem directly, to prove the mount-ns view.
@@ -114,7 +120,8 @@ target_link_libraries(zen_test_forge_client PRIVATE loom zen-switchboard zen-war
 
 set(ZEN_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_crasher
-    zen_test_weave_silent zen_test_weave_netprobe zen_test_weave_fsprobe
+    zen_test_weave_silent zen_test_weave_bequeaths zen_test_weave_heir zen_test_weave_wedged
+    zen_test_weave_netprobe zen_test_weave_fsprobe
     zen_test_weave_membomb zen_test_weave_forkbomb zen_test_mod_storage
     zen_test_storage_client zen_test_storage_broker zen_test_net_client
     zen_test_net_broker zen_test_forge_client zen_test_badabi)
@@ -132,6 +139,9 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_weave_v2>\""
     "ZEN_SO_CRASHER=\"$<TARGET_FILE:zen_test_weave_crasher>\""
     "ZEN_SO_SILENT=\"$<TARGET_FILE:zen_test_weave_silent>\""
+    "ZEN_SO_BEQUEATHS=\"$<TARGET_FILE:zen_test_weave_bequeaths>\""
+    "ZEN_SO_HEIR=\"$<TARGET_FILE:zen_test_weave_heir>\""
+    "ZEN_SO_WEDGED=\"$<TARGET_FILE:zen_test_weave_wedged>\""
     "ZEN_SO_NETPROBE=\"$<TARGET_FILE:zen_test_weave_netprobe>\""
     "ZEN_SO_FSPROBE=\"$<TARGET_FILE:zen_test_weave_fsprobe>\""
     "ZEN_SO_MEMBOMB=\"$<TARGET_FILE:zen_test_weave_membomb>\""

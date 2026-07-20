@@ -1,9 +1,11 @@
 #include <doctest.h>
 
 #include <zen/weave.hpp>
+#include <zen/weave/lifecycle.hpp>
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -324,6 +326,36 @@ TEST_CASE("a derived policy reaches the bus") {
     ReviveOutcome third = bus.reload(responder, "garbage");
     CHECK_FALSE(third.revived);
     CHECK(third.reloads_exhausted);
+}
+
+// ---- the Loomstd lifecycle vocabulary (weave/lifecycle.hpp) -----------------
+// This case lives in the PORTABLE suite on purpose. The letter protocol is
+// Loomstd-tier — universal, not kernel-tier — and a header that claims to be
+// portable while only ever being compiled behind `if(NOT WIN32)` is a claim
+// nothing checks. Compiling and running it on every platform is what makes the
+// tier placement true rather than asserted. (The parts that swap real .so files
+// stay Linux-gated in the `manager` suite, where they belong.)
+
+TEST_CASE("a letter item round-trips, and reading one goes through the gate or not at all") {
+    // bequeath_item writes; claim_item reads. claim_item's whole job is that
+    // inherited mail is UNTRUSTED INPUT: it admits through the one validator
+    // before a field is touched, so a corrupt or wrong-shaped item is a clean
+    // nothing rather than a misread.
+    const loom::Bytes item = loom::bequeath_item(Ping{41});
+    const std::optional<Ping> read = loom::claim_item<Ping>(item);
+    REQUIRE(read.has_value());
+    CHECK(read->seq == 41);
+
+    // Garbage is refused, not guessed at.
+    CHECK_FALSE(loom::claim_item<Ping>(loom::Bytes{0x00, 0x01, 0x02, 0x03}).has_value());
+    CHECK_FALSE(loom::claim_item<Ping>(loom::Bytes{}).has_value());
+    // A well-formed item of a DIFFERENT shape is refused too — the gate compares
+    // the claim against the schema the READER asked for, not the one it carries.
+    CHECK_FALSE(loom::claim_item<Ping>(loom::bequeath_item(loom::Refused{"other"})).has_value());
+
+    // The bound is published, so it is checkable rather than folklore.
+    static_assert(loom::kMaxBequestItems > 0, "a letter must be able to say something");
+    CHECK(std::string(loom::kManagerRole) == "zen.manager");
 }
 
 } // TEST_SUITE

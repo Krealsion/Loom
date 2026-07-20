@@ -470,6 +470,32 @@ std::string Kernel::role_of(const std::string& name) const {
     return it == libs_.end() ? std::string{} : it->second.role;
 }
 
+Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string& shape_name,
+                                     std::uint32_t shape_version) const {
+    RoleQuery out;
+    if (role.empty()) {
+        return out; // "no role" is not a role
+    }
+    for (const auto& entry : libs_) {
+        if (entry.second.role != role) {
+            continue;
+        }
+        out.holder = entry.second.id;
+        // The accept-set the bus published for this weave at registration — the
+        // same list the kernel reconstructed from the library's own manifest, and
+        // the same list delivery is matched against. Asking the bus rather than
+        // caching it here keeps one truth.
+        for (const auto& s : bus_.accepted_schemas(entry.second.id)) {
+            if (s && s->name() == shape_name && s->version() == shape_version) {
+                out.accepts = true;
+                break;
+            }
+        }
+        return out;
+    }
+    return out;
+}
+
 bool Kernel::is_loaded(const std::string& name) const { return libs_.count(name) != 0; }
 
 std::vector<std::string> Kernel::loaded() const {
