@@ -186,18 +186,25 @@ public:
     void run() { pump(); }
     void stop() noexcept { stop_requested_ = true; }
 
-    /// The fate of a previously-issued Ticket (Pending until pumped). The journal
-    /// retains only the most recent `kJournalCapacity` outcomes (see below), so a
-    /// Ticket older than that window — or one never issued — reads as Pending. Every
-    /// consumer reads within the same submit→pump→outcome cycle, far inside the window.
+    /// The fate of a previously-issued Ticket (Pending until pumped). The journal retains
+    /// only the most recent `kJournalCapacity` outcomes (see below), so a Ticket older than
+    /// that window — or one never issued — reads as Pending. This is loss-free *provided a
+    /// single pump() does not deliver more than `kJournalCapacity` envelopes between a
+    /// Ticket's submit and its read*: the window can roll *within one pump* if a handler
+    /// cascades past the capacity, so a consumer that batches many sends before one pump, or
+    /// reads an outcome after such a cascade, can see Pending for a Ticket that was in fact
+    /// Delivered/Refused. Every current consumer stays inside that breath — the relay tracks
+    /// its own pending (kMaxRelayPending), the console reads one outcome per pump — so the
+    /// window is not a live hazard today; a future high-fan-out consumer must size for it.
     DeliveryOutcome outcome(Ticket t) const;
 
     /// The delivery journal is a bounded ring: it keeps the outcomes of the last
     /// `kJournalCapacity` deliveries, not one per message ever sent. A bus is exactly
     /// the component that runs for weeks, so its footprint must be bounded by design,
-    /// never by lifetime throughput (audit F-6). The window is far larger than any
-    /// real outstanding-ticket count (a Ticket is read right after its pump), so
-    /// eviction never touches a live read; published and pinned, like kMaxRelayPending.
+    /// never by lifetime throughput (audit F-6). The window is far larger than any real
+    /// per-pump delivery count in the current tree (no consumer batches or cascades this
+    /// many before reading — see outcome() for the sufficiency condition), so eviction
+    /// never touches a live read today; published and pinned, like kMaxRelayPending.
     static constexpr std::size_t kJournalCapacity = 1024;
 
     /// Register an observer/tap; it is notified of every delivery and lifecycle

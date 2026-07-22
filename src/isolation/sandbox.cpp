@@ -62,10 +62,13 @@ const char* capability_name(Capability c) noexcept {
     return "?";
 }
 
-std::string resource_note(const ResourceCaps& caps, bool memory_enforceable) {
-    // Mirror cgroup_create_leaf exactly: memory.max is written only where the memory
-    // controller is delegated. Rendering "memory<=NMiB" when it is not would claim a
-    // cap we never set — the one thing the honesty lattice forbids (audit F-20).
+std::string resource_note(const ResourceCaps& caps, bool memory_enforceable,
+                          bool pids_enforceable) {
+    // Mirror cgroup_create_leaf exactly, in BOTH dimensions: memory.max and pids.max are
+    // each written only where their controller is delegated (g_cg_memory / g_cg_pids).
+    // Rendering "memory<=NMiB" or "pids<=N" where the controller is absent would claim a
+    // cap we never set — the one thing the honesty lattice forbids (audit F-20, and its
+    // pids mirror). Each dimension states UNCAPPED where its controller is not delegated.
     std::string mem;
     if (caps.memory_max < 0) {
         mem = "memory unlimited-by-grant"; // opted out by grant; nothing to impose
@@ -74,10 +77,57 @@ std::string resource_note(const ResourceCaps& caps, bool memory_enforceable) {
     } else {
         mem = "memory UNCAPPED (no memory controller delegated — not enforceable on this host)";
     }
-    // pids is the fork-bomb stop and is delegated wherever any cgroup subtree is (the
-    // detection posture this note is reached from); rendered unconditionally. The
-    // symmetric memory-only-delegation case is tracked as a face-up observation.
-    return mem + ", pids<=" + std::to_string(caps.pids_max);
+    std::string pids;
+    if (caps.pids_max < 0) {
+        // Defensive: the floor never licenses a fork bomb, so a real grant path never
+        // reaches here — but if pids were opted out, say so rather than imply a cap.
+        pids = "pids unlimited-by-grant";
+    } else if (pids_enforceable) {
+        pids = "pids<=" + std::to_string(caps.pids_max);
+    } else {
+        pids = "pids UNCAPPED (no pids controller delegated — not enforceable on this host)";
+    }
+    return mem + ", " + pids;
+}
+
+// The honest one-line resources ATTESTATION for a resolved leaf: the note (above) plus the
+// "honest scope" sentence rendered into containment(). Pure and portable like resource_note,
+// so every delegation posture is unit-testable without a live cgroup. The fork-bomb stop is
+// pids.max, imposed only where the pids controller is delegated — so this clause is
+// delegation-qualified exactly as the memory and cpu clauses already are (F-20's pids
+// mirror): where pids is not delegated it states the fork-bomb stop is NOT enforceable,
+// retiring the former absolute "pids.max ALWAYS bounds a fork-bomb".
+std::string resource_attestation(const std::string& note, bool pids_enforceable, bool confirmed) {
+    // The headline carries per-posture truth: where pids is not delegated, the absent
+    // fork-bomb stop is surfaced as prominently as a NOT-CONTAINED network cap (it is at least
+    // as load-bearing), not buried in the scope clause.
+    std::string s = pids_enforceable
+                        ? "resources: contained (cgroup-v2: " + note + ")"
+                        : "resources: memory contained but FORK-BOMB STOP NOT ENFORCEABLE (no "
+                          "pids controller delegated — pids.max unset) (cgroup-v2: " + note + ")";
+    if (confirmed) {
+        // cgroup_confirm reads back only delegated controllers (it skips a controller's
+        // readback where it is absent), so the confirmed clause must not imply a pids
+        // readback the host never performed.
+        s += pids_enforceable
+                 ? " (confirmed: pid in leaf, limits read back)"
+                 : " (confirmed: pid in leaf, memory read back; pids not delegated — no "
+                   "pids.max to confirm)";
+    }
+    s += "; honest scope: ";
+    if (pids_enforceable) {
+        s += "pids.max bounds a fork-bomb (no grant licenses one) where the pids controller "
+             "is delegated";
+    } else {
+        s += "the fork-bomb stop (pids.max) is unset — a fork bomb is bounded only by the "
+             "host-wide pid limit, not per-Weave (see the headline)";
+    }
+    s += "; a memory cap OOM-kills within the cgroup (the host survives and "
+         "reloads-then-quarantines) where the memory controller is delegated and not opted "
+         "out by grant — otherwise memory is uncapped (named so in the note above); "
+         "cpu.weight is a fair-share weight (set-and-confirmed where the cpu controller is "
+         "delegated, absent otherwise), not a hard cap";
+    return s;
 }
 
 const CapabilityStatus* EnforcementReport::find(Capability c) const noexcept {

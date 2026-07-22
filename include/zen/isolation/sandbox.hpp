@@ -136,13 +136,23 @@ bool cgroup_pids_available() noexcept;   ///< pids controller enabled for leaves
 bool cgroup_cpu_available() noexcept;    ///< cpu controller enabled for leaves (cpu.weight)
 
 /// The honest one-line resource note for a leaf with these caps. It must state only
-/// what cgroup_create_leaf will TRULY impose: memory.max is written only where the
-/// memory controller is delegated, so where `memory_enforceable` is false the note
-/// says memory is UNCAPPED rather than claim a computed-but-never-set cap. This is
-/// the lattice's one absolute rule — never report enforcement we did not impose
-/// (audit F-20: a pids-only host reported `memory<=…` while memory ran uncapped).
-/// Pure and portable, so the honesty is unit-testable without a live cgroup.
-std::string resource_note(const ResourceCaps& caps, bool memory_enforceable);
+/// what cgroup_create_leaf will TRULY impose: memory.max and pids.max are each written
+/// only where their controller is delegated, so where `memory_enforceable` /
+/// `pids_enforceable` is false the note says that dimension is UNCAPPED rather than claim
+/// a computed-but-never-set cap. This is the lattice's one absolute rule — never report
+/// enforcement we did not impose (audit F-20: a pids-only host reported `memory<=…` while
+/// memory ran uncapped; its mirror — a memory-only host claiming `pids<=…` — is closed the
+/// same way). Pure and portable, so the honesty is unit-testable without a live cgroup.
+std::string resource_note(const ResourceCaps& caps, bool memory_enforceable,
+                          bool pids_enforceable);
+
+/// The honest one-line resources ATTESTATION (the note plus the "honest scope" sentence)
+/// rendered into containment(). Pure and portable like resource_note: the fork-bomb-stop
+/// claim is delegation-qualified on `pids_enforceable` (the pids controller is what imposes
+/// pids.max), so every posture — including memory-only, which no live cgroup on a
+/// memory+pids host can produce — is unit-testable without a live cgroup. `confirmed` is
+/// the leaf's positive readback (of the delegated controllers only).
+std::string resource_attestation(const std::string& note, bool pids_enforceable, bool confirmed);
 
 /// Per-Weave leaf lifecycle. `name` is a bare leaf name unique to the Weave.
 bool cgroup_create_leaf(const std::string& name, const ResourceCaps& caps);

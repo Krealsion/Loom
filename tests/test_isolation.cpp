@@ -489,35 +489,73 @@ TEST_CASE("a fork-bomb is bounded by pids.max; the host survives") {
     CHECK(forked <= 64); // bounded by pids.max, not the 4000 it attempted
 }
 
-TEST_CASE("resource note honesty: a memory cap is claimed only where the controller is delegated") {
-    // Audit F-20 — the honesty lattice's one absolute rule: never report enforcement we
-    // did not impose. cgroup_create_leaf writes memory.max ONLY where the memory
-    // controller is delegated, so the note must NOT print `memory<=…` on a host that
-    // cannot enforce it (the pids-only posture the auditor reproduced live in
-    // sec2_probe.cpp). resource_note is a pure function, so this pins the honesty on any
-    // detection posture without needing a live pids-without-memory cgroup base.
+TEST_CASE("resource note + attestation honesty: the full delegation matrix (memory x pids)") {
+    // Audit F-20 AND its pids mirror (N-1) — the honesty lattice's one absolute rule: never
+    // report enforcement we did not impose. cgroup_create_leaf writes memory.max ONLY where the
+    // memory controller is delegated, and pids.max ONLY where the pids controller is delegated
+    // (sandbox.cpp:482/488), so neither the note NOR the attestation may claim a cap the leaf
+    // will not set. The original F-20 pin watched only the pids-only posture and never the
+    // symmetric memory-only one, so the mirror over-claimed unwatched. resource_note and
+    // resource_attestation are pure, so this pins ALL FOUR postures — including memory-only,
+    // which no live cgroup on this memory+pids host can produce — with no live cgroup.
     ResourceCaps caps;
     caps.memory_max = 256 * 1024 * 1024; // a computed 256 MiB cap
     caps.pids_max = 64;
 
-    SUBCASE("full-resources posture: the memory cap is named honestly") {
-        const std::string note = resource_note(caps, /*memory_enforceable=*/true);
+    // ---- resource_note: the 2x2 delegation matrix ----
+    SUBCASE("both delegated: both caps named honestly") {
+        const std::string note = resource_note(caps, /*mem=*/true, /*pids=*/true);
         CHECK(note.find("memory<=256MiB") != std::string::npos);
         CHECK(note.find("pids<=64") != std::string::npos);
         CHECK(note.find("UNCAPPED") == std::string::npos);
     }
-    SUBCASE("pids-only posture: memory is positively stated uncapped, never claimed capped") {
-        const std::string note = resource_note(caps, /*memory_enforceable=*/false);
-        CHECK(note.find("memory<=") == std::string::npos);  // never claims a cap it cannot impose
-        CHECK(note.find("UNCAPPED") != std::string::npos);  // positively states memory uncapped
-        CHECK(note.find("pids<=64") != std::string::npos);  // pids is still honestly bounded
+    SUBCASE("pids-only (memory NOT delegated): memory UNCAPPED, pids asserted [F-20 pin, kept]") {
+        const std::string note = resource_note(caps, /*mem=*/false, /*pids=*/true);
+        CHECK(note.find("memory<=") == std::string::npos);       // never a cap it cannot impose
+        CHECK(note.find("memory UNCAPPED") != std::string::npos); // positively stated
+        CHECK(note.find("pids<=64") != std::string::npos);        // pids is real here
     }
-    SUBCASE("a grant opt-out reads distinctly from an unenforceable host, honest either way") {
+    SUBCASE("memory-only (pids NOT delegated): pids UNCAPPED, memory asserted [N-1 mirror]") {
+        const std::string note = resource_note(caps, /*mem=*/true, /*pids=*/false);
+        CHECK(note.find("memory<=256MiB") != std::string::npos);  // memory is real here
+        CHECK(note.find("pids<=") == std::string::npos);          // never a pids cap it cannot impose
+        CHECK(note.find("pids UNCAPPED") != std::string::npos);   // positively stated
+    }
+    SUBCASE("neither delegated: both dimensions UNCAPPED, no cap claimed") {
+        const std::string note = resource_note(caps, /*mem=*/false, /*pids=*/false);
+        CHECK(note.find("memory UNCAPPED") != std::string::npos);
+        CHECK(note.find("pids UNCAPPED") != std::string::npos);
+        CHECK(note.find("<=") == std::string::npos); // no cap claimed in either dimension
+    }
+    SUBCASE("a grant memory opt-out reads distinctly from an unenforceable host") {
         ResourceCaps opted = caps;
-        opted.memory_max = -1; // unlimited-by-grant (an intentional opt-out, not a host limit)
-        CHECK(resource_note(opted, true).find("unlimited-by-grant") != std::string::npos);
+        opted.memory_max = -1; // unlimited-by-grant (intentional opt-out, not a host limit)
+        CHECK(resource_note(opted, true, true).find("memory unlimited-by-grant") !=
+              std::string::npos);
         // even opted-out, an unenforceable host must never imply a cap exists
-        CHECK(resource_note(opted, false).find("memory<=") == std::string::npos);
+        CHECK(resource_note(opted, false, true).find("memory<=") == std::string::npos);
+    }
+
+    // ---- resource_attestation: the fork-bomb-stop claim is delegation-qualified on pids ----
+    SUBCASE("attestation asserts the fork-bomb stop only where pids is delegated [N-1 mirror]") {
+        const std::string att_pids =
+            resource_attestation(resource_note(caps, true, true), /*pids=*/true, /*confirmed=*/true);
+        CHECK(att_pids.find("bounds a fork-bomb") != std::string::npos);            // real here
+        CHECK(att_pids.find("pid in leaf, limits read back") != std::string::npos); // live-path phrasing
+        CHECK(att_pids.find("FORK-BOMB STOP NOT ENFORCEABLE") == std::string::npos);
+
+        const std::string att_nopids = resource_attestation(resource_note(caps, true, false),
+                                                            /*pids=*/false, /*confirmed=*/true);
+        CHECK(att_nopids.find("FORK-BOMB STOP NOT ENFORCEABLE") != std::string::npos); // honest
+        CHECK(att_nopids.find("ALWAYS bounds a fork-bomb") == std::string::npos);      // retired absolute
+        // prominence (judgment d): the gap is in the HEADLINE, not buried — parity with
+        // "network: NOT CONTAINED", so a status scan can't miss an absent fork-bomb stop.
+        CHECK(att_nopids.compare(0, 20, "resources: contained") != 0); // not the plain headline
+        CHECK(att_nopids.find("memory contained but FORK-BOMB STOP NOT ENFORCEABLE") !=
+              std::string::npos);
+        // the confirmed clause must not imply a pids readback the host never performed
+        CHECK(att_nopids.find("pids not delegated — no pids.max to confirm") != std::string::npos);
+        CHECK(att_nopids.find("pid in leaf, limits read back") == std::string::npos);
     }
 }
 
