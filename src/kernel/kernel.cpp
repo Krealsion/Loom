@@ -298,6 +298,12 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     const loom::Value& manifest = a.value();
 
     Manifest result;
+    // Referenced (nested component) schemas first — the manifest is
+    // self-contained, so a library whose doors or state nest a shape (a
+    // List<Pos>, a Pos field) brings that shape with it. Same registry, same
+    // agreement wall: a component conflicting with what another library
+    // already registered refuses the load.
+    decode_referenced(manifest, registry_);
     for (const loom::Cell& c : manifest.get("accepted")->as_list()) {
         auto s = decode_schema(*c.as_message(), registry_);
         registry_.register_schema(s); // enforces cross-library schema agreement

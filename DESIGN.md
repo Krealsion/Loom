@@ -534,9 +534,25 @@ schema travels as ordinary bytes and is re-admitted through the gate exactly lik
 any other value before the host reconstructs it with `SchemaBuilder`. A type
 reference is a flat, prefix-order token list, so nested Lists/Messages need no
 recursive meta-schema; Message/List nested schemas are referenced by
-`(name, version)` and resolved against the host registry (the manifest lists
-referenced schemas first). This is the minimal **schema-as-value** precursor —
-the one place that seam is lightly touched.
+`(name, version)` and resolved against the host registry. This is the minimal
+**schema-as-value** precursor — the one place that seam is lightly touched.
+
+**The manifest is self-contained (`zen.Manifest` v3).** "The manifest lists
+referenced schemas first" was documented here from the start — and unbuilt: no
+encoder section carried the nested components, which no fixture noticed because
+every shape that had ever crossed the ABI was flat. The **first real consumer
+with a nested shape** (Zengine's snake — a state carrying `List<Pos>` and a
+`Pos` field) was refused at load with `unresolved nested schema 'Pos'`, and the
+prose-over-promise surfaced. v3 completes it: an optional `referenced` list
+carries every transitively-nested component schema in **post-order**
+(dependencies before dependents, deduplicated), the decode side registers them
+into the dependency registry before touching accepted/state, and the
+cross-library **agreement wall applies to components** exactly as to doors (an
+identical re-registration is a no-op; a conflicting one refuses the load). Flat
+manifests emit no section and stay lean. The kernel's reconstruct consumes it;
+the isolation host's manifest path deliberately does **not** yet (no
+out-of-process consumer has a nested shape — its refusal stays clean, the
+helper exists, the trigger will pull it).
 
 ### Weaving stays Zen-invisible
 
@@ -548,6 +564,24 @@ forward to C++ template helpers, serialize Values to the host sink, rebuild a
 `Bus` that forwards the Weave's `send`/`publish` across the callback table, and
 **never let a C++ exception cross the seam** (all caught, turned into status
 codes).
+
+**Build a weave library with `-fno-gnu-unique` (GCC).** Found by the first
+maker-path `.so`s (Zengine's snake), not by the fixtures: the woven layer
+instantiates loom's inline templates — `schema_of<T>()`'s function-local
+statics — with vague linkage, which GCC emits as `STB_GNU_UNIQUE` symbols, and
+glibc resolves those through a **program-wide** table that ignores `RTLD_LOCAL`
+and can outlive a `dlclose`. Two libraries sharing a vocabulary header, one
+unloaded before the other loads, left the second silently aliasing the first
+one's *destroyed* statics — a use-after-free in `describe()` at load time (or
+garbage manifest bytes when the read survived). The kernel's `RTLD_LOCAL`
+promise ("the host and the library never interpose") is only whole when the
+library is compiled `-fno-gnu-unique`, demoting those statics to ordinary
+vague linkage so each library owns its own, whole lives. The fixtures dodged
+this for years by accident — their hand-built schemas live in anonymous
+namespaces, and internal linkage is never unique; any real maker using
+`ZEN_SHAPE` + `WeaveBase` in a `.so` needs the flag. Pinned by Zengine's
+load-unload-load linkage cases; a Loom-native pin (a `WeaveBase` fixture pair)
+is a named follow-on.
 
 ### The host adapter
 

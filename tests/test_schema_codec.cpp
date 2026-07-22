@@ -124,6 +124,73 @@ TEST_CASE("a manifest carries the accept-set and state schema") {
     CHECK(state->content_id() == counter->content_id());
 }
 
+TEST_CASE("a manifest is self-contained: nested component schemas travel in `referenced` "
+          "and resolve into an EMPTY registry") {
+    // The exact shape that found the hole (Zengine's snake): a state that nests
+    // a component both as a List<Message> and as a message field — plus a
+    // two-deep chain (Outer nests Mid nests Pos) to pin the post-order
+    // guarantee, not just one level.
+    auto pos = SchemaBuilder("Pos", 1).field("x", Kind::Int).field("y", Kind::Int).build();
+    auto mid = SchemaBuilder("Mid", 1).message("at", pos).build();
+    auto world = SchemaBuilder("SnakeWorldState", 1)
+                     .field("width", Kind::Int)
+                     .list("snake", type_message(pos))
+                     .message("food", pos)
+                     .build();
+    auto outer = SchemaBuilder("Outer", 1).message("m", mid).build();
+    auto tick = SchemaBuilder("Tick", 1).build();
+
+    const std::vector<std::shared_ptr<const Schema>> accepted{tick, outer};
+    const std::string bytes = serialize(encode_manifest(accepted, *world));
+
+    Unverified u = parse(bytes);
+    REQUIRE(u.well_formed());
+    Admission a = admit(u, manifest_schema());
+    REQUIRE(a.ok());
+    const Value& manifest = a.value();
+
+    SUBCASE("the reconstruct sequence resolves everything from the manifest alone") {
+        Registry deps; // EMPTY: the manifest must bring its own components
+        decode_referenced(manifest, deps);
+        std::vector<std::shared_ptr<const Schema>> rebuilt;
+        for (const Cell& c : manifest.get("accepted")->as_list()) {
+            auto s = decode_schema(*c.as_message(), deps);
+            deps.register_schema(s);
+            rebuilt.push_back(s);
+        }
+        auto state = decode_schema(*manifest.get("state")->as_message(), deps);
+        REQUIRE(rebuilt.size() == 2);
+        CHECK(rebuilt[0]->content_id() == tick->content_id());
+        CHECK(rebuilt[1]->content_id() == outer->content_id());
+        CHECK(state->content_id() == world->content_id());
+        // The components arrived with true identity, not just resolvability.
+        REQUIRE(deps.lookup("Pos", 1) != nullptr);
+        CHECK(deps.lookup("Pos", 1)->content_id() == pos->content_id());
+        REQUIRE(deps.lookup("Mid", 1) != nullptr);
+        CHECK(deps.lookup("Mid", 1)->content_id() == mid->content_id());
+    }
+
+    SUBCASE("the section is load-bearing: skipping it reproduces the original refusal") {
+        Registry deps;
+        // Straight to the state descriptor with no referenced pass — exactly
+        // what every decode site did before v3, and why the first nested
+        // consumer's load refused with "unresolved nested schema 'Pos'".
+        CHECK_THROWS_AS(decode_schema(*manifest.get("state")->as_message(), deps),
+                        std::runtime_error);
+    }
+
+    SUBCASE("a flat manifest stays lean: no referenced section is emitted at all") {
+        auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+        const std::vector<std::shared_ptr<const Schema>> flat{tick};
+        const std::string flat_bytes = serialize(encode_manifest(flat, *counter));
+        Unverified fu = parse(flat_bytes);
+        REQUIRE(fu.well_formed());
+        Admission fa = admit(fu, manifest_schema());
+        REQUIRE(fa.ok());
+        CHECK(fa.value().get("referenced") == nullptr);
+    }
+}
+
 TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead of "
           "overflowing the host stack") {
     // Audit F-19 (sign-off blocker). The type-token stream is FLAT, so its length is
