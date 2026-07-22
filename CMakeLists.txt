@@ -366,8 +366,10 @@ endif()
 # Loom's forever. The UI trio, the console, the TUI, the bridge and the SDL skin are
 # Zengine-destined (each moves in its own port phase), so exporting them now would publish a
 # surface we are about to relocate. The kernel and isolation ARE Loom's, but they are
-# Linux-only and no consumer hosts a Weave yet; they join the export when a hosting consumer
-# appears. SEAM APPRECIATION: the export set is the honest answer to "what is public", and
+# Linux-only; the rule was that each joins the export when a hosting consumer appears — and
+# for the KERNEL that trigger has now fired (Zengine's snake slice hosts .so weaves), so
+# loom::kernel rides the export on Linux. Isolation still waits for its first out-of-process
+# consumer. SEAM APPRECIATION: the export set is the honest answer to "what is public", and
 # the gap between it and the build tree is a visible, intentional seam — a consumer that
 # leans on an unexported target fails on the DEFAULT path, which is exactly where we want
 # that mistake to surface.
@@ -404,21 +406,32 @@ if(LOOM_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    # The exported header closure, verified self-contained: the core, the switchboard, and the
-    # weave-authoring headers. The unexported targets' headers stay home — with ONE exception:
-    # zen/weave/weave.hpp reaches for the header-only zen/kernel/schema_codec.hpp, which itself
-    # needs only registry/schema/value. It ships without the kernel library it is filed under.
+    # The kernel target is Linux-only (it does not exist on WIN32), so it joins the same
+    # export set conditionally; a consumer therefore gates on `if(TARGET loom::kernel)`,
+    # which is also the honest question ("can this install host .so weaves?").
+    if(NOT WIN32)
+        set_target_properties(zen-kernel PROPERTIES EXPORT_NAME kernel)
+        install(TARGETS zen-kernel
+            EXPORT loomTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+
+    # The exported header closure, verified self-contained: the core, the switchboard, the
+    # weave-authoring headers, and the kernel's (kernel/abi.h is the reason "*.h" matches —
+    # the C ABI header is deliberately not a .hpp). The kernel headers ship on every platform
+    # (they are just text); the TARGET is what a consumer must gate on. The other unexported
+    # targets' headers stay home.
     install(DIRECTORY include/zen/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zen
         FILES_MATCHING
             PATTERN "*.hpp"
+            PATTERN "*.h"
             PATTERN "bridge"    EXCLUDE
             PATTERN "console"   EXCLUDE
             PATTERN "isolation" EXCLUDE
-            PATTERN "kernel"    EXCLUDE
             PATTERN "ui"        EXCLUDE)
-    install(FILES include/zen/kernel/schema_codec.hpp
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zen/kernel)
 
     install(EXPORT loomTargets
         FILE loomTargets.cmake

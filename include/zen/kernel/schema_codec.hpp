@@ -79,11 +79,20 @@ inline std::shared_ptr<const Schema> capability_ask_schema() {
 }
 
 inline std::shared_ptr<const Schema> manifest_schema() {
-    // v2 adds the optional `requests` (the ask). Bumping the version — rather than
-    // mutating v1 in place — keeps the project invariant that a published (name,
-    // version) is a frozen shape. `requests` is optional: a Weave with no ask omits
-    // it, so the floor manifest still admits unchanged.
-    static const auto s = SchemaBuilder("zen.Manifest", 2)
+    // v2 added the optional `requests` (the ask). v3 adds the optional
+    // `referenced` list: the schemas the accept-set and state NEST, listed
+    // before anything that references them, so a manifest is self-contained —
+    // decode registers these into the dependency registry first and the
+    // (name, version) references in later descriptors resolve. This section
+    // was documented from the start ("a manifest lists referenced schemas
+    // before the schemas that reference them") but unbuilt until the first
+    // consumer with a nested shape arrived (Zengine's snake: a state carrying
+    // List<Pos> + a Pos field) and the gap refused its load. Optional, so a
+    // flat manifest stays lean. Each bump — never mutation — keeps the
+    // invariant that a published (name, version) is a frozen shape.
+    static const auto s = SchemaBuilder("zen.Manifest", 3)
+                              .list("referenced", type_message(schema_desc_schema()),
+                                    /*required=*/false)
                               .list("accepted", type_message(schema_desc_schema()))
                               .message("state", schema_desc_schema())
                               .message("requests", capability_ask_schema(), /*required=*/false)
@@ -151,11 +160,59 @@ inline Value encode_capability_ask(const CapabilityAsk& ask) {
     return v;
 }
 
+// Collect every schema `s` transitively references through its field types, in
+// POST-ORDER (a schema's own references precede it), deduplicated by
+// (name, version). Post-order is what lets the decoder resolve a manifest's
+// `referenced` list front to back with no second pass. Cycles are impossible by
+// construction — a Schema is immutable and built before anything can reference
+// it — so the recursion is bounded by the schema DAG's depth.
+inline void collect_referenced(const TypeRef& t,
+                               std::vector<std::shared_ptr<const Schema>>& out);
+
+inline void collect_referenced(const Schema& s,
+                               std::vector<std::shared_ptr<const Schema>>& out) {
+    for (const Field& f : s.fields()) {
+        collect_referenced(f.type, out);
+    }
+}
+
+inline void collect_referenced(const TypeRef& t,
+                               std::vector<std::shared_ptr<const Schema>>& out) {
+    if (t.kind == Kind::List && t.element) {
+        collect_referenced(*t.element, out);
+        return;
+    }
+    if (t.kind != Kind::Message || !t.message) {
+        return;
+    }
+    collect_referenced(*t.message, out); // dependencies first (post-order)
+    for (const auto& seen : out) {
+        if (seen->name() == t.message->name() && seen->version() == t.message->version()) {
+            return;
+        }
+    }
+    out.push_back(t.message);
+}
+
 // `ask` is optional: a null ask emits no requests section (the floor), which admits
-// because the manifest's requests field is optional.
+// because the manifest's requests field is optional. The `referenced` section is
+// likewise emitted only when the accept-set or state actually nests something.
 inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& accepted,
                              const Schema& state, const CapabilityAsk* ask = nullptr) {
     Value m(manifest_schema());
+    std::vector<std::shared_ptr<const Schema>> referenced;
+    for (const auto& s : accepted) {
+        collect_referenced(*s, referenced);
+    }
+    collect_referenced(state, referenced);
+    if (!referenced.empty()) {
+        std::vector<Cell> refs;
+        refs.reserve(referenced.size());
+        for (const auto& s : referenced) {
+            refs.push_back(Cell::message(encode_schema(*s)));
+        }
+        m.set("referenced", Cell::list(std::move(refs)));
+    }
     std::vector<Cell> acc;
     acc.reserve(accepted.size());
     for (const auto& s : accepted) {
@@ -250,6 +307,24 @@ inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Regi
         rebuilt.push_back(Field{std::move(fname), std::move(type), required});
     }
     return make_schema(std::move(name), version, std::move(rebuilt));
+}
+
+/// Decode an admitted manifest's optional `referenced` section into `deps`, in
+/// order — the encoder's post-order guarantee is what makes one forward pass
+/// sufficient. Every entry lands in the registry (identical re-registration is
+/// a no-op; a conflicting one throws SchemaConflict — the cross-library
+/// agreement wall applies to components exactly as it does to doors), so the
+/// (name, version) references in the manifest's accepted/state descriptors
+/// resolve. A hand-built manifest with a mis-ordered list simply fails its own
+/// resolution and the load refuses cleanly.
+inline void decode_referenced(const Value& manifest, Registry& deps) {
+    const Cell* refs = manifest.get("referenced");
+    if (refs == nullptr) {
+        return; // flat manifest: nothing nested, nothing to do
+    }
+    for (const Cell& c : refs->as_list()) {
+        deps.register_schema(decode_schema(*c.as_message(), deps));
+    }
 }
 
 // Precondition: `v` has passed the gate against capability_ask_schema() (it does,
