@@ -276,6 +276,43 @@ TEST_CASE("the grant-record persists deltas across reload, keyed by content-hash
     std::remove(path.c_str());
 }
 
+TEST_CASE("grant-record perms: a pre-planted looser-perm temp does not leak into the ledger (N-2)") {
+    // Audit N-2: write_file_synced opens the temp with 0600, but open(O_CREAT,0600) IGNORES the
+    // mode when the temp already EXISTS, and rename preserves the source mode — so a pre-planted
+    // world-writable `<path>.tmp` would make this TCB ledger world-writable after the next
+    // persist() (the re-test observed 0666). The fix fchmods the open fd to 0600 regardless of a
+    // pre-existing file. Pin it: plant a 0666 temp, persist, confirm the live ledger is
+    // owner-only (never group/other writable) and the temp did not leak.
+    namespace fs = std::filesystem;
+    const std::string path = "/tmp/zen_grant_record_perms_n2.json";
+    const std::string tmp = path + ".tmp";
+    std::remove(path.c_str());
+    std::remove(tmp.c_str());
+
+    { std::ofstream o(tmp); o << "stale-attacker-planted"; } // pre-plant the temp...
+    fs::permissions(tmp,
+                    fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read |
+                        fs::perms::group_write | fs::perms::others_read | fs::perms::others_write,
+                    fs::perm_options::replace); // ...as 0666, explicitly (no umask masking)
+    REQUIRE((fs::status(tmp).permissions() & fs::perms::others_write) != fs::perms::none);
+
+    {
+        GrantRecord rec;
+        rec.load(path);
+        rec.record("deadbeefcafef00d", GrantDelta{/*network=*/true, /*filesystem=*/""}); // persists
+    }
+
+    const fs::perms p = fs::status(path).permissions();
+    CHECK((p & fs::perms::owner_read) != fs::perms::none);
+    CHECK((p & fs::perms::owner_write) != fs::perms::none);
+    CHECK((p & fs::perms::group_write) == fs::perms::none);  // NOT group-writable
+    CHECK((p & fs::perms::others_write) == fs::perms::none); // NOT world-writable (the N-2 hole)
+    CHECK((p & fs::perms::others_read) == fs::perms::none);  // 0600, not the umask-masked 0644
+    CHECK_FALSE(fs::exists(tmp));                            // temp renamed away, no leak
+
+    std::remove(path.c_str());
+}
+
 TEST_CASE("so_content_hash is a truncated SHA-256 (NIST vectors); a content change changes the key") {
     // Audit F-1: the grant key is now a cryptographic digest (SHA-256 truncated to 128
     // bits), not FNV-1a — because this key ALONE decides a mod's authority above the

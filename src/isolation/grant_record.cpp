@@ -19,6 +19,7 @@
 // Durable-write path (host-side, POSIX; this library is never built on Windows).
 #include <cerrno>
 #include <fcntl.h>
+#include <sys/stat.h> // fchmod — enforce 0600 on the temp regardless of a pre-existing file
 #include <unistd.h>
 
 namespace loom {
@@ -64,6 +65,15 @@ void write_file_synced(const std::string& path, const std::string& data) {
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         throw std::runtime_error("grant record: cannot write '" + path + "'");
+    }
+    // open(O_CREAT, 0600) IGNORES the mode when the temp already EXISTS, and rename preserves
+    // the source mode — so a pre-planted looser-perm temp (audit N-2: a `0666` `.tmp` observed
+    // to yield a world-writable ledger) would leak into this TCB record. Enforce 0600 on the
+    // open fd unconditionally, so the perms never depend on a pre-existing file.
+    if (::fchmod(fd, 0600) != 0) {
+        (void)::close(fd);
+        (void)std::remove(path.c_str());
+        throw std::runtime_error("grant record: cannot set mode on '" + path + "'");
     }
     std::size_t off = 0;
     while (off < data.size()) {

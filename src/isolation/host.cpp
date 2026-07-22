@@ -231,19 +231,16 @@ std::string describe_resolution(const CapabilityResolution& r) {
     if (r.capability == Capability::Resources) {
         switch (r.outcome) {
             case Outcome::Enforced:
-                return std::string("resources: contained (cgroup-v2: ") + r.note + ")" +
-                       (r.confirmed ? " (confirmed: pid in leaf, limits read back)" : "") +
-                       "; honest scope: pids.max ALWAYS bounds a fork-bomb (no grant licenses "
-                       "one); a memory cap OOM-kills within the cgroup (the host survives and "
-                       "reloads-then-quarantines) where the memory controller is delegated and "
-                       "not opted out by grant — otherwise memory is uncapped (named so in the "
-                       "note above), still pids-bounded; cpu.weight is a fair-share weight "
-                       "(set-and-confirmed where the cpu controller is delegated, absent "
-                       "otherwise), not a hard cap";
+                // Rendered by the pure, delegation-qualified helper (sandbox.cpp) so the
+                // fork-bomb-stop claim mirrors the memory clause: it is asserted only where
+                // the pids controller is delegated (F-20's pids mirror). cgroup_pids_available()
+                // is the same source of truth cgroup_create_leaf gates pids.max on.
+                return resource_attestation(r.note, cgroup_pids_available(), r.confirmed);
             case Outcome::Granted:
-                // Resources never resolve to Granted (there is no wholesale opt-out — pids is
-                // always bounded). Kept only for switch-exhaustiveness; defensive if ever hit.
-                return "resources: (unexpected) — always at least pids-bounded; no opt-out";
+                // Resources never resolve to Granted (there is no wholesale opt-out; where the
+                // pids controller is delegated, no grant licenses a fork bomb). Kept only for
+                // switch-exhaustiveness; defensive if ever hit.
+                return "resources: (unexpected) — no wholesale opt-out";
             case Outcome::Uncontained:
                 return "resources: NOT CONTAINED — requested but unenforceable on this host, "
                        "running under dev-mode override";
@@ -739,11 +736,12 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
         rc.capability = Capability::Resources;
         const loom::ResourceLimits& lim = grant.resources();
         if (enforcement_.enforceable(Capability::Resources)) {
-            // Always Enforced when cgroups work: a leaf with at-least-pids bounded.
-            // There is no wholesale opt-out — no grant can license a fork bomb. The
-            // memory cap may be opted out of (unlimited_memory), but pids and cpu stay
-            // applied. (cgroups unavailable -> Uncontained in dev-mode, else refuse —
-            // never Granted.)
+            // Always Enforced when any resource controller is delegated: a leaf bounded by
+            // whatever controllers are present. There is no wholesale opt-out — no grant can
+            // license a fork bomb where the pids controller is delegated. The memory cap may be
+            // opted out of (unlimited_memory); memory, pids, and cpu are each imposed only where
+            // their controller is delegated, and the note/attestation say so per dimension.
+            // (cgroups unavailable -> Uncontained in dev-mode, else refuse — never Granted.)
             rc.outcome = Outcome::Enforced;
             ResourceCaps caps = cgroup_default_caps(); // conservative, computed from host
             if (lim.unlimited_memory) {
@@ -759,11 +757,11 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             }
             link->cg_caps = caps;
             link->cg_leaf = "zen-weave-" + std::to_string(g_leaf_counter++);
-            // Built from what a leaf will ACTUALLY impose, not from the computed caps:
-            // where the memory controller is not delegated, create_leaf never writes
-            // memory.max, so the note must say memory is uncapped, not claim a cap it
-            // never set (audit F-20 — the honesty lattice's one absolute rule).
-            rc.note = resource_note(caps, cgroup_memory_available());
+            // Built from what a leaf will ACTUALLY impose, not from the computed caps: where a
+            // controller is not delegated, create_leaf never writes that dimension's cap, so
+            // the note must say it is uncapped, not claim a cap it never set (audit F-20 — the
+            // honesty lattice's one absolute rule — applied to BOTH memory and pids).
+            rc.note = resource_note(caps, cgroup_memory_available(), cgroup_pids_available());
         } else if (dev_mode_) {
             rc.outcome = Outcome::Uncontained;
             std::fprintf(stderr,

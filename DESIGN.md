@@ -1203,9 +1203,10 @@ the attach race: the child runs nothing real until released):
   controllers on a cgroup that holds processes). Per-Weave leaves are created **alongside** the
   supervisor.
 - At **mount**, a per-Weave leaf is created with its limits (`memory.max` unless opted out by
-  grant, `memory.swap.max=0` so swap can't escape the cap, `pids.max` **always**, and
-  `cpu.weight` where the cpu controller is delegated — a fair-share weight, set-and-confirmed,
-  not a hard cap). At the **sync point** (child unshared, blocked on
+  grant, `memory.swap.max=0` so swap can't escape the cap, `pids.max` **where the pids
+  controller is delegated**, and `cpu.weight` where the cpu controller is delegated — a
+  fair-share weight, set-and-confirmed, not a hard cap). Each dimension is written only where
+  its controller is present, and the note/attestation say so per dimension. At the **sync point** (child unshared, blocked on
   "go") the parent writes the child's pid into the leaf's `cgroup.procs` — moving the whole
   subtree it execs/spawns under the limits — then maps it (if it made a userns), then releases.
   The child consumes nothing until released, so it is in the cgroup before it can.
@@ -1216,12 +1217,14 @@ the attach race: the child runs nothing real until released):
 
 ### Resolution, confirmation, and the delegation reality
 
-Resolution joins the tree: enforceable → **Enforced** (a leaf with at-least-pids bounded; memory
-capped or opted-out by grant; cpu weighted where delegated — create+limit+move+confirm); else
-dev-mode → **Uncontained**; else **fail-safe refuse**. Resources **never resolve to Granted** —
-there is no wholesale opt-out, so a leaf (with its pids cap) is always created when cgroups work.
-Confirmation reads `/proc/<pid>/cgroup` (pid is in the leaf) and reads the limits back (memory
-where capped, pids always, cpu where delegated); a mismatch fails safe.
+Resolution joins the tree: enforceable → **Enforced** (a leaf bounded by the delegated
+controllers — memory capped or opted-out by grant, pids capped, cpu weighted, *each where its
+controller is delegated* — create+limit+move+confirm); else dev-mode → **Uncontained**; else
+**fail-safe refuse**. Resources **never resolve to Granted** — there is no wholesale opt-out, so
+a leaf is always created when cgroups work (bounded by whatever controllers are delegated).
+Confirmation reads `/proc/<pid>/cgroup` (pid is in the leaf) and reads the limits back — each
+where its controller is delegated (memory where capped, pids where delegated, cpu where
+delegated); a mismatch fails safe.
 
 **Delegation is the make-or-break, and it is invocation-dependent.** cgroup write access needs
 a *delegated* subtree the user owns (on systemd, the user session slice). A process launched
@@ -1244,17 +1247,25 @@ under a delegated scope). The OS-enforced proof passes **with its negative contr
 memory-bomb Weave under a 64 MiB cap is **OOM-killed within its cgroup** (the host survives and
 quarantines it), while the *same* allocation under a 512 MiB cap **survives** — proving the cap,
 not the allocation, is the cause; and a fork-bomb is **bounded by `pids.max`** (≤64 of its 4000
-attempts). **The structural invariant is pinned: a fork-bomb stays bounded *even with
-`with_unlimited_memory()`*** (memory uncapped, pids still 64-bounded), and the memory opt-out
-lets a bomb survive the cap that would OOM a default-capped one — no grant can license a fork
-bomb. `cpu.weight` is **set-and-confirmed where the cpu controller is delegated** (present but
+attempts) **where the pids controller is delegated**. **The structural invariant is pinned (in
+that posture): a fork-bomb stays bounded *even with `with_unlimited_memory()`*** (memory
+uncapped, pids still 64-bounded), and the memory opt-out lets a bomb survive the cap that would
+OOM a default-capped one — no grant can license a fork bomb. Where pids is *not* delegated the
+substrate now **says so** rather than claim the stop absolutely (the F-20 pids mirror, below). `cpu.weight` is **set-and-confirmed where the cpu controller is delegated** (present but
 unexercised on this WSL host, which delegates only memory+pids — honestly reported absent), a
 *fair-share weight, never a hard cap*; an absolute `cpu.max` quota is a possible **future
-opt-in**, not built. **Memory is reported the same honest way as cpu:** the containment note
-prints `memory<=…` only where the memory controller is delegated (`cgroup_memory_available()`),
-and positively states memory is *uncapped* where it is not — `cgroup_create_leaf` writes
-`memory.max` only when the controller is present, so the note must never claim a cap it did not
-set (the honesty lattice's one absolute rule; audit F-20). `containment()` now leaves **only
+opt-in**, not built. **Memory _and pids_ are reported the same honest way as cpu:** the
+containment note prints `memory<=…` / `pids<=…` only where that controller is delegated
+(`cgroup_memory_available()` / `cgroup_pids_available()`), and positively states the dimension is
+*uncapped* where it is not — `cgroup_create_leaf` writes `memory.max` / `pids.max` only when the
+controller is present, so the note must never claim a cap it did not set. **The attestation
+mirrors the note:** `resource_attestation()` qualifies the fork-bomb-stop claim on
+pids-delegation — where pids is not delegated it says the fork-bomb stop is *not enforceable on
+this host*, retiring the former absolute `"pids.max ALWAYS bounds a fork-bomb"`. This is the
+honesty lattice's one absolute rule (audit F-20 **and its pids mirror, N-1**), now watched in
+**both** delegation directions: the original F-20 pin exercised only the pids-only posture, so
+the memory-only mirror over-claimed unwatched — the pids×memory **posture matrix**
+(test_isolation.cpp) closes that, pinning every posture to tell the truth or fail. `containment()` now leaves **only
 syscalls** unenforced. The mechanism ladder is **complete for the threat model** — as a
 *mechanism* set, and conditionally: the OS-enforced rungs need userns + delegated cgroup-v2, and
 where the host lacks them a mount **fails safe (refuses)** outside dev-mode. What remains is a
