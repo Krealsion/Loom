@@ -118,7 +118,8 @@ add_library(loom::kernel ALIAS zen-kernel)
 
 if(WIN32)
     # Impossible to miss, on purpose: this configuration hosts weaves with no sandbox.
-    message(STATUS "loom: WINDOWS KERNEL BACKEND ENABLED — development/demo only. "
+    # (ASCII only, like every runtime honesty string: it must render on any console.)
+    message(STATUS "loom: WINDOWS KERNEL BACKEND ENABLED - development/demo only. "
                    "Containment: unisolated; process-level only; no sandbox.")
 endif()
 

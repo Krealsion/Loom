@@ -52,8 +52,10 @@ public:
     /// banner says so without room for drift.
     static constexpr const char* containment_note() {
 #if defined(_WIN32)
+        // ASCII only, deliberately: this line prints before any console setup
+        // (codepage, VT) exists, so it must render on the barest conhost.
         return "unisolated; process-level only; no sandbox (Windows development/demo "
-               "backend — isolation and the OS sandbox are Linux-only)";
+               "backend - isolation and the OS sandbox are Linux-only)";
 #else
         return "in-process; trusted; no OS sandbox (out-of-process isolation is the "
                "isolation host's job)";
