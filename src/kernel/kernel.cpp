@@ -25,9 +25,13 @@ namespace {
 
 void* lib_open(const std::string& path, std::string& error) {
 #if defined(_WIN32)
+    // The development/demo backend (see Kernel::containment_note). LoadLibraryA
+    // is ANSI: a non-ANSI path is a known, named limitation (a LoadLibraryW +
+    // UTF-8→UTF-16 conversion is the follow-on), not a silent one.
     void* h = static_cast<void*>(::LoadLibraryA(path.c_str()));
     if (h == nullptr) {
-        error = "LoadLibrary failed";
+        error = "LoadLibrary failed (error " + std::to_string(::GetLastError()) +
+                "): " + path;
     }
     return h;
 #else

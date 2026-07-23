@@ -26,7 +26,15 @@
 #include <string_view>
 #include <vector>
 
-#if defined(__GNUC__) || defined(__clang__)
+// On PE (the Windows development/demo backend), __declspec(dllexport) is the
+// precise spelling — and marking the ONE ABI symbol for export also switches
+// off MinGW's export-everything auto-export, so the library's dynamic surface
+// shrinks to exactly `zen_weave_abi`: the RTLD_LOCAL spirit, PE edition. The
+// ELF visibility attribute is not meaningful on PE (and is warning-hostile
+// under -Werror there), hence the platform split.
+#if defined(_WIN32)
+#define ZEN_KERNEL_EXPORT __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
 #define ZEN_KERNEL_EXPORT __attribute__((visibility("default")))
 #else
 #define ZEN_KERNEL_EXPORT

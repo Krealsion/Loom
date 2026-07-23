@@ -107,17 +107,25 @@ target_link_libraries(my_weave PRIVATE loom::core)          # values, schemas, t
 cmake -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
 ```
 
-The **exported surface is deliberately smaller than the build tree**: `loom::core`
-and `loom::switchboard`, plus the headers they need. (The package also defines
-`loom::sanitize` and `loom::warnings` — two INTERFACE targets that *must* ride the
-export set because they survive in the libraries' link interface. They are plumbing,
-not surface: `warnings` is carried `LINK_ONLY`, so the Loom's `-Werror` and
-`-Wconversion` never reach your sources.) The UI vocabulary, the console,
-the TUI, the bridge and the SDL skin build here today but are Zengine-destined —
-each moves out in its own port phase — so exporting them now would publish a surface
-about to be relocated. The kernel and isolation *are* the Loom's, but they are
-Linux-only and no consumer hosts a Weave yet; they join the export when a hosting
-consumer appears.
+The **exported surface is deliberately smaller than the build tree**: `loom::core`,
+`loom::switchboard`, and `loom::kernel`, plus the headers they need. (The package
+also defines `loom::sanitize` and `loom::warnings` — two INTERFACE targets that
+*must* ride the export set because they survive in the libraries' link interface.
+They are plumbing, not surface: `warnings` is carried `LINK_ONLY`, so the Loom's
+`-Werror` and `-Wconversion` never reach your sources.) The UI vocabulary, the
+console, the TUI, the bridge and the SDL skin build here today but are
+Zengine-destined — each moves out in its own port phase — so exporting them now
+would publish a surface about to be relocated.
+
+`loom::kernel` joined the export when its first hosting consumer appeared
+(Zengine's snake slice). It exists on Linux always; **on Windows only when the
+Loom was configured with `LOOM_ENABLE_WINDOWS_KERNEL=ON`** — an explicit
+development/demo backend (`LoadLibrary`) that hosts weaves with **no isolation
+and says so** (`Kernel::containment_note()`; the sandbox and the honesty
+lattice's enforced rungs are Linux-only, and the security story remains
+WSL-hosting). Gate on `if(TARGET loom::kernel)` — the honest question is "can
+this install host loadable weaves?", not "which OS is this?". Isolation still
+waits for its first out-of-process consumer.
 
 Exported target names match the in-tree aliases exactly, so a consumer can swap a
 sibling-source build (`add_subdirectory`) for the installed package without touching

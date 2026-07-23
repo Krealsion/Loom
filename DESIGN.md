@@ -629,6 +629,38 @@ become the two permanent hosting modes, and a cross-boundary link is just
 `serialize` at the sender and `parse` → `admit` at the receiver, with no change
 to the Weave contract.
 
+### The Windows backend (opt-in, development/demo only)
+
+The kernel's platform loader was dual from birth (the surviving cross-platform
+wrapper: `dlopen`/`dlsym`/`dlclose` vs `LoadLibrary`/`GetProcAddress`/
+`FreeLibrary`); what was gated was the *target*. `LOOM_ENABLE_WINDOWS_KERNEL`
+(default **OFF** — default builds are unchanged everywhere) builds `zen-kernel`
+on Windows so makers there can run the demos' live load/swap/reload (the
+snake's three moments). Its honest terms, none negotiable:
+
+- **No isolation, and no claim of any.** The sandbox, namespaces, cgroups, and
+  every enforced rung of the honesty lattice remain Linux-only; the security
+  story remains WSL-hosting. `Kernel::containment_note()` is the one voice —
+  on Windows it says *"unisolated; process-level only; no sandbox
+  (development/demo backend)"*, and on Linux the in-process kernel is equally
+  honest (*"no OS sandbox"* — in-process was never the contained mode). A
+  configure-time banner repeats it so the weaker nature is impossible to miss.
+  Pinned per platform in the kernel suite: the note may never drift toward a
+  stronger claim.
+- **Same ABI, same gate.** The C ABI, the manifest (v3, referenced schemas),
+  and the re-admission of every crossing byte are identical; the kernel,
+  manager, and capabilities suites run on the backend as-is.
+- **PE linkage notes.** `ZEN_KERNEL_EXPORT` is `__declspec(dllexport)` on
+  Windows — precise, and it disables MinGW's export-everything auto-export, so
+  a weave DLL's dynamic surface is exactly `zen_weave_abi` (the `RTLD_LOCAL`
+  spirit, PE edition). The `-fno-gnu-unique` law is **ELF-specific**: PE has no
+  gnu-unique mechanism, so DLL statics are per-library by construction and the
+  swap-alias hazard does not exist there. Named limitations, not papered over:
+  `LoadLibraryA` is ANSI (non-ANSI paths are a `LoadLibraryW` follow-on), and a
+  MinGW-built weave DLL needs its runtime DLLs (`libstdc++-6.dll` et al.)
+  resolvable at load time — ship them beside the host or put the toolchain's
+  bin on `PATH`.
+
 ---
 
 ## The weaving layer (schema-from-struct, low ceremony)
