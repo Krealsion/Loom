@@ -44,6 +44,22 @@ public:
     explicit Kernel(loom::Switchboard& bus);
     ~Kernel();
 
+    /// The honest containment statement for THIS kernel's hosting mode — never
+    /// stronger than what is imposed. The in-process kernel isolates NOTHING on
+    /// any platform (that is the out-of-process isolation host's job, which
+    /// exists only on Linux); the Windows backend additionally exists only as
+    /// an explicit development/demo opt-in, and this string is how a host or a
+    /// banner says so without room for drift.
+    static constexpr const char* containment_note() {
+#if defined(_WIN32)
+        return "unisolated; process-level only; no sandbox (Windows development/demo "
+               "backend — isolation and the OS sandbox are Linux-only)";
+#else
+        return "in-process; trusted; no OS sandbox (out-of-process isolation is the "
+               "isolation host's job)";
+#endif
+    }
+
     Kernel(const Kernel&) = delete;
     Kernel& operator=(const Kernel&) = delete;
 

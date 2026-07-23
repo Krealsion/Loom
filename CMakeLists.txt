@@ -87,18 +87,22 @@ target_link_libraries(zen-switchboard
 
 add_library(loom::switchboard ALIAS zen-switchboard)
 
-# ---- Linux-only substrate: the kernel + isolation (POSIX dlopen, namespaces, cgroups) ----------
+# ---- The kernel + isolation (dynamic loading; namespaces/cgroups are Linux-only) ---------------
 #
-# These depend on POSIX/Linux facilities (dlfcn dynamic loading, fork, mount/pid/net namespaces,
-# cgroup-v2) and are gated behind a platform check so the portable subset (core, switchboard,
-# console, both terminal frontends) configures on Windows. SEAM APPRECIATION: the gate makes the
-# "Linux-only targets" a visible seam — native Windows .dll Weave loading (dlopen -> LoadLibrary)
-# is a clean future addition hooked right here, but its trigger (wanting native Windows execution
-# of sandboxed Weaves) likely never fires, because WSL-hosting is the security story. Hooked,
-# deferred to a probably-never trigger. On Linux every gate below is taken — nothing changes.
-if(NOT WIN32)
+# The kernel's PRIMARY home is Linux (dlopen + the isolation stack beneath it). On Windows it is
+# available as an EXPLICIT OPT-IN development/demo backend (LoadLibrary) — the hook this gate
+# always appreciated, now pulled by its real trigger: makers on Windows wanting to run the Zengine
+# demos (the snake slice's three moments need live load/swap/reload). The Windows backend carries
+# NO isolation and never claims any (Kernel::containment_note() says so; the sandbox, namespaces,
+# cgroups, and the honesty-lattice guarantees remain Linux-only, and the security story remains
+# WSL-hosting). Default builds are unchanged on every platform: the option is OFF.
+option(LOOM_ENABLE_WINDOWS_KERNEL
+       "Build the Windows kernel backend (LoadLibrary). Development/demo only — no isolation."
+       OFF)
 
-# The kernel (DLL loading + the C ABI + hot-reload).
+if(NOT WIN32 OR LOOM_ENABLE_WINDOWS_KERNEL)
+
+# The kernel (dynamic library loading + the C ABI + hot-reload).
 add_library(zen-kernel
     src/kernel/kernel.cpp)
 
@@ -111,6 +115,20 @@ target_link_libraries(zen-kernel
     PRIVATE zen-warnings ${CMAKE_DL_LIBS})
 
 add_library(loom::kernel ALIAS zen-kernel)
+
+if(WIN32)
+    # Impossible to miss, on purpose: this configuration hosts weaves with no sandbox.
+    message(STATUS "loom: WINDOWS KERNEL BACKEND ENABLED — development/demo only. "
+                   "Containment: unisolated; process-level only; no sandbox.")
+endif()
+
+endif() # kernel (Linux always; Windows under LOOM_ENABLE_WINDOWS_KERNEL)
+
+# ---- Linux-only substrate: isolation (fork, mount/pid/net namespaces, cgroup-v2) ---------------
+#
+# Isolation is the security story and it is deliberately NOT ported: the OS sandbox, the honesty
+# lattice's enforced rungs, and the out-of-process host exist only where the Linux facilities do.
+if(NOT WIN32)
 
 # Isolation (out-of-process Weave hosting + crash supervision). The host-side library: the IPC
 # channel, the proxy Weave, and the supervisor. It reuses the kernel's header-only schema codec to
@@ -132,7 +150,7 @@ target_link_libraries(zen-isolation
 
 add_library(loom::isolation ALIAS zen-isolation)
 
-endif() # NOT WIN32 (kernel + isolation)
+endif() # NOT WIN32 (isolation)
 
 # ---- The UI vocabulary (zen-ui) — the Loom's semantic tree, in its own target -----------
 #
@@ -406,10 +424,11 @@ if(LOOM_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    # The kernel target is Linux-only (it does not exist on WIN32), so it joins the same
-    # export set conditionally; a consumer therefore gates on `if(TARGET loom::kernel)`,
-    # which is also the honest question ("can this install host .so weaves?").
-    if(NOT WIN32)
+    # The kernel joins the export wherever it was built: always on Linux; on Windows only
+    # under LOOM_ENABLE_WINDOWS_KERNEL (the opt-in development/demo backend — no isolation).
+    # A consumer therefore gates on `if(TARGET loom::kernel)`, which is also the honest
+    # question ("can this install host loadable weaves?").
+    if(TARGET zen-kernel)
         set_target_properties(zen-kernel PROPERTIES EXPORT_NAME kernel)
         install(TARGETS zen-kernel
             EXPORT loomTargets

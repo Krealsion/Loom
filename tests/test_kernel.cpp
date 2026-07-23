@@ -27,6 +27,24 @@ std::int64_t live_count(Switchboard& bus, WeaveId id) {
 
 TEST_SUITE("kernel") {
 
+TEST_CASE("the containment note tells the truth for this platform's hosting mode") {
+    // The honesty floor for the in-process kernel: it never claims a sandbox
+    // anywhere, and the Windows development/demo backend says its weaker
+    // nature out loud. Pinned per platform so a wording drift toward a
+    // stronger claim is a red test, not a review catch.
+    const std::string note = Kernel::containment_note();
+#if defined(_WIN32)
+    CHECK(note.find("unisolated") != std::string::npos);
+    CHECK(note.find("no sandbox") != std::string::npos);
+    CHECK(note.find("development/demo") != std::string::npos);
+#else
+    CHECK(note.find("no OS sandbox") != std::string::npos);
+#endif
+    // On no platform may this surface claim containment.
+    CHECK(note.find("contained") == std::string::npos);
+    CHECK(note.find("sandboxed") == std::string::npos);
+}
+
 TEST_CASE("a loaded DLL Weave mounts and is indistinguishable; both directions are gated") {
     Switchboard bus;
     Kernel kernel(bus);
