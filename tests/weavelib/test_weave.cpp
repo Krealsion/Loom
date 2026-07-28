@@ -33,6 +33,11 @@
 //                                   EXTRA accepted shape, so a reload between the two
 //                                   differs in nothing but the door contract (R2A-1:
 //                                   the accepted-schema-drift negative)
+//   ZEN_WEAVE_ACTIVATES_CONFLICT  — the drift twin whose extra door carries the SAME
+//                                   (name, version) with DIFFERENT content, so loading
+//                                   it meets the registry's agreement wall (R2A-1a:
+//                                   makes a rejected candidate's schema admission
+//                                   observable from outside the kernel)
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
@@ -101,8 +106,16 @@ std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
     return s;
 }
-[[maybe_unused]] std::shared_ptr<const Schema> greet_schema() { // only the accepted-drift variant
+[[maybe_unused]] std::shared_ptr<const Schema> greet_schema() { // only the accepted-drift variants
+#if defined(ZEN_WEAVE_ACTIVATES_CONFLICT)
+    // The SAME (name, version) carrying DIFFERENT content — a cross-library
+    // disagreement, which the registry's agreement wall refuses at load. Used to
+    // make the kernel registry's admission of a REJECTED candidate's schemas
+    // observable from outside.
+    static const auto s = SchemaBuilder("Greet", 1).field("text", Kind::Text).build();
+#else
     static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
+#endif
     return s;
 }
 std::shared_ptr<const Schema> counter_schema() {
@@ -137,10 +150,11 @@ public:
         return {ping_schema(), schema_of<loom::PrepareShutdown>()};
 #elif defined(ZEN_WEAVE_HEIR)
         return {ping_schema(), schema_of<loom::Bequest>(), schema_of<loom::Refused>()};
-#elif defined(ZEN_WEAVE_ACTIVATES_DRIFT)
+#elif defined(ZEN_WEAVE_ACTIVATES_DRIFT) || defined(ZEN_WEAVE_ACTIVATES_CONFLICT)
         // Declaring zen.Activated IS the opt-in, exactly as PrepareShutdown is
         // for the letter — plus ONE extra door. Same state schema, different
         // contract: the only thing a reload from the plain variant changes.
+        // (The _CONFLICT twin differs only in what its Greet v1 SAYS.)
         return {ping_schema(), schema_of<loom::Activated>(), greet_schema()};
 #elif defined(ZEN_WEAVE_ACTIVATES)
         return {ping_schema(), schema_of<loom::Activated>()};

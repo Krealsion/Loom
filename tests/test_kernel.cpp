@@ -265,6 +265,64 @@ TEST_CASE("reload refuses a drifted door contract before commit; the incumbent k
     CHECK(kernel.weave_id("t") == id);
 }
 
+TEST_CASE("a rejected candidate's schemas stay admitted — today's registry monotonicity, named") {
+    // THIS PINS CURRENT BEHAVIOUR; IT DOES NOT ENDORSE IT AS FINAL DOCTRINE.
+    //
+    // Reconstructing a candidate's manifest is what PRODUCES the schemas the
+    // compatibility check then compares, and reconstruct() admits them into this
+    // Kernel's dependency registry on the way — so a candidate refused for
+    // accepted-contract drift has already bound its (name, version) keys. That
+    // is why "refused before commit" is scoped to *incumbent replacement and its
+    // published routing contract* and not to "the Loom is unchanged".
+    //
+    // Whether that admission is intentionally monotonic, or should join a future
+    // prepared-replacement transaction, is an R2B decision. Nothing here answers
+    // it. (Note the Switchboard's own registry is a DIFFERENT registry and is
+    // untouched: only register_weave writes it, and a rejected candidate never
+    // registers — so nothing the bus routes or resolves by is affected.)
+    {
+        // THE NEGATIVE CONTROL, first, or the pin below proves nothing: in a
+        // fresh kernel the conflicting library loads perfectly well. Its refusal
+        // further down is therefore caused by the rejected candidate's
+        // admission, not by the fixture being intrinsically unloadable.
+        Switchboard bus;
+        Kernel kernel(bus);
+        REQUIRE(kernel.load("t", ZEN_SO_ACTIVATES).ok);
+        LoadResult clean = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
+        CHECK_MESSAGE(clean.ok, clean.error);
+        CHECK(kernel.is_loaded("u"));
+    }
+
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+
+    // A reload refused for door drift. The candidate declared Greet v1 {msg}.
+    ReloadResult rr = kernel.reload_from("t", ZEN_SO_ACTIVATES_DRIFT);
+    REQUIRE(rr.ok);
+    REQUIRE_FALSE(rr.reloaded);
+    CHECK(rr.error == "accepted schema contract mismatch; reload refused");
+
+    // The R2A-1 claim, unchanged and still true: the incumbent's published
+    // routing contract never moved.
+    CHECK(kernel.weave_id("t") == lr.id);
+    CHECK_FALSE(kernel.accepts(lr.id, "Greet", 1));
+
+    // AND YET the rejected candidate's Greet v1 is still bound in the kernel's
+    // dependency registry — observable because a later library declaring Greet
+    // v1 with DIFFERENT content now meets the agreement wall, exactly where the
+    // negative control above shows it would otherwise have loaded.
+    LoadResult conflicted = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
+    CHECK_FALSE(conflicted.ok);
+    CHECK(conflicted.error.find("load refused") != std::string::npos);
+    CHECK(conflicted.error.find("Greet") != std::string::npos);
+    CHECK_FALSE(kernel.is_loaded("u"));
+    // No half-loaded wreckage, and the incumbent is still serving.
+    CHECK(kernel.is_loaded("t"));
+    CHECK(kernel.weave_id("t") == lr.id);
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);

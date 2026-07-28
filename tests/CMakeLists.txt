@@ -104,6 +104,10 @@ zen_add_test_weave(zen_test_weave_wedged ZEN_WEAVE_WEDGED)
 zen_add_test_weave(zen_test_weave_activates ZEN_WEAVE_ACTIVATES)
 zen_add_test_weave(zen_test_weave_activates_b ZEN_WEAVE_ACTIVATES)
 zen_add_test_weave(zen_test_weave_activates_drift ZEN_WEAVE_ACTIVATES ZEN_WEAVE_ACTIVATES_DRIFT)
+# R2A-1a: the drift twin whose extra door DISAGREES about Greet v1, so the agreement
+# wall makes a rejected candidate's schema admission observable from outside.
+zen_add_test_weave(zen_test_weave_activates_conflict
+    ZEN_WEAVE_ACTIVATES ZEN_WEAVE_ACTIVATES_CONFLICT)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
@@ -112,7 +116,7 @@ target_compile_options(zen_test_badabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
 set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
-    zen_test_weave_activates_drift zen_test_badabi)
+    zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -128,6 +132,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ACTIVATES=\"$<TARGET_FILE:zen_test_weave_activates>\""
     "ZEN_SO_ACTIVATES_B=\"$<TARGET_FILE:zen_test_weave_activates_b>\""
     "ZEN_SO_ACTIVATES_DRIFT=\"$<TARGET_FILE:zen_test_weave_activates_drift>\""
+    "ZEN_SO_ACTIVATES_CONFLICT=\"$<TARGET_FILE:zen_test_weave_activates_conflict>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
