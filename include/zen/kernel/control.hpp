@@ -187,7 +187,14 @@ class ControlWeave
                              loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo,
                                         loom::Activated>> {
 public:
-    explicit ControlWeave(Kernel& kernel) : kernel_(&kernel) {}
+    /// The authority is HOST-SUPPLIED WIRING, exactly like the Kernel reference
+    /// beside it: the host decides which weave conducts lifecycle and hands it
+    /// the capability at mount. It is not derivable from the accept set, not
+    /// implied by the grant, and not constructible by any weave — so "who may
+    /// attest an activation" is a decision the host makes once and visibly,
+    /// rather than a property anyone can acquire by learning a shape.
+    ControlWeave(Kernel& kernel, loom::LifecycleAuthority authority)
+        : kernel_(&kernel), authority_(authority) {}
 
     void on(const LoadLibrary& m, loom::Mail& mail) {
         ++state_.ops;
@@ -349,7 +356,18 @@ private:
             // recoverable; a lie about which incarnation this is, is not.
             return;
         }
-        mail.send(target, loom::Activated{*sequence}, /*correlation=*/0);
+        // ATTESTED, not merely sent (R2B-1). The shape stays an ordinary declared
+        // message and the send stays gated by this door's ordinary grant; what
+        // the authority adds is Loom's word that this activation is a real
+        // lifecycle commit for THIS incarnation and THIS sequence. Before it, a
+        // consumer could check who spoke but not whether that speaker had any
+        // business announcing a lifecycle fact — so any weave granted the shape
+        // could manufacture a first breath for someone else's incarnation.
+        //
+        // The sequence is passed to Loom as well as carried in the payload, and
+        // that redundancy is the point: the consumer compares the two, so an
+        // attestation minted for one activation cannot authenticate another.
+        mail.announce_lifecycle(authority_, target, loom::Activated{*sequence}, *sequence);
     }
 
     /// Answer the asker: reply_to if given, else the bus-stamped sender, echoing
@@ -366,13 +384,19 @@ private:
     }
 
     Kernel* kernel_;
+    loom::LifecycleAuthority authority_; ///< host-supplied; the right to attest, not to send
 };
 
 /// Register the control Weave on `bus` and return its id. mount() derives its
 /// grant from the declared Emit<...> — the three standard reply shapes — so the
 /// door can answer without any host-assembled authority.
+///
+/// The lifecycle authority is handed over HERE, by the host, at the one moment
+/// the host is choosing which weave sits on the kernel's operations. A different
+/// operator wired by a different host would need the host to hand it one too;
+/// nothing about accepting the control shapes confers it.
 inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus) {
-    return loom::mount<ControlWeave>(bus, kernel);
+    return loom::mount<ControlWeave>(bus, kernel, loom::Switchboard::lifecycle_authority());
 }
 
 /// The grant that lets a Weave drive the kernel: permission to send the six

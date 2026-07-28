@@ -22,8 +22,40 @@ extern "C" {
 #endif
 
 /* The ABI's own version, distinct from any schema version. The host rejects a
- * descriptor whose abi_version it does not support. */
-#define ZEN_ABI_VERSION 1u
+ * descriptor whose abi_version it does not support.
+ *
+ * v2 (R2B-1): handle() carries the delivery's PROVENANCE — Loom's own word about
+ * why a recipient may trust this message's standing in a lifecycle conversation.
+ * A loaded weave could previously distinguish a message's shape and its sender
+ * but not whether Loom itself authorized it, which left a heir claiming an
+ * inheritance by role unable to tell the steward it actually reached from any
+ * weave holding the same grant.
+ *
+ * PAID AS A BREAK, DELIBERATELY. Provenance is a fact ABOUT ONE DELIVERY, so it
+ * belongs beside `sender` in the call rather than behind an ambient query a
+ * library could read at the wrong moment. The cost is that every pre-v2 artifact
+ * is refused at load with a version reason — which is the honest failure. The
+ * alternative (an appended host callback) would have loaded stale artifacts
+ * happily and left them silently unable to accept an activation, i.e. loaded and
+ * permanently inert. A refusal that names its cause beats a weave that never
+ * speaks. */
+#define ZEN_ABI_VERSION 2u
+
+/* Delivery provenance flags (ZEN_PROV_*). Zero means an ordinary message: it
+ * stands on its shape and its sender stamp, and claims nothing more. These are
+ * set by the HOST from bus-owned state; they have no wire representation and no
+ * schema, so no payload a weave can compose ever produces one. */
+enum {
+    ZEN_PROV_NONE = 0u,
+    /* This delivery is THE one authorized answer to a request this weave sent.
+     * Only the weave that actually received that request could produce it, and
+     * only once. */
+    ZEN_PROV_ANSWER = 1u,
+    /* Loom attests a lifecycle commit for THIS incarnation. The attested
+     * sequence travels beside the flag so an attestation issued for one
+     * activation cannot authenticate another. */
+    ZEN_PROV_ACTIVATION = 2u
+};
 
 /* Status codes returned across the seam. 0 == OK; negatives are errors. No
  * exception ever crosses the boundary; the host adapter translates these. */
@@ -83,9 +115,16 @@ typedef struct ZenWeaveAbi {
     ZenStatus (*policy)(void* instance, ZenByteSink sink);
     /* Restore from state bytes the host has already admitted through the gate. */
     ZenStatus (*revive)(void* instance, const uint8_t* state, size_t len);
-    /* Handle an already-host-gated inbound message; may send/publish via `host`. */
+    /* Handle an already-host-gated inbound message; may send/publish via `host`.
+     *
+     * `provenance` is a ZEN_PROV_* flag word and `attested_sequence` is the
+     * sequence Loom attested (meaningful only for ZEN_PROV_ACTIVATION, else 0).
+     * Both are host-computed delivery facts, not payload: a library may trust
+     * them exactly as far as it trusts `sender`, and can neither forge one on
+     * the way out nor find one on an ordinary message. */
     ZenStatus (*handle)(void* instance, uint64_t sender, uint64_t reply_to, uint64_t correlation,
-                        const uint8_t* payload, size_t len, const ZenHostApi* host);
+                        uint32_t provenance, int64_t attested_sequence, const uint8_t* payload,
+                        size_t len, const ZenHostApi* host);
 } ZenWeaveAbi;
 
 /* The one exported symbol every Zen Weave library provides. Returns a pointer to

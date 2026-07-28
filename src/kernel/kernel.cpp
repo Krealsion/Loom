@@ -259,9 +259,25 @@ public:
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_};
         ZenHostApi api{&ctx, &zen_host_send, &zen_host_publish, &zen_host_send_to_role};
+        // Provenance crosses as a host-computed flag word beside the sender, and
+        // it crosses ONE WAY ONLY: there is no callback a library can hand one
+        // back through, so the seam is a place a loaded weave learns Loom's word
+        // and never a place it can invent one.
+        std::uint32_t prov = ZEN_PROV_NONE;
+        switch (in.provenance.kind()) {
+        case loom::Provenance::Kind::Answer:
+            prov = ZEN_PROV_ANSWER;
+            break;
+        case loom::Provenance::Kind::Activation:
+            prov = ZEN_PROV_ACTIVATION;
+            break;
+        case loom::Provenance::Kind::None:
+            break;
+        }
         // The DLL handler's status is contained: the message was validly
         // delivered; any internal library error is the library's own concern.
-        abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation,
+        abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation, prov,
+                     in.provenance.attested_sequence(),
                      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
     }
 

@@ -211,12 +211,26 @@ public:
         }
 #elif defined(ZEN_WEAVE_ACTIVATES)
         if (in.payload.schema().name() == loom::Activated::zen_name) {
+            (void)bus;
+            // R2B-1: THE FACT IS TRUSTED BECAUSE LOOM ATTESTS IT, not because the
+            // shape arrived. Two questions, and both must answer yes:
+            //   - did Loom authorize a lifecycle commit for THIS incarnation?
+            //     (bound to the target by the bus; an ordinary weave sending the
+            //      same public shape produces nothing here)
+            //   - is the attested sequence the one the payload claims? (a proof
+            //     minted for one activation must not authenticate another)
+            // Anything else is an ordinary message wearing a lifecycle costume,
+            // and is ignored entirely — no count, no lineage, no notice.
+            const std::int64_t claimed = in.payload.get("sequence")->as_int();
+            if (!in.provenance.lifecycle_activation() ||
+                in.provenance.attested_sequence() != claimed) {
+                return;
+            }
             // The whole participation: note that it happened and which one it
             // was. Deliberately nothing else — no loop is started, no prior work
             // repeated, nothing announced. Activation is a fact, not an order.
-            (void)bus;
             ++activations_;
-            last_activation_ = in.payload.get("sequence")->as_int();
+            last_activation_ = claimed;
             return; // never falls through to the Ping path below ('seq' is absent)
         }
 #endif

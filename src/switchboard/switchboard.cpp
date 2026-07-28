@@ -172,9 +172,17 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     return released;
 }
 
-Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated) {
+// EVERY ENQUEUE PATH DECIDES THE PROVENANCE, and the ordinary ones decide
+// "none" — unconditionally, overwriting whatever the caller's Message carried.
+// That single assignment is what makes provenance unforgeable by ordinary weave
+// code: a weave may construct a Message however it likes, and may even copy one
+// it was delivered, but the moment it hands that Message to the bus the fact is
+// erased. Only answer_as() and announce_as() pass a non-empty one.
+Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
+                                     Provenance provenance) {
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
+    msg.provenance = provenance;
     queue_.push_back(Envelope{std::move(msg), target, seq, gated});
     return Ticket{seq};
 }
@@ -182,8 +190,67 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated) {
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
+    msg.provenance = Provenance{};
     queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role)});
     return Ticket{seq};
+}
+
+Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& msg,
+                               RefusalReason reason) {
+    // A refusal that never became a delivery still gets a seq, a journal slot and
+    // a tap event, so "this weave tried to answer without authority" is visible at
+    // exactly the altitude "this weave tried to send without a grant" already is.
+    const std::uint64_t seq = next_seq_++;
+    const Refusal r{reason, {}};
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{Disposition::Refused, r}};
+    BusEvent ev;
+    ev.kind = EventKind::Refused;
+    ev.seq = seq;
+    ev.target = target;
+    ev.sender = sender;
+    ev.schema_name = msg.payload.schema().name();
+    ev.schema_version = msg.payload.schema().version();
+    ev.refusal = r;
+    emit(ev);
+    return Ticket{seq};
+}
+
+Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
+    // Three ways to have no authority, and each is a refusal of AUTHORITY —
+    // categorically distinct from the grant check that still runs afterwards on
+    // a legitimate answer:
+    //   - nothing is being dispatched, or the caller is not the weave being
+    //     dispatched (a Bus that outlived its delivery, or one belonging to
+    //     another delivery entirely);
+    //   - the request came from a root, so there is no requester to answer;
+    //   - this delivery's one answer is already spent.
+    if (!current_target_.valid() || as_sender != current_target_ ||
+        !authority_.requester.valid() || authority_.spent) {
+        return refuse_now(authority_.requester, as_sender, msg, RefusalReason::CapabilityDenied);
+    }
+    authority_.spent = true;
+    // Loom chooses the recipient and the correlation; the answerer chooses only
+    // what it says. That is what binds the proof to ONE request from ONE weave.
+    const WeaveId to = authority_.requester;
+    msg.sender = as_sender;
+    msg.reply_to = WeaveId{};
+    msg.correlation = authority_.correlation;
+    return enqueue_directed(to, std::move(msg), /*gated=*/true,
+                            Provenance::attested(Provenance::Kind::Answer, 0));
+}
+
+Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority&, WeaveId target,
+                                Message msg, std::int64_t sequence) {
+    // The authority's presence IS the check — an ordinary weave cannot construct
+    // one — so there is nothing further to validate here except that the target
+    // is real enough to name. The attestation is bound to THIS target and THIS
+    // sequence, both taken from the call rather than from the payload.
+    if (!target.valid()) {
+        return refuse_now(target, as_sender, msg, RefusalReason::NoSuchTarget);
+    }
+    msg.sender = as_sender;
+    return enqueue_directed(target, std::move(msg), /*gated=*/true,
+                            Provenance::attested(Provenance::Kind::Activation, sequence));
 }
 
 std::size_t Switchboard::fanout(Message msg, bool gated) {
@@ -201,6 +268,8 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
         }
         const std::uint64_t seq = next_seq_++;
         journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
+        // Rebuilt field by field, which also means a published Message carries no
+        // provenance whatever the caller's copy held.
         queue_.push_back(Envelope{
             Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id, seq, gated});
         ++recipients;
@@ -362,11 +431,25 @@ void Switchboard::deliver_one(Envelope env) {
     }
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
+    trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    // THE REPLY AUTHORITY IS THIS STACK FRAME. It is created after routing has
+    // chosen the recipient — so it names the incarnation that ACTUALLY received
+    // the request, not the one the sender guessed or the one the role names now —
+    // and it dies when the handler returns. A role changing hands after this
+    // point hands the new holder nothing: it never received this request.
+    current_target_ = env.target;
+    authority_ = ReplyAuthority{env.msg.sender, env.msg.correlation, /*spent=*/false};
     // The handler receives a WeaveBus bound to its own id — never the concrete
     // Switchboard — so anything it sends is stamped with its identity and gated
     // against its grant.
     WeaveBus weave_bus(*this, env.target);
     rec->weave->handle(trusted, weave_bus); // may enqueue further deliveries
+    // The authority does not outlive the handler. Cleared even on the throwing
+    // path would be better still, but handle() escaping is already a programming
+    // bug that unwinds past the pump; what matters here is that no ordinary
+    // return leaves an answerable delivery behind.
+    current_target_ = WeaveId{};
+    authority_ = ReplyAuthority{};
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;

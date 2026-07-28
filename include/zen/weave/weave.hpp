@@ -95,6 +95,51 @@ public:
             role, loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
     }
 
+    // ---- authenticated lifecycle conversation (R2B-1) -----------------------
+    //
+    // THE LAW: a role tells Loom WHERE to deliver an ask; an authenticated
+    // conversation tells the asker WHO actually received it and who may answer.
+
+    /// Answer the message being handled — once, to whoever sent it, carrying
+    /// Loom's word that this is that answer.
+    ///
+    /// The recipient and the correlation are Loom's, not this weave's: an answer
+    /// cannot be aimed elsewhere or relabelled. Answering twice, or answering a
+    /// delivery that came from a root, is refused visibly rather than silently
+    /// downgraded to an ordinary send — a caller that meant to answer should not
+    /// discover it merely spoke.
+    template <class T>
+    loom::Ticket answer(const T& msg) {
+        return bus_.answer(loom::Message(to_value(msg), self_));
+    }
+
+    /// Is THIS delivery the one authorized answer to a request this weave sent?
+    ///
+    /// A consumer still owes the ordinary obligation of matching the correlation
+    /// against its own outstanding ask: this says the answer is genuine, not that
+    /// it is the one you are waiting for.
+    bool answers_ask() const { return in_.provenance.answers_ask(); }
+
+    /// Does Loom attest a lifecycle commit for the incarnation receiving this?
+    /// (Bound to this target by Loom; a proof for another incarnation never
+    /// arrives here wearing this flag.)
+    bool lifecycle_attested() const { return in_.provenance.lifecycle_activation(); }
+
+    /// The sequence Loom attested — to be compared against the payload's own, so
+    /// an attestation issued for one activation cannot authenticate another.
+    std::int64_t attested_sequence() const { return in_.provenance.attested_sequence(); }
+
+    /// Announce a lifecycle commit for `target`, carrying Loom's attestation.
+    /// Requires the host-granted capability; still gated by the ordinary grant.
+    template <class T>
+    loom::Ticket announce_lifecycle(const loom::LifecycleAuthority& authority,
+                                    loom::WeaveId target, const T& msg, std::int64_t sequence) {
+        return bus_.announce_lifecycle(authority, target,
+                                       loom::Message(to_value(msg), self_, loom::WeaveId{},
+                                                     /*correlation=*/0),
+                                       sequence);
+    }
+
 private:
     loom::Bus& bus_;
     const loom::Message& in_;

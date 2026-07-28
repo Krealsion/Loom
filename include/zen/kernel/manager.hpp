@@ -381,11 +381,26 @@ public:
     }
 
     /// The heir's question. Honored ONLY from the weave recorded as this role's
-    /// successor, and answered exactly once.
+    /// successor, and answered exactly once — through the AUTHENTICATED path.
+    ///
+    /// Why `mail.answer` and not `mail.send` (R2B-1). An heir wakes knowing
+    /// nothing and reaches the steward BY ROLE, precisely because it cannot know
+    /// the steward's id — which means it cannot pre-bind the answer's sender, and
+    /// a correlation plus a shape were the only things it had to go on. Any weave
+    /// holding the grant for `zen.Bequest` could speak into that gap, and for a
+    /// letter whose contents name identities (Zengine's Timer handoff names the
+    /// weaves its firings are addressed to) that is not a cosmetic gap.
+    ///
+    /// `answer` closes it from this end: the authority to answer belongs to the
+    /// DELIVERY, so only the incarnation that actually received this claim can
+    /// produce Loom's word for it, once. Loom picks the recipient and the
+    /// correlation, so this handler cannot aim its answer elsewhere even by
+    /// mistake. Nothing about the steward's reach widens: the answer is still
+    /// authorized against the ordinary grant, and the Manager still relays no
+    /// domain traffic — it answers a claim, and that is all.
     void on(const ClaimBequest& c, Mail& mail) {
-        const WeaveId asker = asker_of(mail);
-        if (!asker.valid()) {
-            return;
+        if (!mail.sender().valid()) {
+            return; // a root has no identity to be the heir of, and nowhere to answer
         }
         for (std::size_t i = 0; i < state_.letters.size(); ++i) {
             const StoredLetter& l = state_.letters[i];
@@ -395,14 +410,15 @@ public:
             }
             const Bequest answer{l.role, l.items};
             state_.letters.erase(state_.letters.begin() + static_cast<std::ptrdiff_t>(i));
-            mail.send(asker, answer, mail.correlation());
+            mail.answer(answer);
             return;
         }
         // No letter, or not yours. Either way the heir gets a real answer and
         // starts fresh — silence would leave it waiting on a letter that will
-        // never come.
-        mail.send(asker, Refused{"no bequest is held for role '" + c.role + "' for you"},
-                  mail.correlation());
+        // never come. This refusal is authenticated too: "there is nothing for
+        // you" is exactly as load-bearing as a letter, because it is what ends
+        // the heir's bounded wait.
+        mail.answer(Refused{"no bequest is held for role '" + c.role + "' for you"});
     }
 
 private:

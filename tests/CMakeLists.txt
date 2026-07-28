@@ -25,6 +25,7 @@ add_executable(zen-tests
     test_integration.cpp
     test_fuzz.cpp
     test_switchboard.cpp
+    test_provenance.cpp
     test_harness.cpp
     test_breathing.cpp
     test_schema_codec.cpp
@@ -113,10 +114,18 @@ add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
 target_compile_options(zen_test_badabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
 
+# R2B-1: the artifact built against the PREVIOUS ABI. bad_abi declares a FUTURE
+# version (a host too old for it); this one declares version 1 — the real stale
+# artifact the provenance break creates — so "paid explicitly" has a witness.
+add_library(zen_test_staleabi SHARED weavelib/stale_abi.cpp)
+target_link_libraries(zen_test_staleabi PRIVATE loom zen-warnings zen-sanitize)
+target_compile_options(zen_test_staleabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+
 set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
-    zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi)
+    zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
+    zen_test_staleabi)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -133,7 +142,8 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ACTIVATES_B=\"$<TARGET_FILE:zen_test_weave_activates_b>\""
     "ZEN_SO_ACTIVATES_DRIFT=\"$<TARGET_FILE:zen_test_weave_activates_drift>\""
     "ZEN_SO_ACTIVATES_CONFLICT=\"$<TARGET_FILE:zen_test_weave_activates_conflict>\""
-    "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\"")
+    "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
+    "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
 
@@ -219,7 +229,7 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # exit-status check is the source of truth — no output-scraping needed. The portable
 # suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard harness breathing schema_codec weave_shape weave poke console component
+    switchboard provenance harness breathing schema_codec weave_shape weave poke console component
     pixel bridge)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)

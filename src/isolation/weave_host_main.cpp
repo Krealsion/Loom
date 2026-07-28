@@ -213,7 +213,16 @@ int main(int argc, char** argv) {
                 break;
             }
             std::string_view bytes = cursor.rest();
-            abi->handle(instance, sender, reply_to, correlation,
+            // PROVENANCE IS IN-PROCESS ONLY IN V1, and this is where that is
+            // paid rather than papered over. The Deliver frame carries no
+            // attestation — cross-process authentication is deliberately out of
+            // scope — so an out-of-process weave is told the truth: nothing here
+            // is attested. It therefore fails CLOSED, which is the safe
+            // direction: such a weave never adopts an authenticated answer or an
+            // attested activation, rather than being handed a flag the parent
+            // could not actually vouch for across the pipe.
+            abi->handle(instance, sender, reply_to, correlation, ZEN_PROV_NONE,
+                        /*attested_sequence=*/0,
                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
             (void)emit_snapshot(abi, instance);
         } else if (op == Op::Revive) {
