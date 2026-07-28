@@ -79,8 +79,8 @@ public:
     /// snapshot through the gate.
     ///
     /// RELOAD-IN-PLACE REQUIRES THE WHOLE CONTRACT, not merely the state shape.
-    /// Two exact agreements are checked before anything commits, and either one
-    /// failing is a clean refusal with the incumbent untouched:
+    /// Two exact agreements are checked before the incumbent is replaced, and
+    /// either one failing is a clean refusal with the incumbent untouched:
     ///   - the STATE schema, identical (name, version, content_id);
     ///   - the ACCEPTED-message schemas, an order-independent exact set match
     ///     against what the bus published for the incumbent.
@@ -93,6 +93,21 @@ public:
     /// exact equality is what makes the retained set truthful. Evolving an
     /// accepted contract is REPLACEMENT's business (or a later explicit
     /// manifest-migration design), never reload's.
+    ///
+    /// WHAT "REFUSED BEFORE COMMIT" SCOPES TO, exactly. A contract mismatch is
+    /// refused **before incumbent replacement and before any change to its
+    /// published routing contract**: the incumbent's instance, library, WeaveId,
+    /// role, state and published accepted-message set are all untouched, the
+    /// candidate's behavior is never installed, and no activation is emitted.
+    /// It does NOT mean "the Loom is unchanged". Reconstructing the candidate's
+    /// manifest is what *produces* the schemas being compared, and reconstruct()
+    /// admits them into this Kernel's dependency registry on the way — so a
+    /// rejected candidate may already have monotonically admitted schemas there,
+    /// observable through the cross-library agreement wall on a later load.
+    /// (The Switchboard's own registry is untouched: only register_weave writes
+    /// it, and a rejected candidate never registers.) Whether schema admission
+    /// should participate in a future replacement transaction, or is
+    /// intentionally monotonic, is an R2B design decision this does not make.
     ///
     /// HONEST REMAINING EDGE, not fixed here: this is validate-then-commit, not
     /// transactional. The incumbent's instance is destroyed and the adapter

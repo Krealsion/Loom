@@ -167,7 +167,12 @@ struct ClaimBequest {
 // part of this shape (Zengine's Timer is the first intended consumer — R2A-2).
 struct Activated {
     /// Positive, and newer than the previous activation from the same revived
-    /// lineage. Never reused by that lineage.
+    /// lineage, and never reused by that lineage — *because the sender refuses
+    /// the lifecycle operation when it cannot say that truthfully.* The field is
+    /// a finite signed integer, so a lineage has a last representable sequence;
+    /// at that boundary the operation is refused rather than wrapped, and no
+    /// activation is emitted at all. The guarantee is real and it names its
+    /// condition (see ControlState / activation_block in kernel/control.hpp).
     std::int64_t sequence;
 
     using ZenSelf = Activated;

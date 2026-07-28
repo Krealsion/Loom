@@ -629,6 +629,21 @@ equality is what makes the retained set truthful; **evolving an accepted contrac
 is replacement's business** (or a later explicit manifest-migration design), never
 reload's. Refusal reason: `accepted schema contract mismatch; reload refused`.
 
+**What "refused before commit" scopes to.** A contract mismatch is refused
+**before incumbent replacement and before any change to its published routing
+contract** — instance, library, `WeaveId`, role, state and published
+accepted-message set all untouched, candidate behaviour never installed, no
+activation emitted. It does **not** mean "the Loom is unchanged". Reconstructing
+the candidate's manifest is what *produces* the schemas being compared, and
+`reconstruct()` admits them into the Kernel's dependency registry on the way, so
+a rejected candidate may already have bound its `(name, version)` keys there —
+observable through the cross-library agreement wall on a later load, and pinned
+as today's behaviour in the `kernel` suite. (The Switchboard's own registry is a
+*different* registry and is untouched: only `register_weave` writes it, and a
+rejected candidate never registers, so nothing the bus routes or resolves by is
+affected.) Whether that admission is intentionally monotonic or belongs to a
+future prepared-replacement transaction is an **R2B** decision recorded, not made.
+
 **The honest remaining edge, not fixed:** this is validate-then-commit, *not*
 transactional. The incumbent's instance is destroyed and the adapter rebound
 **before** revival is known to have succeeded, so an identical-manifest candidate
@@ -899,6 +914,23 @@ Identity is the pair **(bus-stamped sender, sequence)**; the sequence lives in
 rather than restarting. **Swap is not special-cased anywhere** — a successor is
 activated because it was loaded through the same primitive. **Host-native
 `mount<T>()` weaves are not covered**, and nothing claims they are.
+
+**The lineage is finite, and the promise names its boundary.** `last_activation`
+is a signed 64-bit field, so "positive, newer within the lineage, never reused"
+holds *because the door refuses when it cannot say it truthfully*. A single
+`activation_block()` preflight runs **before the Kernel is called** on
+`LoadLibrary` and `ReloadLibrary`: at `INT64_MAX` (the last representable
+sequence, emitted exactly once) and on a revived-negative lineage (reachable
+through the ordinary revival path — the gate range-checks no `Int`), the
+operation is refused on the existing `zen.Refused` path with a reason naming
+which boundary it hit. Nothing is normalized, absolute-valued, or wrapped; a
+refused operation consumes no sequence. Refusing *before* the Kernel is the
+point: committing first and only then discovering the promised fact cannot be
+represented would report success while failing the operation's own post-commit
+contract. The trade, stated: at the boundary the door refuses without first
+learning whether the candidate would even participate, because it cannot know
+until the Kernel inspects it — one final non-participating load, at a limit no
+natural operation reaches.
 
 ### Loaded `.so` Weaves, and the B1 → B2 → B3 split
 

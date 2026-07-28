@@ -68,7 +68,9 @@
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -148,6 +150,16 @@ struct RoleInfo {
 /// move near one another today — `ops` counts every command including the ones
 /// that refuse or activate nobody.
 ///
+/// IT IS A FINITE SIGNED INTEGER, AND THE CONTRACT IS BOUNDED BY THAT. The
+/// lineage's valid range is [0, INT64_MAX]: the last representable sequence is
+/// INT64_MAX, emitted exactly once, and every lifecycle operation after it is
+/// REFUSED rather than wrapped (activation_block()). A revived state outside
+/// that range — the gate admits any Int, so a negative value is constructible
+/// through the ordinary revival path — has no valid continuation and refuses the
+/// same way. Neither state is normalized, absolute-valued, or wrapped into an
+/// apparently-healthy lineage; a forged activation identity would be worse than
+/// a refused load.
+///
 /// v2: `last_activation` joined the shape. `zen.ControlState` v1 meant {ops} and
 /// still does, forever — the immutable-published-schema rule, paid as usual.
 struct ControlState {
@@ -155,6 +167,15 @@ struct ControlState {
     std::int64_t last_activation;
     ZEN_SHAPE(ControlState, 2, ZEN_FIELD(ops), ZEN_FIELD(last_activation));
 };
+
+/// The two ways a control lineage can be unable to name another activation.
+/// Ordinary self-contained refusal reasons on the existing `zen.Refused` path —
+/// no new lifecycle vocabulary, and each says which boundary was hit rather than
+/// collapsing both into one half-true word.
+inline constexpr const char* kActivationExhausted =
+    "activation sequence exhausted; lifecycle operation refused";
+inline constexpr const char* kActivationInvalid =
+    "activation sequence state is invalid; lifecycle operation refused";
 
 /// A Weave whose handlers drive a Kernel. Its authority to *reach* the kernel is
 /// its accept-set being reachable, gated by the *sender's* load capability; its
@@ -170,6 +191,10 @@ public:
 
     void on(const LoadLibrary& m, loom::Mail& mail) {
         ++state_.ops;
+        if (const char* blocked = activation_block()) {
+            answer(mail, loom::Refused{blocked});
+            return; // the Kernel is never called: nothing is opened, nothing bound
+        }
         const LoadResult r = kernel_->load(m.name, m.path, m.role);
         if (r.ok) {
             // The weave is registered, its role (if any) bound, its manifest and
@@ -185,6 +210,10 @@ public:
 
     void on(const ReloadLibrary& m, loom::Mail& mail) {
         ++state_.ops;
+        if (const char* blocked = activation_block()) {
+            answer(mail, loom::Refused{blocked});
+            return; // the incumbent is never touched: no snapshot, no rebind, no revive
+        }
         const ReloadResult r = kernel_->reload_from(m.name, m.path);
         // `reloaded` is the only success; every other outcome — not loaded, open
         // failure, the state-schema mismatch, the accepted-contract mismatch, a
@@ -245,6 +274,46 @@ public:
     }
 
 private:
+    /// Why this lineage cannot name another activation, or nullptr if it can.
+    ///
+    /// THE PREFLIGHT, and it runs BEFORE the Kernel is called. The alternative
+    /// ordering is the one that lies: commit the load or reload, *then* discover
+    /// that the promised activation cannot be represented, and leave a freshly
+    /// installed participating incarnation reported as successful while its own
+    /// declared post-commit fact never happened. The door must be able to name an
+    /// activation before it starts an operation that may owe one.
+    ///
+    /// THE ACCEPTED CONSERVATISM, said out loud: at the boundary this refuses
+    /// without first learning whether the candidate would even participate. It
+    /// cannot know — a candidate's accepted schemas are unknown until the Kernel
+    /// inspects or loads it, and calling the Kernel to find out is exactly the
+    /// thing the before-Kernel boundary exists to prevent. So a lineage at the
+    /// limit refuses one final *non-participating* load it could in principle
+    /// have served. That is a deliberate trade: the limit is unreachable by any
+    /// natural operation, and correctness at the boundary is worth more than the
+    /// last load before it.
+    const char* activation_block() const {
+        if (state_.last_activation < 0) {
+            return kActivationInvalid;
+        }
+        if (state_.last_activation == std::numeric_limits<std::int64_t>::max()) {
+            return kActivationExhausted;
+        }
+        return nullptr;
+    }
+
+    /// The SOLE mutation point for the sequence, and it is total: it refuses
+    /// rather than wrapping, so no arithmetic path here can produce a
+    /// non-positive or reused activation identity. `++` is safe precisely because
+    /// the guard above it has already excluded the only two inputs that make it
+    /// unsafe. Nothing is consumed when nothing can be allocated.
+    std::optional<std::int64_t> next_activation() {
+        if (activation_block() != nullptr) {
+            return std::nullopt;
+        }
+        return ++state_.last_activation;
+    }
+
     /// Tell a freshly committed incarnation that it is live — if, and only if, it
     /// said it would listen.
     ///
@@ -265,11 +334,22 @@ private:
             !kernel_->accepts(target, loom::Activated::zen_name, loom::Activated::zen_version)) {
             return;
         }
-        // Allocated only now, for an activation that WILL be emitted, and never
-        // reused: monotonic within this lineage across snapshot and revival
-        // because it lives in the state.
-        const std::int64_t sequence = ++state_.last_activation;
-        mail.send(target, loom::Activated{sequence}, /*correlation=*/0);
+        // Allocated only now, for an activation that WILL be emitted. Monotonic
+        // within this lineage across snapshot and revival because it lives in
+        // the state — and never reused *because next_activation() refuses rather
+        // than wrapping* when the lineage has no valid continuation, which is the
+        // boundary that makes the word "never" true rather than aspirational.
+        const std::optional<std::int64_t> sequence = next_activation();
+        if (!sequence) {
+            // UNREACHABLE TODAY — every handler that gets here preflighted
+            // activation_block() and refused. It is written anyway, and as a
+            // silent nothing rather than a wrap, so that a future reordering
+            // degrades into a visibly missing activation (a load that succeeded
+            // and told nobody) instead of a forged identity on the wire. A gap is
+            // recoverable; a lie about which incarnation this is, is not.
+            return;
+        }
+        mail.send(target, loom::Activated{*sequence}, /*correlation=*/0);
     }
 
     /// Answer the asker: reply_to if given, else the bus-stamped sender, echoing

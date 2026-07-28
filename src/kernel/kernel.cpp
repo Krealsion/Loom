@@ -472,6 +472,15 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // makes the retained set true rather than merely retained. Refused before
     // rebind: the incumbent's instance, library, state, WeaveId and role are all
     // still untouched at this point.
+    //
+    // Scoped honestly: refused before INCUMBENT REPLACEMENT and before any
+    // change to its published routing contract — not "the Loom is unchanged".
+    // reconstruct() above is what produced these schemas, and it admitted them
+    // into registry_ on the way; a candidate rejected here has therefore already
+    // bound its (name, version) keys in this Kernel's dependency registry, which
+    // a later conflicting load will meet at the agreement wall. That is named,
+    // not endorsed: whether admission is intentionally monotonic or belongs to a
+    // future prepared-replacement transaction is R2B's decision (see the ledger).
     if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
         new_abi->destroy(new_inst);
         lib_close(new_lib);

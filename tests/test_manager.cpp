@@ -9,7 +9,10 @@
 #include <zen/switchboard.hpp>
 #include <zen/weave.hpp>
 
+#include <zen/serialize.hpp>
+
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -154,6 +157,43 @@ void watch_activations(Switchboard& bus, std::vector<ActivationEvent>& out) {
         }
     });
 }
+
+/// The control door's own bookkeeping, read the way anyone may read any weave's.
+/// Asserting on THIS rather than inferring the sequence from what a participant
+/// happened to record is what makes "no sequence was consumed" a direct
+/// observation instead of a deduction.
+ControlState control_state(Switchboard& bus, WeaveId control) {
+    Unverified u = parse(bus.snapshot_bytes(control));
+    Admission a = admit(u, schema_of<ControlState>());
+    REQUIRE(a.ok());
+    return from_value<ControlState>(a.value());
+}
+
+/// Put a control lineage at an exact point through the REAL revival path: build
+/// the state, serialize it, and swap it in through the gate — the same door a
+/// snapshot/revive comes through, not a back channel. That matters for the
+/// negative-sequence case especially: it is reachable *because* the gate
+/// range-checks nothing about an Int, and a test that reached it any other way
+/// would be inventing the hazard rather than finding it.
+void set_control_state(Switchboard& bus, WeaveId control, std::int64_t ops, std::int64_t last) {
+    const std::string bytes = loom::serialize(to_value(ControlState{ops, last}));
+    REQUIRE(bus.swap_state(control, bytes).revived);
+}
+
+/// How many times the bus revived this weave — i.e. how many times a kernel
+/// reload actually committed, since reload_from's commit goes through
+/// Switchboard::swap_state and that is what emits Revived.
+std::size_t revived_count(const std::vector<TapRecord>& tap, WeaveId target) {
+    std::size_t n = 0;
+    for (const TapRecord& t : tap) {
+        if (t.kind == EventKind::Revived && t.target == target) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+constexpr std::int64_t kSeqMax = std::numeric_limits<std::int64_t>::max();
 
 // Decode the live count out of a loaded Weave's snapshot (Counter v1), host-side.
 std::int64_t live_count(Switchboard& bus, WeaveId id) {
@@ -1008,6 +1048,13 @@ TEST_CASE("R2A-1 B: a weave that never declared zen.Activated hears nothing at a
     REQUIRE(acts.size() == 1);
     CHECK(acts[0].target == r.kernel.weave_id("live"));
     CHECK_FALSE(acts[0].target == id); // and never the non-participant
+
+    // ...and the non-participating load CONSUMED NO SEQUENCE. Without this the
+    // participant's sequence is never looked at, so a flow that spent one on the
+    // non-participant would pass every check above. The first activation of this
+    // lineage must be 1, not 2.
+    CHECK(activation_log(r.bus, r.kernel.weave_id("live")).last == 1);
+    CHECK(control_state(r.bus, r.control).last_activation == 1);
 }
 
 TEST_CASE("R2A-1 C: the direct control door activates too — the fact is not the Manager's") {
@@ -1252,6 +1299,186 @@ TEST_CASE("R2A-1 H: the activation sequence lives in the control state and survi
     // globally unique.
     CHECK(acts[2].sender == control2);
     CHECK_FALSE(acts[2].sender == lineage);
+}
+
+// ---- R2A-1a: the finite boundary --------------------------------------------
+// `last_activation` is a finite signed integer. The contract says every emitted
+// sequence is positive, newer, and never reused — so at the boundary the door
+// must REFUSE rather than wrap, and must refuse before it starts an operation
+// that would owe an activation it cannot name.
+
+TEST_CASE("R2A-1a A: an exhausted lineage refuses a load before the Kernel is called") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    set_control_state(r.bus, r.control, /*ops=*/0, kSeqMax);
+
+    // A load target whose success path is already known-good (case A of R2A-1
+    // loads exactly this), so the refusal is attributable to sequence
+    // exhaustion and to nothing else.
+    Answer a = drive(r.engine, r.manager, "zen.LoadWeave",
+                     {lit("live"), lit(ZEN_SO_ACTIVATES), lit("spawner")});
+    CHECK(a.name == "zen.Refused");
+    CHECK(text_field(a.value, "reason") == std::string(kActivationExhausted));
+
+    // The Kernel was never called: nothing opened, nothing registered, no role
+    // bound — the slot still refuses like an unmounted provider.
+    CHECK_FALSE(r.kernel.is_loaded("live"));
+    CHECK(r.kernel.role_of("live").empty());
+    Ticket t = r.bus.send_to_role("spawner", Message(ping(1)));
+    r.bus.pump();
+    CHECK(r.bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
+
+    CHECK(acts.empty());
+    // Nothing was consumed, and nothing was normalized: the lineage is exactly
+    // where it was. `ops` DOES count this refusal, matching every other outcome
+    // at this door — a failed open, a refused reload, and now an exhausted
+    // lineage all increment it, because `ops` counts operations asked for.
+    const ControlState st = control_state(r.bus, r.control);
+    CHECK(st.last_activation == kSeqMax);
+    CHECK(st.ops == 1);
+
+    // No delayed side effect: pumping again neither loads nor activates.
+    const std::size_t settled = r.engine.buffer_size();
+    r.bus.pump();
+    CHECK(acts.empty());
+    CHECK(r.engine.buffer_size() == settled);
+    CHECK_FALSE(r.kernel.is_loaded("live"));
+    CHECK(control_state(r.bus, r.control).last_activation == kSeqMax);
+
+    // EXHAUSTION DOES NOT BRICK THE DOOR. Only the two operations that could owe
+    // an activation refuse; everything that cannot owe one still answers. A
+    // future "simplification" that hoisted the preflight somewhere shared would
+    // make an exhausted lineage unable to even list what is loaded, and nothing
+    // else here would notice.
+    Answer list = drive(r.engine, r.manager, "zen.ListLoaded", {});
+    CHECK(list.name == "zen.Result");
+
+    // THE POSITIVE CONTROL, and it is what turns "refused" into "refused BECAUSE
+    // OF EXHAUSTION". Put the lineage back in range, change nothing else, and
+    // repeat the identical load: it succeeds and activates. So the refusal above
+    // was attributable to the one variable under test — and `acts` was empty
+    // because nothing fired, not because the watcher was blind.
+    set_control_state(r.bus, r.control, /*ops=*/9, /*last=*/41);
+    Answer again = drive(r.engine, r.manager, "zen.LoadWeave",
+                         {lit("live"), lit(ZEN_SO_ACTIVATES), lit("spawner")});
+    CHECK(again.name == "zen.Result");
+    CHECK(r.kernel.is_loaded("live"));
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].target == r.kernel.weave_id("live"));
+    CHECK(activation_log(r.bus, r.kernel.weave_id("live")).last == 42);
+}
+
+TEST_CASE("R2A-1a B: an exhausted lineage refuses a reload without touching the incumbent") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+    std::vector<TapRecord> tap;
+    r.bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+    Registered recorder = register_probe(r.bus, {pong_schema()});
+
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    const WeaveId id = r.kernel.weave_id("live");
+    REQUIRE(acts.size() == 1);
+    for (int i = 0; i < 3; ++i) {
+        r.bus.send(id, Message(ping(1)));
+    }
+    r.bus.pump();
+    REQUIRE(activation_log(r.bus, id).count == 3);
+
+    // Exhaust the lineage, then ask for a reload that would CERTAINLY have
+    // succeeded — the identical-contract rebuild R2A-1's case D reloads happily.
+    set_control_state(r.bus, r.control, /*ops=*/7, kSeqMax);
+    Answer a = drive(r.engine, r.manager, "zen.ReloadWeave",
+                     {lit("live"), lit(ZEN_SO_ACTIVATES_B)});
+    CHECK(a.name == "zen.Refused");
+    CHECK(text_field(a.value, "reason") == std::string(kActivationExhausted));
+
+    // THE STRONG PROOF that the Kernel was never called, not merely that the
+    // reply differed: reload_from commits through Switchboard::swap_state, and
+    // swap_state is what emits Revived. There is no Revived for this weave, so
+    // nothing was snapshotted, rebound, or revived.
+    CHECK(revived_count(tap, id) == 0);
+
+    CHECK(r.kernel.weave_id("live") == id);
+    CHECK(activation_log(r.bus, id).count == 3); // state untouched
+    r.bus.send(id, Message(ping(9), WeaveId{}, recorder.id));
+    r.bus.pump();
+    REQUIRE_FALSE(recorder.weave->handled_values.empty());
+    CHECK(recorder.weave->handled_values.back() == 9); // and still answering
+    CHECK(acts.size() == 1);                          // no new activation
+    CHECK(control_state(r.bus, r.control).last_activation == kSeqMax);
+
+    // THE POSITIVE CONTROL for the Revived counter, without which "0 revivals"
+    // could mean a blind observer rather than an untouched incumbent: put the
+    // lineage back in range and reload again. Now it commits, and the counter
+    // moves.
+    set_control_state(r.bus, r.control, /*ops=*/8, /*last=*/5);
+    Answer ok = drive(r.engine, r.manager, "zen.ReloadWeave",
+                      {lit("live"), lit(ZEN_SO_ACTIVATES_B)});
+    CHECK(ok.name == "zen.Ack");
+    CHECK(revived_count(tap, id) == 1);
+    REQUIRE(acts.size() == 2);
+    CHECK(activation_log(r.bus, id).last == 6); // the next unused sequence, not kSeqMax+1
+}
+
+TEST_CASE("R2A-1a C: the last representable sequence is emitted once, then operations refuse") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    set_control_state(r.bus, r.control, /*ops=*/0, kSeqMax - 1);
+
+    // The final valid activation of this lineage. It must actually happen — a
+    // guard that refused here would be an off-by-one that silently shortens
+    // every lineage by one, which no exhaustion test alone would catch.
+    Answer first = drive(r.engine, r.manager, "zen.LoadWeave",
+                         {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    CHECK(first.name == "zen.Result");
+    const WeaveId id = r.kernel.weave_id("live");
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].target == id);
+    const ActivationLog log = activation_log(r.bus, id);
+    CHECK(log.activations == 1);
+    CHECK(log.last == kSeqMax); // exactly the last representable sequence...
+    CHECK(log.last > 0);        // ...and it is positive, as the contract promises
+    CHECK(control_state(r.bus, r.control).last_activation == kSeqMax);
+
+    // One past the end: refused, never wrapped.
+    Answer second = drive(r.engine, r.manager, "zen.LoadWeave",
+                          {lit("live2"), lit(ZEN_SO_ACTIVATES_B), lit("")});
+    CHECK(second.name == "zen.Refused");
+    CHECK(text_field(second.value, "reason") == std::string(kActivationExhausted));
+    CHECK_FALSE(r.kernel.is_loaded("live2"));
+    CHECK(acts.size() == 1);
+    CHECK(control_state(r.bus, r.control).last_activation == kSeqMax);
+}
+
+TEST_CASE("R2A-1a: a revived lineage with a negative sequence refuses rather than normalizing") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    // THE GATE RANGE-CHECKS NOTHING ABOUT AN Int, so this state is reachable
+    // through the ORDINARY revival path rather than a back door — which is
+    // exactly why it needs an answer rather than an assumption. Prove the path
+    // admits it first, so the case is about the refusal and not about whether
+    // the hazard was invented.
+    set_control_state(r.bus, r.control, /*ops=*/0, /*last=*/-5);
+    REQUIRE(control_state(r.bus, r.control).last_activation == -5);
+
+    Answer a = drive(r.engine, r.manager, "zen.LoadWeave",
+                     {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    CHECK(a.name == "zen.Refused");
+    // Says WHICH boundary it hit. Calling this "exhausted" would be a small lie:
+    // the lineage is not full, it is invalid.
+    CHECK(text_field(a.value, "reason") == std::string(kActivationInvalid));
+    CHECK_FALSE(r.kernel.is_loaded("live"));
+    CHECK(acts.empty());
+    // Not normalized to zero, not made absolute, not wrapped into an apparently
+    // healthy lineage: left exactly as found.
+    CHECK(control_state(r.bus, r.control).last_activation == -5);
 }
 
 // ---- the steward is itself inspectable --------------------------------------
