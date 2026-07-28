@@ -358,4 +358,32 @@ TEST_CASE("a letter item round-trips, and reading one goes through the gate or n
     CHECK(std::string(loom::kManagerRole) == "zen.manager");
 }
 
+TEST_CASE("zen.Activated is an ordinary shape, and its whole claim is one number") {
+    // Same reasoning as the letter case above: activation is Loomstd-tier, so it
+    // is compiled and run on every platform, not only where a kernel exists.
+    const std::shared_ptr<const Schema> s = schema_of<loom::Activated>();
+    CHECK(s->name() == "zen.Activated");
+    CHECK(s->version() == 1);
+
+    // THE SHAPE'S POWER IS ITS SMALLNESS, so the smallness is pinned: exactly one
+    // field. A later phase that wants a role, a cause, a health flag, or a
+    // predecessor id has to come here and change a test that says why it must not
+    // — which is the point. (`zen.Activated` deliberately carries no role: a
+    // loaded weave may hold none, and payload metadata must never compete with
+    // the bus and the live role map for who a thing is.)
+    REQUIRE(s->fields().size() == 1);
+    CHECK(s->fields()[0].name == "sequence");
+    CHECK(s->fields()[0].type.kind == Kind::Int);
+
+    // It round-trips as any registered shape does, and reading one is a trip
+    // through the one validator like every other untrusted input.
+    const loom::Activated sent{7};
+    CHECK(from_value<loom::Activated>(to_value(sent)).sequence == 7);
+    const std::optional<loom::Activated> read =
+        loom::claim_item<loom::Activated>(loom::bequeath_item(sent));
+    REQUIRE(read.has_value());
+    CHECK(read->sequence == 7);
+    CHECK_FALSE(loom::claim_item<loom::Activated>(loom::bequeath_item(Ping{7})).has_value());
+}
+
 } // TEST_SUITE

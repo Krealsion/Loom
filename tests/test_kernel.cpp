@@ -5,7 +5,9 @@
 #include <zen/gate.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/serialize.hpp>
+#include <zen/weave/lifecycle.hpp>
 
+#include <cstddef>
 #include <string>
 
 using namespace loom;
@@ -183,6 +185,84 @@ TEST_CASE("a reload to a newer state-schema version is a clean refusal; the old 
     bus.pump();
     REQUIRE_FALSE(recorder.weave->handled_values.empty());
     CHECK(recorder.weave->handled_values.back() == 5);
+}
+
+// ---- R2A-1: the accept-set query, and reload's whole-contract check ----------
+
+TEST_CASE("the accept-set query answers from the bus's published set, and nowhere else") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+
+    // Positive: a door the library's own manifest declared.
+    CHECK(kernel.accepts(lr.id, loom::Activated::zen_name, loom::Activated::zen_version));
+    CHECK(kernel.accepts(lr.id, "Ping", 1));
+    // Negative: a shape it never declared, and the RIGHT name at the WRONG
+    // version — version is part of the identity routing selects on, so a v2 door
+    // is a different door, not the same one.
+    CHECK_FALSE(kernel.accepts(lr.id, "Greet", 1));
+    CHECK_FALSE(kernel.accepts(lr.id, loom::Activated::zen_name, 2));
+    // Unknown / never-loaded / already-unloaded ids are a clean false, not an
+    // error and not a throw: the bus answers an empty set for an id it has never
+    // heard of, and this must read that as "declares nothing".
+    CHECK_FALSE(kernel.accepts(WeaveId{}, loom::Activated::zen_name, 1));
+    CHECK_FALSE(kernel.accepts(WeaveId{999999}, loom::Activated::zen_name, 1));
+    REQUIRE(kernel.unload("t"));
+    CHECK_FALSE(kernel.accepts(lr.id, loom::Activated::zen_name, 1));
+
+    // A weave that never declared it is the ordinary non-participant.
+    LoadResult plain = kernel.load("p", ZEN_SO_WEAVE);
+    REQUIRE(plain.ok);
+    CHECK(kernel.accepts(plain.id, "Ping", 1));
+    CHECK_FALSE(kernel.accepts(plain.id, loom::Activated::zen_name, 1));
+}
+
+TEST_CASE("reload refuses a drifted door contract before commit; the incumbent keeps everything") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered recorder = register_probe(bus, {pong_schema()});
+
+    LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    const WeaveId id = lr.id;
+    const std::size_t doors = bus.accepted_schemas(id).size();
+
+    // The candidate's STATE schema is byte-identical to the incumbent's — the
+    // only agreement reload checked before this phase, so this would have
+    // committed and then routed by a contract the new code no longer speaks.
+    ReloadResult rr = kernel.reload_from("t", ZEN_SO_ACTIVATES_DRIFT);
+    CHECK(rr.ok);
+    CHECK_FALSE(rr.reloaded);
+    CHECK_FALSE(rr.version_mismatch); // deliberately NOT the state-schema refusal
+    CHECK(rr.error == "accepted schema contract mismatch; reload refused");
+
+    // Refused BEFORE rebind, so nothing about the incumbent moved: same id, same
+    // published doors, same live implementation still serving.
+    CHECK(kernel.is_loaded("t"));
+    CHECK(kernel.weave_id("t") == id);
+    CHECK(bus.accepted_schemas(id).size() == doors);
+    CHECK_FALSE(kernel.accepts(id, "Greet", 1)); // the candidate's extra door was never published
+    CHECK(kernel.accepts(id, "Ping", 1));
+    CHECK(kernel.accepts(id, loom::Activated::zen_name, loom::Activated::zen_version));
+
+    bus.send(id, Message(ping(5), WeaveId{}, recorder.id));
+    bus.pump();
+    REQUIRE_FALSE(recorder.weave->handled_values.empty());
+    CHECK(recorder.weave->handled_values.back() == 5);
+
+    // And the drifted shape genuinely cannot be routed to it — the accept-set is
+    // the incumbent's, in fact and not only in the query's answer.
+    Ticket t = bus.send(id, Message(greet("hi")));
+    bus.pump();
+    CHECK(bus.outcome(t).refusal.reason == RefusalReason::NotAccepted);
+
+    // The refusal is about the DRIFT, not about reload: the same library with an
+    // identical contract still reloads in place.
+    ReloadResult ok = kernel.reload_from("t", ZEN_SO_ACTIVATES_B);
+    REQUIRE_MESSAGE(ok.ok, ok.error);
+    CHECK(ok.reloaded);
+    CHECK(kernel.weave_id("t") == id);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

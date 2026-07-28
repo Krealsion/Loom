@@ -614,6 +614,28 @@ slot in.) The revive after the swap goes through `Switchboard::swap_state`, the
 down nor is blocked by the Weave's crash-revival budget (see *Intentional swap ≠
 crash revival* above).
 
+**Reload-in-place requires the WHOLE contract, not only the state shape** (R2A-1).
+Two exact agreements are checked before anything commits, and either one failing
+is a clean refusal with the incumbent untouched: the **state** schema, identical
+`(name, version, content_id)`; and the **accepted-message** schemas, an
+order-independent exact set match against what the bus published for the
+incumbent. The second exists because commit does **not** republish — `rebind()`
+swaps the ABI and instance behind the incumbent's adapter and the Switchboard
+keeps routing by the accept-set recorded at the incumbent's registration, so a
+candidate that changed its doors would be routed to by the *old* contract. That
+is false composition truth, and it also makes the control door's
+activation-participation question unanswerable after a reload. Requiring exact
+equality is what makes the retained set truthful; **evolving an accepted contract
+is replacement's business** (or a later explicit manifest-migration design), never
+reload's. Refusal reason: `accepted schema contract mismatch; reload refused`.
+
+**The honest remaining edge, not fixed:** this is validate-then-commit, *not*
+transactional. The incumbent's instance is destroyed and the adapter rebound
+**before** revival is known to have succeeded, so an identical-manifest candidate
+whose `revive()` fails still leaves the weave unavailable. Both *pre-commit*
+refusals preserve the incumbent and are pinned; the prepared-candidate/rollback
+work is R2B's and nothing here claims it.
+
 ### The one switchboard change for the kernel, and a note on hosting
 
 The kernel needed two small `Switchboard` additions: `unregister_weave` (to
@@ -856,6 +878,27 @@ shapes to the control Weave — is the canonical dangerous grant: a Weave holdin
 drives the kernel by message; one without it is denied at the control Weave's door
 (`CapabilityDenied`), gating the single most dangerous surface in the system with
 the same mechanism as everything else.
+
+**The door also owns the activation fact** (R2A-1). On a successful `LoadLibrary`
+or `ReloadLibrary` it sends the newly committed weave one `zen.Activated{sequence}`
+— the Loomstd-tier shape whose whole claim is *"a new code incarnation committed
+at this address"*, and which promises nothing about health, readiness, role,
+state, predecessors, or what to do next. It lives at the **door**, not the
+Manager, because `LoadWeave`/`SwapWeave`/`ReloadWeave` are Manager composites
+while `LoadLibrary`/`ReloadLibrary` are the primitives that call the Kernel, and a
+participant holding `load_capability` may drive those with **no Manager in the
+path** — a Manager-emitted lifecycle fact would mean two callers producing
+identical kernel changes with only one producing the lifecycle result. It is not
+in the Kernel either: the Kernel answers an accept-set query (`Kernel::accepts`)
+and never enqueues anything itself, so no privileged non-message backchannel
+exists. **Participation is declared, never attempted**: a weave opts in by listing
+`zen.Activated` in its accepted schemas, the door asks the Kernel first, and a
+non-participant costs nothing — no message, no refusal, no sequence spent.
+Identity is the pair **(bus-stamped sender, sequence)**; the sequence lives in
+`ControlState` (v2, `last_activation`) so it snapshots and revives with the weave
+rather than restarting. **Swap is not special-cased anywhere** — a successor is
+activated because it was loaded through the same primitive. **Host-native
+`mount<T>()` weaves are not covered**, and nothing claims they are.
 
 ### Loaded `.so` Weaves, and the B1 → B2 → B3 split
 

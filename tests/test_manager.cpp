@@ -110,6 +110,51 @@ std::size_t refused_count(const std::vector<TapRecord>& tap, const std::string& 
     return n;
 }
 
+// ---- R2A-1 helpers ----------------------------------------------------------
+
+// Counter v3 — the activation participant's persisted bookkeeping. Reading it
+// through the ordinary snapshot path is deliberate: the fixture invents no
+// domain protocol just to be inspected.
+std::shared_ptr<const Schema> counter_v3_schema() {
+    static const auto s = SchemaBuilder("Counter", 3)
+                              .field("count", Kind::Int)
+                              .field("activations", Kind::Int)
+                              .field("last_activation", Kind::Int)
+                              .build();
+    return s;
+}
+struct ActivationLog {
+    std::int64_t count = 0;        ///< ordinary Pings handled
+    std::int64_t activations = 0;  ///< how many zen.Activated it has handled
+    std::int64_t last = 0;         ///< the newest sequence it was told
+};
+ActivationLog activation_log(Switchboard& bus, WeaveId id) {
+    Unverified u = parse(bus.snapshot_bytes(id));
+    Admission a = admit(u, counter_v3_schema());
+    REQUIRE(a.ok());
+    return ActivationLog{a.value().get("count")->as_int(),
+                         a.value().get("activations")->as_int(),
+                         a.value().get("last_activation")->as_int()};
+}
+
+/// One zen.Activated event as the BUS saw it. TapRecord drops the sender, and
+/// the bus-stamped sender is half of an activation's identity (a naked number is
+/// not one), so these cases read the raw event instead. Refusals are recorded
+/// too — "no activation happened" must mean no delivery AND no refusal, never
+/// merely "nothing was delivered".
+struct ActivationEvent {
+    EventKind kind;
+    WeaveId target;
+    WeaveId sender;
+};
+void watch_activations(Switchboard& bus, std::vector<ActivationEvent>& out) {
+    bus.add_observer([&out](const BusEvent& e) {
+        if (e.schema_name == loom::Activated::zen_name) {
+            out.push_back(ActivationEvent{e.kind, e.target, e.sender});
+        }
+    });
+}
+
 // Decode the live count out of a loaded Weave's snapshot (Counter v1), host-side.
 std::int64_t live_count(Switchboard& bus, WeaveId id) {
     Unverified u = parse(bus.snapshot_bytes(id));
@@ -898,6 +943,315 @@ TEST_CASE("a wedged graceful swap is escaped by a plain force-swap, with no time
     CHECK(forced.name == "zen.Result");
     CHECK_FALSE(r.kernel.is_loaded("stuck"));
     CHECK(r.kernel.is_loaded("next"));
+}
+
+// ---- R2A-1: the activation fact ---------------------------------------------
+// zen.Activated says exactly one thing: a new code incarnation committed at this
+// address. Every case here pins that fact and its edges — never a larger claim.
+
+TEST_CASE("R2A-1 A: a participating load is told, once, that it is live") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    // `drive` REQUIREs exactly one new console entry, so the ordinary answer
+    // reaching the asker exactly once is pinned by the call itself.
+    Answer loaded = drive(r.engine, r.manager, "zen.LoadWeave",
+                          {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    CHECK(loaded.name == "zen.Result");
+    const WeaveId id = r.kernel.weave_id("live");
+    CHECK(text_field(loaded.value, "value") == std::to_string(id.value));
+
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].kind == EventKind::Delivered);
+    CHECK(acts[0].target == id);        // the newly loaded weave, not the operator
+    CHECK(acts[0].sender == r.control); // stamped by the bus as the door's, not claimed
+    const ActivationLog log = activation_log(r.bus, id);
+    CHECK(log.activations == 1);
+    CHECK(log.last > 0); // positive, always
+
+    // Nothing is queued to arrive twice; one commit is one activation.
+    r.bus.pump();
+    CHECK(acts.size() == 1);
+    CHECK(activation_log(r.bus, id).activations == 1);
+}
+
+TEST_CASE("R2A-1 B: a weave that never declared zen.Activated hears nothing at all") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+    Registered recorder = register_probe(r.bus, {pong_schema()});
+
+    // ZEN_SO_WEAVE declares only Ping. Non-participation is a clean non-event,
+    // not a failed ceremony — so `acts` must be EMPTY, which pins both halves at
+    // once: no delivery, and no refusal manufactured by sending blindly.
+    Answer loaded = drive(r.engine, r.manager, "zen.LoadWeave",
+                          {lit("plain"), lit(ZEN_SO_WEAVE), lit("")});
+    CHECK(loaded.name == "zen.Result"); // the operation's own result is untouched
+    CHECK(acts.empty());
+
+    // And it is otherwise an entirely ordinary loaded weave.
+    const WeaveId id = r.kernel.weave_id("plain");
+    r.bus.send(id, Message(ping(4), WeaveId{}, recorder.id));
+    r.bus.pump();
+    REQUIRE_FALSE(recorder.weave->handled_values.empty());
+    CHECK(recorder.weave->handled_values.back() == 4);
+    CHECK(acts.empty());
+
+    // THE POSITIVE CONTROL, and this case is worthless without it. Every check
+    // above is an ASSERTION OF ABSENCE, which a broken watcher would satisfy
+    // just as happily as correct silence — a green meaning "nothing complained"
+    // rather than "nothing happened". So prove the watcher can see: load a
+    // participant into the same rig and require it to fire. Now the silence
+    // above is silence, not blindness.
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].target == r.kernel.weave_id("live"));
+    CHECK_FALSE(acts[0].target == id); // and never the non-participant
+}
+
+TEST_CASE("R2A-1 C: the direct control door activates too — the fact is not the Manager's") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    // THE OWNERSHIP PROOF. A participant holding exactly load_capability drives
+    // the door with no Manager in the path. If activation lived in the Manager,
+    // this load would produce identical kernel changes and no activation — two
+    // callers, one truth, which is the false architecture the door's ownership
+    // exists to prevent.
+    struct Driver : WeaveBase<Driver, GoState, Accept<Go, Result>, Emit<LoadLibrary>> {
+        WeaveId control{};
+        std::vector<std::string> results;
+        void on(const Go&, Mail& mail) {
+            mail.send(control, LoadLibrary{"direct", ZEN_SO_ACTIVATES, ""});
+        }
+        void on(const Result& res, Mail&) { results.push_back(res.value); }
+    };
+    WeaveId driver = mount_granted<Driver>(r.bus, load_capability(r.control));
+    Driver* d = static_cast<Driver*>(r.bus.weave(driver));
+    d->control = r.control;
+
+    r.bus.send(driver, Message(to_value(Go{1})));
+    r.bus.pump();
+
+    const WeaveId id = r.kernel.weave_id("direct");
+    CHECK(r.kernel.is_loaded("direct"));
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].target == id);
+    CHECK(acts[0].sender == r.control);
+    CHECK(activation_log(r.bus, id).activations == 1);
+
+    // The direct operator got the normal answer, exactly once...
+    REQUIRE(d->results.size() == 1);
+    CHECK(d->results[0] == std::to_string(id.value));
+    // ...and the steward was never touched: no relay outstanding, no sequence
+    // spent, no swap, no letter. It is not in this story.
+    const loom::Value mst = manager_state(r.bus, r.manager);
+    CHECK(mst.get("relay")->as_message()->get("next_seq")->as_int() == 0);
+    CHECK(swaps_in_flight(r.bus, r.manager) == 0);
+    CHECK(letters_held(r.bus, r.manager) == 0);
+}
+
+TEST_CASE("R2A-1 D: a reload keeps the identity, transplants the state, and earns a NEWER one") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    const WeaveId id = r.kernel.weave_id("live");
+    REQUIRE(acts.size() == 1);
+    const std::int64_t first = activation_log(r.bus, id).last;
+    CHECK(first > 0);
+
+    // Advance its ordinary life so the transplant carries something real.
+    for (int i = 0; i < 3; ++i) {
+        r.bus.send(id, Message(ping(1)));
+    }
+    r.bus.pump();
+    REQUIRE(activation_log(r.bus, id).count == 3);
+
+    Answer a = drive(r.engine, r.manager, "zen.ReloadWeave",
+                     {lit("live"), lit(ZEN_SO_ACTIVATES_B)});
+    CHECK(a.name == "zen.Ack");
+    CHECK(r.kernel.weave_id("live") == id); // reload PRESERVES the logical identity...
+
+    // ...and is still a new code incarnation, so it earns its own activation.
+    REQUIRE(acts.size() == 2);
+    CHECK(acts[1].target == id);
+    CHECK(acts[1].sender == acts[0].sender); // the same lineage said both
+    const ActivationLog after = activation_log(r.bus, id);
+    CHECK(after.last > first); // strictly newer, never reused
+    CHECK(after.count == 3);   // the ordinary state crossed the reload
+
+    // THE ORDERING PROOF, and it is why `activations` is PERSISTED state: the
+    // snapshot taken before the swap said 1. Reading 2 means the transplant
+    // landed FIRST and the new activation was folded into the revived state —
+    // had the activation been delivered before the revive, the revive would have
+    // overwritten it back to 1.
+    CHECK(after.activations == 2);
+
+    r.bus.pump();
+    CHECK(acts.size() == 2);
+    CHECK(activation_log(r.bus, id).activations == 2);
+}
+
+TEST_CASE("R2A-1 E: a swap's successor is activated by the ordinary load primitive") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    drive(r.engine, r.manager, "zen.LoadWeave",
+          {lit("gen1"), lit(ZEN_SO_ACTIVATES), lit("spawner")});
+    const WeaveId incumbent = r.kernel.weave_id("gen1");
+    REQUIRE(acts.size() == 1);
+    const std::int64_t incumbent_seq = activation_log(r.bus, incumbent).last;
+
+    Answer sw = drive(r.engine, r.manager, "zen.SwapWeave",
+                      {lit("spawner"), lit("gen2"), lit(ZEN_SO_ACTIVATES_B), litb(false)}, 2);
+    CHECK(sw.name == "zen.Result");
+    const WeaveId successor = r.kernel.weave_id("gen2");
+    CHECK_FALSE(successor == incumbent);
+
+    // Exactly two activations exist in this whole run: the incumbent's own load,
+    // and the successor's. So the successor was told once, and the predecessor
+    // was told nothing after it was unloaded — there is no third event to be it.
+    REQUIRE(acts.size() == 2);
+    CHECK(acts[0].target == incumbent);
+    CHECK(acts[1].target == successor);
+    CHECK(acts[1].kind == EventKind::Delivered);
+    const ActivationLog s = activation_log(r.bus, successor);
+    CHECK(s.activations == 1);
+    CHECK(s.last > incumbent_seq); // newer than the prior one from the same door
+
+    // And no Manager code did this: `hard_swap` sends UnloadRole then
+    // LoadLibrary, and the second of those is the same primitive case A used.
+}
+
+TEST_CASE("R2A-1 E2: the graceful path activates its heir through that same primitive") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    // The incumbent converses about its succession (it declares
+    // zen.PrepareShutdown) but never declared zen.Activated — so the ceremony
+    // runs and it is still told nothing. Two independent opt-ins, unentangled.
+    drive(r.engine, r.manager, "zen.LoadWeave",
+          {lit("gen1"), lit(ZEN_SO_BEQUEATHS), lit("spawner")});
+    CHECK(acts.empty());
+    r.bus.send(r.kernel.weave_id("gen1"), Message(ping(1)));
+    r.bus.pump();
+
+    Answer sw = drive(r.engine, r.manager, "zen.SwapWeave",
+                      {lit("spawner"), lit("gen2"), lit(ZEN_SO_ACTIVATES), litb(true)}, 2);
+    CHECK(sw.name == "zen.Result");
+    const WeaveId heir = r.kernel.weave_id("gen2");
+
+    // The graceful chain ends in the same LoadLibrary the hard swap ends in, so
+    // the heir is activated for the same reason — no ceremony-specific code.
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].target == heir);
+    CHECK(activation_log(r.bus, heir).activations == 1);
+}
+
+TEST_CASE("R2A-1 F: a failed operation activates nobody, and spends no sequence") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+    Registered recorder = register_probe(r.bus, {pong_schema()});
+
+    // (1) A load that never opened anything.
+    Answer bad = drive(r.engine, r.manager, "zen.LoadWeave",
+                       {lit("bad"), lit("/nonexistent/definitely-not-a.so"), lit("")});
+    CHECK(bad.name == "zen.Refused");
+    CHECK(acts.empty()); // there is no almost-activated
+
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    const WeaveId id = r.kernel.weave_id("live");
+    REQUIRE(acts.size() == 1);
+    const std::int64_t first = activation_log(r.bus, id).last;
+
+    // (2) A reload whose STATE schema disagrees (Counter v1 against Counter v3).
+    Answer sm = drive(r.engine, r.manager, "zen.ReloadWeave", {lit("live"), lit(ZEN_SO_WEAVE)});
+    CHECK(sm.name == "zen.Refused");
+    CHECK(text_field(sm.value, "reason") == "state schema version mismatch; reload refused");
+
+    // (3) A reload whose state agrees exactly and whose DOORS do not.
+    Answer am = drive(r.engine, r.manager, "zen.ReloadWeave",
+                      {lit("live"), lit(ZEN_SO_ACTIVATES_DRIFT)});
+    CHECK(am.name == "zen.Refused");
+    CHECK(text_field(am.value, "reason") == "accepted schema contract mismatch; reload refused");
+
+    // Both refusals are PRE-COMMIT, so the incumbent is untouched and still
+    // serving. (A post-rebind revive failure is a different, still-open story —
+    // R2B — and nothing here claims otherwise.)
+    CHECK(acts.size() == 1);
+    CHECK(r.kernel.is_loaded("live"));
+    CHECK(r.kernel.weave_id("live") == id);
+    CHECK(activation_log(r.bus, id).activations == 1);
+    r.bus.send(id, Message(ping(6), WeaveId{}, recorder.id));
+    r.bus.pump();
+    REQUIRE_FALSE(recorder.weave->handled_values.empty());
+    CHECK(recorder.weave->handled_values.back() == 6);
+
+    // No sequence was burned by the three failures: the next real activation is
+    // exactly one past the last, not four past it.
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live2"), lit(ZEN_SO_ACTIVATES_B), lit("")});
+    REQUIRE(acts.size() == 2);
+    CHECK(activation_log(r.bus, r.kernel.weave_id("live2")).last == first + 1);
+}
+
+TEST_CASE("R2A-1 H: the activation sequence lives in the control state and survives revival") {
+    Rig r;
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("a"), lit(ZEN_SO_ACTIVATES), lit("")});
+    REQUIRE(acts.size() == 1);
+    const WeaveId lineage = acts[0].sender; // the stamped half of the identity
+    const std::int64_t first = activation_log(r.bus, r.kernel.weave_id("a")).last;
+    CHECK(first == 1);
+
+    // The door's state, snapshotted the way anyone may snapshot any weave.
+    const std::string saved = r.bus.snapshot_bytes(r.control);
+
+    // (1) SAME IDENTITY. Revive the control weave in place through the ordinary
+    // lifecycle path; the WeaveId is preserved, so the stamped sender is too.
+    REQUIRE(r.bus.swap_state(r.control, saved).revived);
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("b"), lit(ZEN_SO_ACTIVATES_B), lit("")});
+    REQUIRE(acts.size() == 2);
+    CHECK(acts[1].sender == lineage); // literally the same lineage
+    CHECK(activation_log(r.bus, r.kernel.weave_id("b")).last == first + 1);
+
+    // (2) A FRESH EQUIVALENT, revived from those same bytes. This is the half
+    // that proves the sequence is carried by the STATE and not by some live
+    // member the snapshot never sees: a newly constructed ControlWeave starts at
+    // zero, so only the revival can give it the point it continues from. Without
+    // the revive it would say 1 here; it says 2.
+    const WeaveId control2 = mount_control(r.kernel, r.bus);
+    REQUIRE(r.bus.swap_state(control2, saved).revived);
+    struct Driver : WeaveBase<Driver, GoState, Accept<Go>, Emit<LoadLibrary>> {
+        WeaveId control{};
+        void on(const Go&, Mail& mail) {
+            mail.send(control, LoadLibrary{"c", ZEN_SO_ACTIVATES, ""});
+        }
+    };
+    WeaveId driver = mount_granted<Driver>(r.bus, load_capability(control2));
+    static_cast<Driver*>(r.bus.weave(driver))->control = control2;
+    r.bus.send(driver, Message(to_value(Go{1})));
+    r.bus.pump();
+
+    REQUIRE(acts.size() == 3);
+    CHECK(activation_log(r.bus, r.kernel.weave_id("c")).last == first + 1);
+    // THE HONEST LIMIT, stated rather than papered over: an "equivalent" control
+    // weave is necessarily a DIFFERENT weave with a different id, because no
+    // operation binds a replacement native participant behind an existing
+    // WeaveId (the known addressing seam). So the state continues and the
+    // stamped sender does not — which is exactly why identity is the PAIR, and
+    // why `sequence` is documented as monotonic within a lineage rather than
+    // globally unique.
+    CHECK(acts[2].sender == control2);
+    CHECK_FALSE(acts[2].sender == lineage);
 }
 
 // ---- the steward is itself inspectable --------------------------------------
