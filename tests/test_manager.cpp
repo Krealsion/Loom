@@ -1504,4 +1504,165 @@ TEST_CASE("the Manager is poke-inspectable like any weave: its bookkeeping is no
     CHECK_FALSE(fields[0].as_message()->get("writable")->as_bool());
 }
 
+
+// ---- R2B-1: the activation is trusted because Loom ATTESTS it ----------------
+//
+// R2A-1 made the activation fact narrow and gave it a stamped sender. It could
+// not answer the next question: was that sender authorized to announce a
+// lifecycle commit at all? Any weave granted the public shape could manufacture
+// a first breath for somebody else's incarnation, and a consumer had no way to
+// tell. These cases pin the answer — and, because the fixture weave now ignores
+// an unattested activation entirely, every R2A-1 case above is silently pinning
+// it too.
+
+namespace {
+
+/// A weave holding a real LifecycleAuthority — the test standing in for a HOST
+/// that wired a second lifecycle operator. It exists to drive the attestation
+/// from angles the honest door never would: an attestation whose sequence
+/// disagrees with the payload it accompanies, and one aimed at a bystander.
+///
+/// Note what a test can do here that no weave can: mint the authority. That is
+/// the point of it being a capability object rather than a grant — the host
+/// decides who conducts lifecycle, and a weave cannot promote itself.
+struct RogueState {
+    std::int64_t n = 0;
+    ZEN_SHAPE(RogueState, 1, ZEN_FIELD(n));
+};
+struct RogueOrder {
+    std::int64_t target = 0;
+    std::int64_t announce = 0; ///< the sequence Loom is asked to attest
+    std::int64_t claim = 0;    ///< the sequence the payload states
+    ZEN_SHAPE(RogueOrder, 1, ZEN_FIELD(target), ZEN_FIELD(announce), ZEN_FIELD(claim));
+};
+
+class RogueOperator : public WeaveBase<RogueOperator, RogueState, Accept<RogueOrder>,
+                                       Emit<loom::Activated>> {
+public:
+    explicit RogueOperator(loom::LifecycleAuthority authority) : authority_(authority) {}
+
+    void on(const RogueOrder& o, Mail& mail) {
+        ++state_.n;
+        mail.announce_lifecycle(authority_, WeaveId{static_cast<std::uint64_t>(o.target)},
+                                loom::Activated{o.claim}, o.announce);
+    }
+
+private:
+    loom::LifecycleAuthority authority_;
+};
+
+/// An ordinary weave that merely holds the grant for the public shape — the
+/// whole threat model, in one class.
+struct ForgerState {
+    std::int64_t n = 0;
+    ZEN_SHAPE(ForgerState, 1, ZEN_FIELD(n));
+};
+class ActivationForger : public WeaveBase<ActivationForger, ForgerState, Accept<RogueOrder>,
+                                          Emit<loom::Activated>> {
+public:
+    void on(const RogueOrder& o, Mail& mail) {
+        ++state_.n;
+        // Everything an impersonator has: the right shape, a plausible positive
+        // sequence, the right target. Sent the ordinary way, because that is the
+        // only way it has.
+        mail.send(WeaveId{static_cast<std::uint64_t>(o.target)}, loom::Activated{o.claim});
+    }
+};
+
+} // namespace
+
+TEST_CASE("R2B-1 A: a forged activation from an ordinary weave is ignored — the shape, a "
+          "plausible sequence and the right target are not enough") {
+    Rig r;
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    const WeaveId live = r.kernel.weave_id("live");
+    REQUIRE(activation_log(r.bus, live).activations == 1); // the genuine one landed
+    REQUIRE(activation_log(r.bus, live).last == 1);
+
+    // Now an ordinary weave, holding nothing but the ordinary grant for the
+    // public shape, announces a newer-looking activation for that incarnation.
+    const WeaveId forger = mount<ActivationForger>(r.bus);
+    std::vector<ActivationEvent> acts;
+    watch_activations(r.bus, acts);
+    r.bus.send(forger, Message(to_value(RogueOrder{static_cast<std::int64_t>(live.value), 0, 2})));
+    r.bus.pump();
+
+    // It was DELIVERED — it is a legal message and the forger holds the grant, so
+    // this is a rejection by provenance and not by routing, a grant, or the gate.
+    REQUIRE(acts.size() == 1);
+    CHECK(acts[0].kind == EventKind::Delivered);
+    CHECK(acts[0].target == live);
+    CHECK(acts[0].sender == forger);
+
+    // And it changed nothing: no new activation, no advanced lineage.
+    CHECK(activation_log(r.bus, live).activations == 1);
+    CHECK(activation_log(r.bus, live).last == 1);
+}
+
+TEST_CASE("R2B-1 B: an attestation minted for one sequence cannot authenticate another") {
+    Rig r;
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
+    const WeaveId live = r.kernel.weave_id("live");
+    REQUIRE(activation_log(r.bus, live).activations == 1);
+
+    // A genuine authority, used dishonestly: Loom is asked to attest sequence 7
+    // while the payload claims 8. Loom records what it was asked to attest, so
+    // the two disagree and the consumer sees it.
+    const WeaveId rogue = mount<RogueOperator>(r.bus, Switchboard::lifecycle_authority());
+    r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(live.value), 7, 8})));
+    r.bus.pump();
+    CHECK(activation_log(r.bus, live).activations == 1); // unchanged
+    CHECK(activation_log(r.bus, live).last == 1);
+
+    // THE POSITIVE CONTROL, without which the above is only proof that the rogue
+    // is broken: the same weave, the same authority, the two sequences AGREEING.
+    r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(live.value), 9, 9})));
+    r.bus.pump();
+    CHECK(activation_log(r.bus, live).activations == 2); // an honest attestation is honoured
+    CHECK(activation_log(r.bus, live).last == 9);
+}
+
+TEST_CASE("R2B-1 C: an attestation is bound to the incarnation it names — announcing to one "
+          "weave never activates another") {
+    Rig r;
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("a"), lit(ZEN_SO_ACTIVATES), lit("")});
+    drive(r.engine, r.manager, "zen.LoadWeave", {lit("b"), lit(ZEN_SO_ACTIVATES), lit("")});
+    const WeaveId a = r.kernel.weave_id("a");
+    const WeaveId b = r.kernel.weave_id("b");
+    REQUIRE(activation_log(r.bus, a).activations == 1);
+    REQUIRE(activation_log(r.bus, b).activations == 1);
+    // Each was told its own sequence: the door activated the weave it committed,
+    // and only that one.
+    CHECK(activation_log(r.bus, a).last == 1);
+    CHECK(activation_log(r.bus, b).last == 2);
+
+    // An authority aimed at `a` reaches `a` and nothing else. There is no way to
+    // express "a proof for a, spent on b": the target is an argument to the
+    // minting call, so the binding is not a check that could be skipped — it is
+    // the only thing that decides where the attested message goes.
+    const WeaveId rogue = mount<RogueOperator>(r.bus, Switchboard::lifecycle_authority());
+    r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(a.value), 5, 5})));
+    r.bus.pump();
+    CHECK(activation_log(r.bus, a).activations == 2);
+    CHECK(activation_log(r.bus, b).activations == 1); // the bystander is untouched
+}
+
+TEST_CASE("R2B-1 D: an artifact built against the previous ABI is refused at load, and named") {
+    // The break R2B-1 pays for carrying provenance across the library seam. The
+    // failure is a clean refusal that says which version — not a weave that
+    // loads, runs, and is silently unable to accept a lifecycle fact for the
+    // rest of its life.
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult lr = kernel.load("stale", ZEN_SO_STALEABI);
+    CHECK_FALSE(lr.ok);
+    CHECK(lr.error.find("abi_version") != std::string::npos);
+    CHECK(lr.error.find("1") != std::string::npos); // the version it declared
+    CHECK_FALSE(kernel.is_loaded("stale"));
+
+    // And nothing of it was ever called: its function pointers are null, so a
+    // host that touched one would crash rather than pass.
+    CHECK(bus.list_weaves().empty());
+}
+
 } // TEST_SUITE

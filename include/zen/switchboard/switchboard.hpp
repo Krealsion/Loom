@@ -180,6 +180,12 @@ public:
     Ticket send_to_role(std::string_view role, Message msg) override;
     Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
 
+    /// Mint the capability that lets a weave attach Loom's lifecycle attestation.
+    /// ROOT AUTHORITY, like send_as: the host decides which weave conducts
+    /// lifecycle, and hands it this at mount. There is no other way to obtain one
+    /// — LifecycleAuthority's only constructor is private to this class.
+    static LifecycleAuthority lifecycle_authority() noexcept { return LifecycleAuthority{}; }
+
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
     /// reentrant call (from within a handler) is a no-op.
     void pump();
@@ -278,11 +284,39 @@ private:
         std::string role{};  ///< non-empty => role-targeted; resolved to a holder at delivery
     };
 
+    /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
+    /// a time, and gone the moment that delivery returns.
+    ///
+    /// This is the narrowest V1 the law allows, and the narrowness is the design
+    /// rather than a corner cut: *a reply authority belongs to one delivered
+    /// request between two exact incarnations and authorizes at most one matching
+    /// response.* Because it lives and dies with the handler, every question a
+    /// longer-lived token would owe an answer to is answered by construction —
+    /// it cannot be stored, named, passed, replayed, reused for another request,
+    /// or survive either participant's death, reload, or the role changing hands,
+    /// because there is nothing to survive. A weave that wants to answer later
+    /// answers ordinarily, and its answer is ordinary — which is the truth.
+    ///
+    /// KEPT HERE RATHER THAN IN THE HANDLER'S STACK FRAME, deliberately. Dispatch
+    /// is single-threaded and non-reentrant, so "the current delivery" is a real
+    /// singular thing the bus can name. Holding it here means the authority is
+    /// checked against WHO IS BEING DISPATCHED, not merely against who is asking
+    /// — so a WeaveBus that outlived its delivery (already undefined behaviour,
+    /// and outside this phase's threat altitude) finds the authority of a
+    /// different delivery and is refused, instead of quietly borrowing it.
+    struct ReplyAuthority {
+        WeaveId requester{};           ///< the request's stamped sender: the only legal recipient
+        std::uint64_t correlation = 0; ///< the request's own: the answer may not choose it
+        bool spent = false;            ///< one delivery, one answer
+    };
+
     // The Bus a handler actually receives: it stamps the handling Weave's identity
     // onto every send and routes through the *gated* path. A Weave holds only this
     // — never the concrete Switchboard — so it cannot send except as itself and
     // subject to its grant. (Switchboard::send/publish, held only by the host, are
-    // the ungated root authority.) This split is the trust boundary.
+    // the ungated root authority.) This split is the trust boundary, and it is why
+    // the reply authority is reached through here too: the door that can attest is
+    // the same door that cannot lie about who is speaking.
     class WeaveBus : public Bus {
     public:
         WeaveBus(Switchboard& sb, WeaveId self) noexcept : sb_(sb), self_(self) {}
@@ -293,15 +327,35 @@ private:
         Ticket send_to_role(std::string_view role, Message msg) override {
             return sb_.send_as_to_role(self_, role, std::move(msg));
         }
+        Ticket answer(Message msg) override { return sb_.answer_as(self_, std::move(msg)); }
+        Ticket announce_lifecycle(const LifecycleAuthority& authority, WeaveId target, Message msg,
+                                  std::int64_t sequence) override {
+            return sb_.announce_as(self_, authority, target, std::move(msg), sequence);
+        }
 
     private:
         Switchboard& sb_;
         WeaveId self_;
     };
 
-    Ticket enqueue_directed(WeaveId target, Message msg, bool gated);
+    Ticket enqueue_directed(WeaveId target, Message msg, bool gated,
+                            Provenance provenance = Provenance{});
     Ticket enqueue_role(std::string role, Message msg, bool gated);
     std::size_t fanout(Message msg, bool gated);
+
+    /// The one write path for an attested answer. Refuses — visibly, on the tap
+    /// and in the journal — when the caller is not the weave currently being
+    /// dispatched, when the request had no one to answer, or when the delivery's
+    /// one answer is already spent.
+    Ticket answer_as(WeaveId as_sender, Message msg);
+
+    /// The one write path for a lifecycle attestation.
+    Ticket announce_as(WeaveId as_sender, const LifecycleAuthority& authority, WeaveId target,
+                       Message msg, std::int64_t sequence);
+
+    /// Record and publish a refusal that never became a delivery, so a failure of
+    /// authority is visible at the same altitude as a failure of capability.
+    Ticket refuse_now(WeaveId target, WeaveId sender, const Message& msg, RefusalReason reason);
 
     void deliver_one(Envelope env);
     void emit(const BusEvent& event);
@@ -336,6 +390,11 @@ private:
 
     bool in_dispatch_ = false;
     bool stop_requested_ = false;
+    /// The delivery currently being dispatched, and its one reply authority.
+    /// Meaningful only inside deliver_one's call to handle(); `current_target_`
+    /// invalid means no delivery is live, so nobody may answer.
+    WeaveId current_target_{};
+    ReplyAuthority authority_{};
 };
 
 } // namespace loom

@@ -171,9 +171,26 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
     }
 }
 
+/// Translate the host's provenance flags back into the C++ fact.
+///
+/// The library rebuilds a Provenance for its own dispatch and nothing else: the
+/// value never leaves this call, and the outbound host callbacks have no field
+/// to put one in. A library that lied here would be lying to itself.
+inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequence) {
+    switch (flags) {
+    case ZEN_PROV_ANSWER:
+        return loom::Provenance::attested(loom::Provenance::Kind::Answer, 0);
+    case ZEN_PROV_ACTIVATION:
+        return loom::Provenance::attested(loom::Provenance::Kind::Activation, sequence);
+    default:
+        return loom::Provenance{};
+    }
+}
+
 template <class S>
 ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to,
-                    std::uint64_t correlation, const std::uint8_t* payload, std::size_t len,
+                    std::uint64_t correlation, std::uint32_t provenance,
+                    std::int64_t attested_sequence, const std::uint8_t* payload, std::size_t len,
                     const ZenHostApi* host) {
     try {
         S* s = static_cast<S*>(instance);
@@ -194,6 +211,7 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         }
         loom::Message msg(a.value(), loom::WeaveId{sender}, loom::WeaveId{reply_to},
                              correlation);
+        msg.provenance = provenance_from(provenance, attested_sequence);
         HostApiBus bus(host);
         s->handle(msg, bus);
         return ZEN_OK;
@@ -224,10 +242,10 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         return ::loom::detail::do_revive<WeaveClass>(i, st, n);                              \
     }                                                                                              \
     static ZenStatus zen__abi_handle(void* i, uint64_t sender, uint64_t reply_to,                  \
-                                     uint64_t correlation, const uint8_t* p, size_t n,             \
-                                     const ZenHostApi* h) {                                         \
-        return ::loom::detail::do_handle<WeaveClass>(i, sender, reply_to, correlation, p, n, \
-                                                            h);                                    \
+                                     uint64_t correlation, uint32_t prov, int64_t attested,        \
+                                     const uint8_t* p, size_t n, const ZenHostApi* h) {             \
+        return ::loom::detail::do_handle<WeaveClass>(i, sender, reply_to, correlation, prov, \
+                                                            attested, p, n, h);                    \
     }                                                                                              \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
         static const ZenWeaveAbi abi = {ZEN_ABI_VERSION, zen__abi_create,   zen__abi_destroy,      \

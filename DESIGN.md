@@ -2676,6 +2676,92 @@ not a flag.
 
 ---
 
+## The lifecycle conversation, and the four questions it keeps apart (R2B-1)
+
+A message arriving at a weave raises four questions that look alike and are not.
+Zen answered the first two from the beginning, and until R2B-1 had no way to ask
+the last two at all:
+
+```text
+Shape compatibility        Can this message be represented and admitted?
+                           -> the gate, one validator, every boundary
+
+Sender stamp               Which weave emitted it?
+                           -> the bus, at delivery; unforgeable, and never a payload field
+
+Authenticated conversation Is this response authorized by the request-time
+provenance                 routing decision?
+                           -> Provenance::Answer, minted only by the weave the
+                              request was actually delivered to, once
+
+Lifecycle attestation      Did Loom itself authorize this lifecycle fact for
+                           this incarnation?
+                           -> Provenance::Activation, minted only under a
+                              capability the host hands out
+```
+
+They are related and **not interchangeable**. A perfectly-shaped `zen.Bequest`
+from a weave that merely holds the grant for that shape answers the first two
+and fails the third. That gap was not cosmetic: an heir claiming an inheritance
+reaches the steward **by role**, precisely because it cannot know the steward's
+`WeaveId` — so it cannot pre-bind the answer's sender, and a shape plus a public
+correlation is exactly what any weave holding the same grant can also produce.
+
+> **A role tells Loom where to deliver an ask. An authenticated conversation
+> tells the asker who actually received it, and who may answer.**
+
+### The primitive
+
+`Provenance` is a **delivery fact**, not a payload field, and it cannot become
+one. It has no wire representation, no schema, and no serializer; every ordinary
+enqueue path (`send`, `send_to_role`, `publish`, and their `_as` forms)
+overwrites it with nothing. A weave that stores a delivered `Message` and
+re-sends it — the copy-what-you-observed attack — sends an ordinary message.
+
+Two ways to obtain one, and neither is a grant:
+
+- **`mail.answer(msg)`** — the authority belongs to the DELIVERY, so only the
+  weave a request was actually delivered to can produce Loom's word for it, and
+  only once. Loom chooses the recipient (the request's stamped sender) and the
+  correlation (the request's own), so an answer cannot be aimed elsewhere or
+  relabelled.
+- **`mail.announce_lifecycle(authority, target, msg, sequence)`** — requires a
+  `LifecycleAuthority`, a capability object whose only constructor is private to
+  the Switchboard. A weave holds one because the HOST handed it one at mount, the
+  way the kernel's control door holds a `Kernel&`. The attestation is bound to
+  the target and the sequence given to THIS call, not read out of the payload.
+
+Neither widens a grant. An attested send is still authorized against the sender's
+ordinary grant at delivery: the authority answers "may this message carry Loom's
+word?", never "may this weave send it?".
+
+### Conversation lifetime — the narrowest V1
+
+> A reply authority belongs to one delivered request between two exact
+> incarnations, and authorizes at most one matching response.
+
+It begins when routing has chosen the recipient — so it names the incarnation
+that ACTUALLY received the ask, not the one the sender guessed or the one the
+role names now — and it ends when the handler returns. Because it cannot be
+stored, named, passed or transferred, every question a longer-lived token would
+owe an answer to is answered by construction:
+
+| | |
+|---|---|
+| a refused or no-target request | confers nothing: the authority is created after routing succeeds |
+| a request from a root | confers nothing to answer: there is no requester |
+| the role changing hands | hands the successor nothing; it never received the request |
+| either participant dying | nothing survives to be inherited; an already-enqueued answer is refused at delivery like any other in-flight message |
+| reload of either participant | same: there is nothing to cross |
+| queueing | the answer is an ordinary queued delivery once minted |
+| a second answer | refused, visibly, at the same altitude a missing grant is |
+
+**The cost, stated:** a steward that cannot answer within the delivery that
+asked cannot answer *authentically* at all. Today's Manager answers immediately,
+so V1 is whole; an asynchronous steward is the seam this leaves.
+
+---
+
 ## Future seams (designed for, not built)
 
 - **Reflection migration of the macro.** Under C++26, the `ZEN_FIELD` block in
