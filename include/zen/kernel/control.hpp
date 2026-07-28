@@ -3,8 +3,9 @@
 
 // The kernel's message door: operate the kernel like everything else — by sending
 // it messages. A control Weave accepts LoadLibrary / ReloadLibrary / UnloadLibrary
-// / UnloadRole / ListLibraries and calls the kernel's existing load / reload_from /
-// unload / unload_role / loaded. The right to send those shapes to the control
+// / UnloadRole / ListLibraries / QueryRole and calls the kernel's existing load /
+// reload_from / unload / unload_role / loaded / query_role. The right to send
+// those shapes to the control
 // Weave is the **load capability** — the canonical dangerous grant. A Weave holding
 // it can drive the kernel by message; a Weave without it is denied at delivery
 // (CapabilityDenied), protecting the single most dangerous surface in the system
@@ -17,6 +18,7 @@
 //   UnloadLibrary  -> zen.Ack                | zen.Refused{why}
 //   UnloadRole     -> zen.Ack                | zen.Refused{why}
 //   ListLibraries  -> zen.Result{"a,b@role"} | (never refuses)
+//   QueryRole      -> RoleInfo{holder, converses}   (bespoke, by the razor)
 // Before this, all five outcomes were discarded at the door: the most dangerous
 // surface in the system was also the only one that answered nothing, so a
 // reload's state-schema mismatch — a real, deliberate, well-shaped refusal — died
@@ -27,6 +29,38 @@
 // then load-the-successor) live in the orchestrator, never here — that is what
 // makes the orchestrator replaceable: a different Manager can compose the same
 // primitives into a different policy.
+//
+// ---------------------------------------------------------------------------
+// R2A-1 — THE ACTIVATION FACT. The door also tells a freshly committed weave, in
+// one ordinary message, that it is live: zen.Activated (weave/lifecycle.hpp,
+// which states the fact's exact meaning and its long list of non-meanings).
+//
+// WHY THE DOOR OWNS THIS, and not the Manager, the Kernel, or the Switchboard.
+// LoadWeave/SwapWeave/ReloadWeave are Manager composites, but LoadLibrary and
+// ReloadLibrary are the primitives that actually call the Kernel — and a
+// participant holding load_capability may drive them with no Manager in the
+// path at all (the manager suite pins exactly that). A lifecycle fact emitted by
+// the Manager would therefore be FALSE ARCHITECTURE: two callers producing
+// identical kernel changes, only one of which produced the lifecycle result.
+// The door is the ordinary message participant sitting directly on the
+// successful kernel operation: it knows the outcome, can name the target, has a
+// bus-stamped identity, sends through ordinary Mail, and declares what it emits.
+// The Kernel stays a thing that answers questions and never speaks through a
+// privileged backchannel; the Switchboard stays routing.
+//
+// THERE IS NO SWAP-SPECIFIC ACTIVATION CODE ANYWHERE, and that absence is the
+// ownership proof. A swap — hard or graceful — eventually succeeds through
+// LoadLibrary, so its successor is activated for the same reason any dynamically
+// loaded weave is. Neither this file nor the Manager contains a line that knows
+// a swap is happening.
+//
+// WHAT IS NOT COVERED, said out loud: host-native mount<T>() weaves. This door
+// only sees dynamic load/reload, so native mounts are simply not activated —
+// not "activated silently", not "activated later". Nothing here claims them.
+//
+// The immediate downstream consumer is Zengine's Timer, which will author its
+// beat chain from an activation instead of a one-shot host wind — that is R2A-2
+// and no line of it exists yet.
 
 #include <zen/weave.hpp>
 #include <zen/weave/lifecycle.hpp>
@@ -102,10 +136,24 @@ struct RoleInfo {
     ZEN_SHAPE(RoleInfo, 1, ZEN_FIELD(holder), ZEN_FIELD(converses));
 };
 
-/// The control Weave's state: how many operations it has performed.
+/// The control Weave's state: how many operations it has performed, and the
+/// activation sequence it has reached.
+///
+/// `last_activation` is the highest sequence this control lineage has emitted;
+/// 0 means it has emitted none. Kept in the STATE, not in a live member, which
+/// is the whole point: it snapshots and revives like any other weave's
+/// bookkeeping, so a revived control weave continues its lineage instead of
+/// restarting it (pinned in the manager suite). It is deliberately NOT `ops`:
+/// operation count and activation identity are different facts that happen to
+/// move near one another today — `ops` counts every command including the ones
+/// that refuse or activate nobody.
+///
+/// v2: `last_activation` joined the shape. `zen.ControlState` v1 meant {ops} and
+/// still does, forever — the immutable-published-schema rule, paid as usual.
 struct ControlState {
     std::int64_t ops;
-    ZEN_SHAPE(ControlState, 1, ZEN_FIELD(ops));
+    std::int64_t last_activation;
+    ZEN_SHAPE(ControlState, 2, ZEN_FIELD(ops), ZEN_FIELD(last_activation));
 };
 
 /// A Weave whose handlers drive a Kernel. Its authority to *reach* the kernel is
@@ -115,7 +163,8 @@ class ControlWeave
     : public loom::WeaveBase<ControlWeave, ControlState,
                              loom::Accept<LoadLibrary, ReloadLibrary, UnloadLibrary, UnloadRole,
                                           ListLibraries, QueryRole>,
-                             loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo>> {
+                             loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo,
+                                        loom::Activated>> {
 public:
     explicit ControlWeave(Kernel& kernel) : kernel_(&kernel) {}
 
@@ -123,6 +172,11 @@ public:
         ++state_.ops;
         const LoadResult r = kernel_->load(m.name, m.path, m.role);
         if (r.ok) {
+            // The weave is registered, its role (if any) bound, its manifest and
+            // initial state admitted — the incarnation is committed, so the fact
+            // is now true and may be said. Said BEFORE the asker's answer, so the
+            // activation is already queued when the operator hears "loaded".
+            announce_activation(mail, r.id);
             answer(mail, loom::Result{std::to_string(r.id.value)});
         } else {
             answer(mail, loom::Refused{r.error});
@@ -133,9 +187,15 @@ public:
         ++state_.ops;
         const ReloadResult r = kernel_->reload_from(m.name, m.path);
         // `reloaded` is the only success; every other outcome — not loaded, open
-        // failure, the state-schema mismatch, a refused revive — has already
-        // written its own self-contained reason into `error`.
+        // failure, the state-schema mismatch, the accepted-contract mismatch, a
+        // refused revive — has already written its own self-contained reason
+        // into `error`. No almost-activated: only the success path speaks.
         if (r.reloaded) {
+            // A reload PRESERVES the logical WeaveId but is still a new code
+            // incarnation, so it earns its own, newer, activation. The id is
+            // resolved from the loaded name after success — the door does not
+            // have to have been told it.
+            announce_activation(mail, kernel_->weave_id(m.name));
             answer(mail, loom::Ack{});
         } else {
             answer(mail, loom::Refused{r.error});
@@ -185,6 +245,33 @@ public:
     }
 
 private:
+    /// Tell a freshly committed incarnation that it is live — if, and only if, it
+    /// said it would listen.
+    ///
+    /// PARTICIPATION IS ASKED, NEVER ATTEMPTED. Sending blindly and calling the
+    /// resulting refusal "optional participation" would be a lie in two
+    /// directions: it manufactures refusal noise on the tap for weaves that did
+    /// nothing wrong, and it spends an activation sequence on a conversation that
+    /// never happened. So the accept-set is checked first, and a non-participant
+    /// costs exactly nothing — no message, no refusal, no sequence, no change to
+    /// the operation's own result.
+    ///
+    /// Correlation 0: an activation is an EVENT, not an answer to an ask. Nothing
+    /// is awaited and nothing may be inferred from silence — what a participant
+    /// does with the fact is its own business, and it does not owe the door a
+    /// reply.
+    void announce_activation(loom::Mail& mail, loom::WeaveId target) {
+        if (!target.valid() ||
+            !kernel_->accepts(target, loom::Activated::zen_name, loom::Activated::zen_version)) {
+            return;
+        }
+        // Allocated only now, for an activation that WILL be emitted, and never
+        // reused: monotonic within this lineage across snapshot and revival
+        // because it lives in the state.
+        const std::int64_t sequence = ++state_.last_activation;
+        mail.send(target, loom::Activated{sequence}, /*correlation=*/0);
+    }
+
     /// Answer the asker: reply_to if given, else the bus-stamped sender, echoing
     /// the request's correlation. A request with neither (a root fire-and-forget)
     /// has nowhere to answer — the asker chose not to listen. Mirrors the poke
@@ -208,7 +295,7 @@ inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus) {
     return loom::mount<ControlWeave>(bus, kernel);
 }
 
-/// The grant that lets a Weave drive the kernel: permission to send the five
+/// The grant that lets a Weave drive the kernel: permission to send the six
 /// control shapes to the control Weave, and only to it. This is the dangerous
 /// grant — it is deliberately target-scoped, never allow_to_any.
 inline loom::Grant load_capability(loom::WeaveId control) {

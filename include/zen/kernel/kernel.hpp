@@ -76,8 +76,29 @@ public:
 
     /// Hot-reload `name` from `new_path`: snapshot the live Weave to host-owned
     /// bytes, swap the library behind the same WeaveId, and revive from the
-    /// snapshot through the gate. A state-schema version mismatch is a clean
-    /// refusal and the old library keeps running.
+    /// snapshot through the gate.
+    ///
+    /// RELOAD-IN-PLACE REQUIRES THE WHOLE CONTRACT, not merely the state shape.
+    /// Two exact agreements are checked before anything commits, and either one
+    /// failing is a clean refusal with the incumbent untouched:
+    ///   - the STATE schema, identical (name, version, content_id);
+    ///   - the ACCEPTED-message schemas, an order-independent exact set match
+    ///     against what the bus published for the incumbent.
+    /// The accepted half exists because commit does NOT republish: rebind() swaps
+    /// the ABI and instance behind the incumbent's adapter, and the Switchboard
+    /// keeps routing by the accept-set recorded at the incumbent's registration.
+    /// A candidate that changed its doors would therefore be routed to by the old
+    /// contract — false composition truth, and it would make the control door's
+    /// activation-participation question unanswerable after a reload. Requiring
+    /// exact equality is what makes the retained set truthful. Evolving an
+    /// accepted contract is REPLACEMENT's business (or a later explicit
+    /// manifest-migration design), never reload's.
+    ///
+    /// HONEST REMAINING EDGE, not fixed here: this is validate-then-commit, not
+    /// transactional. The incumbent's instance is destroyed and the adapter
+    /// rebound BEFORE revival is known to have succeeded, so a candidate with an
+    /// identical manifest whose revive() fails still leaves the incumbent
+    /// unavailable. The prepared-candidate / rollback work is R2B's.
     ReloadResult reload_from(const std::string& name, const std::string& new_path);
 
     /// Stop the Weave, destroy its instance, then close the library — in that
@@ -116,6 +137,20 @@ public:
     /// own business.
     RoleQuery query_role(const std::string& role, const std::string& shape_name,
                          std::uint32_t shape_version) const;
+
+    /// Does `id` declare (shape_name, shape_version) in the accept-set the bus
+    /// published for it? The "will you converse?" question asked of one weave
+    /// rather than of a role's holder — the shape the control door needs, since a
+    /// freshly loaded weave may hold no role at all.
+    ///
+    /// The Switchboard's published accept-set is the truth and the ONLY truth
+    /// consulted: no second cache lives here, so this can never drift from what
+    /// delivery actually matches against. An unknown or unloaded id is a clean
+    /// false (the bus answers an empty set), never an error — and this carries no
+    /// lifecycle policy of its own; deciding what to do with the answer belongs
+    /// entirely to the caller.
+    bool accepts(loom::WeaveId id, const std::string& shape_name,
+                 std::uint32_t shape_version) const;
 
 private:
     struct Loaded {

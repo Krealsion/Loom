@@ -1,7 +1,15 @@
 #ifndef ZEN_WEAVE_LIFECYCLE_HPP
 #define ZEN_WEAVE_LIFECYCLE_HPP
 
-// The letter: cooperative handoff — a weave writes a letter to its heir.
+// The lifecycle conversations a weave may choose to have. Two live here:
+//
+//   THE LETTER (zen.PrepareShutdown / zen.Bequest / zen.ClaimBequest) — cooperative
+//   handoff: a weave writes a letter to its heir. Everything below the TIER note
+//   down to bequeath_item/claim_item is the letter's.
+//
+//   ACTIVATION (zen.Activated) — the one narrow fact that a newly committed code
+//   incarnation is live. It is not part of the letter and knows nothing about it;
+//   the two share a header because they share a tier, not a mechanism.
 //
 // TIER. This header is the **Loomstd embryo**. The shapes here are not core law
 // (nothing in the substrate requires them; a weave that ignores them is a clean
@@ -110,6 +118,62 @@ struct ClaimBequest {
     static constexpr const char* zen_name = "zen.ClaimBequest";
     static constexpr std::uint32_t zen_version = 1;
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role)); }
+};
+
+// ---- activation (R2A-1) -----------------------------------------------------
+//
+// THE WHOLE FACT, and nothing beside it. `zen.Activated` means exactly:
+//
+//     "The lifecycle operator that sent this message has successfully committed a
+//      new code incarnation at this address."
+//
+// It does NOT mean the weave is healthy, ready for domain traffic, holder of a
+// role, that state was preserved, that a predecessor existed, that a replacement
+// was graceful, that external resources are available, that it should start a
+// loop, that it should repeat prior work, or that the system is ready. Those are
+// larger claims; none of them is smuggled in here. The power of this shape is how
+// little it claims — do not grow it to carry tomorrow's lifecycle.
+//
+// PARTICIPATION IS DECLARED, NOT ATTEMPTED. A weave opts in by listing this shape
+// in its accepted schemas; a sender asks first and stays silent otherwise. A
+// non-participant hears nothing and produces no refusal — the optional-
+// participation floor, exactly as with the letter's PrepareShutdown.
+//
+// IDENTITY IS **bus-stamped sender + sequence**. `sequence` is monotonic within
+// the revived lineage of the sender that emitted it; it is NOT claimed unique
+// across hosts, control weaves, or histories, and a naked number is not an
+// identity. The stamped sender stays load-bearing.
+//
+// THE CONSUMER'S OBLIGATION follows from that, and it is the consumer's, not the
+// substrate's: this is an ordinary registered shape, so any weave granted it can
+// emit one — exactly as any weave granted `zen.Ack` can emit an Ack. A consumer
+// that acts on an activation must therefore check the BUS-STAMPED SENDER (the one
+// field a sender cannot forge) against the operator it actually trusts, and treat
+// a sequence that is not newer than the last one from that sender as a duplicate.
+// Trusting a bare `sequence` because it looked plausible is the same mistake as
+// trusting an unsolicited standard reply, and has the same answer.
+//
+// NO ROLE FIELD: a loaded weave may hold none, a weave already knows which
+// message it received, and role ownership is separate live composition truth —
+// a payload field would invite trusting metadata over the bus and the live role
+// map. NO CAUSE FIELD: "load"/"reload"/"swap"/"recovery" is vocabulary no proven
+// consumer needs yet; the only proven fact is that a new incarnation committed.
+//
+// WHO SENDS IT, TODAY: the kernel's control door (kernel/control.hpp), on a
+// successful LoadLibrary or ReloadLibrary — the ordinary participant sitting on
+// the kernel operation, reachable by the default Manager and by any explicitly
+// authorized alternate operator alike. Host-native mount<T>() weaves are NOT
+// covered. What a participant should DO on activation is its own business and no
+// part of this shape (Zengine's Timer is the first intended consumer — R2A-2).
+struct Activated {
+    /// Positive, and newer than the previous activation from the same revived
+    /// lineage. Never reused by that lineage.
+    std::int64_t sequence;
+
+    using ZenSelf = Activated;
+    static constexpr const char* zen_name = "zen.Activated";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(sequence)); }
 };
 
 /// Write one already-built Value into a letter item. The predecessor's side of

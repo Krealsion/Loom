@@ -97,6 +97,13 @@ zen_add_test_weave(zen_test_weave_bequeaths ZEN_WEAVE_BEQUEATHS)
 zen_add_test_weave(zen_test_weave_heir ZEN_WEAVE_HEIR)
 # ...and one that declares the ceremony then never answers: the honest wedge.
 zen_add_test_weave(zen_test_weave_wedged ZEN_WEAVE_WEDGED)
+# R2A-1 (activation): a participant that declares zen.Activated and records what it
+# was told, its identical "rebuild" for reload-in-place, and a DRIFT twin whose state
+# schema is identical but whose door contract has one extra shape — the negative that
+# proves reload compares the whole contract, not just the state.
+zen_add_test_weave(zen_test_weave_activates ZEN_WEAVE_ACTIVATES)
+zen_add_test_weave(zen_test_weave_activates_b ZEN_WEAVE_ACTIVATES)
+zen_add_test_weave(zen_test_weave_activates_drift ZEN_WEAVE_ACTIVATES ZEN_WEAVE_ACTIVATES_DRIFT)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
@@ -104,7 +111,8 @@ target_compile_options(zen_test_badabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
 
 set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
-    zen_test_weave_wedged zen_test_badabi)
+    zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
+    zen_test_weave_activates_drift zen_test_badabi)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -117,6 +125,9 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_BEQUEATHS=\"$<TARGET_FILE:zen_test_weave_bequeaths>\""
     "ZEN_SO_HEIR=\"$<TARGET_FILE:zen_test_weave_heir>\""
     "ZEN_SO_WEDGED=\"$<TARGET_FILE:zen_test_weave_wedged>\""
+    "ZEN_SO_ACTIVATES=\"$<TARGET_FILE:zen_test_weave_activates>\""
+    "ZEN_SO_ACTIVATES_B=\"$<TARGET_FILE:zen_test_weave_activates_b>\""
+    "ZEN_SO_ACTIVATES_DRIFT=\"$<TARGET_FILE:zen_test_weave_activates_drift>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)

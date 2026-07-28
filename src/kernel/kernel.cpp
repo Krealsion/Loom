@@ -4,12 +4,15 @@
 #include <zen/serialize.hpp>
 #include <zen/value.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -68,6 +71,45 @@ void lib_close(void* handle) {
 
 std::string_view as_view(const std::uint8_t* data, std::size_t len) {
     return std::string_view(reinterpret_cast<const char*>(data), len);
+}
+
+// Does a published accept-set declare this shape? The one place the question is
+// answered, so query_role and accepts() cannot drift apart on what "declares"
+// means. (name, version) is the identity routing selects a door by.
+bool declares(const std::vector<std::shared_ptr<const Schema>>& accept,
+              const std::string& shape_name, std::uint32_t shape_version) {
+    for (const auto& s : accept) {
+        if (s && s->name() == shape_name && s->version() == shape_version) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The comparable identity of one published schema. Reload's accepted-contract
+// check compares SETS of these: name and version are what routing selects on,
+// content_id is what the shape actually says.
+using SchemaIdentity = std::tuple<std::string, std::uint32_t, ContentId>;
+
+std::vector<SchemaIdentity> identities(const std::vector<std::shared_ptr<const Schema>>& schemas) {
+    std::vector<SchemaIdentity> out;
+    out.reserve(schemas.size());
+    for (const auto& s : schemas) {
+        if (s) {
+            out.emplace_back(s->name(), s->version(), s->content_id());
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// Exact set equality, order-independent: same count, nothing missing, nothing
+// added, nothing changed behind the same (name, version). Sorting rather than
+// hashing keeps duplicates significant — two declarations of one shape is not
+// the same contract as one, and pretending otherwise would be a quiet widening.
+bool same_accepted_contract(const std::vector<std::shared_ptr<const Schema>>& a,
+                            const std::vector<std::shared_ptr<const Schema>>& b) {
+    return identities(a) == identities(b);
 }
 
 // Resolve and validate the descriptor exported by a loaded library.
@@ -404,9 +446,11 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         return {false, false, false, "library create() returned null"};
     }
 
-    std::shared_ptr<const Schema> new_state;
+    // Reconstruct the candidate's WHOLE manifest once: both halves of the
+    // contract are checked from it, and neither check may commit anything.
+    Manifest cand;
     try {
-        new_state = reconstruct(new_abi, new_inst).state;
+        cand = reconstruct(new_abi, new_inst);
     } catch (const std::exception& e) {
         new_abi->destroy(new_inst);
         lib_close(new_lib);
@@ -414,15 +458,30 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
 
     const std::shared_ptr<const Schema>& old_state = rec.adapter->state_schema();
-    if (new_state->name() != old_state->name() || new_state->version() != old_state->version() ||
-        new_state->content_id() != old_state->content_id()) {
+    if (cand.state->name() != old_state->name() ||
+        cand.state->version() != old_state->version() ||
+        cand.state->content_id() != old_state->content_id()) {
         new_abi->destroy(new_inst);
         lib_close(new_lib);
         return {true, false, true, "state schema version mismatch; reload refused"};
     }
 
+    // The second half of the contract: the doors. Compared against what the BUS
+    // published for the incumbent — the same list delivery matches against and
+    // the same list commit will silently keep using — so equality here is what
+    // makes the retained set true rather than merely retained. Refused before
+    // rebind: the incumbent's instance, library, state, WeaveId and role are all
+    // still untouched at this point.
+    if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
+        new_abi->destroy(new_inst);
+        lib_close(new_lib);
+        return {true, false, false, "accepted schema contract mismatch; reload refused"};
+    }
+
     // Commit: swap the library behind the same adapter/WeaveId. rebind destroys
-    // the old instance while the old library is still open.
+    // the old instance while the old library is still open. From here the
+    // incumbent is gone — a revive failure below leaves the weave unavailable
+    // rather than rolling back (the honest edge named in the header; R2B).
     void* old_lib = rec.lib;
     rec.adapter->rebind(new_abi, new_inst);
     rec.abi = new_abi;
@@ -491,19 +550,20 @@ Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string&
             continue;
         }
         out.holder = entry.second.id;
-        // The accept-set the bus published for this weave at registration — the
-        // same list the kernel reconstructed from the library's own manifest, and
-        // the same list delivery is matched against. Asking the bus rather than
-        // caching it here keeps one truth.
-        for (const auto& s : bus_.accepted_schemas(entry.second.id)) {
-            if (s && s->name() == shape_name && s->version() == shape_version) {
-                out.accepts = true;
-                break;
-            }
-        }
+        out.accepts = accepts(entry.second.id, shape_name, shape_version);
         return out;
     }
     return out;
+}
+
+bool Kernel::accepts(loom::WeaveId id, const std::string& shape_name,
+                     std::uint32_t shape_version) const {
+    // The accept-set the bus published for this weave at registration — the same
+    // list the kernel reconstructed from the library's own manifest, and the same
+    // list delivery is matched against. Asking the bus rather than caching it
+    // here keeps one truth; an id the bus does not know answers with an empty
+    // set, which is the clean false this must give.
+    return declares(bus_.accepted_schemas(id), shape_name, shape_version);
 }
 
 bool Kernel::is_loaded(const std::string& name) const { return libs_.count(name) != 0; }

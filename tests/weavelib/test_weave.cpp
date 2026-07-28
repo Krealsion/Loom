@@ -24,6 +24,15 @@
 //   ZEN_WEAVE_HEIR                — a DIFFERENTLY-SHAPED successor (Counter v2) that
 //                                   claims by role on first wake and folds what it
 //                                   inherits into its own count (1b: the heir)
+//   ZEN_WEAVE_ACTIVATES           — accepts zen.Activated and records, IN ITS OWN
+//                                   PERSISTED STATE (Counter v3), how many it has
+//                                   handled and the newest sequence (R2A-1: the
+//                                   activation participant, observed through the
+//                                   ordinary snapshot path)
+//   ZEN_WEAVE_ACTIVATES_DRIFT     — the same weave with the SAME state schema and one
+//                                   EXTRA accepted shape, so a reload between the two
+//                                   differs in nothing but the door contract (R2A-1:
+//                                   the accepted-schema-drift negative)
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
@@ -92,8 +101,22 @@ std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
     return s;
 }
+[[maybe_unused]] std::shared_ptr<const Schema> greet_schema() { // only the accepted-drift variant
+    static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
+    return s;
+}
 std::shared_ptr<const Schema> counter_schema() {
-#if defined(ZEN_WEAVE_STATE_V2) || defined(ZEN_WEAVE_HEIR)
+#if defined(ZEN_WEAVE_ACTIVATES)
+    // Counter v3 — the activation participant's own bookkeeping, persisted like
+    // any other state so a reload TRANSPLANTS it. That is what makes "the state
+    // crossed the reload before the new activation arrived" observable rather
+    // than asserted: a fresh instance would read 0 activations.
+    static const auto s = SchemaBuilder("Counter", 3)
+                              .field("count", Kind::Int)
+                              .field("activations", Kind::Int)
+                              .field("last_activation", Kind::Int)
+                              .build();
+#elif defined(ZEN_WEAVE_STATE_V2) || defined(ZEN_WEAVE_HEIR)
     static const auto s = SchemaBuilder("Counter", 2)
                               .field("count", Kind::Int)
                               .field("note", Kind::Text, /*required=*/false)
@@ -114,6 +137,13 @@ public:
         return {ping_schema(), schema_of<loom::PrepareShutdown>()};
 #elif defined(ZEN_WEAVE_HEIR)
         return {ping_schema(), schema_of<loom::Bequest>(), schema_of<loom::Refused>()};
+#elif defined(ZEN_WEAVE_ACTIVATES_DRIFT)
+        // Declaring zen.Activated IS the opt-in, exactly as PrepareShutdown is
+        // for the letter — plus ONE extra door. Same state schema, different
+        // contract: the only thing a reload from the plain variant changes.
+        return {ping_schema(), schema_of<loom::Activated>(), greet_schema()};
+#elif defined(ZEN_WEAVE_ACTIVATES)
+        return {ping_schema(), schema_of<loom::Activated>()};
 #else
         return {ping_schema()};
 #endif
@@ -164,6 +194,16 @@ public:
             claimed_ = true;
             bus.send_to_role(loom::kManagerRole,
                              Message(loom::to_value(loom::ClaimBequest{"spawner"})));
+        }
+#elif defined(ZEN_WEAVE_ACTIVATES)
+        if (in.payload.schema().name() == loom::Activated::zen_name) {
+            // The whole participation: note that it happened and which one it
+            // was. Deliberately nothing else — no loop is started, no prior work
+            // repeated, nothing announced. Activation is a fact, not an order.
+            (void)bus;
+            ++activations_;
+            last_activation_ = in.payload.get("sequence")->as_int();
+            return; // never falls through to the Ping path below ('seq' is absent)
         }
 #endif
         const std::int64_t seq = in.payload.get("seq")->as_int();
@@ -308,6 +348,10 @@ public:
 #ifndef ZEN_WEAVE_MALFORMED_SNAPSHOT
         v.set("count", Cell::integer(count_));
 #endif
+#if defined(ZEN_WEAVE_ACTIVATES)
+        v.set("activations", Cell::integer(activations_));
+        v.set("last_activation", Cell::integer(last_activation_));
+#endif
         return v;
     }
 
@@ -337,6 +381,10 @@ public:
         count_ = 0;
 #else
         count_ = state.get("count")->as_int();
+#if defined(ZEN_WEAVE_ACTIVATES)
+        activations_ = state.get("activations")->as_int();
+        last_activation_ = state.get("last_activation")->as_int();
+#endif
 #endif
     }
 
@@ -344,6 +392,10 @@ private:
     std::int64_t count_ = 0;
 #if defined(ZEN_WEAVE_HEIR)
     bool claimed_ = false; // transient: waking asks once, and only once
+#endif
+#if defined(ZEN_WEAVE_ACTIVATES)
+    std::int64_t activations_ = 0;      // how many zen.Activated this incarnation has handled
+    std::int64_t last_activation_ = 0;  // the newest sequence it was told
 #endif
 };
 
