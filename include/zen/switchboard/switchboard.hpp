@@ -108,6 +108,14 @@ public:
 
     Switchboard(const Switchboard&) = delete;
     Switchboard& operator=(const Switchboard&) = delete;
+    /// NOT MOVABLE, and now said out loud rather than left as a side effect of
+    /// the deleted copy. A Switchboard IS an authority domain: weaves hold
+    /// references into it, its identity anchors every authority it ever issued,
+    /// and "the same Loom, at a different address" is not a state this design
+    /// has a meaning for. Deleting the move makes the meaningless case
+    /// unrepresentable instead of accidentally supported.
+    Switchboard(Switchboard&&) = delete;
+    Switchboard& operator=(Switchboard&&) = delete;
 
     /// Remove a Weave and hand its ownership back to the caller (or nullptr if
     /// the id is unknown). Used by hosts that must destroy a Weave — and any
@@ -399,13 +407,35 @@ private:
     /// with no instance and no host involvement, and — given an exact grant for
     /// `zen.Activated` — manufacture a lifecycle fact for another incarnation.
     /// A private constructor behind a reachable factory protects nothing.
-    LifecycleAuthority lifecycle_authority() noexcept { return LifecycleAuthority{}; }
+    /// R2B-1b: the authority carries WHICH board issued it. Minting from any
+    /// board is still legal — anyone may own a Switchboard — but the result is
+    /// only spendable through the board it names.
+    LifecycleAuthority lifecycle_authority() noexcept { return LifecycleAuthority{identity_}; }
+
+    /// Was this authority issued by THIS Loom, and is that Loom still alive?
+    ///
+    /// The check lives inside trusted Switchboard machinery, never in consumer
+    /// code — a consumer holding an authority has no way to ask the question and
+    /// no business answering it. `lock()` failing is a destroyed issuer, which is
+    /// the lifetime rule: an authority lasts exactly as long as the Loom that
+    /// issued it.
+    bool issued_here(const LifecycleAuthority& authority) const noexcept {
+        const std::shared_ptr<const LoomIdentity> issuer = authority.issuer_.lock();
+        return issuer != nullptr && issuer == identity_;
+    }
 
     /// The ONE expression in the system that yields a LifecycleAuthority. It is
     /// defined in `zen/host/lifecycle_wiring.hpp` — a host-wiring header that no
     /// weave-authoring header includes — so the name is not even visible to
     /// ordinary weave source, and the object it needs is one a weave never has.
     friend LifecycleAuthority host_lifecycle_authority(Switchboard& bus);
+
+    /// This Loom's own identity — created with the board, destroyed with it, and
+    /// shared with nothing except the authorities it issues (weakly). Two boards
+    /// alive at once hold two distinct identities; a board that dies takes its
+    /// identity's control block with it, so an authority from a dead world can
+    /// never be revived by a later board landing on the same address.
+    std::shared_ptr<const LoomIdentity> identity_;
 
     bool in_dispatch_ = false;
     bool stop_requested_ = false;

@@ -29,8 +29,9 @@
 
 #include <cstdint>
 #include <memory>
-#include <type_traits>
+#include <new> // placement new: the storage-reuse pin needs a GUARANTEED address collision
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -869,6 +870,272 @@ TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnatio
 
     // The legitimate answer was accepted exactly once, and nothing reopened it.
     CHECK(heard.attested_count() == 1);
+}
+
+
+// ============================================================================
+// R2B-1b — every Loom is its own authority domain
+// ============================================================================
+//
+// R2B-1a required a `Switchboard&` to mint an authority. It did not make the
+// result mean anything about WHICH Switchboard — the authority was an empty
+// marker, so every board honoured every board's. The attack below is therefore
+// not a compile-surface question at all: it is entirely legal to write, it
+// compiles, and it must fail at RUNTIME.
+
+namespace {
+
+/// "Attack this target with this sequence."
+struct DecoyAttack {
+    std::int64_t target = 0;
+    std::int64_t sequence = 0;
+    ZEN_SHAPE(DecoyAttack, 1, ZEN_FIELD(target), ZEN_FIELD(sequence));
+};
+
+/// THE DECOY-BOARD ATTACK, by an ordinary native weave.
+///
+/// It does everything the threat model permits and nothing it forbids: it
+/// includes the host-wiring header (any code may), constructs its OWN
+/// Switchboard (any code may — a Switchboard is an ordinary object), and mints a
+/// completely genuine LifecycleAuthority from it through the same public
+/// function the real host uses. Then it spends that authority through the REAL
+/// delivery's `Mail`.
+///
+/// Its grant permits exactly `zen.Activated`, so nothing here is refused for
+/// want of capability. The authority is not a forgery — it is real, and real
+/// somewhere else.
+class DecoyBoardAttacker : public WeaveBase<DecoyBoardAttacker, ProvState, Accept<DecoyAttack>,
+                                            Emit<loom::Activated>> {
+public:
+    void on(const DecoyAttack& a, Mail& mail) {
+        ++state_.n;
+        // A second Loom, owned entirely by this weave.
+        Switchboard decoy;
+        // A real authority — for that Loom.
+        const LifecycleAuthority forged = host_lifecycle_authority(decoy);
+        // Spent through THIS Loom's Mail.
+        mail.announce_lifecycle(forged, WeaveId{static_cast<std::uint64_t>(a.target)},
+                                loom::Activated{a.sequence}, a.sequence);
+    }
+};
+
+/// The same attack, but with an authority whose issuing board has already been
+/// DESTROYED by the time it is spent — the lifetime half of the same rule.
+class DeadBoardAttacker : public WeaveBase<DeadBoardAttacker, ProvState, Accept<DecoyAttack>,
+                                           Emit<loom::Activated>> {
+public:
+    void on(const DecoyAttack& a, Mail& mail) {
+        ++state_.n;
+        LifecycleAuthority stale = [] {
+            Switchboard shortlived;
+            return host_lifecycle_authority(shortlived);
+        }(); // the board dies here; the authority outlives it as an object
+        mail.announce_lifecycle(stale, WeaveId{static_cast<std::uint64_t>(a.target)},
+                                loom::Activated{a.sequence}, a.sequence);
+    }
+};
+
+/// Counts refusals of `zen.Activated`, so "refused" is measured rather than
+/// inferred from an absence.
+struct ActivationTap {
+    std::int64_t delivered = 0;
+    std::int64_t capability_denied = 0;
+    std::int64_t other_refusals = 0;
+
+    void arm(Switchboard& bus) {
+        bus.add_observer([this](const BusEvent& ev) {
+            if (ev.schema_name != std::string_view(loom::Activated::zen_name)) {
+                return;
+            }
+            if (ev.kind == EventKind::Delivered) {
+                ++delivered;
+            } else if (ev.kind == EventKind::Refused) {
+                if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
+                    ++capability_denied;
+                } else {
+                    ++other_refusals;
+                }
+            }
+        });
+    }
+};
+
+} // namespace
+
+TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy board — and the "
+          "running Loom refuses it, because it belongs to another world") {
+    Switchboard bus;
+    ActivationTap tap;
+    tap.arm(bus);
+    ActivationLog log;
+    const WeaveId victim = mount<ActivationConsumer>(bus, log);
+    const WeaveId attacker = mount<DecoyBoardAttacker>(bus);
+
+    // Its grant really does permit the shape — so what follows is a refusal of
+    // AUTHORITY, not of capability, routing, or conformance.
+    const Grant g = emit_default_grant(*static_cast<DecoyBoardAttacker*>(bus.weave(attacker)));
+    CHECK(g.permits(loom::Activated::zen_name, loom::Activated::zen_version, victim));
+
+    bus.send(attacker, Message(to_value(DecoyAttack{static_cast<std::int64_t>(victim.value), 1})));
+    bus.pump();
+
+    // Nothing was delivered at all: the attestation was refused where it was
+    // asked for, not swallowed quietly at the far end.
+    CHECK(tap.delivered == 0);
+    CHECK(tap.capability_denied == 1); // visible on the tap, at the same altitude as a grant refusal
+    CHECK(tap.other_refusals == 0);
+
+    // And the victim's own view agrees: nothing arrived, nothing was accepted,
+    // no lineage was installed.
+    CHECK(log.delivered == 0);
+    CHECK(log.accepted == 0);
+    CHECK(log.lineage == 0);
+
+    // THE POSITIVE CONTROL. Same bus, same victim, same target, same sequence —
+    // an authority issued by THIS board. Without this the checks above would be
+    // satisfied just as well by an attacker that never fired.
+    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
+    bus.pump();
+    CHECK(tap.delivered == 1);
+    CHECK(log.accepted == 1);
+    CHECK(log.lineage == 1);
+}
+
+TEST_CASE("R2B-1b: an authority whose issuing Loom has been destroyed cannot be spent — the "
+          "lifetime rule, not a special case") {
+    Switchboard bus;
+    ActivationTap tap;
+    tap.arm(bus);
+    ActivationLog log;
+    const WeaveId victim = mount<ActivationConsumer>(bus, log);
+    const WeaveId attacker = mount<DeadBoardAttacker>(bus);
+
+    bus.send(attacker, Message(to_value(DecoyAttack{static_cast<std::int64_t>(victim.value), 1})));
+    bus.pump();
+
+    CHECK(tap.delivered == 0);
+    CHECK(tap.capability_denied == 1);
+    CHECK(log.accepted == 0);
+
+    // Destroying somebody else's board did nothing to THIS one's authority.
+    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
+    bus.pump();
+    CHECK(log.accepted == 1);
+}
+
+TEST_CASE("R2B-1b: authority does not follow a board's ADDRESS — reusing a dead Loom's storage "
+          "cannot revive it") {
+    // THE CASE THAT JUSTIFIES THE REPRESENTATION, deterministically rather than
+    // by argument. "Identify a board by its address" is the obvious design and
+    // the wrong one: destroy a board, construct another in the same storage, and
+    // an authority from the dead world would validate against the living one.
+    //
+    // Placement-new makes the address collision GUARANTEED instead of hoped for,
+    // which is what turns this from a comment into a pin. (The two boards'
+    // identity OBJECTS are separate heap allocations; only the boards share an
+    // address — exactly the confusion a raw board pointer would fall for.)
+    alignas(Switchboard) static unsigned char storage[sizeof(Switchboard)];
+
+    Switchboard* first = new (static_cast<void*>(storage)) Switchboard();
+    const LifecycleAuthority from_first = host_lifecycle_authority(*first);
+    first->~Switchboard();
+
+    Switchboard* second = new (static_cast<void*>(storage)) Switchboard();
+    REQUIRE(static_cast<void*>(second) == static_cast<void*>(storage)); // same address, proven
+
+    ActivationTap tap;
+    tap.arm(*second);
+    ActivationLog log;
+    const WeaveId victim = mount<ActivationConsumer>(*second, log);
+    const WeaveId smuggler = mount<Operator>(*second, from_first);
+
+    second->send(smuggler,
+                 Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
+    second->pump();
+    CHECK(tap.delivered == 0);
+    CHECK(tap.capability_denied == 1);
+    CHECK(log.accepted == 0);
+
+    // THE POSITIVE CONTROL, on this very board at this very address.
+    const WeaveId op = mount<Operator>(*second, host_lifecycle_authority(*second));
+    second->send(op,
+                 Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
+    second->pump();
+    CHECK(log.accepted == 1);
+
+    second->~Switchboard();
+}
+
+TEST_CASE("R2B-1b: two worlds, the same logical ids and the same sequences — and authority does "
+          "not cross between them") {
+    // Two independent Looms. No world/fork machinery: two Switchboards IS two
+    // worlds, which is exactly the point being made.
+    Switchboard world_a;
+    Switchboard world_b;
+    ActivationLog log_a;
+    ActivationLog log_b;
+
+    // Mounted in the same order in both, so the WeaveIds MATCH across worlds —
+    // the confusion this case exists to rule out.
+    const WeaveId victim_a = mount<ActivationConsumer>(world_a, log_a);
+    const WeaveId victim_b = mount<ActivationConsumer>(world_b, log_b);
+    REQUIRE(victim_a.value == victim_b.value); // identical logical identity
+
+    // Each world's operator holds ITS OWN board's authority...
+    const WeaveId op_a = mount<Operator>(world_a, host_lifecycle_authority(world_a));
+    const WeaveId op_b = mount<Operator>(world_b, host_lifecycle_authority(world_b));
+    // ...and a smuggler in each world holding the OTHER world's authority.
+    const WeaveId smuggler_a = mount<Operator>(world_a, host_lifecycle_authority(world_b));
+    const WeaveId smuggler_b = mount<Operator>(world_b, host_lifecycle_authority(world_a));
+
+    const auto attest = [](Switchboard& bus, WeaveId op, WeaveId target, std::int64_t seq) {
+        bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(target.value), seq,
+                                                  seq})));
+        bus.pump();
+    };
+
+    // Authority A works through board A; authority B works through board B.
+    attest(world_a, op_a, victim_a, 1);
+    attest(world_b, op_b, victim_b, 1);
+    CHECK(log_a.accepted == 1);
+    CHECK(log_b.accepted == 1);
+    CHECK(log_a.lineage == 1);
+    CHECK(log_b.lineage == 1);
+
+    // Authority B fails through board A, and authority A fails through board B —
+    // with the SAME target id and the SAME next sequence in both worlds, so
+    // nothing here can be passing for an unrelated reason.
+    attest(world_a, smuggler_a, victim_a, 2);
+    attest(world_b, smuggler_b, victim_b, 2);
+    CHECK(log_a.accepted == 1); // unchanged
+    CHECK(log_b.accepted == 1);
+    CHECK(log_a.lineage == 1);
+    CHECK(log_b.lineage == 1);
+
+    // ...and the legitimate operators still work afterwards, so the refusals
+    // above are refusals rather than a wedged world.
+    attest(world_a, op_a, victim_a, 2);
+    attest(world_b, op_b, victim_b, 2);
+    CHECK(log_a.accepted == 2);
+    CHECK(log_b.accepted == 2);
+}
+
+TEST_CASE("R2B-1b: a Switchboard is an authority domain, and is deliberately neither copyable "
+          "nor movable") {
+    // "The same Loom, at a different address" is not a state this design has a
+    // meaning for: weaves hold references into a board and its identity anchors
+    // every authority it ever issued. The meaningless case is unrepresentable
+    // rather than accidentally supported.
+    static_assert(!std::is_copy_constructible_v<Switchboard>);
+    static_assert(!std::is_copy_assignable_v<Switchboard>);
+    static_assert(!std::is_move_constructible_v<Switchboard>);
+    static_assert(!std::is_move_assignable_v<Switchboard>);
+
+    // And an authority is copyable — that is how the control door holds its own.
+    static_assert(std::is_copy_constructible_v<LifecycleAuthority>);
+    CHECK(true); // the assertions above are the case
 }
 
 } // TEST_SUITE
