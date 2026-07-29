@@ -89,15 +89,42 @@ private:
 /// The right to attach a lifecycle attestation — a capability OBJECT, not a
 /// grant and not a payload flag.
 ///
-/// Ordinary weave code cannot construct one: the default constructor is private
-/// and the Switchboard is its only minter. A weave holds one because the HOST
-/// handed it one at mount, exactly as the kernel's control door holds a Kernel
-/// reference. Copying an authority you were given is ordinary (it is yours);
-/// there is no path from "I know the shape" to "I hold the authority".
+/// THE BOUNDARY, STATED WHOLE. "The constructor is private" is not the
+/// protection and never was — a private constructor behind a reachable factory
+/// protects nothing, which is exactly the hole R2B-1 shipped and R2B-1a closes.
+/// The durable statement is:
 ///
-/// It does NOT widen the holder's grant. An attested send is still authorized
-/// against the sender's ordinary grant at delivery, so the authority answers
-/// "may this message carry Loom's word?" and never "may this weave send it?".
+///   Lifecycle provenance can be attached only by trusted host/kernel
+///   infrastructure holding an authority that is unavailable through the
+///   supported weave-authoring surface.
+///
+/// Two walls hold that up, and both are the compiler's rather than a comment's:
+///
+///   1. THE MINT IS NON-STATIC AND PRIVATE ON THE SWITCHBOARD. Minting requires
+///      the Switchboard ITSELF — and a weave never holds one. It is handed a
+///      `Bus&`, and `Bus` has no such member. This is the same line that already
+///      separates `send` (root) from `send_as` (a weave speaking as itself): the
+///      Switchboard *is* the host's authority in this codebase, and lifecycle
+///      minting now sits on the correct side of a boundary that already existed.
+///   2. THE ONLY EXPRESSION THAT REACHES IT lives in a host-wiring header
+///      (`zen/host/lifecycle_wiring.hpp`) that no weave-authoring header
+///      includes, and is the Switchboard's one friend.
+///
+/// So the three tiers stay distinct, and the third is not implied by the first
+/// two:
+///
+///   PUBLIC SHAPE       ordinary code may represent `zen.Activated`
+///   EXACT GRANT        ordinary code may be permitted to EMIT it
+///   LIFECYCLE AUTHORITY only Loom infrastructure may ATTEST it as a lifecycle fact
+///
+/// A grant to emit the shape is intentionally insufficient. Copying an authority
+/// you were handed is ordinary — it is yours — and there is no path from "I know
+/// the shape" or "I may send it" to "I hold the authority".
+///
+/// It does NOT widen the holder's grant either. An attested send is still
+/// authorized against the sender's ordinary grant at delivery, so the authority
+/// answers "may this message carry Loom's word?" and never "may this weave send
+/// it?".
 class LifecycleAuthority {
 public:
     LifecycleAuthority(const LifecycleAuthority&) = default;

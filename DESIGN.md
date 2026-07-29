@@ -2726,10 +2726,48 @@ Two ways to obtain one, and neither is a grant:
   correlation (the request's own), so an answer cannot be aimed elsewhere or
   relabelled.
 - **`mail.announce_lifecycle(authority, target, msg, sequence)`** — requires a
-  `LifecycleAuthority`, a capability object whose only constructor is private to
-  the Switchboard. A weave holds one because the HOST handed it one at mount, the
+  `LifecycleAuthority`. A weave holds one because the HOST handed it one at mount, the
   way the kernel's control door holds a `Kernel&`. The attestation is bound to
   the target and the sequence given to THIS call, not read out of the payload.
+
+### Where lifecycle authority can come from (R2B-1a)
+
+R2B-1 shipped this as "the constructor is private" — which is **not** the boundary, and was
+not one: the mint was also a **public static** on `Switchboard`, reachable from every weave
+that includes `zen/switchboard.hpp`, with no instance and no host involved. A private
+constructor behind a reachable factory protects nothing. The durable statement is:
+
+> Lifecycle provenance can be attached only by trusted host/kernel infrastructure holding an
+> authority that is **unavailable through the supported weave-authoring surface**.
+
+Two walls, both the compiler's:
+
+1. **The mint is private and NON-STATIC on `Switchboard`.** Minting requires the Switchboard
+   itself — the host's own object. A weave never holds one; it is handed a `Bus&`, and `Bus`
+   has no such member. This is the line the codebase already draws between `send` (root) and
+   `send_as`, and lifecycle minting now sits on the correct side of it.
+2. **The one expression that reaches it** is `loom::host_lifecycle_authority(Switchboard&)`,
+   defined in `zen/host/lifecycle_wiring.hpp` and the Switchboard's only friend.
+
+**The audit, checked rather than asserted** — compiling `<zen/kernel/export.hpp>` +
+`<zen/weave.hpp>` + `<zen/switchboard.hpp>` (the whole authoring surface, a superset of what a
+loaded weave sees) never reaches `lifecycle_wiring.hpp` or `kernel/control.hpp`:
+
+| | header | who |
+|---|---|---|
+| **declares** provenance | `zen/switchboard/message.hpp` | everyone (it is a delivery fact) |
+| **inspects** it | `zen/weave/weave.hpp` (`Mail::answers_ask`, `lifecycle_attested`) | any weave — reading Loom's word is ordinary |
+| **validates** it | `src/switchboard/switchboard.cpp` | the bus alone, at enqueue and delivery |
+| **mints** it | `zen/host/lifecycle_wiring.hpp` → private `Switchboard::lifecycle_authority()` | host wiring only: `mount_control`, host programs, and test harnesses (which *are* hosts — they own the bus) |
+
+A weave may freely **inspect** the provenance it receives. It may not **create** it. Reading
+Loom's word and speaking as Loom are different acts, and only the second is gated.
+
+The compile half is pinned, not merely documented: the `provenance` suite asserts — through
+concepts, so the questions are asked in an immediate context rather than as hard errors — that
+neither `Bus`, `Mail`, nor `Switchboard` exposes a minting expression, that the static factory
+is gone, and that `LifecycleAuthority` is not default-constructible. A source grep would miss a
+new spelling; the compiler does not.
 
 Neither widens a grant. An attested send is still authorized against the sender's
 ordinary grant at delivery: the authority answers "may this message carry Loom's
