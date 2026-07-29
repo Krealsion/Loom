@@ -1608,7 +1608,7 @@ TEST_CASE("R2B-1 B: an attestation minted for one sequence cannot authenticate a
     // A genuine authority, used dishonestly: Loom is asked to attest sequence 7
     // while the payload claims 8. Loom records what it was asked to attest, so
     // the two disagree and the consumer sees it.
-    const WeaveId rogue = mount<RogueOperator>(r.bus, Switchboard::lifecycle_authority());
+    const WeaveId rogue = mount<RogueOperator>(r.bus, host_lifecycle_authority(r.bus));
     r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(live.value), 7, 8})));
     r.bus.pump();
     CHECK(activation_log(r.bus, live).activations == 1); // unchanged
@@ -1640,7 +1640,7 @@ TEST_CASE("R2B-1 C: an attestation is bound to the incarnation it names — anno
     // express "a proof for a, spent on b": the target is an argument to the
     // minting call, so the binding is not a check that could be skipped — it is
     // the only thing that decides where the attested message goes.
-    const WeaveId rogue = mount<RogueOperator>(r.bus, Switchboard::lifecycle_authority());
+    const WeaveId rogue = mount<RogueOperator>(r.bus, host_lifecycle_authority(r.bus));
     r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(a.value), 5, 5})));
     r.bus.pump();
     CHECK(activation_log(r.bus, a).activations == 2);

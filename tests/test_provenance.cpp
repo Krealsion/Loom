@@ -22,11 +22,14 @@
 
 #include "doctest.h"
 
+#include <zen/host/lifecycle_wiring.hpp> // the harness IS a host; a weave is not
 #include <zen/switchboard.hpp>
 #include <zen/weave.hpp>
+#include <zen/weave/lifecycle.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <type_traits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -277,6 +280,69 @@ struct RefusalTap {
 
 constexpr const char* kProvRole = "prov.steward";
 constexpr std::uint64_t kPublicCorrelation = 0xC1A1; // as public as a constant gets
+
+// ---- the compile-surface half of the authority proof (R2B-1a) -----------------
+//
+// The runtime cases below can only ever show that the strongest attack a weave
+// can COMPILE achieves nothing. They cannot show that a stronger one is
+// unwriteable — and that is the actual claim, so it is asserted here, at compile
+// time, over the exact headers a weave author is supported in using.
+//
+// This TU includes <zen/switchboard.hpp> and <zen/weave.hpp>: the whole
+// weave-authoring surface for a native weave, and a superset of what a loaded
+// weave library gets (which sees no Switchboard at all). If any of these
+// expressions became well-formed, the corresponding static_assert fires and this
+// file stops compiling. A source-text grep would not catch a new spelling; this
+// does, because it asks the compiler the question directly.
+//
+// R2B-1 shipped `Switchboard::lifecycle_authority()` as a PUBLIC STATIC, so the
+// third assertion below was false — no instance needed, no host involved, and a
+// weave with an exact `zen.Activated` grant could manufacture a lifecycle fact
+// for someone else's incarnation. These are the pins that keep it closed.
+
+/// The questions have to be asked THROUGH A TEMPLATE. A `requires` expression
+/// only swallows an invalid expression inside an immediate context, so asking it
+/// of a concrete type at namespace scope is a hard compile error rather than a
+/// `false` — which would make this file fail to build for the very reason it is
+/// meant to assert. Access checking IS part of that immediate context, so a
+/// private member reads as "cannot", exactly as a missing one does.
+template <class T>
+concept MintsByMemberCall = requires(T& t) { t.lifecycle_authority(); };
+template <class T>
+concept MintsByAnyName = requires(T& t) { t.mint_lifecycle_authority(); };
+template <class T>
+concept MintsByStaticCall = requires { T::lifecycle_authority(); };
+
+/// A weave's own doors: a `Bus&` in `handle`, a `Mail&` in a maker's `on`.
+/// Neither may offer a way to mint, under this name or another.
+static_assert(!MintsByMemberCall<loom::Bus>,
+              "R2B-1a: a weave's Bus must never expose lifecycle minting");
+static_assert(!MintsByMemberCall<loom::Mail>,
+              "R2B-1a: Mail must never expose lifecycle minting");
+static_assert(!MintsByAnyName<loom::Mail>,
+              "R2B-1a: Mail must never expose lifecycle minting under another name");
+
+/// The static factory R2B-1 actually shipped: no instance, no host, no wall.
+static_assert(!MintsByStaticCall<loom::Switchboard>,
+              "R2B-1a: the lifecycle mint must not be a reachable static factory");
+
+/// And not reachable from an instance either. A weave handed a Switchboard is
+/// already host infrastructure by the host's own choice, but the mint stays
+/// private so that even then it comes through the one named host-wiring
+/// function rather than by helping itself.
+static_assert(!MintsByMemberCall<loom::Switchboard>,
+              "R2B-1a: the lifecycle mint must be private to the Switchboard");
+
+/// Nor by naming the type: its only constructor is private, so neither a fresh
+/// one nor a value-initialised one is expressible.
+static_assert(!std::is_default_constructible_v<loom::LifecycleAuthority>,
+              "R2B-1a: LifecycleAuthority must not be default-constructible");
+
+/// THE POSITIVE CONTROL, without which every assertion above is satisfied just
+/// as happily by a typo. Copying an authority one was HANDED is ordinary and
+/// must keep working — that is how the control door holds its own.
+static_assert(std::is_copy_constructible_v<loom::LifecycleAuthority>,
+              "an authority you were given is yours to hold");
 
 } // namespace
 
@@ -576,6 +642,233 @@ TEST_CASE("ordinary messaging is untouched: send, publish and role-send carry no
     // wire representation, so nothing here was version-bumped to carry it.
     CHECK(schema_of<ProvAnswer>()->version() == 1);
     CHECK(schema_of<ProvAnswer>()->fields().size() == 1);
+}
+
+
+// ============================================================================
+// R2B-1a — authority is handed, not minted
+// ============================================================================
+
+namespace {
+
+/// The strongest attack the supported authoring surface permits.
+///
+/// This weave is given every advantage the threat model allows and one more
+/// besides: it is handed the victim's real WeaveId at construction, it knows a
+/// plausible positive sequence, it accepts an ordinary trigger, and its grant
+/// permits EXACTLY `zen.Activated` — the very shape it wants to forge. It
+/// includes the whole weave-authoring surface (this TU includes
+/// <zen/switchboard.hpp> and <zen/weave.hpp>).
+///
+/// What it cannot write is the line that would matter. Every route that existed
+/// before R2B-1a is asserted unwriteable at compile time above; what remains,
+/// and what this class actually does, is the strongest thing that still
+/// COMPILES: an ordinary, legal, correctly-stamped `zen.Activated`.
+class ActivationImpostor : public WeaveBase<ActivationImpostor, ProvState, Accept<ProvNudge>,
+                                            Emit<loom::Activated>> {
+public:
+    ActivationImpostor(WeaveId victim, std::int64_t sequence)
+        : victim_(victim), sequence_(sequence) {}
+
+    void on(const ProvNudge&, Mail& mail) {
+        ++state_.n;
+        // Everything it has. Note what is NOT reachable from here: there is no
+        // `mail.announce_lifecycle(...)` it could call, because it has no
+        // authority to pass and no expression that yields one.
+        mail.send(victim_, loom::Activated{sequence_});
+    }
+
+private:
+    WeaveId victim_;
+    std::int64_t sequence_;
+};
+
+/// The victim: an ordinary activation consumer applying the rule every Zengine
+/// package applies — believe it only if Loom attests it, for this exact
+/// sequence. It records BOTH what arrived and what Loom said about it, so a
+/// refusal is distinguishable from a message that never came.
+struct ActivationLog {
+    std::int64_t delivered = 0; ///< Activated messages handled at all
+    std::int64_t accepted = 0;  ///< ...that Loom vouched for
+    std::int64_t lineage = 0;   ///< the sequence currently believed
+};
+
+class ActivationConsumer : public WeaveBase<ActivationConsumer, ProvState,
+                                            Accept<loom::Activated>, Emit<>> {
+public:
+    explicit ActivationConsumer(ActivationLog& log) : log_(&log) {}
+
+    void on(const loom::Activated& a, Mail& mail) {
+        ++log_->delivered;
+        if (!mail.lifecycle_attested() || mail.attested_sequence() != a.sequence) {
+            return; // an ordinary message wearing a lifecycle costume
+        }
+        if (a.sequence <= log_->lineage) {
+            return; // replay or non-newer: inert
+        }
+        ++log_->accepted;
+        log_->lineage = a.sequence;
+    }
+
+private:
+    ActivationLog* log_;
+};
+
+/// A lifecycle operator, holding a real authority because a HOST handed it one.
+struct AttestOrder {
+    std::int64_t target = 0;
+    std::int64_t announce = 0;
+    std::int64_t claim = 0;
+    ZEN_SHAPE(AttestOrder, 1, ZEN_FIELD(target), ZEN_FIELD(announce), ZEN_FIELD(claim));
+};
+
+class Operator : public WeaveBase<Operator, ProvState, Accept<AttestOrder>,
+                                  Emit<loom::Activated>> {
+public:
+    explicit Operator(loom::LifecycleAuthority authority) : authority_(authority) {}
+    void on(const AttestOrder& o, Mail& mail) {
+        ++state_.n;
+        mail.announce_lifecycle(authority_, WeaveId{static_cast<std::uint64_t>(o.target)},
+                                loom::Activated{o.claim}, o.announce);
+    }
+
+private:
+    loom::LifecycleAuthority authority_;
+};
+
+} // namespace
+
+TEST_CASE("R2B-1a: an ordinary weave with an exact zen.Activated grant, the victim's id and a "
+          "plausible sequence still cannot manufacture a lifecycle fact") {
+    Switchboard bus;
+    ActivationLog log;
+    const WeaveId victim = mount<ActivationConsumer>(bus, log);
+    const WeaveId impostor = mount<ActivationImpostor>(bus, victim, 1);
+
+    // Its grant really does permit the shape it is forging — so this is a
+    // rejection by AUTHORITY, not by capability, routing, or the gate.
+    const Grant g = emit_default_grant(*static_cast<ActivationImpostor*>(bus.weave(impostor)));
+    CHECK(g.permits(loom::Activated::zen_name, loom::Activated::zen_version, victim));
+
+    bus.send(impostor, Message(to_value(ProvNudge{})));
+    bus.pump();
+
+    // It arrived — a legal, well-formed, correctly-stamped message.
+    CHECK(log.delivered == 1);
+    // And it did nothing at all.
+    CHECK(log.accepted == 0);
+    CHECK(log.lineage == 0);
+
+    // THE POSITIVE CONTROL. The same victim, the same sequence, the same bus —
+    // announced by a weave a HOST handed an authority. Without this the checks
+    // above are satisfied just as well by a victim that ignores everything.
+    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
+    bus.pump();
+    CHECK(log.delivered == 2);
+    CHECK(log.accepted == 1); // the difference is the authority, and only that
+    CHECK(log.lineage == 1);
+}
+
+TEST_CASE("R2B-1a: a genuine authority still binds to one target and one sequence, and a "
+          "replayed activation stays inert") {
+    Switchboard bus;
+    ActivationLog first;
+    ActivationLog second;
+    const WeaveId a = mount<ActivationConsumer>(bus, first);
+    // The bystander: never named in any minting call, and its log is what makes
+    // "bound to the target" an observation rather than an assumption.
+    (void)mount<ActivationConsumer>(bus, second);
+    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+
+    const auto attest = [&](WeaveId target, std::int64_t announce, std::int64_t claim) {
+        bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(target.value),
+                                                  announce, claim})));
+        bus.pump();
+    };
+
+    // Honest: accepted, once.
+    attest(a, 1, 1);
+    CHECK(first.accepted == 1);
+    CHECK(second.accepted == 0); // bound to the target named in the minting call
+
+    // SEQUENCE MISMATCH: Loom is asked to attest 5 while the payload claims 6.
+    attest(a, 5, 6);
+    CHECK(first.accepted == 1); // unchanged
+    CHECK(first.lineage == 1);
+
+    // REPLAY of a genuine, correctly-matched activation: attested, and still
+    // inert, because lineage is the consumer's half of the rule.
+    attest(a, 1, 1);
+    CHECK(first.accepted == 1);
+
+    // ...and a newer one is honoured, so the refusals above are refusals.
+    attest(a, 9, 9);
+    CHECK(first.accepted == 2);
+    CHECK(first.lineage == 9);
+    CHECK(second.accepted == 0); // the bystander was never touched at all
+}
+
+TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnation that actually "
+          "received it — not to whoever holds the role afterwards") {
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+
+    // `first` holds the role and will answer from inside the delivery.
+    const WeaveId first =
+        mount_into_role<Responder>(bus, kProvRole, "first", Speak::Authenticated);
+
+    // THE REAL ROUTING DOOR: the asker names a ROLE, not an id. It does not know
+    // and cannot know which incarnation will receive this — which is the whole
+    // reason a correlation and a shape were never enough. Nothing here ever
+    // mentions a responder's WeaveId to the asker.
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"byrole"}), asker, WeaveId{},
+                                kPublicCorrelation));
+
+    // ...and now the holder CHANGES BEFORE THE REQUEST IS DELIVERED. This is
+    // what makes the case about role resolution rather than about delivery to a
+    // known id: if routing were decided when the asker spoke, this request would
+    // be bound to `first` and would die with it. It is decided at DELIVERY, so
+    // it reaches whoever holds the role then.
+    bus.unregister_weave(first);
+    const WeaveId second =
+        mount_into_role<Responder>(bus, kProvRole, "second", Speak::Authenticated);
+    bus.pump();
+
+    // It arrived at `second`, which answered from inside that delivery — with
+    // Loom's word behind it, and with the correlation the ASKER chose.
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].tag == "second"); // resolved at delivery, not at send
+    CHECK(heard.answers[0].attested);
+    CHECK(heard.answers[0].correlation == kPublicCorrelation);
+    CHECK(heard.answers[0].sender == second.value);
+
+    // NOW THE ROLE CHANGES HANDS AGAIN, to a weave that wants that conversation.
+    //
+    // (Freeing a role means unregistering its holder, and an unregistered
+    // weave's still-queued replies die with it — the substrate's in-flight rule,
+    // pinned in the manager suite. So this move happens after the answer has
+    // landed; what is under test here is the SUCCESSOR's standing, not that
+    // rule.)
+    bus.unregister_weave(second);
+    const WeaveId third = mount_into_role<Forger>(bus, kProvRole, asker, kPublicCorrelation);
+
+    // `third` owns the role, knows the correlation, holds the grant, and knows
+    // the asker. It still cannot answer that conversation: its own reply
+    // authority belongs to whatever delivery IT is handling, so its `answer`
+    // reaches its own nudger and never the asker, and its ordinary direct send
+    // of the response shape arrives unauthenticated.
+    bus.send(third, Message(to_value(ProvNudge{})));
+    bus.pump();
+    REQUIRE(heard.answers.size() == 2);
+    CHECK(heard.answers[1].tag == "forged");
+    CHECK_FALSE(heard.answers[1].attested);
+    CHECK(heard.answers[1].sender == third.value);
+
+    // The legitimate answer was accepted exactly once, and nothing reopened it.
+    CHECK(heard.attested_count() == 1);
 }
 
 } // TEST_SUITE

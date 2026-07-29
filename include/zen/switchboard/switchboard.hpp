@@ -180,11 +180,6 @@ public:
     Ticket send_to_role(std::string_view role, Message msg) override;
     Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
 
-    /// Mint the capability that lets a weave attach Loom's lifecycle attestation.
-    /// ROOT AUTHORITY, like send_as: the host decides which weave conducts
-    /// lifecycle, and hands it this at mount. There is no other way to obtain one
-    /// — LifecycleAuthority's only constructor is private to this class.
-    static LifecycleAuthority lifecycle_authority() noexcept { return LifecycleAuthority{}; }
 
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
     /// reentrant call (from within a handler) is a no-op.
@@ -387,6 +382,30 @@ private:
 
     std::vector<std::pair<ObserverId, Observer>> observers_;
     ObserverId next_observer_id_ = 1;
+
+    /// Mint the capability that lets trusted infrastructure attach Loom's
+    /// lifecycle attestation.
+    ///
+    /// PRIVATE AND NON-STATIC, and both halves are load-bearing. Non-static
+    /// means minting requires the Switchboard ITSELF — the host's own object —
+    /// and a weave never holds one; it is handed a `Bus&`, which has no such
+    /// member. That is the boundary this codebase already draws between `send`
+    /// (root) and `send_as`, and lifecycle minting belongs on the same side of
+    /// it. Private means even code holding a Switchboard must come through the
+    /// one named host-wiring function below rather than helping itself.
+    ///
+    /// R2B-1 shipped this as a PUBLIC STATIC, which was no boundary at all: any
+    /// weave could write `Switchboard::lifecycle_authority()` from anywhere,
+    /// with no instance and no host involvement, and — given an exact grant for
+    /// `zen.Activated` — manufacture a lifecycle fact for another incarnation.
+    /// A private constructor behind a reachable factory protects nothing.
+    LifecycleAuthority lifecycle_authority() noexcept { return LifecycleAuthority{}; }
+
+    /// The ONE expression in the system that yields a LifecycleAuthority. It is
+    /// defined in `zen/host/lifecycle_wiring.hpp` — a host-wiring header that no
+    /// weave-authoring header includes — so the name is not even visible to
+    /// ordinary weave source, and the object it needs is one a weave never has.
+    friend LifecycleAuthority host_lifecycle_authority(Switchboard& bus);
 
     bool in_dispatch_ = false;
     bool stop_requested_ = false;

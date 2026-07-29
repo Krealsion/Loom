@@ -62,6 +62,7 @@
 // beat chain from an activation instead of a one-shot host wind — that is R2A-2
 // and no line of it exists yet.
 
+#include <zen/host/lifecycle_wiring.hpp> // host wiring: the one mint, not weave-facing
 #include <zen/weave.hpp>
 #include <zen/weave/lifecycle.hpp>
 #include <zen/kernel/kernel.hpp>
@@ -396,7 +397,7 @@ private:
 /// operator wired by a different host would need the host to hand it one too;
 /// nothing about accepting the control shapes confers it.
 inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus) {
-    return loom::mount<ControlWeave>(bus, kernel, loom::Switchboard::lifecycle_authority());
+    return loom::mount<ControlWeave>(bus, kernel, loom::host_lifecycle_authority(bus));
 }
 
 /// The grant that lets a Weave drive the kernel: permission to send the six
