@@ -18,15 +18,26 @@
 // produce. Include it all you like; you still have nothing to pass it.
 //
 // That is the same line this codebase has always drawn. `Switchboard::send` is
-// root authority and `send_as` is a weave speaking as itself; holding the
-// Switchboard IS being the host. Lifecycle minting now sits on the correct side
-// of a boundary that already existed and is already understood.
+// root authority and `send_as` is a weave speaking as itself. Lifecycle minting
+// now sits on the correct side of a boundary that already existed.
+//
+// BUT SAY IT PRECISELY (R2B-1b). The earlier wording here — "holding the
+// Switchboard IS being the host" — was too broad, and the gap was real:
+//
+//     Holding a Switchboard grants host authority only within THAT
+//     Switchboard's Loom.
+//
+// Constructing a separate board creates a separate authority domain, and an
+// authority minted from it has no standing anywhere else. Anyone may own a
+// Switchboard; nobody thereby owns yours. Every Loom is its own authority
+// domain, and an authority carries which one issued it.
 //
 // THE TIERS THIS KEEPS APART, none of which implies the next:
 //
-//   PUBLIC SHAPE        ordinary code may represent `zen.Activated`
-//   EXACT GRANT         ordinary code may be permitted to EMIT it
-//   LIFECYCLE AUTHORITY only Loom infrastructure may ATTEST it as a lifecycle fact
+//   POSSESSING A SWITCHBOARD  mints authority for THAT Switchboard only
+//   POSSESSING AN AUTHORITY   attests through its ISSUING Switchboard only
+//   POSSESSING AN EXACT GRANT permits the shape, never lifecycle provenance
+//   POSSESSING A Bus / Mail   implies no authority over the host Loom at all
 //
 // WHO USES THIS, and it is a short list on purpose:
 //   - `loom::mount_control` (kernel/control.hpp) — the one production caller,

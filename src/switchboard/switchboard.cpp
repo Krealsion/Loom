@@ -60,7 +60,12 @@ std::shared_ptr<const Schema> lifecycle_policy_schema() {
 
 // ---- Switchboard ----------------------------------------------------------
 
-Switchboard::Switchboard() {
+Switchboard::Switchboard()
+    // THIS LOOM'S IDENTITY, minted once here and never again. `new` rather than
+    // make_shared because LoomIdentity's constructor is private to this class —
+    // which is the point: nobody else can make one, so nobody else can produce a
+    // value that compares equal to it.
+    : identity_(std::shared_ptr<const LoomIdentity>(new LoomIdentity{})) {
     // A fixed-size ring, allocated once: the journal's footprint is bounded by
     // kJournalCapacity for the life of the bus, never by how many messages it ever
     // carries (audit F-6). Slots start seq=0 ("never written"); real seqs start at 1.
@@ -239,12 +244,26 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
                             Provenance::attested(Provenance::Kind::Answer, 0));
 }
 
-Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority&, WeaveId target,
-                                Message msg, std::int64_t sequence) {
-    // The authority's presence IS the check — an ordinary weave cannot construct
-    // one — so there is nothing further to validate here except that the target
-    // is real enough to name. The attestation is bound to THIS target and THIS
-    // sequence, both taken from the call rather than from the payload.
+Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& authority,
+                                WeaveId target, Message msg, std::int64_t sequence) {
+    // AUTHORITY IS RELATIVE TO THE LOOM THAT ISSUED IT.
+    //
+    // R2B-1a made minting require a Switchboard; it did not make the result mean
+    // anything about WHICH Switchboard. The authority was an empty marker, so
+    // this function took one and ignored it — and an ordinary weave could stand
+    // up a decoy board of its own, mint a genuine authority from it, and spend it
+    // here. Constructing that decoy is legal and stays legal: a Switchboard is an
+    // ordinary object. What it cannot be is THIS Loom.
+    //
+    // So the check is the issuer, and it lives here rather than in any consumer:
+    // holding an authority gives you no way to ask the question, and no standing
+    // to answer it. `issued_here` also fails for an authority whose board has
+    // been destroyed — the lifetime rule, not a special case.
+    if (!issued_here(authority)) {
+        return refuse_now(target, as_sender, msg, RefusalReason::CapabilityDenied);
+    }
+    // The attestation is bound to THIS target and THIS sequence, both taken from
+    // the call rather than from the payload.
     if (!target.valid()) {
         return refuse_now(target, as_sender, msg, RefusalReason::NoSuchTarget);
     }

@@ -2749,6 +2749,44 @@ Two walls, both the compiler's:
 2. **The one expression that reaches it** is `loom::host_lifecycle_authority(Switchboard&)`,
    defined in `zen/host/lifecycle_wiring.hpp` and the Switchboard's only friend.
 
+### …and authority belongs to the Loom that issued it (R2B-1b)
+
+R2B-1a narrowed *who may mint* and left *what a minted authority means* open. The authority was
+an **empty marker**, so every board honoured every board's — and an ordinary weave could stand
+up a decoy Switchboard of its own, mint a completely genuine authority from it, and spend it
+through the running system. Constructing that decoy is legal and stays legal: a Switchboard is
+an ordinary object, and anyone may own one.
+
+> **Holding a Switchboard grants host authority only within that Switchboard's Loom.**
+> Constructing a separate board creates a separate authority domain.
+
+So the earlier phrasing — "holding a Switchboard is being the host" — was too broad and is
+corrected. The distinctions that matter, none implying the next:
+
+```text
+Possessing a Switchboard      mints authority for that Switchboard only
+Possessing lifecycle authority attests through its issuing Switchboard only
+Possessing an exact grant     permits the shape, never lifecycle provenance
+Possessing a Bus or Mail      implies no authority over the host Loom
+```
+
+**The representation.** Each board owns a `shared_ptr<const LoomIdentity>` — an empty type whose
+constructor is private to `Switchboard`, so no other code can make one or name a value equal to
+one. An authority carries a **`weak_ptr`** to its issuer, and `Switchboard::announce_as` refuses
+unless `issued_here(authority)`. The check is inside trusted bus machinery; a consumer holding an
+authority has no way to ask the question and no standing to answer it.
+
+**Why not a raw address.** A destroyed board can be followed by a new one at the same address, at
+which point an authority from the dead world would validate against the living one. A control
+block is not recycled that way, so the *lifetime* rule falls out of the representation rather
+than needing a special case: **an authority lasts exactly as long as the Loom that issued it**,
+and a dead issuer's `weak_ptr` is permanently expired. Weak rather than strong on purpose — a
+strong reference would let a stale authority keep its world alive.
+
+`Switchboard` is now explicitly **neither copyable nor movable**: "the same Loom at a different
+address" is not a state this design has a meaning for, so the meaningless case is
+unrepresentable rather than accidentally supported.
+
 **The audit, checked rather than asserted** — compiling `<zen/kernel/export.hpp>` +
 `<zen/weave.hpp>` + `<zen/switchboard.hpp>` (the whole authoring surface, a superset of what a
 loaded weave sees) never reaches `lifecycle_wiring.hpp` or `kernel/control.hpp`:

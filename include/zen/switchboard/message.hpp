@@ -4,6 +4,7 @@
 #include <zen/value.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <utility>
 
 namespace loom {
@@ -19,6 +20,27 @@ struct WeaveId {
 };
 
 class Switchboard;
+
+/// THE PRIVATE IDENTITY OF ONE LOOM.
+///
+/// An empty type whose only purpose is to be a thing that exists exactly once
+/// per Switchboard and cannot be manufactured. Ordinary code cannot construct
+/// one (the constructor is private to the Switchboard), cannot name a value that
+/// equals one, and cannot obtain one except by holding an authority that board
+/// itself issued.
+///
+/// IT IS HELD BY SHARED OWNERSHIP, AND THAT IS THE LIFETIME ANSWER rather than a
+/// convenience. A raw address would be the obvious representation and is the
+/// wrong one: a board can be destroyed and a later board allocated at the same
+/// address, at which point an authority from the dead world would validate
+/// against the living one. A control block is not recycled that way — the board
+/// holds the only `shared_ptr`, an authority holds a `weak_ptr`, and when a board
+/// dies every authority it ever issued expires with it, permanently.
+class LoomIdentity {
+private:
+    friend class Switchboard;
+    LoomIdentity() = default;
+};
 
 /// WHY A RECIPIENT MAY TRUST WHAT IT WAS JUST HANDED — a delivery fact, and the
 /// third of three questions the system has always needed to keep apart:
@@ -125,6 +147,27 @@ private:
 /// authorized against the sender's ordinary grant at delivery, so the authority
 /// answers "may this message carry Loom's word?" and never "may this weave send
 /// it?".
+///
+/// AND IT IS RELATIVE TO THE LOOM THAT ISSUED IT (R2B-1a left this open;
+/// R2B-1b closes it). R2B-1a required a `Switchboard&` to mint — but the result
+/// was an EMPTY MARKER, so every board accepted every board's authority. An
+/// ordinary weave could stand up a second Switchboard of its own, mint a
+/// perfectly real authority from that decoy, and spend it through the running
+/// system:
+///
+///     loom::Switchboard decoy;
+///     auto forged = loom::host_lifecycle_authority(decoy);
+///     mail.announce_lifecycle(forged, victim, loom::Activated{1}, 1);
+///
+/// Constructing that decoy is legal and stays legal — a Switchboard is an
+/// ordinary object and anyone may own one. What changed is that an authority now
+/// carries WHICH board issued it, and the issuing board checks. So:
+///
+///     Holding a Switchboard grants host authority only within that
+///     Switchboard's Loom.
+///
+/// Every Loom is its own authority domain. The decoy's authority is not fake —
+/// it is entirely real, and real somewhere else.
 class LifecycleAuthority {
 public:
     LifecycleAuthority(const LifecycleAuthority&) = default;
@@ -132,7 +175,14 @@ public:
 
 private:
     friend class Switchboard;
-    LifecycleAuthority() = default;
+    explicit LifecycleAuthority(std::weak_ptr<const LoomIdentity> issuer)
+        : issuer_(std::move(issuer)) {}
+
+    /// WEAK, deliberately. An authority must not keep its board's identity alive:
+    /// the rule is that authority lasts only as long as the Loom that issued it,
+    /// and a strong reference would quietly make a stale authority outlive the
+    /// world it belonged to. Expired means refused.
+    std::weak_ptr<const LoomIdentity> issuer_;
 };
 
 /// The routed envelope. The payload is a self-describing Value — its own schema
