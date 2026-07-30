@@ -3198,6 +3198,33 @@ unrelated traffic; a "committed but activating" state would have had to defer re
 production somewhere. The scan is bounded by the pending queue and runs once per
 commit.
 
+**Admission recognizes its owner (R2B-3b-1a).** The candidate's private
+conversation checked the exact coordinator life and incarnation on every message;
+admission did not — which left the strongest act in the system resting on a stale
+fact. A trusted host caller holding a perfectly good lifecycle authority could
+admit a candidate whose coordinator had died and revived, been reloaded into new
+code, or been removed entirely.
+
+> **A candidate may enter the world only while the exact coordinator life and
+> incarnation that sealed it still owns the preparation.**
+
+`admit_candidate` now verifies the captured owner is the participant standing
+there today, and takes the activation's own sender-life stamp **from the verified
+owner** rather than a fresh lookup of the coordinator id — which is precisely how
+a successor's life could otherwise be stamped onto a predecessor's activation. It
+returns an `AdmitResult` naming *why*: `ForeignAuthority`, `NotACandidate`,
+`OwnerChanged`, `IncumbentUnfit`, `RoleNotHeld`. Admission is a host call, not a
+delivery, so there is no message to refuse and no tap event — the reason belongs
+in the answer the caller already receives, and "the coordinator that sealed this is
+not the one standing here now" sends an operator somewhere quite different from
+"the role moved under you".
+
+`seal_weave` gained two refusals of its own: a **dead** coordinator cannot own a
+preparation (it could never answer), and an **already-sealed** candidate cannot be
+resealed — silently changing owners would hand a prepared candidate to somebody
+else's transaction, and transfer semantics are deliberately not part of this
+errand.
+
 **Status: this is the primitive and its transaction boundary, not the phase.** The
 transaction record and state machine, the readiness conversation, the dynamic
 fixture pair, the failure ladder and the Timer continuity vertical proof are not

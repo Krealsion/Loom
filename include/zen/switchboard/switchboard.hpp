@@ -164,6 +164,34 @@ struct CandidateOwner {
     }
 };
 
+/// Why an admission was refused, for the host that asked (R2B-3b-1a).
+///
+/// Admission is a host call, not a delivery, so there is no message to refuse and
+/// no tap event to carry a `RefusalReason`. The reason belongs in the answer the
+/// caller already receives — and it is named rather than a bare false, because
+/// "the coordinator that sealed this is not the one standing here now" and "the
+/// role moved under you" send an operator to entirely different places.
+enum class AdmitRefusal : std::uint8_t {
+    None = 0,         ///< admitted
+    ForeignAuthority, ///< the lifecycle authority was not issued by this Loom
+    NotACandidate,    ///< missing, dead, or not sealed at all
+    OwnerChanged,     ///< the exact coordinator life/incarnation that sealed it is gone
+    IncumbentUnfit,   ///< missing, dead, or already sealed
+    RoleNotHeld,      ///< the role is empty, or held by somebody other than the incumbent
+};
+
+const char* name_of(AdmitRefusal r) noexcept;
+
+/// The result of an admission attempt. Convertible to bool so the common
+/// `REQUIRE(bus.admit_candidate(...))` reads as it should, with `why` for the
+/// cases that care.
+struct AdmitResult {
+    bool ok = false;
+    AdmitRefusal why = AdmitRefusal::None;
+
+    explicit operator bool() const noexcept { return ok; }
+};
+
 /// How a Weave's accept-set is interpreted at delivery. `Listed` (the default): only the
 /// explicit `(name, version)` schemas it declares. `AnyRegistered`: a deliberate
 /// capability — the Weave accepts **any registered shape**, gated at delivery against
@@ -322,6 +350,11 @@ public:
     /// weave holds a role — a candidate with a public role is a contradiction, and
     /// making that impossible here means commit is the only way a role can move.
     /// Returns false if there is no such weave, or it already holds a role.
+    /// Refuses if the candidate or coordinator is missing, if the coordinator is
+    /// DEAD (a life that cannot converse cannot own a preparation), if the
+    /// candidate holds a role, or if the candidate is ALREADY SEALED — resealing
+    /// would silently transfer a prepared candidate to a second owner, and this
+    /// errand deliberately adds no transfer semantics.
     bool seal_weave(WeaveId candidate, WeaveId coordinator);
 
     /// Who owns this sealed weave, as the exact life and incarnation that sealed
@@ -371,9 +404,19 @@ public:
     /// leaving every other message's order untouched. Nothing is dropped.
     ///
     /// Refuses — changing NOTHING — on any failed precondition.
-    bool admit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role,
-                         const LifecycleAuthority& authority, Message activation,
-                         std::int64_t sequence);
+    /// THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a). The seal records an exact
+    /// coordinator life and incarnation; admission verifies that the participant
+    /// standing at that address today IS that one. A trusted host caller holding a
+    /// perfectly good lifecycle authority still cannot admit a candidate whose
+    /// coordinator died and revived, was reloaded into new code, or was removed —
+    /// because the preparation belonged to a life, and that life is over.
+    ///
+    /// The activation's own sender-life stamp is taken from the VERIFIED owner
+    /// record rather than from a fresh lookup of the coordinator id, so it can
+    /// never describe a successor.
+    AdmitResult admit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role,
+                                const LifecycleAuthority& authority, Message activation,
+                                std::int64_t sequence);
 
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
     ///
