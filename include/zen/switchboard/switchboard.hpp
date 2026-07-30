@@ -244,6 +244,12 @@ enum class TxnReason : std::uint8_t {
     WrongState,
     NotTheOwner,
     PreconditionFailed,
+    /// Another active transaction already names this incumbent, or this candidate
+    /// (R2B-3b-2a). Two distinct facts, named separately, because "somebody is
+    /// already replacing that service" and "that successor is already promised
+    /// elsewhere" are different problems with different fixes.
+    IncumbentBusy,
+    CandidateBusy,
 };
 
 const char* name_of(TxnState s) noexcept;

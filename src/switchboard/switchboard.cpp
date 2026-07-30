@@ -103,6 +103,10 @@ const char* name_of(TxnReason r) noexcept {
         return "NotTheOwner";
     case TxnReason::PreconditionFailed:
         return "PreconditionFailed";
+    case TxnReason::IncumbentBusy:
+        return "IncumbentBusy";
+    case TxnReason::CandidateBusy:
+        return "CandidateBusy";
     }
     return "?";
 }
@@ -1189,32 +1193,54 @@ const Switchboard::PreparedReplacement* Switchboard::find_txn(TxnId id) const {
 }
 
 void Switchboard::finish_txn(PreparedReplacement& txn, TxnState state, TxnReason reason) {
-    // THE OUTCOME IS EVIDENCE, NOT AUTHORITY: it says what happened and confers
-    // nothing. It is kept for the EXACT operator that began the transaction, in a
-    // separately bounded store, and dropped oldest-first rather than growing.
+    // ORDERING IS THE WHOLE CORRECTION (R2B-3b-2a).
+    //
+    // Cleanup discards the candidate, discarding a candidate is a lifecycle
+    // change, and a lifecycle change re-enters `invalidate_transactions_for`. If
+    // this transaction were still in the active registry at that moment the hook
+    // would rediscover it and end it a SECOND time — two terminal truths for one
+    // promise, and two slots consumed in a bounded store that then evicts somebody
+    // else's result early.
+    //
+    // So the record leaves the active registry FIRST, and the re-entrant hook has
+    // nothing to find. That is structural non-reentrancy rather than a "currently
+    // finishing" flag, which would have to be honoured at every future call site
+    // instead of being true at one.
+    //
+    // `txn` is deliberately a caller-owned COPY (every call site passes one), so
+    // erasing the registry entry below leaves these facts valid to use afterwards.
+    const TxnId id = txn.id;
+    const ParticipantRef op = txn.op;
+    const WeaveId candidate = txn.candidate.who;
+
+    // 1. no longer discoverable as active — and the slot is back at once.
+    for (auto it = txns_.begin(); it != txns_.end(); ++it) {
+        if (it->id == id) {
+            txns_.erase(it);
+            break;
+        }
+    }
+
+    // 2. EXACTLY ONE terminal outcome. Evidence, not authority: it says what
+    //    happened and confers nothing. Kept for the exact operator that began the
+    //    transaction, in a separately bounded store, dropped oldest-first.
     if (outcomes_.size() >= kMaxTerminalOutcomes) {
         outcomes_.erase(outcomes_.begin());
         outcome_of_.erase(outcome_of_.begin());
     }
-    outcomes_.push_back(TxnOutcome{txn.id, state, reason});
-    outcome_of_.push_back(txn.op);
+    outcomes_.push_back(TxnOutcome{id, state, reason});
+    outcome_of_.push_back(op);
 
-    // A candidate that never entered the world is discarded here, which also ends
-    // any speech it had queued (R2B-2b). Only ever a SEALED weave: an admitted
-    // candidate is a live service and is nobody's to discard.
+    // 3. and only now the cleanup that may re-enter. A candidate that never
+    //    entered the world is discarded, which also ends any speech it had queued
+    //    (R2B-2b). Only ever a SEALED weave: an admitted candidate is a live
+    //    service and is nobody's to discard. If this fails, it leaves sealed
+    //    wreckage — which is nonpublic by construction, cannot be admitted through
+    //    a transaction that no longer exists, and does not produce a second result.
     if (state == TxnState::Aborted) {
-        const WeaveRecord* cand = find(txn.candidate.who);
+        const WeaveRecord* cand = find(candidate);
         if (cand != nullptr && cand->sealed_by.valid()) {
-            (void)unregister_weave(txn.candidate.who);
-        }
-    }
-
-    // The slot comes back immediately. There is no sweep, no expiry and nothing
-    // that depends on an operator remembering to ask.
-    for (auto it = txns_.begin(); it != txns_.end(); ++it) {
-        if (it->id == txn.id) {
-            txns_.erase(it);
-            return;
+            (void)unregister_weave(candidate);
         }
     }
 }
@@ -1295,11 +1321,24 @@ TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinato
     if (held == roles_.end() || !(held->second == incumbent)) {
         return {false, TxnId{}, TxnReason::RoleChanged};
     }
-    // One active transaction per incumbent. A second attempt refuses; the first
-    // is not disturbed by having been asked.
+    // ONE INCUMBENT, ONE REPLACEMENT — and ONE CANDIDATE, ONE REPLACEMENT.
+    //
+    // The second half was missing, and the gap was not cosmetic: the same sealed
+    // candidate could be promised to two different incumbents at once. Every other
+    // precondition holds for both (it is sealed by the same coordinator, holds no
+    // role, is alive), so nothing else would have caught it — and the consequences
+    // are all bad. One readiness event would answer two transactions; aborting one
+    // would unregister the candidate out from under the other; committing one
+    // would make it public while the other still believed it sealed.
+    //
+    // Refused BEFORE a slot is consumed or anything is touched, and the two causes
+    // are named separately because they send an operator to different places.
     for (const PreparedReplacement& t : txns_) {
         if (t.incumbent.who == incumbent) {
-            return {false, TxnId{}, TxnReason::PreconditionFailed};
+            return {false, TxnId{}, TxnReason::IncumbentBusy};
+        }
+        if (t.candidate.who == candidate) {
+            return {false, TxnId{}, TxnReason::CandidateBusy};
         }
     }
 
