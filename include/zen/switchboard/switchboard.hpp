@@ -252,6 +252,12 @@ public:
     std::string snapshot_bytes(WeaveId id) const;
 
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
+    ///
+    /// THIS IS THE DEATH TRANSITION, and committing it ends every unfinished
+    /// deferred conversation that weave was a party to (R2B-2a) — before `Died` is
+    /// announced, so an observer of the death sees those conversations already
+    /// over. Revival, last-known-good fallback and quarantine therefore all begin
+    /// from the same place: no inherited answer rights.
     void kill(WeaveId id);
 
     /// Revive a Weave from candidate bytes: parse -> admit(Unverified, state
@@ -301,10 +307,15 @@ private:
         std::uint64_t reloads_used = 0;
         bool alive = true;
         /// WHICH CODE this id currently is. A WeaveId is never reused, so it
-        /// already distinguishes a swap successor — but reload replaces the code
-        /// behind a STABLE id, so only this distinguishes a reload successor from
-        /// the incarnation that earned a deferred answer. Bumped wherever the
-        /// bus commits new code behind an existing id (swap_state, reload).
+        /// already distinguishes a swap successor — but a code reload replaces the
+        /// code behind a STABLE id, so only this distinguishes that successor from
+        /// the incarnation that earned a deferred answer.
+        ///
+        /// Bumped in `swap_state` — and ONLY there. Corrected in R2B-2a, where the
+        /// original claim ("wherever the bus commits new code") was read as covering
+        /// `reload()` too: it does not, and never did. `reload()` is crash REVIVAL
+        /// of the same code, so it advances nothing here; what ends the
+        /// conversations of a life that ended is `abandon_deferred_for` at `kill`.
         std::uint64_t incarnation = 1;
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
@@ -431,9 +442,25 @@ private:
     }
 
     /// Drop every unfinished conversation either side of which is `id` at an
-    /// incarnation that no longer exists. Called when a weave is unregistered and
-    /// when its code is replaced.
+    /// incarnation that no longer exists. THE QUESTION HERE IS STALENESS, which is
+    /// the right question when the CODE behind a still-living id was replaced:
+    /// `swap_state` bumps the incarnation and this sweeps what the predecessor
+    /// left. It is deliberately NOT the question death asks — see
+    /// `abandon_deferred_for`.
     void forget_deferred_for(WeaveId id);
+
+    /// Drop every unfinished conversation `id` is a party to, in either direction
+    /// and at ANY incarnation, unconditionally.
+    ///
+    /// THE QUESTION HERE IS THE END OF A LIFE (R2B-2a), and staleness cannot ask
+    /// it: a killed weave keeps its id AND its incarnation, so nothing about the
+    /// record looks stale — yet the participant that earned the right is gone.
+    /// Called at `kill` (death, which the isolation supervisor drives on a crashed
+    /// child before reviving it from the host-owned snapshot) and at
+    /// `unregister_weave` (permanent removal). Being unconditional also makes it
+    /// order-independent: unlike the staleness sweep, it does not depend on whether
+    /// the record has already been erased from `weaves_`.
+    void abandon_deferred_for(WeaveId id);
 
     DeferredRecord* find_deferred(std::uint64_t token);
     /// This weave's current incarnation, or 0 if it is not registered.
