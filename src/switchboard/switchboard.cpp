@@ -89,6 +89,16 @@ std::shared_ptr<const Schema> lifecycle_policy_schema() {
     return schema;
 }
 
+namespace {
+/// Is `speaker` the exact participant that owns this seal — same id, same life,
+/// same code? A successor at the same address is not (R2B-3b).
+bool owns_seal(const CandidateOwner& owner, WeaveId speaker,
+               std::uint64_t speaker_life, std::uint64_t speaker_incarnation) {
+    return owner.valid() && owner.who == speaker && owner.life == speaker_life &&
+           owner.incarnation == speaker_incarnation;
+}
+} // namespace
+
 // ---- Switchboard ----------------------------------------------------------
 
 Switchboard::Switchboard()
@@ -177,7 +187,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     true,
                     /*incarnation=*/1, // this id's first code; bumped by swap_state alone
                     /*life=*/1,        // its first life; bumped only on a revival
-                    /*sealed_by=*/WeaveId{}, // in the world from the moment it exists
+                    /*sealed_by=*/CandidateOwner{}, // in the world from the moment it exists
                     role};
     weaves_.emplace(id.value, std::move(rec));
     if (!role.empty()) {
@@ -688,7 +698,13 @@ void Switchboard::deliver_one(Envelope env) {
             // OUTBOUND. A sealed weave may address exactly one weave — the
             // coordinator preparing it — and may not address a ROLE at all, so it
             // cannot even learn whether a production slot is held.
-            if (!env.role.empty() || !(env.target == sender->sealed_by)) {
+            const WeaveRecord* owner = find(sender->sealed_by.who);
+            const bool owner_is_current =
+                owner != nullptr &&
+                owns_seal(sender->sealed_by, sender->sealed_by.who, owner->life,
+                          owner->incarnation);
+            if (!env.role.empty() || !(env.target == sender->sealed_by.who) ||
+                !owner_is_current) {
                 const Refusal r{RefusalReason::SealedSpeech, {}};
                 record(env.seq, Disposition::Refused, r);
                 ev.kind = EventKind::Refused;
@@ -698,8 +714,10 @@ void Switchboard::deliver_one(Envelope env) {
             }
         }
         const WeaveRecord* addressee = env.role.empty() ? find(env.target) : nullptr;
-        if (addressee != nullptr && addressee->sealed_by.valid() &&
-            !(env.msg.sender == addressee->sealed_by)) {
+        const bool from_owner =
+            addressee != nullptr && sender != nullptr &&
+            owns_seal(addressee->sealed_by, env.msg.sender, sender->life, sender->incarnation);
+        if (addressee != nullptr && addressee->sealed_by.valid() && !from_owner) {
             // INBOUND, and deliberately indistinguishable from an unregistered id:
             // the world must not be able to discover that a candidate exists, still
             // less start a conversation with one. Only its coordinator gets through.
@@ -911,11 +929,19 @@ std::string Switchboard::snapshot_bytes(WeaveId id) const {
 
 bool Switchboard::seal_weave(WeaveId candidate, WeaveId coordinator) {
     WeaveRecord* rec = find(candidate);
-    if (rec == nullptr || !rec->role.empty()) {
+    const WeaveRecord* owner = find(coordinator);
+    if (rec == nullptr || owner == nullptr || !rec->role.empty()) {
         return false;
     }
-    rec->sealed_by = coordinator;
+    // The owner is captured as it is NOW — life and incarnation included — so a
+    // later occupant of the same address is a different owner, not this one.
+    rec->sealed_by = CandidateOwner{coordinator, owner->life, owner->incarnation};
     return true;
+}
+
+CandidateOwner Switchboard::candidate_owner(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    return rec == nullptr ? CandidateOwner{} : rec->sealed_by;
 }
 
 WeaveId Switchboard::role_holder(std::string_view role) const {
@@ -927,6 +953,7 @@ bool Switchboard::sealed(WeaveId id) const {
     const WeaveRecord* rec = find(id);
     return rec != nullptr && rec->sealed_by.valid();
 }
+
 
 bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
                                    const std::string& role) {
@@ -950,10 +977,72 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
     // precedes all of this or follows all of it. What would NOT be atomic is
     // expressing the same change as several ordinary messages — which is exactly
     // what today's SwapWeave does, and exactly the observable window it documents.
-    cand->sealed_by = WeaveId{};
+    cand->sealed_by = CandidateOwner{};
     inc->role.clear();
     cand->role = role;
     held->second = candidate;
+    return true;
+}
+
+bool Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
+                                  const std::string& role,
+                                  const LifecycleAuthority& authority, Message activation,
+                                  std::int64_t sequence) {
+    // EVERY PRECONDITION FIRST — including the authority, so an unattested caller
+    // cannot move production topology.
+    if (!issued_here(authority)) {
+        return false;
+    }
+    WeaveRecord* cand = find(candidate);
+    WeaveRecord* inc = find(incumbent);
+    if (cand == nullptr || inc == nullptr || !cand->sealed_by.valid() || !cand->alive ||
+        !inc->alive || inc->sealed_by.valid() || role.empty()) {
+        return false;
+    }
+    const auto held = roles_.find(role);
+    if (held == roles_.end() || !(held->second == incumbent)) {
+        return false;
+    }
+    const CandidateOwner owner = cand->sealed_by;
+
+    // ---- ACTIVATION FIRST, and this is where the queue resisted the model -----
+    //
+    // Role resolution is a DELIVERY-time decision, so a role-addressed message
+    // enqueued before this moment resolves to whoever holds the role when it is
+    // finally dispatched — which, after this call, is the candidate. Appending the
+    // activation at the tail would therefore let ordinary production reach a weave
+    // that has not yet been told it is alive.
+    //
+    // The activation is placed immediately ahead of the FIRST queued envelope that
+    // could reach this candidate: one addressed to the role being committed, or to
+    // the candidate itself. That is the narrowest placement that makes activation
+    // the candidate's first live delivery. Every other message keeps its order,
+    // and nothing is dropped — the alternative (discarding the older traffic) would
+    // buy ordering with silence.
+    const std::uint64_t seq = next_seq_++;
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
+    activation.sender = owner.who;
+    activation.provenance = Provenance::attested(Provenance::Kind::Activation, sequence);
+    Envelope act{std::move(activation), candidate, seq, /*gated=*/true, std::string{},
+                 life_of(owner.who)};
+    auto at = queue_.begin();
+    for (; at != queue_.end(); ++at) {
+        if (at->target == candidate || (!at->role.empty() && at->role == role)) {
+            break;
+        }
+    }
+    queue_.insert(at, std::move(act));
+
+    // ---- and then the whole topology change, with no delivery in between ------
+    cand->sealed_by = CandidateOwner{};
+    inc->role.clear();
+    cand->role = role;
+    held->second = candidate;
+    // The incumbent is sealed FOR RETIREMENT, to the same coordinator: it stops
+    // receiving production entirely — not merely role traffic — and remains
+    // reachable for the private retirement conversation. Moving the role alone
+    // would leave it publicly direct-addressable, which is a second live service.
+    inc->sealed_by = owner;
     return true;
 }
 
