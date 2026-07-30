@@ -25,6 +25,43 @@ std::int64_t live_count(Switchboard& bus, WeaveId id) {
     return a.value().get("count")->as_int();
 }
 
+// ---- R2B-2: reading the deferring steward's mind, host-side ------------------
+//
+// A loaded weave has exactly one window on itself — the snapshot it already had
+// to provide — so that is where the fixture puts what these tests need to see. No
+// back channel was invented for the test.
+
+// Counter v4, the ZEN_WEAVE_DEFERS state contract, spelled out again here on
+// purpose: the test must not share a definition with the library it is
+// interrogating, or a drift in either would cancel out.
+inline std::shared_ptr<const Schema> defers_state_schema() {
+    static const auto s = SchemaBuilder("Counter", 4)
+                              .field("count", Kind::Int)
+                              .field("deferred", Kind::Int)
+                              .field("spent", Kind::Int)
+                              .field("token", Kind::Int)
+                              .build();
+    return s;
+}
+
+struct Steward {
+    std::int64_t count = 0;    ///< deliveries handled (either shape)
+    std::int64_t deferred = 0; ///< did the last ask yield a retained answer right?
+    std::int64_t spent = 0;    ///< how many spends the BOARD accepted
+    std::int64_t token = 0;    ///< the opaque number it is holding, if any
+};
+
+inline Steward steward_state(Switchboard& bus, WeaveId id) {
+    Unverified u = parse(bus.snapshot_bytes(id));
+    Admission a = admit(u, defers_state_schema());
+    REQUIRE(a.ok());
+    return Steward{a.value().get("count")->as_int(), a.value().get("deferred")->as_int(),
+                   a.value().get("spent")->as_int(), a.value().get("token")->as_int()};
+}
+
+// A correlation the asker chooses and the steward is never told in any payload.
+constexpr std::uint64_t kAskCorrelation = 0x5EEDu;
+
 } // namespace
 
 TEST_SUITE("kernel") {
@@ -321,6 +358,227 @@ TEST_CASE("a rejected candidate's schemas stay admitted — today's registry mon
     // No half-loaded wreckage, and the incumbent is still serving.
     CHECK(kernel.is_loaded("t"));
     CHECK(kernel.weave_id("t") == lr.id);
+}
+
+// ---- R2B-2: the deferring steward, proven where it has to be proven -----------
+//
+// EVERY CASE BELOW DRIVES A REAL .so. That is not thoroughness for its own sake:
+// the whole claim is that an answer right survives the handler that earned it,
+// and a native fixture holding the old Bus& would be asking a different (and
+// already-answered) question. Across the C seam a loaded weave keeps NOTHING but
+// an opaque integer, gets a brand-new Bus on the next delivery, and still has to
+// be able to answer — or the capability is not really a capability.
+
+TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only once") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    const WeaveId steward = lr.id;
+
+    // The asker is native only because somebody has to ask. Note what it does NOT
+    // supply: no reply_to. Nothing in the ask says where an answer should go, so
+    // the answer's arrival is Loom's bookkeeping and cannot be the payload's.
+    Registered asker = register_probe(bus, {pong_schema(), tick_schema()});
+    int answers = 0;
+    bool every_answer_attested = true;
+    std::uint64_t heard_correlation = 0;
+    asker.weave->on_handle = [&](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Tick") {
+            if (in.payload.get("n")->as_int() == 1) {
+                b.send(steward, Message(ping(41), WeaveId{}, /*reply_to=*/WeaveId{},
+                                        kAskCorrelation));
+            } else {
+                b.send(steward, Message(greet("now")));
+            }
+            return;
+        }
+        ++answers;
+        every_answer_attested = every_answer_attested && in.provenance.answers_ask();
+        heard_correlation = in.correlation;
+    };
+
+    // Round one: the ask is delivered, the steward's handler runs to completion,
+    // and the pump drains. No handler is on the stack when this returns.
+    bus.send(asker.id, Message(tick(1)));
+    bus.pump();
+    Steward s1 = steward_state(bus, steward);
+    CHECK(s1.count == 1);    // it really did handle the ask...
+    CHECK(s1.deferred == 1); // ...and really did take the answer right with it...
+    CHECK(s1.spent == 0);
+    CHECK(answers == 0); // ...and answered nothing at all.
+
+    // Round two: an unrelated delivery, a fresh Bus, a new stack frame — and the
+    // answer to the ORIGINAL request goes out.
+    bus.send(asker.id, Message(tick(2)));
+    bus.pump();
+    REQUIRE(answers == 1);
+    CHECK(asker.weave->handled_names.back() == "Pong");
+    CHECK(steward_state(bus, steward).spent == 1);
+    // Still an AUTHENTICATED answer: waiting costs the answer none of its
+    // standing, and it still wears the original ask's label, which the steward
+    // never chose and could not have known to forge.
+    CHECK(every_answer_attested);
+    CHECK(heard_correlation == kAskCorrelation);
+
+    // Round three: the same completion again. Deferring did not multiply the
+    // right; it moved it. One delivered request, one answer, across handlers.
+    bus.send(asker.id, Message(tick(2)));
+    bus.pump();
+    const Steward s3 = steward_state(bus, steward);
+    CHECK(s3.count == 3); // POSITIVE CONTROL: the third delivery really happened...
+    CHECK(answers == 1);  // ...and still produced no second answer
+    CHECK(s3.spent == 1);
+}
+
+TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused — reload is a new "
+          "incarnation across the seam too") {
+    // THE SHARPEST FORM OF THE INHERITANCE QUESTION. The fixture persists its
+    // token, so the successor rebuilds a capability from the real number and
+    // genuinely believes it holds one. Nothing library-side says no. The board
+    // does.
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    const WeaveId steward = lr.id;
+
+    Registered asker = register_probe(bus, {pong_schema(), tick_schema()});
+    int answers = 0;
+    asker.weave->on_handle = [&](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Tick") {
+            if (in.payload.get("n")->as_int() == 1) {
+                b.send(steward, Message(ping(7), WeaveId{}, WeaveId{}, kAskCorrelation));
+            } else {
+                b.send(steward, Message(greet("now")));
+            }
+            return;
+        }
+        ++answers;
+    };
+
+    bus.send(asker.id, Message(tick(1)));
+    bus.pump();
+    const Steward before = steward_state(bus, steward);
+    REQUIRE(before.deferred == 1);
+    REQUIRE(before.token != 0); // the number really is in its persisted state
+
+    // A reload in place: its own snapshot, transplanted back — exactly what a real
+    // reload does — which carries the token forward and bumps the incarnation.
+    const ReviveOutcome ro = bus.swap_state(steward, bus.snapshot_bytes(steward));
+    REQUIRE(ro.revived);
+    const Steward after = steward_state(bus, steward);
+    CHECK(after.token == before.token); // the successor holds the same number...
+    CHECK(after.deferred == 1);         // ...and believes it is a live capability
+
+    // ...and the completion buys it nothing. Same WeaveId, same role in the world,
+    // same token — different incarnation.
+    bus.send(asker.id, Message(tick(2)));
+    bus.pump();
+    const Steward tried = steward_state(bus, steward);
+    CHECK(tried.count == 2); // POSITIVE CONTROL: the successor DID handle it...
+    CHECK(answers == 0);     // ...and reached nobody
+    CHECK(tried.spent == 0);
+}
+
+TEST_CASE("R2B-2: the requester dying strands a loaded steward's answer rather than misdelivering "
+          "it") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    const WeaveId steward = lr.id;
+
+    Registered asker = register_probe(bus, {pong_schema(), tick_schema()});
+    int answers = 0;
+    asker.weave->on_handle = [&](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Tick") {
+            b.send(steward, Message(ping(9), WeaveId{}, WeaveId{}, kAskCorrelation));
+            return;
+        }
+        ++answers;
+    };
+
+    bus.send(asker.id, Message(tick(1)));
+    bus.pump();
+    REQUIRE(steward_state(bus, steward).deferred == 1);
+
+    // The requester leaves, and somebody else arrives after it.
+    bus.unregister_weave(asker.id);
+    Registered newcomer = register_probe(bus, {pong_schema(), tick_schema()});
+
+    bus.send(steward, Message(greet("now")));
+    bus.pump();
+    const Steward after = steward_state(bus, steward);
+    CHECK(after.count == 2); // POSITIVE CONTROL: it really tried
+    CHECK(answers == 0);
+    CHECK(newcomer.weave->handled_names.empty()); // and NOT onto whoever came next
+    CHECK(after.spent == 0);
+}
+
+TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish somebody else's "
+          "conversation") {
+    // The seam's token is a number, and a number is guessable. What stops a thief
+    // is not secrecy: it is that the record names its respondent AT AN
+    // INCARNATION, so a token only ever spends a right its holder already had.
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    LoadResult first = kernel.load("steward", ZEN_SO_DEFERS);
+    REQUIRE_MESSAGE(first.ok, first.error);
+    LoadResult second = kernel.load("thief", ZEN_SO_DEFERS);
+    REQUIRE_MESSAGE(second.ok, second.error);
+
+    // THE INCARNATIONS ARE EQUALIZED ON PURPOSE, and this is the difference
+    // between a pin and a coincidence. Injecting a token into the thief takes a
+    // reload, which advances ITS incarnation — so without this the incarnation
+    // term alone would refuse the theft and the respondent term would never be
+    // tested. Reloading the victim first puts both at incarnation 2, leaving
+    // respondent identity as the only thing standing between them.
+    REQUIRE(bus.swap_state(first.id, bus.snapshot_bytes(first.id)).revived);
+
+    Registered asker = register_probe(bus, {pong_schema(), tick_schema()});
+    int answers = 0;
+    asker.weave->on_handle = [&](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Tick") {
+            b.send(first.id, Message(ping(3), WeaveId{}, WeaveId{}, kAskCorrelation));
+            return;
+        }
+        ++answers;
+    };
+
+    bus.send(asker.id, Message(tick(1)));
+    bus.pump();
+    const Steward victim = steward_state(bus, first.id);
+    REQUIRE(victim.token != 0);
+
+    // Hand the thief the victim's exact token through its own persisted state —
+    // the strongest position a thief could ever reach, since the number is
+    // otherwise unguessable-by-luck rather than unguessable-in-principle.
+    Value stolen(defers_state_schema());
+    stolen.set("count", Cell::integer(0));
+    stolen.set("deferred", Cell::integer(0));
+    stolen.set("spent", Cell::integer(0));
+    stolen.set("token", Cell::integer(victim.token));
+    REQUIRE(bus.swap_state(second.id, serialize(stolen)).revived);
+    REQUIRE(steward_state(bus, second.id).deferred == 1); // it believes it holds one
+
+    bus.send(second.id, Message(greet("mine now")));
+    bus.pump();
+    const Steward robbed = steward_state(bus, second.id);
+    CHECK(robbed.count == 1); // POSITIVE CONTROL: the thief really did try
+    CHECK(answers == 0);
+    CHECK(robbed.spent == 0);
+
+    // And the rightful holder is unharmed: the conversation is still open and
+    // still its own to finish.
+    bus.send(first.id, Message(greet("now")));
+    bus.pump();
+    CHECK(answers == 1);
+    CHECK(steward_state(bus, first.id).spent == 1);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

@@ -258,6 +258,8 @@ WeaveId mount_into_role(Switchboard& bus, std::string role, Args&&... args) {
 /// inferred from an absence.
 struct RefusalTap {
     std::int64_t capability_denied = 0;
+    std::int64_t foreign_authority = 0; ///< a capability-object failure (R2B-2)
+    std::int64_t exhausted = 0;         ///< a published bound was reached (R2B-2)
     std::int64_t other_refusals = 0;
     std::int64_t delivered_answers = 0;
 
@@ -269,7 +271,11 @@ struct RefusalTap {
             if (ev.kind == EventKind::Delivered) {
                 ++delivered_answers;
             } else if (ev.kind == EventKind::Refused) {
-                if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
+                if (ev.refusal.reason == RefusalReason::ForeignAuthority) {
+                    ++foreign_authority;
+                } else if (ev.refusal.reason == RefusalReason::Exhausted) {
+                    ++exhausted;
+                } else if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
                     ++capability_denied;
                 } else {
                     ++other_refusals;
@@ -939,6 +945,8 @@ public:
 /// inferred from an absence.
 struct ActivationTap {
     std::int64_t delivered = 0;
+    std::int64_t foreign_authority = 0; ///< the accurate reason (R2B-2)
+    std::int64_t exhausted = 0;         ///< a published bound was reached (R2B-2)
     std::int64_t capability_denied = 0;
     std::int64_t other_refusals = 0;
 
@@ -950,7 +958,11 @@ struct ActivationTap {
             if (ev.kind == EventKind::Delivered) {
                 ++delivered;
             } else if (ev.kind == EventKind::Refused) {
-                if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
+                if (ev.refusal.reason == RefusalReason::ForeignAuthority) {
+                    ++foreign_authority;
+                } else if (ev.refusal.reason == RefusalReason::Exhausted) {
+                    ++exhausted;
+                } else if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
                     ++capability_denied;
                 } else {
                     ++other_refusals;
@@ -982,7 +994,11 @@ TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy b
     // Nothing was delivered at all: the attestation was refused where it was
     // asked for, not swallowed quietly at the far end.
     CHECK(tap.delivered == 0);
-    CHECK(tap.capability_denied == 1); // visible on the tap, at the same altitude as a grant refusal
+    // THE DIAGNOSTIC IS ACCURATE, not merely present (R2B-2). The grant here is
+    // perfectly correct; what is wrong is the authority DOMAIN, and saying
+    // "CapabilityDenied" would send an operator looking at grants.
+    CHECK(tap.foreign_authority == 1);
+    CHECK(tap.capability_denied == 0);
     CHECK(tap.other_refusals == 0);
 
     // And the victim's own view agrees: nothing arrived, nothing was accepted,
@@ -1015,7 +1031,8 @@ TEST_CASE("R2B-1b: an authority whose issuing Loom has been destroyed cannot be 
     bus.pump();
 
     CHECK(tap.delivered == 0);
-    CHECK(tap.capability_denied == 1);
+    CHECK(tap.foreign_authority == 1);
+    CHECK(tap.capability_denied == 0);
     CHECK(log.accepted == 0);
 
     // Destroying somebody else's board did nothing to THIS one's authority.
@@ -1055,7 +1072,8 @@ TEST_CASE("R2B-1b: authority does not follow a board's ADDRESS — reusing a dea
                  Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
     second->pump();
     CHECK(tap.delivered == 0);
-    CHECK(tap.capability_denied == 1);
+    CHECK(tap.foreign_authority == 1);
+    CHECK(tap.capability_denied == 0);
     CHECK(log.accepted == 0);
 
     // THE POSITIVE CONTROL, on this very board at this very address.
@@ -1136,6 +1154,637 @@ TEST_CASE("R2B-1b: a Switchboard is an authority domain, and is deliberately nei
     // And an authority is copyable — that is how the control door holds its own.
     static_assert(std::is_copy_constructible_v<LifecycleAuthority>);
     CHECK(true); // the assertions above are the case
+}
+
+
+// ============================================================================
+// R2B-2 — the answer may wait
+// ============================================================================
+//
+// THE LAW: an answer may outlive the handler, but never the conversation or the
+// incarnation that earned it.
+
+namespace {
+
+/// "Finish the job" — the later message a deferring responder is waiting for.
+struct ProvFinish {
+    std::string tag;
+    ZEN_SHAPE(ProvFinish, 1, ZEN_FIELD(tag));
+};
+
+/// A responder that DEFERS: it takes the answer right away with it, returns from
+/// the request handler without answering, and answers from a later handler.
+class Deferrer : public WeaveBase<Deferrer, ProvState, Accept<ProvAsk, ProvFinish>,
+                                  Emit<ProvAnswer>> {
+public:
+    enum class Mode {
+        Normal,        ///< defer, then answer on Finish
+        DeferTwice,    ///< a second defer_answer() must fail
+        AnswerAfter,   ///< mail.answer() after deferring must provide nothing
+        SpendTwice,    ///< a second spend must fail
+        ReleaseThenSpend, ///< release, then try to spend
+    };
+
+    explicit Deferrer(Mode mode) : mode_(mode) {}
+
+    void on(const ProvAsk&, Mail& mail) {
+        ++state_.n;
+        pending_ = mail.defer_answer();
+        deferred_valid_ = pending_.valid();
+        if (mode_ == Mode::DeferTwice) {
+            // ONE REQUEST, ONE ANSWER: deferring CONVERTED the immediate right, so
+            // there is nothing left to convert a second time.
+            second_defer_valid_ = mail.defer_answer().valid();
+        }
+        if (mode_ == Mode::AnswerAfter) {
+            // ...and nothing left to answer with, either.
+            immediate_after_defer_ = mail.answer(ProvAnswer{"immediate-after-defer"}).valid();
+        }
+        // NOTE WHAT DOES NOT HAPPEN HERE: no answer. The handler returns.
+    }
+
+    void on(const ProvFinish& f, Mail& mail) {
+        ++state_.n;
+        if (mode_ == Mode::ReleaseThenSpend) {
+            release_deferred(pending_, mail);
+        }
+        first_spend_ = answer_deferred(pending_, mail, ProvAnswer{f.tag}).valid();
+        if (mode_ == Mode::SpendTwice || mode_ == Mode::ReleaseThenSpend) {
+            second_spend_ = answer_deferred(pending_, mail, ProvAnswer{f.tag + ".again"}).valid();
+        }
+    }
+
+    /// Test-only: the opaque number the board handed it. A test needs this to
+    /// hand a THIEF the strongest thing a thief could ever obtain.
+    std::uint64_t token() const { return pending_.opaque_token(); }
+
+    /// Test-only: move the CAPABILITY ITSELF out, and into another weave. No weave
+    /// can do this — `DeferredAnswer` has no wire form, so there is no message that
+    /// carries one — which is precisely why a test has to reach in by hand to ask
+    /// the question "what if one really did cross?".
+    loom::DeferredAnswer take() { return std::move(pending_); }
+    void adopt(loom::DeferredAnswer a) { pending_ = std::move(a); }
+
+    bool deferred_valid_ = false;
+    bool second_defer_valid_ = false;
+    bool immediate_after_defer_ = false;
+    bool first_spend_ = false;
+    bool second_spend_ = false;
+
+private:
+    Mode mode_;
+    loom::DeferredAnswer pending_{};
+};
+
+/// A weave that is handed everything publicly representable about somebody
+/// else's unfinished conversation and tries to finish it.
+class AnswerThief : public WeaveBase<AnswerThief, ProvState, Accept<ProvFinish>,
+                                     Emit<ProvAnswer>> {
+public:
+    AnswerThief(WeaveId victim, std::uint64_t correlation)
+        : victim_(victim), correlation_(correlation) {}
+
+    void on(const ProvFinish&, Mail& mail) {
+        ++state_.n;
+        // Everything it knows: the requester's id, the correlation, the shape.
+        // What it cannot do is hold the capability — `DeferredAnswer` is move-only,
+        // has no wire form, and is not a message field. So the strongest thing it
+        // can express is an ordinary send.
+        mail.send(victim_, ProvAnswer{"stolen"}, correlation_);
+        // ...and its own answer authority reaches only its own asker.
+        mail.answer(ProvAnswer{"stolen.answer"});
+    }
+
+private:
+    WeaveId victim_;
+    std::uint64_t correlation_;
+};
+
+/// A weave handed the victim's exact token NUMBER, which it rebuilds into a
+/// capability with the one public door that exists for the library side of the C
+/// seam. This is the strongest position a thief can reach: not a guess, the real
+/// number, presented from its own live handler at its own live incarnation.
+class TokenForger : public WeaveBase<TokenForger, ProvState, Accept<ProvFinish>,
+                                     Emit<ProvAnswer>> {
+public:
+    explicit TokenForger(std::uint64_t token) : token_(token) {}
+
+    void on(const ProvFinish&, Mail& mail) {
+        ++state_.n;
+        loom::DeferredAnswer forged = loom::DeferredAnswer::from_host_token(token_);
+        forged_valid_ = forged.valid(); // it really did build one
+        spent_ = answer_deferred(forged, mail, ProvAnswer{"forged-token"}).valid();
+    }
+
+    bool forged_valid_ = false;
+    bool spent_ = false;
+
+private:
+    std::uint64_t token_;
+};
+
+} // namespace
+
+TEST_CASE("R2B-2: the answer waits — a responder defers, the handler returns, and a LATER "
+          "handler answers the original request") {
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    // The ask, by role — the responder is chosen at delivery as always.
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+
+    // THE HANDLER RETURNED WITHOUT ANSWERING, and the proof is that the queue is
+    // empty and the asker has heard nothing — not merely that the answer came
+    // later than we looked.
+    CHECK(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
+    CHECK(heard.answers.empty());
+    CHECK(bus.pending() == 0);
+
+    // AN UNRELATED QUEUE TURN, so "later" is real rather than an artifact of one
+    // pump: an ordinary message to somebody else, handled in between.
+    const WeaveId bystander = mount<Asker>(bus, heard);
+    bus.send(bystander, Message(to_value(ProvAnswer{"unrelated"})));
+    bus.pump();
+    CHECK(heard.answers.size() == 1); // the bystander's, not an answer to the ask
+    CHECK_FALSE(heard.answers[0].attested);
+
+    // Now the completion arrives, and the SAME LIVING INCARNATION spends what it
+    // kept.
+    bus.send(steward, Message(to_value(ProvFinish{"prepared"})));
+    bus.pump();
+
+    REQUIRE(heard.answers.size() == 2);
+    CHECK(heard.answers[1].tag == "prepared");
+    CHECK(heard.answers[1].attested);                          // authentic answer provenance...
+    CHECK(heard.answers[1].correlation == kPublicCorrelation); // ...to the ORIGINAL request
+    CHECK(heard.answers[1].sender == steward.value);
+    CHECK(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
+}
+
+TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second deferral, no "
+          "immediate answer afterwards, and no second spend") {
+    // One request grants one answer, whichever door it leaves by.
+    {
+        Switchboard bus;
+        Received heard;
+        const WeaveId asker = mount<Asker>(bus, heard);
+        const WeaveId steward =
+            mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::DeferTwice);
+        bus.send_as_to_role(asker, kProvRole,
+                            Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
+        bus.pump();
+        Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+        CHECK(d->deferred_valid_);
+        CHECK_FALSE(d->second_defer_valid_); // nothing left to convert
+    }
+    {
+        Switchboard bus;
+        Received heard;
+        const WeaveId asker = mount<Asker>(bus, heard);
+        const WeaveId steward =
+            mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::AnswerAfter);
+        bus.send_as_to_role(asker, kProvRole,
+                            Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
+        bus.pump();
+        Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+        CHECK(d->deferred_valid_);
+        CHECK_FALSE(d->immediate_after_defer_); // the immediate door is closed
+        CHECK(heard.answers.empty());           // and nothing leaked out of it
+    }
+    {
+        Switchboard bus;
+        Received heard;
+        const WeaveId asker = mount<Asker>(bus, heard);
+        const WeaveId steward =
+            mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::SpendTwice);
+        bus.send_as_to_role(asker, kProvRole,
+                            Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
+        bus.pump();
+        bus.send(steward, Message(to_value(ProvFinish{"once"})));
+        bus.pump();
+        Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+        CHECK(d->first_spend_);
+        CHECK_FALSE(d->second_spend_);        // consumed before queueing
+        CHECK(heard.answers.size() == 1);     // exactly one answer exists
+        CHECK(heard.answers[0].attested);
+    }
+}
+
+TEST_CASE("R2B-2: releasing abandons the conversation — silently to the requester, immediately "
+          "to the bus") {
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::ReleaseThenSpend);
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
+    bus.pump();
+    bus.send(steward, Message(to_value(ProvFinish{"too late"})));
+    bus.pump();
+
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    CHECK_FALSE(d->first_spend_);  // released, so there is nothing to spend
+    CHECK_FALSE(d->second_spend_);
+    CHECK(heard.answers.empty());  // and the requester is told nothing at all
+}
+
+TEST_CASE("R2B-2: another weave knowing every public value cannot finish somebody else's "
+          "conversation") {
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId thief = mount<AnswerThief>(bus, asker, kPublicCorrelation);
+
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    REQUIRE(heard.answers.empty());
+
+    // The thief knows the requester, the correlation and the shape. The
+    // capability is move-only, has no wire representation, and is not a message
+    // field — so there is nothing for it to hold, and its best effort is an
+    // ordinary send.
+    bus.send(thief, Message(to_value(ProvFinish{"now"})));
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].tag == "stolen");
+    CHECK_FALSE(heard.answers[0].attested); // no provenance, so not an answer
+
+    // And the real steward can still finish, so the refusal above cost nothing.
+    bus.send(steward, Message(to_value(ProvFinish{"prepared"})));
+    bus.pump();
+    REQUIRE(heard.answers.size() == 2);
+    CHECK(heard.answers[1].attested);
+    CHECK(heard.answers[1].correlation == kPublicCorrelation);
+}
+
+TEST_CASE("R2B-2: the real token, forged into a capability by a weave that never received the "
+          "request, buys nothing") {
+    // THE RESIDUAL, PINNED RATHER THAN ARGUED. `from_host_token` must be public —
+    // it is how the library side of the C seam rebuilds a capability from the
+    // integer the host handed it — so a native weave can mint a token-shaped value
+    // at will. What makes that safe is not secrecy: it is that the record names
+    // its respondent, so presenting a number nobody gave you reaches nothing.
+    //
+    // NOTE the incarnations: both weaves are mounted fresh, so both are at
+    // incarnation 1. The forger is therefore refused by RESPONDENT IDENTITY and by
+    // nothing else — the incarnation term cannot mask it here.
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    REQUIRE(d->deferred_valid_);
+    const std::uint64_t real_token = d->token();
+    REQUIRE(real_token != 0);
+
+    // Handed the genuine number — not a guess.
+    const WeaveId forger = mount<TokenForger>(bus, real_token);
+    bus.send(forger, Message(to_value(ProvFinish{"take it"})));
+    bus.pump();
+    TokenForger* f = static_cast<TokenForger*>(bus.weave(forger));
+    CHECK(f->forged_valid_); // the capability object really was constructible...
+    CHECK_FALSE(f->spent_);  // ...and spending it reached nothing
+    CHECK(heard.answers.empty());
+
+    // And the conversation is untouched: still open, still the steward's to finish.
+    bus.send(steward, Message(to_value(ProvFinish{"mine"})));
+    bus.pump();
+    CHECK(d->first_spend_);
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].tag == "mine");
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2: the role moving on does not carry the unfinished conversation with it") {
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId first =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    REQUIRE(heard.answers.empty());
+
+    // A ROLE CHOOSES WHO RECEIVES AN ASK. IT DOES NOT INHERIT UNFINISHED
+    // CONVERSATIONS. `first` keeps living — it is only the role that moves — so
+    // this isolates succession from death.
+    bus.unregister_weave(first);
+    const WeaveId second =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    // The successor gets the completion message and has nothing to spend.
+    bus.send(second, Message(to_value(ProvFinish{"not mine"})));
+    bus.pump();
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(second));
+    CHECK_FALSE(d->deferred_valid_); // it never received the ask
+    CHECK_FALSE(d->first_spend_);
+    CHECK(heard.answers.empty());
+}
+
+TEST_CASE("R2B-2: reload behind a stable WeaveId is a NEW incarnation — the successor cannot "
+          "spend its predecessor's answer right") {
+    // THE LOAD-BEARING IDENTITY QUESTION, pinned. A WeaveId is never reused, so it
+    // already distinguishes a SWAP successor. It does NOT distinguish a RELOAD
+    // successor, because reload deliberately keeps the id — so without an
+    // incarnation counter, handler-surviving authority would silently become
+    // reload-surviving authority.
+    Switchboard bus;
+    Received heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    REQUIRE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
+
+    // Reload it in place: SAME WeaveId, same role, new code behind it.
+    Value state(schema_of<ProvState>());
+    state.set("n", Cell::integer(0));
+    const ReviveOutcome ro = bus.swap_state(steward, serialize(state));
+    REQUIRE(ro.revived);
+
+    // The completion arrives at the same id — and the right is gone with the
+    // incarnation that earned it.
+    bus.send(steward, Message(to_value(ProvFinish{"after reload"})));
+    bus.pump();
+    CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
+    CHECK(heard.answers.empty());
+}
+
+TEST_CASE("R2B-2: the requester dying prevents delivery, and no successor inherits the answer") {
+    Switchboard bus;
+    Received heard;
+    Received successor_heard;
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    REQUIRE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
+
+    // The requester goes away, and a fresh weave takes its place in the world.
+    bus.unregister_weave(asker);
+    const WeaveId newcomer = mount<Asker>(bus, successor_heard);
+
+    bus.send(steward, Message(to_value(ProvFinish{"prepared"})));
+    bus.pump();
+
+    CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
+    CHECK(heard.answers.empty());
+    // AND CRUCIALLY the answer did not land on whoever came next. WeaveIds are
+    // never reused, so `newcomer` is a different id — but this pins that the
+    // answer is addressed to the recorded requester and nothing else.
+    CHECK(successor_heard.answers.empty());
+    CHECK(newcomer.value != asker.value);
+}
+
+TEST_CASE("R2B-2: an ordinary delivery has no answer authority to defer") {
+    Switchboard bus;
+    Received heard;
+    (void)mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    // Root-sent: nobody to answer, so nothing to convert into a deferred answer.
+    bus.send(steward, Message(to_value(ProvAsk{"rootless"})));
+    bus.pump();
+    CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
+
+    // And spending an invalid capability is safe and loud rather than silent: the
+    // completion handler's attempt simply fails.
+    bus.send(steward, Message(to_value(ProvFinish{"nothing to say"})));
+    bus.pump();
+    CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
+    CHECK(heard.answers.empty());
+}
+
+TEST_CASE("R2B-2: a deferred answer is board-relative — World A's capability has no standing "
+          "in World B, even with identical ids and correlations") {
+    Switchboard world_a;
+    Switchboard world_b;
+    Received heard_a;
+    Received heard_b;
+
+    // Mounted in the same order, so the logical ids MATCH across worlds.
+    const WeaveId asker_a = mount<Asker>(world_a, heard_a);
+    const WeaveId asker_b = mount<Asker>(world_b, heard_b);
+    REQUIRE(asker_a.value == asker_b.value);
+    const WeaveId steward_a =
+        mount_into_role<Deferrer>(world_a, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId steward_b =
+        mount_into_role<Deferrer>(world_b, kProvRole, Deferrer::Mode::Normal);
+    REQUIRE(steward_a.value == steward_b.value);
+
+    // Both worlds run the same conversation with the same correlation, so both
+    // registries hold a record with the SAME token number — which is exactly the
+    // trap a token-only design would fall into.
+    world_a.send_as_to_role(asker_a, kProvRole,
+                            Message(to_value(ProvAsk{"a"}), asker_a, WeaveId{},
+                                    kPublicCorrelation));
+    world_a.pump();
+    world_b.send_as_to_role(asker_b, kProvRole,
+                            Message(to_value(ProvAsk{"b"}), asker_b, WeaveId{},
+                                    kPublicCorrelation));
+    world_b.pump();
+
+    // Each world finishes its own conversation, and only its own.
+    world_a.send(steward_a, Message(to_value(ProvFinish{"from-a"})));
+    world_a.pump();
+    world_b.send(steward_b, Message(to_value(ProvFinish{"from-b"})));
+    world_b.pump();
+
+    REQUIRE(heard_a.answers.size() == 1);
+    REQUIRE(heard_b.answers.size() == 1);
+    CHECK(heard_a.answers[0].tag == "from-a");
+    CHECK(heard_b.answers[0].tag == "from-b");
+    CHECK(heard_a.answers[0].attested);
+    CHECK(heard_b.answers[0].attested);
+}
+
+TEST_CASE("R2B-2: and the capability ITSELF does not cross — World A's answer right, presented by "
+          "World B's steward against a matching record, is refused") {
+    // THE PREVIOUS CASE IS NOT ENOUGH, and saying why is the point. There, each
+    // world spent its own capability, so the issuer never had to be the thing that
+    // refused anything — the tokens stayed home by construction. This case makes
+    // the capability actually cross: the object minted by World A is moved, by
+    // hand, into World B's steward, where a record with the SAME token number
+    // names that very steward at that very incarnation. Every check but one
+    // agrees. The issuing Loom is the one that says no.
+    Switchboard world_a;
+    Switchboard world_b;
+    Received heard_a;
+    Received heard_b;
+
+    const WeaveId asker_a = mount<Asker>(world_a, heard_a);
+    const WeaveId asker_b = mount<Asker>(world_b, heard_b);
+    const WeaveId steward_a =
+        mount_into_role<Deferrer>(world_a, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId steward_b =
+        mount_into_role<Deferrer>(world_b, kProvRole, Deferrer::Mode::Normal);
+    REQUIRE(asker_a.value == asker_b.value);
+    REQUIRE(steward_a.value == steward_b.value);
+
+    world_a.send_as_to_role(asker_a, kProvRole,
+                            Message(to_value(ProvAsk{"a"}), asker_a, WeaveId{},
+                                    kPublicCorrelation));
+    world_a.pump();
+    world_b.send_as_to_role(asker_b, kProvRole,
+                            Message(to_value(ProvAsk{"b"}), asker_b, WeaveId{},
+                                    kPublicCorrelation));
+    world_b.pump();
+
+    Deferrer* da = static_cast<Deferrer*>(world_a.weave(steward_a));
+    Deferrer* db = static_cast<Deferrer*>(world_b.weave(steward_b));
+    REQUIRE(da->deferred_valid_);
+    REQUIRE(db->deferred_valid_);
+    // The trap, made real: the two worlds minted the same NUMBER.
+    REQUIRE(da->token() == db->token());
+
+    // World B's steward now holds World A's capability — and nothing else about
+    // it changed: same id, same role, same incarnation, same live record.
+    db->adopt(da->take());
+    world_b.send(steward_b, Message(to_value(ProvFinish{"with a's right"})));
+    world_b.pump();
+
+    CHECK_FALSE(db->first_spend_);
+    CHECK(heard_b.answers.empty()); // nothing was answered in B...
+    CHECK(heard_a.answers.empty()); // ...and certainly nothing crossed into A
+}
+
+namespace {
+
+/// Fill the deferred-answer registry to its published bound using an ordinary
+/// weave doing something entirely ordinary: it holds exactly ONE capability
+/// member, so every ask after the first overwrites — and thereby LEAKS — the one
+/// before it. Nothing will ever spend those records. This is the hole the bound
+/// exists to close, and each reclamation claim below has to face a FULL registry
+/// or it proves nothing.
+struct FullRegistry {
+    Received heard;
+    RefusalTap tap;
+    WeaveId asker{};
+    WeaveId steward{};
+
+    void ask(Switchboard& bus, const char* tag) {
+        bus.send_as_to_role(asker, kProvRole,
+                            Message(to_value(ProvAsk{tag}), asker, WeaveId{},
+                                    kPublicCorrelation));
+        bus.pump();
+    }
+
+    Deferrer* fill(Switchboard& bus, Deferrer::Mode mode) {
+        tap.arm(bus, ProvAsk::zen_name);
+        asker = mount<Asker>(bus, heard);
+        steward = mount_into_role<Deferrer>(bus, kProvRole, mode);
+        Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+        bool every_one_deferred = true;
+        for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+            ask(bus, "leak");
+            every_one_deferred = every_one_deferred && d->deferred_valid_;
+        }
+        // ONE assertion, not sixty-four: a per-iteration REQUIRE would make this
+        // suite's assertion count a function of the bound.
+        REQUIRE(every_one_deferred);
+        REQUIRE(tap.exhausted == 0); // the bound is not hit EARLY, either
+        return d;
+    }
+};
+
+} // namespace
+
+TEST_CASE("R2B-2: the registry is bounded, the overflow says CAPACITY, and the caller keeps the "
+          "immediate opportunity it never spent") {
+    // A deferred answer is host-side state a weave asks for, so an unbounded one
+    // would be a memory hole any weave could dig by deferring and never answering.
+    // The bound is published — and DRIVEN here, because a bound nobody reaches is
+    // a comment.
+    static_assert(Switchboard::kMaxDeferredAnswers == 64);
+
+    Switchboard bus;
+    FullRegistry world;
+    // AnswerAfter tries to answer immediately after deferring. While deferring
+    // SUCCEEDS that attempt must fail (the right was converted, not copied) — and
+    // once the registry is full it must SUCCEED, which is how "nothing was
+    // consumed" is measured rather than asserted.
+    Deferrer* d = world.fill(bus, Deferrer::Mode::AnswerAfter);
+    CHECK_FALSE(d->immediate_after_defer_);
+    CHECK(world.heard.answers.empty());
+
+    world.ask(bus, "one too many");
+
+    CHECK_FALSE(d->deferred_valid_);      // no capability...
+    CHECK(world.tap.exhausted == 1);      // ...refused VISIBLY, and as capacity...
+    CHECK(world.tap.foreign_authority == 0);
+    CHECK(world.tap.capability_denied == 0);
+    // ...and the immediate opportunity intact, so a well-written weave degrades to
+    // answering now instead of losing the conversation.
+    CHECK(d->immediate_after_defer_);
+    REQUIRE(world.heard.answers.size() == 1);
+    CHECK(world.heard.answers[0].tag == "immediate-after-defer");
+    CHECK(world.heard.answers[0].attested); // and it is still a REAL answer
+}
+
+TEST_CASE("R2B-2: a leaked capability costs one slot only until NEW CODE lands behind its owner") {
+    // Reclamation on reload, facing a FULL registry — which is the only way to see
+    // it. Reclamation and the incarnation comparison in spend_deferred_as are two
+    // independent guards against the same mistake; this one watches reclamation,
+    // and it must not be preceded by anything that empties the registry first.
+    Switchboard bus;
+    FullRegistry world;
+    (void)world.fill(bus, Deferrer::Mode::Normal);
+
+    Value fresh(schema_of<ProvState>());
+    fresh.set("n", Cell::integer(0));
+    REQUIRE(bus.swap_state(world.steward, serialize(fresh)).revived);
+
+    // The successor is an ordinary live weave and can defer at once: all 64 slots
+    // came back with the incarnation that owned them.
+    world.ask(bus, "after the reload");
+    CHECK(static_cast<Deferrer*>(bus.weave(world.steward))->deferred_valid_);
+    CHECK(world.tap.exhausted == 0);
+}
+
+TEST_CASE("R2B-2: a leaked capability costs one slot only until its owner DIES") {
+    // The same claim, the other event, and a separate full registry — because
+    // reclaiming on reload would otherwise have emptied this one before death got
+    // a chance to be the thing that reclaimed anything.
+    Switchboard bus;
+    FullRegistry world;
+    (void)world.fill(bus, Deferrer::Mode::Normal);
+
+    bus.unregister_weave(world.steward);
+    const WeaveId reborn =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    world.ask(bus, "after the reaping");
+    CHECK(static_cast<Deferrer*>(bus.weave(reborn))->deferred_valid_);
+    CHECK(world.tap.exhausted == 0);
 }
 
 } // TEST_SUITE

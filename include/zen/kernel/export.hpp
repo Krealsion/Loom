@@ -91,6 +91,40 @@ public:
         return loom::Ticket{};
     }
 
+    // ---- deferred answers across the seam (R2B-2) ---------------------------
+    //
+    // The capability crosses as an OPAQUE TOKEN and nothing else. It carries no
+    // issuer here, and does not need one: a loaded weave can only present a token
+    // through the host context of the delivery that handed it one, so the token
+    // reaches its own board's registry or no registry at all.
+
+    loom::DeferredAnswer make_deferred_answer() override {
+        if (host_ == nullptr || host_->defer_answer == nullptr) {
+            return loom::DeferredAnswer{};
+        }
+        return loom::DeferredAnswer::from_host_token(host_->defer_answer(host_->ctx));
+    }
+
+    loom::Ticket spend_deferred(const loom::DeferredAnswer& answer, loom::Message msg) override {
+        if (host_ == nullptr || host_->answer_deferred == nullptr || !answer.valid()) {
+            return loom::Ticket{};
+        }
+        const std::string bytes = loom::serialize(msg.payload);
+        const ZenStatus st = host_->answer_deferred(
+            host_->ctx, answer.opaque_token(),
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        // The library-side Ticket is not a bus seq (it never is across this seam),
+        // but success/failure IS meaningful and is the only way a loaded steward
+        // can learn whether its answer went out.
+        return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
+    }
+
+    void release_deferred(const loom::DeferredAnswer& answer) override {
+        if (host_ != nullptr && host_->release_deferred != nullptr && answer.valid()) {
+            host_->release_deferred(host_->ctx, answer.opaque_token());
+        }
+    }
+
 private:
     const ZenHostApi* host_;
 };

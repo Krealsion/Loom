@@ -109,6 +109,12 @@ zen_add_test_weave(zen_test_weave_activates_drift ZEN_WEAVE_ACTIVATES ZEN_WEAVE_
 # wall makes a rejected candidate's schema admission observable from outside.
 zen_add_test_weave(zen_test_weave_activates_conflict
     ZEN_WEAVE_ACTIVATES ZEN_WEAVE_ACTIVATES_CONFLICT)
+# R2B-2: the DEFERRING STEWARD — a dynamically loaded weave that takes an ask's
+# answer right away with it, returns without answering, and answers from a LATER
+# handler. It is the central proof, and it must be a real .so: the whole question
+# is whether the right survives the handler that earned it, and a native lambda
+# holding the old Mail would answer a different question.
+zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
@@ -125,7 +131,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
-    zen_test_staleabi)
+    zen_test_staleabi zen_test_weave_defers)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -143,7 +149,8 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ACTIVATES_DRIFT=\"$<TARGET_FILE:zen_test_weave_activates_drift>\""
     "ZEN_SO_ACTIVATES_CONFLICT=\"$<TARGET_FILE:zen_test_weave_activates_conflict>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
-    "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\"")
+    "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\""
+    "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
 
@@ -196,7 +203,10 @@ endforeach()
 set(ZEN_ISOLATION_WEAVE_LIBS zen_test_weave_crasher zen_test_weave_silent
     zen_test_weave_netprobe zen_test_weave_fsprobe zen_test_weave_membomb
     zen_test_weave_forkbomb zen_test_mod_storage zen_test_storage_client
-    zen_test_storage_broker zen_test_net_client zen_test_net_broker zen_test_forge_client)
+    zen_test_storage_broker zen_test_net_client zen_test_net_broker zen_test_forge_client
+    # R2B-2: the deferring steward is mounted out-of-process too, to pin that the
+    # capability FAILS CLOSED across the pipe rather than being faked across it.
+    zen_test_weave_defers)
 add_dependencies(zen-tests ${ZEN_ISOLATION_WEAVE_LIBS})
 
 # The isolation tests spawn the real child-host executable.

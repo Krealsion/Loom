@@ -39,7 +39,15 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 2u
+#define ZEN_ABI_VERSION 3u
+
+/* v3 (R2B-2): the host API gained the deferred-answer door, so a DYNAMICALLY
+ * LOADED weave can hold an answer right across handler boundaries — the case a
+ * dynamic steward needs and v2 could not express. Appending callbacks is
+ * binary-compatible in itself, but the version is still bumped: a v2 library
+ * loaded by a v3 host would be indistinguishable from a v3 one by number alone,
+ * and a v3 library loaded by a v2 host would read past the struct. A version is
+ * exactly the thing that makes those two cases refuse instead of guess. */
 
 /* Delivery provenance flags (ZEN_PROV_*). Zero means an ordinary message: it
  * stands on its shape and its sender stamp, and claims nothing more. These are
@@ -92,6 +100,20 @@ typedef struct ZenHostApi {
      * connection, so a mod cannot impersonate another. `role` is NUL-terminated. */
     ZenStatus (*send_to_role)(void* ctx, const char* role, uint64_t reply_to,
                               uint64_t correlation, const uint8_t* payload, size_t len);
+    /* Deferred answers (R2B-2). The capability crosses as an OPAQUE token: it has
+     * no wire form, is not a message field, is not reconstructible from sender,
+     * correlation, role or schema, and is validated host-side against the bound
+     * requester, respondent, both incarnations and correlation. A number on its
+     * own is not authority — the library must also be speaking through the host
+     * context of a live delivery to the incarnation that earned the right.
+     *
+     * defer_answer:    convert this delivery's immediate answer right into a
+     *                  retained one. 0 == there was none to convert.
+     * answer_deferred: spend it. The host chooses the recipient and correlation.
+     * release_deferred: abandon it; the host slot is reclaimed at once. */
+    uint64_t (*defer_answer)(void* ctx);
+    ZenStatus (*answer_deferred)(void* ctx, uint64_t token, const uint8_t* payload, size_t len);
+    void (*release_deferred)(void* ctx, uint64_t token);
 } ZenHostApi;
 
 /* The single descriptor a Weave library exposes, returned by zen_weave_abi().

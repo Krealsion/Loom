@@ -68,6 +68,36 @@ public:
         return Ticket{};
     }
 
+    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (R2B-2). Converts this delivery's
+    /// immediate answer opportunity into one that survives the handler's return.
+    ///
+    /// It CONSUMES the immediate opportunity rather than sitting beside it: after
+    /// a successful deferral `answer()` provides nothing and a second
+    /// `defer_answer()` fails, so a request still grants exactly one answer.
+    /// Returns an invalid capability when this delivery has no answer authority to
+    /// convert — an ordinary path that never earned one cannot be deferred into an
+    /// authenticated answer.
+    ///
+    /// The default is "no authority here", the same truthful answer a Bus that is
+    /// not a live delivery gives to `answer()`.
+    virtual DeferredAnswer make_deferred_answer() { return DeferredAnswer{}; }
+
+    /// Spend a deferred answer. `token` names bus-private state; the bus checks it
+    /// against the bound requester, respondent, both incarnations and the original
+    /// correlation, and against the CURRENT speaker — which is why this lives on
+    /// the Bus a handler was handed rather than anywhere a capability could be
+    /// carried to. Consumed before queueing, so reentrancy cannot double it.
+    virtual Ticket spend_deferred(const DeferredAnswer& answer, Message msg) {
+        (void)answer;
+        (void)msg;
+        return Ticket{};
+    }
+
+    /// Abandon a deferred answer without answering. The conversation ends; the
+    /// requester is told nothing (V1 has no cancellation vocabulary) and the
+    /// bus-side record is reclaimed immediately rather than waiting for death.
+    virtual void release_deferred(const DeferredAnswer& answer) { (void)answer; }
+
     /// Attach Loom's lifecycle attestation to a message about `target`'s freshly
     /// committed incarnation. Requires the capability object — see
     /// LifecycleAuthority — and is still authorized against the sender's grant.

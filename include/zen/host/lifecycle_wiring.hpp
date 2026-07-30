@@ -11,11 +11,20 @@
 // WHY IT IS A SEPARATE HEADER, and why that is not merely a rename. R2B-1 put
 // the mint on `Switchboard` as a PUBLIC STATIC, reachable from every weave that
 // includes `zen/switchboard.hpp` — which is every native weave. Moving it here
-// removes it from the authoring surface; making it need a `Switchboard&`
-// removes it from a weave's reach even if the weave includes this file anyway.
-// The second wall is the load-bearing one: a weave is handed a `Bus&`, never
-// the Switchboard, so the argument this function requires is one no weave can
-// produce. Include it all you like; you still have nothing to pass it.
+// removes it from the authoring surface.
+//
+// BUT DO NOT OVERSTATE THE SECOND WALL (corrected in R2B-2). An earlier version
+// of this comment said a weave "has nothing to pass it", as though a weave could
+// not obtain a Switchboard at all. That is false, and the falsehood mattered:
+//
+//     An ordinary weave MAY construct another Switchboard and mint genuine
+//     authority there. That authority has no standing in the running Loom.
+//
+// Constructing a board is ordinary — a Switchboard is an ordinary object. What a
+// weave cannot do is make its own board be THIS one. The protection is not
+// scarcity of boards; it is that an authority names its issuer and the issuer
+// checks (R2B-1b, `Switchboard::issued_here`). Every Loom is its own authority
+// domain, and an authority minted elsewhere is real — elsewhere.
 //
 // That is the same line this codebase has always drawn. `Switchboard::send` is
 // root authority and `send_as` is a weave speaking as itself. Lifecycle minting

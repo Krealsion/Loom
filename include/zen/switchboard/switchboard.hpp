@@ -32,6 +32,19 @@ enum class RefusalReason : std::uint8_t {
     GateRefused,       ///< routing passed, but admit() refused — see `error`
     CapabilityDenied,  ///< the sender's grant does not permit (shape -> target); the gate is
                        ///< never reached. Authorization, not conformance.
+    /// A lifecycle/answer authority was presented that this Loom did not issue —
+    /// or that is expired, already spent, or bound to a different conversation or
+    /// incarnation. DISTINCT FROM CapabilityDenied on purpose (R2B-2): the
+    /// sender's grant may be perfectly correct while the AUTHORITY DOMAIN is
+    /// wrong, and reporting that as "you lack the grant" sends an operator
+    /// looking in exactly the wrong place. The grant answers "may you send this
+    /// shape?"; this answers "is this yours to say here?".
+    ForeignAuthority,
+    /// A published bound was reached, and nothing about authority or conformance
+    /// was wrong. Kept distinct from ForeignAuthority for the same reason that one
+    /// is distinct from CapabilityDenied: reporting a capacity limit as a foreign
+    /// capability would send an operator hunting a forgery that never happened.
+    Exhausted,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -216,6 +229,18 @@ public:
     /// never touches a live read today; published and pinned, like kMaxRelayPending.
     static constexpr std::size_t kJournalCapacity = 1024;
 
+    /// How many unfinished conversations one Loom will hold at once (R2B-2).
+    ///
+    /// BOUNDED AND PUBLISHED, like the journal above and for the same reason: a
+    /// deferred answer is host-side state a WEAVE asks for, so an unbounded one
+    /// would be a memory hole any weave could dig by deferring and never
+    /// answering. Exceeding it refuses visibly and leaves the caller's immediate
+    /// answer opportunity intact — a refused deferral is not a lost conversation.
+    /// Records are reclaimed on spending, on release, and when either participant
+    /// dies or is reloaded, so a LEAKED capability costs one slot only until its
+    /// owner does.
+    static constexpr std::size_t kMaxDeferredAnswers = 64;
+
     /// Register an observer/tap; it is notified of every delivery and lifecycle
     /// event. Returns an id for removal.
     ObserverId add_observer(Observer obs);
@@ -275,6 +300,12 @@ private:
         Grant grant;
         std::uint64_t reloads_used = 0;
         bool alive = true;
+        /// WHICH CODE this id currently is. A WeaveId is never reused, so it
+        /// already distinguishes a swap successor — but reload replaces the code
+        /// behind a STABLE id, so only this distinguishes a reload successor from
+        /// the incarnation that earned a deferred answer. Bumped wherever the
+        /// bus commits new code behind an existing id (swap_state, reload).
+        std::uint64_t incarnation = 1;
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };
@@ -311,6 +342,10 @@ private:
         WeaveId requester{};           ///< the request's stamped sender: the only legal recipient
         std::uint64_t correlation = 0; ///< the request's own: the answer may not choose it
         bool spent = false;            ///< one delivery, one answer
+        /// The shape of the request being answered, carried so that a refusal
+        /// raised where no message is in hand — deferral overflow — can still say
+        /// WHICH conversation it refused instead of naming an unrelated schema.
+        std::shared_ptr<const Schema> shape{};
     };
 
     // The Bus a handler actually receives: it stamps the handling Weave's identity
@@ -331,6 +366,13 @@ private:
             return sb_.send_as_to_role(self_, role, std::move(msg));
         }
         Ticket answer(Message msg) override { return sb_.answer_as(self_, std::move(msg)); }
+        DeferredAnswer make_deferred_answer() override { return sb_.defer_answer_as(self_); }
+        Ticket spend_deferred(const DeferredAnswer& answer, Message msg) override {
+            return sb_.spend_deferred_as(self_, answer, std::move(msg));
+        }
+        void release_deferred(const DeferredAnswer& answer) override {
+            sb_.release_deferred_as(self_, answer);
+        }
         Ticket announce_lifecycle(const LifecycleAuthority& authority, WeaveId target, Message msg,
                                   std::int64_t sequence) override {
             return sb_.announce_as(self_, authority, target, std::move(msg), sequence);
@@ -355,6 +397,47 @@ private:
     /// The one write path for a lifecycle attestation.
     Ticket announce_as(WeaveId as_sender, const LifecycleAuthority& authority, WeaveId target,
                        Message msg, std::int64_t sequence);
+
+    // ---- deferred answers (R2B-2) -------------------------------------------
+
+    /// ONE UNFINISHED CONVERSATION, held by the bus.
+    ///
+    /// It records both participants' EXACT INCARNATIONS, not just their ids —
+    /// which is the load-bearing part. A WeaveId is never reused, so it
+    /// distinguishes a swap successor for free; it does NOT distinguish a RELOAD
+    /// successor, because reload replaces the code behind a stable id. Handler-
+    /// surviving authority must not accidentally become reload-surviving
+    /// authority, so the incarnation counter is what makes "the participant that
+    /// earned the right" mean the code that earned it.
+    struct DeferredRecord {
+        std::uint64_t token = 0; ///< 0 = a free slot
+        WeaveId requester{};
+        std::uint64_t requester_incarnation = 0;
+        WeaveId respondent{};
+        std::uint64_t respondent_incarnation = 0;
+        std::uint64_t correlation = 0;
+    };
+
+    DeferredAnswer defer_answer_as(WeaveId as_sender);
+    Ticket spend_deferred_as(WeaveId as_sender, const DeferredAnswer& answer, Message msg);
+    void release_deferred_as(WeaveId as_sender, const DeferredAnswer& answer);
+
+    /// Did THIS board issue this deferred answer? A capability held natively
+    /// carries its issuer; one held inside a dynamic library carries none, and is
+    /// board-relative structurally (its token can only reach its own registry).
+    bool issued_here_deferred(const DeferredAnswer& answer) const noexcept {
+        const std::shared_ptr<const LoomIdentity> issuer = answer.issuer().lock();
+        return issuer == nullptr || issuer == identity_;
+    }
+
+    /// Drop every unfinished conversation either side of which is `id` at an
+    /// incarnation that no longer exists. Called when a weave is unregistered and
+    /// when its code is replaced.
+    void forget_deferred_for(WeaveId id);
+
+    DeferredRecord* find_deferred(std::uint64_t token);
+    /// This weave's current incarnation, or 0 if it is not registered.
+    std::uint64_t incarnation_of(WeaveId id) const;
 
     /// Record and publish a refusal that never became a delivery, so a failure of
     /// authority is visible at the same altitude as a failure of capability.
@@ -444,6 +527,15 @@ private:
     /// invalid means no delivery is live, so nobody may answer.
     WeaveId current_target_{};
     ReplyAuthority authority_{};
+    std::vector<DeferredRecord> deferred_;      ///< bounded; see kMaxDeferredAnswers
+    /// Monotonic; a token is never reused. DELIBERATELY UNGUARDED against
+    /// exhaustion, unlike the activation sequence, and the difference is the
+    /// reason: that one is PERSISTED and revived from state bytes, so a caller can
+    /// hand it a large value and it must refuse rather than wrap. This one is
+    /// process-local, never serialized, never revived, and advances by exactly one
+    /// per deferral — so 2^64 is not a number an adversary can approach, only one a
+    /// process can outlive by any measure.
+    std::uint64_t next_deferred_token_ = 1;
 };
 
 } // namespace loom
