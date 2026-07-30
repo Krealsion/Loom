@@ -39,6 +39,24 @@ const char* name_of(RefusalReason r) noexcept {
     return "?";
 }
 
+const char* name_of(AdmitRefusal r) noexcept {
+    switch (r) {
+    case AdmitRefusal::None:
+        return "None";
+    case AdmitRefusal::ForeignAuthority:
+        return "ForeignAuthority";
+    case AdmitRefusal::NotACandidate:
+        return "NotACandidate";
+    case AdmitRefusal::OwnerChanged:
+        return "OwnerChanged";
+    case AdmitRefusal::IncumbentUnfit:
+        return "IncumbentUnfit";
+    case AdmitRefusal::RoleNotHeld:
+        return "RoleNotHeld";
+    }
+    return "?";
+}
+
 std::string Refusal::message() const {
     switch (reason) {
     case RefusalReason::None:
@@ -930,7 +948,13 @@ std::string Switchboard::snapshot_bytes(WeaveId id) const {
 bool Switchboard::seal_weave(WeaveId candidate, WeaveId coordinator) {
     WeaveRecord* rec = find(candidate);
     const WeaveRecord* owner = find(coordinator);
-    if (rec == nullptr || owner == nullptr || !rec->role.empty()) {
+    // A DEAD coordinator cannot own a preparation — it cannot converse, so the
+    // candidate would be sealed to a correspondent that can never answer. And an
+    // already-sealed candidate is not resealable: silently changing owners would
+    // transfer a prepared candidate to somebody else's transaction, and transfer
+    // semantics are deliberately not part of this errand.
+    if (rec == nullptr || owner == nullptr || !owner->alive || !rec->role.empty() ||
+        rec->sealed_by.valid()) {
         return false;
     }
     // The owner is captured as it is NOW — life and incarnation included — so a
@@ -984,26 +1008,46 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
     return true;
 }
 
-bool Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
-                                  const std::string& role,
-                                  const LifecycleAuthority& authority, Message activation,
-                                  std::int64_t sequence) {
+AdmitResult Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
+                                         const std::string& role,
+                                         const LifecycleAuthority& authority,
+                                         Message activation, std::int64_t sequence) {
     // EVERY PRECONDITION FIRST — including the authority, so an unattested caller
     // cannot move production topology.
     if (!issued_here(authority)) {
-        return false;
+        return {false, AdmitRefusal::ForeignAuthority};
     }
     WeaveRecord* cand = find(candidate);
     WeaveRecord* inc = find(incumbent);
-    if (cand == nullptr || inc == nullptr || !cand->sealed_by.valid() || !cand->alive ||
-        !inc->alive || inc->sealed_by.valid() || role.empty()) {
-        return false;
+    if (cand == nullptr || !cand->alive || !cand->sealed_by.valid()) {
+        return {false, AdmitRefusal::NotACandidate};
+    }
+    if (inc == nullptr || !inc->alive || inc->sealed_by.valid()) {
+        return {false, AdmitRefusal::IncumbentUnfit};
+    }
+    const CandidateOwner owner = cand->sealed_by;
+
+    // THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a).
+    //
+    // The candidate's private conversation already checks this on every message;
+    // admission did not, which left the strongest act in the system — moving
+    // production topology — resting on a stale fact. A trusted host caller holding
+    // a perfectly good lifecycle authority could admit a candidate whose
+    // coordinator had died and revived, been reloaded into new code, or been
+    // removed entirely. The preparation belonged to a LIFE, and that life is over.
+    const WeaveRecord* owner_rec = find(owner.who);
+    if (owner_rec == nullptr || !owner_rec->alive || owner_rec->life != owner.life ||
+        owner_rec->incarnation != owner.incarnation) {
+        return {false, AdmitRefusal::OwnerChanged};
+    }
+
+    if (role.empty()) {
+        return {false, AdmitRefusal::RoleNotHeld};
     }
     const auto held = roles_.find(role);
     if (held == roles_.end() || !(held->second == incumbent)) {
-        return false;
+        return {false, AdmitRefusal::RoleNotHeld};
     }
-    const CandidateOwner owner = cand->sealed_by;
 
     // ---- ACTIVATION FIRST, and this is where the queue resisted the model -----
     //
@@ -1023,8 +1067,12 @@ bool Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     activation.sender = owner.who;
     activation.provenance = Provenance::attested(Provenance::Kind::Activation, sequence);
+    // The sender-life stamp comes from the VERIFIED owner — the life the seal
+    // named and this call has just confirmed — never from a fresh lookup of the
+    // coordinator id, which is precisely how a successor's life could be stamped
+    // onto a predecessor's activation.
     Envelope act{std::move(activation), candidate, seq, /*gated=*/true, std::string{},
-                 life_of(owner.who)};
+                 owner.life};
     auto at = queue_.begin();
     for (; at != queue_.end(); ++at) {
         if (at->target == candidate || (!at->role.empty() && at->role == role)) {
@@ -1043,7 +1091,7 @@ bool Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
     // reachable for the private retirement conversation. Moving the role alone
     // would leave it publicly direct-addressable, which is a second live service.
     inc->sealed_by = owner;
-    return true;
+    return {true, AdmitRefusal::None};
 }
 
 void Switchboard::kill(WeaveId id) {

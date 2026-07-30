@@ -1048,6 +1048,195 @@ TEST_CASE("R2B-3b: admission refuses without Loom's own authority, and a refusal
     CHECK(static_cast<ProbeWeave*>(bus.weave(incumbent))->handled_names.size() == 1);
 }
 
+// ---- R2B-3b-1a (errand A): admission recognizes its owner ----------------------
+//
+// The candidate's private conversation already checked the exact coordinator life
+// and incarnation on every message. Admission did not — which left the strongest
+// act in the system, moving production topology, resting on a stale fact. A
+// trusted host caller holding a perfectly good lifecycle authority could admit a
+// candidate whose coordinator had died and revived, been reloaded into new code,
+// or been removed entirely.
+//
+//     A candidate may enter the world only while the exact coordinator life and
+//     incarnation that sealed it still owns the preparation.
+
+namespace {
+
+/// The shape every errand-A case builds: a coordinator, an incumbent holding the
+/// role, and a sealed candidate belonging to that coordinator.
+struct Prepared {
+    Registered coordinator;
+    WeaveId incumbent{};
+    WeaveId candidate{};
+    ProbeWeave* incumbent_raw = nullptr;
+    ProbeWeave* candidate_raw = nullptr;
+};
+
+Prepared prepare(Switchboard& bus) {
+    Prepared p{register_probe(bus, {pong_schema(), tick_schema()})};
+    auto inc = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{ping_schema()});
+    p.incumbent_raw = inc.get();
+    p.incumbent = bus.register_weave(std::move(inc), Grant{}.allow_any(), "worker");
+    auto cand = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    p.candidate_raw = cand.get();
+    p.candidate = bus.register_weave(std::move(cand), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(p.candidate, p.coordinator.id));
+    return p;
+}
+
+/// Everything an ordinary observer could notice about the replacement, sampled so
+/// "nothing changed" is measured rather than asserted.
+struct Topology {
+    WeaveId holder{};
+    bool candidate_sealed = false;
+    bool incumbent_sealed = false;
+    std::size_t pending = 0;
+    std::size_t candidate_deliveries = 0;
+
+    static Topology of(Switchboard& bus, const Prepared& p) {
+        return Topology{bus.role_holder("worker"), bus.sealed(p.candidate),
+                        bus.sealed(p.incumbent), bus.pending(),
+                        p.candidate_raw->handled_names.size()};
+    }
+    friend bool operator==(const Topology& a, const Topology& b) {
+        return a.holder == b.holder && a.candidate_sealed == b.candidate_sealed &&
+               a.incumbent_sealed == b.incumbent_sealed && a.pending == b.pending &&
+               a.candidate_deliveries == b.candidate_deliveries;
+    }
+};
+
+} // namespace
+
+TEST_CASE("R2B-3b-1a: a coordinator successor cannot admit its predecessor's candidate, and the "
+          "refusal changes nothing") {
+    int route = 0;
+    SUBCASE("the coordinator died and was revived") { route = 0; }
+    SUBCASE("the coordinator's code was replaced while alive") { route = 1; }
+    SUBCASE("the coordinator was permanently removed") { route = 2; }
+
+    Switchboard bus;
+    Prepared p = prepare(bus);
+    const Topology before = Topology::of(bus, p);
+
+    const std::string state = bus.snapshot_bytes(p.coordinator.id);
+    if (route == 0) {
+        bus.kill(p.coordinator.id);
+        REQUIRE(bus.reload(p.coordinator.id, state).revived);
+    } else if (route == 1) {
+        REQUIRE(bus.swap_state(p.coordinator.id, state).revived);
+    } else {
+        bus.unregister_weave(p.coordinator.id);
+    }
+
+    // A trusted host caller, with this Loom's own genuine lifecycle authority.
+    loom::Activated fact{9};
+    const AdmitResult r = bus.admit_candidate(p.candidate, p.incumbent, "worker",
+                                              host_lifecycle_authority(bus),
+                                              Message(to_value(fact)), 9);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why == AdmitRefusal::OwnerChanged); // named, not a bare false
+
+    // NOTHING MOVED — sampled, not assumed. In particular no activation was
+    // inserted, which is what `pending` catches.
+    CHECK(Topology::of(bus, p) == before);
+    CHECK(bus.role_holder("worker") == p.incumbent);
+    CHECK(bus.sealed(p.candidate));
+    CHECK_FALSE(bus.sealed(p.incumbent));
+
+    // ...and the incumbent is still the service.
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    CHECK(p.incumbent_raw->handled_names.size() == 1);
+    CHECK(p.candidate_raw->handled_names.empty());
+}
+
+TEST_CASE("R2B-3b-1a: the unchanged exact coordinator still admits — the positive control the "
+          "refusals above would otherwise be meaningless without") {
+    Switchboard bus;
+    Prepared p = prepare(bus);
+
+    loom::Activated fact{4};
+    const AdmitResult r = bus.admit_candidate(p.candidate, p.incumbent, "worker",
+                                              host_lifecycle_authority(bus),
+                                              Message(to_value(fact)), 4);
+    REQUIRE(r.ok);
+    CHECK(r.why == AdmitRefusal::None);
+    CHECK(bus.role_holder("worker") == p.candidate);
+    CHECK_FALSE(bus.sealed(p.candidate));
+    CHECK(bus.sealed(p.incumbent));
+
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    REQUIRE(p.candidate_raw->handled_names.size() == 2);
+    CHECK(p.candidate_raw->handled_names[0] == std::string(loom::Activated::zen_name));
+    CHECK(p.candidate_raw->handled_names[1] == "Ping");
+}
+
+TEST_CASE("R2B-3b-1a: sealing refuses a dead coordinator and refuses to reseal") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered second = register_probe(bus, {pong_schema()});
+    const WeaveId candidate = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any());
+
+    // A dead coordinator cannot own a preparation: it cannot converse, so the
+    // candidate would be sealed to a correspondent that can never answer.
+    bus.kill(coordinator.id);
+    CHECK_FALSE(bus.seal_weave(candidate, coordinator.id));
+    CHECK_FALSE(bus.sealed(candidate));
+
+    REQUIRE(bus.reload(coordinator.id, bus.snapshot_bytes(coordinator.id)).revived);
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+    const CandidateOwner owner = bus.candidate_owner(candidate);
+    CHECK(owner.who == coordinator.id);
+    CHECK(owner.life == 2); // the revived life, and the seal knows which one
+
+    // RESEALING IS NOT A TRANSFER. Silently changing owners would hand a prepared
+    // candidate to somebody else's transaction; transfer semantics are deliberately
+    // not part of this errand, so the second attempt simply fails.
+    CHECK_FALSE(bus.seal_weave(candidate, second.id));
+    CHECK(bus.candidate_owner(candidate) == owner);
+
+    // A candidate that holds a role was never sealable, and still is not.
+    const WeaveId roled = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "taken");
+    CHECK_FALSE(bus.seal_weave(roled, coordinator.id));
+}
+
+TEST_CASE("R2B-3b-1a: every other admission refusal is named, and none of them touch topology") {
+    Switchboard bus;
+    Switchboard decoy;
+    Prepared p = prepare(bus);
+    const Topology before = Topology::of(bus, p);
+    loom::Activated fact{1};
+
+    const AdmitResult foreign =
+        bus.admit_candidate(p.candidate, p.incumbent, "worker",
+                            host_lifecycle_authority(decoy), Message(to_value(fact)), 1);
+    CHECK(foreign.why == AdmitRefusal::ForeignAuthority);
+
+    const AdmitResult not_a_candidate =
+        bus.admit_candidate(p.coordinator.id, p.incumbent, "worker",
+                            host_lifecycle_authority(bus), Message(to_value(fact)), 1);
+    CHECK(not_a_candidate.why == AdmitRefusal::NotACandidate);
+
+    const AdmitResult wrong_role =
+        bus.admit_candidate(p.candidate, p.incumbent, "no-such-role",
+                            host_lifecycle_authority(bus), Message(to_value(fact)), 1);
+    CHECK(wrong_role.why == AdmitRefusal::RoleNotHeld);
+
+    const AdmitResult wrong_incumbent =
+        bus.admit_candidate(p.candidate, p.coordinator.id, "worker",
+                            host_lifecycle_authority(bus), Message(to_value(fact)), 1);
+    CHECK(wrong_incumbent.why == AdmitRefusal::RoleNotHeld);
+
+    CHECK(Topology::of(bus, p) == before);
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);
