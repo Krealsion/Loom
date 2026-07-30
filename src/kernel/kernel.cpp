@@ -467,6 +467,46 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
     }
 }
 
+LoadResult Kernel::load_candidate(const std::string& name, const std::string& path,
+                                  loom::WeaveId coordinator) {
+    // Deliberately the ordinary load, then the seal — rather than a second,
+    // simpler loading path that would drift from it. The prepared artifact MUST be
+    // the artifact that becomes live, so it is built by the same code that builds
+    // every other weave, and the only difference is that it is born outside the
+    // world.
+    //
+    // NOTHING CAN OBSERVE THE GAP between the two calls. `fanout` chooses its
+    // recipients at ENQUEUE time, so a publication already in the queue never
+    // named this weave; a publication enqueued later finds it sealed and skips it.
+    // And no delivery can run in between, because this is host code, not a handler.
+    LoadResult lr = load(name, path, /*role=*/std::string{});
+    if (!lr.ok) {
+        return lr;
+    }
+    if (!bus_.seal_weave(lr.id, coordinator)) {
+        (void)unload(name); // could not be sealed => must not be left in the world
+        return {false, {}, "candidate could not be sealed"};
+    }
+    return lr;
+}
+
+bool Kernel::commit_candidate(const std::string& incumbent_name,
+                              const std::string& candidate_name, const std::string& role) {
+    auto inc = libs_.find(incumbent_name);
+    auto cand = libs_.find(candidate_name);
+    if (inc == libs_.end() || cand == libs_.end()) {
+        return false;
+    }
+    if (!bus_.commit_candidate(cand->second.id, inc->second.id, role)) {
+        return false; // the bus refused; nothing moved, and our books are still true
+    }
+    // The bus is the authority on who holds the role; this is the kernel's own
+    // bookkeeping catching up, after the fact that mattered has already happened.
+    inc->second.role.clear();
+    cand->second.role = role;
+    return true;
+}
+
 ReloadResult Kernel::reload_from(const std::string& name, const std::string& new_path) {
     auto it = libs_.find(name);
     if (it == libs_.end()) {

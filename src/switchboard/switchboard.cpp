@@ -33,6 +33,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "SenderLifeEnded";
     case RefusalReason::AnswerTargetChanged:
         return "AnswerTargetChanged";
+    case RefusalReason::SealedSpeech:
+        return "SealedSpeech";
     }
     return "?";
 }
@@ -69,6 +71,9 @@ std::string Refusal::message() const {
         // and is simply not the participant this answer was earned for.
         return "the requester this answer belongs to is no longer the participant "
                "at that address";
+    case RefusalReason::SealedSpeech:
+        return "a prepared candidate may converse with its coordinator, not with "
+               "the world";
     }
     return "?";
 }
@@ -172,6 +177,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     true,
                     /*incarnation=*/1, // this id's first code; bumped by swap_state alone
                     /*life=*/1,        // its first life; bumped only on a revival
+                    /*sealed_by=*/WeaveId{}, // in the world from the moment it exists
                     role};
     weaves_.emplace(id.value, std::move(rec));
     if (!role.empty()) {
@@ -546,6 +552,9 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
         if (!rec.alive) {
             continue;
         }
+        if (rec.sealed_by.valid()) {
+            continue; // a candidate is not in the world; the world's news is not its
+        }
         if (accept_match(rec, name, version) == nullptr) {
             continue;
         }
@@ -580,6 +589,14 @@ Ticket Switchboard::send_as(WeaveId as_sender, WeaveId target, Message msg) {
 }
 
 std::size_t Switchboard::publish_as(WeaveId as_sender, Message msg) {
+    // A candidate cannot publish, and not merely because nobody would hear it: a
+    // publication is speech into the world by definition, so there is no coherent
+    // "to the coordinator only" version of it. Refused visibly, because a candidate
+    // trying to publish is exactly what the operator wants to know about.
+    if (sealed(as_sender)) {
+        (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::SealedSpeech);
+        return 0;
+    }
     msg.sender = as_sender;
     return fanout(std::move(msg), /*gated=*/true);
 }
@@ -656,6 +673,37 @@ void Switchboard::deliver_one(Envelope env) {
             // that ended, it is no sender at all, and the grant check below already
             // refuses it as CapabilityDenied.
             const Refusal r{RefusalReason::SenderLifeEnded, {}};
+            record(env.seq, Disposition::Refused, r);
+            ev.kind = EventKind::Refused;
+            ev.refusal = r;
+            emit(ev);
+            return;
+        }
+        // ---- the candidate boundary (R2B-3) --------------------------------
+        //
+        // A prepared candidate may converse INSIDE the preparation before it may
+        // speak INSIDE the world, and both halves of that are decided here, before
+        // the grant and before role resolution.
+        if (sender != nullptr && sender->sealed_by.valid()) {
+            // OUTBOUND. A sealed weave may address exactly one weave — the
+            // coordinator preparing it — and may not address a ROLE at all, so it
+            // cannot even learn whether a production slot is held.
+            if (!env.role.empty() || !(env.target == sender->sealed_by)) {
+                const Refusal r{RefusalReason::SealedSpeech, {}};
+                record(env.seq, Disposition::Refused, r);
+                ev.kind = EventKind::Refused;
+                ev.refusal = r;
+                emit(ev);
+                return;
+            }
+        }
+        const WeaveRecord* addressee = env.role.empty() ? find(env.target) : nullptr;
+        if (addressee != nullptr && addressee->sealed_by.valid() &&
+            !(env.msg.sender == addressee->sealed_by)) {
+            // INBOUND, and deliberately indistinguishable from an unregistered id:
+            // the world must not be able to discover that a candidate exists, still
+            // less start a conversation with one. Only its coordinator gets through.
+            const Refusal r{RefusalReason::NoSuchTarget, {}};
             record(env.seq, Disposition::Refused, r);
             ev.kind = EventKind::Refused;
             ev.refusal = r;
@@ -859,6 +907,54 @@ std::string Switchboard::snapshot_bytes(WeaveId id) const {
         throw std::invalid_argument("snapshot_bytes: no such weave");
     }
     return loom::serialize(rec->weave->snapshot());
+}
+
+bool Switchboard::seal_weave(WeaveId candidate, WeaveId coordinator) {
+    WeaveRecord* rec = find(candidate);
+    if (rec == nullptr || !rec->role.empty()) {
+        return false;
+    }
+    rec->sealed_by = coordinator;
+    return true;
+}
+
+WeaveId Switchboard::role_holder(std::string_view role) const {
+    const auto it = roles_.find(std::string(role));
+    return it == roles_.end() ? WeaveId{} : it->second;
+}
+
+bool Switchboard::sealed(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    return rec != nullptr && rec->sealed_by.valid();
+}
+
+bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
+                                   const std::string& role) {
+    // EVERY PRECONDITION FIRST, SO A REFUSAL CHANGES NOTHING. A half-applied commit
+    // is the one outcome this whole phase exists to make impossible, and the
+    // cheapest way to guarantee it is to have nothing to undo.
+    WeaveRecord* cand = find(candidate);
+    WeaveRecord* inc = find(incumbent);
+    if (cand == nullptr || inc == nullptr || !cand->sealed_by.valid() || !cand->alive ||
+        !inc->alive || role.empty()) {
+        return false;
+    }
+    const auto held = roles_.find(role);
+    if (held == roles_.end() || !(held->second == incumbent)) {
+        return false; // somebody else holds the slot; this is not our replacement
+    }
+
+    // ...AND THEN THE WHOLE CHANGE, WITH NO DELIVERY BETWEEN ANY TWO LINES OF IT.
+    // There is no lock here and none is needed: dispatch is single-threaded and
+    // `pump()` is non-reentrant, so an ordinary observer's next delivery either
+    // precedes all of this or follows all of it. What would NOT be atomic is
+    // expressing the same change as several ordinary messages — which is exactly
+    // what today's SwapWeave does, and exactly the observable window it documents.
+    cand->sealed_by = WeaveId{};
+    inc->role.clear();
+    cand->role = role;
+    held->second = candidate;
+    return true;
 }
 
 void Switchboard::kill(WeaveId id) {

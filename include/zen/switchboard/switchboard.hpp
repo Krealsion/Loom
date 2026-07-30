@@ -64,6 +64,15 @@ enum class RefusalReason : std::uint8_t {
     /// that resolves to nobody or to somebody dead. Here the target exists, is
     /// alive, and is simply not who the conversation was with.
     AnswerTargetChanged,
+    /// A SEALED weave tried to speak into the world (R2B-3). A prepared candidate
+    /// exists outside the live world: it may converse with the coordinator that is
+    /// preparing it, and with nobody else. This is what it hears when it tries.
+    ///
+    /// Deliberately visible, unlike the mirror case: a message aimed AT a sealed
+    /// weave by anyone other than its coordinator is refused as `NoSuchTarget`, so
+    /// the world cannot learn that a candidate exists. The candidate's own attempts
+    /// are the operator's business and are named.
+    SealedSpeech,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -286,6 +295,40 @@ public:
     /// Serialize the Weave's current snapshot to native bytes.
     std::string snapshot_bytes(WeaveId id) const;
 
+    /// SEAL a weave: it becomes a prepared candidate outside the live world,
+    /// able to converse only with `coordinator` (R2B-3).
+    ///
+    /// Host/root authority, like `kill` and `unregister_weave`. Refuses if the
+    /// weave holds a role — a candidate with a public role is a contradiction, and
+    /// making that impossible here means commit is the only way a role can move.
+    /// Returns false if there is no such weave, or it already holds a role.
+    bool seal_weave(WeaveId candidate, WeaveId coordinator);
+
+    /// Is this weave currently a sealed candidate? (Diagnostics and pins; the
+    /// routing decisions are made inside the bus, never by asking.)
+    bool sealed(WeaveId id) const;
+
+    /// Who holds `role` right now — the invalid id if nobody does. A read-only
+    /// query for hosts and taps; routing resolves the role itself at delivery and
+    /// never consults this.
+    WeaveId role_holder(std::string_view role) const;
+
+    /// THE COMMIT. One operation, one visible change (R2B-3).
+    ///
+    /// Unseals `candidate` and moves `role` from `incumbent` to it. Everything an
+    /// ordinary observer could notice — the candidate becoming reachable, the role
+    /// changing hands, the incumbent ceasing to hold it — happens here, between two
+    /// deliveries, so no pump can run in the middle of it. That is the atomic
+    /// visibility boundary this phase needed, and it is a property of the
+    /// single-threaded queue rather than a lock: `pump()` dispatches one envelope
+    /// at a time and is non-reentrant, so a commit performed outside `deliver_one`
+    /// (or wholly within one handler) cannot be observed half-done.
+    ///
+    /// Refuses — changing NOTHING — if the candidate is not sealed, if either
+    /// weave is missing or dead, or if the role is held by anyone other than the
+    /// incumbent. A refused commit is observationally identical to no commit.
+    bool commit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role);
+
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
     ///
     /// THIS IS THE DEATH TRANSITION, and committing it ends every unfinished
@@ -367,6 +410,16 @@ private:
         /// semantic change nobody asked for. They are used where each belongs:
         /// deferred answers bind to the incarnation, queued envelopes to the life.
         std::uint64_t life = 1;
+        /// OUTSIDE THE WORLD, AND WHOSE CONVERSATION IT IS (R2B-3). Invalid (0) for
+        /// every ordinary weave. When valid, this record is a prepared CANDIDATE:
+        /// it is loaded, constructed and real, but it is not a participant. It
+        /// receives no publications, no ordinary sends and no role traffic, and it
+        /// may speak only to the weave named here — the coordinator preparing it.
+        ///
+        /// A candidate is not "registered and please don't route to it": the
+        /// routing paths themselves refuse, which is why this lives on the record
+        /// the router already consults rather than in a table beside it.
+        WeaveId sealed_by{};
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };

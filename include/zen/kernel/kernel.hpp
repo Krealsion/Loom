@@ -118,6 +118,29 @@ public:
 
     /// Stop the Weave, destroy its instance, then close the library — in that
     /// order, leaving no live pointer into the closed library.
+    /// Load an artifact as a PREPARED CANDIDATE (R2B-3): opened, constructed,
+    /// contract-validated and revivable — everything an ordinary load does — but
+    /// SEALED, so it is not a participant in the live world. It receives no
+    /// publications, no ordinary sends and no role traffic, and may speak only to
+    /// `coordinator`.
+    ///
+    /// Every artifact-level refusal an ordinary load can produce (open failure,
+    /// missing symbol, stale ABI, malformed manifest, schema disagreement) happens
+    /// here too and identically, which is the point: a candidate that cannot load
+    /// is discovered BEFORE the live world has been touched at all.
+    ///
+    /// It holds no role by construction. A role can only ever reach it through
+    /// `commit_candidate`.
+    LoadResult load_candidate(const std::string& name, const std::string& path,
+                              loom::WeaveId coordinator);
+
+    /// THE COMMIT (R2B-3): unseal `candidate_name` and move `role` to it from
+    /// whoever holds it now, as one indivisible change to what ordinary delivery
+    /// can see. Returns false — changing nothing — unless the candidate is a live
+    /// sealed weave and the role is held by `incumbent_name`.
+    bool commit_candidate(const std::string& incumbent_name, const std::string& candidate_name,
+                          const std::string& role);
+
     bool unload(const std::string& name);
 
     /// Unload whichever loaded library holds `role` (false if none does). The

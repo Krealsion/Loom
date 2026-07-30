@@ -582,6 +582,279 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
     CHECK(steward_state(bus, first.id).spent == 1);
 }
 
+// ---- R2B-3: the candidate waits outside the world -----------------------------
+//
+// Today's SwapWeave says its own window out loud: it issues UnloadRole then
+// LoadLibrary, and between those two deliveries the role is held by nobody. The
+// incumbent is already gone when the successor turns out to be broken.
+//
+// A prepared replacement inverts that. The candidate is loaded, constructed and
+// made ready while the incumbent is still fully the incumbent — and one operation
+// makes the swap visible:
+//
+//     The incumbent remains fully authoritative until one atomic commit makes
+//     the prepared candidate live.
+//
+// The primitive underneath is a SEAL on the weave record. A sealed weave is real
+// (it loaded from a real artifact, it has contracts, it can be revived and can
+// answer) and is not a participant: publications skip it, ordinary sends cannot
+// find it, it cannot address a role at all, and it may speak to exactly one weave
+// — the coordinator preparing it.
+//
+//     The candidate may converse inside preparation before it may speak
+//     inside the world.
+
+TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT in the world") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    // A coordinator: an ordinary weave, and the only one the candidate may talk to.
+    Registered coordinator = register_probe(bus, {pong_schema(), tick_schema()});
+    Registered bystander = register_probe(bus, {ping_schema(), pong_schema()});
+
+    // The incumbent holds the role and keeps it throughout.
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE_MESSAGE(incumbent.ok, incumbent.error);
+
+    // The candidate loads from the same real artifact — every ordinary load step,
+    // then sealed.
+    LoadResult candidate = kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id);
+    REQUIRE_MESSAGE(candidate.ok, candidate.error);
+    CHECK(bus.sealed(candidate.id));
+    CHECK_FALSE(bus.sealed(incumbent.id));
+    CHECK(bus.alive(candidate.id)); // real, constructed, and alive — just not present
+    CHECK(kernel.role_of("cand").empty());
+    CHECK(kernel.role_of("live") == "worker");
+
+    // IT IS NOT IN THE WORLD, one routing path at a time.
+    //
+    // (1) A publication reaches every living participant that accepts the shape —
+    //     and not the candidate.
+    const std::size_t heard = bus.publish(Message(ping(1)));
+    bus.pump();
+    CHECK(heard == 2); // the incumbent and the bystander; NOT the candidate
+    CHECK(live_count(bus, candidate.id) == 0);
+    CHECK(live_count(bus, incumbent.id) == 1);
+
+    // (2) An ordinary weave that somehow knows the id cannot reach it, and cannot
+    //     tell it apart from an id that was never registered.
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+    bus.send_as(bystander.id, candidate.id, Message(ping(2)));
+    bus.send_as(bystander.id, WeaveId{999999}, Message(ping(3)));
+    bus.pump();
+    REQUIRE(tap.size() == 2);
+    CHECK(tap[0].kind == EventKind::Refused);
+    CHECK(tap[0].reason == RefusalReason::NoSuchTarget);
+    CHECK(tap[1].reason == tap[0].reason); // indistinguishable, deliberately
+    CHECK(live_count(bus, candidate.id) == 0);
+
+    // (3) The role still points at the incumbent, and role traffic still lands there.
+    bus.send_to_role("worker", Message(ping(4)));
+    bus.pump();
+    CHECK(live_count(bus, incumbent.id) == 2);
+    CHECK(live_count(bus, candidate.id) == 0);
+
+    // (4) ...and its coordinator CAN reach it. That is the whole point of a seal
+    //     rather than a quarantine: preparation is a conversation.
+    bus.send_as(coordinator.id, candidate.id, Message(ping(5)));
+    bus.pump();
+    CHECK(live_count(bus, candidate.id) == 1);
+}
+
+TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every attempt is named") {
+    // THE HOSTILE CANDIDATE. Its grant is the permissive one every loaded weave
+    // gets — the prepared artifact is the artifact that becomes live, so its real
+    // contract is not stripped — and it still cannot reach anything.
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered victim = register_probe(bus, {pong_schema()});
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE(incumbent.ok);
+    LoadResult candidate = kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id);
+    REQUIRE_MESSAGE(candidate.ok, candidate.error);
+
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+
+    // Speaking AS the candidate, by every door a weave has: a direct domain
+    // message, a role-addressed message, and a publication.
+    bus.send_as(candidate.id, victim.id, Message(pong(1)));
+    bus.send_as_to_role(candidate.id, "worker", Message(ping(2)));
+    const std::size_t published = bus.publish_as(candidate.id, Message(pong(3)));
+    bus.pump();
+
+    CHECK(published == 0);
+    CHECK(victim.weave->handled_names.empty());
+    CHECK(live_count(bus, incumbent.id) == 0); // the role send reached nobody
+    std::size_t sealed_refusals = 0;
+    for (const TapRecord& r : tap) {
+        if (r.kind == EventKind::Refused && r.reason == RefusalReason::SealedSpeech) {
+            ++sealed_refusals;
+        }
+    }
+    CHECK(sealed_refusals == 3); // all three, each named as what it was
+
+    // And the one thing it MAY do still works.
+    bus.send_as(candidate.id, coordinator.id, Message(pong(4)));
+    bus.pump();
+    REQUIRE(coordinator.weave->handled_names.size() == 1);
+    CHECK(coordinator.weave->handled_names[0] == "Pong");
+}
+
+TEST_CASE("R2B-3: commit is ONE visible change — no observer sees a gap, two holders, or a "
+          "role pointing at a sealed weave") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE(incumbent.ok);
+    LoadResult candidate = kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id);
+    REQUIRE(candidate.ok);
+
+    // A watcher that samples the world's topology on EVERY delivery. If commit were
+    // several ordinary steps, some delivery would land between them and see one of
+    // the forbidden intermediate states.
+    struct Sample {
+        bool role_held = false;
+        bool role_is_incumbent = false;
+        bool role_is_candidate = false;
+        bool candidate_sealed = false;
+    };
+    std::vector<Sample> samples;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind != EventKind::Delivered && e.kind != EventKind::Refused) {
+            return;
+        }
+        const WeaveId holder = bus.role_holder("worker");
+        samples.push_back(Sample{holder.valid(), holder == incumbent.id,
+                                 holder == candidate.id, bus.sealed(candidate.id)});
+    });
+
+    // Traffic before, the commit, traffic after — all in one drain.
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    REQUIRE(kernel.commit_candidate("live", "cand", "worker"));
+    bus.send_to_role("worker", Message(ping(2)));
+    bus.pump();
+
+    // Four samples, not two: each Ping is delivered AND draws a Pong whose
+    // reply_to is nobody, so each round produces a delivery and a refusal. Both
+    // are ordinary deliveries and both sample the topology, which is what makes
+    // this a real watcher rather than a bookend.
+    REQUIRE(samples.size() == 4);
+    // Every sample saw exactly one holder, and never a sealed one.
+    for (const Sample& s : samples) {
+        CHECK(s.role_held);
+        const bool two_holders = s.role_is_incumbent && s.role_is_candidate;
+        const bool unready_holder = s.role_is_candidate && s.candidate_sealed;
+        CHECK_FALSE(two_holders);
+        CHECK_FALSE(unready_holder);
+    }
+    CHECK(samples[0].role_is_incumbent); // before the commit
+    CHECK(samples[1].role_is_incumbent);
+    CHECK(samples[2].role_is_candidate); // after it, and nothing in between
+    CHECK(samples[3].role_is_candidate);
+    CHECK_FALSE(samples[3].candidate_sealed);
+
+    // The traffic went where the topology said it would, on both sides of the line.
+    CHECK(live_count(bus, incumbent.id) == 1);
+    CHECK(live_count(bus, candidate.id) == 1);
+
+    // ...and the incumbent is still alive and addressable by id — it retired from
+    // the ROLE, not from existence. Retirement is a separate act.
+    CHECK(bus.alive(incumbent.id));
+    CHECK(kernel.role_of("live").empty());
+    CHECK(kernel.role_of("cand") == "worker");
+}
+
+TEST_CASE("R2B-3: a refused commit changes NOTHING — it is observationally identical to never "
+          "having tried") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE(incumbent.ok);
+    LoadResult candidate = kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id);
+    REQUIRE(candidate.ok);
+
+    // Wrong role; wrong incumbent; and a candidate that was never sealed.
+    CHECK_FALSE(kernel.commit_candidate("live", "cand", "not-a-role"));
+    CHECK_FALSE(kernel.commit_candidate("cand", "live", "worker")); // roles reversed
+    CHECK_FALSE(kernel.commit_candidate("live", "nope", "worker"));
+
+    CHECK(bus.role_holder("worker") == incumbent.id);
+    CHECK(bus.sealed(candidate.id));
+    CHECK(kernel.role_of("live") == "worker");
+    CHECK(kernel.role_of("cand").empty());
+
+    // The incumbent never stopped serving.
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    CHECK(live_count(bus, incumbent.id) == 1);
+    CHECK(live_count(bus, candidate.id) == 0);
+}
+
+TEST_CASE("R2B-3: an artifact that cannot load never becomes a candidate, and the incumbent "
+          "does not notice") {
+    // THE FAILURE SIDE IS THE POINT. Under today's SwapWeave the incumbent is
+    // already unloaded when a broken successor is discovered; here the discovery
+    // happens with the incumbent untouched, because nothing has been touched yet.
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE(incumbent.ok);
+
+    // A stale-ABI artifact: a real, complete refusal at the artifact level.
+    LoadResult stale = kernel.load_candidate("cand", ZEN_SO_STALEABI, coordinator.id);
+    CHECK_FALSE(stale.ok);
+    CHECK(stale.error.find("abi_version") != std::string::npos);
+    CHECK_FALSE(kernel.is_loaded("cand"));
+
+    // A malformed-snapshot artifact: refused at the manifest/gate level.
+    LoadResult bad = kernel.load_candidate("cand2", ZEN_SO_BADSNAP, coordinator.id);
+    CHECK_FALSE(bad.ok);
+    CHECK_FALSE(kernel.is_loaded("cand2"));
+
+    // The incumbent is exactly where it was, still holding the role and serving.
+    CHECK(bus.role_holder("worker") == incumbent.id);
+    CHECK(bus.alive(incumbent.id));
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    CHECK(live_count(bus, incumbent.id) == 1);
+    CHECK(bus.list_weaves().size() == 2); // coordinator + incumbent; no wreckage
+}
+
+TEST_CASE("R2B-3: abandoning a prepared candidate leaves the world as it was, and its speech "
+          "cannot leak afterwards") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered victim = register_probe(bus, {pong_schema()});
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE(incumbent.ok);
+    LoadResult candidate = kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id);
+    REQUIRE(candidate.ok);
+    const WeaveId cand_id = candidate.id;
+
+    // The candidate speaks — into the queue — and is then abandoned before the
+    // pump. Its queued speech must not outlive the transaction.
+    bus.send_as(cand_id, coordinator.id, Message(pong(1)));
+    REQUIRE(bus.pending() == 1);
+    REQUIRE(kernel.unload("cand"));
+    bus.pump();
+
+    CHECK(coordinator.weave->handled_names.empty()); // R2B-2b: its life ended
+    CHECK_FALSE(bus.alive(cand_id));
+    CHECK(bus.role_holder("worker") == incumbent.id);
+    bus.send_to_role("worker", Message(ping(2)));
+    bus.pump();
+    CHECK(live_count(bus, incumbent.id) == 1);
+    CHECK(victim.weave->handled_names.empty());
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);
