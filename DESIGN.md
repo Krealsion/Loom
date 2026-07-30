@@ -3044,6 +3044,70 @@ say `CapabilityDenied`, because a vanished sender has no grant to check and the
 *authorization* term failed. Right answer, wrong road: an operator would have gone
 looking for a grant that was never the problem. It now says `SenderLifeEnded`.
 
+### The answer belongs to the life that asked (R2B-2c)
+
+R2B-2b binds a message to the life that **authored** it, which protects the
+answering side. The other half is the participant an answer was earned **for**:
+
+```text
+requester A asks -> the responder queues an authentic answer -> A dies
+-> A is revived under the same WeaveId -> the answer lands on the revival
+```
+
+and its quieter twin, where nothing dies at all:
+
+```text
+requester A asks -> the answer is queued -> A's CODE is replaced in place
+-> successor code B inherits A's completed conversation
+```
+
+> **An authenticated answer belongs to the requester life and code incarnation
+> that asked.**
+
+**Ordinary messages deliberately keep their old behaviour**, and there is a case
+pinning that they do. A direct or role-addressed send names a *logical
+destination* and should reach whoever legitimately occupies it — that is what
+makes hot-reload usable. An authenticated answer is different in kind, because its
+meaning already names one conversation between two exact participants. So only
+envelopes that leave by an answer door carry a target expectation:
+
+| | |
+|---|---|
+| ordinary message | the logical destination, under the ordinary delivery rules |
+| authenticated answer | the exact requester **life** and **code incarnation** that owns the conversation |
+
+**Captured when the ask is delivered, never recomputed.** `ReplyAuthority` gains
+the requester's life and incarnation at the moment the request is delivered and
+the authority is earned; `DeferredRecord` copies them from there rather than
+re-reading the world at defer time. Recomputing later would mean an answer
+silently retargets itself onto whatever the requester has *become*, which is the
+whole failure being prevented — so both doors read one captured fact.
+
+**One door out.** `answer_as` and `spend_deferred_as` both funnel through a single
+private `enqueue_answer`, which decides the recipient, the correlation, the
+provenance and the target stamp together. Two near-identical enqueues either side
+of a registry is exactly the shape that drifts, and "patched the deferred registry
+only" is a mutation that would otherwise pass.
+
+**Why incarnation as well as life.** A live reload never stops the weave living,
+so its life generation is untouched — a life-only check would hand A's finished
+conversation to successor code B, which never asked anything and would read the
+answer as its own. Note the deliberate asymmetry with the sender side: R2B-2b
+checks only the author's *life*, because replacing a weave's code does not change
+who spoke. Being *spoken to* is the case where the code matters, because the code
+is what will interpret the answer.
+
+**Diagnostics.** `AnswerTargetChanged` is its own refusal — not `NoSuchTarget`
+(the address resolves), not `TargetUnavailable` (a dead target is a different and
+still-honest outcome, pinned separately), not `SenderLifeEnded` (that is about the
+author), and not a grant denial. The event carries four numbers — expected life
+and incarnation, current life and incarnation — so a journal reader sees the
+causal event rather than inferring it.
+
+**No ABI change.** The target binding is host-side envelope provenance, invisible
+to payload code and unreachable from a library: the deferred-answer token crossing
+the seam is opaque, and the requester facts never leave the bus.
+
 **Two residuals, stated rather than papered over.** Out-of-process weaves fail
 **closed**: the child host is given null deferral callbacks, because a
 cross-process capability is out of scope for V1 and a token the pipe cannot
