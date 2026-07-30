@@ -31,6 +31,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "Exhausted";
     case RefusalReason::SenderLifeEnded:
         return "SenderLifeEnded";
+    case RefusalReason::AnswerTargetChanged:
+        return "AnswerTargetChanged";
     }
     return "?";
 }
@@ -62,6 +64,11 @@ std::string Refusal::message() const {
         // Names the AUTHOR, not the target, the payload or the grant: the sender
         // that spoke is no longer the sender that exists.
         return "the sender life that authored this message has ended";
+    case RefusalReason::AnswerTargetChanged:
+        // Names the CONVERSATION, not the address: the target is there and alive,
+        // and is simply not the participant this answer was earned for.
+        return "the requester this answer belongs to is no longer the participant "
+               "at that address";
     }
     return "?";
 }
@@ -253,6 +260,25 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
     return Ticket{seq};
 }
 
+Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
+                                   std::uint64_t correlation, std::uint64_t requester_life,
+                                   std::uint64_t requester_incarnation) {
+    // Loom chooses the recipient and the correlation; the answerer chooses only
+    // what it says. And Loom stamps WHICH requester the answer is for, so the
+    // conversation survives in the envelope rather than only in the stack frame or
+    // the registry record that produced it.
+    msg.sender = as_sender;
+    msg.reply_to = WeaveId{};
+    msg.correlation = correlation;
+    const std::uint64_t seq = next_seq_++;
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
+    msg.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
+    Envelope env{std::move(msg), to, seq, /*gated=*/true, std::string{}, life_of(as_sender)};
+    env.answer_target = AnswerTarget{true, requester_life, requester_incarnation};
+    queue_.push_back(std::move(env));
+    return Ticket{seq};
+}
+
 Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
     // Three ways to have no authority, and each is a refusal of AUTHORITY —
     // categorically distinct from the grant check that still runs afterwards on
@@ -271,14 +297,13 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
         return Ticket{};
     }
     authority_.spent = true;
-    // Loom chooses the recipient and the correlation; the answerer chooses only
-    // what it says. That is what binds the proof to ONE request from ONE weave.
-    const WeaveId to = authority_.requester;
-    msg.sender = as_sender;
-    msg.reply_to = WeaveId{};
-    msg.correlation = authority_.correlation;
-    return enqueue_directed(to, std::move(msg), /*gated=*/true,
-                            Provenance::attested(Provenance::Kind::Answer, 0));
+    // The requester's identity comes from the authority — captured when the
+    // request was delivered — and not from a fresh lookup here. Within one handler
+    // the two cannot differ; taking the same road as the deferred path is what
+    // keeps them from ever differing later.
+    return enqueue_answer(authority_.requester, as_sender, std::move(msg),
+                          authority_.correlation, authority_.requester_life,
+                          authority_.requester_incarnation);
 }
 
 // ---- deferred answers (R2B-2) ----------------------------------------------
@@ -414,6 +439,7 @@ DeferredAnswer Switchboard::defer_answer_as(WeaveId as_sender) {
     *slot = DeferredRecord{token,
                            authority_.requester,
                            requester_incarnation,
+                           authority_.requester_life, // captured at DELIVERY, not now
                            as_sender,
                            respondent_incarnation,
                            authority_.correlation};
@@ -455,13 +481,14 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
     // turn one right into two answers.
     const WeaveId to = rec->requester;
     const std::uint64_t correlation = rec->correlation;
+    const std::uint64_t requester_life = rec->requester_life;
+    const std::uint64_t requester_incarnation = rec->requester_incarnation;
     *rec = DeferredRecord{};
 
-    msg.sender = as_sender;
-    msg.reply_to = WeaveId{};
-    msg.correlation = correlation; // the ORIGINAL request's, never the answerer's choice
-    return enqueue_directed(to, std::move(msg), /*gated=*/true,
-                            Provenance::attested(Provenance::Kind::Answer, 0));
+    // THE SAME DOOR THE IMMEDIATE ANSWER LEAVES BY, carrying the requester facts
+    // the RECORD kept — the ones from when the ask was delivered, never today's.
+    return enqueue_answer(to, as_sender, std::move(msg), correlation, requester_life,
+                          requester_incarnation);
 }
 
 void Switchboard::release_deferred_as(WeaveId as_sender, const DeferredAnswer& answer) {
@@ -685,6 +712,37 @@ void Switchboard::deliver_one(Envelope env) {
         return;
     }
 
+    // AN AUTHENTICATED ANSWER BELONGS TO THE LIFE AND INCARNATION THAT ASKED
+    // (R2B-2c). R2B-2b bound a message to the life that AUTHORED it, which
+    // protects the answerer's side; this is the other half — the participant the
+    // answer was earned FOR.
+    //
+    // Ordinary messages deliberately do NOT get this treatment: a direct or
+    // role-addressed send is aimed at a logical destination and should reach
+    // whoever legitimately occupies it. An answer is different in kind, because
+    // its meaning already names one conversation between two exact participants.
+    // So the expectation rides only on envelopes that left by an answer door.
+    if (env.answer_target.present) {
+        ev.expected_requester_life = env.answer_target.life;
+        ev.expected_requester_incarnation = env.answer_target.incarnation;
+        ev.requester_life_now = rec->life;
+        ev.requester_incarnation_now = rec->incarnation;
+        // Two ways to be the wrong occupant, and both matter: a NEW LIFE behind
+        // this id (it died and came back) and NEW CODE behind it (it was reloaded
+        // in place). The second is why an incarnation is required as well as a
+        // life — a live reload never stops the weave living, so a life check alone
+        // would hand A's completed conversation to successor code B.
+        if (rec->life != env.answer_target.life ||
+            rec->incarnation != env.answer_target.incarnation) {
+            const Refusal r{RefusalReason::AnswerTargetChanged, {}};
+            record(env.seq, Disposition::Refused, r);
+            ev.kind = EventKind::Refused;
+            ev.refusal = r;
+            emit(ev);
+            return;
+        }
+    }
+
     const std::shared_ptr<const Schema>* door =
         accept_match(*rec, ev.schema_name, ev.schema_version);
     // Wildcard-accept (a deliberate capability — the console): a Weave registered
@@ -726,8 +784,18 @@ void Switchboard::deliver_one(Envelope env) {
     // and it dies when the handler returns. A role changing hands after this
     // point hands the new holder nothing: it never received this request.
     current_target_ = env.target;
-    authority_ = ReplyAuthority{env.msg.sender, env.msg.correlation, /*spent=*/false,
-                                trusted.payload.schema_ptr()};
+    // ...AND IT REMEMBERS WHO ASKED, not merely where to send (R2B-2c). Captured
+    // HERE, at the delivery that earns the authority, so that an answer produced
+    // later — this handler's, or a deferred one spent minutes from now — is bound
+    // to the requester that actually asked rather than to whatever occupies that
+    // id when the answer is finally written.
+    const WeaveRecord* asker = find(env.msg.sender);
+    authority_ = ReplyAuthority{env.msg.sender,
+                                env.msg.correlation,
+                                /*spent=*/false,
+                                trusted.payload.schema_ptr(),
+                                asker == nullptr ? 0 : asker->life,
+                                asker == nullptr ? 0 : asker->incarnation};
     // The handler receives a WeaveBus bound to its own id — never the concrete
     // Switchboard — so anything it sends is stamped with its identity and gated
     // against its grant.

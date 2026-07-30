@@ -54,6 +54,16 @@ enum class RefusalReason : std::uint8_t {
     /// payload, and `CapabilityDenied` would send an operator to edit a grant that
     /// was never the problem. What ended was the utterance's author.
     SenderLifeEnded,
+    /// An authenticated answer arrived for a requester that is no longer the one
+    /// that asked (R2B-2c): the weave at that `WeaveId` has since died and been
+    /// revived, or its code has been replaced. The address is right and the
+    /// occupant is wrong.
+    ///
+    /// Distinct from `SenderLifeEnded`, which is about the AUTHOR of a message,
+    /// and from `NoSuchTarget`/`TargetUnavailable`, which are about an address
+    /// that resolves to nobody or to somebody dead. Here the target exists, is
+    /// alive, and is simply not who the conversation was with.
+    AnswerTargetChanged,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -96,6 +106,15 @@ struct BusEvent {
     /// to infer it. Both are 0 for host/root sends, which belong to no weave life.
     std::uint64_t sender_life = 0;
     std::uint64_t sender_life_now = 0;
+    /// DIAGNOSTICS ONLY, and only for an authenticated answer (R2B-2c): what the
+    /// conversation expected of its requester, and what that requester is now. A
+    /// journal reader can therefore see the causal event — "expected life 1 /
+    /// incarnation 1, found life 2 / incarnation 1" — instead of inferring it.
+    /// Zero on every other kind of delivery.
+    std::uint64_t expected_requester_life = 0;
+    std::uint64_t expected_requester_incarnation = 0;
+    std::uint64_t requester_life_now = 0;
+    std::uint64_t requester_incarnation_now = 0;
 };
 
 using Observer = std::function<void(const BusEvent&)>;
@@ -352,6 +371,18 @@ private:
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };
 
+    /// What an authenticated answer expects to find at its destination.
+    ///
+    /// `present` is what distinguishes "this is an answer, check the occupant"
+    /// from "this is an ordinary message, deliver by the ordinary rules" — a flag
+    /// rather than a reserved life value, so no number has to carry an implicit
+    /// meaning.
+    struct AnswerTarget {
+        bool present = false;
+        std::uint64_t life = 0;
+        std::uint64_t incarnation = 0;
+    };
+
     struct Envelope {
         Message msg;
         WeaveId target{};
@@ -370,6 +401,18 @@ private:
         /// is stamped afresh with its *re-sender's* life, because the stamp was
         /// never part of what it hoarded.
         std::uint64_t sender_life = 0;
+        /// WHICH REQUESTER THIS ANSWER IS FOR (R2B-2c). Present only on envelopes
+        /// queued through an answer door — `answer_as` and `spend_deferred_as` —
+        /// and absent on every ordinary send, because ordinary messages are
+        /// deliberately addressed to a logical destination and should reach
+        /// whoever legitimately occupies it at delivery. An authenticated answer
+        /// is not that: its meaning already names one exact conversation between
+        /// exact participants, so it names them here too.
+        ///
+        /// LAST, and deliberately: every ordinary enqueue brace-initializes this
+        /// struct up to `sender_life` and stops, so an ordinary send cannot carry a
+        /// target expectation even by accident. Only `enqueue_answer` sets it.
+        AnswerTarget answer_target{};
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
@@ -400,6 +443,14 @@ private:
         /// raised where no message is in hand — deferral overflow — can still say
         /// WHICH conversation it refused instead of naming an unrelated schema.
         std::shared_ptr<const Schema> shape{};
+        /// WHO ASKED, captured AT DELIVERY of the request rather than recomputed
+        /// when an answer is eventually produced (R2B-2c). Recomputing later would
+        /// mean an answer silently retargets itself onto whatever the requester
+        /// has become — which is the entire failure this phase exists to prevent.
+        /// Both answer doors read the requester's identity from here, so there is
+        /// one capture point and no drift between the immediate and deferred paths.
+        std::uint64_t requester_life = 0;
+        std::uint64_t requester_incarnation = 0;
     };
 
     // The Bus a handler actually receives: it stamps the handling Weave's identity
@@ -467,10 +518,23 @@ private:
         std::uint64_t token = 0; ///< 0 = a free slot
         WeaveId requester{};
         std::uint64_t requester_incarnation = 0;
+        /// The requester's LIFE at the moment it asked (R2B-2c). The incarnation
+        /// above distinguishes replaced code behind a stable id; this
+        /// distinguishes a different life behind it.
+        std::uint64_t requester_life = 0;
         WeaveId respondent{};
         std::uint64_t respondent_incarnation = 0;
         std::uint64_t correlation = 0;
     };
+
+    /// The ONE door every authenticated answer leaves by (R2B-2c).
+    ///
+    /// Both `answer_as` and `spend_deferred_as` funnel through here, so the
+    /// target expectation, the provenance and the recipient are decided in a
+    /// single place. Two nearly-identical enqueues either side of a registry is
+    /// exactly the shape that drifts.
+    Ticket enqueue_answer(WeaveId to, WeaveId as_sender, Message msg, std::uint64_t correlation,
+                          std::uint64_t requester_life, std::uint64_t requester_incarnation);
 
     DeferredAnswer defer_answer_as(WeaveId as_sender);
     Ticket spend_deferred_as(WeaveId as_sender, const DeferredAnswer& answer, Message msg);

@@ -261,12 +261,18 @@ struct RefusalTap {
     std::int64_t foreign_authority = 0; ///< a capability-object failure (R2B-2)
     std::int64_t exhausted = 0;         ///< a published bound was reached (R2B-2)
     std::int64_t sender_life_ended = 0; ///< the author's life is over (R2B-2b)
+    std::int64_t answer_target_changed = 0; ///< the requester is not who asked (R2B-2c)
     std::int64_t other_refusals = 0;
     std::int64_t delivered_answers = 0;
     /// The (authored, current) life pair off the last event for this shape, so the
     /// generation arithmetic can be pinned rather than inferred.
     std::uint64_t last_authored_life = 0;
     std::uint64_t last_current_life = 0;
+    /// The four numbers an authenticated answer's refusal reports (R2B-2c).
+    std::uint64_t expected_life = 0;
+    std::uint64_t expected_incarnation = 0;
+    std::uint64_t found_life = 0;
+    std::uint64_t found_incarnation = 0;
 
     void arm(Switchboard& bus, const char* shape) {
         bus.add_observer([this, shape](const BusEvent& ev) {
@@ -275,6 +281,10 @@ struct RefusalTap {
             }
             last_authored_life = ev.sender_life;
             last_current_life = ev.sender_life_now;
+            expected_life = ev.expected_requester_life;
+            expected_incarnation = ev.expected_requester_incarnation;
+            found_life = ev.requester_life_now;
+            found_incarnation = ev.requester_incarnation_now;
             if (ev.kind == EventKind::Delivered) {
                 ++delivered_answers;
             } else if (ev.kind == EventKind::Refused) {
@@ -284,6 +294,8 @@ struct RefusalTap {
                     ++exhausted;
                 } else if (ev.refusal.reason == RefusalReason::SenderLifeEnded) {
                     ++sender_life_ended;
+                } else if (ev.refusal.reason == RefusalReason::AnswerTargetChanged) {
+                    ++answer_target_changed;
                 } else if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
                     ++capability_denied;
                 } else {
@@ -2598,6 +2610,498 @@ TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold �
     CHECK_FALSE(victim_heard.answers[0].attested);
     CHECK(victim_heard.answers[0].sender == magpie.value);
     CHECK(tap.sender_life_ended == 0);
+}
+
+// ---- R2B-2c: the answer belongs to the life that asked -------------------------
+//
+// R2B-2b bound a message to the life that AUTHORED it, which protects the
+// answering side. This is the other half — the participant an answer was earned
+// FOR:
+//
+//     requester A asks -> responder queues an authentic answer -> A dies
+//     -> A is revived under the same WeaveId -> the answer lands on the revival
+//
+// and its quieter twin, where A never dies at all:
+//
+//     requester A asks -> the answer is queued -> A's CODE is replaced in place
+//     -> successor code B inherits A's completed conversation
+//
+// Ordinary messages deliberately keep their old behaviour: a direct or
+// role-addressed send is aimed at a logical destination and should reach whoever
+// legitimately occupies it. An authenticated answer is different in kind, because
+// its meaning already names one conversation between two exact participants.
+//
+//     An authenticated answer belongs to the requester life and code
+//     incarnation that asked.
+
+namespace {
+
+/// Drive one ask, and stop the pump the instant the ASK is delivered — so the
+/// authenticated answer the responder produced during that delivery is sitting in
+/// the queue, undelivered, while the test changes the requester underneath it.
+void queue_one_answer(Switchboard& bus, WeaveId asker, const char* role, const char* tag) {
+    const ObserverId stopper = bus.add_observer([&bus](const BusEvent& ev) {
+        if (ev.kind == EventKind::Delivered && ev.schema_name == ProvAsk::zen_name) {
+            bus.stop();
+        }
+    });
+    bus.send_as_to_role(asker, role,
+                        Message(to_value(ProvAsk{tag}), asker, WeaveId{}, kPublicCorrelation));
+    bus.pump();
+    bus.remove_observer(stopper);
+}
+
+/// The deferred twin: ask (deferred, nothing queued), then the completion — and
+/// stop on the COMPLETION's delivery, leaving the spent answer queued.
+void queue_one_deferred_answer(Switchboard& bus, WeaveId asker, WeaveId steward,
+                               const char* role, const char* tag) {
+    bus.send_as_to_role(asker, role,
+                        Message(to_value(ProvAsk{"defer me"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    const ObserverId stopper = bus.add_observer([&bus](const BusEvent& ev) {
+        if (ev.kind == EventKind::Delivered && ev.schema_name == ProvFinish::zen_name) {
+            bus.stop();
+        }
+    });
+    bus.send(steward, Message(to_value(ProvFinish{tag})));
+    bus.pump();
+    bus.remove_observer(stopper);
+}
+
+} // namespace
+
+TEST_CASE("R2B-2c: an authenticated answer queued for a requester that then died is not the "
+          "revival's answer — immediate and deferred alike") {
+    // THE CORE PROOF, run down both answer doors, because patching only the
+    // deferred registry would leave the immediate path exactly as broken.
+    bool deferred = false;
+    SUBCASE("immediate answer") { deferred = false; }
+    SUBCASE("deferred answer, spent before the death") { deferred = true; }
+
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId responder =
+        deferred ? mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal)
+                 : mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+    LifeTap life;
+    life.arm(bus, asker);
+
+    if (deferred) {
+        queue_one_deferred_answer(bus, asker, responder, kProvRole, "deferred");
+    } else {
+        queue_one_answer(bus, asker, kProvRole, "immediate");
+    }
+    REQUIRE(bus.pending() == 1); // the ANSWER is queued, and provably not delivered
+    REQUIRE(heard.answers.empty());
+
+    // The requester dies and comes back at the same logical address.
+    const std::string own_state = bus.snapshot_bytes(asker);
+    bus.kill(asker);
+    REQUIRE(life.died == 1);
+    REQUIRE(bus.reload(asker, own_state).revived);
+    REQUIRE(life.revived == 1);
+
+    bus.pump();
+    CHECK(heard.answers.empty());          // the revival was told nothing
+    CHECK(tap.answer_target_changed == 1); // and the refusal NAMES the cause
+    CHECK(tap.delivered_answers == 0);
+    CHECK(tap.capability_denied == 0);
+    CHECK(tap.other_refusals == 0);
+    CHECK(tap.expected_life == 1); // ...in numbers a journal reader can act on
+    CHECK(tap.found_life == 2);
+    CHECK(tap.expected_incarnation == 1);
+    CHECK(tap.found_incarnation == 1);
+
+    // THE POSITIVE CONTROL: the revived life's own question is answered normally.
+    if (deferred) {
+        queue_one_deferred_answer(bus, asker, responder, kProvRole, "fresh");
+    } else {
+        queue_one_answer(bus, asker, kProvRole, "fresh");
+    }
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].attested);
+    CHECK(heard.answers[0].correlation == kPublicCorrelation);
+}
+
+TEST_CASE("R2B-2c: a LIVE code reload of the requester does not inherit the conversation its "
+          "predecessor completed") {
+    // THE REASON INCARNATION IS REQUIRED AS WELL AS LIFE. Nothing died here: the
+    // weave never stopped living, so its life generation is untouched and a
+    // life-only check would hand A's finished conversation to successor code B —
+    // code that never asked anything and would read the answer as its own.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    (void)mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+
+    queue_one_answer(bus, asker, kProvRole, "asked by incarnation 1");
+    REQUIRE(bus.pending() == 1);
+
+    // New code behind the same id, while alive.
+    Value fresh(schema_of<ProvState>());
+    fresh.set("n", Cell::integer(0));
+    REQUIRE(bus.swap_state(asker, serialize(fresh)).revived);
+    CHECK(bus.alive(asker)); // it never stopped living
+
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(tap.answer_target_changed == 1);
+    CHECK(tap.expected_life == 1);
+    CHECK(tap.found_life == 1); // the LIFE is unchanged — only the code moved
+    CHECK(tap.expected_incarnation == 1);
+    CHECK(tap.found_incarnation == 2);
+
+    // ...and the successor's own question is answered normally.
+    queue_one_answer(bus, asker, kProvRole, "asked by incarnation 2");
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2c: ORDINARY messages keep their logical targeting — a queued direct send still "
+          "reaches the address it named, even after that address gets new code") {
+    // THE BOUNDARY, PINNED FROM THE OTHER SIDE. It would be easy to "improve"
+    // delivery by pinning every message to the exact recipient it was aimed at
+    // when queued. That is deliberately NOT the law: an ordinary send names a
+    // logical destination and should reach whoever legitimately occupies it —
+    // which is what makes hot-reload usable at all.
+    //
+    // Only envelopes that leave by an answer door carry a target expectation, and
+    // this case is what would go red if that ever stopped being true.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+
+    // The TARGET's code is replaced while the message waits.
+    Value fresh(schema_of<ProvState>());
+    fresh.set("n", Cell::integer(0));
+    REQUIRE(bus.swap_state(steward, serialize(fresh)).revived);
+
+    bus.pump();
+    CHECK(tap.answer_target_changed == 0);
+    CHECK(tap.other_refusals == 0);
+    CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 1); // it arrived
+}
+
+TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and the spend is "
+          "refused at the spend, before any answer is queued") {
+    // THE OTHER WINDOW. A deferred conversation can be invalidated in two places:
+    // before the answer is written (here) and after it is queued (the live-reload
+    // case above). This one is the older guard — R2B-2's spend-time incarnation
+    // check — and it is pinned here because it is what makes the R2B-2c capture
+    // rule LOOK redundant: with it in place, a spend that recomputed the
+    // requester's identity instead of using the record's could never observe a
+    // difference. Cutting both together is the only way to see the pair.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"defer me"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    REQUIRE(d->deferred_valid_);
+
+    // New code behind the requester's id, while it is alive and while the
+    // conversation is still open.
+    Value fresh(schema_of<ProvState>());
+    fresh.set("n", Cell::integer(0));
+    REQUIRE(bus.swap_state(asker, serialize(fresh)).revived);
+
+    bus.send(steward, Message(to_value(ProvFinish{"too late"})));
+    bus.pump();
+    CHECK_FALSE(d->first_spend_);   // the spend itself failed...
+    CHECK(bus.pending() == 0);      // ...so no answer was ever queued
+    CHECK(heard.answers.empty());
+    CHECK(tap.delivered_answers == 0);
+
+    // ...and the successor's own conversation works.
+    bus.send_as_to_role(asker, kProvRole,
+                        Message(to_value(ProvAsk{"mine"}), asker, WeaveId{},
+                                kPublicCorrelation));
+    bus.pump();
+    bus.send(steward, Message(to_value(ProvFinish{"answered"})));
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2c: an UNCHANGED requester still gets its answer, whatever else the world does") {
+    // The positive control for the whole phase. If the target expectation were
+    // even slightly too strict, this is the case that would go quiet — and every
+    // "no answer arrived" assertion elsewhere would become meaningless.
+    Switchboard bus;
+    Received heard;
+    Received bystander_heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId bystander = mount<Asker>(bus, bystander_heard);
+    const WeaveId responder =
+        mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+
+    queue_one_answer(bus, asker, kProvRole, "mine");
+    REQUIRE(bus.pending() == 1);
+
+    // Unrelated lifecycle churn everywhere EXCEPT the requester: a third weave
+    // dies and revives, and the RESPONDER's own code is replaced in place. The
+    // answerer's life is what R2B-2b binds, and a code reload is not a death — so
+    // neither of these is this conversation's business.
+    const std::string bystander_state = bus.snapshot_bytes(bystander);
+    bus.kill(bystander);
+    REQUIRE(bus.reload(bystander, bystander_state).revived);
+    Value fresh(schema_of<ProvState>());
+    fresh.set("n", Cell::integer(0));
+    REQUIRE(bus.swap_state(responder, serialize(fresh)).revived);
+
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].attested);                       // authentic
+    CHECK(heard.answers[0].correlation == kPublicCorrelation); // original label
+    CHECK(heard.answers[0].tag == "r");                     // expected payload
+    CHECK(tap.answer_target_changed == 0);
+    CHECK(bystander_heard.answers.empty());
+}
+
+TEST_CASE("R2B-2c: an answer pumped while the requester is STILL DEAD is refused as a dead "
+          "target, which is a different fact from a changed one") {
+    // Two honest outcomes that must not be conflated: an address whose occupant is
+    // dead (nobody can be delivered to, whoever they are) versus an address whose
+    // occupant is alive and is somebody else. This case is deliberately NOT a
+    // substitute for the death-then-revival proof above.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    (void)mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+
+    queue_one_answer(bus, asker, kProvRole, "q");
+    REQUIRE(bus.pending() == 1);
+    bus.kill(asker);
+
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(tap.answer_target_changed == 0); // NOT "changed" — it has not changed yet
+    CHECK(tap.other_refusals == 1);        // TargetUnavailable, the pre-existing truth
+    CHECK(tap.delivered_answers == 0);
+}
+
+TEST_CASE("R2B-2c: LAST-KNOWN-GOOD revival is no back door either") {
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    (void)mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+    LifeTap life;
+    life.arm(bus, asker);
+
+    queue_one_answer(bus, asker, kProvRole, "q");
+    REQUIRE(bus.pending() == 1);
+
+    bus.kill(asker);
+    const ReviveOutcome ro = bus.reload(asker, "not a serialized value");
+    REQUIRE(ro.revived);
+    REQUIRE(ro.from_last_known_good);
+    REQUIRE(life.revived_from_lkg == 1);
+
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(tap.answer_target_changed == 1);
+
+    // And a fresh conversation works afterwards.
+    queue_one_answer(bus, asker, kProvRole, "again");
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2c: when BOTH participants change, the answer still does not arrive") {
+    // Two independent guards can both apply, and correctness must not depend on
+    // which one is consulted first. This records which one fires today — the
+    // sender's, because it is checked before the target is even resolved — while
+    // asserting only the thing that matters: nothing was delivered.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId responder =
+        mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+
+    queue_one_answer(bus, asker, kProvRole, "q");
+    REQUIRE(bus.pending() == 1);
+
+    const std::string asker_state = bus.snapshot_bytes(asker);
+    const std::string responder_state = bus.snapshot_bytes(responder);
+    bus.kill(asker);
+    REQUIRE(bus.reload(asker, asker_state).revived);
+    bus.kill(responder);
+    REQUIRE(bus.reload(responder, responder_state).revived);
+
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(tap.delivered_answers == 0);
+    // Exactly one refusal, whichever cause it names.
+    CHECK(tap.sender_life_ended + tap.answer_target_changed == 1);
+    CHECK(tap.sender_life_ended == 1); // today: the author's life, checked first
+}
+
+TEST_CASE("R2B-2c: changing one requester does not invalidate an answer queued for another") {
+    // The cleanup-everything shortcut would make every case above just as green.
+    Switchboard bus;
+    Received heard_a;
+    Received heard_b;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId a = mount<Asker>(bus, heard_a);
+    const WeaveId b = mount<Asker>(bus, heard_b);
+    (void)mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+
+    // Two conversations, both answered, both answers queued: one pump, stopped
+    // after the SECOND ask is delivered.
+    int asks = 0;
+    const ObserverId stopper = bus.add_observer([&](const BusEvent& ev) {
+        if (ev.kind == EventKind::Delivered && ev.schema_name == ProvAsk::zen_name &&
+            ++asks == 2) {
+            bus.stop();
+        }
+    });
+    bus.send_as_to_role(a, kProvRole,
+                        Message(to_value(ProvAsk{"a"}), a, WeaveId{}, kPublicCorrelation));
+    bus.send_as_to_role(b, kProvRole,
+                        Message(to_value(ProvAsk{"b"}), b, WeaveId{}, kPublicCorrelation));
+    bus.pump();
+    bus.remove_observer(stopper);
+    REQUIRE(bus.pending() == 2);
+
+    // Only B changes.
+    const std::string b_state = bus.snapshot_bytes(b);
+    bus.kill(b);
+    REQUIRE(bus.reload(b, b_state).revived);
+
+    bus.pump();
+    CHECK(tap.answer_target_changed == 1); // exactly one, and it is B's
+    CHECK(heard_b.answers.empty());
+    REQUIRE(heard_a.answers.size() == 1);  // A's conversation was never anyone's business
+    CHECK(heard_a.answers[0].attested);
+}
+
+TEST_CASE("R2B-2c: WeaveIds are never reused, so a later participant cannot inherit an earlier "
+          "one's conversation by numbering") {
+    // The prompt's "numerically reused id" case is unreachable rather than
+    // untested, and the honest thing is to pin the allocation law that makes it so
+    // rather than manufacture a scenario the bus cannot produce.
+    Switchboard bus;
+    Received heard;
+    const WeaveId first = mount<Asker>(bus, heard);
+    bus.unregister_weave(first);
+    Received later_heard;
+    const WeaveId second = mount<Asker>(bus, later_heard);
+    CHECK(second.value != first.value);
+    CHECK(second.value > first.value); // monotonic, never recycled
+
+    // And an answer owed to a weave that has been permanently removed reaches
+    // nobody at all — the address resolves to no record.
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    (void)mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+    queue_one_answer(bus, asker, kProvRole, "q");
+    REQUIRE(bus.pending() == 1);
+    bus.unregister_weave(asker);
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(later_heard.answers.empty());
+    CHECK(tap.delivered_answers == 0);
+}
+
+TEST_CASE("R2B-2c: a SWAP successor holds a different WeaveId, so an answer owed to its "
+          "predecessor cannot reach it") {
+    // Distinct from a reload: a swap creates a NEW record with a NEW id, so the
+    // predecessor's conversation cannot even be addressed at the successor. Pinned
+    // rather than argued, because "a different id" is exactly the assumption the
+    // rest of this phase rests on.
+    Switchboard bus;
+    Received heard;
+    Received successor_heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    (void)mount_into_role<Responder>(bus, kProvRole, "r", Speak::Authenticated);
+
+    queue_one_answer(bus, asker, kProvRole, "q");
+    REQUIRE(bus.pending() == 1);
+
+    // The requester is replaced by a successor: unregistered, and a fresh weave
+    // mounted in its place — which is what a swap is at the bus's altitude.
+    bus.unregister_weave(asker);
+    const WeaveId successor = mount<Asker>(bus, successor_heard);
+    CHECK(successor.value != asker.value);
+
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(successor_heard.answers.empty());
+    CHECK(tap.delivered_answers == 0);
+}
+
+TEST_CASE("R2B-2c: a replayed raw envelope carries no target expectation, because it carries no "
+          "private provenance at all") {
+    // The existing replay proof covers answer provenance; this adds the new
+    // private fact to the same statement. A weave that hoards a delivered answer
+    // and re-sends it is speaking as itself under ordinary rules — so the copy
+    // reaches its victim even though the ORIGINAL conversation named somebody else
+    // entirely, and it arrives with no authenticity to inherit.
+    Switchboard bus;
+    Received victim_heard;
+    Received magpie_heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId victim = mount<Asker>(bus, victim_heard);
+
+    auto raw = std::make_unique<RawMagpie>(victim, magpie_heard);
+    RawMagpie* magpie_raw = raw.get();
+    Grant g;
+    g.allow_to_any(ProvAsk::zen_name, ProvAsk::zen_version);
+    g.allow_to_any(ProvAnswer::zen_name, ProvAnswer::zen_version);
+    const WeaveId magpie = bus.register_weave(std::move(raw), std::move(g));
+    const WeaveId holder =
+        mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Authenticated);
+
+    bus.send_as(magpie, holder, Message(to_value(ProvAsk{"one"}), magpie, WeaveId{}, 5));
+    bus.pump();
+    REQUIRE(magpie_raw->kept_was_attested());
+
+    // The magpie's own conversation was with the MAGPIE. Replaying it at the
+    // victim delivers an ordinary message — the target expectation did not come
+    // along, because it was never in anything the magpie could hold.
+    bus.send(magpie, Message(to_value(ProvNudge{})));
+    bus.pump();
+    REQUIRE(victim_heard.answers.size() == 1);
+    CHECK_FALSE(victim_heard.answers[0].attested);
+    CHECK(victim_heard.answers[0].sender == magpie.value);
+    CHECK(tap.answer_target_changed == 0); // no expectation to violate
 }
 
 } // TEST_SUITE
