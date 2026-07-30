@@ -406,7 +406,7 @@ DeferredAnswer Switchboard::defer_answer_as(WeaveId as_sender) {
         !authority_.requester.valid() || authority_.spent) {
         return DeferredAnswer{};
     }
-    const std::uint64_t requester_incarnation = incarnation_of(authority_.requester);
+    const std::uint64_t requester_incarnation = authority_.requester_incarnation;
     const std::uint64_t respondent_incarnation = incarnation_of(as_sender);
     if (requester_incarnation == 0 || respondent_incarnation == 0) {
         return DeferredAnswer{}; // one of the participants is already gone
