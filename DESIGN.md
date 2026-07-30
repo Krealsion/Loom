@@ -2919,6 +2919,47 @@ sharpened the same way: the fixture **persists its token**, so the successor
 rebuilds a capability from the real number and genuinely believes it holds one —
 and the board, not the fixture, is what says no.
 
+### The answer means the same on both sides of the seam (R2B-3b-1a, ABI v4)
+
+A native weave writes `mail.answer(reply)` and Loom enqueues an authenticated
+answer. A dynamically loaded weave wrote the same line, reached `HostApiBus`, and
+got the base class's do-nothing default:
+
+```text
+request delivered -> dynamic handler calls mail.answer() ->
+    no answer, no refusal, no bus event
+```
+
+> **A public delivery operation must mean the same thing on both sides of the
+> dynamic-library seam, or fail loudly before user code mistakes silence for
+> success.**
+
+`Bus::answer`'s default is truthful for a Bus that is *not* a live delivery — a
+library-side shim, a future mailbox — and that is exactly why it was the wrong
+thing to inherit here, where the Bus *is* a live delivery. The default was not
+wrong; the omission was.
+
+**ABI v4 pays for it with one narrowly typed door.** No authority crosses in
+either direction: the library asks for the public operation, and the host decides
+whether the delivery earned an answer, chooses the recipient and the correlation,
+and stamps the requester-target provenance. `ZEN_ERR_REFUSED` means *there was no
+answer authority to spend* — a real result a caller can act on, instead of the
+silence it used to get.
+
+**Defer-then-spend was rejected, and the reason is measurable.** Implementing the
+immediate answer as "create a deferred answer, then immediately spend it" would
+borrow a slot from `kMaxDeferredAnswers` for a conversation that never needed one,
+and at the bound it would begin failing as `Exhausted` for a reason the caller
+could do nothing about. There is a case that answers far past the bound and shows
+zero refusals of any kind.
+
+The version bump is deliberate rather than a quiet append: appending a callback is
+binary-compatible in itself, which is precisely the danger — a v3 library under a
+v4 host would be indistinguishable by number and would keep failing *silently*.
+The stale-artifact fixture now declares `ZEN_ABI_VERSION - 1`, so that pin keeps
+meaning "the immediately previous ABI is refused" after every future bump instead
+of pinning the literal number it happened to be when written.
+
 **One asymmetry worth naming.** `answer()` refuses when the `Bus` it is called
 through does not belong to the delivery in progress — that is how a stored `Bus&`
 is caught. `spend_deferred()` deliberately has no such check: outliving the

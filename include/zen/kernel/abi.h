@@ -39,7 +39,7 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 3u
+#define ZEN_ABI_VERSION 4u
 
 /* v3 (R2B-2): the host API gained the deferred-answer door, so a DYNAMICALLY
  * LOADED weave can hold an answer right across handler boundaries — the case a
@@ -48,6 +48,20 @@ extern "C" {
  * loaded by a v3 host would be indistinguishable from a v3 one by number alone,
  * and a v3 library loaded by a v2 host would read past the struct. A version is
  * exactly the thing that makes those two cases refuse instead of guess. */
+
+/* v4 (R2B-3b-1a): the host API gained the IMMEDIATE ANSWER door.
+ *
+ * A native weave writes `mail.answer(reply)` and Loom enqueues an authenticated
+ * answer. A dynamically loaded weave writes the same line, reached `HostApiBus`,
+ * and got the base class's do-nothing default: no answer, no refusal, no bus
+ * event. The same public word meant two different things depending on which side
+ * of this seam it was spoken, and the difference was SILENT.
+ *
+ * Paid as a version bump rather than a quiet append. Appending a callback is
+ * binary-compatible in itself, which is exactly the danger: a v3 library loaded by
+ * a v4 host would be indistinguishable by number alone and would keep failing
+ * silently, and a v4 library loaded by a v3 host would read past the struct. A
+ * version is the thing that makes both refuse instead of guess. */
 
 /* Delivery provenance flags (ZEN_PROV_*). Zero means an ordinary message: it
  * stands on its shape and its sender stamp, and claims nothing more. These are
@@ -114,6 +128,15 @@ typedef struct ZenHostApi {
     uint64_t (*defer_answer)(void* ctx);
     ZenStatus (*answer_deferred)(void* ctx, uint64_t token, const uint8_t* payload, size_t len);
     void (*release_deferred)(void* ctx, uint64_t token);
+    /* The IMMEDIATE authenticated answer (v4): the same trusted operation a native
+     * weave reaches through `mail.answer()`. The library asks for the public
+     * operation and nothing more — no authority crosses, in either direction. The
+     * host decides whether this delivery earned an answer, chooses the recipient
+     * and the correlation, and stamps the requester-target provenance; a library
+     * cannot name any of them. ZEN_ERR_REFUSED means there was no answer authority
+     * to spend (a root's request, or one already answered), which is a REAL
+     * result the caller can act on rather than the silence it used to get. */
+    ZenStatus (*answer)(void* ctx, const uint8_t* payload, size_t len);
 } ZenHostApi;
 
 /* The single descriptor a Weave library exposes, returned by zen_weave_abi().

@@ -246,6 +246,26 @@ static ZenStatus zen_host_answer_deferred(void* ctx, uint64_t token, const std::
     return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
 }
 
+static ZenStatus zen_host_answer(void* ctx, const std::uint8_t* payload, std::size_t len) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+    if (!a.ok()) {
+        return ZEN_ERR_REFUSED;
+    }
+    // Straight to the gated WeaveBus of the delivery in progress — the SAME
+    // trusted operation `mail.answer()` reaches natively. The host owns the
+    // recipient, the correlation and the requester-target provenance; the library
+    // supplied only what it wanted to say.
+    const loom::Ticket t = h->gated->answer(loom::Message(std::move(a).value()));
+    return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+}
+
 static void zen_host_release_deferred(void* ctx, uint64_t token) {
     auto* h = static_cast<HostCtx*>(ctx);
     h->gated->release_deferred(loom::DeferredAnswer::from_host_token(token));
@@ -291,9 +311,14 @@ public:
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_};
-        ZenHostApi api{&ctx,           &zen_host_send,         &zen_host_publish,
-                       &zen_host_send_to_role, &zen_host_defer_answer, &zen_host_answer_deferred,
-                       &zen_host_release_deferred};
+        ZenHostApi api{&ctx,
+                       &zen_host_send,
+                       &zen_host_publish,
+                       &zen_host_send_to_role,
+                       &zen_host_defer_answer,
+                       &zen_host_answer_deferred,
+                       &zen_host_release_deferred,
+                       &zen_host_answer};
         // Provenance crosses as a host-computed flag word beside the sender, and
         // it crosses ONE WAY ONLY: there is no callback a library can hand one
         // back through, so the seam is a place a loaded weave learns Loom's word

@@ -1662,7 +1662,11 @@ TEST_CASE("R2B-1 D: an artifact built against the previous ABI is refused at loa
     LoadResult lr = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(lr.ok);
     CHECK(lr.error.find("abi_version") != std::string::npos);
-    CHECK(lr.error.find("1") != std::string::npos); // the version it declared
+    // The fixture declares ONE BEHIND whatever the host requires, so this pin keeps
+    // meaning "the immediately previous ABI is refused" after every future bump
+    // rather than pinning the literal number it happened to be when written.
+    CHECK(lr.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(lr.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
     CHECK_FALSE(kernel.is_loaded("stale"));
 
     // And nothing of it was ever called: its function pointers are null, so a
