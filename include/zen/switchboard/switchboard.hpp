@@ -144,6 +144,26 @@ struct ReviveOutcome {
 /// only these two fields are read.
 std::shared_ptr<const Schema> lifecycle_policy_schema();
 
+/// WHO OWNS A SEALED CANDIDATE (R2B-3b).
+///
+/// R2B-3a bound a seal to a coordinator's `WeaveId` alone, which was enough to
+/// prove isolation and is NOT enough to own a transaction: a coordinator that
+/// dies and revives, or whose code is replaced, is a different participant at
+/// the same address — and R2B-2b/2c already established that such a successor
+/// inherits neither speech nor conversations. A preparation is a conversation.
+/// So ownership carries the same three facts every other authority in this
+/// codebase carries, and the issuing Loom is implicit in living on its record.
+struct CandidateOwner {
+    WeaveId who{};
+    std::uint64_t life = 0;
+    std::uint64_t incarnation = 0;
+
+    bool valid() const noexcept { return who.valid(); }
+    friend bool operator==(const CandidateOwner& a, const CandidateOwner& b) noexcept {
+        return a.who == b.who && a.life == b.life && a.incarnation == b.incarnation;
+    }
+};
+
 /// How a Weave's accept-set is interpreted at delivery. `Listed` (the default): only the
 /// explicit `(name, version)` schemas it declares. `AnyRegistered`: a deliberate
 /// capability — the Weave accepts **any registered shape**, gated at delivery against
@@ -304,6 +324,10 @@ public:
     /// Returns false if there is no such weave, or it already holds a role.
     bool seal_weave(WeaveId candidate, WeaveId coordinator);
 
+    /// Who owns this sealed weave, as the exact life and incarnation that sealed
+    /// it. An invalid owner means the weave is not sealed.
+    CandidateOwner candidate_owner(WeaveId id) const;
+
     /// Is this weave currently a sealed candidate? (Diagnostics and pins; the
     /// routing decisions are made inside the bus, never by asking.)
     bool sealed(WeaveId id) const;
@@ -328,6 +352,28 @@ public:
     /// weave is missing or dead, or if the role is held by anyone other than the
     /// incumbent. A refused commit is observationally identical to no commit.
     bool commit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role);
+
+    /// THE ADMISSION (R2B-3b): the commit above, extended to account for the
+    /// incumbent and for activation ordering. One operation, one visible change.
+    ///
+    ///   before   incumbent public          candidate sealed
+    ///   after    incumbent sealed for      candidate admitted, its activation
+    ///            retirement (coordinator-  already ahead of any production
+    ///            private only)             that could reach it
+    ///
+    /// `activation` is enqueued as an attested lifecycle fact — and NOT at the
+    /// tail. Role resolution happens at delivery, so a role-addressed message
+    /// queued before the commit would otherwise be delivered to the candidate
+    /// BEFORE its activation. It is instead placed immediately ahead of the first
+    /// queued envelope that could reach this candidate (one addressed to the
+    /// committed role, or to the candidate directly), which is the narrowest
+    /// placement that makes activation the candidate's first live delivery while
+    /// leaving every other message's order untouched. Nothing is dropped.
+    ///
+    /// Refuses — changing NOTHING — on any failed precondition.
+    bool admit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role,
+                         const LifecycleAuthority& authority, Message activation,
+                         std::int64_t sequence);
 
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
     ///
@@ -419,7 +465,7 @@ private:
         /// A candidate is not "registered and please don't route to it": the
         /// routing paths themselves refuse, which is why this lives on the record
         /// the router already consults rather than in a table beside it.
-        WeaveId sealed_by{};
+        CandidateOwner sealed_by{};
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };

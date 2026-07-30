@@ -3,6 +3,7 @@
 #include "switchboard_fixtures.hpp"
 
 #include <zen/gate.hpp>
+#include <zen/host/lifecycle_wiring.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/serialize.hpp>
 #include <zen/weave/lifecycle.hpp>
@@ -853,6 +854,198 @@ TEST_CASE("R2B-3: abandoning a prepared candidate leaves the world as it was, an
     bus.pump();
     CHECK(live_count(bus, incumbent.id) == 1);
     CHECK(victim.weave->handled_names.empty());
+}
+
+// ---- R2B-3b: the transaction's identity and the admission boundary -------------
+//
+// R2B-3a bound a seal to a coordinator's WeaveId, which was enough to prove
+// isolation and is not enough to own a transaction. Every other authority in this
+// codebase already carries three facts, and for the same reason: a coordinator
+// that dies and revives, or whose code is replaced, is a different participant at
+// the same address. A preparation is a conversation, so it belongs to a life.
+//
+// And commit has to account for the incumbent, not merely the role — otherwise a
+// "replaced" service is still publicly direct-addressable, which is two live
+// services with one of them pretending to be retired.
+
+TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor its conversation") {
+    bool by_death = false;
+    SUBCASE("the coordinator dies and is revived") { by_death = true; }
+    SUBCASE("the coordinator's code is replaced while alive") { by_death = false; }
+
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema(), tick_schema()});
+    LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
+    REQUIRE(incumbent.ok);
+    LoadResult candidate = kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id);
+    REQUIRE_MESSAGE(candidate.ok, candidate.error);
+
+    const CandidateOwner owner = bus.candidate_owner(candidate.id);
+    CHECK(owner.who == coordinator.id);
+    CHECK(owner.life == 1);
+    CHECK(owner.incarnation == 1);
+
+    // Before: the coordinator can converse with its candidate.
+    bus.send_as(coordinator.id, candidate.id, Message(ping(1)));
+    bus.pump();
+    REQUIRE(live_count(bus, candidate.id) == 1);
+
+    // The coordinator becomes a different participant at the same address.
+    const std::string state = bus.snapshot_bytes(coordinator.id);
+    if (by_death) {
+        bus.kill(coordinator.id);
+        REQUIRE(bus.reload(coordinator.id, state).revived);
+    } else {
+        REQUIRE(bus.swap_state(coordinator.id, state).revived);
+    }
+
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+
+    // The successor cannot reach the candidate — and cannot tell it from an id
+    // that was never registered.
+    bus.send_as(coordinator.id, candidate.id, Message(ping(2)));
+    // ...and the candidate cannot reach the successor either: its one permitted
+    // correspondent was a life, not an address.
+    bus.send_as(candidate.id, coordinator.id, Message(pong(3)));
+    bus.pump();
+
+    CHECK(live_count(bus, candidate.id) == 1); // unchanged: nothing got through
+    REQUIRE(tap.size() == 2);
+    CHECK(tap[0].reason == RefusalReason::NoSuchTarget);  // inbound, no oracle
+    CHECK(tap[1].reason == RefusalReason::SealedSpeech);  // outbound, named
+    CHECK(coordinator.weave->handled_names.empty());
+
+    // The incumbent never noticed any of it.
+    CHECK(bus.role_holder("worker") == incumbent.id);
+    bus.send_to_role("worker", Message(ping(4)));
+    bus.pump();
+    CHECK(live_count(bus, incumbent.id) == 1);
+}
+
+TEST_CASE("R2B-3b: at admission the candidate's FIRST live delivery is its activation, even "
+          "though production was queued for the role before commit") {
+    // THE ORDERING THE QUEUE RESISTED. Role resolution is a delivery-time decision,
+    // so a role-addressed message enqueued before the commit resolves to whoever
+    // holds the role when it is finally dispatched — the candidate. Appending the
+    // activation at the tail would let ordinary production reach a weave that has
+    // not yet been told it is alive.
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered incumbent = register_probe(bus, {ping_schema()});
+    // The candidate is a probe here because the claim is about ORDER, and a probe
+    // records the exact sequence it was handed. (That a real .so can be a sealed
+    // candidate is R2B-3a's ground, pinned there against actual artifacts.)
+    auto cand_weave = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    const WeaveId inc_id = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+    (void)incumbent;
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+
+    // Production aimed at the ROLE, queued while the incumbent still holds it.
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.send_to_role("worker", Message(ping(2)));
+    REQUIRE(bus.pending() == 2);
+
+    loom::Activated fact{7};
+    REQUIRE(bus.admit_candidate(candidate, inc_id, "worker",
+                                host_lifecycle_authority(bus),
+                                Message(to_value(fact)), 7));
+
+    bus.pump();
+
+    // The candidate saw its activation FIRST, then the production that was already
+    // waiting. Nothing was dropped to achieve that.
+    REQUIRE(cand_raw->handled_names.size() == 3);
+    CHECK(cand_raw->handled_names[0] == std::string(loom::Activated::zen_name));
+    CHECK(cand_raw->handled_names[1] == "Ping");
+    CHECK(cand_raw->handled_names[2] == "Ping");
+}
+
+TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no production of any "
+          "kind, and the coordinator can still reach it") {
+    // Moving the role alone would leave the incumbent publicly direct-addressable:
+    // a second live service that merely lost its name.
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered outsider = register_probe(bus, {pong_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+    auto cand_weave = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+
+    ProbeWeave* inc_raw = static_cast<ProbeWeave*>(bus.weave(incumbent));
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    REQUIRE(inc_raw->handled_names.size() == 1);
+
+    loom::Activated fact{3};
+    REQUIRE(bus.admit_candidate(candidate, incumbent, "worker",
+                                host_lifecycle_authority(bus),
+                                Message(to_value(fact)), 3));
+    CHECK(bus.sealed(incumbent));
+    CHECK_FALSE(bus.sealed(candidate));
+
+    // Production by role AND by id both miss the incumbent now.
+    bus.send_to_role("worker", Message(ping(2)));
+    bus.send_as(outsider.id, incumbent, Message(ping(3)));
+    bus.pump();
+    CHECK(inc_raw->handled_names.size() == 1); // still just the pre-commit one
+    CHECK(cand_raw->handled_names.size() == 2); // activation + the role message
+
+    // ...and the private retirement conversation still reaches it.
+    bus.send_as(coordinator.id, incumbent, Message(ping(4)));
+    bus.pump();
+    CHECK(inc_raw->handled_names.size() == 2);
+}
+
+TEST_CASE("R2B-3b: admission refuses without Loom's own authority, and a refusal changes nothing") {
+    Switchboard bus;
+    Switchboard decoy; // a real board, and a real authority — issued elsewhere
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+    const WeaveId candidate = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+
+    loom::Activated fact{1};
+    // Another Loom's authority has no standing here (R2B-1b), and topology is
+    // exactly the kind of thing it must not move.
+    CHECK_FALSE(bus.admit_candidate(candidate, incumbent, "worker",
+                                    host_lifecycle_authority(decoy),
+                                    Message(to_value(fact)), 1));
+    // Precondition drift: the role is not held by the named incumbent.
+    CHECK_FALSE(bus.admit_candidate(candidate, coordinator.id, "worker",
+                                    host_lifecycle_authority(bus),
+                                    Message(to_value(fact)), 1));
+    // An unsealed "candidate" is not a candidate.
+    CHECK_FALSE(bus.admit_candidate(coordinator.id, incumbent, "worker",
+                                    host_lifecycle_authority(bus),
+                                    Message(to_value(fact)), 1));
+
+    // Nothing moved, and nothing was queued.
+    CHECK(bus.role_holder("worker") == incumbent);
+    CHECK(bus.sealed(candidate));
+    CHECK_FALSE(bus.sealed(incumbent));
+    CHECK(bus.pending() == 0);
+    bus.send_to_role("worker", Message(ping(1)));
+    bus.pump();
+    CHECK(static_cast<ProbeWeave*>(bus.weave(incumbent))->handled_names.size() == 1);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

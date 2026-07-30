@@ -3157,9 +3157,51 @@ is precisely what `SwapWeave` does and precisely the window it documents. A watc
 that samples the topology on every delivery never sees no holder, two holders, or a
 role pointing at a sealed weave.
 
-**Status: this is the primitive, not the phase.** The transaction state machine,
-the Timer continuity vertical proof, and the failure ladder above the substrate are
-not built here; see the phase report.
+**A seal belongs to a life, not an address (R2B-3b).** R2B-3a bound the seal to a
+coordinator's `WeaveId`, which was enough to prove isolation and is not enough to
+own a transaction — every other authority here already carries three facts, and for
+the same reason. `CandidateOwner` is `(WeaveId, life, incarnation)`, captured when
+the seal is made, so a coordinator that dies and revives, or whose code is
+replaced, inherits neither the candidate nor the conversation: its sends are
+refused as `NoSuchTarget` (no oracle) and the candidate's are refused as
+`SealedSpeech`.
+
+### Admission: activation first, and the queue resisted (R2B-3b)
+
+Moving the role is not enough, in two separate ways.
+
+**The incumbent must be sealed too.** Role traffic would follow the role, but the
+incumbent stays publicly *direct*-addressable — a second live service that merely
+lost its name. At admission it is sealed to the same coordinator, so it receives no
+production of any kind and remains reachable only for the private retirement
+conversation.
+
+**And the activation has to arrive first.** Role resolution is a *delivery-time*
+decision, so a role-addressed message queued before the commit resolves to whoever
+holds the role when it is finally dispatched — the candidate. Appending the
+attested `zen.Activated` at the tail would therefore let ordinary production reach
+a weave that has not yet been told it is alive:
+
+```text
+queue before commit:   [Ping@role] [Ping@role]
+naive commit:          [Ping@role] [Ping@role] [Activated]   <- production first
+admission:             [Activated] [Ping@role] [Ping@role]
+```
+
+`admit_candidate` inserts the activation immediately ahead of the **first queued
+envelope that could reach this candidate** — one addressed to the committed role,
+or to the candidate itself. That is the narrowest placement that makes activation
+the candidate's first live delivery: every other message keeps its order, and
+**nothing is dropped**, because buying ordering with silence would be a worse
+trade. Head-insertion would have been simpler and would have broken FIFO for
+unrelated traffic; a "committed but activating" state would have had to defer real
+production somewhere. The scan is bounded by the pending queue and runs once per
+commit.
+
+**Status: this is the primitive and its transaction boundary, not the phase.** The
+transaction record and state machine, the readiness conversation, the dynamic
+fixture pair, the failure ladder and the Timer continuity vertical proof are not
+built here; see the phase report.
 
 **Two residuals, stated rather than papered over.** Out-of-process weaves fail
 **closed**: the child host is given null deferral callbacks, because a
