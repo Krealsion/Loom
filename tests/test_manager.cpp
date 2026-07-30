@@ -419,11 +419,15 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
 
     // OUTBOUND, and this is the honest half: the incumbent replied to both, but
     // only the FIRST Pong was delivered before the unload. The second was still
-    // queued when the incumbent was unregistered, and a gated message is
-    // authorized by looking its sender up at DELIVERY time — a sender that no
-    // longer exists cannot be authorized, so the bus refuses it CapabilityDenied
-    // (fail-closed; switchboard.cpp's `sender != nullptr` term). An unloaded
-    // weave's in-flight answers die with it.
+    // queued when the incumbent was unregistered — and a queued message belongs to
+    // the LIFE that authored it (R2B-2b), so the bus refuses it as
+    // `SenderLifeEnded`. An unloaded weave's in-flight answers die with it.
+    //
+    // R2B-2b SHARPENED THIS PIN rather than changing the behaviour: the refusal was
+    // previously `CapabilityDenied`, which arrived at the right answer by the wrong
+    // road (a vanished sender has no grant to check, so the authorization term
+    // failed). Same outcome, but an operator reading that reason would have gone
+    // looking for a grant that was never the problem. The author is what ended.
     //
     // This is a property of unregistering ANY weave mid-queue, not something the
     // swap invented — the swap is simply the first op that makes it routine. It
@@ -431,7 +435,8 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     // invisible/atomic rebind would have to solve if the window is ever felt.
     REQUIRE(answered_by.size() == 1);
     CHECK(answered_by[0] == incumbent);
-    CHECK(refused_count(tap, "Pong", RefusalReason::CapabilityDenied) == 1);
+    CHECK(refused_count(tap, "Pong", RefusalReason::SenderLifeEnded) == 1);
+    CHECK(refused_count(tap, "Pong", RefusalReason::CapabilityDenied) == 0);
 
     // The replacement did happen, and a send issued after the drain reaches the
     // successor — the role slot carried the consumer's reach across.

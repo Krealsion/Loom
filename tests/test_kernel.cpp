@@ -170,6 +170,7 @@ TEST_CASE("hot-reload swaps the library and the state survives the swap") {
     // And it still works after the swap.
     bus.send(id, Message(ping(9), WeaveId{}, recorder.id));
     bus.pump();
+    REQUIRE_FALSE(recorder.weave->handled_values.empty()); // guard the index below
     CHECK(recorder.weave->handled_values.back() == 9);
 }
 

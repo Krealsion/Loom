@@ -45,6 +45,15 @@ enum class RefusalReason : std::uint8_t {
     /// is distinct from CapabilityDenied: reporting a capacity limit as a foreign
     /// capability would send an operator hunting a forgery that never happened.
     Exhausted,
+    /// The message was authored by a life that has since ended (R2B-2b): the
+    /// sender is dead, has been permanently removed, or has been revived — which
+    /// makes the speaker a different life behind the same `WeaveId`.
+    ///
+    /// Its own reason for the same reason the two above have theirs. "No such
+    /// target" would be a lie (the target is fine), a gate error would blame the
+    /// payload, and `CapabilityDenied` would send an operator to edit a grant that
+    /// was never the problem. What ended was the utterance's author.
+    SenderLifeEnded,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -80,6 +89,13 @@ struct BusEvent {
     Refusal refusal{};             ///< for Refused, and for a failed/fallback Revived
     bool from_last_known_good = false; ///< for Revived
     const Value* payload = nullptr; ///< for Delivered; valid only during the callback
+    /// DIAGNOSTICS ONLY, and only for a weave-originated delivery (R2B-2b): the
+    /// sender life this envelope was stamped with at enqueue, and the sender's life
+    /// right now. When they differ, the message was authored by a life that has
+    /// since ended — and a journal reader can see exactly that rather than having
+    /// to infer it. Both are 0 for host/root sends, which belong to no weave life.
+    std::uint64_t sender_life = 0;
+    std::uint64_t sender_life_now = 0;
 };
 
 using Observer = std::function<void(const BusEvent&)>;
@@ -317,6 +333,21 @@ private:
         /// of the same code, so it advances nothing here; what ends the
         /// conversations of a life that ended is `abandon_deferred_for` at `kill`.
         std::uint64_t incarnation = 1;
+        /// WHICH LIFE this id currently is — one continuous period of being alive
+        /// (R2B-2b). Advanced on every dead -> alive transition, and NOWHERE else.
+        ///
+        /// A SECOND FIELD, DELIBERATELY, because one cannot carry both concepts:
+        ///
+        ///   code incarnation   changes when the code behind an id is replaced,
+        ///                      while the weave never stopped living
+        ///   life generation    changes when a life ends and another begins behind
+        ///                      the same id, whatever the code
+        ///
+        /// Collapsing them would make a live code reload invalidate speech already
+        /// in the queue — the same weave, still alive, mid-sentence — which is a
+        /// semantic change nobody asked for. They are used where each belongs:
+        /// deferred answers bind to the incarnation, queued envelopes to the life.
+        std::uint64_t life = 1;
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
     };
@@ -327,6 +358,18 @@ private:
         std::uint64_t seq = 0;
         bool gated = false;  ///< true => Weave-originated; authorize against the sender's grant
         std::string role{};  ///< non-empty => role-targeted; resolved to a holder at delivery
+        /// WHICH LIFE AUTHORED THIS (R2B-2b). Stamped by the bus at enqueue from
+        /// the sender's current life, compared against the sender's life at
+        /// delivery. Meaningful only when `gated` — a host/root send belongs to no
+        /// weave life, and 0 there means "not weave speech", not a magic life.
+        ///
+        /// IT LIVES ON THE ENVELOPE AND NOT ON `Message`, which is the whole point:
+        /// `Envelope` is private to the Switchboard and has no wire form, no
+        /// schema, and no constructor a weave can reach. So there is nothing for a
+        /// weave to read, copy, forge or replay — a hoarded `Message` re-sent later
+        /// is stamped afresh with its *re-sender's* life, because the stamp was
+        /// never part of what it hoarded.
+        std::uint64_t sender_life = 0;
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
@@ -462,9 +505,17 @@ private:
     /// the record has already been erased from `weaves_`.
     void abandon_deferred_for(WeaveId id);
 
+    /// Advance `rec`'s life generation iff it is currently dead — i.e. iff the
+    /// caller is about to bring it back. Called by every revival path before it
+    /// marks the record alive (R2B-2b).
+    void begin_new_life(WeaveRecord& rec);
+
     DeferredRecord* find_deferred(std::uint64_t token);
     /// This weave's current incarnation, or 0 if it is not registered.
     std::uint64_t incarnation_of(WeaveId id) const;
+    /// This weave's current life generation, or 0 if it is not registered. Used to
+    /// stamp an envelope at enqueue and to check it at delivery.
+    std::uint64_t life_of(WeaveId id) const;
 
     /// Record and publish a refusal that never became a delivery, so a failure of
     /// authority is visible at the same altitude as a failure of capability.

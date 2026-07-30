@@ -2980,6 +2980,70 @@ number that never named anything both come back as `ForeignAuthority` with no
 requester on the refusal. A distinct "this conversation used to exist" reason would
 be an oracle, and would grant no authority to anyone who could read it.
 
+### The message belongs to a life (R2B-2b)
+
+R2B-2a ends every conversation a dying participant was already *in*. A message it
+had merely **queued** names no conversation yet, so there was nothing for that
+cleanup to find:
+
+```text
+life A queues an ask -> A dies -> A is revived under the same WeaveId
+-> the ask is delivered -> the responder answers -> the NEW life is answered
+```
+
+The logical sender id never changed. The life that authored the sentence ended
+before it was spoken.
+
+> **A weave-originated message belongs to the life that authored it.**
+
+Every gated envelope is stamped at enqueue with the sender's current **life**, and
+delivery refuses when that life is over — as `RefusalReason::SenderLifeEnded`,
+checked **before the grant and before role resolution**, so a stale message reaches
+nothing at all: no handler, no answer authority, no deferred record, and not even
+the knowledge of whether a role is currently held.
+
+**Two generations, and one field could not carry both.** This is the crux:
+
+| | changes when | binds |
+|---|---|---|
+| `incarnation` (code) | the code behind an id is replaced, while the weave never stopped living (`swap_state`) | deferred answers |
+| `life` (R2B-2b) | a life ends and another begins behind the same id — i.e. every dead → alive transition | queued envelopes |
+
+Collapsing them would make a **live code reload discard speech already in the
+queue** — the same weave, still alive, mid-sentence. So a live reload advances the
+incarnation and leaves the life alone, and there is a case pinning exactly that.
+
+**Where the stamp lives is the security argument.** It is a field on the bus's
+private `Envelope`, not on `Message`: no wire form, no schema, no constructor a
+weave can reach, and no public setter anywhere. So cross-Loom carriage and replay
+are **structural** rather than checked — there is nothing to copy out of a
+delivered message. The consequence is worth stating because a reader might expect
+the opposite: a weave that hoards someone else's envelope and re-sends it is not
+relaying that author's speech, it is **speaking itself**, and it is checked as
+itself. (The dynamic ABI needed no change at all: a loaded weave's emitted message
+is stamped host-side, on the way in.)
+
+**Authorization timing, stated once:** grants are enforced at **delivery** only —
+`find(sender)` then `grant.permits(...)` — which is pre-existing Loom law and is
+deliberately left alone. R2B-2b adds a second, independent condition at the same
+moment (the author's life) rather than a snapshot of the grant. So revocation
+between send and delivery still takes effect, and a widened grant still applies;
+what a widened grant can no longer do is resurrect the speech of a life that ended.
+
+**Origins have different lifetime sources, and are not treated alike.** Ordinary
+weave speech and authenticated answers belong to the authoring weave's life
+(stamped, checked). Host/root sends belong to no weave life — they are ungated, and
+their stamp is unused rather than a sentinel with invented meaning. Lifecycle
+attestations are ordinary sends *by the control door*, which is alive when it
+speaks; they are stamped like any other weave's speech, and one mutation exists
+purely to prove legitimate activation still works.
+
+**One pin got sharper rather than changing.** An unloaded weave's in-flight replies
+have always died with it — the swap-window case pinned that — but the tap used to
+say `CapabilityDenied`, because a vanished sender has no grant to check and the
+*authorization* term failed. Right answer, wrong road: an operator would have gone
+looking for a grant that was never the problem. It now says `SenderLifeEnded`.
+
 **Two residuals, stated rather than papered over.** Out-of-process weaves fail
 **closed**: the child host is given null deferral callbacks, because a
 cross-process capability is out of scope for V1 and a token the pipe cannot
