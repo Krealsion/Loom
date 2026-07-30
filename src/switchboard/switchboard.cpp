@@ -57,6 +57,56 @@ const char* name_of(AdmitRefusal r) noexcept {
     return "?";
 }
 
+const char* name_of(TxnState st) noexcept {
+    switch (st) {
+    case TxnState::Preparing:
+        return "Preparing";
+    case TxnState::Ready:
+        return "Ready";
+    case TxnState::Committed:
+        return "Committed";
+    case TxnState::Aborted:
+        return "Aborted";
+    }
+    return "?";
+}
+
+const char* name_of(TxnReason r) noexcept {
+    switch (r) {
+    case TxnReason::None:
+        return "None";
+    case TxnReason::ExplicitAbort:
+        return "ExplicitAbort";
+    case TxnReason::PreparationExhausted:
+        return "PreparationExhausted";
+    case TxnReason::OperatorChanged:
+        return "OperatorChanged";
+    case TxnReason::CoordinatorChanged:
+        return "CoordinatorChanged";
+    case TxnReason::IncumbentChanged:
+        return "IncumbentChanged";
+    case TxnReason::CandidateChanged:
+        return "CandidateChanged";
+    case TxnReason::RoleChanged:
+        return "RoleChanged";
+    case TxnReason::CapacityExhausted:
+        return "CapacityExhausted";
+    case TxnReason::CommitPreconditionFailed:
+        return "CommitPreconditionFailed";
+    case TxnReason::AdmissionRefused:
+        return "AdmissionRefused";
+    case TxnReason::NoSuchTransaction:
+        return "NoSuchTransaction";
+    case TxnReason::WrongState:
+        return "WrongState";
+    case TxnReason::NotTheOwner:
+        return "NotTheOwner";
+    case TxnReason::PreconditionFailed:
+        return "PreconditionFailed";
+    }
+    return "?";
+}
+
 std::string Refusal::message() const {
     switch (reason) {
     case RefusalReason::None:
@@ -242,6 +292,10 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     // because the record was already erased above — true, but true only by call
     // order. Permanent removal is the end of a life, so it asks the death question.
     abandon_deferred_for(id);
+    // THE TRANSITION AN OBSERVER CANNOT SEE. `unregister_weave` announces nothing,
+    // which is exactly why the transaction registry lives in the bus rather than
+    // watching from outside.
+    invalidate_transactions_for(id);
     return released;
 }
 
@@ -1094,21 +1148,321 @@ AdmitResult Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
     return {true, AdmitRefusal::None};
 }
 
+// ---- Prepared replacement (R2B-3b-2) ---------------------------------------
+
+ParticipantRef Switchboard::participant(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    if (rec == nullptr) {
+        return ParticipantRef{};
+    }
+    return ParticipantRef{id, rec->life, rec->incarnation};
+}
+
+bool Switchboard::still(const ParticipantRef& was) const {
+    const WeaveRecord* rec = find(was.who);
+    return rec != nullptr && rec->alive && rec->life == was.life &&
+           rec->incarnation == was.incarnation;
+}
+
+Switchboard::PreparedReplacement* Switchboard::find_txn(TxnId id) {
+    if (!id.valid()) {
+        return nullptr;
+    }
+    for (PreparedReplacement& t : txns_) {
+        if (t.id == id) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+const Switchboard::PreparedReplacement* Switchboard::find_txn(TxnId id) const {
+    if (!id.valid()) {
+        return nullptr;
+    }
+    for (const PreparedReplacement& t : txns_) {
+        if (t.id == id) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+void Switchboard::finish_txn(PreparedReplacement& txn, TxnState state, TxnReason reason) {
+    // THE OUTCOME IS EVIDENCE, NOT AUTHORITY: it says what happened and confers
+    // nothing. It is kept for the EXACT operator that began the transaction, in a
+    // separately bounded store, and dropped oldest-first rather than growing.
+    if (outcomes_.size() >= kMaxTerminalOutcomes) {
+        outcomes_.erase(outcomes_.begin());
+        outcome_of_.erase(outcome_of_.begin());
+    }
+    outcomes_.push_back(TxnOutcome{txn.id, state, reason});
+    outcome_of_.push_back(txn.op);
+
+    // A candidate that never entered the world is discarded here, which also ends
+    // any speech it had queued (R2B-2b). Only ever a SEALED weave: an admitted
+    // candidate is a live service and is nobody's to discard.
+    if (state == TxnState::Aborted) {
+        const WeaveRecord* cand = find(txn.candidate.who);
+        if (cand != nullptr && cand->sealed_by.valid()) {
+            (void)unregister_weave(txn.candidate.who);
+        }
+    }
+
+    // The slot comes back immediately. There is no sweep, no expiry and nothing
+    // that depends on an operator remembering to ask.
+    for (auto it = txns_.begin(); it != txns_.end(); ++it) {
+        if (it->id == txn.id) {
+            txns_.erase(it);
+            return;
+        }
+    }
+}
+
+void Switchboard::invalidate_transactions_for(WeaveId changed) {
+    // SELECTIVE, ALWAYS. One weave's death is not everybody's problem, so this
+    // aborts only transactions that BIND `changed` and only when the fact they
+    // captured no longer holds.
+    //
+    // Re-entrancy matters here: finishing a transaction can unregister its
+    // candidate, which calls back into this function. The loop re-scans from the
+    // start after each finish rather than holding an iterator across it.
+    bool again = true;
+    while (again) {
+        again = false;
+        for (PreparedReplacement& t : txns_) {
+            TxnReason why = TxnReason::None;
+            if (t.op.who == changed && !still(t.op)) {
+                why = TxnReason::OperatorChanged;
+            } else if (t.coordinator.who == changed && !still(t.coordinator)) {
+                why = TxnReason::CoordinatorChanged;
+            } else if (t.incumbent.who == changed && !still(t.incumbent)) {
+                why = TxnReason::IncumbentChanged;
+            } else if (t.candidate.who == changed && !still(t.candidate)) {
+                why = TxnReason::CandidateChanged;
+            } else if (t.incumbent.who == changed) {
+                // Still the same life and code — but the role may have moved out
+                // from under it, or it may have been sealed by someone else.
+                const WeaveRecord* inc = find(t.incumbent.who);
+                const auto held = roles_.find(t.role);
+                if (inc == nullptr || inc->sealed_by.valid() || held == roles_.end() ||
+                    !(held->second == t.incumbent.who)) {
+                    why = TxnReason::RoleChanged;
+                }
+            }
+            if (why != TxnReason::None) {
+                PreparedReplacement copy = t; // finish_txn erases from txns_
+                finish_txn(copy, TxnState::Aborted, why);
+                again = true;
+                break;
+            }
+        }
+    }
+}
+
+TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinator,
+                                                  WeaveId incumbent, WeaveId candidate,
+                                                  const std::string& role,
+                                                  std::uint32_t budget) {
+    // CAPACITY FIRST, so an overflow refuses before anything is inspected, let
+    // alone touched. The incumbent's whole guarantee is that a failed attempt is
+    // indistinguishable from no attempt.
+    if (txns_.size() >= kMaxPreparedReplacements) {
+        return {false, TxnId{}, TxnReason::CapacityExhausted};
+    }
+    if (budget == 0 || budget > kMaxPreparationBudget || role.empty()) {
+        return {false, TxnId{}, TxnReason::PreconditionFailed};
+    }
+    const ParticipantRef o = participant(op);
+    const ParticipantRef c = participant(coordinator);
+    const ParticipantRef i = participant(incumbent);
+    const ParticipantRef k = participant(candidate);
+    if (!still(o) || !still(c) || !still(i) || !still(k)) {
+        return {false, TxnId{}, TxnReason::PreconditionFailed};
+    }
+    const WeaveRecord* inc = find(incumbent);
+    const WeaveRecord* cand = find(candidate);
+    // The incumbent must be a public service holding the role; the candidate must
+    // be sealed by exactly this coordinator and hold no role at all.
+    if (inc->sealed_by.valid() || !cand->sealed_by.valid() || !cand->role.empty()) {
+        return {false, TxnId{}, TxnReason::PreconditionFailed};
+    }
+    if (!(cand->sealed_by.who == coordinator) || cand->sealed_by.life != c.life ||
+        cand->sealed_by.incarnation != c.incarnation) {
+        return {false, TxnId{}, TxnReason::CoordinatorChanged};
+    }
+    const auto held = roles_.find(role);
+    if (held == roles_.end() || !(held->second == incumbent)) {
+        return {false, TxnId{}, TxnReason::RoleChanged};
+    }
+    // One active transaction per incumbent. A second attempt refuses; the first
+    // is not disturbed by having been asked.
+    for (const PreparedReplacement& t : txns_) {
+        if (t.incumbent.who == incumbent) {
+            return {false, TxnId{}, TxnReason::PreconditionFailed};
+        }
+    }
+
+    const TxnId id{next_txn_id_++};
+    txns_.push_back(PreparedReplacement{id, o, c, i, k, role, TxnState::Preparing, budget,
+                                        TxnReason::None});
+    return {true, id, TxnReason::None};
+}
+
+TxnResult Switchboard::tick_preparation(TxnId id) {
+    PreparedReplacement* t = find_txn(id);
+    if (t == nullptr) {
+        return {false, id, TxnReason::NoSuchTransaction};
+    }
+    if (t->state != TxnState::Preparing) {
+        return {false, id, TxnReason::WrongState}; // the budget is a PREPARING cost
+    }
+    if (t->budget > 0) {
+        --t->budget;
+    }
+    if (t->budget == 0) {
+        PreparedReplacement copy = *t;
+        finish_txn(copy, TxnState::Aborted, TxnReason::PreparationExhausted);
+        return {false, id, TxnReason::PreparationExhausted};
+    }
+    return {true, id, TxnReason::None};
+}
+
+TxnResult Switchboard::mark_candidate_ready(TxnId id, WeaveId coordinator, WeaveId candidate) {
+    PreparedReplacement* t = find_txn(id);
+    if (t == nullptr) {
+        return {false, id, TxnReason::NoSuchTransaction};
+    }
+    if (t->state != TxnState::Preparing) {
+        return {false, id, TxnReason::WrongState};
+    }
+    if (!(t->coordinator.who == coordinator) || !(t->candidate.who == candidate)) {
+        return {false, id, TxnReason::NotTheOwner};
+    }
+    if (!still(t->coordinator) || !still(t->candidate) || !still(t->op) ||
+        !still(t->incumbent)) {
+        return {false, id, TxnReason::PreconditionFailed};
+    }
+    const WeaveRecord* cand = find(t->candidate.who);
+    if (cand == nullptr || !cand->sealed_by.valid() ||
+        !(cand->sealed_by.who == t->coordinator.who) ||
+        cand->sealed_by.life != t->coordinator.life ||
+        cand->sealed_by.incarnation != t->coordinator.incarnation) {
+        return {false, id, TxnReason::CandidateChanged};
+    }
+    t->state = TxnState::Ready;
+    return {true, id, TxnReason::None};
+}
+
+TxnResult Switchboard::commit_prepared_replacement(TxnId id,
+                                                   const LifecycleAuthority& authority,
+                                                   Message activation,
+                                                   std::int64_t sequence) {
+    PreparedReplacement* t = find_txn(id);
+    if (t == nullptr) {
+        return {false, id, TxnReason::NoSuchTransaction};
+    }
+    if (t->state != TxnState::Ready) {
+        // Preparing is the interesting case and it is simply refused: a commit
+        // before readiness is the whole thing this phase exists to prevent.
+        return {false, id, TxnReason::WrongState};
+    }
+    // Revalidate every exact identity. `admit_candidate` checks the ones it needs
+    // for its own safety; the transaction checks the ones IT promised.
+    if (!still(t->op) || !still(t->coordinator) || !still(t->incumbent) ||
+        !still(t->candidate)) {
+        PreparedReplacement copy = *t;
+        finish_txn(copy, TxnState::Aborted, TxnReason::CommitPreconditionFailed);
+        return {false, id, TxnReason::CommitPreconditionFailed};
+    }
+
+    // ONE ADMISSION MUTATION, AND IT IS NOT HERE. The transaction layer never
+    // moves a role, never unseals anything and never queues an activation: it
+    // delegates the whole topology change to the primitive that was proven atomic.
+    const PreparedReplacement snapshot = *t;
+    const AdmitResult admitted = admit_candidate(snapshot.candidate.who,
+                                                 snapshot.incumbent.who, snapshot.role,
+                                                 authority, std::move(activation), sequence);
+    PreparedReplacement* again = find_txn(id);
+    if (again == nullptr) {
+        return {false, id, TxnReason::NoSuchTransaction}; // aborted underneath us
+    }
+    if (!admitted.ok) {
+        PreparedReplacement copy = *again;
+        finish_txn(copy, TxnState::Aborted, TxnReason::AdmissionRefused);
+        return {false, id, TxnReason::AdmissionRefused};
+    }
+    PreparedReplacement copy = *again;
+    finish_txn(copy, TxnState::Committed, TxnReason::None);
+    return {true, id, TxnReason::None};
+}
+
+TxnResult Switchboard::abort_prepared_replacement(TxnId id, WeaveId op) {
+    PreparedReplacement* t = find_txn(id);
+    if (t == nullptr) {
+        return {false, id, TxnReason::NoSuchTransaction};
+    }
+    if (!(t->op.who == op)) {
+        return {false, id, TxnReason::NotTheOwner};
+    }
+    PreparedReplacement copy = *t;
+    finish_txn(copy, TxnState::Aborted, TxnReason::ExplicitAbort);
+    return {true, id, TxnReason::None};
+}
+
+TxnState Switchboard::transaction_state(TxnId id) const {
+    const PreparedReplacement* t = find_txn(id);
+    if (t != nullptr) {
+        return t->state;
+    }
+    for (const TxnOutcome& o : outcomes_) {
+        if (o.id == id) {
+            return o.state;
+        }
+    }
+    return TxnState::Aborted; // unknown ids are not live, and never were
+}
+
+bool Switchboard::transaction_active(TxnId id) const { return find_txn(id) != nullptr; }
+
+std::size_t Switchboard::active_transactions() const noexcept { return txns_.size(); }
+
+bool Switchboard::take_outcome(WeaveId op, TxnOutcome& out) {
+    const ParticipantRef now = participant(op);
+    for (std::size_t i = 0; i < outcomes_.size(); ++i) {
+        // The EXACT life and incarnation that began it. A successor at the same
+        // address inherits no result, exactly as it inherits no conversation.
+        if (outcome_of_[i] == now) {
+            out = outcomes_[i];
+            outcomes_.erase(outcomes_.begin() + static_cast<std::ptrdiff_t>(i));
+            outcome_of_.erase(outcome_of_.begin() + static_cast<std::ptrdiff_t>(i));
+            return true; // consumed once
+        }
+    }
+    return false;
+}
+
 void Switchboard::kill(WeaveId id) {
     WeaveRecord* rec = find(id);
     if (rec == nullptr) {
         return;
     }
     rec->alive = false;
-    // Committing the death includes ending its unfinished conversations (R2B-2a),
-    // and that happens BEFORE the announcement so that anything observing `Died`
-    // sees a world in which those conversations are already over.
-    abandon_deferred_for(id);
+    // WHAT THE ANNOUNCEMENT NEEDS IS READ BEFORE ANY HOOK RUNS, and that is not
+    // tidiness: aborting a prepared replacement discards its candidate, and if THIS
+    // weave is that candidate the hook erases the very record `rec` points at.
+    // ASan found it; the Debug lane did not.
     BusEvent ev;
     ev.kind = EventKind::Died;
     ev.target = id;
     ev.schema_name = rec->state_schema->name();
     ev.schema_version = rec->state_schema->version();
+
+    // Committing the death includes ending its unfinished conversations (R2B-2a)
+    // and its unfinished transactions (R2B-3b-2), both BEFORE the announcement so
+    // that anything observing `Died` sees a world in which they are already over.
+    abandon_deferred_for(id);
+    invalidate_transactions_for(id); // a life that ended owns no preparation
     emit(ev);
 }
 
@@ -1158,6 +1512,7 @@ ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) 
         rec->alive = true;
         out.revived = true;
         announce(/*from_lkg=*/false, Refusal{});
+        invalidate_transactions_for(id); // ...and a new life owns no preparation
         return out;
     }
 
@@ -1172,6 +1527,7 @@ ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) 
         out.revived = true;
         out.from_last_known_good = true;
         announce(/*from_lkg=*/true, out.refusal);
+        invalidate_transactions_for(id);
         return out;
     }
 
@@ -1232,8 +1588,14 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // from quietly becoming reload-surviving authority.
     ++rec->incarnation;
     forget_deferred_for(id);
+    // New code, or a revival, is a new participant as far as a transaction is
+    // concerned — and this hook was MISSING in the first cut, which the
+    // commit-precondition case caught: a coordinator could be reloaded under a
+    // Ready transaction and the transaction would not notice until commit. The
+    // phase's own law is that it must become terminal PROMPTLY.
     out.revived = true;
-    announce(EventKind::Revived, Refusal{});
+    announce(EventKind::Revived, Refusal{}); // uses `rec`; the hook below may erase it
+    invalidate_transactions_for(id);
     return out;
 }
 

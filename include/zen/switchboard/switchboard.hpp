@@ -192,6 +192,79 @@ struct AdmitResult {
     explicit operator bool() const noexcept { return ok; }
 };
 
+/// WHO A TRANSACTION IS BOUND TO (R2B-3b-2).
+///
+/// The same three facts every authority in this codebase carries, for the same
+/// reason: a participant that dies and revives, or whose code is replaced, is a
+/// different participant at the same address, and a prepared replacement belongs
+/// to the exact lives that began it. `CandidateOwner` is this shape for the seal;
+/// this is it for the other three roles a transaction names.
+struct ParticipantRef {
+    WeaveId who{};
+    std::uint64_t life = 0;
+    std::uint64_t incarnation = 0;
+
+    bool valid() const noexcept { return who.valid(); }
+    friend bool operator==(const ParticipantRef& a, const ParticipantRef& b) noexcept {
+        return a.who == b.who && a.life == b.life && a.incarnation == b.incarnation;
+    }
+    friend bool operator!=(const ParticipantRef& a, const ParticipantRef& b) noexcept {
+        return !(a == b);
+    }
+};
+
+/// An opaque, host-issued transaction handle. Never a correlation a weave chose,
+/// never a participant id, and never authority on its own: every command proves
+/// the caller is the exact bound participant as well as naming the transaction.
+struct TxnId {
+    std::uint64_t value = 0;
+    bool valid() const noexcept { return value != 0; }
+    friend bool operator==(TxnId a, TxnId b) noexcept { return a.value == b.value; }
+};
+
+/// The whole state machine. Four states, and the two terminals are terminal.
+enum class TxnState : std::uint8_t { Preparing, Ready, Committed, Aborted };
+
+/// Why a transaction ended, or why a command was refused. One vocabulary for
+/// both, because "you may not do that now" and "this is how it ended" are the
+/// same question asked at different moments.
+enum class TxnReason : std::uint8_t {
+    None = 0,
+    ExplicitAbort,
+    PreparationExhausted,
+    OperatorChanged,
+    CoordinatorChanged,
+    IncumbentChanged,
+    CandidateChanged,
+    RoleChanged,
+    CapacityExhausted,
+    CommitPreconditionFailed,
+    AdmissionRefused,
+    NoSuchTransaction,
+    WrongState,
+    NotTheOwner,
+    PreconditionFailed,
+};
+
+const char* name_of(TxnState s) noexcept;
+const char* name_of(TxnReason r) noexcept;
+
+/// The result of beginning a transaction, or of any command on one.
+struct TxnResult {
+    bool ok = false;
+    TxnId id{};
+    TxnReason why = TxnReason::None;
+
+    explicit operator bool() const noexcept { return ok; }
+};
+
+/// How a transaction ended, kept only until its EXACT operator takes it.
+struct TxnOutcome {
+    TxnId id{};
+    TxnState state = TxnState::Aborted;
+    TxnReason reason = TxnReason::None;
+};
+
 /// How a Weave's accept-set is interpreted at delivery. `Listed` (the default): only the
 /// explicit `(name, version)` schemas it declares. `AnyRegistered`: a deliberate
 /// capability — the Weave accepts **any registered shape**, gated at delivery against
@@ -417,6 +490,69 @@ public:
     AdmitResult admit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role,
                                 const LifecycleAuthority& authority, Message activation,
                                 std::int64_t sequence);
+
+    // ---- Prepared replacement (R2B-3b-2) -----------------------------------
+    //
+    // THE TRANSACTION LIVES HERE, and the reason is question 4 of the phase's own
+    // investigation: this is the only place that sees every transition that can
+    // invalidate a participant. `kill` announces Died and `swap_state` announces
+    // Revived — but `unregister_weave` announces NOTHING, so a registry living
+    // anywhere else and watching events would silently miss permanent removal.
+    // Inline notification from the transitions themselves needs no observer
+    // framework and exposes no transaction policy to any weave.
+    //
+    //     A replacement transaction belongs to exact lives, advances through one
+    //     finite state machine, and either commits once or disappears without
+    //     disturbing the incumbent.
+
+    /// How many prepared replacements may be in flight at once. Small on purpose:
+    /// this is an operator-driven lifecycle act, not a workload.
+    static constexpr std::size_t kMaxPreparedReplacements = 8;
+    /// How many ended transactions are remembered for their operator to collect.
+    /// Bounded separately, because a terminal result is evidence rather than work,
+    /// and the oldest is dropped rather than growing without limit.
+    static constexpr std::size_t kMaxTerminalOutcomes = 16;
+    /// The largest preparation budget a caller may ask for.
+    static constexpr std::uint32_t kMaxPreparationBudget = 1024;
+
+    /// Begin one prepared replacement. Validates EVERYTHING before storing
+    /// anything, so a refusal changes nothing — in particular it never touches the
+    /// incumbent, whose whole point is that it has not been disturbed.
+    TxnResult begin_prepared_replacement(WeaveId op, WeaveId coordinator, WeaveId incumbent,
+                                         WeaveId candidate, const std::string& role,
+                                         std::uint32_t budget);
+
+    /// Spend one unit of the preparation budget. THE DETERMINISTIC UNIT: an
+    /// explicit step, not a clock, not a sleep, and not a count of unrelated bus
+    /// activity. Only decrements while Preparing; at zero the transaction aborts
+    /// with PreparationExhausted.
+    TxnResult tick_preparation(TxnId id);
+
+    /// TRUSTED NATIVE SCAFFOLDING FOR R2B-3b-3, and deliberately not a message
+    /// shape. The real readiness answer is an authenticated conversation between
+    /// the coordinator and the candidate; this seam exists so the STATE MACHINE
+    /// can be proven before that conversation exists, and the next slice replaces
+    /// its caller rather than adding a second way to become ready.
+    TxnResult mark_candidate_ready(TxnId id, WeaveId coordinator, WeaveId candidate);
+
+    /// Commit: revalidate every exact participant, then delegate the topology
+    /// change to `admit_candidate` — which remains the SOLE admission mutation.
+    /// The transaction layer never moves a role itself.
+    TxnResult commit_prepared_replacement(TxnId id, const LifecycleAuthority& authority,
+                                          Message activation, std::int64_t sequence);
+
+    /// Abort from any nonterminal state, by the exact operator.
+    TxnResult abort_prepared_replacement(TxnId id, WeaveId op);
+
+    /// Diagnostics: the state of a transaction, and how many slots are in use.
+    TxnState transaction_state(TxnId id) const;
+    bool transaction_active(TxnId id) const;
+    std::size_t active_transactions() const noexcept;
+
+    /// Take the terminal outcome of a transaction this weave began. Consumed
+    /// once, and only by the EXACT operator life and incarnation that started it —
+    /// a successor inherits no result, exactly as it inherits no conversation.
+    bool take_outcome(WeaveId op, TxnOutcome& out);
 
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
     ///
@@ -711,6 +847,38 @@ private:
     /// the record has already been erased from `weaves_`.
     void abandon_deferred_for(WeaveId id);
 
+    /// One prepared replacement, remembered in full. Nothing here is inferred
+    /// from the absence of a field: the state is a state, and the reason is a
+    /// reason.
+    struct PreparedReplacement {
+        TxnId id{};
+        ParticipantRef op{};
+        ParticipantRef coordinator{};
+        ParticipantRef incumbent{};
+        ParticipantRef candidate{};
+        std::string role;
+        TxnState state = TxnState::Preparing;
+        std::uint32_t budget = 0;
+        TxnReason reason = TxnReason::None;
+    };
+
+    /// Snapshot a participant as it is right now.
+    ParticipantRef participant(WeaveId id) const;
+    /// Is this participant still exactly who it was, and still alive?
+    bool still(const ParticipantRef& was) const;
+
+    PreparedReplacement* find_txn(TxnId id);
+    const PreparedReplacement* find_txn(TxnId id) const;
+
+    /// End a transaction, record its outcome for its operator, and free the slot.
+    void finish_txn(PreparedReplacement& txn, TxnState state, TxnReason reason);
+
+    /// EVERY TRANSITION THAT CAN INVALIDATE A PARTICIPANT CALLS THIS, inline.
+    /// Aborts only the transactions that BIND `changed` and whose captured facts
+    /// no longer hold — never the whole registry, which would make one weave's
+    /// death everybody's problem.
+    void invalidate_transactions_for(WeaveId changed);
+
     /// Advance `rec`'s life generation iff it is currently dead — i.e. iff the
     /// caller is about to bring it back. Called by every revival path before it
     /// marks the record alive (R2B-2b).
@@ -819,6 +987,12 @@ private:
     /// process-local, never serialized, never revived, and advances by exactly one
     /// per deferral — so 2^64 is not a number an adversary can approach, only one a
     /// process can outlive by any measure.
+    /// Bounded, and small. Slots are reclaimed the moment a transaction ends.
+    std::vector<PreparedReplacement> txns_;
+    std::vector<TxnOutcome> outcomes_;      ///< bounded; oldest dropped
+    std::vector<ParticipantRef> outcome_of_; ///< whose outcome each one is
+    std::uint64_t next_txn_id_ = 1;
+
     std::uint64_t next_deferred_token_ = 1;
 };
 
