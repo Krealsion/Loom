@@ -3108,6 +3108,59 @@ causal event rather than inferring it.
 to payload code and unreachable from a library: the deferred-answer token crossing
 the seam is opaque, and the requester facts never leave the bus.
 
+### The candidate waits outside the world (R2B-3, first increment)
+
+Today's `SwapWeave` states its own window out loud: it issues `UnloadRole` then
+`LoadLibrary`, and between those two deliveries the role is held by nobody. The
+incumbent is already gone when the successor turns out to be broken.
+
+Prepared replacement inverts that, and the law it needs is:
+
+> **The incumbent remains fully authoritative until one atomic commit makes the
+> prepared candidate live.**
+
+**The missing primitive was a seal, and it is one field.** Loading a weave used to
+mean publishing it: `Kernel::load` calls `register_weave`, and from that instant
+`fanout` reaches it, ids can address it, and a role can be bound to it. A
+candidate cannot be prepared in a world that can already talk to it — and
+"registered, but please don't route to it" is not isolation, it is a convention.
+
+`WeaveRecord::sealed_by` names the coordinator preparing this candidate, and the
+routing paths themselves refuse:
+
+| | |
+|---|---|
+| publications | `fanout` skips sealed records — the world's news is not a candidate's |
+| ordinary sends in | refused as **`NoSuchTarget`**, deliberately indistinguishable from an unregistered id, so the world cannot learn a candidate exists |
+| its coordinator's sends | delivered — preparation is a *conversation*, which is why this is a seal and not a quarantine |
+| its speech out | refused as **`SealedSpeech`** unless addressed to the coordinator; visible, because a candidate reaching for the world is the operator's business |
+| role-addressed speech out | refused outright, so it cannot even learn whether a production slot is held |
+| publishing | refused outright: a publication is speech into the world by definition |
+| holding a role | impossible — sealing requires an empty role, so `commit_candidate` is the only way a role can ever reach a candidate |
+
+`Kernel::load_candidate` is the ordinary load followed by the seal, deliberately
+rather than a second simpler loading path that would drift: **the prepared artifact
+must be the artifact that becomes live**. Every artifact-level refusal — open
+failure, missing symbol, stale ABI, malformed manifest, schema disagreement —
+happens exactly as it always did, and now happens *before the live world has been
+touched at all*. Nothing can observe the gap between load and seal: `fanout` picks
+its recipients at enqueue time, so a publication already queued never named the new
+weave, and no delivery can run in between because this is host code, not a handler.
+
+**The commit is one operation, and the atomicity is the queue's, not a lock's.**
+`commit_candidate` checks every precondition first — so a refusal has nothing to
+undo — then unseals the candidate and moves the role in straight-line code.
+Dispatch is single-threaded and `pump()` is non-reentrant, so an ordinary
+observer's next delivery either precedes all of it or follows all of it. What would
+*not* be atomic is expressing the same change as several ordinary messages, which
+is precisely what `SwapWeave` does and precisely the window it documents. A watcher
+that samples the topology on every delivery never sees no holder, two holders, or a
+role pointing at a sealed weave.
+
+**Status: this is the primitive, not the phase.** The transaction state machine,
+the Timer continuity vertical proof, and the failure ladder above the substrate are
+not built here; see the phase report.
+
 **Two residuals, stated rather than papered over.** Out-of-process weaves fail
 **closed**: the child host is given null deferral callbacks, because a
 cross-process capability is out of scope for V1 and a token the pipe cannot
