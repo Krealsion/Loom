@@ -3266,7 +3266,66 @@ resealed — silently changing owners would hand a prepared candidate to somebod
 else's transaction, and transfer semantics are deliberately not part of this
 errand.
 
-**Status: this is the primitive and its transaction boundary, not the phase.** The
+### The transaction remembers (R2B-3b-2)
+
+The door knew how to open; it had no memory of who was allowed to turn the handle.
+
+> **A replacement transaction belongs to exact lives, advances through one finite
+> state machine, and either commits once or disappears without disturbing the
+> incumbent.**
+
+**Where it lives, and why that was the decisive question.** The registry is in the
+`Switchboard`, because that is the only place that sees every transition capable of
+invalidating a participant. `kill` announces `Died` and `swap_state` announces
+`Revived` — but **`unregister_weave` announces nothing at all**, so a registry
+watching from outside would silently miss permanent removal, the most complete
+invalidation there is. Notifying inline from the transitions themselves needs no
+observer framework and exposes no transaction policy to any weave.
+
+`PreparedReplacement` names four `ParticipantRef`s — operator, coordinator,
+incumbent, candidate — each `(WeaveId, life, incarnation)`, plus the role, the
+state, the remaining budget and the terminal reason. **Nothing is inferred from a
+missing field:** the state is a state.
+
+```text
+begin       none      -> Preparing
+tick        Preparing -> Preparing (budget-1), or Aborted at zero
+ready       Preparing -> Ready
+commit      Ready     -> Committed
+abort       Preparing -> Aborted,  Ready -> Aborted
+```
+
+Everything else refuses truthfully and does no work — commit from `Preparing`, a
+second commit, a second abort, commit after abort.
+
+**Bounds, all published:** `kMaxPreparedReplacements = 8`, one active transaction
+per incumbent, `kMaxPreparationBudget = 1024`, and `kMaxTerminalOutcomes = 16`
+kept in a *separate* bounded store, oldest dropped. Capacity is refused **before**
+anything is inspected, let alone touched, and every ending returns its slot
+immediately — there is no sweep and nothing that waits for an operator to ask.
+
+**The budget is a step, not a clock.** `tick_preparation` is an explicit
+deterministic unit: no wall-clock, no sleep, no polling, and no dependence on how
+much unrelated traffic the bus happened to carry. It decrements only while
+`Preparing`.
+
+**Commit delegates.** The transaction layer revalidates the identities *it*
+promised and then calls `admit_candidate`, which remains **the sole admission
+mutation** — no role is moved, nothing unsealed and no activation queued anywhere
+else. A refused admission aborts terminally rather than claiming success.
+
+**Terminal outcomes are evidence, not authority.** They are kept for the *exact*
+operator life and incarnation that began the transaction and consumed once; a
+successor at the same address inherits no result, exactly as it inherits no
+conversation.
+
+`mark_candidate_ready` is **trusted native scaffolding, named as such**: the real
+readiness answer is an authenticated conversation between coordinator and
+candidate, and R2B-3b-3 replaces this seam's caller rather than adding a second way
+to become ready.
+
+**Status: the transaction spine exists; the dynamic readiness conversation and the
+Timer keystone do not.** The
 transaction record and state machine, the readiness conversation, the dynamic
 fixture pair, the failure ladder and the Timer continuity vertical proof are not
 built here; see the phase report.

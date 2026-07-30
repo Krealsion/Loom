@@ -1532,6 +1532,486 @@ TEST_CASE("R2B-3b-1a: an artifact built against the previous ABI is refused, nam
     CHECK(bus.list_weaves().empty());
 }
 
+// ---- R2B-3b-2: the transaction remembers ---------------------------------------
+//
+// The door already knew how to open. What it did not have was a memory of who was
+// allowed to turn the handle — so the strongest act in the system could be driven
+// by a coordinator that had died, an operator that had been replaced, or against
+// an incumbent that had drifted away underneath it.
+//
+//     A replacement transaction belongs to exact lives, advances through one
+//     finite state machine, and either commits once or disappears without
+//     disturbing the incumbent.
+//
+// The registry lives in the Switchboard for one decisive reason: `kill` announces
+// Died and `swap_state` announces Revived, but `unregister_weave` announces
+// NOTHING. A registry watching from outside would silently miss permanent
+// removal — the most complete invalidation there is.
+
+namespace {
+
+/// A production service that answers a version query, so "the incumbent never
+/// stopped being the service" is something a test can ASK rather than infer.
+class VersionedService final : public Weave {
+public:
+    explicit VersionedService(std::string version) : version_(std::move(version)) {}
+
+    std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
+        return {ping_schema(), schema_of<loom::Activated>()};
+    }
+    void handle(const Message& in, Bus& bus) override {
+        if (in.payload.schema().name() == std::string_view(loom::Activated::zen_name)) {
+            ++activations;
+            return;
+        }
+        ++served;
+        Value out(greet_schema());
+        out.set("msg", Cell::text(version_));
+        bus.send(in.reply_to, Message(std::move(out)));
+    }
+    Value snapshot() const override {
+        Value v(counter_schema());
+        v.set("count", Cell::integer(served));
+        return v;
+    }
+    Value policy() const override {
+        Value v(lifecycle_policy_schema());
+        v.set("max_reloads", Cell::integer(8));
+        v.set("revive_from_last_good", Cell::boolean(true));
+        return v;
+    }
+    void revive(const Value& v) override { served = v.get("count")->as_int(); }
+
+    std::int64_t served = 0;
+    std::int64_t activations = 0;
+
+private:
+    std::string version_;
+};
+
+/// The whole cast a prepared replacement names, plus an observer that asks the
+/// role "which version are you?" and records the answer.
+struct Cast {
+    Registered op;
+    Registered coordinator;
+    Registered observer;
+    WeaveId incumbent{};
+    WeaveId candidate{};
+    VersionedService* incumbent_raw = nullptr;
+    VersionedService* candidate_raw = nullptr;
+    std::vector<std::string> answers;
+
+    std::string ask(Switchboard& bus, const char* role) {
+        const std::size_t before = answers.size();
+        bus.send_as_to_role(observer.id, role,
+                            Message(ping(1), observer.id, observer.id, 0));
+        bus.pump();
+        return answers.size() > before ? answers.back() : std::string("<no answer>");
+    }
+};
+
+Cast cast_with_role(Switchboard& bus, const char* role) {
+    Cast c{register_probe(bus, {pong_schema()}), register_probe(bus, {pong_schema()}),
+           register_probe(bus, {greet_schema()}), WeaveId{}, WeaveId{}, nullptr, nullptr, {}};
+    c.observer.weave->on_handle = [&c](const Message& in, Bus&, ProbeWeave&) {
+        const Cell* m = in.payload.get("msg");
+        c.answers.push_back(m == nullptr ? std::string("<none>") : std::string(m->as_text()));
+    };
+    auto inc = std::make_unique<VersionedService>("v1");
+    c.incumbent_raw = inc.get();
+    c.incumbent = bus.register_weave(std::move(inc), Grant{}.allow_any(), role);
+    auto cand = std::make_unique<VersionedService>("v2");
+    c.candidate_raw = cand.get();
+    c.candidate = bus.register_weave(std::move(cand), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(c.candidate, c.coordinator.id));
+    return c;
+}
+
+/// Everything a failure case must show is unchanged.
+///
+/// DELIBERATELY BUS-ONLY. An earlier version read `c.candidate_raw->activations`,
+/// which is a use-after-free the moment an abort discards the candidate — and it
+/// duly printed a garbage number rather than failing honestly. Everything here is
+/// asked of the bus, which is also the only party whose answer would matter to a
+/// real observer.
+void incumbent_untouched(Switchboard& bus, Cast& c, const char* role) {
+    CHECK(bus.alive(c.incumbent));
+    CHECK_FALSE(bus.sealed(c.incumbent));
+    CHECK(bus.role_holder(role) == c.incumbent);
+    CHECK(c.ask(bus, role) == "v1");
+    // The candidate never entered the world: it does not hold the role, and no
+    // activation is waiting for it (an activation can only be queued BY admission,
+    // which is the same act that moves the role).
+    CHECK(bus.role_holder(role) != c.candidate);
+    CHECK(bus.pending() == 0);
+}
+
+constexpr const char* kRole = "service";
+
+} // namespace
+
+TEST_CASE("R2B-3b-2: one prepared replacement, remembered from Preparing to Committed") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    REQUIRE(c.ask(bus, kRole) == "v1");
+
+    const TxnResult begun = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                           c.incumbent, c.candidate, kRole, 4);
+    REQUIRE(begun.ok);
+    CHECK(bus.transaction_state(begun.id) == TxnState::Preparing);
+    CHECK(bus.active_transactions() == 1);
+    // Beginning changed nothing about the live world.
+    CHECK(c.ask(bus, kRole) == "v1");
+    CHECK_FALSE(bus.sealed(c.incumbent));
+
+    // Preparation spends a deterministic budget — a step, not a clock.
+    REQUIRE(bus.tick_preparation(begun.id).ok);
+    CHECK(bus.transaction_state(begun.id) == TxnState::Preparing);
+    CHECK(c.ask(bus, kRole) == "v1"); // ...and the incumbent is still the service
+
+    REQUIRE(bus.mark_candidate_ready(begun.id, c.coordinator.id, c.candidate).ok);
+    CHECK(bus.transaction_state(begun.id) == TxnState::Ready);
+    CHECK(c.ask(bus, kRole) == "v1"); // still
+
+    loom::Activated fact{1};
+    const TxnResult committed = bus.commit_prepared_replacement(
+        begun.id, host_lifecycle_authority(bus), Message(to_value(fact)), 1);
+    REQUIRE(committed.ok);
+
+    // One terminal result, for the exact operator, consumed once.
+    TxnOutcome out{};
+    REQUIRE(bus.take_outcome(c.op.id, out));
+    CHECK(out.state == TxnState::Committed);
+    CHECK(out.reason == TxnReason::None);
+    CHECK_FALSE(bus.take_outcome(c.op.id, out)); // consumed
+
+    // The topology moved exactly as R2B-3b-1 proved it does.
+    CHECK(bus.sealed(c.incumbent));
+    CHECK_FALSE(bus.sealed(c.candidate));
+    CHECK(bus.role_holder(kRole) == c.candidate);
+    // The activation is QUEUED by admission, so it is handled on the next drain —
+    // and it is handled before any production, which R2B-3b-1 pins against traffic
+    // that was already waiting.
+    bus.pump();
+    CHECK(c.candidate_raw->activations == 1);
+    CHECK(c.ask(bus, kRole) == "v2");
+    CHECK(c.incumbent_raw->served == 4); // it answered every pre-commit query
+
+    // A second commit refuses, and the slot is already back.
+    CHECK_FALSE(bus.commit_prepared_replacement(begun.id, host_lifecycle_authority(bus),
+                                                Message(to_value(fact)), 2).ok);
+    CHECK(bus.active_transactions() == 0);
+}
+
+TEST_CASE("R2B-3b-2: the registry is bounded, one transaction per incumbent, and every ending "
+          "returns the slot") {
+    Switchboard bus;
+    std::vector<Cast> casts;
+    std::vector<TxnId> ids;
+    const std::size_t bound = Switchboard::kMaxPreparedReplacements;
+
+    // Fill it exactly, each against its own incumbent.
+    for (std::size_t i = 0; i < bound; ++i) {
+        const std::string role = "svc" + std::to_string(i);
+        casts.push_back(cast_with_role(bus, role.c_str()));
+        const TxnResult r = bus.begin_prepared_replacement(
+            casts[i].op.id, casts[i].coordinator.id, casts[i].incumbent, casts[i].candidate,
+            role, 4);
+        REQUIRE(r.ok); // including the LAST slot: the positive control
+        ids.push_back(r.id);
+    }
+    CHECK(bus.active_transactions() == bound);
+
+    // One beyond capacity refuses — and refuses BEFORE touching anything.
+    Cast extra = cast_with_role(bus, "one-too-many");
+    const TxnResult over = bus.begin_prepared_replacement(
+        extra.op.id, extra.coordinator.id, extra.incumbent, extra.candidate, "one-too-many", 4);
+    CHECK_FALSE(over.ok);
+    CHECK(over.why == TxnReason::CapacityExhausted);
+    incumbent_untouched(bus, extra, "one-too-many");
+    CHECK(bus.sealed(extra.candidate)); // still sealed, still nobody's
+
+    // A second transaction against an incumbent that already has one refuses, and
+    // the first is not disturbed by having been asked.
+    REQUIRE(bus.abort_prepared_replacement(ids[0], casts[0].op.id).ok);
+    CHECK(bus.active_transactions() == bound - 1); // abort returned the slot
+    const TxnResult dup = bus.begin_prepared_replacement(
+        casts[1].op.id, casts[1].coordinator.id, casts[1].incumbent, casts[1].candidate,
+        "svc1", 4);
+    CHECK_FALSE(dup.ok);
+    CHECK(bus.transaction_state(ids[1]) == TxnState::Preparing);
+}
+
+TEST_CASE("R2B-3b-2: the state machine has no back doors") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    loom::Activated fact{1};
+
+    SUBCASE("commit from Preparing is refused, and nothing moves") {
+        const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                          c.incumbent, c.candidate, kRole, 4);
+        REQUIRE(t.ok);
+        const TxnResult early = bus.commit_prepared_replacement(
+            t.id, host_lifecycle_authority(bus), Message(to_value(fact)), 1);
+        CHECK_FALSE(early.ok);
+        CHECK(early.why == TxnReason::WrongState);
+        CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+        incumbent_untouched(bus, c, kRole);
+    }
+
+    SUBCASE("a second abort, and a commit after abort, both refuse") {
+        const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                          c.incumbent, c.candidate, kRole, 4);
+        REQUIRE(t.ok);
+        REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
+        CHECK_FALSE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
+        CHECK_FALSE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                                    Message(to_value(fact)), 1).ok);
+        CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+        incumbent_untouched(bus, c, kRole);
+    }
+
+    SUBCASE("abort is safe from Ready as well as Preparing") {
+        const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                          c.incumbent, c.candidate, kRole, 4);
+        REQUIRE(t.ok);
+        REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+        REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
+        CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+        CHECK(bus.active_transactions() == 0);
+        incumbent_untouched(bus, c, kRole);
+    }
+}
+
+TEST_CASE("R2B-3b-2: the preparation budget is deterministic, and exhausting it aborts") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 3);
+    REQUIRE(t.ok);
+
+    // A step, not a clock: no sleeping, no polling, and no dependence on how much
+    // unrelated traffic the bus happened to carry.
+    REQUIRE(bus.tick_preparation(t.id).ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    REQUIRE(bus.tick_preparation(t.id).ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    const TxnResult last = bus.tick_preparation(t.id);
+    CHECK_FALSE(last.ok);
+    CHECK(last.why == TxnReason::PreparationExhausted);
+
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0); // capacity reclaimed
+    CHECK_FALSE(bus.alive(c.candidate));   // candidate discarded
+    incumbent_untouched(bus, c, kRole);
+
+    TxnOutcome out{};
+    REQUIRE(bus.take_outcome(c.op.id, out));
+    CHECK(out.reason == TxnReason::PreparationExhausted);
+}
+
+TEST_CASE("R2B-3b-2: a participant that changes aborts its own transaction and only its own") {
+    // The failure ladder, one rung per subcase, each proving the same seven things
+    // about the incumbent and one thing about the transaction.
+    int who = 0;
+    SUBCASE("the operator dies") { who = 0; }
+    SUBCASE("the operator's code is replaced") { who = 1; }
+    SUBCASE("the coordinator dies") { who = 2; }
+    SUBCASE("the coordinator's code is replaced") { who = 3; }
+    SUBCASE("the candidate dies") { who = 4; }
+    SUBCASE("the candidate is permanently removed") { who = 5; }
+
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    // A SECOND, UNRELATED transaction that must survive all of it.
+    Cast other = cast_with_role(bus, "other");
+    const TxnResult mine = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                         c.incumbent, c.candidate, kRole, 8);
+    REQUIRE(mine.ok);
+    const TxnResult theirs = bus.begin_prepared_replacement(
+        other.op.id, other.coordinator.id, other.incumbent, other.candidate, "other", 8);
+    REQUIRE(theirs.ok);
+    CHECK(bus.active_transactions() == 2);
+
+    const auto churn = [&](WeaveId id, bool by_death, bool remove) {
+        const std::string state = bus.snapshot_bytes(id);
+        if (remove) {
+            bus.unregister_weave(id);
+        } else if (by_death) {
+            bus.kill(id);
+            (void)bus.reload(id, state);
+        } else {
+            (void)bus.swap_state(id, state);
+        }
+    };
+    TxnReason expected = TxnReason::None;
+    switch (who) {
+    case 0: churn(c.op.id, true, false);          expected = TxnReason::OperatorChanged; break;
+    case 1: churn(c.op.id, false, false);         expected = TxnReason::OperatorChanged; break;
+    case 2: churn(c.coordinator.id, true, false); expected = TxnReason::CoordinatorChanged; break;
+    case 3: churn(c.coordinator.id, false, false);expected = TxnReason::CoordinatorChanged; break;
+    case 4: churn(c.candidate, true, false);      expected = TxnReason::CandidateChanged; break;
+    default: churn(c.candidate, false, true);     expected = TxnReason::CandidateChanged; break;
+    }
+
+    CHECK(bus.transaction_state(mine.id) == TxnState::Aborted);
+    CHECK_FALSE(bus.transaction_active(mine.id));
+    incumbent_untouched(bus, c, kRole);
+
+    // ...and the unrelated transaction is untouched. One weave's trouble is not
+    // everybody's.
+    CHECK(bus.transaction_active(theirs.id));
+    CHECK(bus.transaction_state(theirs.id) == TxnState::Preparing);
+    CHECK(bus.active_transactions() == 1); // exactly one slot came back
+
+    TxnOutcome out{};
+    if (who <= 1) {
+        // A successor operator inherits nothing — not even the news.
+        CHECK_FALSE(bus.take_outcome(c.op.id, out));
+    } else {
+        REQUIRE(bus.take_outcome(c.op.id, out));
+        CHECK(out.reason == expected);
+    }
+}
+
+TEST_CASE("R2B-3b-2: the incumbent drifting aborts the transaction rather than retargeting it") {
+    int how = 0;
+    SUBCASE("the incumbent dies") { how = 0; }
+    SUBCASE("the incumbent's code is replaced") { how = 1; }
+    SUBCASE("the role moves to somebody else") { how = 2; }
+
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+
+    if (how == 0) {
+        const std::string state = bus.snapshot_bytes(c.incumbent);
+        bus.kill(c.incumbent);
+        REQUIRE(bus.reload(c.incumbent, state).revived);
+    } else if (how == 1) {
+        REQUIRE(bus.swap_state(c.incumbent, bus.snapshot_bytes(c.incumbent)).revived);
+    } else {
+        // The role is taken away entirely: prepared replacement is not recovery,
+        // and it does not follow a slot that moved on.
+        bus.unregister_weave(c.incumbent);
+    }
+
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0);
+    CHECK_FALSE(bus.alive(c.candidate)); // the candidate never becomes the successor
+    CHECK(bus.role_holder(kRole) != c.candidate);
+}
+
+TEST_CASE("R2B-3b-2: commit revalidates, and a precondition that drifts after Ready refuses "
+          "without moving anything") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+    REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+
+    // Ready, and then the coordinator's code is replaced underneath it. The
+    // transaction becomes terminal PROMPTLY — it does not wait for commit to
+    // discover the problem.
+    REQUIRE(bus.swap_state(c.coordinator.id, bus.snapshot_bytes(c.coordinator.id)).revived);
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+
+    loom::Activated fact{1};
+    const TxnResult late = bus.commit_prepared_replacement(
+        t.id, host_lifecycle_authority(bus), Message(to_value(fact)), 1);
+    CHECK_FALSE(late.ok);
+    incumbent_untouched(bus, c, kRole);
+    CHECK(bus.pending() == 0); // no activation was queued
+}
+
+TEST_CASE("R2B-3b-2: a Ready transaction whose ADMISSION refuses aborts terminally rather than "
+          "claiming success") {
+    // THE BRANCH NO OTHER CASE REACHED. Everywhere else a doomed commit is caught
+    // by the transaction's own revalidation, so `admit_candidate` is never asked
+    // and never says no. The mutation that made a failed admission report
+    // `Committed` therefore stayed GREEN — not because the guard was redundant,
+    // but because nothing exercised it.
+    //
+    // A foreign lifecycle authority is the cleanest way in: every transaction
+    // precondition holds, and admission refuses on its own terms.
+    Switchboard bus;
+    Switchboard decoy; // a real board, and a real authority — issued elsewhere
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+    REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
+
+    loom::Activated fact{1};
+    const TxnResult refused = bus.commit_prepared_replacement(
+        t.id, host_lifecycle_authority(decoy), Message(to_value(fact)), 1);
+    CHECK_FALSE(refused.ok);
+    CHECK(refused.why == TxnReason::AdmissionRefused);
+
+    // Terminal, not retryable — and the world is exactly as it was.
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0);
+    incumbent_untouched(bus, c, kRole);
+
+    TxnOutcome out{};
+    REQUIRE(bus.take_outcome(c.op.id, out));
+    CHECK(out.state == TxnState::Aborted);
+    CHECK(out.reason == TxnReason::AdmissionRefused);
+}
+
+TEST_CASE("R2B-3b-2: readiness needs the exact coordinator and the exact candidate") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    Cast other = cast_with_role(bus, "other");
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+
+    // Another coordinator cannot ready somebody else's transaction...
+    CHECK_FALSE(bus.mark_candidate_ready(t.id, other.coordinator.id, c.candidate).ok);
+    // ...and a valid coordinator cannot ready a different candidate.
+    CHECK_FALSE(bus.mark_candidate_ready(t.id, c.coordinator.id, other.candidate).ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+
+    // Nor can a stranger abort it.
+    CHECK_FALSE(bus.abort_prepared_replacement(t.id, other.op.id).ok);
+    CHECK(bus.transaction_active(t.id));
+
+    // The exact pair still works.
+    CHECK(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+}
+
+TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its queued speech "
+          "does not escape") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+    REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+
+    // The candidate says something to its coordinator, and the transaction is
+    // abandoned before the pump.
+    bus.send_as(c.candidate, c.coordinator.id, Message(pong(1)));
+    REQUIRE(bus.pending() == 1);
+    REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
+    bus.pump();
+    CHECK(c.coordinator.weave->handled_names.empty()); // R2B-2b: its life ended
+
+    // And the admission primitive itself will not take it: it is gone.
+    loom::Activated fact{1};
+    const AdmitResult admitted = bus.admit_candidate(c.candidate, c.incumbent, kRole,
+                                                     host_lifecycle_authority(bus),
+                                                     Message(to_value(fact)), 1);
+    CHECK_FALSE(admitted.ok);
+    incumbent_untouched(bus, c, kRole);
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);
