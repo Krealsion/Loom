@@ -2012,6 +2012,243 @@ TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its
     incumbent_untouched(bus, c, kRole);
 }
 
+// ---- R2B-3b-2a: the transaction ends once --------------------------------------
+//
+// Terminalizing a transaction discards its candidate, and discarding a candidate
+// is a lifecycle change, which re-enters the invalidation hook. If the ending
+// transaction is still in the active registry at that moment, the hook rediscovers
+// it and ends it AGAIN:
+//
+//     outer finish -> record outcome #1 -> unregister candidate
+//                     -> invalidate -> finds the same transaction
+//                        -> nested finish -> record outcome #2 -> erase
+//                  -> outer erase finds nothing
+//
+// Two terminal truths for one promise, and two slots consumed in a bounded store
+// that then evicts somebody else's result early.
+//
+//     One candidate belongs to one active replacement, and one replacement
+//     produces one terminal truth.
+//
+// The repair is ORDERING, not a guard: remove the record from the active registry
+// BEFORE any cleanup can run, so the hook has nothing to rediscover. Structural
+// non-reentrancy beats a "currently finishing" flag, which would have to be
+// correct at every future call site instead of at one.
+
+namespace {
+
+/// One terminal truth, and nothing behind it.
+void exactly_one_outcome(Switchboard& bus, WeaveId op, TxnId id, TxnState state,
+                         TxnReason reason) {
+    TxnOutcome first{};
+    REQUIRE(bus.take_outcome(op, first));
+    CHECK(first.id == id);
+    CHECK(first.state == state);
+    CHECK(first.reason == reason);
+    TxnOutcome second{};
+    CHECK_FALSE(bus.take_outcome(op, second)); // ...and there is no second copy
+}
+
+} // namespace
+
+TEST_CASE("R2B-3b-2a: every abort route produces exactly one terminal outcome") {
+    // Each of these ends by discarding the candidate, so each re-enters the
+    // invalidation hook on its way out. The hook must find nothing.
+    int route = 0;
+    SUBCASE("explicit abort from Preparing") { route = 0; }
+    SUBCASE("explicit abort from Ready") { route = 1; }
+    SUBCASE("preparation exhaustion") { route = 2; }
+    SUBCASE("candidate death, which BEGINS inside kill()") { route = 3; }
+    SUBCASE("coordinator death") { route = 4; }
+    SUBCASE("incumbent role loss") { route = 5; }
+    SUBCASE("admission refused from Ready") { route = 6; }
+
+    Switchboard bus;
+    Switchboard decoy;
+    Cast c = cast_with_role(bus, kRole);
+    const std::uint32_t budget = route == 2 ? 1u : 8u;
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, budget);
+    REQUIRE(t.ok);
+    TxnReason expected = TxnReason::ExplicitAbort;
+
+    switch (route) {
+    case 0:
+        REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
+        break;
+    case 1:
+        REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+        REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
+        break;
+    case 2:
+        CHECK_FALSE(bus.tick_preparation(t.id).ok);
+        expected = TxnReason::PreparationExhausted;
+        break;
+    case 3:
+        bus.kill(c.candidate); // the whole ending happens inside this call
+        expected = TxnReason::CandidateChanged;
+        break;
+    case 4:
+        bus.kill(c.coordinator.id);
+        expected = TxnReason::CoordinatorChanged;
+        break;
+    case 5:
+        bus.unregister_weave(c.incumbent);
+        expected = TxnReason::IncumbentChanged;
+        break;
+    default: {
+        REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+        loom::Activated fact{1};
+        CHECK_FALSE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(decoy),
+                                                    Message(to_value(fact)), 1).ok);
+        expected = TxnReason::AdmissionRefused;
+        break;
+    }
+    }
+
+    CHECK_FALSE(bus.transaction_active(t.id));
+    CHECK(bus.active_transactions() == 0); // the slot came back exactly once
+    exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, expected);
+}
+
+TEST_CASE("R2B-3b-2a: a duplicate terminalization cannot consume two slots of the bounded "
+          "terminal store") {
+    // The bound is the instrument. Fill the store exactly, then run an abort whose
+    // candidate cleanup re-enters the hook: a second insertion would evict one MORE
+    // of the older results than it should, and the count of survivors says so.
+    Switchboard bus;
+    std::vector<Cast> casts;
+    std::vector<TxnId> ids;
+    const std::size_t store = Switchboard::kMaxTerminalOutcomes;
+
+    // Each operator gets exactly one terminal result, so survivors are countable.
+    for (std::size_t i = 0; i < store; ++i) {
+        const std::string role = "fill" + std::to_string(i);
+        casts.push_back(cast_with_role(bus, role.c_str()));
+        const TxnResult r = bus.begin_prepared_replacement(
+            casts[i].op.id, casts[i].coordinator.id, casts[i].incumbent, casts[i].candidate,
+            role, 4);
+        REQUIRE(r.ok);
+        ids.push_back(r.id);
+        REQUIRE(bus.abort_prepared_replacement(r.id, casts[i].op.id).ok);
+    }
+    CHECK(bus.active_transactions() == 0);
+
+    // One more abort, whose cleanup re-enters. It should evict EXACTLY the oldest.
+    Cast last = cast_with_role(bus, "last");
+    const TxnResult t = bus.begin_prepared_replacement(last.op.id, last.coordinator.id,
+                                                      last.incumbent, last.candidate,
+                                                      "last", 4);
+    REQUIRE(t.ok);
+    REQUIRE(bus.abort_prepared_replacement(t.id, last.op.id).ok);
+
+    // The newest is there, exactly once.
+    exactly_one_outcome(bus, last.op.id, t.id, TxnState::Aborted, TxnReason::ExplicitAbort);
+
+    // Count how many of the original results survived. One insertion evicts one;
+    // a duplicate would have evicted two.
+    std::size_t survivors = 0;
+    for (std::size_t i = 0; i < store; ++i) {
+        TxnOutcome out{};
+        if (bus.take_outcome(casts[i].op.id, out)) {
+            ++survivors;
+        }
+    }
+    CHECK(survivors == store - 1);
+}
+
+TEST_CASE("R2B-3b-2a: one sealed candidate belongs to at most one active transaction") {
+    Switchboard bus;
+    // Two incumbents in two roles, one coordinator, and ONE candidate.
+    Cast a = cast_with_role(bus, "role-a");
+    Cast b = cast_with_role(bus, "role-b");
+
+    const TxnResult first = bus.begin_prepared_replacement(a.op.id, a.coordinator.id,
+                                                           a.incumbent, a.candidate,
+                                                           "role-a", 8);
+    REQUIRE(first.ok);
+
+    // A different incumbent, a different operator — and the SAME candidate. Every
+    // other precondition holds: it is sealed by its coordinator, holds no role, and
+    // is alive. Only exclusivity stands in the way.
+    const TxnResult second = bus.begin_prepared_replacement(b.op.id, a.coordinator.id,
+                                                            b.incumbent, a.candidate,
+                                                            "role-b", 8);
+    CHECK_FALSE(second.ok);
+    CHECK(second.why == TxnReason::CandidateBusy);
+
+    // The first is untouched, the slot was never consumed, and neither incumbent
+    // moved. Two incumbents were never promised the same successor.
+    CHECK(bus.transaction_active(first.id));
+    CHECK(bus.transaction_state(first.id) == TxnState::Preparing);
+    CHECK(bus.active_transactions() == 1);
+    CHECK(bus.candidate_owner(a.candidate).who == a.coordinator.id);
+    incumbent_untouched(bus, a, "role-a");
+    incumbent_untouched(bus, b, "role-b");
+
+    // POSITIVE CONTROL: exclusivity is about the CANDIDATE, not about there being
+    // one transaction in the world. Distinct candidates coexist happily.
+    const TxnResult distinct = bus.begin_prepared_replacement(b.op.id, b.coordinator.id,
+                                                              b.incumbent, b.candidate,
+                                                              "role-b", 8);
+    REQUIRE(distinct.ok);
+    CHECK(bus.active_transactions() == 2);
+    CHECK(bus.transaction_state(first.id) == TxnState::Preparing);
+}
+
+TEST_CASE("R2B-3b-2a: a committed candidate is public, so it cannot be named as a sealed "
+          "candidate again") {
+    Switchboard bus;
+    Cast a = cast_with_role(bus, "role-a");
+    Cast b = cast_with_role(bus, "role-b");
+
+    const TxnResult t = bus.begin_prepared_replacement(a.op.id, a.coordinator.id, a.incumbent,
+                                                       a.candidate, "role-a", 8);
+    REQUIRE(t.ok);
+    REQUIRE(bus.mark_candidate_ready(t.id, a.coordinator.id, a.candidate).ok);
+    loom::Activated fact{1};
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 1).ok);
+    CHECK(bus.active_transactions() == 0);
+    exactly_one_outcome(bus, a.op.id, t.id, TxnState::Committed, TxnReason::None);
+
+    // It is a live public service now, holding a role. The existing begin
+    // preconditions refuse it — not as "busy", but as "not a sealed candidate".
+    const TxnResult again = bus.begin_prepared_replacement(b.op.id, b.coordinator.id,
+                                                           b.incumbent, a.candidate,
+                                                           "role-b", 8);
+    CHECK_FALSE(again.ok);
+    CHECK(again.why == TxnReason::PreconditionFailed);
+    CHECK(bus.active_transactions() == 0);
+    incumbent_untouched(bus, b, "role-b");
+}
+
+TEST_CASE("R2B-3b-2a: aborting one transaction does not duplicate its result, disturb another, "
+          "or consume the other's terminal capacity") {
+    Switchboard bus;
+    Cast a = cast_with_role(bus, "role-a");
+    Cast b = cast_with_role(bus, "role-b");
+    const TxnResult ta = bus.begin_prepared_replacement(a.op.id, a.coordinator.id, a.incumbent,
+                                                        a.candidate, "role-a", 8);
+    const TxnResult tb = bus.begin_prepared_replacement(b.op.id, b.coordinator.id, b.incumbent,
+                                                        b.candidate, "role-b", 8);
+    REQUIRE(ta.ok);
+    REQUIRE(tb.ok);
+    REQUIRE(bus.mark_candidate_ready(tb.id, b.coordinator.id, b.candidate).ok);
+
+    REQUIRE(bus.abort_prepared_replacement(ta.id, a.op.id).ok);
+
+    exactly_one_outcome(bus, a.op.id, ta.id, TxnState::Aborted, TxnReason::ExplicitAbort);
+    // B is exactly where it was — still Ready, still active, still owning its
+    // candidate, and its own terminal slot is still unused.
+    CHECK(bus.transaction_active(tb.id));
+    CHECK(bus.transaction_state(tb.id) == TxnState::Ready);
+    CHECK(bus.active_transactions() == 1);
+    TxnOutcome none{};
+    CHECK_FALSE(bus.take_outcome(b.op.id, none));
+    incumbent_untouched(bus, b, "role-b");
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);

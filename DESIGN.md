@@ -3324,6 +3324,37 @@ readiness answer is an authenticated conversation between coordinator and
 candidate, and R2B-3b-3 replaces this seam's caller rather than adding a second way
 to become ready.
 
+**Ending happens once, and the ordering is the reason (R2B-3b-2a).** Terminalizing
+a transaction discards its candidate; discarding a candidate is a lifecycle
+change; a lifecycle change re-enters the invalidation hook. With the record still
+in the active registry at that moment, the hook rediscovered it and ended it
+*again*:
+
+```text
+outer finish -> record outcome #1 -> unregister candidate
+                -> invalidate -> finds the same transaction
+                   -> nested finish -> record outcome #2 -> erase
+             -> outer erase finds nothing
+```
+
+Two terminal truths for one promise, and two slots consumed in a bounded store
+that then evicts somebody else's result early. The repair is **ordering, not a
+guard**: the record leaves the active registry *first*, then exactly one outcome is
+recorded, then cleanup runs and finds nothing to rediscover. Structural
+non-reentrancy beats a "currently finishing" flag, which would have to be honoured
+at every future call site instead of being true at one. Cleanup failure therefore
+leaves **sealed wreckage** — nonpublic by construction, unadmittable through a
+transaction that no longer exists, and unable to produce a second result.
+
+**One candidate, one replacement (R2B-3b-2a).** The registry enforced one
+transaction per *incumbent* and not per *candidate*, so the same sealed candidate
+could be promised to two incumbents at once — every other precondition holds for
+both, so nothing else would have caught it. One readiness event would have answered
+two transactions; aborting one would have unregistered the candidate out from under
+the other; committing one would have made it public while the other still believed
+it sealed. `IncumbentBusy` and `CandidateBusy` are named separately because they
+send an operator to different places.
+
 **Status: the transaction spine exists; the dynamic readiness conversation and the
 Timer keystone do not.** The
 transaction record and state machine, the readiness conversation, the dynamic
