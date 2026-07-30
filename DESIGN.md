@@ -2897,11 +2897,11 @@ construction now needs an explicit answer, and each one is a different attack:
 |---|---|
 | the role changing hands | **A role chooses who receives an ask. It does not inherit unfinished conversations.** The record names the weave the ask was delivered to, not the role's current holder |
 | another weave presenting the same token | refused: it is not the bound respondent |
-| **reload** behind a stable `WeaveId` | refused. A `WeaveId` is never reused, so it already distinguishes a *swap* successor — but reload deliberately keeps the id, so records also carry a per-weave **incarnation** counter, bumped whenever new code is committed behind an id |
-| the requester dying | refused before delivery, and explicitly **not** delivered to whoever holds that id next |
-| the respondent dying | the record dies with it; a successor inherits nothing |
+| **code replacement** behind a stable `WeaveId` | refused. A `WeaveId` is never reused, so it already distinguishes a *swap* successor — but replacing the code keeps the id, so records also carry a per-weave **incarnation** counter, bumped in `swap_state` |
+| the requester dying | the record ends at the death (R2B-2a), so an answer is never delivered to whoever holds that id next — including that requester's own next life |
+| the respondent dying | the record ends at the death; no successor and no revival inherits it |
 | a capability from another Loom | refused. `DeferredAnswer` carries a `weak_ptr` to its issuing Loom's identity, exactly as `LifecycleAuthority` does (R2B-1b) — two symmetric worlds really do mint the same token numbers |
-| leaking one | costs **one slot** until its owner dies, and no more: records are reclaimed on spend, on release, on reload and on death |
+| leaking one | costs **one slot** until its owner dies, and no more: records are reclaimed on spend, on release, on code replacement, on **death**, and on permanent removal |
 | digging a memory hole with them | bounded. `Switchboard::kMaxDeferredAnswers` is published beside `kJournalCapacity`; past it, deferral refuses **visibly** (`RefusalReason::Exhausted`, naming the ask it could not defer) and leaves the caller's immediate opportunity intact, so a well-written weave degrades to answering now |
 
 `Exhausted` is a new refusal reason rather than a reuse of `ForeignAuthority`, for
@@ -2927,6 +2927,58 @@ It is not a weaker guard, it is the absence of one that would contradict the
 feature; a weave that stores a `Bus&` has undefined behaviour either way, and even
 a successful spend from one reaches only the recorded requester with the recorded
 correlation.
+
+### Death ends the answer (R2B-2a)
+
+R2B-2 stated the law correctly and proved two thirds of it. The third was **not
+implemented**, and the report's prose was wrong about it: cleanup happened when a
+weave's code was replaced (`swap_state`) and when it was permanently removed
+(`unregister_weave`) — but a **recoverable death** was neither of those.
+
+`kill()` leaves both the `WeaveId` and the incarnation exactly as they were. So
+every record still looked perfectly current, and this sequence handed a new life
+its predecessor's rights:
+
+```text
+requester asks -> respondent defers -> respondent is killed -> Died is announced
+-> respondent is revived from its own snapshot -> the old token still spends
+```
+
+That is not a hypothetical: it is precisely what `IsolationHost::recover` does to a
+crashed child — `bus_.kill(id)` then `bus_.reload(id, host-owned snapshot)`.
+
+> **A handler may end without ending the conversation. A life may not.**
+
+Committing a death now includes ending every conversation that life was a party to,
+in either direction, unconditionally, **at the death transition** — before `Died`
+is announced, so anything observing the death sees a world where those
+conversations are already over. Three consequences worth stating separately:
+
+- **Revival cannot recover the right, by either branch.** Not from a fresh
+  candidate, and not from last-known-good. The revived weave often still holds the
+  capability *object* — nothing library-side changed — and the board is what
+  refuses it.
+- **Capacity returns at the death, not at a revival.** A weave whose reload budget
+  is exhausted is quarantined and never revived at all; its slots must not be
+  hostage to an event that will never arrive.
+- **It is selective.** Only conversations naming the dead weave end. Clearing the
+  registry wholesale would make every focused test just as green, which is why
+  there is a case for exactly that (`A→B`, `E→B`, `C→D`; killing `B` leaves `C→D`
+  answering normally).
+
+**Two mechanisms, two different questions, and they are not interchangeable.**
+Staleness (`forget_deferred_for`) asks *did the code behind this id change?* and is
+right for `swap_state`. Death (`abandon_deferred_for`) asks *did this life end?*
+and staleness **cannot express it**, because a killed weave's records look current
+in every field. The incarnation counter is bumped in `swap_state` and **only**
+there — R2B-2's comment claiming "wherever the bus commits new code" was read as
+covering `reload()`, which it never did; `reload()` is crash revival of the *same*
+code and advances nothing.
+
+**Deliberately indistinguishable:** spending a reclaimed token and spending a
+number that never named anything both come back as `ForeignAuthority` with no
+requester on the refusal. A distinct "this conversation used to exist" reason would
+be an oracle, and would grant no authority to anyone who could read it.
 
 **Two residuals, stated rather than papered over.** Out-of-process weaves fail
 **closed**: the child host is given null deferral callbacks, because a

@@ -1183,12 +1183,20 @@ public:
         AnswerAfter,   ///< mail.answer() after deferring must provide nothing
         SpendTwice,    ///< a second spend must fail
         ReleaseThenSpend, ///< release, then try to spend
+        HoardAll,      ///< keep EVERY capability, then try to spend them all (R2B-2a)
     };
 
     explicit Deferrer(Mode mode) : mode_(mode) {}
 
     void on(const ProvAsk&, Mail& mail) {
         ++state_.n;
+        if (mode_ == Mode::HoardAll) {
+            // Several conversations open at once, which is what a selectivity test
+            // needs: one weave party to more than one unfinished conversation.
+            retained_.push_back(mail.defer_answer());
+            deferred_valid_ = retained_.back().valid();
+            return;
+        }
         pending_ = mail.defer_answer();
         deferred_valid_ = pending_.valid();
         if (mode_ == Mode::DeferTwice) {
@@ -1205,6 +1213,15 @@ public:
 
     void on(const ProvFinish& f, Mail& mail) {
         ++state_.n;
+        if (mode_ == Mode::HoardAll) {
+            spent_from_retained_ = 0;
+            for (const loom::DeferredAnswer& a : retained_) {
+                if (answer_deferred(a, mail, ProvAnswer{f.tag}).valid()) {
+                    ++spent_from_retained_;
+                }
+            }
+            return;
+        }
         if (mode_ == Mode::ReleaseThenSpend) {
             release_deferred(pending_, mail);
         }
@@ -1225,6 +1242,10 @@ public:
     loom::DeferredAnswer take() { return std::move(pending_); }
     void adopt(loom::DeferredAnswer a) { pending_ = std::move(a); }
 
+    /// HoardAll only: how many of the capabilities it kept the BOARD accepted.
+    int spent_from_retained_ = 0;
+    std::size_t retained_count() const { return retained_.size(); }
+
     bool deferred_valid_ = false;
     bool second_defer_valid_ = false;
     bool immediate_after_defer_ = false;
@@ -1234,6 +1255,7 @@ public:
 private:
     Mode mode_;
     loom::DeferredAnswer pending_{};
+    std::vector<loom::DeferredAnswer> retained_{}; ///< HoardAll only
 };
 
 /// A weave that is handed everything publicly representable about somebody
@@ -1311,7 +1333,7 @@ TEST_CASE("R2B-2: the answer waits — a responder defers, the handler returns, 
     const WeaveId bystander = mount<Asker>(bus, heard);
     bus.send(bystander, Message(to_value(ProvAnswer{"unrelated"})));
     bus.pump();
-    CHECK(heard.answers.size() == 1); // the bystander's, not an answer to the ask
+    REQUIRE(heard.answers.size() == 1); // the bystander's, not an answer to the ask
     CHECK_FALSE(heard.answers[0].attested);
 
     // Now the completion arrives, and the SAME LIVING INCARNATION spends what it
@@ -1371,7 +1393,7 @@ TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second def
         Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
         CHECK(d->first_spend_);
         CHECK_FALSE(d->second_spend_);        // consumed before queueing
-        CHECK(heard.answers.size() == 1);     // exactly one answer exists
+        REQUIRE(heard.answers.size() == 1);   // exactly one answer exists
         CHECK(heard.answers[0].attested);
     }
 }
@@ -1785,6 +1807,336 @@ TEST_CASE("R2B-2: a leaked capability costs one slot only until its owner DIES")
     world.ask(bus, "after the reaping");
     CHECK(static_cast<Deferrer*>(bus.weave(reborn))->deferred_valid_);
     CHECK(world.tap.exhausted == 0);
+}
+
+// ---- R2B-2a: death ends the answer -------------------------------------------
+//
+// R2B-2 said "an answer may outlive the handler, but never the conversation or the
+// incarnation that earned it" — and proved the CODE-replacement and permanent-
+// removal halves. It did not prove the RECOVERABLE DEATH half, and the real code
+// did not implement it: `kill()` leaves both the WeaveId and the incarnation
+// untouched, so a crashed weave revived from its own snapshot — the isolation
+// supervisor's ordinary recovery path — came back holding its predecessor's answer
+// rights. These cases pin the law at the transition that actually says so:
+//
+//     A handler may end without ending the conversation. A life may not.
+
+namespace {
+
+/// Count Died/Revived for one weave, so "Loom announced the death" is observed
+/// rather than assumed from the fact that the test called kill().
+struct LifeTap {
+    WeaveId watched{};
+    int died = 0;
+    int revived = 0;
+    int revived_from_lkg = 0;
+
+    void arm(Switchboard& bus, WeaveId id) {
+        watched = id;
+        bus.add_observer([this](const BusEvent& ev) {
+            if (!(ev.target == watched)) {
+                return;
+            }
+            if (ev.kind == EventKind::Died) {
+                ++died;
+            } else if (ev.kind == EventKind::Revived) {
+                ++revived;
+                if (ev.from_last_known_good) {
+                    ++revived_from_lkg;
+                }
+            }
+        });
+    }
+};
+
+/// The one ask every case below opens a conversation with.
+void ask_by_role(Switchboard& bus, WeaveId asker, const char* role, const char* tag) {
+    bus.send_as_to_role(asker, role,
+                        Message(to_value(ProvAsk{tag}), asker, WeaveId{}, kPublicCorrelation));
+    bus.pump();
+}
+
+constexpr const char* kOtherRole = "prov.other";
+
+} // namespace
+
+TEST_CASE("R2B-2a: the respondent DYING ends the conversation, and revival from its own snapshot "
+          "does not bring the answer back") {
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name); // so the failed spend is MEASURED, not inferred
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    LifeTap life;
+    life.arm(bus, steward);
+
+    ask_by_role(bus, asker, kProvRole, "prepare");
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    REQUIRE(d->deferred_valid_); // one deferred record exists, handler already returned
+
+    // Its own state, captured while alive: revival is from something the weave
+    // really produced, not from bytes invented by the test.
+    const std::string own_state = bus.snapshot_bytes(steward);
+
+    // DEATH, through Loom's actual path — and Loom really says so.
+    bus.kill(steward);
+    CHECK(life.died == 1);
+    CHECK_FALSE(bus.alive(steward));
+
+    // REVIVAL through the supported crash-revival path, same logical identity.
+    const ReviveOutcome ro = bus.reload(steward, own_state);
+    REQUIRE(ro.revived);
+    CHECK_FALSE(ro.from_last_known_good);
+    CHECK(life.revived == 1);
+    CHECK(bus.alive(steward));
+
+    // The completion arrives, and the revived life STILL HOLDS THE CAPABILITY
+    // OBJECT — nothing library-side changed. The board is what refuses.
+    bus.send(steward, Message(to_value(ProvFinish{"after revival"})));
+    bus.pump();
+    Deferrer* revived = static_cast<Deferrer*>(bus.weave(steward));
+    CHECK_FALSE(revived->first_spend_);
+    CHECK(heard.answers.empty());
+    CHECK(tap.foreign_authority == 1); // refused VISIBLY, not silently dropped
+    CHECK(tap.delivered_answers == 0);
+
+    // And the new life is not crippled: a fresh ask defers and answers normally.
+    ask_by_role(bus, asker, kProvRole, "again");
+    CHECK(revived->deferred_valid_);
+    bus.send(steward, Message(to_value(ProvFinish{"fresh"})));
+    bus.pump();
+    CHECK(revived->first_spend_);
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].tag == "fresh");
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2a: LAST-KNOWN-GOOD revival cannot restore an answer right either") {
+    // The other real revival branch, and it must not be a back door. A malformed
+    // candidate plus a policy that permits the fallback is the whole difference; the
+    // conversation is just as over.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    LifeTap life;
+    life.arm(bus, steward);
+
+    ask_by_role(bus, asker, kProvRole, "prepare");
+    REQUIRE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
+
+    bus.kill(steward);
+    REQUIRE(life.died == 1);
+
+    // Garbage candidate: the gate refuses it, and the weave's policy (the WeaveBase
+    // default) permits returning as its last-known-good.
+    const ReviveOutcome ro = bus.reload(steward, "not a serialized value");
+    REQUIRE(ro.revived);
+    REQUIRE(ro.from_last_known_good);
+    CHECK(life.revived_from_lkg == 1);
+    CHECK(bus.alive(steward));
+
+    bus.send(steward, Message(to_value(ProvFinish{"from the old life"})));
+    bus.pump();
+    CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
+    CHECK(heard.answers.empty());
+    CHECK(tap.foreign_authority == 1);
+    CHECK(tap.delivered_answers == 0);
+}
+
+TEST_CASE("R2B-2a: the REQUESTER dying and reviving does not inherit the answer its previous life "
+          "was owed") {
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    LifeTap life;
+    life.arm(bus, asker);
+
+    ask_by_role(bus, asker, kProvRole, "prepare");
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    REQUIRE(d->deferred_valid_);
+
+    const std::string own_state = bus.snapshot_bytes(asker);
+    bus.kill(asker);
+    CHECK(life.died == 1);
+
+    // REVIVED FIRST, THEN SPENT — deliberately. A spend attempted while the
+    // requester is still dead would be refused for an entirely different reason
+    // (there is nobody alive to deliver to), and would prove nothing about whether
+    // the conversation survived the life.
+    const ReviveOutcome ro = bus.reload(asker, own_state);
+    REQUIRE(ro.revived);
+    CHECK(life.revived == 1);
+    CHECK(bus.alive(asker));
+
+    bus.send(steward, Message(to_value(ProvFinish{"owed to your predecessor"})));
+    bus.pump();
+    CHECK_FALSE(d->first_spend_);
+    CHECK(heard.answers.empty()); // the new life is not handed the old life's answer
+    CHECK(tap.foreign_authority == 1);
+    CHECK(tap.delivered_answers == 0);
+
+    // ...and the revived requester is a perfectly ordinary participant again.
+    ask_by_role(bus, asker, kProvRole, "my own question");
+    CHECK(d->deferred_valid_);
+    bus.send(steward, Message(to_value(ProvFinish{"mine"})));
+    bus.pump();
+    CHECK(d->first_spend_);
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].tag == "mine");
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2a: death reclaims registry capacity AT THE DEATH, in both ownership directions") {
+    // The bound is 64 and a leaked capability costs a slot. R2B-2 proved code
+    // replacement and permanent removal give the slots back; this proves DEATH does
+    // — immediately, and before any revival, because a quarantined weave is never
+    // revived at all and its slots must not be hostage to an event that never comes.
+
+    SUBCASE("the dead participant is the RESPONDENT") {
+        Switchboard bus;
+        FullRegistry world;
+        Deferrer* d = world.fill(bus, Deferrer::Mode::Normal);
+        world.ask(bus, "one too many");
+        REQUIRE_FALSE(d->deferred_valid_);
+        REQUIRE(world.tap.exhausted == 1);
+
+        bus.kill(world.steward);
+
+        // IMMEDIATELY, with no revival anywhere: an unrelated pair can open a
+        // conversation, which it could not have done a moment earlier.
+        Received other_heard;
+        const WeaveId other_asker = mount<Asker>(bus, other_heard);
+        const WeaveId other_steward =
+            mount_into_role<Deferrer>(bus, kOtherRole, Deferrer::Mode::Normal);
+        ask_by_role(bus, other_asker, kOtherRole, "with the reclaimed capacity");
+        CHECK(static_cast<Deferrer*>(bus.weave(other_steward))->deferred_valid_);
+        CHECK(world.tap.exhausted == 1); // no second overflow
+
+        // And the revived original can use it too.
+        REQUIRE(bus.reload(world.steward, bus.snapshot_bytes(world.steward)).revived);
+        world.ask(bus, "after revival");
+        CHECK(static_cast<Deferrer*>(bus.weave(world.steward))->deferred_valid_);
+        CHECK(world.tap.exhausted == 1);
+    }
+
+    SUBCASE("the dead participant is the REQUESTER") {
+        // Cleanup indexes both sides, so both sides are watched.
+        Switchboard bus;
+        FullRegistry world;
+        Deferrer* d = world.fill(bus, Deferrer::Mode::Normal);
+        world.ask(bus, "one too many");
+        REQUIRE_FALSE(d->deferred_valid_);
+        REQUIRE(world.tap.exhausted == 1);
+
+        bus.kill(world.asker);
+
+        Received other_heard;
+        const WeaveId other_asker = mount<Asker>(bus, other_heard);
+        const WeaveId other_steward =
+            mount_into_role<Deferrer>(bus, kOtherRole, Deferrer::Mode::Normal);
+        ask_by_role(bus, other_asker, kOtherRole, "with the reclaimed capacity");
+        CHECK(static_cast<Deferrer*>(bus.weave(other_steward))->deferred_valid_);
+        CHECK(world.tap.exhausted == 1);
+
+        REQUIRE(bus.reload(world.asker, bus.snapshot_bytes(world.asker)).revived);
+        world.ask(bus, "after revival");
+        CHECK(d->deferred_valid_);
+        CHECK(world.tap.exhausted == 1);
+    }
+}
+
+TEST_CASE("R2B-2a: death cleanup is SELECTIVE — killing one participant ends only the "
+          "conversations it was a party to") {
+    // A -> B, E -> B, C -> D. Killing B must end the first two and leave the third
+    // untouched. Clearing the whole registry would make every other case in this
+    // suite pass just as green, which is exactly why this case exists.
+    Switchboard bus;
+    Received heard_a;
+    Received heard_c;
+    Received heard_e;
+    const WeaveId a = mount<Asker>(bus, heard_a);
+    const WeaveId c = mount<Asker>(bus, heard_c);
+    const WeaveId e = mount<Asker>(bus, heard_e);
+    // B holds TWO conversations at once, which is the only way to see that BOTH of
+    // its records went and not merely the last one.
+    const WeaveId b = mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::HoardAll);
+    const WeaveId d = mount_into_role<Deferrer>(bus, kOtherRole, Deferrer::Mode::Normal);
+
+    ask_by_role(bus, a, kProvRole, "a-asks-b");
+    ask_by_role(bus, e, kProvRole, "e-asks-b");
+    ask_by_role(bus, c, kOtherRole, "c-asks-d");
+    Deferrer* bw = static_cast<Deferrer*>(bus.weave(b));
+    Deferrer* dw = static_cast<Deferrer*>(bus.weave(d));
+    REQUIRE(bw->retained_count() == 2);
+    REQUIRE(dw->deferred_valid_);
+
+    bus.kill(b);
+    REQUIRE(bus.reload(b, bus.snapshot_bytes(b)).revived);
+
+    // B still holds both capability objects and tries both. Neither is honoured.
+    bus.send(b, Message(to_value(ProvFinish{"revived-b"})));
+    bus.pump();
+    CHECK(bw->spent_from_retained_ == 0);
+    CHECK(heard_a.answers.empty());
+    CHECK(heard_e.answers.empty());
+
+    // C -> D was never B's business, and it still works — the registry was not
+    // simply emptied.
+    bus.send(d, Message(to_value(ProvFinish{"c-gets-this"})));
+    bus.pump();
+    CHECK(dw->first_spend_);
+    REQUIRE(heard_c.answers.size() == 1);
+    CHECK(heard_c.answers[0].tag == "c-gets-this");
+    CHECK(heard_c.answers[0].attested);
+}
+
+TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICALLY, on purpose") {
+    // Deliberate, and worth writing down: after a death the record is gone, so a
+    // persisted token names nothing — the same nothing a fabricated number names.
+    // Both come back as ForeignAuthority with no requester on the refusal, so the
+    // refusal cannot be read as an oracle for whether a conversation once existed.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId asker = mount<Asker>(bus, heard);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    ask_by_role(bus, asker, kProvRole, "prepare");
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    REQUIRE(d->deferred_valid_);
+    const std::uint64_t real_token = d->token();
+    REQUIRE(real_token != 0);
+
+    bus.kill(steward);
+    REQUIRE(bus.reload(steward, bus.snapshot_bytes(steward)).revived);
+
+    // The real (now reclaimed) token, presented by the weave that earned it.
+    bus.send(steward, Message(to_value(ProvFinish{"reclaimed"})));
+    bus.pump();
+    CHECK_FALSE(d->first_spend_);
+    const std::int64_t after_reclaimed = tap.foreign_authority;
+    CHECK(after_reclaimed == 1);
+
+    // A number that never named anything, presented by a weave that never asked.
+    const WeaveId forger = mount<TokenForger>(bus, real_token + 12345u);
+    bus.send(forger, Message(to_value(ProvFinish{"never-existed"})));
+    bus.pump();
+    CHECK_FALSE(static_cast<TokenForger*>(bus.weave(forger))->spent_);
+    CHECK(tap.foreign_authority == after_reclaimed + 1); // same reason, same altitude
+    CHECK(tap.delivered_answers == 0);
+    CHECK(heard.answers.empty());
 }
 
 } // TEST_SUITE

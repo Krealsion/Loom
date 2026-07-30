@@ -157,7 +157,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     std::move(grant),
                     0,
                     true,
-                    /*incarnation=*/1, // this id's first code; bumped on every reload
+                    /*incarnation=*/1, // this id's first code; bumped by swap_state alone
                     role};
     weaves_.emplace(id.value, std::move(rec));
     if (!role.empty()) {
@@ -189,8 +189,11 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     std::unique_ptr<Weave> released = std::move(it->second.weave);
     weaves_.erase(it);
     // Its unfinished conversations end with it, in both directions: it can no
-    // longer answer, and nothing can be answered TO it.
-    forget_deferred_for(id);
+    // longer answer, and nothing can be answered TO it. Unconditional (R2B-2a):
+    // this used to rely on the staleness sweep happening to see incarnation 0
+    // because the record was already erased above — true, but true only by call
+    // order. Permanent removal is the end of a life, so it asks the death question.
+    abandon_deferred_for(id);
     return released;
 }
 
@@ -287,12 +290,42 @@ Switchboard::DeferredRecord* Switchboard::find_deferred(std::uint64_t token) {
     return nullptr;
 }
 
+void Switchboard::abandon_deferred_for(WeaveId id) {
+    // A HANDLER MAY END WITHOUT ENDING THE CONVERSATION. A LIFE MAY NOT.
+    //
+    // This is the death half of R2B-2's law, and it needs its own function because
+    // the staleness sweep below CANNOT express it: `kill` leaves the id and the
+    // incarnation exactly as they were, so every record still looks perfectly
+    // current. Without this, a crashed weave revived from its own snapshot — the
+    // isolation supervisor's ordinary recovery path — would come back holding its
+    // predecessor's answer rights.
+    //
+    // Unconditional, and in BOTH directions: it does not matter whether the dead
+    // participant was the one who asked or the one who was going to answer. Nor
+    // does it matter what happens next — revival, last-known-good fallback, or
+    // permanent quarantine — because the slot is reclaimed HERE, at the transition,
+    // rather than at some later event that may never arrive.
+    //
+    // Deliberately selective: only conversations this weave is a party to. Every
+    // other conversation in the registry belongs to lives that did not end.
+    for (DeferredRecord& r : deferred_) {
+        if (r.token != 0 && (r.respondent == id || r.requester == id)) {
+            r = DeferredRecord{}; // the slot is free again
+        }
+    }
+}
+
 void Switchboard::forget_deferred_for(WeaveId id) {
-    // Called when a weave is unregistered and when new code is committed behind
-    // its id. Either event ends every unfinished conversation that weave was a
-    // party to: the incarnation that earned the right is gone, and a successor
-    // does not inherit it. This is also how a LEAKED capability is reclaimed —
-    // it costs one slot until its owner dies, and no longer.
+    // Called when NEW CODE is committed behind an existing id (`swap_state`), and
+    // only there. That event ends every unfinished conversation the predecessor was
+    // a party to: the incarnation that earned the right is gone, and a successor
+    // does not inherit it. Death and permanent removal are a different question and
+    // have their own function — see `abandon_deferred_for`, and note that THIS one
+    // could not answer them: a killed weave keeps both its id and its incarnation,
+    // so nothing about its records looks stale.
+    //
+    // This is also how a LEAKED capability is reclaimed: it costs one slot until
+    // its owner's code is replaced or its life ends, and no longer.
     const std::uint64_t now = incarnation_of(id);
     for (DeferredRecord& r : deferred_) {
         if (r.token == 0) {
@@ -702,6 +735,10 @@ void Switchboard::kill(WeaveId id) {
         return;
     }
     rec->alive = false;
+    // Committing the death includes ending its unfinished conversations (R2B-2a),
+    // and that happens BEFORE the announcement so that anything observing `Died`
+    // sees a world in which those conversations are already over.
+    abandon_deferred_for(id);
     BusEvent ev;
     ev.kind = EventKind::Died;
     ev.target = id;
