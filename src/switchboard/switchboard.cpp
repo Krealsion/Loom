@@ -25,6 +25,10 @@ const char* name_of(RefusalReason r) noexcept {
         return "GateRefused";
     case RefusalReason::CapabilityDenied:
         return "CapabilityDenied";
+    case RefusalReason::ForeignAuthority:
+        return "ForeignAuthority";
+    case RefusalReason::Exhausted:
+        return "Exhausted";
     }
     return "?";
 }
@@ -43,6 +47,15 @@ std::string Refusal::message() const {
         return "gate refused: " + error.message();
     case RefusalReason::CapabilityDenied:
         return "sender's grant does not permit this shape to this target";
+    case RefusalReason::ForeignAuthority:
+        // Deliberately says AUTHORITY, not grant: the sender may hold exactly the
+        // right grant and still be presenting an authority this Loom never issued.
+        return "lifecycle/answer authority was not issued here, or is expired, "
+               "spent, or bound to a different conversation";
+    case RefusalReason::Exhausted:
+        // Says CAPACITY, and says which bound, because the fix is a different one:
+        // nothing here is wrong with the sender, the shape, or the authority.
+        return "a published bound was reached (deferred answers in flight)";
     }
     return "?";
 }
@@ -144,6 +157,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     std::move(grant),
                     0,
                     true,
+                    /*incarnation=*/1, // this id's first code; bumped on every reload
                     role};
     weaves_.emplace(id.value, std::move(rec));
     if (!role.empty()) {
@@ -174,6 +188,9 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     }
     std::unique_ptr<Weave> released = std::move(it->second.weave);
     weaves_.erase(it);
+    // Its unfinished conversations end with it, in both directions: it can no
+    // longer answer, and nothing can be answered TO it.
+    forget_deferred_for(id);
     return released;
 }
 
@@ -231,7 +248,11 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
     //   - this delivery's one answer is already spent.
     if (!current_target_.valid() || as_sender != current_target_ ||
         !authority_.requester.valid() || authority_.spent) {
-        return refuse_now(authority_.requester, as_sender, msg, RefusalReason::CapabilityDenied);
+        // Visible on the tap AND honestly reported to the caller: an INVALID
+        // ticket, because nothing was queued. A refusal ticket would tell a
+        // responder its answer had been sent.
+        (void)refuse_now(authority_.requester, as_sender, msg, RefusalReason::CapabilityDenied);
+        return Ticket{};
     }
     authority_.spent = true;
     // Loom chooses the recipient and the correlation; the answerer chooses only
@@ -242,6 +263,155 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
     msg.correlation = authority_.correlation;
     return enqueue_directed(to, std::move(msg), /*gated=*/true,
                             Provenance::attested(Provenance::Kind::Answer, 0));
+}
+
+// ---- deferred answers (R2B-2) ----------------------------------------------
+//
+// THE LAW: an answer may outlive the handler, but never the conversation or the
+// incarnation that earned it.
+
+std::uint64_t Switchboard::incarnation_of(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    return rec == nullptr ? 0 : rec->incarnation;
+}
+
+Switchboard::DeferredRecord* Switchboard::find_deferred(std::uint64_t token) {
+    if (token == 0) {
+        return nullptr;
+    }
+    for (DeferredRecord& r : deferred_) {
+        if (r.token == token) {
+            return &r;
+        }
+    }
+    return nullptr;
+}
+
+void Switchboard::forget_deferred_for(WeaveId id) {
+    // Called when a weave is unregistered and when new code is committed behind
+    // its id. Either event ends every unfinished conversation that weave was a
+    // party to: the incarnation that earned the right is gone, and a successor
+    // does not inherit it. This is also how a LEAKED capability is reclaimed —
+    // it costs one slot until its owner dies, and no longer.
+    const std::uint64_t now = incarnation_of(id);
+    for (DeferredRecord& r : deferred_) {
+        if (r.token == 0) {
+            continue;
+        }
+        const bool stale_respondent = r.respondent == id && r.respondent_incarnation != now;
+        const bool stale_requester = r.requester == id && r.requester_incarnation != now;
+        if (stale_respondent || stale_requester) {
+            r = DeferredRecord{}; // the slot is free again
+        }
+    }
+}
+
+DeferredAnswer Switchboard::defer_answer_as(WeaveId as_sender) {
+    // DEFERRING IS A CONVERSION, NOT AN ADDITION. It spends the immediate
+    // opportunity, so one delivered request still grants exactly one answer: a
+    // second defer_answer() finds nothing left to convert, and answer() finds
+    // nothing left to send. A delivery that never earned answer authority — an
+    // ordinary path, or a request from a root with nobody to answer — has nothing
+    // to defer, and says so by returning an invalid capability.
+    if (!current_target_.valid() || as_sender != current_target_ ||
+        !authority_.requester.valid() || authority_.spent) {
+        return DeferredAnswer{};
+    }
+    const std::uint64_t requester_incarnation = incarnation_of(authority_.requester);
+    const std::uint64_t respondent_incarnation = incarnation_of(as_sender);
+    if (requester_incarnation == 0 || respondent_incarnation == 0) {
+        return DeferredAnswer{}; // one of the participants is already gone
+    }
+
+    DeferredRecord* slot = nullptr;
+    for (DeferredRecord& r : deferred_) {
+        if (r.token == 0) {
+            slot = &r;
+            break;
+        }
+    }
+    if (slot == nullptr) {
+        if (deferred_.size() >= kMaxDeferredAnswers) {
+            // BOUNDED, AND THE OVERFLOW IS VISIBLE rather than a silent nothing:
+            // the caller keeps its immediate opportunity (nothing was consumed),
+            // and a tap sees a refusal that names the ask it could not defer and
+            // says CAPACITY rather than implying a forgery.
+            Message empty{Value(authority_.shape != nullptr ? authority_.shape
+                                                            : lifecycle_policy_schema())};
+            (void)refuse_now(authority_.requester, as_sender, empty, RefusalReason::Exhausted);
+            return DeferredAnswer{};
+        }
+        deferred_.emplace_back();
+        slot = &deferred_.back();
+    }
+
+    authority_.spent = true; // the immediate right is now the deferred one
+    const std::uint64_t token = next_deferred_token_++;
+    *slot = DeferredRecord{token,
+                           authority_.requester,
+                           requester_incarnation,
+                           as_sender,
+                           respondent_incarnation,
+                           authority_.correlation};
+    return DeferredAnswer{identity_, token};
+}
+
+Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& answer,
+                                      Message msg) {
+    // Board-relativity first: a capability minted by another Loom has no standing
+    // here even if its token happens to name a live record of ours. (Two symmetric
+    // worlds really can mint the same token number — that is exactly the trap.)
+    if (!issued_here_deferred(answer)) {
+        (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::ForeignAuthority);
+        return Ticket{};
+    }
+    DeferredRecord* rec = find_deferred(answer.opaque_token());
+    // EVERY TERM MATTERS, and each one is a different attack:
+    //   - the record exists and has not been spent or released;
+    //   - the speaker IS the bound respondent (not a successor, not the current
+    //     role holder, not another weave holding copied public values);
+    //   - the respondent is STILL THE SAME INCARNATION (a reload behind the same
+    //     id is a different one, and does not inherit the conversation);
+    //   - the requester still exists AT THE INCARNATION THAT ASKED, so an answer
+    //     cannot be delivered to a successor that happens to hold the same id.
+    if (rec == nullptr || as_sender != rec->respondent ||
+        incarnation_of(as_sender) != rec->respondent_incarnation) {
+        (void)refuse_now(rec == nullptr ? WeaveId{} : rec->requester, as_sender, msg,
+                         RefusalReason::ForeignAuthority);
+        return Ticket{};
+    }
+    if (incarnation_of(rec->requester) != rec->requester_incarnation) {
+        const WeaveId to = rec->requester;
+        *rec = DeferredRecord{}; // the conversation is over either way
+        (void)refuse_now(to, as_sender, msg, RefusalReason::NoSuchTarget);
+        return Ticket{};
+    }
+
+    // CONSUMED BEFORE QUEUEING, so neither a replay nor a reentrant handler can
+    // turn one right into two answers.
+    const WeaveId to = rec->requester;
+    const std::uint64_t correlation = rec->correlation;
+    *rec = DeferredRecord{};
+
+    msg.sender = as_sender;
+    msg.reply_to = WeaveId{};
+    msg.correlation = correlation; // the ORIGINAL request's, never the answerer's choice
+    return enqueue_directed(to, std::move(msg), /*gated=*/true,
+                            Provenance::attested(Provenance::Kind::Answer, 0));
+}
+
+void Switchboard::release_deferred_as(WeaveId as_sender, const DeferredAnswer& answer) {
+    // Abandonment is SILENT to the requester in V1 — there is no cancellation
+    // vocabulary, and inventing one here would be a protocol nobody asked for.
+    // What it is not is silent to the bus: the slot is reclaimed at once.
+    if (!issued_here_deferred(answer)) {
+        return;
+    }
+    DeferredRecord* rec = find_deferred(answer.opaque_token());
+    if (rec != nullptr && as_sender == rec->respondent &&
+        incarnation_of(as_sender) == rec->respondent_incarnation) {
+        *rec = DeferredRecord{};
+    }
 }
 
 Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& authority,
@@ -260,12 +430,14 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
     // to answer it. `issued_here` also fails for an authority whose board has
     // been destroyed — the lifetime rule, not a special case.
     if (!issued_here(authority)) {
-        return refuse_now(target, as_sender, msg, RefusalReason::CapabilityDenied);
+        (void)refuse_now(target, as_sender, msg, RefusalReason::ForeignAuthority);
+        return Ticket{};
     }
     // The attestation is bound to THIS target and THIS sequence, both taken from
     // the call rather than from the payload.
     if (!target.valid()) {
-        return refuse_now(target, as_sender, msg, RefusalReason::NoSuchTarget);
+        (void)refuse_now(target, as_sender, msg, RefusalReason::NoSuchTarget);
+        return Ticket{};
     }
     msg.sender = as_sender;
     return enqueue_directed(target, std::move(msg), /*gated=*/true,
@@ -457,7 +629,8 @@ void Switchboard::deliver_one(Envelope env) {
     // and it dies when the handler returns. A role changing hands after this
     // point hands the new holder nothing: it never received this request.
     current_target_ = env.target;
-    authority_ = ReplyAuthority{env.msg.sender, env.msg.correlation, /*spent=*/false};
+    authority_ = ReplyAuthority{env.msg.sender, env.msg.correlation, /*spent=*/false,
+                                trusted.payload.schema_ptr()};
     // The handler receives a WeaveBus bound to its own id — never the concrete
     // Switchboard — so anything it sends is stamped with its identity and gated
     // against its grant.
@@ -642,6 +815,14 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     rec->weave->revive(state);
     rec->last_known_good = state;
     rec->alive = true;
+    // NEW CODE BEHIND A STABLE ID IS A NEW INCARNATION (R2B-2). The WeaveId is
+    // deliberately unchanged — that is what reload means — so this counter is the
+    // only thing that distinguishes the successor from the incarnation that may
+    // have earned a deferred answer. Bumping it here, then forgetting that
+    // weave's unfinished conversations, is what keeps handler-surviving authority
+    // from quietly becoming reload-surviving authority.
+    ++rec->incarnation;
+    forget_deferred_for(id);
     out.revived = true;
     announce(EventKind::Revived, Refusal{});
     return out;

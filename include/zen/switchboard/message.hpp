@@ -185,6 +185,107 @@ private:
     std::weak_ptr<const LoomIdentity> issuer_;
 };
 
+/// THE RIGHT TO ANSWER LATER — the same one answer, retained (R2B-2).
+///
+/// R2B-1's immediate authority lives and dies with the handler, which is right
+/// for a responder that already knows the answer and is the whole reason that
+/// path stays the smallest and strongest one. It is not enough for a responder
+/// whose answer depends on messages it has not received yet: a dynamically
+/// loaded steward, a preparation that needs queue turns, a Manager that is
+/// itself a weave.
+///
+/// THE LAW: *an answer may outlive the handler, but never the conversation or
+/// the incarnation that earned it.*
+///
+///   IMMEDIATE ANSWER AUTHORITY  one answer during the delivered request handler
+///   DEFERRED ANSWER AUTHORITY   the SAME one answer, retained by the exact
+///                               respondent incarnation that earned it
+///   MESSAGE PAYLOAD             what the answer says
+///   ANSWER PROVENANCE           why the requester may trust it as THE answer
+///
+/// WHAT IT IS NOT. Not a payload field, not serializable, not a future, not a
+/// promise, and not an ambient send door: spending it requires a live `Mail`
+/// belonging to the exact incarnation that earned it, so holding one buys the
+/// right to finish ONE conversation and nothing else. The response shape is
+/// still governed by that weave's ordinary emit grant — possession authorizes a
+/// reply, never a vocabulary.
+///
+/// MOVE-ONLY, deliberately. Copying an answer right would invite two answers to
+/// one question; making the type move-only means the compiler refuses the
+/// question rather than the bus refusing the second answer. A default-constructed
+/// one is INVALID and says so (`valid()`), so it can be held as a member before a
+/// conversation exists — and spending an invalid one fails visibly rather than
+/// silently doing nothing.
+class DeferredAnswer {
+public:
+    DeferredAnswer() = default;
+    DeferredAnswer(const DeferredAnswer&) = delete;
+    DeferredAnswer& operator=(const DeferredAnswer&) = delete;
+    DeferredAnswer(DeferredAnswer&& other) noexcept
+        : issuer_(std::move(other.issuer_)), token_(other.token_) {
+        other.token_ = 0; // moved-from is invalid: one right, one holder
+    }
+    DeferredAnswer& operator=(DeferredAnswer&& other) noexcept {
+        if (this != &other) {
+            issuer_ = std::move(other.issuer_);
+            token_ = other.token_;
+            other.token_ = 0;
+        }
+        return *this;
+    }
+
+    /// Does this name a conversation at all? False for a default one and for one
+    /// that has been moved from. It does NOT promise the conversation is still
+    /// answerable — only the bus can say that, and only at the moment of
+    /// spending.
+    bool valid() const noexcept { return token_ != 0; }
+
+    /// The bus-private index this capability names.
+    ///
+    /// PUBLIC, AND INERT — the number is not the authority. Every spend is checked
+    /// against the record's bound requester, respondent, both incarnations, the
+    /// original correlation, AND the issuing board, so a number carries nothing on
+    /// its own. It is exposed because a Bus implementation on the far side of the C
+    /// ABI has to be able to hand it to the host, and hiding it behind friendship
+    /// spanning a library boundary would buy obscurity rather than safety.
+    std::uint64_t opaque_token() const noexcept { return token_; }
+
+    /// Which Loom issued it. Empty for a capability held inside a dynamic library:
+    /// there, board-relativity is structural instead — the host context a loaded
+    /// weave spends through IS the board that delivered its request, so a token
+    /// can only ever be presented to its own registry.
+    std::weak_ptr<const LoomIdentity> issuer() const noexcept { return issuer_; }
+
+    /// Rebuild a capability a dynamic library was handed across the C ABI.
+    ///
+    /// It carries NO issuer, and that is correct rather than a gap: a loaded
+    /// weave can only ever present a token through the host context of the very
+    /// delivery that gave it one, so board-relativity is STRUCTURAL there — the
+    /// token reaches its own registry or no registry at all. Fabricating a number
+    /// here buys nothing: every spend is still checked against the record's bound
+    /// requester, respondent, both incarnations and correlation, so the worst a
+    /// library can reach is a conversation it already owns.
+    static DeferredAnswer from_host_token(std::uint64_t token) noexcept {
+        DeferredAnswer d;
+        d.token_ = token;
+        return d;
+    }
+
+private:
+    friend class Switchboard;
+    DeferredAnswer(std::weak_ptr<const LoomIdentity> issuer, std::uint64_t token)
+        : issuer_(std::move(issuer)), token_(token) {}
+
+    /// Board-relative, exactly as LifecycleAuthority is: an answer right minted
+    /// by one Loom has no standing in another, and dies with its issuer.
+    std::weak_ptr<const LoomIdentity> issuer_;
+    /// An index into bus-private state, not a secret and not a name a weave can
+    /// invent usefully: every spend is checked against the record's bound
+    /// requester, respondent, incarnations and correlation, so a fabricated
+    /// number can at most reach a conversation the caller already owns.
+    std::uint64_t token_ = 0;
+};
+
 /// The routed envelope. The payload is a self-describing Value — its own schema
 /// is its routing shape. Routing metadata rides alongside it: who sent it, an
 /// optional reply address, an optional opaque correlation token so a handler can

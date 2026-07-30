@@ -33,6 +33,11 @@
 //                                   EXTRA accepted shape, so a reload between the two
 //                                   differs in nothing but the door contract (R2A-1:
 //                                   the accepted-schema-drift negative)
+//   ZEN_WEAVE_DEFERS              — takes an ask's answer right AWAY WITH IT, returns
+//                                   without answering, and answers from a LATER
+//                                   handler using only the retained capability
+//                                   (R2B-2: the deferring steward, proven as a real
+//                                   .so because that is the whole question)
 //   ZEN_WEAVE_ACTIVATES_CONFLICT  — the drift twin whose extra door carries the SAME
 //                                   (name, version) with DIFFERENT content, so loading
 //                                   it meets the registry's agreement wall (R2A-1a:
@@ -129,6 +134,22 @@ std::shared_ptr<const Schema> counter_schema() {
                               .field("activations", Kind::Int)
                               .field("last_activation", Kind::Int)
                               .build();
+#elif defined(ZEN_WEAVE_DEFERS)
+    // Counter v4 — the deferring steward's own bookkeeping. A loaded weave has no
+    // window on itself but this one, so what the test needs to see (did I get a
+    // retained answer right? did spending it succeed?) is persisted state like
+    // anything else, rather than a back channel invented for a test.
+    // `token` is deliberately persisted so a RELOAD hands the successor a
+    // capability that LOOKS live. Without that, a successor would simply have an
+    // empty member and fail locally, proving nothing about the board. With it, the
+    // successor genuinely presents its predecessor's token and the board is the
+    // thing that has to say no.
+    static const auto s = SchemaBuilder("Counter", 4)
+                              .field("count", Kind::Int)
+                              .field("deferred", Kind::Int)
+                              .field("spent", Kind::Int)
+                              .field("token", Kind::Int)
+                              .build();
 #elif defined(ZEN_WEAVE_STATE_V2) || defined(ZEN_WEAVE_HEIR)
     static const auto s = SchemaBuilder("Counter", 2)
                               .field("count", Kind::Int)
@@ -156,6 +177,10 @@ public:
         // contract: the only thing a reload from the plain variant changes.
         // (The _CONFLICT twin differs only in what its Greet v1 SAYS.)
         return {ping_schema(), schema_of<loom::Activated>(), greet_schema()};
+#elif defined(ZEN_WEAVE_DEFERS)
+        // The dynamic steward: an ASK (Ping) it answers LATER, and the COMPLETION
+        // (Greet) that tells it the answer is ready.
+        return {ping_schema(), greet_schema()};
 #elif defined(ZEN_WEAVE_ACTIVATES)
         return {ping_schema(), schema_of<loom::Activated>()};
 #else
@@ -164,6 +189,37 @@ public:
     }
 
     void handle(const Message& in, Bus& bus) override {
+#if defined(ZEN_WEAVE_DEFERS)
+        // THE DYNAMIC STEWARD (R2B-2). An ask arrives; the answer is not known
+        // yet; so it takes the answer right away with it and RETURNS WITHOUT
+        // ANSWERING. Nothing here retains a Bus or a Message — only the opaque
+        // capability, which is the whole point: a stored `Bus&` would be a
+        // dangling reference, and a stored Message would be an ordinary value
+        // with no authority.
+        // `count_` counts DELIVERIES, both shapes, so a test can positively
+        // observe that a handler ran — which matters most for the assertions that
+        // are absences ("it got nothing", "it answered nobody"): without it, a
+        // weave that never woke up would pass them all.
+        ++count_;
+        if (in.payload.schema().name() == std::string_view("Ping")) {
+            pending_ = bus.make_deferred_answer();
+            deferred_ok_ = pending_.valid();
+            return; // no answer. The handler ends here.
+        }
+        // ...and later, on an entirely separate delivery, it answers the ORIGINAL
+        // request using the capability it kept and THIS handler's bus. Every Greet
+        // tries; the COUNT of accepted spends is what makes "spendable once" a
+        // fact observed through the dynamic path rather than one asserted natively.
+        if (in.payload.schema().name() == std::string_view("Greet")) {
+            Value answer(pong_schema());
+            answer.set("seq", Cell::integer(count_));
+            if (bus.spend_deferred(pending_, Message(answer)).valid()) {
+                ++spends_ok_;
+            }
+            return;
+        }
+        return;
+#endif
 #if defined(ZEN_WEAVE_BEQUEATHS)
         if (in.payload.schema().name() == loom::PrepareShutdown::zen_name) {
             // The letter: what this weave wants its heir to know, said in its own
@@ -380,6 +436,11 @@ public:
         v.set("activations", Cell::integer(activations_));
         v.set("last_activation", Cell::integer(last_activation_));
 #endif
+#if defined(ZEN_WEAVE_DEFERS)
+        v.set("deferred", Cell::integer(deferred_ok_ ? 1 : 0));
+        v.set("spent", Cell::integer(spends_ok_));
+        v.set("token", Cell::integer(static_cast<std::int64_t>(pending_.opaque_token())));
+#endif
         return v;
     }
 
@@ -413,6 +474,15 @@ public:
         activations_ = state.get("activations")->as_int();
         last_activation_ = state.get("last_activation")->as_int();
 #endif
+#if defined(ZEN_WEAVE_DEFERS)
+        // The successor inherits the NUMBER, rebuilds a capability from it, and
+        // believes it holds one. It is entitled to nothing, and the board — not
+        // this fixture — is what must refuse it.
+        pending_ = loom::DeferredAnswer::from_host_token(
+            static_cast<std::uint64_t>(state.get("token")->as_int()));
+        deferred_ok_ = pending_.valid();
+        spends_ok_ = 0;
+#endif
 #endif
     }
 
@@ -420,6 +490,11 @@ private:
     std::int64_t count_ = 0;
 #if defined(ZEN_WEAVE_HEIR)
     bool claimed_ = false; // transient: waking asks once, and only once
+#endif
+#if defined(ZEN_WEAVE_DEFERS)
+    loom::DeferredAnswer pending_{}; // the retained answer right; move-only, opaque
+    bool deferred_ok_ = false;       // did this delivery HAVE an answer right to retain?
+    std::int64_t spends_ok_ = 0;     // how many spends the board accepted
 #endif
 #if defined(ZEN_WEAVE_ACTIVATES)
     std::int64_t activations_ = 0;      // how many zen.Activated this incarnation has handled

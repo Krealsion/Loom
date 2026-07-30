@@ -113,6 +113,26 @@ public:
         return bus_.answer(loom::Message(to_value(msg), self_));
     }
 
+    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (R2B-2) — for the responder whose
+    /// answer depends on messages it has not received yet.
+    ///
+    /// This CONVERTS the immediate opportunity rather than adding to it: after a
+    /// successful deferral `answer()` provides nothing and a second
+    /// `defer_answer()` fails, so one request still grants one answer. Store the
+    /// result, return from the handler, and spend it from a later handler:
+    ///
+    ///     void on(const Prepare&, loom::Mail& mail) {
+    ///         pending_ = mail.defer_answer();
+    ///         begin_preparation();
+    ///     }
+    ///     void on(const Complete& c, loom::Mail& mail) {
+    ///         answer_deferred(pending_, mail, Prepared{c.result});
+    ///     }
+    ///
+    /// An invalid capability comes back when this delivery had no answer
+    /// authority to convert.
+    loom::DeferredAnswer defer_answer() { return bus_.make_deferred_answer(); }
+
     /// Is THIS delivery the one authorized answer to a request this weave sent?
     ///
     /// A consumer still owes the ordinary obligation of matching the correlation
@@ -145,6 +165,32 @@ private:
     const loom::Message& in_;
     loom::WeaveId self_;
 };
+
+/// Spend a deferred answer, or abandon it. Free functions rather than members of
+/// `DeferredAnswer` because the capability lives in `switchboard/message.hpp`,
+/// below the maker layer, and must not learn about `Mail` or `to_value` to be
+/// spendable — the shape-to-Value step is the maker layer's business.
+///
+/// THE CURRENT `Mail` IS THE SECOND HALF OF THE CHECK, not a convenience. It is
+/// what keeps a stored capability from becoming an ambient root-send door: the bus
+/// verifies that the weave speaking now IS the exact incarnation that earned the
+/// right, and refuses otherwise.
+///
+/// What it does NOT verify — deliberately — is that a delivery is in progress.
+/// `answer()` does, and that is how a stale `Bus&` is caught there; here,
+/// outliving the delivery is the entire feature, so there is nothing left to
+/// compare against. The identity of the speaker is the whole check.
+template <class T>
+loom::Ticket answer_deferred(const loom::DeferredAnswer& pending, Mail& mail, const T& msg) {
+    return mail.bus().spend_deferred(pending, loom::Message(to_value(msg)));
+}
+
+/// Abandon it. Silent to the requester in V1 (there is no cancellation
+/// vocabulary); the bus-side slot is reclaimed at once rather than waiting for
+/// the respondent to die.
+inline void release_deferred(const loom::DeferredAnswer& pending, Mail& mail) {
+    mail.bus().release_deferred(pending);
+}
 
 /// CRTP base. A Weave is:
 ///   class Node : public WeaveBase<Node, Counter, Accept<Ping>, Emit<Pong>> {

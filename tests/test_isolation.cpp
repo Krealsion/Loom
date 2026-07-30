@@ -742,6 +742,73 @@ TEST_CASE("unmount tears the child down cleanly and the proxy leaves the bus") {
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
 
+// ---- R2B-2: deferred answers are in-process only, and FAIL CLOSED out of it ----
+
+TEST_CASE("R2B-2: an out-of-process weave gets no deferred-answer capability, and says so by "
+          "having none rather than by holding one the pipe cannot honour") {
+    // THE COST OF V1's SCOPE, PAID WHERE IT IS INCURRED. Cross-process capability
+    // is deliberately out of scope, so the child host hands the library NO
+    // deferral door. This pins the direction of that gap: the child gets nothing
+    // (and its conversation simply goes unanswered), rather than being handed a
+    // token the parent could not validate across the pipe.
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+
+    // Counter v4, the DEFERS state contract, spelled out locally on purpose.
+    static const auto steward_state = SchemaBuilder("Counter", 4)
+                                          .field("count", Kind::Int)
+                                          .field("deferred", Kind::Int)
+                                          .field("spent", Kind::Int)
+                                          .field("token", Kind::Int)
+                                          .build();
+
+    Registered asker = register_probe(bus, {pong_schema(), tick_schema()});
+    OutOfProcessResult out = host.mount("steward", ZEN_SO_DEFERS, Grant{}.allow_any());
+    REQUIRE_MESSAGE(out.ok, out.error);
+
+    int answers = 0;
+    asker.weave->on_handle = [&](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Tick") {
+            if (in.payload.get("n")->as_int() == 1) {
+                b.send(out.id, Message(ping(5), WeaveId{}, WeaveId{}, 0x5EEDu));
+            } else {
+                b.send(out.id, Message(greet("now")));
+            }
+            return;
+        }
+        ++answers;
+    };
+
+    // Deliberately ASSERTION-FREE: this runs inside the poll predicate, and an
+    // assertion there would make the suite's assertion count depend on how many
+    // times the loop happened to spin.
+    const auto field = [&](const char* name) -> std::int64_t {
+        Unverified u = parse(bus.snapshot_bytes(out.id));
+        Admission a = admit(u, steward_state);
+        if (!a.ok()) {
+            return -1;
+        }
+        const Cell* c = a.value().get(name);
+        return c == nullptr ? -1 : c->as_int();
+    };
+
+    bus.send(asker.id, Message(tick(1)));
+    REQUIRE(host.run_until([&] { return field("count") >= 1; }, 2000));
+    // It handled the ask, and came away with NOTHING to answer later with.
+    CHECK(field("deferred") == 0);
+    CHECK(field("token") == 0);
+
+    // The completion arrives and the attempt fails, quietly and safely: no answer,
+    // no crash, and above all no answer minted from a token nobody could check.
+    // REQUIRED, not hoped for: every assertion below is an ABSENCE, so without a
+    // positive control that the completion really was handled, a child that never
+    // woke up would pass this test.
+    bus.send(asker.id, Message(tick(2)));
+    REQUIRE(host.run_until([&] { return field("count") >= 2; }, 2000));
+    CHECK(field("spent") == 0);
+    CHECK(answers == 0);
+}
+
 // ---- Harness honesty (Part 1): the fail-by-default asymmetry, proven in-suite ----
 
 TEST_CASE("harness honesty: an unprovable security proof FAILS by default, skips only on opt-out") {

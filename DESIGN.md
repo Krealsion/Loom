@@ -2834,7 +2834,108 @@ owe an answer to is answered by construction:
 
 **The cost, stated:** a steward that cannot answer within the delivery that
 asked cannot answer *authentically* at all. Today's Manager answers immediately,
-so V1 is whole; an asynchronous steward is the seam this leaves.
+so V1 is whole; an asynchronous steward is the seam this leaves — and the seam
+its trigger fired on, below.
+
+### The answer may wait (R2B-2)
+
+R2B-1's authority was the stack frame. That is the right default and the wrong
+*only* option: a steward that must load a library, wait for a child process, or
+hear back from a broker before it can say anything true has no way to answer at
+all, and its choices were to lie early or go silent. So the ceremony gains exactly
+one verb:
+
+> **Returning from a handler need not end the right to answer. Death of the
+> participant that earned the right does.**
+
+`mail.defer_answer()` converts this delivery's immediate right into a retained
+one and hands back a `DeferredAnswer`. `answer_deferred(pending, mail, msg)`
+spends it from any later handler; `release_deferred(pending, mail)` abandons it.
+Nothing else changed: the recipient and the correlation are still Loom's, the
+answer still arrives with `Provenance::Answer`, and there is still **exactly one**
+of it.
+
+**It is a conversion, not an addition.** Deferring spends the immediate
+opportunity — so a second `defer_answer()` finds nothing left to convert, and
+`answer()` after deferring finds nothing left to send. One delivered request, one
+answer, whichever way it is spent. That single sentence is what keeps "the answer
+may wait" from quietly meaning "the answer may be given twice".
+
+Which makes four things a recipient must keep apart, not three:
+
+```text
+Payload              What the sender chose to say.
+                     -> untrusted input; the gate's business
+
+Provenance           Loom's word about WHY this delivery may be trusted.
+                     -> a delivery fact; no wire form, no schema, cleared by
+                        every ordinary enqueue path
+
+Immediate authority  The right to answer THIS delivery, held by the stack frame.
+                     -> unnamed, unstorable, gone when the handler returns
+
+Deferred authority   The same right, made nameable so it can outlive the frame.
+                     -> a move-only capability object bound to (issuing Loom,
+                        requester, respondent, both incarnations, correlation)
+```
+
+The last one is the only one a weave can hold in a member, and holding it is all
+it can do with it: `DeferredAnswer` is move-only, has no wire representation and
+is not a schema field, so there is no bequest, snapshot or publish that carries
+**the capability**. What crosses the C ABI is an **opaque token and nothing else**
+— and a weave is free to write that number into anything it likes, because the
+number is not the authority. It names a record the board validates against its
+bound participants, so presenting one can only ever spend a right its presenter
+already had. (The test fixture deliberately persists its token across a reload for
+exactly this reason: the successor really does present a live number, and the
+board really is the thing that refuses it.)
+
+**What a longer life had to pay for.** Every question the stack frame answered by
+construction now needs an explicit answer, and each one is a different attack:
+
+| | |
+|---|---|
+| the role changing hands | **A role chooses who receives an ask. It does not inherit unfinished conversations.** The record names the weave the ask was delivered to, not the role's current holder |
+| another weave presenting the same token | refused: it is not the bound respondent |
+| **reload** behind a stable `WeaveId` | refused. A `WeaveId` is never reused, so it already distinguishes a *swap* successor — but reload deliberately keeps the id, so records also carry a per-weave **incarnation** counter, bumped whenever new code is committed behind an id |
+| the requester dying | refused before delivery, and explicitly **not** delivered to whoever holds that id next |
+| the respondent dying | the record dies with it; a successor inherits nothing |
+| a capability from another Loom | refused. `DeferredAnswer` carries a `weak_ptr` to its issuing Loom's identity, exactly as `LifecycleAuthority` does (R2B-1b) — two symmetric worlds really do mint the same token numbers |
+| leaking one | costs **one slot** until its owner dies, and no more: records are reclaimed on spend, on release, on reload and on death |
+| digging a memory hole with them | bounded. `Switchboard::kMaxDeferredAnswers` is published beside `kJournalCapacity`; past it, deferral refuses **visibly** (`RefusalReason::Exhausted`, naming the ask it could not defer) and leaves the caller's immediate opportunity intact, so a well-written weave degrades to answering now |
+
+`Exhausted` is a new refusal reason rather than a reuse of `ForeignAuthority`, for
+the same reason `ForeignAuthority` is not `CapabilityDenied`: nothing about the
+sender, the shape or the authority was wrong, and reporting a capacity limit as a
+foreign capability sends an operator hunting a forgery that never happened.
+
+**Where it is proven.** The central proof is a **dynamically loaded** steward
+(`ZEN_WEAVE_DEFERS`), because the claim is precisely that the right survives the
+frame that earned it — a native fixture holding the old `Bus&` would be answering
+an easier question. Across the seam the library keeps nothing but the integer,
+receives a brand-new `Bus` on the next delivery, and still answers the original
+ask with the original correlation and Loom's word on it. The reload case is
+sharpened the same way: the fixture **persists its token**, so the successor
+rebuilds a capability from the real number and genuinely believes it holds one —
+and the board, not the fixture, is what says no.
+
+**One asymmetry worth naming.** `answer()` refuses when the `Bus` it is called
+through does not belong to the delivery in progress — that is how a stored `Bus&`
+is caught. `spend_deferred()` deliberately has no such check: outliving the
+delivery is the entire point, so there is nothing left for it to compare against.
+It is not a weaker guard, it is the absence of one that would contradict the
+feature; a weave that stores a `Bus&` has undefined behaviour either way, and even
+a successful spend from one reaches only the recorded requester with the recorded
+correlation.
+
+**Two residuals, stated rather than papered over.** Out-of-process weaves fail
+**closed**: the child host is given null deferral callbacks, because a
+cross-process capability is out of scope for V1 and a token the pipe cannot
+validate would be worse than none. And `DeferredAnswer::from_host_token` is
+public — it must be, for the library side of the seam — so a native weave can
+mint a token-shaped value at will. It buys nothing: the board still requires the
+presenter to *be* the bound respondent at the bound incarnation, so a guessed
+token can only spend a right its guesser already held.
 
 ---
 
