@@ -260,14 +260,21 @@ struct RefusalTap {
     std::int64_t capability_denied = 0;
     std::int64_t foreign_authority = 0; ///< a capability-object failure (R2B-2)
     std::int64_t exhausted = 0;         ///< a published bound was reached (R2B-2)
+    std::int64_t sender_life_ended = 0; ///< the author's life is over (R2B-2b)
     std::int64_t other_refusals = 0;
     std::int64_t delivered_answers = 0;
+    /// The (authored, current) life pair off the last event for this shape, so the
+    /// generation arithmetic can be pinned rather than inferred.
+    std::uint64_t last_authored_life = 0;
+    std::uint64_t last_current_life = 0;
 
     void arm(Switchboard& bus, const char* shape) {
         bus.add_observer([this, shape](const BusEvent& ev) {
             if (ev.schema_name != shape) {
                 return;
             }
+            last_authored_life = ev.sender_life;
+            last_current_life = ev.sender_life_now;
             if (ev.kind == EventKind::Delivered) {
                 ++delivered_answers;
             } else if (ev.kind == EventKind::Refused) {
@@ -275,6 +282,8 @@ struct RefusalTap {
                     ++foreign_authority;
                 } else if (ev.refusal.reason == RefusalReason::Exhausted) {
                     ++exhausted;
+                } else if (ev.refusal.reason == RefusalReason::SenderLifeEnded) {
+                    ++sender_life_ended;
                 } else if (ev.refusal.reason == RefusalReason::CapabilityDenied) {
                     ++capability_denied;
                 } else {
@@ -1242,6 +1251,11 @@ public:
     loom::DeferredAnswer take() { return std::move(pending_); }
     void adopt(loom::DeferredAnswer a) { pending_ = std::move(a); }
 
+    /// How many deliveries this weave has actually handled. The instrument for
+    /// "the handler never ran at all", which is a stronger statement than "it did
+    /// not answer".
+    std::int64_t deliveries() const { return state_.n; }
+
     /// HoardAll only: how many of the capabilities it kept the BOARD accepted.
     int spent_from_retained_ = 0;
     std::size_t retained_count() const { return retained_.size(); }
@@ -1720,13 +1734,14 @@ struct FullRegistry {
         bus.pump();
     }
 
-    Deferrer* fill(Switchboard& bus, Deferrer::Mode mode) {
+    Deferrer* fill(Switchboard& bus, Deferrer::Mode mode,
+                   std::size_t count = Switchboard::kMaxDeferredAnswers) {
         tap.arm(bus, ProvAsk::zen_name);
         asker = mount<Asker>(bus, heard);
         steward = mount_into_role<Deferrer>(bus, kProvRole, mode);
         Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
         bool every_one_deferred = true;
-        for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+        for (std::size_t i = 0; i < count; ++i) {
             ask(bus, "leak");
             every_one_deferred = every_one_deferred && d->deferred_valid_;
         }
@@ -2137,6 +2152,452 @@ TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICA
     CHECK(tap.foreign_authority == after_reclaimed + 1); // same reason, same altitude
     CHECK(tap.delivered_answers == 0);
     CHECK(heard.answers.empty());
+}
+
+// ---- R2B-2b: the message belongs to a life ------------------------------------
+//
+// R2B-2a ends every conversation a dying participant was already IN. A message it
+// had merely QUEUED names no conversation yet, so there was nothing for that
+// cleanup to find — and delivered later it would have become speech from whatever
+// now answers to the same id:
+//
+//     life A queues an ask -> A dies -> A is revived under the same WeaveId
+//     -> the ask is delivered -> the responder answers -> the NEW life is answered
+//
+// So every weave-originated envelope is stamped, at enqueue, with the sender's
+// current LIFE, and delivery refuses when that life is over.
+//
+//     A weave-originated message belongs to the life that authored it.
+
+namespace {
+
+/// A weave that speaks when nudged, in whichever of the three ways a weave can
+/// speak. Its whole purpose is to author one message and get out of the way, so
+/// the message can sit in the queue while the test kills and revives its author.
+class Speaker : public WeaveBase<Speaker, ProvState, Accept<ProvNudge, ProvAnswer>,
+                                Emit<ProvAsk>> {
+public:
+    enum class How { Direct, ByRole, Publish };
+
+    Speaker(How how, Received& heard) : how_(how), heard_(&heard) {}
+
+    /// Direct sends need a target the test only knows after mounting it.
+    void aim(WeaveId target) { target_ = target; }
+    void say(std::string tag) { tag_ = std::move(tag); }
+
+    void on(const ProvNudge&, Mail& mail) {
+        ++state_.n;
+        switch (how_) {
+        case How::Direct:
+            mail.send(target_, ProvAsk{tag_}, kPublicCorrelation);
+            return;
+        case How::ByRole:
+            mail.send_to_role(kProvRole, ProvAsk{tag_}, kPublicCorrelation);
+            return;
+        case How::Publish:
+            mail.publish(ProvAsk{tag_});
+            return;
+        }
+    }
+
+    void on(const ProvAnswer& a, Mail& mail) {
+        ++state_.n;
+        heard_->answers.push_back(
+            Received::One{a.tag, mail.answers_ask(), mail.correlation(), mail.sender().value});
+    }
+
+private:
+    How how_;
+    Received* heard_;
+    WeaveId target_{};
+    std::string tag_ = "queued";
+};
+
+/// Make `speaker` author exactly one message and leave it in the queue.
+///
+/// The nudge is root-sent, so the pump delivers it, the handler enqueues the real
+/// utterance, and the observer stops the pump the instant the nudge's own delivery
+/// is announced — which happens after the handler has returned. What the handler
+/// enqueued is therefore still queued, and `pending()` is the proof rather than
+/// the assumption.
+void queue_one_utterance(Switchboard& bus, WeaveId speaker) {
+    const ObserverId stopper = bus.add_observer([&bus](const BusEvent& ev) {
+        if (ev.kind == EventKind::Delivered && ev.schema_name == ProvNudge::zen_name) {
+            bus.stop();
+        }
+    });
+    bus.send(speaker, Message(to_value(ProvNudge{})));
+    bus.pump();
+    bus.remove_observer(stopper);
+}
+
+/// Kill and revive through the real paths, asserting Loom announced both.
+void kill_and_revive(Switchboard& bus, WeaveId id, LifeTap& life) {
+    const std::string own_state = bus.snapshot_bytes(id);
+    bus.kill(id);
+    REQUIRE(life.died == 1);
+    const ReviveOutcome ro = bus.reload(id, own_state);
+    REQUIRE(ro.revived);
+    REQUIRE(life.revived == 1);
+    REQUIRE(bus.alive(id));
+}
+
+} // namespace
+
+TEST_CASE("R2B-2b: an ask queued by a life that then died is not speech from its revival") {
+    // THE CORE PROOF. Everything after it is another shape of send, or another
+    // thing the stale message must fail to reach.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
+    LifeTap life;
+    life.arm(bus, speaker);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1); // GENUINELY QUEUED, and provably not delivered
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    REQUIRE(d->deliveries() == 0);
+
+    kill_and_revive(bus, speaker, life);
+
+    // The queued ask now comes up for delivery, and its author is a different life.
+    bus.pump();
+    CHECK(tap.sender_life_ended == 1);   // refused, and NAMED
+    CHECK(tap.capability_denied == 0);   // not blamed on a grant
+    CHECK(tap.other_refusals == 0);      // nor on the target or the payload
+    CHECK(tap.last_authored_life == 1);  // the journal can say WHY, in numbers
+    CHECK(tap.last_current_life == 2);
+    // Nothing downstream happened at all: no handler, so no answer authority and
+    // no deferred record could even be asked for.
+    CHECK(d->deliveries() == 0);
+    CHECK_FALSE(d->deferred_valid_);
+    CHECK(heard.answers.empty());
+
+    // THE POSITIVE CONTROL: the revived life is a perfectly ordinary speaker.
+    static_cast<Speaker*>(bus.weave(speaker))->say("after revival");
+    queue_one_utterance(bus, speaker);
+    bus.pump();
+    CHECK(d->deliveries() == 1);
+    CHECK(d->deferred_valid_);
+    // ...and its speech carries the NEW generation, matching the sender's own.
+    CHECK(tap.last_authored_life == 2);
+    CHECK(tap.last_current_life == 2);
+    bus.send(steward, Message(to_value(ProvFinish{"answered"})));
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].tag == "answered");
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2b: a queued message from a sender that is DEAD AND NOT YET REVIVED is refused "
+          "too — and the two life numbers are EQUAL, which is why aliveness is its own term") {
+    // THE TERM NO OTHER CASE REACHES. Everywhere else the author is killed AND
+    // revived before the pump, so the generation has moved and the generation check
+    // is what refuses. Here the author is simply dead: the stamped life and the
+    // current life are IDENTICAL, and only aliveness can tell the difference.
+    //
+    // This case exists because a mutation deleting the aliveness term came back
+    // GREEN. It was not redundant — it was unwatched.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
+    LifeTap life;
+    life.arm(bus, speaker);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+
+    bus.kill(speaker);
+    REQUIRE(life.died == 1);
+    REQUIRE(life.revived == 0); // dead, and staying dead for the length of this test
+
+    bus.pump();
+    CHECK(tap.sender_life_ended == 1);
+    CHECK(tap.last_authored_life == 1);
+    CHECK(tap.last_current_life == 1); // EQUAL — and still refused
+    CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 0);
+    CHECK(heard.answers.empty());
+}
+
+TEST_CASE("R2B-2b: a stale ROLE-addressed message reaches neither the old holder nor whoever "
+          "holds the role by the time it is delivered") {
+    // Role resolution is delivery-time behaviour, and that is the point of danger:
+    // a stale message would otherwise be handed to whoever happens to hold the slot
+    // later. The life check runs BEFORE resolution, so it never gets that far.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId first_holder =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::ByRole, heard);
+    LifeTap life;
+    life.arm(bus, speaker);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+    kill_and_revive(bus, speaker, life);
+
+    // The role changes hands while the stale message waits — so if it were
+    // delivered, it would be delivered to a weave that never existed when it was
+    // authored.
+    bus.unregister_weave(first_holder);
+    const WeaveId new_holder =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+
+    bus.pump();
+    CHECK(tap.sender_life_ended == 1);
+    CHECK(tap.other_refusals == 0); // NOT "no such target", NOT a role miss
+    CHECK(static_cast<Deferrer*>(bus.weave(new_holder))->deliveries() == 0);
+    CHECK(heard.answers.empty());
+}
+
+TEST_CASE("R2B-2b: a stale PUBLICATION reaches no subscriber, and every recipient's copy is "
+          "checked on its own") {
+    // A publish becomes one envelope per subscriber, so a single check at fan-out
+    // time would be exactly the wrong shape: it would let a stale publication reach
+    // everyone on the strength of one answer. Each delivery answers for itself, and
+    // the refusal count is how that is measured.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId sub_a = mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId sub_b = mount_into_role<Deferrer>(bus, "prov.other", Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Publish, heard);
+    LifeTap life;
+    life.arm(bus, speaker);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 2); // one envelope per subscriber
+    kill_and_revive(bus, speaker, life);
+
+    bus.pump();
+    CHECK(tap.sender_life_ended == 2); // BOTH copies refused, individually
+    CHECK(tap.delivered_answers == 0);
+    CHECK(static_cast<Deferrer*>(bus.weave(sub_a))->deliveries() == 0);
+    CHECK(static_cast<Deferrer*>(bus.weave(sub_b))->deliveries() == 0);
+}
+
+TEST_CASE("R2B-2b: a stale ask creates no IMMEDIATE answer authority") {
+    // The responder here answers every ask it receives. If a stale ask reached its
+    // handler, an authenticated answer would exist — addressed, by Loom, to the
+    // revived life that never asked anything.
+    Switchboard bus;
+    Received heard;
+    RefusalTap answers;
+    answers.arm(bus, ProvAnswer::zen_name);
+    const WeaveId responder =
+        mount_into_role<Responder>(bus, kProvRole, "eager", Speak::Authenticated);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(responder);
+    LifeTap life;
+    life.arm(bus, speaker);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+    kill_and_revive(bus, speaker, life);
+
+    bus.pump();
+    CHECK(heard.answers.empty());
+    CHECK(answers.delivered_answers == 0);
+    CHECK(answers.capability_denied == 0); // no answer was even attempted
+
+    // POSITIVE CONTROL: the same responder answers the revived life's own ask.
+    queue_one_utterance(bus, speaker);
+    bus.pump();
+    REQUIRE(heard.answers.size() == 1);
+    CHECK(heard.answers[0].attested);
+}
+
+TEST_CASE("R2B-2b: a stale ask creates no DEFERRED answer authority and occupies no registry "
+          "capacity") {
+    // Capacity is the exact instrument. The registry is filled to one slot short of
+    // its bound; if the stale ask were delivered and deferred, it would take the
+    // last slot and the living conversation below would be refused as Exhausted.
+    Switchboard bus;
+    FullRegistry world;
+    Deferrer* filler = world.fill(bus, Deferrer::Mode::Normal,
+                                  Switchboard::kMaxDeferredAnswers - 1);
+    REQUIRE(filler->deferred_valid_);
+    REQUIRE(world.tap.exhausted == 0);
+
+    Received heard;
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, "prov.other", Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
+    LifeTap life;
+    life.arm(bus, speaker);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+    kill_and_revive(bus, speaker, life);
+    bus.pump();
+
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    CHECK(d->deliveries() == 0);
+    CHECK_FALSE(d->deferred_valid_);
+
+    // The last slot is still there for a living conversation — which is what
+    // "occupies no capacity" means, measured rather than asserted.
+    world.ask(bus, "the last slot");
+    CHECK(filler->deferred_valid_);
+    CHECK(world.tap.exhausted == 0);
+}
+
+TEST_CASE("R2B-2b: killing one speaker leaves another living speaker's queued message alone") {
+    // Cleanup and validation must both be about ONE life. Invalidating the queue
+    // wholesale would make every case above just as green.
+    Switchboard bus;
+    Received heard_a;
+    Received heard_b;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::HoardAll);
+    const WeaveId a = mount<Speaker>(bus, Speaker::How::Direct, heard_a);
+    const WeaveId b = mount<Speaker>(bus, Speaker::How::Direct, heard_b);
+    static_cast<Speaker*>(bus.weave(a))->aim(steward);
+    static_cast<Speaker*>(bus.weave(b))->aim(steward);
+    LifeTap life;
+    life.arm(bus, a);
+
+    // BOTH utterances must be in the queue AT ONCE, which means one pump: two
+    // nudges go in, and the pump stops only after the second nudge is delivered.
+    // (Nudging them one at a time would let the second pump deliver the first
+    // speaker's ask before the kill, and the case would prove nothing.)
+    int nudges = 0;
+    const ObserverId stopper = bus.add_observer([&](const BusEvent& ev) {
+        if (ev.kind == EventKind::Delivered && ev.schema_name == ProvNudge::zen_name &&
+            ++nudges == 2) {
+            bus.stop();
+        }
+    });
+    bus.send(a, Message(to_value(ProvNudge{})));
+    bus.send(b, Message(to_value(ProvNudge{})));
+    bus.pump();
+    bus.remove_observer(stopper);
+    REQUIRE(bus.pending() == 2);
+
+    kill_and_revive(bus, a, life);
+    bus.pump();
+
+    CHECK(tap.sender_life_ended == 1); // exactly one of the two
+    Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
+    CHECK(d->deliveries() == 1);       // and B's really was delivered
+    CHECK(d->retained_count() == 1);
+}
+
+TEST_CASE("R2B-2b: a queued message from a PERMANENTLY REMOVED sender is refused as a life that "
+          "ended, not as a missing grant") {
+    // The same fact the swap window has always had (an unloaded weave's in-flight
+    // replies die with it) — now reported by its real cause. Before R2B-2b this
+    // arrived at the right answer down the wrong road: a vanished sender has no
+    // grant to check, so the AUTHORIZATION term failed and the tap said
+    // CapabilityDenied, sending an operator to edit a grant that was never wrong.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+    bus.unregister_weave(speaker);
+
+    bus.pump();
+    CHECK(tap.sender_life_ended == 1);
+    CHECK(tap.capability_denied == 0);
+    CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 0);
+}
+
+TEST_CASE("R2B-2b: a LIVE code reload is not a death — speech already in the queue is still that "
+          "same living weave's") {
+    // THE OTHER HALF OF THE LAW, and the reason this phase added a second field
+    // instead of reusing the incarnation. A weave whose code is replaced never
+    // stopped living; a sentence it was already mid-way through delivering is
+    // still its own. Collapsing the two concepts would silently discard it.
+    Switchboard bus;
+    Received heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAsk::zen_name);
+    const WeaveId steward =
+        mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
+    const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
+    static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
+
+    queue_one_utterance(bus, speaker);
+    REQUIRE(bus.pending() == 1);
+
+    // New code behind the same id, while alive: a new INCARNATION, the same LIFE.
+    Value fresh(schema_of<ProvState>());
+    fresh.set("n", Cell::integer(0));
+    REQUIRE(bus.swap_state(speaker, serialize(fresh)).revived);
+
+    bus.pump();
+    CHECK(tap.sender_life_ended == 0);
+    CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 1);
+    CHECK(tap.last_authored_life == 1);
+    CHECK(tap.last_current_life == 1);
+}
+
+TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold — a replayed "
+          "envelope speaks with its REPLAYER's life") {
+    // Cross-Loom and replay are structural here rather than checked: the stamp
+    // lives on the bus's private Envelope, which has no wire form, no schema and no
+    // constructor a weave can reach. So there is nothing to copy out of a delivered
+    // message and nothing to carry into another Loom.
+    //
+    // What that MEANS is worth pinning, because a reader might expect the opposite:
+    // a weave that hoards someone else's message and re-sends it is not relaying
+    // that author's speech, it is speaking itself — and it is checked as itself.
+    Switchboard bus;
+    Received victim_heard;
+    Received magpie_heard;
+    RefusalTap tap;
+    tap.arm(bus, ProvAnswer::zen_name);
+    const WeaveId victim = mount<Asker>(bus, victim_heard);
+
+    auto raw = std::make_unique<RawMagpie>(victim, magpie_heard);
+    RawMagpie* magpie_raw = raw.get();
+    Grant g;
+    g.allow_to_any(ProvAsk::zen_name, ProvAsk::zen_version);
+    g.allow_to_any(ProvAnswer::zen_name, ProvAnswer::zen_version);
+    const WeaveId magpie = bus.register_weave(std::move(raw), std::move(g));
+    const WeaveId holder =
+        mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Authenticated);
+
+    bus.send_as(magpie, holder, Message(to_value(ProvAsk{"one"}), magpie, WeaveId{}, 5));
+    bus.pump();
+    REQUIRE(magpie_raw->kept_was_attested()); // it is holding a real answer
+
+    // The RESPONDER — the life that authored the hoarded envelope — dies.
+    bus.kill(holder);
+
+    // And the magpie replays it anyway. Delivered, because the speaker is the
+    // magpie and the magpie is alive; stripped of provenance, exactly as R2B-2
+    // pinned. The dead author's life was never the question, because the dead
+    // author is not who is speaking.
+    bus.send(magpie, Message(to_value(ProvNudge{})));
+    bus.pump();
+    REQUIRE(victim_heard.answers.size() == 1);
+    CHECK_FALSE(victim_heard.answers[0].attested);
+    CHECK(victim_heard.answers[0].sender == magpie.value);
+    CHECK(tap.sender_life_ended == 0);
 }
 
 } // TEST_SUITE

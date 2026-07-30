@@ -29,6 +29,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "ForeignAuthority";
     case RefusalReason::Exhausted:
         return "Exhausted";
+    case RefusalReason::SenderLifeEnded:
+        return "SenderLifeEnded";
     }
     return "?";
 }
@@ -56,6 +58,10 @@ std::string Refusal::message() const {
         // Says CAPACITY, and says which bound, because the fix is a different one:
         // nothing here is wrong with the sender, the shape, or the authority.
         return "a published bound was reached (deferred answers in flight)";
+    case RefusalReason::SenderLifeEnded:
+        // Names the AUTHOR, not the target, the payload or the grant: the sender
+        // that spoke is no longer the sender that exists.
+        return "the sender life that authored this message has ended";
     }
     return "?";
 }
@@ -158,6 +164,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     0,
                     true,
                     /*incarnation=*/1, // this id's first code; bumped by swap_state alone
+                    /*life=*/1,        // its first life; bumped only on a revival
                     role};
     weaves_.emplace(id.value, std::move(rec));
     if (!role.empty()) {
@@ -208,7 +215,12 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = provenance;
-    queue_.push_back(Envelope{std::move(msg), target, seq, gated});
+    // AND EVERY ENQUEUE PATH ALSO DECIDES WHOSE LIFE IS SPEAKING (R2B-2b). The
+    // stamp is read from the bus's own record of the sender, never from anything
+    // the caller supplied, for exactly the reason provenance is: a weave hands the
+    // bus a Message, and the bus decides the facts about it.
+    const std::uint64_t life = gated ? life_of(msg.sender) : 0;
+    queue_.push_back(Envelope{std::move(msg), target, seq, gated, std::string{}, life});
     return Ticket{seq};
 }
 
@@ -216,7 +228,8 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated) {
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = Provenance{};
-    queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role)});
+    const std::uint64_t life = gated ? life_of(msg.sender) : 0;
+    queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role), life});
     return Ticket{seq};
 }
 
@@ -278,6 +291,11 @@ std::uint64_t Switchboard::incarnation_of(WeaveId id) const {
     return rec == nullptr ? 0 : rec->incarnation;
 }
 
+std::uint64_t Switchboard::life_of(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    return rec == nullptr ? 0 : rec->life;
+}
+
 Switchboard::DeferredRecord* Switchboard::find_deferred(std::uint64_t token) {
     if (token == 0) {
         return nullptr;
@@ -288,6 +306,19 @@ Switchboard::DeferredRecord* Switchboard::find_deferred(std::uint64_t token) {
         }
     }
     return nullptr;
+}
+
+void Switchboard::begin_new_life(WeaveRecord& rec) {
+    // ONE PLACE, ONE RULE: a life generation advances exactly when a weave comes
+    // back from the dead, and never otherwise. Registration starts at 1; a handler
+    // returning, an ordinary message, and a live code reload all leave it alone.
+    //
+    // The `!alive` test is the whole condition, and it must be read BEFORE the
+    // caller marks the weave alive — which is why this is a function rather than a
+    // line copied into three revival paths.
+    if (!rec.alive) {
+        ++rec.life;
+    }
 }
 
 void Switchboard::abandon_deferred_for(WeaveId id) {
@@ -480,6 +511,7 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
 std::size_t Switchboard::fanout(Message msg, bool gated) {
     const std::string name(msg.payload.schema().name());
     const std::uint32_t version = msg.payload.schema().version();
+    const std::uint64_t sender_life = gated ? life_of(msg.sender) : 0;
 
     std::size_t recipients = 0;
     for (auto& entry : weaves_) { // std::map: ascending id == registration order
@@ -493,9 +525,12 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
         const std::uint64_t seq = next_seq_++;
         journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
         // Rebuilt field by field, which also means a published Message carries no
-        // provenance whatever the caller's copy held.
-        queue_.push_back(Envelope{
-            Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id, seq, gated});
+        // provenance whatever the caller's copy held. EVERY recipient's envelope is
+        // stamped, so a publication cannot fan out past a dead author on the
+        // strength of one check: each delivery answers the question for itself.
+        queue_.push_back(
+            Envelope{Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id,
+                     seq, gated, std::string{}, sender_life});
         ++recipients;
     }
     return recipients;
@@ -571,6 +606,35 @@ void Switchboard::deliver_one(Envelope env) {
     // whether the role is currently held.
     if (env.gated) {
         const WeaveRecord* sender = find(env.msg.sender);
+        // A WEAVE-ORIGINATED MESSAGE BELONGS TO THE LIFE THAT AUTHORED IT (R2B-2b).
+        //
+        // Queueing is the gap this closes. R2B-2a ends every conversation a dying
+        // participant was already in — but a message it had merely QUEUED names no
+        // conversation yet, so there was nothing for that cleanup to find. Delivered
+        // later, it would have become speech from whatever now answers to the same
+        // id: the same weave revived, mid-sentence from a life that ended.
+        //
+        // Checked FIRST, before the grant and before role resolution, so a stale
+        // message reaches nothing at all — not a handler, not an answer authority,
+        // not a deferred record, and not even the knowledge of whether a role is
+        // currently held.
+        ev.sender_life = env.sender_life;
+        ev.sender_life_now = sender == nullptr ? 0 : sender->life;
+        if (env.msg.sender.valid() &&
+            (sender == nullptr || !sender->alive || sender->life != env.sender_life)) {
+            // Three ways for a life to be over, and one refusal for all three: it
+            // was permanently removed, it is dead, or it has been revived — which
+            // makes the current occupant a different life behind the same id. An
+            // INVALID sender id is deliberately not one of them: that is not a life
+            // that ended, it is no sender at all, and the grant check below already
+            // refuses it as CapabilityDenied.
+            const Refusal r{RefusalReason::SenderLifeEnded, {}};
+            record(env.seq, Disposition::Refused, r);
+            ev.kind = EventKind::Refused;
+            ev.refusal = r;
+            emit(ev);
+            return;
+        }
         const bool permitted =
             sender != nullptr &&
             (env.role.empty()
@@ -789,6 +853,7 @@ ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) 
         rec->weave->revive(state);
         rec->last_known_good = state;
         ++rec->reloads_used;
+        begin_new_life(*rec); // a revival is a NEW LIFE behind the same id (R2B-2b)
         rec->alive = true;
         out.revived = true;
         announce(/*from_lkg=*/false, Refusal{});
@@ -801,6 +866,7 @@ ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) 
     if (revive_from_last_good) {
         rec->weave->revive(rec->last_known_good);
         ++rec->reloads_used;
+        begin_new_life(*rec); // the fallback branch is no less a new life
         rec->alive = true;
         out.revived = true;
         out.from_last_known_good = true;
@@ -851,6 +917,11 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     Value state = std::move(admitted).value();
     rec->weave->revive(state);
     rec->last_known_good = state;
+    // A SWAP CAN ALSO BE A REVIVAL: this path marks the weave alive whatever it was
+    // before, so if it was dead, this is a new life as well as new code. If it was
+    // alive, the life continues — a live code reload is not a death, and speech
+    // already in the queue is still that same living weave's (R2B-2b).
+    begin_new_life(*rec);
     rec->alive = true;
     // NEW CODE BEHIND A STABLE ID IS A NEW INCARNATION (R2B-2). The WeaveId is
     // deliberately unchanged — that is what reload means — so this counter is the
