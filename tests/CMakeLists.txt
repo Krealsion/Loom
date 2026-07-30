@@ -115,6 +115,9 @@ zen_add_test_weave(zen_test_weave_activates_conflict
 # is whether the right survives the handler that earned it, and a native lambda
 # holding the old Mail would answer a different question.
 zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
+# R2B-3b-1a: the immediate-answer parity fixture, and its answer-twice twin.
+zen_add_test_weave(zen_test_weave_answers ZEN_WEAVE_ANSWERS)
+zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSWERS_TWICE)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
@@ -131,7 +134,8 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
-    zen_test_staleabi zen_test_weave_defers)
+    zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
+    zen_test_weave_answers_twice)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -150,7 +154,9 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ACTIVATES_CONFLICT=\"$<TARGET_FILE:zen_test_weave_activates_conflict>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\""
-    "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\"")
+    "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\""
+    "ZEN_SO_ANSWERS=\"$<TARGET_FILE:zen_test_weave_answers>\""
+    "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
 

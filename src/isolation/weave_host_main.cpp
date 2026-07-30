@@ -196,17 +196,19 @@ int main(int argc, char** argv) {
         send_frame(Op::Hello, hello);
     }
 
-    // Deferred answers are IN-PROCESS ONLY in V1, and the child is told so by
-    // being given no door: cross-process capability is out of scope, and a null
-    // callback makes an out-of-process weave's deferral fail closed rather than
-    // reach for something the pipe cannot carry.
+    // Deferred answers — and the immediate answer with them (v4) — are IN-PROCESS
+    // ONLY in V1, and the child is told so by being given no door: the answer
+    // authority lives in the parent's delivery, and this pipe carries no
+    // attestation, so an out-of-process weave's answer fails closed rather than
+    // reaching for something the pipe cannot vouch for.
     ZenHostApi api{nullptr,
                    &zen_child_send,
                    &zen_child_publish,
                    &zen_child_send_to_role,
                    /*defer_answer=*/nullptr,
                    /*answer_deferred=*/nullptr,
-                   /*release_deferred=*/nullptr};
+                   /*release_deferred=*/nullptr,
+                   /*answer=*/nullptr};
 
     for (;;) {
         Op op = Op::Hello;

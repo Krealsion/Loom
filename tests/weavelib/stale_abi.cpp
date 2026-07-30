@@ -19,7 +19,8 @@
 #include <zen/kernel/export.hpp> // for ZEN_KERNEL_EXPORT
 
 extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
-    static const ZenWeaveAbi abi = {/*abi_version=*/1u, nullptr, nullptr, nullptr,
+    static const ZenWeaveAbi abi = {/*abi_version=*/ZEN_ABI_VERSION - 1u, nullptr, nullptr,
+                                    nullptr,
                                     nullptr,            nullptr, nullptr, nullptr};
     return &abi;
 }

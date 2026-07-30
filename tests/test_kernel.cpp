@@ -1237,6 +1237,301 @@ TEST_CASE("R2B-3b-1a: every other admission refusal is named, and none of them t
     CHECK(Topology::of(bus, p) == before);
 }
 
+// ---- R2B-3b-1a (errand B): the answer means the same on both sides -------------
+//
+// A native weave writes `mail.answer(reply)` and Loom enqueues an authenticated
+// answer. A dynamically loaded weave wrote the same line, reached `HostApiBus`,
+// and got the base class's do-nothing default: no answer, no refusal, no bus
+// event. The same public word meant two different things depending on which side
+// of the library seam it was spoken — and the difference was SILENT, which is the
+// worst way for it to be different.
+//
+//     A public delivery operation must mean the same thing on both sides of the
+//     dynamic-library seam, or fail loudly before user code mistakes silence for
+//     success.
+//
+// ABI v4 pays for it with one narrowly typed door. No authority crosses: the
+// library asks for the public operation, and the host decides whether this
+// delivery earned an answer, who receives it, and what it is labelled.
+
+namespace {
+
+/// The native half of the parity fixture: the same ask, the same public call.
+class NativeAnswerer final : public Weave {
+public:
+    std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
+        return {ping_schema()};
+    }
+    void handle(const Message& in, Bus& bus) override {
+        ++n_;
+        Value reply(pong_schema());
+        reply.set("seq", Cell::integer(in.payload.get("seq")->as_int()));
+        answered = bus.answer(Message(reply)).valid();
+    }
+    Value snapshot() const override {
+        Value v(counter_schema());
+        v.set("count", Cell::integer(n_));
+        return v;
+    }
+    Value policy() const override {
+        Value v(lifecycle_policy_schema());
+        v.set("max_reloads", Cell::integer(8));
+        v.set("revive_from_last_good", Cell::boolean(true));
+        return v;
+    }
+    void revive(const Value& v) override { n_ = v.get("count")->as_int(); }
+
+    bool answered = false;
+
+private:
+    std::int64_t n_ = 0;
+};
+
+/// What an asker heard, and Loom's verdict on it.
+struct Heard {
+    int count = 0;
+    bool all_attested = true;
+    std::uint64_t correlation = 0;
+    std::int64_t seq = -1;
+
+    void arm(ProbeWeave& probe) {
+        probe.on_handle = [this](const Message& in, Bus&, ProbeWeave&) {
+            ++count;
+            all_attested = all_attested && in.provenance.answers_ask();
+            correlation = in.correlation;
+            const Cell* c = in.payload.get("seq");
+            seq = c == nullptr ? -1 : c->as_int();
+        };
+    }
+};
+
+constexpr std::uint64_t kAskCorr = 0xA5Cu;
+
+/// The dynamic fixture's own window (Counter v5).
+struct AnswerState {
+    std::int64_t count = 0;
+    std::int64_t answered = 0;
+    std::int64_t second = 0;
+};
+
+AnswerState answer_state(Switchboard& bus, WeaveId id) {
+    static const auto s = SchemaBuilder("Counter", 5)
+                              .field("count", Kind::Int)
+                              .field("answered", Kind::Int)
+                              .field("second", Kind::Int)
+                              .build();
+    Unverified u = parse(bus.snapshot_bytes(id));
+    Admission a = admit(u, s);
+    REQUIRE(a.ok());
+    return AnswerState{a.value().get("count")->as_int(), a.value().get("answered")->as_int(),
+                       a.value().get("second")->as_int()};
+}
+
+} // namespace
+
+TEST_CASE("R2B-3b-1a: mail.answer() means the same thing natively and dynamically") {
+    // THE PARITY PROOF. One ask each, the same public call, and the two results
+    // compared field by field rather than each asserted against a wish.
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    Registered native_asker = register_probe(bus, {pong_schema(), tick_schema()});
+    Registered dynamic_asker = register_probe(bus, {pong_schema(), tick_schema()});
+    Heard native_heard;
+    Heard dynamic_heard;
+    native_heard.arm(*native_asker.weave);
+    dynamic_heard.arm(*dynamic_asker.weave);
+
+    auto nat = std::make_unique<NativeAnswerer>();
+    NativeAnswerer* nat_raw = nat.get();
+    const WeaveId native_responder = bus.register_weave(std::move(nat), Grant{}.allow_any());
+    LoadResult dyn = kernel.load("dyn", ZEN_SO_ANSWERS);
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    bus.send_as(native_asker.id, native_responder, Message(ping(11), native_asker.id,
+                                                           WeaveId{}, kAskCorr));
+    bus.send_as(dynamic_asker.id, dyn.id, Message(ping(22), dynamic_asker.id, WeaveId{},
+                                                  kAskCorr));
+    bus.pump();
+
+    // Delivered: exactly one each.
+    CHECK(native_heard.count == 1);
+    CHECK(dynamic_heard.count == 1);
+    // Authentic: Loom's word on both.
+    CHECK(native_heard.all_attested);
+    CHECK(dynamic_heard.all_attested);
+    // The original correlation, which neither responder chose.
+    CHECK(native_heard.correlation == kAskCorr);
+    CHECK(dynamic_heard.correlation == kAskCorr);
+    // ...and each answered its own asker with its own payload.
+    CHECK(native_heard.seq == 11);
+    CHECK(dynamic_heard.seq == 22);
+    // Both responders were told their answer went out — the dynamic one used to be
+    // told nothing at all.
+    CHECK(nat_raw->answered);
+    CHECK(answer_state(bus, dyn.id).answered == 1);
+}
+
+TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY ROLE, and a "
+          "forged ordinary reply is not") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered asker = register_probe(bus, {pong_schema()});
+    Heard heard;
+    heard.arm(*asker.weave);
+    LoadResult dyn = kernel.load("dyn", ZEN_SO_ANSWERS, "answerer");
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    bus.send_as_to_role(asker.id, "answerer",
+                        Message(ping(5), asker.id, WeaveId{}, kAskCorr));
+    bus.pump();
+    REQUIRE(heard.count == 1);
+    CHECK(heard.all_attested);
+    CHECK(heard.correlation == kAskCorr);
+
+    // A rogue that knows the shape and the correlation sends the same bytes the
+    // ordinary way. Provenance is a delivery fact, not a payload (R2B-1).
+    Registered rogue = register_probe(bus, {tick_schema()});
+    bus.send_as(rogue.id, asker.id, Message(pong(5), rogue.id, WeaveId{}, kAskCorr));
+    bus.pump();
+    REQUIRE(heard.count == 2);
+    CHECK_FALSE(heard.all_attested); // the forgery is the one that is not attested
+}
+
+TEST_CASE("R2B-3b-1a: one delivery authorizes one dynamic answer, and the second is refused "
+          "rather than silently dropped") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered asker = register_probe(bus, {pong_schema()});
+    Heard heard;
+    heard.arm(*asker.weave);
+    LoadResult dyn = kernel.load("dyn", ZEN_SO_ANSWERS_TWICE);
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    bus.send_as(asker.id, dyn.id, Message(ping(1), asker.id, WeaveId{}, kAskCorr));
+    bus.pump();
+
+    CHECK(heard.count == 1); // exactly one answer exists
+    const AnswerState st = answer_state(bus, dyn.id);
+    CHECK(st.answered == 1); // the first was accepted...
+    CHECK(st.second == 0);   // ...and the second was REFUSED, and it was told so
+}
+
+TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer capacity — proven "
+          "with the registry already FULL") {
+    // The defer-then-spend shortcut would have been the easy implementation, and
+    // this is why it was rejected: it would borrow a slot from a bounded registry
+    // for a conversation that never needed one, and at the bound it would begin
+    // failing as `Exhausted` for a reason the caller could do nothing about.
+    //
+    // AN EARLIER VERSION OF THIS CASE PROVED NOTHING: it answered far past the
+    // bound but pumped after every ask, so each borrowed slot was returned before
+    // the next was taken and the registry never actually filled. The mutation that
+    // routes the immediate answer through defer-then-spend stayed green. The
+    // instrument has to HOLD the registry full.
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered asker = register_probe(bus, {pong_schema()});
+    Heard heard;
+    heard.arm(*asker.weave);
+    LoadResult dyn = kernel.load("dyn", ZEN_SO_ANSWERS);
+    REQUIRE(dyn.ok);
+
+    // Fill every slot with conversations that are deferred and never answered: a
+    // dynamic steward that keeps its capability and is simply never completed.
+    LoadResult hoarder = kernel.load("hoard", ZEN_SO_DEFERS);
+    REQUIRE_MESSAGE(hoarder.ok, hoarder.error);
+    Registered nagger = register_probe(bus, {pong_schema()});
+    for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+        bus.send_as(nagger.id, hoarder.id, Message(ping(1), nagger.id, WeaveId{}, 1));
+        bus.pump();
+    }
+
+    // The registry is now full, and says so: one more deferral is refused.
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) {
+        if (e.kind == EventKind::Refused) {
+            tap.push_back(to_record(e));
+        }
+    });
+    bus.send_as(nagger.id, hoarder.id, Message(ping(1), nagger.id, WeaveId{}, 1));
+    bus.pump();
+    std::size_t exhausted = 0;
+    for (const TapRecord& r : tap) {
+        if (r.reason == RefusalReason::Exhausted) {
+            ++exhausted;
+        }
+    }
+    REQUIRE(exhausted == 1); // the positive control: the bound is genuinely reached
+
+    // ...and with not one slot to spare, the dynamic immediate answer works
+    // exactly as a native one does. It never wanted a slot.
+    tap.clear();
+    bus.send_as(asker.id, dyn.id, Message(ping(7), asker.id, WeaveId{}, kAskCorr));
+    bus.pump();
+    CHECK(heard.count == 1);
+    CHECK(heard.all_attested);
+    CHECK(heard.correlation == kAskCorr);
+    CHECK(heard.seq == 7);
+    CHECK(tap.empty()); // no Exhausted, no refusal of any kind
+}
+
+TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle laws exactly as "
+          "a native one does") {
+    bool requester_changes = false;
+    SUBCASE("the requester dies and revives before the answer is delivered") {
+        requester_changes = true;
+    }
+    SUBCASE("the responder dies after queueing the answer") { requester_changes = false; }
+
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered asker = register_probe(bus, {pong_schema()});
+    Heard heard;
+    heard.arm(*asker.weave);
+    LoadResult dyn = kernel.load("dyn", ZEN_SO_ANSWERS);
+    REQUIRE(dyn.ok);
+
+    // Stop the pump the moment the ASK is delivered, so the answer the dynamic
+    // weave produced is queued and undelivered.
+    const ObserverId stopper = bus.add_observer([&bus](const BusEvent& ev) {
+        if (ev.kind == EventKind::Delivered && ev.schema_name == "Ping") {
+            bus.stop();
+        }
+    });
+    bus.send_as(asker.id, dyn.id, Message(ping(3), asker.id, WeaveId{}, kAskCorr));
+    bus.pump();
+    bus.remove_observer(stopper);
+    REQUIRE(bus.pending() == 1);
+    REQUIRE(heard.count == 0);
+
+    if (requester_changes) {
+        // R2B-2c: the answer belongs to the life that asked.
+        const std::string state = bus.snapshot_bytes(asker.id);
+        bus.kill(asker.id);
+        REQUIRE(bus.reload(asker.id, state).revived);
+    } else {
+        // R2B-2b: queued speech belongs to the life that authored it.
+        bus.kill(dyn.id);
+    }
+    bus.pump();
+    CHECK(heard.count == 0); // neither law is weakened by crossing the seam
+}
+
+TEST_CASE("R2B-3b-1a: an artifact built against the previous ABI is refused, naming both "
+          "versions") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
+    CHECK_FALSE(stale.ok);
+    CHECK(stale.error.find("abi_version") != std::string::npos);
+    CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
+    CHECK_FALSE(kernel.is_loaded("stale"));
+    // No silent fallback: nothing of it reached the bus.
+    CHECK(bus.list_weaves().empty());
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);

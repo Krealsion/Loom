@@ -33,6 +33,10 @@
 //                                   EXTRA accepted shape, so a reload between the two
 //                                   differs in nothing but the door contract (R2A-1:
 //                                   the accepted-schema-drift negative)
+//   ZEN_WEAVE_ANSWERS             — answers its ask IMMEDIATELY through the public
+//                                   answer surface, so the dynamic seam's meaning of
+//                                   mail.answer() can be compared with the native one
+//                                   (R2B-3b-1a)
 //   ZEN_WEAVE_DEFERS              — takes an ask's answer right AWAY WITH IT, returns
 //                                   without answering, and answers from a LATER
 //                                   handler using only the retained capability
@@ -124,7 +128,15 @@ std::shared_ptr<const Schema> ping_schema() {
     return s;
 }
 std::shared_ptr<const Schema> counter_schema() {
-#if defined(ZEN_WEAVE_ACTIVATES)
+#if defined(ZEN_WEAVE_ANSWERS)
+    // Counter v5 — the immediate-answer fixture's own window: did the board accept
+    // its answer, and did it refuse a second one?
+    static const auto s = SchemaBuilder("Counter", 5)
+                              .field("count", Kind::Int)
+                              .field("answered", Kind::Int)
+                              .field("second", Kind::Int)
+                              .build();
+#elif defined(ZEN_WEAVE_ACTIVATES)
     // Counter v3 — the activation participant's own bookkeeping, persisted like
     // any other state so a reload TRANSPLANTS it. That is what makes "the state
     // crossed the reload before the new activation arrived" observable rather
@@ -189,6 +201,20 @@ public:
     }
 
     void handle(const Message& in, Bus& bus) override {
+#if defined(ZEN_WEAVE_ANSWERS)
+        // THE PARITY FIXTURE. One line, the public one, and the whole question is
+        // whether it means here what it means natively.
+        ++count_;
+        Value reply(pong_schema());
+        reply.set("seq", Cell::integer(in.payload.get("seq")->as_int()));
+        answered_ = bus.answer(Message(reply)).valid();
+#if defined(ZEN_WEAVE_ANSWERS_TWICE)
+        // ...and a second attempt from the same delivery must fail, exactly as it
+        // does natively: one delivered request, one answer.
+        second_answer_ = bus.answer(Message(reply)).valid();
+#endif
+        return;
+#endif
 #if defined(ZEN_WEAVE_DEFERS)
         // THE DYNAMIC STEWARD (R2B-2). An ask arrives; the answer is not known
         // yet; so it takes the answer right away with it and RETURNS WITHOUT
@@ -436,6 +462,10 @@ public:
         v.set("activations", Cell::integer(activations_));
         v.set("last_activation", Cell::integer(last_activation_));
 #endif
+#if defined(ZEN_WEAVE_ANSWERS)
+        v.set("answered", Cell::integer(answered_ ? 1 : 0));
+        v.set("second", Cell::integer(second_answer_ ? 1 : 0));
+#endif
 #if defined(ZEN_WEAVE_DEFERS)
         v.set("deferred", Cell::integer(deferred_ok_ ? 1 : 0));
         v.set("spent", Cell::integer(spends_ok_));
@@ -490,6 +520,10 @@ private:
     std::int64_t count_ = 0;
 #if defined(ZEN_WEAVE_HEIR)
     bool claimed_ = false; // transient: waking asks once, and only once
+#endif
+#if defined(ZEN_WEAVE_ANSWERS)
+    bool answered_ = false;      // did the board accept the immediate answer?
+    bool second_answer_ = false; // ...and did a second one from the same delivery?
 #endif
 #if defined(ZEN_WEAVE_DEFERS)
     loom::DeferredAnswer pending_{}; // the retained answer right; move-only, opaque

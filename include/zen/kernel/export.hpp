@@ -91,6 +91,25 @@ public:
         return loom::Ticket{};
     }
 
+    /// THE IMMEDIATE ANSWER, across the seam (R2B-3b-1a).
+    ///
+    /// Without this override a loaded weave inherited `Bus::answer`'s truthful-
+    /// for-a-mailbox default — invalid ticket, nothing enqueued — which for a LIVE
+    /// DELIVERY is not truthful at all, merely silent. The same `mail.answer()`
+    /// that works natively appeared to do nothing here, and said nothing about it.
+    loom::Ticket answer(loom::Message msg) override {
+        if (host_ == nullptr || host_->answer == nullptr) {
+            return loom::Ticket{}; // an old host: honestly nothing, not a pretence
+        }
+        const std::string bytes = loom::serialize(msg.payload);
+        const ZenStatus st = host_->answer(
+            host_->ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        // Not a bus seq — it never is across this seam — but success/failure IS
+        // meaningful, and is the only way a loaded weave learns whether its answer
+        // was authorized.
+        return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
+    }
+
     // ---- deferred answers across the seam (R2B-2) ---------------------------
     //
     // The capability crosses as an OPAQUE TOKEN and nothing else. It carries no
