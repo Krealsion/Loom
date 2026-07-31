@@ -595,20 +595,64 @@ Switchboard's system-wide registry (`resolve_schema`) and gate it before routing
 
 ### Teardown and hot-reload order
 
-The adapter owns the instance and destroys it (`abi->destroy`) in its destructor;
-the Kernel owns the library handle and closes it **only after** the adapter is
-gone. Unload is therefore: `unregister_weave` (stop delivery, take ownership) →
-destroy the adapter (→ destroy the instance, library still open) → `close` — no
-call ever lands in a closed library (clean under ASan).
+**Ownership, one link at a time (R2B-3b-3a).** The order used to be a property of
+the statements in `Kernel::unload` — destroy the adapter, *then* close — which is
+a rule every future call site has to remember, and which said nothing at all
+about a destruction the Kernel did not initiate. It is now a property of who is
+still holding a `shared_ptr`:
+
+- **`LoadedLibrary`** owns one open library handle and closes it in its
+  destructor. It is held by **both** the Kernel's `Loaded` record and the
+  `HostAdapter`, so the handle closes **exactly once, when the last holder lets
+  go** — and *cannot* close while an adapter that could still run code from it
+  exists. Both forbidden outcomes (closed twice; closed while its code is live)
+  become unrepresentable rather than merely avoided.
+- **`HostAdapter`** is owned by the **Switchboard** from registration onward,
+  exactly as every other Weave is, and destroys the library instance in its
+  destructor — once, because a destructor runs once. Its `lib_` share is a
+  *member*, so it is released **after** the destructor body: the instance is
+  always gone before the library can close.
+- **`Kernel::Loaded`** holds the name, the library share, the ABI, and a
+  **non-owning** pointer to the adapter.
+
+The invariant tying them is deliberately **one-directional**: *a `Loaded` record
+never outlives its `HostAdapter`*, so that raw pointer cannot dangle. The converse
+is false and useful — an adapter may outlive its record (a host that took
+ownership via `unregister_weave` and kept it), in which case it is **detached**,
+reaps nothing later, and keeps the library mapped for its own use.
+`Kernel::status()` reports that state as `Unregistered` rather than calling it
+live.
+
+**The adapter's destructor IS the removal notification**, and that is the whole
+Kernel↔Switchboard synchronization mechanism. It is the one object whose lifetime
+is exactly "this artifact's instance is live", so it is correct no matter *who*
+destroyed it: the Kernel's own `unload`, a host calling `unregister_weave`, or a
+prepared replacement aborting and discarding its candidate deep inside a delivery
+(`finish_txn` → `unregister_weave`). Crucially it calls **no Switchboard method at
+all**, so no ownership cycle and no reentrancy into the bus is representable — the
+Switchboard needs no hook, no observer, and no knowledge that a Kernel exists.
+
+Unload is therefore: `unregister_weave` (stop delivery, take ownership) → destroy
+the adapter (→ destroy the instance → release the artifact record) → the library
+closes when the last share goes. No call ever lands in a closed library (clean
+under ASan). A `Kernel::unload` of a name a transaction already discarded answers
+a truthful **false**, not a silent success over wreckage.
+
+**A host-side lifetime ledger** (`kernel_lifetime_counts()`) counts instances
+created/destroyed and libraries opened/closed at the one place each act happens.
+It is diagnostics only — nothing reads it to decide anything — and it exists
+because *exactly once* is the ownership law here, and a law nobody can count is a
+law nobody can test.
 
 `reload_from(name, new_path)` snapshots the live Weave to **host-owned** bytes,
 opens and validates the new library, then swaps `(abi, instance)` **in place
 behind the same adapter and WeaveId** (so senders keep their handle), destroys
-the old instance while its library is still open, closes the old library, and
-revives the new instance from the snapshot **through the gate**. State survives
-because the snapshot bytes are host-owned, independent of either library. A new
-library whose **state-schema version differs** is a **clean refusal** — the old
-library keeps running. (This is exactly where the deferred migration layer will
+the old instance while its library is still open, releases the old library share
+(which closes it, the adapter having already moved to the new one), and revives
+the new instance from the snapshot **through the gate**. State survives because
+the snapshot bytes are host-owned, independent of either library. A new library
+whose **state-schema version differs** is a **clean refusal** — the old library
+keeps running. (This is exactly where the deferred migration layer will
 slot in.) The revive after the swap goes through `Switchboard::swap_state`, the
 **unbudgeted** intentional-swap path, so a deliberate hot-reload neither draws
 down nor is blocked by the Weave's crash-revival budget (see *Intentional swap ≠
@@ -651,13 +695,43 @@ whose `revive()` fails still leaves the weave unavailable. Both *pre-commit*
 refusals preserve the incumbent and are pinned; the prepared-candidate/rollback
 work is R2B's and nothing here claims it.
 
-### The one switchboard change for the kernel, and a note on hosting
+**A second honest edge, named in R2B-3b-3a: a reload can discard its own
+subject.** New code is a new participant, so reloading a weave that some prepared
+replacement has bound as its **candidate** ends that transaction from inside
+`swap_state` — and ending it discards the candidate, which destroys the very
+adapter and record `reload_from` is holding. The swap really happened and was
+then undone. It reports `reloaded == false` with that reason rather than claiming
+a success whose subject no longer exists, and nothing is left behind: the record
+is released and both libraries close on the way out. Pinned in the `kernel` suite,
+including the exact instance/library counts either side of the call.
 
-The kernel needed two small `Switchboard` additions: `unregister_weave` (to
-destroy an adapter before closing its library) and `resolve_schema` (to gate a
-library's emitted messages against the system registry). `Weave::handle` taking
-the abstract `Bus` (rather than the concrete `Switchboard`) is what lets one
-Weave be hosted either natively or from a `.so`.
+### The switchboard changes for the kernel, and a note on hosting
+
+The kernel needed three small `Switchboard` additions: `unregister_weave` (to
+hand an adapter back so its instance dies before its library can close),
+`resolve_schema` (to gate a library's emitted messages against the system
+registry), and — R2B-3b-3a — `role_of(WeaveId)`, the read-only inverse of
+`role_holder`. `Weave::handle` taking the abstract `Bus` (rather than the
+concrete `Switchboard`) is what lets one Weave be hosted either natively or from
+a `.so`.
+
+**Why `role_of` exists at all: so nobody has to cache a role.** A host that binds
+a role at registration used to be the only thing that could move one, so hosts
+remembered what they bound — and the Kernel's `role_of`/`query_role`/`unload_role`
+all answered from its own map. Admission ended that: a prepared replacement
+committing, or a direct `admit_candidate`, moves a role with **no host call at
+all**, so a remembered answer becomes a lie the moment it does. The Kernel's
+cached role field is **deleted**, not repaired — two independently mutable
+answers to one question is the shape being removed — and all three queries now
+derive from the Switchboard's own role table, which is the same table routing
+resolves against. `Kernel::role_of` therefore means *the role this weave holds
+right now*, never *the role it was loaded under*; there is deliberately no
+load-time role kept beside it.
+
+Note the asymmetry, which is the point: the Kernel depends on the Switchboard,
+and the Switchboard has **no knowledge of the Kernel whatsoever** — not even a
+hook. See *Teardown and hot-reload order* for why the removal notification lives
+in the adapter's destructor instead.
 
 **Crash isolation is a non-goal here:** this kernel is in-process, so a crashing
 Weave takes the host down (accepted for now). The wire format already makes the
