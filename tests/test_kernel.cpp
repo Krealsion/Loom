@@ -4087,6 +4087,43 @@ TEST_CASE("R2B-3b-3a: unloading an artifact whose adapter a host still holds doe
     CHECK(ledger.closed() == 1); // the last holder closes it, once
 }
 
+TEST_CASE("R2B-3b-3a: every artifact status is reachable, and aliveness outranks the seal") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+
+    // The four states an artifact on the bus can be in, each reached by the
+    // ordinary road to it. `Dead` is here because an enum value with no case
+    // asserting it is a branch nobody has proven reachable.
+    CHECK(kernel.status("nothing-by-that-name") == ArtifactStatus::NotLoaded);
+    CHECK(kernel.status("v1") == ArtifactStatus::Live);
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+
+    bus.kill(d.incumbent);
+    CHECK(kernel.status("v1") == ArtifactStatus::Dead);
+    CHECK(kernel.is_loaded("v1")); // dead is still loaded — it is awaiting revival
+
+    // ...AND ALIVENESS OUTRANKS THE SEAL, which is the documented precedence: a
+    // weave that receives nothing is Dead whatever its seal says. Killing the
+    // incumbent already aborted nothing here (no transaction), so the candidate
+    // is still sealed and can be killed while sealed.
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+    bus.kill(d.candidate);
+    CHECK(bus.sealed(d.candidate)); // still sealed...
+    CHECK(kernel.status("v2") == ArtifactStatus::Dead); // ...and reported dead
+
+    // Revival restores the finer answer rather than leaving it coarse.
+    REQUIRE(bus.swap_state(d.candidate, bus.snapshot_bytes(d.candidate)).revived);
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+
+    // The spellings exist for operators, and each is its own word.
+    CHECK(std::string(name_of(ArtifactStatus::NotLoaded)) == "NotLoaded");
+    CHECK(std::string(name_of(ArtifactStatus::Live)) == "Live");
+    CHECK(std::string(name_of(ArtifactStatus::Sealed)) == "Sealed");
+    CHECK(std::string(name_of(ArtifactStatus::Dead)) == "Dead");
+    CHECK(std::string(name_of(ArtifactStatus::Unregistered)) == "Unregistered");
+}
+
 TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter") {
     Switchboard bus;
     LifetimeDelta ledger;
