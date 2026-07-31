@@ -35,6 +35,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "AnswerTargetChanged";
     case RefusalReason::SealedSpeech:
         return "SealedSpeech";
+    case RefusalReason::AdmissionRevoked:
+        return "AdmissionRevoked";
     }
     return "?";
 }
@@ -53,6 +55,8 @@ const char* name_of(AdmitRefusal r) noexcept {
         return "IncumbentUnfit";
     case AdmitRefusal::RoleNotHeld:
         return "RoleNotHeld";
+    case AdmitRefusal::CandidateContract:
+        return "CandidateContract";
     }
     return "?";
 }
@@ -63,6 +67,8 @@ const char* name_of(TxnState st) noexcept {
         return "Preparing";
     case TxnState::Ready:
         return "Ready";
+    case TxnState::AdmissionPending:
+        return "AdmissionPending";
     case TxnState::Committed:
         return "Committed";
     case TxnState::Aborted:
@@ -154,6 +160,12 @@ std::string Refusal::message() const {
     case RefusalReason::SealedSpeech:
         return "a prepared candidate may converse with its coordinator, not with "
                "the world";
+    case RefusalReason::AdmissionRevoked:
+        // Names the ADMISSION, not the message. Nothing about this delivery was
+        // wrong; the world it described stopped being true before it was reached,
+        // and the topology change it was carrying did not happen.
+        return "the scheduled admission no longer described the world; nothing "
+               "changed and the incumbent is still the service";
     }
     return "?";
 }
@@ -736,6 +748,18 @@ void Switchboard::emit(const BusEvent& event) {
 }
 
 void Switchboard::deliver_one(Envelope env) {
+    // AN ADMISSION IS ITS OWN DELIVERY (R2B-3d). It takes the whole turn: it
+    // moves production topology and hands the candidate its activation, and it
+    // does not travel the ordinary authorization path below — a committed
+    // activation is Loom's act, not the coordinator's speech, and re-deriving its
+    // standing from a mutable grant or a mutable sender life is exactly how a
+    // successful admission used to become a service that was never told it was
+    // alive.
+    if (env.admission.present) {
+        deliver_admission(std::move(env));
+        return;
+    }
+
     BusEvent ev;
     ev.seq = env.seq;
     ev.target = env.target;
@@ -1114,24 +1138,25 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
     return true;
 }
 
-AdmitResult Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
-                                         const std::string& role,
-                                         const LifecycleAuthority& authority,
-                                         Message activation, std::int64_t sequence) {
-    // EVERY PRECONDITION FIRST — including the authority, so an unattested caller
-    // cannot move production topology.
-    if (!issued_here(authority)) {
-        return {false, AdmitRefusal::ForeignAuthority};
+AdmitRefusal Switchboard::admission_blocked(const ParticipantRef& candidate,
+                                            const ParticipantRef& incumbent,
+                                            const CandidateOwner& owner,
+                                            const std::string& role) const {
+    // ONE FUNCTION, ASKED TWICE (R2B-3d). Scheduling an admission and dispatching
+    // it must require exactly the same world, and the cheapest guarantee of that
+    // is that there is only one place the question is written down. Every
+    // participant is checked as an exact life and incarnation, so a queued
+    // admission cannot land on a successor at the same address.
+    const WeaveRecord* cand = find(candidate.who);
+    if (cand == nullptr || !cand->alive || !cand->sealed_by.valid() ||
+        cand->life != candidate.life || cand->incarnation != candidate.incarnation) {
+        return AdmitRefusal::NotACandidate;
     }
-    WeaveRecord* cand = find(candidate);
-    WeaveRecord* inc = find(incumbent);
-    if (cand == nullptr || !cand->alive || !cand->sealed_by.valid()) {
-        return {false, AdmitRefusal::NotACandidate};
+    const WeaveRecord* inc = find(incumbent.who);
+    if (inc == nullptr || !inc->alive || inc->sealed_by.valid() || inc->life != incumbent.life ||
+        inc->incarnation != incumbent.incarnation) {
+        return AdmitRefusal::IncumbentUnfit;
     }
-    if (inc == nullptr || !inc->alive || inc->sealed_by.valid()) {
-        return {false, AdmitRefusal::IncumbentUnfit};
-    }
-    const CandidateOwner owner = cand->sealed_by;
 
     // THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a).
     //
@@ -1141,44 +1166,136 @@ AdmitResult Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
     // a perfectly good lifecycle authority could admit a candidate whose
     // coordinator had died and revived, been reloaded into new code, or been
     // removed entirely. The preparation belonged to a LIFE, and that life is over.
+    //
+    // Two halves, and both matter: the seal on the record must still name this
+    // exact owner (it could have been discarded and resealed to somebody else),
+    // and that owner must still be the participant standing at that address.
+    if (!owns_seal(cand->sealed_by, owner.who, owner.life, owner.incarnation)) {
+        return AdmitRefusal::OwnerChanged;
+    }
     const WeaveRecord* owner_rec = find(owner.who);
     if (owner_rec == nullptr || !owner_rec->alive || owner_rec->life != owner.life ||
         owner_rec->incarnation != owner.incarnation) {
-        return {false, AdmitRefusal::OwnerChanged};
+        return AdmitRefusal::OwnerChanged;
     }
 
     if (role.empty()) {
-        return {false, AdmitRefusal::RoleNotHeld};
+        return AdmitRefusal::RoleNotHeld;
     }
     const auto held = roles_.find(role);
-    if (held == roles_.end() || !(held->second == incumbent)) {
-        return {false, AdmitRefusal::RoleNotHeld};
+    if (held == roles_.end() || !(held->second == incumbent.who)) {
+        return AdmitRefusal::RoleNotHeld;
+    }
+    return AdmitRefusal::None;
+}
+
+std::optional<Value> Switchboard::activation_deliverable(const WeaveRecord& candidate,
+                                                         Value payload) const {
+    // THE RECIPIENT'S HALF OF THE CONTRACT, asked before anything moves.
+    //
+    // A candidate without the activation contract is not admissible: discovering
+    // at delivery that the new service never accepted `zen.Activated` is
+    // discovering it AFTER the role has moved, which is the whole defect. Both
+    // questions the ordinary path would ask later are asked here — the accept-set
+    // door and the gate — against the exact payload this admission will deliver.
+    //
+    // The answer is stable by construction, which is what makes prevalidation a
+    // guarantee rather than a hope: a weave's accept-set is fixed at registration
+    // (neither `swap_state` nor `reload` rewrites it — reload refuses outright on
+    // a drifted accept-set), and `admit()` is a pure function of a payload and a
+    // schema. So a door that answers here answers the same way at dispatch, where
+    // it is asked again anyway.
+    const std::string name(payload.schema().name());
+    const std::uint32_t version = payload.schema().version();
+    const std::shared_ptr<const Schema>* door = accept_match(candidate, name, version);
+    std::shared_ptr<const Schema> wildcard_door;
+    if (door == nullptr && candidate.accepts_any) {
+        wildcard_door = resolve_schema(name, version);
+    }
+    if (door == nullptr && !wildcard_door) {
+        return std::nullopt;
+    }
+    Admission a = loom::admit(std::move(payload), door != nullptr ? **door : *wildcard_door);
+    if (!a.ok()) {
+        return std::nullopt;
+    }
+    return std::move(a).value();
+}
+
+AdmitResult Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
+                                         const std::string& role,
+                                         const LifecycleAuthority& authority,
+                                         Message activation, std::int64_t sequence) {
+    // The direct host primitive IS the shared one, with no transaction to end.
+    return schedule_admission(candidate, incumbent, role, authority, std::move(activation),
+                              sequence, TxnId{});
+}
+
+AdmitResult Switchboard::schedule_admission(WeaveId candidate, WeaveId incumbent,
+                                            const std::string& role,
+                                            const LifecycleAuthority& authority,
+                                            Message activation, std::int64_t sequence,
+                                            TxnId txn) {
+    // EVERY PRECONDITION FIRST — including the authority, so an unattested caller
+    // cannot schedule a change to production topology.
+    if (!issued_here(authority)) {
+        return {false, AdmitRefusal::ForeignAuthority, Ticket{}};
+    }
+    const ParticipantRef cand_ref = participant(candidate);
+    const ParticipantRef inc_ref = participant(incumbent);
+    const WeaveRecord* cand = find(candidate);
+    const CandidateOwner owner = cand == nullptr ? CandidateOwner{} : cand->sealed_by;
+    const AdmitRefusal blocked = admission_blocked(cand_ref, inc_ref, owner, role);
+    if (blocked != AdmitRefusal::None) {
+        return {false, blocked, Ticket{}};
+    }
+
+    // ---- CAN THE CANDIDATE RECEIVE ITS OWN FIRST BREATH? ---------------------
+    //
+    // Asked here, before a single field moves. The payload is validated against
+    // the candidate's real door and its real gate; a weave that cannot take the
+    // activation is refused as a candidate rather than admitted and then left
+    // unable to hear about it. The trusted result is thrown away — the dispatch
+    // re-admits the pristine payload — because prevalidation exists to REFUSE
+    // early, not to smuggle a pre-gated value past the one gate.
+    if (!activation_deliverable(*cand, activation.payload)) {
+        return {false, AdmitRefusal::CandidateContract, Ticket{}};
     }
 
     // ---- ACTIVATION FIRST, and this is where the queue resisted the model -----
     //
     // Role resolution is a DELIVERY-time decision, so a role-addressed message
     // enqueued before this moment resolves to whoever holds the role when it is
-    // finally dispatched — which, after this call, is the candidate. Appending the
-    // activation at the tail would therefore let ordinary production reach a weave
-    // that has not yet been told it is alive.
+    // finally dispatched. Appending the activation at the tail would let ordinary
+    // production reach a weave that has not yet been told it is alive.
     //
-    // The activation is placed immediately ahead of the FIRST queued envelope that
+    // The envelope is placed immediately ahead of the FIRST queued envelope that
     // could reach this candidate: one addressed to the role being committed, or to
     // the candidate itself. That is the narrowest placement that makes activation
     // the candidate's first live delivery. Every other message keeps its order,
     // and nothing is dropped — the alternative (discarding the older traffic) would
     // buy ordering with silence.
+    //
+    // R2B-3d moves the TOPOLOGY CHANGE to that same point, and the ordering law
+    // comes out of it unchanged: everything ahead of the envelope was queued while
+    // the incumbent was the service and still resolves to the incumbent, and
+    // everything behind it — including anything this call's caller enqueues next —
+    // arrives after the candidate has been told.
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     activation.sender = owner.who;
     activation.provenance = Provenance::attested(Provenance::Kind::Activation, sequence);
-    // The sender-life stamp comes from the VERIFIED owner — the life the seal
-    // named and this call has just confirmed — never from a fresh lookup of the
-    // coordinator id, which is precisely how a successor's life could be stamped
-    // onto a predecessor's activation.
-    Envelope act{std::move(activation), candidate, seq, /*gated=*/true, std::string{},
-                 owner.life};
+    // UNGATED, and this is the phase's semantic decision made structural. A
+    // committed activation is not the coordinator's speech to be authorized
+    // against its grant and its life — it is Loom's own act, authorized by the
+    // authority checked above and performed as part of the admission. So it does
+    // not travel the gated path, and none of that path's later questions can
+    // unmake a commitment already made. The sender stamp remains the coordinator's
+    // because the CONSUMER needs it: `zen.Activated`'s lineage rule is per
+    // attesting operator. It describes who admitted; it does not claim who spoke.
+    Envelope act{std::move(activation), candidate, seq, /*gated=*/false, std::string{},
+                 /*sender_life=*/0};
+    act.admission = PendingAdmission{true, cand_ref, inc_ref, owner, role, txn};
     auto at = queue_.begin();
     for (; at != queue_.end(); ++at) {
         if (at->target == candidate || (!at->role.empty() && at->role == role)) {
@@ -1186,18 +1303,130 @@ AdmitResult Switchboard::admit_candidate(WeaveId candidate, WeaveId incumbent,
         }
     }
     queue_.insert(at, std::move(act));
+    return {true, AdmitRefusal::None, Ticket{seq}};
+}
 
-    // ---- and then the whole topology change, with no delivery in between ------
+void Switchboard::deliver_admission(Envelope env) {
+    BusEvent ev;
+    ev.seq = env.seq;
+    ev.target = env.target;
+    ev.sender = env.msg.sender;
+    ev.schema_name = env.msg.payload.schema().name();
+    ev.schema_version = env.msg.payload.schema().version();
+
+    const auto refuse = [&](RefusalReason reason) {
+        const Refusal r{reason, {}};
+        record(env.seq, Disposition::Refused, r);
+        ev.kind = EventKind::Refused;
+        ev.refusal = r;
+        emit(ev);
+    };
+
+    // ---- 1. is this still the admission that was scheduled? ------------------
+    //
+    // A transaction-borne admission must still be the SAME transaction, still in
+    // the state that scheduled it. An abort while pending erases the record, so
+    // there is nothing here to find and the queued envelope simply refuses — a
+    // pending admission cannot be revived, and no second terminal outcome is ever
+    // written, because ending it already wrote the only one.
+    PreparedReplacement* txn = nullptr;
+    if (env.admission.txn.valid()) {
+        txn = find_txn(env.admission.txn);
+        if (txn == nullptr || txn->state != TxnState::AdmissionPending) {
+            refuse(RefusalReason::AdmissionRevoked);
+            return;
+        }
+    }
+
+    // ---- 2. does it still describe the world? --------------------------------
+    if (admission_blocked(env.admission.candidate, env.admission.incumbent, env.admission.owner,
+                          env.admission.role) != AdmitRefusal::None) {
+        if (txn != nullptr) {
+            PreparedReplacement copy = *txn;
+            finish_txn(copy, TxnState::Aborted, TxnReason::AdmissionRefused);
+        }
+        refuse(RefusalReason::AdmissionRevoked);
+        return;
+    }
+
+    // ---- 3. is the activation deliverable? -----------------------------------
+    //
+    // Re-asked rather than assumed, and asked BEFORE anything moves. The answer
+    // cannot have changed since scheduling — an accept-set is fixed at
+    // registration and the gate is pure — but "cannot have changed" is a claim
+    // about today's code, and the ordering here is what makes the law true
+    // regardless: if the candidate cannot receive its activation, the admission
+    // refuses and the incumbent is still the service.
+    WeaveRecord* cand = find(env.admission.candidate.who);
+    std::optional<Value> admitted;
+    if (cand != nullptr) {
+        admitted = activation_deliverable(*cand, std::move(env.msg.payload));
+    }
+    if (!admitted) {
+        if (txn != nullptr) {
+            PreparedReplacement copy = *txn;
+            finish_txn(copy, TxnState::Aborted, TxnReason::AdmissionRefused);
+        }
+        refuse(RefusalReason::AdmissionRevoked);
+        return;
+    }
+
+    // ---- 4. THE TOPOLOGY CHANGE, with no delivery in between -----------------
+    //
+    // Unchanged from R2B-3b in what it does; changed only in WHEN. There is no
+    // lock and none is needed: `pump()` is non-reentrant and dispatches one
+    // envelope at a time, so an observer's next delivery either precedes all of
+    // this or follows all of it — and what follows it is this candidate's own
+    // activation, below, with nothing whatever between them.
+    WeaveRecord* inc = find(env.admission.incumbent.who);
+    const CandidateOwner owner = env.admission.owner;
     cand->sealed_by = CandidateOwner{};
     inc->role.clear();
-    cand->role = role;
-    held->second = candidate;
+    cand->role = env.admission.role;
+    roles_.find(env.admission.role)->second = env.admission.candidate.who;
     // The incumbent is sealed FOR RETIREMENT, to the same coordinator: it stops
     // receiving production entirely — not merely role traffic — and remains
     // reachable for the private retirement conversation. Moving the role alone
     // would leave it publicly direct-addressable, which is a second live service.
     inc->sealed_by = owner;
-    return {true, AdmitRefusal::None};
+
+    // ---- 5. and only now is the transaction Committed ------------------------
+    //
+    // AFTER the topology moved and AFTER the activation was proven deliverable —
+    // which is exactly what "guaranteed" has to mean. Nothing between this line
+    // and the handler call below can refuse: the payload is admitted and in hand,
+    // the recipient is resolved and alive. Terminalizing here rather than after
+    // `handle()` keeps arbitrary weave code out of the transaction's bookkeeping,
+    // and the two orderings are observationally identical because nothing can
+    // observe the gap.
+    if (txn != nullptr) {
+        PreparedReplacement copy = *txn;
+        finish_txn(copy, TxnState::Committed, TxnReason::None);
+    }
+
+    // ---- 6. the candidate's first breath -------------------------------------
+    Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
+    trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    current_target_ = env.target;
+    const WeaveRecord* asker = find(env.msg.sender);
+    authority_ = ReplyAuthority{env.msg.sender,
+                                env.msg.correlation,
+                                /*spent=*/false,
+                                trusted.payload.schema_ptr(),
+                                asker == nullptr ? 0 : asker->life,
+                                asker == nullptr ? 0 : asker->incarnation,
+                                TxnId{}};
+    delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
+                              env.msg.correlation, TxnId{}};
+    WeaveBus weave_bus(*this, env.target);
+    cand->weave->handle(trusted, weave_bus);
+    current_target_ = WeaveId{};
+    authority_ = ReplyAuthority{};
+    delivery_ = DeliveryFacts{};
+    record(env.seq, Disposition::Delivered, Refusal{});
+    ev.kind = EventKind::Delivered;
+    ev.payload = &trusted.payload;
+    emit(ev);
 }
 
 // ---- Prepared replacement (R2B-3b-2) ---------------------------------------
@@ -1594,20 +1823,26 @@ TxnResult Switchboard::commit_prepared_replacement(TxnId id,
     // moves a role, never unseals anything and never queues an activation: it
     // delegates the whole topology change to the primitive that was proven atomic.
     const PreparedReplacement snapshot = *t;
-    const AdmitResult admitted = admit_candidate(snapshot.candidate.who,
-                                                 snapshot.incumbent.who, snapshot.role,
-                                                 authority, std::move(activation), sequence);
+    const AdmitResult admitted =
+        schedule_admission(snapshot.candidate.who, snapshot.incumbent.who, snapshot.role,
+                           authority, std::move(activation), sequence, id);
     PreparedReplacement* again = find_txn(id);
     if (again == nullptr) {
         return {false, id, TxnReason::NoSuchTransaction}; // aborted underneath us
     }
-    if (!admitted.ok) {
+    if (!admitted.scheduled) {
         PreparedReplacement copy = *again;
         finish_txn(copy, TxnState::Aborted, TxnReason::AdmissionRefused);
         return {false, id, TxnReason::AdmissionRefused};
     }
-    PreparedReplacement copy = *again;
-    finish_txn(copy, TxnState::Committed, TxnReason::None);
+
+    // SCHEDULED, NOT COMMITTED (R2B-3d). The envelope now in the queue will do the
+    // whole admission and terminalize this transaction when it lands. Until then
+    // the incumbent is the service, the candidate is sealed, the slot is held and
+    // the candidate is still exclusively promised here — and this transaction can
+    // still be aborted, in which case the queued admission finds no record and
+    // refuses rather than reviving anything.
+    again->state = TxnState::AdmissionPending;
     return {true, id, TxnReason::None};
 }
 
