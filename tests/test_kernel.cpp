@@ -3047,6 +3047,538 @@ TEST_CASE("R2B-3b-3: the role drifting under a live preparation refuses the read
     CHECK(bus.role_holder(kRole) == usurper_id);               // and nothing moved back
 }
 
+// ---- R2B-3b-3: the dynamic `versioned.service` proof ---------------------------
+//
+// Everything above is native. This is the phase's real subject: two loaded
+// artifacts, a service that never stops answering "v1", and a successor that
+// receives a private preparation ask, keeps the answer across other deliveries,
+// and answers for itself before it is allowed anywhere near the world.
+
+namespace {
+
+constexpr const char* kService = "versioned.service";
+
+/// The candidate's state contract, spelled out here on purpose: the test must not
+/// share a definition with the artifact it is interrogating, or a drift in either
+/// would cancel out. (Same discipline as the R2B-2 steward's Counter v4.)
+std::shared_ptr<const Schema> versioned_state_schema() {
+    static const auto s = SchemaBuilder("VersionedState", 1)
+                              .field("served", Kind::Int)
+                              .field("prepares", Kind::Int)
+                              .field("continues", Kind::Int)
+                              .field("deferred", Kind::Int)
+                              .field("answered", Kind::Int)
+                              .field("activations", Kind::Int)
+                              .field("last_activation", Kind::Int)
+                              .field("escapes", Kind::Int)
+                              .field("retired", Kind::Int)
+                              .field("token", Kind::Int)
+                              .field("plan", Kind::Text)
+                              .build();
+    return s;
+}
+
+Value versioned_state(Switchboard& bus, WeaveId id) {
+    Unverified u = parse(bus.snapshot_bytes(id));
+    Admission a = admit(u, versioned_state_schema());
+    REQUIRE(a.ok());
+    return std::move(a).value();
+}
+
+std::int64_t state_field(Switchboard& bus, WeaveId id, const char* field) {
+    return versioned_state(bus, id).get(field)->as_int();
+}
+
+/// The whole dynamic cast: real artifacts for both services, native probes for the
+/// three roles the substrate does not care about (operator, coordinator, observer).
+struct DynCast {
+    Registered op;
+    Registered coordinator;
+    Registered observer;
+    WeaveId incumbent{};
+    WeaveId candidate{};
+    std::shared_ptr<CastLog> log = std::make_shared<CastLog>();
+    std::shared_ptr<TxnId> live_txn = std::make_shared<TxnId>();
+
+    std::string ask(Switchboard& bus) {
+        const std::size_t before = log->answers.size();
+        bus.send_as_to_role(observer.id, kService,
+                            Message(to_value(versioned::QueryVersion{1}), observer.id,
+                                    observer.id, 0));
+        bus.pump();
+        return log->answers.size() > before ? log->answers.back()
+                                            : std::string("<no answer>");
+    }
+    TxnResult last_readiness() const {
+        return log->readiness.empty() ? TxnResult{} : log->readiness.back();
+    }
+};
+
+/// Load both artifacts and wire the same credulous coordinator the native cases
+/// use. `load_candidate` is the ordinary load followed by the seal — so v2 is
+/// built by exactly the code that builds every other weave, and the object that
+/// prepares is the object that goes live.
+DynCast load_pair(Switchboard& bus, Kernel& kernel) {
+    DynCast d{register_probe(bus, {pong_schema()}),
+              register_probe(bus, {schema_of<versioned::CandidateReady>(),
+                                   schema_of<versioned::CandidateRefused>(),
+                                   schema_of<versioned::VersionReply>()}),
+              register_probe(bus, {schema_of<versioned::VersionReply>()})};
+    std::shared_ptr<CastLog> log = d.log;
+    d.observer.weave->on_handle = [log](const Message& in, Bus&, ProbeWeave&) {
+        const Cell* v = in.payload.get("version");
+        log->answers.push_back(v == nullptr ? std::string("<none>") : std::string(v->as_text()));
+    };
+    std::shared_ptr<TxnId> live = d.live_txn;
+    d.coordinator.weave->on_handle = [&bus, log, live](const Message& in, Bus&, ProbeWeave&) {
+        if (!live->valid()) {
+            return;
+        }
+        const Cell* claimed = in.payload.get("transaction");
+        const TxnId named = claimed == nullptr
+                                ? *live
+                                : TxnId{static_cast<std::uint64_t>(claimed->as_int())};
+        const bool refusal =
+            in.payload.schema().name() == std::string_view(versioned::CandidateRefused::zen_name);
+        log->readiness.push_back(bus.accept_preparation_answer(
+            named, refusal ? PreparationAnswer::Refused : PreparationAnswer::Ready));
+    };
+
+    LoadResult v1 = kernel.load("v1", ZEN_SO_VERSIONED_V1, kService);
+    REQUIRE(v1.ok);
+    d.incumbent = v1.id;
+    LoadResult v2 = kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id);
+    REQUIRE(v2.ok);
+    d.candidate = v2.id;
+    return d;
+}
+
+/// Ask the real artifact to prepare. `escape_to` is the stranger it will try to
+/// reach on its way; every ask carries one, so the isolation regression runs on
+/// every path rather than in one case that could rot.
+void dyn_ask(Switchboard& bus, DynCast& d, TxnId id, const char* plan) {
+    *d.live_txn = id;
+    versioned::PrepareReplacement ask;
+    ask.transaction = static_cast<std::int64_t>(id.value);
+    ask.plan = plan;
+    ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
+    REQUIRE(bus.ask_candidate_to_prepare(id, Message(to_value(ask))).ok);
+    bus.pump();
+}
+
+void dyn_continue(Switchboard& bus, DynCast& d, TxnId id) {
+    bus.send_as(d.coordinator.id, d.candidate,
+                Message(to_value(versioned::ContinuePreparation{
+                    static_cast<std::int64_t>(id.value)})));
+    bus.pump();
+}
+
+/// Everything an ordinary observer could notice about the incumbent, asked of the
+/// bus rather than of any object a failing case might already have destroyed.
+void v1_still_the_service(Switchboard& bus, DynCast& d) {
+    CHECK(bus.alive(d.incumbent));
+    CHECK_FALSE(bus.sealed(d.incumbent));
+    CHECK(bus.role_holder(kService) == d.incumbent);
+    CHECK(d.ask(bus) == "v1");
+    CHECK(bus.role_holder(kService) != d.candidate);
+}
+
+/// A tap that remembers, in order, every delivery the candidate actually received.
+struct CandidateTap {
+    std::vector<std::string> got;
+};
+
+/// Announce a real, Loom-attested activation for `target`.
+///
+/// A lifecycle authority can only be SPENT through a weave's own bus — that is the
+/// R2B-1a boundary — so a one-shot herald does the honours, which is the same road
+/// `zen::control` takes in production. There is deliberately no host shortcut.
+void announce_activation(Switchboard& bus, WeaveId target, std::int64_t sequence) {
+    Registered herald = register_probe(bus, {tick_schema()});
+    const LifecycleAuthority authority = host_lifecycle_authority(bus);
+    herald.weave->on_handle = [authority, target, sequence](const Message&, Bus& wb, ProbeWeave&) {
+        wb.announce_lifecycle(authority, target, Message(to_value(loom::Activated{sequence})),
+                              sequence);
+    };
+    bus.send(herald.id, Message(tick(1)));
+    bus.pump();
+    (void)bus.unregister_weave(herald.id); // its one errand is done
+}
+
+} // namespace
+
+TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answers for itself, "
+          "and only then becomes the service") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    // Every refusal the sealed candidate earns, counted at the source.
+    std::vector<std::string> sealed_speech;
+    bus.add_observer([&sealed_speech](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.refusal.reason == RefusalReason::SealedSpeech) {
+            sealed_speech.push_back(e.schema_name);
+        }
+    });
+
+    // 1-3. The incumbent is loaded, activated, holds the role, and answers "v1".
+    announce_activation(bus, d.incumbent, 1);
+    CHECK(state_field(bus, d.incumbent, "activations") == 1);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // 4-5. A sealed candidate, and one transaction naming all four participants.
+    CHECK(bus.sealed(d.candidate));
+    CHECK(bus.candidate_owner(d.candidate).who == d.coordinator.id);
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+
+    // 6-8. The ask goes through the coordinator-only door; the candidate reaches
+    // for the world on its way, defers its answer, and is still nobody.
+    dyn_ask(bus, d, t.id, "defer");
+    CHECK(state_field(bus, d.candidate, "prepares") == 1);
+    CHECK(state_field(bus, d.candidate, "deferred") == 1);
+    CHECK_FALSE(state_field(bus, d.candidate, "answered"));
+    CHECK(state_field(bus, d.candidate, "escapes") == 4); // it really did try
+    // ...and three of the four were REFUSED as sealed speech: the publication, the
+    // role-addressed send, and the direct send to a stranger. The fourth — a
+    // domain message to its own coordinator — is delivered, because a seal is a
+    // conversation and not a quarantine.
+    CHECK(sealed_speech.size() == 3);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    CHECK(bus.sealed(d.candidate));
+    CHECK(bus.role_holder(kService) != d.candidate);
+    CHECK(state_field(bus, d.candidate, "served") == 0);      // it answered no production
+    CHECK(state_field(bus, d.candidate, "activations") == 0); // and was told nothing
+    // The one thing it CAN say — an ordinary message to its own coordinator — was
+    // offered to the bus as readiness by a credulous coordinator, and refused.
+    REQUIRE(d.log->readiness.size() == 1);
+    CHECK(d.last_readiness().why == TxnReason::InvalidReadiness);
+
+    // 9-10. Unrelated traffic runs, and the incumbent is still the service.
+    CHECK(d.ask(bus) == "v1");
+    REQUIRE(bus.tick_preparation(t.id).ok);
+    CHECK(d.ask(bus) == "v1");
+
+    // 11-15. The continuation arrives; the candidate spends what it kept; the bus
+    // — not the coordinator — decides the answer is this transaction's.
+    dyn_continue(bus, d, t.id);
+    CHECK(state_field(bus, d.candidate, "continues") == 1);
+    CHECK(state_field(bus, d.candidate, "answered") == 1);
+    REQUIRE(d.log->readiness.size() == 2);
+    CHECK(d.last_readiness().ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    CHECK(d.ask(bus) == "v1"); // STILL. Readiness is not admission.
+    CHECK(bus.role_holder(kService) == d.incumbent);
+
+    // 16-19. Commit delegates to admit_candidate, and no observer sees a gap.
+    const std::int64_t served_before = state_field(bus, d.incumbent, "served");
+    loom::Activated fact{2};
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 2).ok);
+    CHECK(bus.role_holder(kService) == d.candidate);
+    CHECK(bus.sealed(d.incumbent));     // sealed for retirement, not merely renamed
+    CHECK_FALSE(bus.sealed(d.candidate));
+    bus.pump();
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
+    CHECK(state_field(bus, d.candidate, "last_activation") == 2);
+
+    // 20-23. The new production answer, exactly one Committed result, and no
+    // second commit or second collection.
+    CHECK(d.ask(bus) == "v2");
+    CHECK(state_field(bus, d.incumbent, "served") == served_before); // it answers no more
+    exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
+    CHECK_FALSE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                                Message(to_value(fact)), 3).ok);
+    CHECK(bus.active_transactions() == 0);
+}
+
+TEST_CASE("R2B-3b-3: the same readiness, answered inside the preparation handler") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+
+    dyn_ask(bus, d, t.id, "ready");
+    CHECK(state_field(bus, d.candidate, "continues") == 0); // no later delivery was needed
+    CHECK(state_field(bus, d.candidate, "deferred") == 0);  // and no slot was borrowed
+    CHECK(state_field(bus, d.candidate, "token") == 0);
+    CHECK(d.last_readiness().ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    CHECK(d.ask(bus) == "v1");
+
+    loom::Activated fact{1};
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 1).ok);
+    bus.pump();
+    CHECK(d.ask(bus) == "v2");
+    exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
+}
+
+TEST_CASE("R2B-3b-3: queued production waiting on the role reaches the new service only after "
+          "its activation") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    CandidateTap tap;
+    const WeaveId watch = d.candidate;
+    bus.add_observer([&tap, watch](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.target == watch) {
+            tap.got.push_back(e.schema_name);
+        }
+    });
+    REQUIRE(d.ask(bus) == "v1");
+
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "ready");
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
+
+    // Real production, addressed to the ROLE, queued while the incumbent still
+    // holds it — and resolved at delivery, which is after the commit.
+    bus.send_as_to_role(d.observer.id, kService,
+                        Message(to_value(versioned::QueryVersion{9}), d.observer.id,
+                                d.observer.id, 0));
+    REQUIRE(bus.pending() == 1);
+
+    loom::Activated fact{5};
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 5).ok);
+    bus.pump();
+
+    // The activation was INSERTED AHEAD of traffic that was already waiting — the
+    // narrowest placement that works, and nothing was dropped to achieve it.
+    REQUIRE(tap.got.size() >= 2);
+    CHECK(tap.got[tap.got.size() - 2] == std::string(loom::Activated::zen_name));
+    CHECK(tap.got.back() == std::string(versioned::QueryVersion::zen_name));
+    REQUIRE_FALSE(d.log->answers.empty());
+    CHECK(d.log->answers.back() == "v2"); // the queued query was answered by v2
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
+}
+
+TEST_CASE("R2B-3b-3: a real candidate's refusal ends it, and v1 never notices") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    const char* plan = "refuse";
+    SUBCASE("refused immediately") { plan = "refuse"; }
+    SUBCASE("refused after deferring") { plan = "defer-refuse"; }
+    SUBCASE("refused because the plan made no sense") { plan = "sing-a-song"; }
+
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, plan);
+    if (std::string(plan) == "defer-refuse") {
+        CHECK(bus.transaction_active(t.id));
+        dyn_continue(bus, d, t.id);
+    }
+
+    CHECK(d.last_readiness().ok);
+    CHECK(d.last_readiness().why == TxnReason::CandidateRefused);
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0);
+    CHECK_FALSE(bus.alive(d.candidate));
+    exactly_one_outcome(bus, d.op.id, t.id, TxnState::Aborted, TxnReason::CandidateRefused);
+    v1_still_the_service(bus, d);
+    // The kernel still holds the library the transaction discarded; unloading it
+    // is the host's ordinary cleanup and must stay safe.
+    CHECK(kernel.unload("v2"));
+}
+
+TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidate outside") {
+    int how = 0;
+    SUBCASE("the candidate dies while holding the answer") { how = 0; }
+    SUBCASE("the candidate's code is replaced") { how = 1; }
+    SUBCASE("the coordinator dies") { how = 2; }
+    SUBCASE("the incumbent dies") { how = 3; }
+    SUBCASE("the operator dies") { how = 4; }
+    SUBCASE("the operator is explicitly abandoned") { how = 5; }
+    SUBCASE("preparation runs out of budget") { how = 6; }
+    SUBCASE("the incumbent's code is replaced") { how = 7; }
+
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 3);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "defer");
+    REQUIRE(state_field(bus, d.candidate, "deferred") == 1);
+    const std::size_t offered = d.log->readiness.size();
+
+    TxnReason expected = TxnReason::CandidateChanged;
+    bool operator_can_collect = true;
+    if (how == 0) {
+        bus.kill(d.candidate);
+    } else if (how == 1) {
+        REQUIRE(bus.swap_state(d.candidate, bus.snapshot_bytes(d.candidate)).revived);
+    } else if (how == 2) {
+        bus.kill(d.coordinator.id);
+        expected = TxnReason::CoordinatorChanged;
+    } else if (how == 3) {
+        bus.kill(d.incumbent);
+        expected = TxnReason::IncumbentChanged;
+    } else if (how == 4) {
+        bus.kill(d.op.id);
+        expected = TxnReason::OperatorChanged;
+        operator_can_collect = false; // a result is kept for a life that has ended
+    } else if (how == 5) {
+        REQUIRE(bus.abort_prepared_replacement(t.id, d.op.id).ok);
+        expected = TxnReason::ExplicitAbort;
+    } else if (how == 6) {
+        REQUIRE(bus.tick_preparation(t.id).ok);
+        REQUIRE(bus.tick_preparation(t.id).ok);
+        CHECK_FALSE(bus.tick_preparation(t.id).ok);
+        expected = TxnReason::PreparationExhausted;
+    } else {
+        // Its code is replaced in place — it never stopped living, and it is
+        // still not the participant the transaction bound.
+        REQUIRE(bus.swap_state(d.incumbent, bus.snapshot_bytes(d.incumbent)).revived);
+        expected = TxnReason::IncumbentChanged;
+    }
+
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0); // capacity reclaimed
+    if (operator_can_collect) {
+        exactly_one_outcome(bus, d.op.id, t.id, TxnState::Aborted, expected);
+    }
+
+    // The retained authority is worthless from here: there is no transaction to
+    // name, and in every case but the incumbent's death the candidate is gone.
+    bus.send_as(d.coordinator.id, d.candidate,
+                Message(to_value(versioned::ContinuePreparation{
+                    static_cast<std::int64_t>(t.id.value)})));
+    bus.pump();
+    CHECK(d.log->readiness.size() == offered);
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.role_holder(kService) != d.candidate);
+
+    if (how != 3) { // the incumbent's own death is the one case where it stopped
+        v1_still_the_service(bus, d);
+    } else {
+        CHECK_FALSE(bus.alive(d.incumbent));
+        CHECK_FALSE(bus.sealed(d.incumbent)); // aborting is not retirement
+    }
+    if (how == 7) { // ...and replaced code is still the service, under its own name
+        CHECK(state_field(bus, d.incumbent, "served") > 0);
+    }
+    CHECK(kernel.unload("v1"));
+    if (kernel.is_loaded("v2")) {
+        CHECK(kernel.unload("v2"));
+    }
+}
+
+TEST_CASE("R2B-3b-3: a candidate artifact that cannot load never becomes a candidate") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // An artifact built against the PREVIOUS ABI: refused at load, so there is
+    // nothing to seal, nothing to name in a transaction, and nothing to undo.
+    LoadResult stale = kernel.load_candidate("stale", ZEN_SO_STALEABI, d.coordinator.id);
+    CHECK_FALSE(stale.ok);
+    CHECK_FALSE(kernel.is_loaded("stale"));
+    CHECK_FALSE(stale.id.valid());
+
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       stale.id, kService, 8);
+    CHECK_FALSE(t.ok);
+    CHECK(t.why == TxnReason::PreconditionFailed);
+    CHECK(bus.active_transactions() == 0);
+    v1_still_the_service(bus, d);
+}
+
+TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothing about the "
+          "new service") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "ready");
+    loom::Activated fact{1};
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 1).ok);
+    bus.pump();
+    REQUIRE(d.ask(bus) == "v2");
+    exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
+
+    // RETIREMENT IS A CONVERSATION THE OPERATOR OWNS, and the substrate's only
+    // part in it is that a sealed weave can still hear its coordinator. Here it
+    // works, and then it stops working — the retired incumbent dies before the
+    // word reaches it.
+    bus.send_as(d.coordinator.id, d.incumbent, Message(to_value(versioned::RetireNow{1})));
+    bus.pump();
+    CHECK(state_field(bus, d.incumbent, "retired") == 1);
+
+    bus.kill(d.incumbent);
+    const Ticket late = bus.send_as(d.coordinator.id, d.incumbent,
+                                    Message(to_value(versioned::RetireNow{2})));
+    bus.pump();
+    // ONE TRUTHFUL DIAGNOSTIC, and no rollback of anything.
+    CHECK(bus.outcome(late).disposition == Disposition::Refused);
+    CHECK(bus.outcome(late).refusal.reason == RefusalReason::TargetUnavailable);
+    CHECK(bus.role_holder(kService) == d.candidate); // the candidate is still the service
+    CHECK(d.ask(bus) == "v2");
+    CHECK(bus.sealed(d.incumbent));                  // sealed wreckage, exactly as it was
+    TxnOutcome second{};
+    CHECK_FALSE(bus.take_outcome(d.op.id, second));  // and no second transaction result
+    CHECK(bus.active_transactions() == 0);
+}
+
+TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation and at commit") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+
+    // What the bus PUBLISHED for each artifact — the same list delivery is matched
+    // against, not a manifest read separately for the test.
+    const auto names = [&bus](WeaveId id) {
+        std::vector<std::string> out;
+        for (const auto& s : bus.accepted_schemas(id)) {
+            out.push_back(s->name() + " v" + std::to_string(s->version()));
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    const std::vector<std::string> incumbent_contract{"QueryVersion v1", "RetireNow v1",
+                                                      "zen.Activated v1"};
+    const std::vector<std::string> candidate_contract{
+        "ContinuePreparation v1", "PrepareReplacement v1", "QueryVersion v1", "RetireNow v1",
+        "zen.Activated v1"};
+    CHECK(names(d.incumbent) == incumbent_contract);
+    CHECK(names(d.candidate) == candidate_contract);
+
+    // NO WILDCARD ACCEPTANCE: a shape the candidate does not declare is refused
+    // even from its own coordinator, which is the only party that can reach it.
+    const Ticket undeclared =
+        bus.send_as(d.coordinator.id, d.candidate, Message(to_value(versioned::CandidateReady{1})));
+    bus.pump();
+    CHECK(bus.outcome(undeclared).refusal.reason == RefusalReason::NotAccepted);
+
+    // ...and the contract does not change at admission. The list after commit is
+    // the list that prepared.
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "ready");
+    loom::Activated fact{1};
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 1).ok);
+    bus.pump();
+    CHECK(names(d.candidate) == candidate_contract);
+    CHECK(d.ask(bus) == "v2");
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);
