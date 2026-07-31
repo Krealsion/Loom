@@ -3163,11 +3163,18 @@ struct DynCast {
 /// use. `load_candidate` is the ordinary load followed by the seal — so v2 is
 /// built by exactly the code that builds every other weave, and the object that
 /// prepares is the object that goes live.
-DynCast load_pair(Switchboard& bus, Kernel& kernel) {
+///
+/// `coordinator_grant` is a parameter because R2B-3d's keystone case is a
+/// coordinator that CANNOT emit `zen.Activated` — the exact grant shape that used
+/// to commit successfully and leave its candidate untold.
+DynCast load_pair(Switchboard& bus, Kernel& kernel,
+                  Grant coordinator_grant = Grant{}.allow_any()) {
     DynCast d{register_probe(bus, {pong_schema()}),
-              register_probe(bus, {schema_of<versioned::CandidateReady>(),
-                                   schema_of<versioned::CandidateRefused>(),
-                                   schema_of<versioned::VersionReply>()}),
+              register_probe(bus,
+                             {schema_of<versioned::CandidateReady>(),
+                              schema_of<versioned::CandidateRefused>(),
+                              schema_of<versioned::VersionReply>()},
+                             2, true, std::move(coordinator_grant)),
               register_probe(bus, {schema_of<versioned::VersionReply>()})};
     std::shared_ptr<CastLog> log = d.log;
     d.observer.weave->on_handle = [log](const Message& in, Bus&, ProbeWeave&) {
@@ -4257,6 +4264,750 @@ TEST_CASE("R2B-3b-3a: a candidate that loads but cannot be sealed leaves no arti
     CHECK(ledger.opened() == 1);
     CHECK(ledger.closed() == 1);
     v1_still_the_service(bus, d);
+}
+
+// ---- R2B-3d: admission includes first breath --------------------------------
+//
+// R2B-3b put the activation ahead of production. It could not make the activation
+// CERTAIN: `admit_candidate` moved the role and queued the activation as an
+// ordinary gated send stamped as the coordinator, so the topology changed here
+// and the message was authorized later — against a grant, a sender life and a
+// seal the commit had already stopped being able to guarantee.
+//
+//     commit -> ok ; role moves ; then Activated -> CapabilityDenied
+//
+// A successor that is publicly the service and was never told it is alive. So the
+// two halves stopped being two things: one envelope now IS the admission and IS
+// the activation, dispatched as one queue turn, and there is no representable
+// state in which one of them happened.
+//
+//     Entering the world and being told that you entered it are one event.
+
+namespace {
+
+/// Every refusal the bus emitted, keyed by the seq that owns it — so a proof can
+/// say "THIS EXACT DELIVERY was never refused" instead of "no refusal that looked
+/// like it went past". The distinction matters here: a retiring incumbent
+/// legitimately produces refusals of its own, and an assertion that merely
+/// counted them would pass while the activation was being rejected beside them.
+struct RefusalLog {
+    struct Entry {
+        std::uint64_t seq = 0;
+        WeaveId target{};
+        std::string schema;
+        RefusalReason reason = RefusalReason::None;
+    };
+    std::vector<Entry> entries;
+    std::vector<std::string> delivered_to_candidate;
+
+    /// WHERE WE ARE NOW. Everything here is scoped from a mark, because a
+    /// preparation legitimately delivers to the candidate and a test may
+    /// legitimately provoke refusals of its own — an assertion that swept the
+    /// whole log would pass on the wrong evidence.
+    std::size_t refusal_mark() const { return entries.size(); }
+    std::size_t delivery_mark() const { return delivered_to_candidate.size(); }
+
+    std::vector<std::string> delivered_since(std::size_t from) const {
+        return std::vector<std::string>(delivered_to_candidate.begin() +
+                                            static_cast<std::ptrdiff_t>(from),
+                                        delivered_to_candidate.end());
+    }
+    bool refused(std::uint64_t seq) const {
+        for (const Entry& e : entries) {
+            if (e.seq == seq) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+/// Watch the bus for a candidate: what it was handed, in order, and every refusal
+/// anybody suffered.
+std::shared_ptr<RefusalLog> watch(Switchboard& bus, WeaveId candidate) {
+    auto log = std::make_shared<RefusalLog>();
+    bus.add_observer([log, candidate](const BusEvent& e) {
+        if (e.kind == EventKind::Refused) {
+            log->entries.push_back(
+                RefusalLog::Entry{e.seq, e.target, e.schema_name, e.refusal.reason});
+        } else if (e.kind == EventKind::Delivered && e.target == candidate) {
+            log->delivered_to_candidate.push_back(e.schema_name);
+        }
+    });
+    return log;
+}
+
+/// THE EXCLUSION LIST, written once. After a successful admission the activation
+/// must not be rejectable for any of these — they are exactly the questions the
+/// old gated path asked after the topology had already moved.
+///
+/// Scoped from the mark taken when the admission was scheduled, so a refusal the
+/// test itself provoked earlier cannot be mistaken for the activation's.
+void no_activation_refusal(const RefusalLog& log, WeaveId candidate, std::size_t from,
+                           std::size_t from_deliveries) {
+    // A POSITIVE CONTROL FIRST: exactly one activation was actually DELIVERED. An
+    // exclusion list on its own is satisfied by an activation that never happened.
+    std::size_t delivered = 0;
+    for (const std::string& s : log.delivered_since(from_deliveries)) {
+        if (s == std::string(loom::Activated::zen_name)) {
+            ++delivered;
+        }
+    }
+    CHECK(delivered == 1);
+    for (std::size_t i = from; i < log.entries.size(); ++i) {
+        const RefusalLog::Entry& e = log.entries[i];
+        if (e.target != candidate || e.schema != loom::Activated::zen_name) {
+            continue;
+        }
+        // Named individually so a failure says WHICH question came back to life.
+        CHECK(e.reason != RefusalReason::CapabilityDenied);
+        CHECK(e.reason != RefusalReason::SenderLifeEnded);
+        CHECK(e.reason != RefusalReason::NoSuchTarget);
+        CHECK(e.reason != RefusalReason::TargetUnavailable);
+        CHECK(e.reason != RefusalReason::NotAccepted);
+        CHECK(e.reason != RefusalReason::GateRefused);
+        CHECK(e.reason != RefusalReason::AnswerTargetChanged);
+        CHECK(e.reason != RefusalReason::SealedSpeech);
+        CHECK(e.reason != RefusalReason::AdmissionRevoked);
+    }
+}
+
+/// A coordinator grant that carries the preparation vocabulary and NOT
+/// `zen.Activated` — the original defect's exact shape, as a value.
+Grant preparation_only() {
+    Grant g;
+    g.allow_to_any(versioned::PrepareReplacement::zen_name,
+                   versioned::PrepareReplacement::zen_version);
+    g.allow_to_any(versioned::ContinuePreparation::zen_name,
+                   versioned::ContinuePreparation::zen_version);
+    g.allow_to_any(versioned::RetireNow::zen_name, versioned::RetireNow::zen_version);
+    return g;
+}
+
+/// Drive a dynamic pair all the way to `Ready`, immediately.
+TxnId dyn_ready(Switchboard& bus, DynCast& d) {
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "ready");
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
+    return t.id;
+}
+
+} // namespace
+
+TEST_CASE("R2B-3d: admission and first breath are one event — v2 is never publicly the service "
+          "without having been told") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    auto log = watch(bus, d.candidate);
+
+    // 1-5. v1 is the live service; v2 is loaded sealed, prepared authentically,
+    //      and the transaction reaches Ready without any of it touching v1.
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnId t = dyn_ready(bus, d);
+    v1_still_the_service(bus, d);
+    CHECK(state_field(bus, d.candidate, "activations") == 0);
+
+    // 6. Production that WILL reach v2 once the role moves, queued while it is
+    //    still v1's. Role-addressed, so resolution is a delivery-time decision.
+    bus.send_as_to_role(d.observer.id, kService,
+                        Message(to_value(versioned::QueryVersion{1}), d.observer.id,
+                                d.observer.id, 0));
+    bus.send_as_to_role(d.observer.id, kService,
+                        Message(to_value(versioned::QueryVersion{2}), d.observer.id,
+                                d.observer.id, 0));
+    REQUIRE(bus.pending() == 2);
+
+    // 7-8. Commit. NO SUCCESSFUL RESULT IS VISIBLE YET: the transaction is
+    //      pending, no outcome exists to collect, and the world is untouched.
+    const std::size_t refusals_before = log->refusal_mark();
+    const std::size_t deliveries_before = log->delivery_mark();
+    loom::Activated fact{11};
+    const TxnResult scheduled = bus.commit_prepared_replacement(
+        t, host_lifecycle_authority(bus), Message(to_value(fact)), 11);
+    REQUIRE(scheduled.ok);
+    CHECK(bus.transaction_state(t) == TxnState::AdmissionPending);
+    TxnOutcome nothing_yet{};
+    CHECK_FALSE(bus.take_outcome(d.op.id, nothing_yet));
+    CHECK(bus.role_holder(kService) == d.incumbent);
+    CHECK(bus.sealed(d.candidate));
+    CHECK_FALSE(bus.sealed(d.incumbent));
+    CHECK(kernel.role_of("v1") == kService);
+    CHECK(state_field(bus, d.candidate, "activations") == 0);
+
+    // 9-12. One dispatch does the whole thing.
+    bus.pump();
+
+    // Topology changed EXACTLY ONCE, and in the committed direction.
+    CHECK(bus.role_holder(kService) == d.candidate);
+    CHECK(bus.sealed(d.incumbent));
+    CHECK_FALSE(bus.sealed(d.candidate));
+
+    // v2 received ONE authentic activation, it was its FIRST live delivery, and
+    // the queued production followed it — nothing dropped, nothing reordered.
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
+    CHECK(state_field(bus, d.candidate, "last_activation") == 11);
+    const std::vector<std::string> live = log->delivered_since(deliveries_before);
+    REQUIRE(live.size() == 3);
+    CHECK(live[0] == std::string(loom::Activated::zen_name));
+    CHECK(live[1] == std::string(versioned::QueryVersion::zen_name));
+    CHECK(live[2] == std::string(versioned::QueryVersion::zen_name));
+
+    // 13-14. v2 answers production; v1 accepts none.
+    const std::int64_t v1_served = state_field(bus, d.incumbent, "served");
+    CHECK(d.ask(bus) == "v2");
+    CHECK(state_field(bus, d.incumbent, "served") == v1_served);
+    CHECK(state_field(bus, d.candidate, "served") == 3); // the two queued, plus that one
+
+    // 15. Exactly one Committed terminal outcome, consumed once.
+    exactly_one_outcome(bus, d.op.id, t, TxnState::Committed, TxnReason::None);
+    CHECK(bus.active_transactions() == 0);
+
+    // 16. The Kernel's role and artifact records agree with the Switchboard.
+    CHECK(kernel.role_of("v2") == kService);
+    CHECK(kernel.role_of("v1").empty());
+    CHECK(kernel.status("v2") == ArtifactStatus::Live);
+    CHECK(kernel.status("v1") == ArtifactStatus::Sealed);
+
+    // And the whole point: the activation was delivered exactly once, and no
+    // refusal of any kind names it.
+    no_activation_refusal(*log, d.candidate, refusals_before, deliveries_before);
+}
+
+TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated grant admits, and "
+          "the activation is authentic anyway") {
+    // Before the repair this scenario was: commit -> ok, the role moves, and the
+    // activation is then refused at delivery as CapabilityDenied. The chosen law
+    // is that LIFECYCLE AUTHORITY owns a committed activation, so the ordinary
+    // grant is not consulted — and this proves both halves of that: the admission
+    // is whole, and the ordinary door is exactly as narrow as it was.
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, preparation_only());
+    auto log = watch(bus, d.candidate);
+
+    // The coordinator genuinely cannot emit the shape. Proven, not assumed —
+    // against the live INCUMBENT, which accepts `zen.Activated` and is not sealed,
+    // so the grant is the only thing that can be refusing.
+    const Ticket forged = bus.send_as(d.coordinator.id, d.incumbent,
+                                      Message(to_value(loom::Activated{99})));
+    bus.pump();
+    CHECK(bus.outcome(forged).refusal.reason == RefusalReason::CapabilityDenied);
+    CHECK(state_field(bus, d.incumbent, "activations") == 0);
+
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnId t = dyn_ready(bus, d);
+    const std::size_t refusals_before = log->refusal_mark();
+    const std::size_t deliveries_before = log->delivery_mark();
+    loom::Activated fact{5};
+    REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                            Message(to_value(fact)), 5)
+                .ok);
+    bus.pump();
+
+    // Committed, authentic, and production follows.
+    exactly_one_outcome(bus, d.op.id, t, TxnState::Committed, TxnReason::None);
+    CHECK(bus.role_holder(kService) == d.candidate);
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
+    CHECK(state_field(bus, d.candidate, "last_activation") == 5);
+    const std::vector<std::string> live = log->delivered_since(deliveries_before);
+    REQUIRE(live.size() >= 1);
+    CHECK(live[0] == std::string(loom::Activated::zen_name));
+    CHECK(d.ask(bus) == "v2");
+    no_activation_refusal(*log, d.candidate, refusals_before, deliveries_before);
+
+    // ...AND NO PUBLIC BYPASS APPEARED. The same coordinator, now speaking to the
+    // weave it just admitted — public, unsealed, accepting the shape — still
+    // cannot say `zen.Activated`. The ordinary grant governs ordinary speech
+    // exactly as before; what changed is only that a committed activation was
+    // never ordinary speech.
+    const Ticket after = bus.send_as(d.coordinator.id, d.candidate,
+                                     Message(to_value(loom::Activated{6})));
+    bus.pump();
+    CHECK(bus.outcome(after).refusal.reason == RefusalReason::CapabilityDenied);
+    CHECK(state_field(bus, d.candidate, "activations") == 1); // still one
+}
+
+TEST_CASE("R2B-3d: an ordinary weave holding the grant sends a perfect zen.Activated that is not "
+          "a lifecycle fact") {
+    // The other half of the same law. Removing the grant from the committed path
+    // must not make the shape mean anything on its own: a weave that IS permitted
+    // to emit it produces a delivered, well-formed, correctly-stamped message
+    // carrying no attestation, and the consumer ignores it.
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    Registered impostor = register_probe(bus, {pong_schema()});
+
+    // First against the live incumbent, which is public and accepts the shape.
+    const Ticket at_v1 =
+        bus.send_as(impostor.id, d.incumbent, Message(to_value(loom::Activated{1})));
+    bus.pump();
+    CHECK(bus.outcome(at_v1).disposition == Disposition::Delivered); // it arrived...
+    CHECK(state_field(bus, d.incumbent, "activations") == 0);        // ...and meant nothing
+
+    // Then the real thing, and then a REPLAY of it: the same shape, the same
+    // sequence, sent ordinarily by a weave that may emit it. A copied activation
+    // is a costume — the attestation is a delivery fact and there is nothing on
+    // the wire to copy.
+    const TxnId t = dyn_ready(bus, d);
+    REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{4})), 4)
+                .ok);
+    bus.pump();
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
+    CHECK(state_field(bus, d.candidate, "last_activation") == 4);
+
+    const Ticket replay =
+        bus.send_as(impostor.id, d.candidate, Message(to_value(loom::Activated{5})));
+    bus.pump();
+    CHECK(bus.outcome(replay).disposition == Disposition::Delivered);
+    CHECK(state_field(bus, d.candidate, "activations") == 1);      // unmoved
+    CHECK(state_field(bus, d.candidate, "last_activation") == 4);  // and unadvanced
+}
+
+TEST_CASE("R2B-3d: a candidate that cannot receive its own activation is not admissible, and the "
+          "refusal happens before anything moves") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+
+    // Two ways to be unable to receive it, and both are the candidate's own
+    // contract rather than anything about the coordinator or the world.
+    std::vector<std::shared_ptr<const Schema>> accept{ping_schema()};
+    Message activation(to_value(loom::Activated{3}));
+    const AdmitRefusal expected = AdmitRefusal::CandidateContract;
+    SUBCASE("it does not accept zen.Activated at all") {}
+    SUBCASE("its gate refuses this exact activation") {
+        accept.push_back(schema_of<loom::Activated>());
+        // The same (name, version), a different shape — so the door MATCHES and
+        // the gate is what refuses. An honest operator cannot produce this; the
+        // pin exists because "the door accepted it" and "the gate admitted it"
+        // are two questions and the old code asked neither until after commit.
+        const auto impostor = SchemaBuilder(std::string(loom::Activated::zen_name),
+                                            loom::Activated::zen_version)
+                                  .field("sequence", Kind::Text)
+                                  .build();
+        Value bad(impostor);
+        bad.set("sequence", Cell::text("3"));
+        activation = Message(std::move(bad));
+    }
+
+    auto cand_weave = std::make_unique<ProbeWeave>(accept);
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+
+    const AdmitResult r = bus.admit_candidate(candidate, incumbent, "worker",
+                                              host_lifecycle_authority(bus),
+                                              std::move(activation), 3);
+    CHECK_FALSE(r.scheduled);
+    CHECK(r.why == expected);
+    CHECK_FALSE(r.ticket.valid()); // a refusal queues nothing
+
+    // NOTHING MOVED and nothing was queued — the refusal is indistinguishable
+    // from never having asked.
+    CHECK(bus.pending() == 0);
+    CHECK(bus.role_holder("worker") == incumbent);
+    CHECK(bus.sealed(candidate));
+    CHECK_FALSE(bus.sealed(incumbent));
+    bus.pump();
+    CHECK(cand_raw->handled_names.empty());
+}
+
+TEST_CASE("R2B-3d: a transaction whose candidate cannot be activated ends Aborted, and the "
+          "incumbent never learns of it") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult begun = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                           c.incumbent, c.candidate, kRole, 8);
+    REQUIRE(begun.ok);
+    const TxnId t = begun.id;
+    make_ready(bus, c, t);
+    REQUIRE(bus.transaction_state(t) == TxnState::Ready);
+
+    // A well-formed activation the candidate's gate cannot admit.
+    const auto impostor =
+        SchemaBuilder(std::string(loom::Activated::zen_name), loom::Activated::zen_version)
+            .field("sequence", Kind::Text)
+            .build();
+    Value bad(impostor);
+    bad.set("sequence", Cell::text("1"));
+    const TxnResult refused = bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                                              Message(std::move(bad)), 1);
+    CHECK_FALSE(refused.ok);
+    CHECK(refused.why == TxnReason::AdmissionRefused);
+    exactly_one_outcome(bus, c.op.id, t, TxnState::Aborted, TxnReason::AdmissionRefused);
+    CHECK(bus.pending() == 0);
+    CHECK(bus.role_holder(kRole) == c.incumbent);
+    CHECK_FALSE(bus.sealed(c.incumbent));
+    CHECK(c.ask(bus, kRole) == "v1");
+}
+
+TEST_CASE("R2B-3d: a scheduled admission whose world drifts before dispatch refuses, and the "
+          "incumbent is still the service") {
+    // THE INTERVAL THE PHASE CREATED, and the proof that it is safe. Scheduling an
+    // admission promises nothing; between the schedule and the dispatch anything
+    // may happen, and every one of these roads ends in the same place — the
+    // envelope refuses as `AdmissionRevoked`, no topology moved, and no weave was
+    // told anything.
+    //
+    // These are DIRECT admissions on purpose: with no transaction there is no
+    // invalidation hook standing in front, so the envelope's own recorded
+    // participants are the only wall, which is exactly the wall under test.
+    enum class Drift { CoordinatorDies, CoordinatorReloads, CandidateDies, CandidateReloads,
+                       IncumbentDies, IncumbentRemoved, CandidateRemoved };
+    Drift drift = Drift::CoordinatorDies;
+    SUBCASE("the coordinator dies") { drift = Drift::CoordinatorDies; }
+    SUBCASE("the coordinator's code is replaced") { drift = Drift::CoordinatorReloads; }
+    SUBCASE("the candidate dies") { drift = Drift::CandidateDies; }
+    SUBCASE("the candidate's code is replaced") { drift = Drift::CandidateReloads; }
+    SUBCASE("the incumbent dies") { drift = Drift::IncumbentDies; }
+    SUBCASE("the incumbent is permanently removed") { drift = Drift::IncumbentRemoved; }
+    SUBCASE("the candidate is removed and a fresh weave takes its place") {
+        drift = Drift::CandidateRemoved;
+    }
+
+    Switchboard bus;
+    Prepared p = prepare(bus);
+    // `unregister_weave` HANDS THE OBJECT BACK, and dropping that owner destroys
+    // it — which would leave `p.candidate_raw` dangling for the final check below.
+    // Held here on purpose: ASan found this, and the Debug lane was green on it.
+    std::unique_ptr<Weave> removed;
+
+    const AdmitResult r = bus.admit_candidate(p.candidate, p.incumbent, "worker",
+                                              host_lifecycle_authority(bus),
+                                              Message(to_value(loom::Activated{2})), 2);
+    REQUIRE(r.scheduled);
+    const Topology scheduled = Topology::of(bus, p);
+    CHECK(scheduled.holder == p.incumbent); // scheduling moved nothing
+
+    switch (drift) {
+    case Drift::CoordinatorDies:
+        bus.kill(p.coordinator.id);
+        break;
+    case Drift::CoordinatorReloads:
+        REQUIRE(bus.swap_state(p.coordinator.id, bus.snapshot_bytes(p.coordinator.id)).revived);
+        break;
+    case Drift::CandidateDies:
+        bus.kill(p.candidate);
+        break;
+    case Drift::CandidateReloads:
+        REQUIRE(bus.swap_state(p.candidate, bus.snapshot_bytes(p.candidate)).revived);
+        break;
+    case Drift::IncumbentDies:
+        bus.kill(p.incumbent);
+        break;
+    case Drift::IncumbentRemoved:
+        // Gone entirely, which also releases the role — so the admission arrives
+        // to find no incumbent AND no slot. It replaces nothing rather than
+        // installing a successor over an absence.
+        removed = bus.unregister_weave(p.incumbent);
+        break;
+    case Drift::CandidateRemoved:
+        removed = bus.unregister_weave(p.candidate);
+        // A brand-new weave, taking the same place in the world. WeaveIds are
+        // never reused, so it cannot BE the old id — and the envelope names a
+        // life and an incarnation as well, so even a namesake could not pass.
+        (void)bus.register_weave(std::make_unique<ProbeWeave>(
+                                     std::vector<std::shared_ptr<const Schema>>{
+                                         schema_of<loom::Activated>()}),
+                                 Grant{}.allow_any());
+        break;
+    }
+
+    bus.pump();
+
+    // Refused, named, and nothing moved.
+    const DeliveryOutcome o = bus.outcome(r.ticket);
+    CHECK(o.disposition == Disposition::Refused);
+    CHECK(o.refusal.reason == RefusalReason::AdmissionRevoked);
+    if (drift == Drift::IncumbentRemoved) {
+        CHECK_FALSE(bus.role_holder("worker").valid()); // released with its holder
+    } else {
+        CHECK(bus.role_holder("worker") == p.incumbent); // still the service's slot
+        CHECK_FALSE(bus.sealed(p.incumbent)); // never sealed for a retirement that did not happen
+    }
+    if (drift != Drift::CandidateRemoved) {
+        CHECK(bus.sealed(p.candidate)); // still outside the world
+    }
+    CHECK(p.candidate_raw->handled_names.empty()); // and never told anything
+}
+
+TEST_CASE("R2B-3d: two admissions racing for one role — the first wins whole, the second refuses "
+          "whole") {
+    // Both are scheduled while the world still permits both. The queue decides,
+    // and there is no partial outcome on either side: the loser's envelope finds
+    // an incumbent that is no longer a public service and changes nothing.
+    Switchboard bus;
+    Prepared p = prepare(bus);
+    auto other = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* other_raw = other.get();
+    const WeaveId rival = bus.register_weave(std::move(other), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(rival, p.coordinator.id));
+
+    const AdmitResult first = bus.admit_candidate(p.candidate, p.incumbent, "worker",
+                                                  host_lifecycle_authority(bus),
+                                                  Message(to_value(loom::Activated{1})), 1);
+    const AdmitResult second = bus.admit_candidate(rival, p.incumbent, "worker",
+                                                   host_lifecycle_authority(bus),
+                                                   Message(to_value(loom::Activated{2})), 2);
+    REQUIRE(first.scheduled);
+    REQUIRE(second.scheduled); // both look fine from here, and that is honest
+    bus.pump();
+
+    CHECK(bus.outcome(first.ticket).disposition == Disposition::Delivered);
+    CHECK(bus.outcome(second.ticket).refusal.reason == RefusalReason::AdmissionRevoked);
+    CHECK(bus.role_holder("worker") == p.candidate);
+    CHECK(p.candidate_raw->handled_names.size() == 1);
+    CHECK(other_raw->handled_names.empty()); // the loser was told nothing at all
+    CHECK(bus.sealed(rival));                // and is still outside the world
+}
+
+TEST_CASE("R2B-3d: aborting a pending admission stops it, once — the queued action cannot revive "
+          "a transaction that has ended") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult begun = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                           c.incumbent, c.candidate, kRole, 8);
+    REQUIRE(begun.ok);
+    make_ready(bus, c, begun.id);
+    REQUIRE(bus.commit_prepared_replacement(begun.id, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{1})), 1)
+                .ok);
+    REQUIRE(bus.transaction_state(begun.id) == TxnState::AdmissionPending);
+
+    // The operator changes its mind while the admission is in flight.
+    REQUIRE(bus.abort_prepared_replacement(begun.id, c.op.id).ok);
+    exactly_one_outcome(bus, c.op.id, begun.id, TxnState::Aborted, TxnReason::ExplicitAbort);
+    CHECK(bus.active_transactions() == 0); // capacity reclaimed at once
+
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+    bus.pump();
+
+    // THE QUEUED ADMISSION FINDS NOTHING AND DOES NOTHING. In particular it does
+    // not write a second terminal outcome — the abort already wrote the only one.
+    CHECK(bus.role_holder(kRole) == c.incumbent);
+    CHECK_FALSE(bus.sealed(c.incumbent));
+    CHECK(c.ask(bus, kRole) == "v1");
+    TxnOutcome second{};
+    CHECK_FALSE(bus.take_outcome(c.op.id, second));
+    std::size_t revoked = 0;
+    for (const TapRecord& t : tap) {
+        if (t.kind == EventKind::Refused && t.reason == RefusalReason::AdmissionRevoked) {
+            ++revoked;
+        }
+    }
+    CHECK(revoked == 1);
+
+    // ...and the transaction cannot be committed again from any door.
+    CHECK_FALSE(bus.commit_prepared_replacement(begun.id, host_lifecycle_authority(bus),
+                                                Message(to_value(loom::Activated{2})), 2)
+                    .ok);
+    CHECK(bus.transaction_state(begun.id) == TxnState::Aborted);
+}
+
+TEST_CASE("R2B-3d: a pending admission holds its promises — no second commit, no second candidate, "
+          "no readiness, no budget") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    Cast other = cast_with_role(bus, "other");
+    const TxnResult begun = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
+                                                           c.incumbent, c.candidate, kRole, 8);
+    REQUIRE(begun.ok);
+    make_ready(bus, c, begun.id);
+    REQUIRE(bus.commit_prepared_replacement(begun.id, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{1})), 1)
+                .ok);
+
+    // Every door that was closed in Ready is closed in AdmissionPending, and each
+    // says so as itself rather than as a bare false.
+    CHECK(bus.commit_prepared_replacement(begun.id, host_lifecycle_authority(bus),
+                                          Message(to_value(loom::Activated{2})), 2)
+              .why == TxnReason::WrongState);
+    CHECK(bus.tick_preparation(begun.id).why == TxnReason::WrongState);
+    CHECK(bus.ask_candidate_to_prepare(begun.id, Message(to_value(versioned::PrepareReplacement{})))
+              .why == TxnReason::WrongState);
+    CHECK(bus.accept_preparation_answer(begun.id, PreparationAnswer::Ready).why ==
+          TxnReason::WrongState);
+    // The candidate is still exclusively this transaction's, and the incumbent
+    // still busy — the slot has not been released early. Asked through the SAME
+    // coordinator, so the exclusivity check is the term that decides rather than
+    // an earlier ownership one.
+    CHECK(bus.begin_prepared_replacement(other.op.id, c.coordinator.id, other.incumbent,
+                                         c.candidate, "other", 8)
+              .why == TxnReason::CandidateBusy);
+    CHECK(bus.begin_prepared_replacement(c.op.id, other.coordinator.id, c.incumbent,
+                                         other.candidate, kRole, 8)
+              .why == TxnReason::IncumbentBusy);
+    CHECK(bus.active_transactions() == 1);
+
+    bus.pump();
+    exactly_one_outcome(bus, c.op.id, begun.id, TxnState::Committed, TxnReason::None);
+    CHECK(c.candidate_raw->activations == 1); // exactly one, ever
+}
+
+TEST_CASE("R2B-3d: the admission dispatch keeps activation-first ordering, unrelated FIFO, and "
+          "drops nothing") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered bystander = register_probe(bus, {ping_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+    auto cand_weave = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    ProbeWeave* inc_raw = static_cast<ProbeWeave*>(bus.weave(incumbent));
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+
+    // Four kinds of traffic, queued before the commit request. A publication too:
+    // `fanout` chooses recipients at ENQUEUE time and skips sealed records, so a
+    // publication from before the admission is not retroactively the candidate's.
+    bus.send(bystander.id, Message(ping(1)));      // unrelated
+    bus.send_to_role("worker", Message(ping(2)));  // will resolve to the candidate
+    bus.send(candidate, Message(ping(3)));         // direct to the candidate
+    bus.publish(Message(ping(4)));                 // to the world as it is now
+    bus.send(bystander.id, Message(ping(5)));      // unrelated, after
+    const std::size_t queued = bus.pending();
+
+    REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
+                                Message(to_value(loom::Activated{9})), 9));
+    CHECK(bus.pending() == queued + 1); // exactly one envelope added; nothing removed
+    bus.pump();
+
+    // The candidate: activation first, then everything that was waiting for it,
+    // in the order it was queued. Nothing was dropped to achieve that.
+    REQUIRE(cand_raw->handled_names.size() == 3);
+    CHECK(cand_raw->handled_names[0] == std::string(loom::Activated::zen_name));
+    CHECK(cand_raw->handled_values[1] == 2); // the role message, queued first
+    CHECK(cand_raw->handled_values[2] == 3); // then the direct one
+    // The bystander's FIFO is untouched — including the one queued BEFORE the
+    // admission point, which is the half a head-insertion would have broken.
+    REQUIRE(bystander.weave->handled_values.size() == 3);
+    CHECK(bystander.weave->handled_values[0] == 1);
+    CHECK(bystander.weave->handled_values[1] == 4); // the publication reached the world...
+    CHECK(bystander.weave->handled_values[2] == 5);
+    // ...and the incumbent got the publication too, because it was still public
+    // when the publication chose its recipients. The candidate did not.
+    REQUIRE(inc_raw->handled_values.size() == 1);
+    CHECK(inc_raw->handled_values[0] == 4);
+
+    // A publication AFTER the admission reaches the new service and not the old.
+    bus.publish(Message(ping(6)));
+    bus.pump();
+    CHECK(cand_raw->handled_values.back() == 6);
+    CHECK(inc_raw->handled_values.size() == 1); // sealed for retirement, hears nothing
+}
+
+TEST_CASE("R2B-3d: a foreign lifecycle authority cannot even schedule an admission") {
+    Switchboard bus;
+    Switchboard decoy;
+    Prepared p = prepare(bus);
+    const Topology before = Topology::of(bus, p);
+
+    const AdmitResult r = bus.admit_candidate(p.candidate, p.incumbent, "worker",
+                                              host_lifecycle_authority(decoy),
+                                              Message(to_value(loom::Activated{1})), 1);
+    CHECK_FALSE(r.scheduled);
+    CHECK(r.why == AdmitRefusal::ForeignAuthority);
+    CHECK_FALSE(r.ticket.valid());
+    CHECK(bus.pending() == 0); // nothing was queued to be revoked later
+    bus.pump();
+    CHECK(Topology::of(bus, p) == before);
+}
+
+TEST_CASE("R2B-3d: a lifecycle change during a pending admission ends the transaction, releases "
+          "the candidate's artifact, and leaves the Kernel agreeing with the Switchboard") {
+    // The transaction road, where the invalidation hook stands in front of the
+    // queued envelope. It ends the transaction with the reason that describes what
+    // actually happened — not `AdmissionRefused`, which would blame the admission
+    // for a coordinator that died — and the envelope then finds nothing to do.
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnId t = dyn_ready(bus, d);
+
+    TxnReason expected = TxnReason::CoordinatorChanged;
+    SUBCASE("the coordinator dies") {
+        expected = TxnReason::CoordinatorChanged;
+        REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                                Message(to_value(loom::Activated{1})), 1)
+                    .ok);
+        bus.kill(d.coordinator.id);
+    }
+    SUBCASE("the candidate's code is replaced under it") {
+        expected = TxnReason::CandidateChanged;
+        REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                                Message(to_value(loom::Activated{1})), 1)
+                    .ok);
+        REQUIRE(bus.swap_state(d.candidate, bus.snapshot_bytes(d.candidate)).revived);
+    }
+    SUBCASE("the incumbent dies") {
+        expected = TxnReason::IncumbentChanged;
+        REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                                Message(to_value(loom::Activated{1})), 1)
+                    .ok);
+        bus.kill(d.incumbent);
+    }
+
+    exactly_one_outcome(bus, d.op.id, t, TxnState::Aborted, expected);
+    CHECK(bus.active_transactions() == 0);
+
+    bus.pump();
+
+    // The role never moved, and the Kernel says so — including about the artifact
+    // an aborted transaction discards: a candidate that never entered the world is
+    // unregistered, and its record and library go with it (R2B-3b-3a's law,
+    // unchanged by the pending window).
+    CHECK(bus.role_holder(kService) == d.incumbent);
+    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.status("v2") == ArtifactStatus::NotLoaded);
+    CHECK_FALSE(kernel.is_loaded("v2"));
+    TxnOutcome second{};
+    CHECK_FALSE(bus.take_outcome(d.op.id, second)); // still exactly one
+
+    // And the transaction cannot be revived by anything the queue held.
+    CHECK(bus.transaction_state(t) == TxnState::Aborted);
+    CHECK_FALSE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                                Message(to_value(loom::Activated{2})), 2)
+                    .ok);
+}
+
+TEST_CASE("R2B-3d: a stale queued admission cannot land on a namesake artifact loaded in the "
+          "candidate's place") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+
+    const AdmitResult r = bus.admit_candidate(d.candidate, d.incumbent, kService,
+                                              host_lifecycle_authority(bus),
+                                              Message(to_value(loom::Activated{8})), 8);
+    REQUIRE(r.scheduled);
+
+    // The artifact is unloaded and the SAME NAME is loaded again from the same
+    // file, sealed to the same coordinator. Everything an operator would recognise
+    // is identical; the only thing that is not is the identity the envelope wrote
+    // down when it was scheduled.
+    REQUIRE(kernel.unload("v2"));
+    const LoadResult again = kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id);
+    REQUIRE(again.ok);
+    CHECK_FALSE(again.id == d.candidate);
+
+    bus.pump();
+    CHECK(bus.outcome(r.ticket).refusal.reason == RefusalReason::AdmissionRevoked);
+    v1_still_the_service(bus, d);
+    CHECK(bus.sealed(again.id));
+    CHECK(state_field(bus, again.id, "activations") == 0);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
