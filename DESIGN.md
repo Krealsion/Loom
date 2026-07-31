@@ -3290,7 +3290,9 @@ missing field:** the state is a state.
 ```text
 begin       none      -> Preparing
 tick        Preparing -> Preparing (budget-1), or Aborted at zero
-ready       Preparing -> Ready
+ask         Preparing -> Preparing (the one readiness conversation opens)
+ready       Preparing -> Ready      (only on the candidate's own attested answer)
+refused     Preparing -> Aborted    (likewise, and the same one answer)
 commit      Ready     -> Committed
 abort       Preparing -> Aborted,  Ready -> Aborted
 ```
@@ -3319,10 +3321,82 @@ operator life and incarnation that began the transaction and consumed once; a
 successor at the same address inherits no result, exactly as it inherits no
 conversation.
 
-`mark_candidate_ready` is **trusted native scaffolding, named as such**: the real
-readiness answer is an authenticated conversation between coordinator and
-candidate, and R2B-3b-3 replaces this seam's caller rather than adding a second way
-to become ready.
+### The candidate answers (R2B-3b-3)
+
+R2B-3b-2 shipped `mark_candidate_ready` as trusted native scaffolding, named as
+such: a host call that *asserted* readiness so the state machine could be proven
+before the conversation existed. It is gone — not replaced by a second door onto
+the same transition, but withdrawn behind it. `accept_authenticated_readiness` is
+private, and the only expression in the system that reaches it is the acceptance
+of a real answer.
+
+> **A transaction becomes ready only when the exact sealed candidate
+> authentically answers the exact preparation request that belongs to that
+> transaction.**
+
+Two halves, deliberately asymmetric. `ask_candidate_to_prepare` is **host
+authority** — the transaction layer already is — and delivers the ask *as* the
+bound coordinator through the coordinator-only door, gated by the coordinator's
+own grant. `accept_preparation_answer` is **not authority at all**: it is the
+consumption of the candidate's own attested speech, called by the coordinator from
+inside the delivery of that answer, and every fact it rests on is one the bus
+stamped.
+
+**The transaction id names the record; it does not authorize the transition.** The
+candidate writes it in its payload because a record has to be named, and the bus
+then proves the delivery is that record's one preparation answer from its own
+private facts:
+
+| term | what it is |
+|---|---|
+| the conversation is `Open` | one ask, one answer, consumed once — whichever way it went |
+| `Envelope::preparation == txn.id` | **the decisive one**: this delivery answers *that ask* |
+| `answers_ask()` | Loom's provenance, which no ordinary enqueue path can write |
+| `current_target_` is the coordinator | who is *being dispatched*, not who claims to be |
+| the bus-stamped sender is the candidate | the stamp, never `reply_to` and never the payload |
+| the correlation matches | redundant while the term above holds, and kept |
+| all four participants are still exactly themselves, the candidate is still sealed to this coordinator, the incumbent still holds the role | the world, re-read from the registry |
+
+**Why an envelope fact and not a correlation.** A correlation is a *number a
+sender chooses*. Loom minting one for the preparation ask makes it unique but not
+unforgeable, so a transaction that believed a matching correlation would be
+believing that the candidate answered *some* question numbered N — not that it
+answered **the** ask. The gap is reachable through the honest API: a coordinator
+sends its own candidate an ordinary ask carrying the same correlation by hand, the
+candidate answers it authentically, and every other term is already satisfied
+because they all derive from a real ask. `Envelope::preparation` rides the same
+bus-private rails as `answer_target` — no wire form, no schema, no constructor a
+weave can reach — carried from the ask into the reply authority (and a deferred
+record), and back out through the one answer door. So an immediate answer and one
+deferred across a dozen deliveries prove exactly the same thing: **one definition
+of readiness, not two.**
+
+Today the term only stops a coordinator confusing *itself*. It is built now
+because the seam is certain: the moment a coordinator is an untrusted loaded
+weave — which is where the Manager-as-weave conversion goes — self-confusion
+becomes the ability to declare readiness by asking the candidate anything at all.
+
+**A forged readiness is refused, not fatal.** `InvalidReadiness` is one reason for
+every way of not being the answer, because telling a forger which term it failed
+is telling it what to fix. It refuses the *command*: no state moves, no outcome is
+recorded, and the transaction the forger named stays exactly as legitimate as it
+was. Hostile traffic does not get to end somebody else's promise. `LateReadiness`
+is the separate truth for an authentic answer naming a transaction that is over —
+distinguished from `NoSuchTransaction` by the id counter alone, so no terminal
+record is consulted, still less resurrected.
+
+**An authentic refusal is an ending, not a failure.** `CandidateRefused` is its own
+terminal reason because it is the only one that is neither a mechanism failure nor
+a participant vanishing: preparation ran, and the successor's own verdict was no.
+It consumes the same one answer, produces exactly one terminal outcome, discards
+the sealed candidate under the existing cleanup law, and leaves an incumbent that
+never learned any of it happened.
+
+**Structurally stronger than "the late answer is refused":** aborting *discards*
+the candidate, so the author of any answer still owed is gone and its queued speech
+is refused as `SenderLifeEnded` before it reaches anyone. There is no late answer
+to refuse. `LateReadiness` exists for the record-naming path, not for an
+answer in flight.
 
 **Ending happens once, and the ordering is the reason (R2B-3b-2a).** Terminalizing
 a transaction discards its candidate; discarding a candidate is a lifecycle
@@ -3355,11 +3429,28 @@ the other; committing one would have made it public while the other still believ
 it sealed. `IncumbentBusy` and `CandidateBusy` are named separately because they
 send an operator to different places.
 
-**Status: the transaction spine exists; the dynamic readiness conversation and the
-Timer keystone do not.** The
-transaction record and state machine, the readiness conversation, the dynamic
-fixture pair, the failure ladder and the Timer continuity vertical proof are not
-built here; see the phase report.
+**The `versioned.service` proof.** Two real loadable artifacts built from one
+source — v1 the incumbent that answers `"v1"`, v2 the candidate that answers
+`"v2"` and also holds up the preparation conversation. One source, because *the
+artifact that prepares must be the artifact that goes live*: a candidate assembled
+specially for preparation and swapped for a freshly loaded object at commit would
+prove nothing about either. Its preparation vocabulary
+(`PrepareReplacement` / `ContinuePreparation` / `CandidateReady` /
+`CandidateRefused`) lives with the fixture and **not** in any `zen/` header — the
+Switchboard still hard-codes exactly one schema, its own lifecycle-policy grammar.
+The bus authenticates the *conversation* and never reads a byte of what was said,
+so a coordinator and its candidate may agree on whatever shapes they like.
+
+The candidate is also the phase's hostile witness: before answering anything it
+publishes, addresses the production role, and addresses a stranger by id, and the
+suite counts the `SealedSpeech` refusals it earns. Its fourth attempt — an ordinary
+domain message to its own coordinator — *is* delivered, because a seal is a
+conversation and not a quarantine, and is still not readiness. That is the sharpest
+forgery in the suite: the right speaker, the right listener, the right shape, and
+nobody asked.
+
+**Status: the generic prepared-replacement spine is complete; the Timer keystone
+is not.** The Timer continuity vertical proof (R2B-3c) is not built here.
 
 **Two residuals, stated rather than papered over.** Out-of-process weaves fail
 **closed**: the child host is given null deferral callbacks, because a

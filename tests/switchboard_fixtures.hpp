@@ -92,6 +92,9 @@ public:
     std::vector<std::int64_t> handled_values; // payload "seq"/"n" if present, else -1
     std::int64_t count = 0;
     int revive_calls = 0;
+    /// A retained answer right, for hooks that defer. Move-only, so it lives here
+    /// rather than being returned out of the hook.
+    loom::DeferredAnswer pending{};
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override { return accept_; }
 
