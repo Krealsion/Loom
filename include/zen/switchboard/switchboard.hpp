@@ -15,6 +15,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -73,6 +74,19 @@ enum class RefusalReason : std::uint8_t {
     /// the world cannot learn that a candidate exists. The candidate's own attempts
     /// are the operator's business and are named.
     SealedSpeech,
+    /// A SCHEDULED ADMISSION NO LONGER DESCRIBED THE WORLD when it reached the
+    /// head of the queue (R2B-3d): a participant died, was reloaded or was
+    /// removed, the role moved, the seal changed hands, or the transaction it
+    /// belonged to had already ended.
+    ///
+    /// NOTHING CHANGED. This is the refusal of an ADMISSION, never of an
+    /// activation — the incumbent is still the service, the candidate is still
+    /// outside the world, and no topology was touched. It has its own reason
+    /// because every other name in this list is about one message failing to
+    /// arrive; this one says the change that message was carrying did not
+    /// happen. An operator reading it looks at the participants, not at a
+    /// grant, a payload, or an address.
+    AdmissionRevoked,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -172,24 +186,45 @@ struct CandidateOwner {
 /// "the coordinator that sealed this is not the one standing here now" and "the
 /// role moved under you" send an operator to entirely different places.
 enum class AdmitRefusal : std::uint8_t {
-    None = 0,         ///< admitted
+    None = 0,         ///< scheduled
     ForeignAuthority, ///< the lifecycle authority was not issued by this Loom
     NotACandidate,    ///< missing, dead, or not sealed at all
     OwnerChanged,     ///< the exact coordinator life/incarnation that sealed it is gone
     IncumbentUnfit,   ///< missing, dead, or already sealed
     RoleNotHeld,      ///< the role is empty, or held by somebody other than the incumbent
+    /// THE CANDIDATE CANNOT RECEIVE THE COMMITTED ACTIVATION (R2B-3d): it does
+    /// not accept `zen.Activated` at all, or the exact activation this admission
+    /// would deliver does not pass its own gate. A weave without the activation
+    /// contract is not admissible, and finding that out at delivery — after the
+    /// role has moved — is precisely the split-brain this phase closes.
+    CandidateContract,
 };
 
 const char* name_of(AdmitRefusal r) noexcept;
 
-/// The result of an admission attempt. Convertible to bool so the common
-/// `REQUIRE(bus.admit_candidate(...))` reads as it should, with `why` for the
-/// cases that care.
+/// The result of SCHEDULING an admission (R2B-3d). Convertible to bool so the
+/// common `REQUIRE(bus.admit_candidate(...))` reads as it should, with `why` for
+/// the cases that care.
+///
+/// `scheduled`, NOT `ok`, and the rename is the phase. Admission is no longer
+/// something this call performs: it validates everything it can, proves the
+/// candidate can receive its activation, and places ONE envelope in the queue
+/// that will do the whole thing at once. What this call reports is that the
+/// envelope is there and every precondition held when it was written — never
+/// that the role has moved.
+///
+/// `ticket` is that envelope's delivery ticket, and it is how a direct caller
+/// learns the real outcome: `Delivered` means the candidate was admitted AND
+/// told; `Refused` with `AdmissionRevoked` means the world drifted and nothing
+/// changed. A transaction caller reads the same fact from its terminal outcome.
 struct AdmitResult {
-    bool ok = false;
+    bool scheduled = false;
     AdmitRefusal why = AdmitRefusal::None;
+    /// The admission-activation delivery. Invalid on a refusal, because a
+    /// refusal queues nothing.
+    Ticket ticket{};
 
-    explicit operator bool() const noexcept { return ok; }
+    explicit operator bool() const noexcept { return scheduled; }
 };
 
 /// WHO A TRANSACTION IS BOUND TO (R2B-3b-2).
@@ -222,8 +257,16 @@ struct TxnId {
     friend bool operator==(TxnId a, TxnId b) noexcept { return a.value == b.value; }
 };
 
-/// The whole state machine. Four states, and the two terminals are terminal.
-enum class TxnState : std::uint8_t { Preparing, Ready, Committed, Aborted };
+/// The whole state machine. Five states, and the two terminals are terminal.
+///
+/// `AdmissionPending` is R2B-3d's one addition and it is not decoration: the
+/// commit request no longer performs the admission, it SCHEDULES it, and the
+/// interval between those two facts is real. While a transaction is in this
+/// state the incumbent is still the public service, the candidate is still
+/// sealed, and nothing has been promised — so the state has to exist, be
+/// abortable, and hold its slot and its candidate exclusivity exactly as
+/// `Preparing` and `Ready` do.
+enum class TxnState : std::uint8_t { Preparing, Ready, AdmissionPending, Committed, Aborted };
 
 /// Why a transaction ended, or why a command was refused. One vocabulary for
 /// both, because "you may not do that now" and "this is how it ended" are the
@@ -516,30 +559,65 @@ public:
     /// incumbent. A refused commit is observationally identical to no commit.
     bool commit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role);
 
-    /// THE ADMISSION (R2B-3b): the commit above, extended to account for the
-    /// incumbent and for activation ordering. One operation, one visible change.
+    /// THE ADMISSION (R2B-3b, completed in R2B-3d): the commit above, extended to
+    /// account for the incumbent and for activation — and SCHEDULED, not
+    /// performed.
     ///
-    ///   before   incumbent public          candidate sealed
-    ///   after    incumbent sealed for      candidate admitted, its activation
-    ///            retirement (coordinator-  already ahead of any production
-    ///            private only)             that could reach it
+    ///     Entering the world and being told that you entered it are one event.
     ///
-    /// `activation` is enqueued as an attested lifecycle fact — and NOT at the
-    /// tail. Role resolution happens at delivery, so a role-addressed message
-    /// queued before the commit would otherwise be delivered to the candidate
-    /// BEFORE its activation. It is instead placed immediately ahead of the first
-    /// queued envelope that could reach this candidate (one addressed to the
-    /// committed role, or to the candidate directly), which is the narrowest
-    /// placement that makes activation the candidate's first live delivery while
-    /// leaving every other message's order untouched. Nothing is dropped.
+    /// R2B-3b made the activation the candidate's first live delivery. It could
+    /// not make it a CERTAIN one: the activation was queued as an ordinary gated
+    /// send stamped as the coordinator, so the topology moved here and the
+    /// message was authorized later — against a grant, a sender life and a seal
+    /// that the commit had already stopped being able to guarantee. A coordinator
+    /// without an ordinary `zen.Activated` grant therefore committed perfectly
+    /// successfully and its candidate was refused its own first breath: publicly
+    /// the service, never told it was alive.
     ///
-    /// Refuses — changing NOTHING — on any failed precondition.
-    /// THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a). The seal records an exact
-    /// coordinator life and incarnation; admission verifies that the participant
-    /// standing at that address today IS that one. A trusted host caller holding a
-    /// perfectly good lifecycle authority still cannot admit a candidate whose
-    /// coordinator died and revived, was reloaded into new code, or was removed —
-    /// because the preparation belonged to a life, and that life is over.
+    /// So the two halves stopped being two things. This call now writes ONE
+    /// envelope which IS the admission and IS the activation, and there is no
+    /// representable state in which one of them happened:
+    ///
+    ///   at this call      validate everything; prove the candidate can receive
+    ///                     this exact activation; place the envelope. Topology
+    ///                     is UNTOUCHED — the incumbent is still the service.
+    ///   at its dispatch   revalidate; admit the payload through the candidate's
+    ///                     own gate; THEN seal the incumbent, unseal the
+    ///                     candidate and move the role; then hand the candidate
+    ///                     its activation, in the same dispatch, with nothing
+    ///                     whatever in between.
+    ///
+    /// PLACEMENT IS UNCHANGED, and it is why the ordering law survives. Role
+    /// resolution happens at delivery, so a role-addressed message queued before
+    /// this call would otherwise reach the candidate before its activation. The
+    /// envelope goes immediately ahead of the first queued envelope that could
+    /// reach this candidate (one addressed to the committed role, or to the
+    /// candidate directly) — the narrowest placement that makes activation the
+    /// candidate's first live delivery while leaving every other message's order
+    /// untouched. Nothing is dropped. And because the topology now moves at that
+    /// same point rather than here, traffic queued AHEAD of it still resolves to
+    /// the incumbent, which is the truthful answer for a message enqueued while
+    /// the incumbent was the service.
+    ///
+    /// THE ORDINARY GRANT IS NOT CONSULTED, and that is a law rather than an
+    /// omission: a committed activation is not the coordinator's speech. It is
+    /// Loom's own act, authorized by the `LifecycleAuthority` presented here and
+    /// performed by Loom as part of the admission. The coordinator's id is
+    /// stamped as the OPERATOR IDENTITY the consumer's lineage rule needs — a
+    /// description of who admitted, not a claim about who is speaking. Nothing
+    /// widens for ordinary messages: `announce_lifecycle` is still a send, still
+    /// gated, still grant-checked, and an ordinary `zen.Activated` from a weave
+    /// still needs the grant and still carries no attestation.
+    ///
+    /// Refuses — queueing nothing and changing NOTHING — on any failed
+    /// precondition, including a candidate that cannot receive the activation.
+    /// THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a), here and again at dispatch.
+    /// The seal records an exact coordinator life and incarnation; admission
+    /// verifies that the participant standing at that address today IS that one.
+    /// A trusted host caller holding a perfectly good lifecycle authority still
+    /// cannot admit a candidate whose coordinator died and revived, was reloaded
+    /// into new code, or was removed — because the preparation belonged to a
+    /// life, and that life is over.
     ///
     /// The activation's own sender-life stamp is taken from the VERIFIED owner
     /// record rather than from a fresh lookup of the coordinator id, so it can
@@ -638,9 +716,22 @@ public:
     /// is the second, independent wall.
     TxnResult accept_preparation_answer(TxnId id, PreparationAnswer answer);
 
-    /// Commit: revalidate every exact participant, then delegate the topology
-    /// change to `admit_candidate` — which remains the SOLE admission mutation.
-    /// The transaction layer never moves a role itself.
+    /// Commit: revalidate every exact participant, then delegate to
+    /// `admit_candidate` — which remains the SOLE admission mutation. The
+    /// transaction layer never moves a role itself.
+    ///
+    /// IT NO LONGER RETURNS `Committed` (R2B-3d). `admit_candidate` schedules,
+    /// so on success this transaction becomes `AdmissionPending` and the caller
+    /// is told the admission is scheduled — never that it happened. The
+    /// transaction terminalizes `Committed` inside the admission dispatch, after
+    /// the topology has actually moved and the candidate's activation is
+    /// guaranteed; if the world drifts first it terminalizes `Aborted` with
+    /// `AdmissionRefused` and the incumbent is still the service.
+    ///
+    /// Reporting `Committed` here would be the exact over-report this phase
+    /// exists to remove: the old code returned ok and left an ordinary delivery
+    /// check to decide, afterwards, whether the successor was ever told it was
+    /// alive.
     TxnResult commit_prepared_replacement(TxnId id, const LifecycleAuthority& authority,
                                           Message activation, std::int64_t sequence);
 
@@ -764,6 +855,35 @@ private:
         std::uint64_t incarnation = 0;
     };
 
+    /// THE ADMISSION AN ENVELOPE *IS* (R2B-3d) — present on exactly one envelope
+    /// per admission, and on nothing else in the system.
+    ///
+    /// This is the narrow private primitive the phase needed, and it is a FIELD
+    /// rather than a second queue or a scheduler because the thing being
+    /// scheduled is not "an action, and then a message": it is one delivery whose
+    /// dispatch happens to move production topology first. Making them one object
+    /// is what makes "publicly admitted but never activated" unrepresentable —
+    /// there is nothing to drop, nothing to reorder, and no second step that
+    /// could be refused on its own.
+    ///
+    /// Every participant is a full `ParticipantRef`/`CandidateOwner`, so a queued
+    /// admission that outlives its world cannot land on a successor: an id is
+    /// never reused, and a life or an incarnation that moved is a different
+    /// participant at the same address.
+    struct PendingAdmission {
+        bool present = false;
+        ParticipantRef candidate{};
+        ParticipantRef incumbent{};
+        /// The coordinator exactly as the seal named it — the same three facts
+        /// `admit_candidate` verified when it scheduled this.
+        CandidateOwner owner{};
+        std::string role;
+        /// The transaction to terminalize when this lands, if any. Invalid for a
+        /// direct admission, which has no transaction to end and reports through
+        /// this envelope's ticket instead.
+        TxnId txn{};
+    };
+
     struct Envelope {
         Message msg;
         WeaveId target{};
@@ -813,6 +933,13 @@ private:
         /// replay. It is carried from the ask into the delivery's reply authority
         /// (and a deferred record), and back out through the one answer door.
         TxnId preparation{};
+        /// WHAT THIS DELIVERY *DOES* BEFORE IT IS DELIVERED (R2B-3d). Set by
+        /// exactly one caller — `admit_candidate` — and absent on every other
+        /// envelope in the system, so no ordinary enqueue path can move
+        /// production topology even by accident. LAST, like `answer_target` and
+        /// for the same reason: every ordinary enqueue brace-initializes this
+        /// struct and stops before it.
+        PendingAdmission admission{};
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
@@ -1062,6 +1189,50 @@ private:
     Ticket refuse_now(WeaveId target, WeaveId sender, const Message& msg, RefusalReason reason);
 
     void deliver_one(Envelope env);
+
+    /// DISPATCH AN ADMISSION (R2B-3d) — the whole of it, in one queue turn.
+    ///
+    /// Revalidate; prove the activation deliverable by admitting it through the
+    /// candidate's own gate; move the topology; terminalize the transaction; hand
+    /// the candidate its activation. Nothing runs between any two of those, so
+    /// there is no observable committed topology in which the candidate has not
+    /// been told.
+    ///
+    /// It is NOT reentrant delivery: this is called from `deliver_one` at the top
+    /// of a queue turn, exactly like an ordinary envelope, and it invokes exactly
+    /// one handler — the candidate's — as its own delivery.
+    ///
+    /// A refusal is recorded and emitted like any other refused delivery, with
+    /// `AdmissionRevoked`, and changes nothing at all.
+    void deliver_admission(Envelope env);
+
+    /// Can `candidate` receive exactly this activation? Answers the recipient's
+    /// half of the contract — the accept-set door and the gate — and hands back
+    /// the admitted payload, so a caller that is about to deliver it does not gate
+    /// it twice. `admit()` consumes its candidate, so this takes the Value by
+    /// value and the caller ends up with the trusted result or with nothing.
+    std::optional<Value> activation_deliverable(const WeaveRecord& candidate,
+                                                Value payload) const;
+
+    /// Everything an admission requires of the WORLD, asked identically when the
+    /// admission is scheduled and again when it is dispatched. One function, so
+    /// the two moments cannot drift apart.
+    AdmitRefusal admission_blocked(const ParticipantRef& candidate,
+                                   const ParticipantRef& incumbent, const CandidateOwner& owner,
+                                   const std::string& role) const;
+
+    /// THE ONE ADMISSION PRIMITIVE (R2B-3d), plus the one fact the public door has
+    /// no business knowing: which transaction, if any, this admission is ending.
+    ///
+    /// `admit_candidate` is this with no transaction; `commit_prepared_replacement`
+    /// is this with one. There is no second path and no second set of checks, which
+    /// is what keeps direct and transaction admission from ever diverging — the
+    /// question the phase had to answer, since fixing only the transaction would
+    /// have left the direct primitive able to reach the old split-brain state.
+    AdmitResult schedule_admission(WeaveId candidate, WeaveId incumbent, const std::string& role,
+                                   const LifecycleAuthority& authority, Message activation,
+                                   std::int64_t sequence, TxnId txn);
+
     void emit(const BusEvent& event);
     void record(std::uint64_t seq, Disposition disposition, const Refusal& refusal);
 

@@ -2881,9 +2881,15 @@ neither `Bus`, `Mail`, nor `Switchboard` exposes a minting expression, that the 
 is gone, and that `LifecycleAuthority` is not default-constructible. A source grep would miss a
 new spelling; the compiler does not.
 
-Neither widens a grant. An attested send is still authorized against the sender's
-ordinary grant at delivery: the authority answers "may this message carry Loom's
-word?", never "may this weave send it?".
+Neither widens a grant. An attested **send** is still authorized against the
+sender's ordinary grant at delivery: the authority answers "may this message carry
+Loom's word?", never "may this weave send it?". `announce_lifecycle` is a send, and
+that is exactly what it stays.
+
+A **committed activation** is the one thing in the system that is not a send at all
+(R2B-3d): it is Loom's own act, performed as part of an admission, and no weave's
+grant is consulted for it. See *Admission includes first breath* below — the
+distinction is between speech an authority decorates and an act the Loom performs.
 
 ### Conversation lifetime — the narrowest V1
 
@@ -3311,7 +3317,8 @@ the candidate's first live delivery: every other message keeps its order, and
 trade. Head-insertion would have been simpler and would have broken FIFO for
 unrelated traffic; a "committed but activating" state would have had to defer real
 production somewhere. The scan is bounded by the pending queue and runs once per
-commit.
+commit. (R2B-3d keeps this placement exactly and moves the **topology change** to
+the same point — see *Admission includes first breath*.)
 
 **Admission recognizes its owner (R2B-3b-1a).** The candidate's private
 conversation checked the exact coordinator life and incarnation on every message;
@@ -3388,7 +3395,9 @@ much unrelated traffic the bus happened to carry. It decrements only while
 **Commit delegates.** The transaction layer revalidates the identities *it*
 promised and then calls `admit_candidate`, which remains **the sole admission
 mutation** — no role is moved, nothing unsealed and no activation queued anywhere
-else. A refused admission aborts terminally rather than claiming success.
+else. A refused admission aborts terminally rather than claiming success. Since
+R2B-3d the delegation *schedules* rather than performs, so the transaction becomes
+`AdmissionPending` here and is terminalized inside the admission dispatch.
 
 **Terminal outcomes are evidence, not authority.** They are kept for the *exact*
 operator life and incarnation that began the transaction and consumed once; a
@@ -3534,6 +3543,103 @@ public — it must be, for the library side of the seam — so a native weave ca
 mint a token-shaped value at will. It buys nothing: the board still requires the
 presenter to *be* the bound respondent at the bound incarnation, so a guessed
 token can only spend a right its guesser already held.
+
+### Admission includes first breath (R2B-3d)
+
+> **Entering the world and being told that you entered it are one event.**
+
+R2B-3b put the activation ahead of production. It could not make the activation
+*certain*. `admit_candidate` moved the role and then queued `zen.Activated` as an
+**ordinary gated send stamped as the coordinator** — so the topology changed at the
+call and the message was authorized later, against a grant, a sender life and a
+seal the commit had already stopped being able to guarantee:
+
+```text
+commit -> ok ; role moves ; candidate unsealed ; incumbent sealed
+                     ...then: Activated -> CapabilityDenied
+```
+
+A coordinator lacking an ordinary `zen.Activated` grant therefore committed
+perfectly successfully and left a successor that was publicly the service and had
+never been told it was alive. The demonstrated grant is one route; the semantic
+question is larger, because *every* delivery-time check on that envelope was a
+question the commit could no longer answer.
+
+**The chosen model: admission completes at activation dispatch.** The commit
+request writes **one envelope that IS the admission and IS the activation**, and
+places it exactly where R2B-3b placed the activation — immediately ahead of the
+first queued envelope that could reach the candidate. Nothing moves at the call.
+When that envelope is dispatched, in one queue turn and with no delivery between
+any two steps, it:
+
+1. revalidates every participant as an exact life and incarnation, and the role;
+2. admits the activation through the candidate's **own** door and gate;
+3. seals the incumbent, unseals the candidate, moves the role;
+4. terminalizes the transaction `Committed`;
+5. hands the candidate its activation.
+
+Step 2 before step 3 is the law: *if the candidate cannot receive its activation,
+the admission refuses and the incumbent is still the service.* There is no
+representable state in which one half happened.
+
+A field on the private `Envelope` rather than a scheduler or a second queue,
+because the thing being scheduled is not "an action, then a message" — it is one
+delivery whose dispatch happens to move production topology first. Making them one
+object is what makes "publicly admitted but never activated" unrepresentable:
+there is nothing to drop, nothing to reorder, and no second step to refuse.
+
+**Lifecycle authority owns a committed activation; the ordinary grant is not
+consulted.** The envelope is enqueued **ungated**, because it is not the
+coordinator's speech — it is Loom's act, authorized by the `LifecycleAuthority`
+checked when it was scheduled. The coordinator's id is still stamped, because
+`zen.Activated`'s lineage rule is per attesting operator: it *describes who
+admitted*, it does not claim who spoke. No public bypass appears — an ordinary
+`zen.Activated` from any weave still needs the grant, still carries no attestation,
+and `announce_lifecycle` is still a gated send.
+
+**What "guaranteed" means.** After the transaction reports `Committed`, the
+activation can no longer be rejected for the coordinator's emit grant, the
+coordinator's life or incarnation, the candidate's accepted-schema set, its gate,
+a stale candidate identity, a foreign authority, a malformed payload, a wrong
+target or a wrong sequence — because all of those are asked *before* step 3 and
+none of them can be asked again after it. A candidate that is killed *after* its
+activation is a post-commit lifecycle event, not an admission refusal, and the two
+are now distinguishable by construction rather than by inspection.
+
+**The cost, paid explicitly.** `admit_candidate` returns `AdmitResult{scheduled,
+why, ticket}` and `commit_prepared_replacement` leaves the transaction in the new
+`AdmissionPending` state. A caller can therefore distinguish *scheduled*,
+*committed* and *refused*; a direct caller reads the real outcome from its
+envelope's ticket, a transaction caller from its terminal outcome. `ok` for
+"perhaps later" is exactly what this removes. A pending transaction is bounded,
+cannot be committed twice, keeps its slot and its candidate exclusivity, and can be
+aborted — after which the queued envelope finds no record and refuses as
+`AdmissionRevoked` without writing a second terminal result.
+
+**The boundary became a position in the queue, and that is the coherence gain.**
+Admission used to jump ahead of the queue: a message enqueued while the incumbent
+was public could be judged against a world that only came into being afterwards.
+Now everything ahead of the admission envelope belongs to the old world and
+everything behind it to the new — one rule instead of two. Role-addressed traffic
+lands exactly where it did; direct traffic to a *retiring incumbent* queued before
+the boundary is now delivered to it rather than refused, and loses nothing, since
+the retirement letter is written afterwards and carries that work across.
+
+**Rejected.** *Prevalidate and keep committing synchronously* — acceptable only if
+the queued activation is structurally guaranteed afterwards, and it is not: the
+coordinator's life, the candidate's existence and the coordinator's seal are all
+mutable in the window, so "the grant was valid when checked" would have been
+exactly the insufficient statement. *A committed-but-activating barrier* — it has
+to defer real production somewhere, and would have existed only to preserve the old
+call shape. *Trusted synchronous delivery from inside the commit call* — commit is
+routinely called from inside a coordinator's handler, so this is reentrant
+delivery, which the single-threaded non-reentrant model does not have a meaning
+for.
+
+**Not touched.** `commit_candidate` — R2B-3a's narrower door, which unseals and
+moves a role without retiring anything and has never promised an activation —
+still exists and still promises nothing about one. It requires no lifecycle
+authority and is host root authority, like `send`.
 
 ---
 

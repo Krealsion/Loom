@@ -1000,6 +1000,14 @@ TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no
     REQUIRE(bus.admit_candidate(candidate, incumbent, "worker",
                                 host_lifecycle_authority(bus),
                                 Message(to_value(fact)), 3));
+    // SCHEDULED, NOT DONE (R2B-3d). Until the admission is dispatched the
+    // incumbent is still exactly the service it was — which is the whole point:
+    // there is no interval in which the world has changed and the successor has
+    // not been told.
+    CHECK_FALSE(bus.sealed(incumbent));
+    CHECK(bus.sealed(candidate));
+    CHECK(bus.role_holder("worker") == incumbent);
+    bus.pump();
     CHECK(bus.sealed(incumbent));
     CHECK_FALSE(bus.sealed(candidate));
 
@@ -1141,7 +1149,7 @@ TEST_CASE("R2B-3b-1a: a coordinator successor cannot admit its predecessor's can
     const AdmitResult r = bus.admit_candidate(p.candidate, p.incumbent, "worker",
                                               host_lifecycle_authority(bus),
                                               Message(to_value(fact)), 9);
-    CHECK_FALSE(r.ok);
+    CHECK_FALSE(r.scheduled);
     CHECK(r.why == AdmitRefusal::OwnerChanged); // named, not a bare false
 
     // NOTHING MOVED — sampled, not assumed. In particular no activation was
@@ -1167,17 +1175,30 @@ TEST_CASE("R2B-3b-1a: the unchanged exact coordinator still admits — the posit
     const AdmitResult r = bus.admit_candidate(p.candidate, p.incumbent, "worker",
                                               host_lifecycle_authority(bus),
                                               Message(to_value(fact)), 4);
-    REQUIRE(r.ok);
+    REQUIRE(r.scheduled);
     CHECK(r.why == AdmitRefusal::None);
-    CHECK(bus.role_holder("worker") == p.candidate);
-    CHECK_FALSE(bus.sealed(p.candidate));
-    CHECK(bus.sealed(p.incumbent));
+    CHECK(r.ticket.valid()); // the admission is a delivery, and it has a receipt
+
+    // Scheduled means scheduled: nothing has moved yet (R2B-3d).
+    CHECK(bus.role_holder("worker") == p.incumbent);
+    CHECK(bus.sealed(p.candidate));
+    CHECK_FALSE(bus.sealed(p.incumbent));
 
     bus.send_to_role("worker", Message(ping(1)));
     bus.pump();
+    CHECK(bus.role_holder("worker") == p.candidate);
+    CHECK_FALSE(bus.sealed(p.candidate));
+    CHECK(bus.sealed(p.incumbent));
     REQUIRE(p.candidate_raw->handled_names.size() == 2);
     CHECK(p.candidate_raw->handled_names[0] == std::string(loom::Activated::zen_name));
     CHECK(p.candidate_raw->handled_names[1] == "Ping");
+
+    // THE ADMISSION'S OWN RECEIPT SAYS DELIVERED, never refused. That is the
+    // fact the whole phase turns on: a successful admission's activation cannot
+    // have been rejected, because the two are one delivery.
+    const DeliveryOutcome o = bus.outcome(r.ticket);
+    CHECK(o.disposition == Disposition::Delivered);
+    CHECK(o.refusal.reason == RefusalReason::None);
 }
 
 TEST_CASE("R2B-3b-1a: sealing refuses a dead coordinator and refuses to reseal") {
@@ -1840,21 +1861,37 @@ TEST_CASE("R2B-3b-2: one prepared replacement, remembered from Preparing to Comm
         begun.id, host_lifecycle_authority(bus), Message(to_value(fact)), 1);
     REQUIRE(committed.ok);
 
+    // COMMITTING SCHEDULES; IT DOES NOT COMMIT (R2B-3d). The transaction is
+    // AdmissionPending, holds its slot, has produced NO terminal outcome, and the
+    // incumbent is still the service answering "v1".
+    CHECK(bus.transaction_state(begun.id) == TxnState::AdmissionPending);
+    CHECK(bus.transaction_active(begun.id));
+    CHECK(bus.active_transactions() == 1);
+    CHECK_FALSE(bus.sealed(c.incumbent));
+    CHECK(bus.sealed(c.candidate));
+    CHECK(bus.role_holder(kRole) == c.incumbent);
+    TxnOutcome early{};
+    CHECK_FALSE(bus.take_outcome(c.op.id, early)); // nothing to collect: nothing ended
+    // ...and it cannot be committed a second time while the first is in flight.
+    CHECK_FALSE(bus.commit_prepared_replacement(begun.id, host_lifecycle_authority(bus),
+                                                Message(to_value(fact)), 1)
+                    .ok);
+
+    bus.pump();
+
     // One terminal result, for the exact operator, consumed once.
     TxnOutcome out{};
     REQUIRE(bus.take_outcome(c.op.id, out));
     CHECK(out.state == TxnState::Committed);
     CHECK(out.reason == TxnReason::None);
     CHECK_FALSE(bus.take_outcome(c.op.id, out)); // consumed
+    CHECK(bus.active_transactions() == 0);       // the slot came back
 
-    // The topology moved exactly as R2B-3b-1 proved it does.
+    // The topology moved exactly as R2B-3b-1 proved it does — in the same dispatch
+    // that told the candidate it was alive.
     CHECK(bus.sealed(c.incumbent));
     CHECK_FALSE(bus.sealed(c.candidate));
     CHECK(bus.role_holder(kRole) == c.candidate);
-    // The activation is QUEUED by admission, so it is handled on the next drain —
-    // and it is handled before any production, which R2B-3b-1 pins against traffic
-    // that was already waiting.
-    bus.pump();
     CHECK(c.candidate_raw->activations == 1);
     CHECK(c.ask(bus, kRole) == "v2");
     CHECK(c.incumbent_raw->served == 4); // it answered every pre-commit query
@@ -2187,7 +2224,7 @@ TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its
     const AdmitResult admitted = bus.admit_candidate(c.candidate, c.incumbent, kRole,
                                                      host_lifecycle_authority(bus),
                                                      Message(to_value(fact)), 1);
-    CHECK_FALSE(admitted.ok);
+    CHECK_FALSE(admitted.scheduled);
     incumbent_untouched(bus, c, kRole);
 }
 
@@ -2388,6 +2425,13 @@ TEST_CASE("R2B-3b-2a: a committed candidate is public, so it cannot be named as 
     loom::Activated fact{1};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 1).ok);
+    // Still exclusively promised while its admission is in flight: the slot is
+    // held, so nobody else can name this candidate even now (R2B-3d).
+    CHECK(bus.active_transactions() == 1);
+    CHECK_FALSE(bus.begin_prepared_replacement(b.op.id, b.coordinator.id, b.incumbent,
+                                               a.candidate, "role-b", 8)
+                    .ok);
+    bus.pump();
     CHECK(bus.active_transactions() == 0);
     exactly_one_outcome(bus, a.op.id, t.id, TxnState::Committed, TxnReason::None);
 
@@ -3029,6 +3073,7 @@ TEST_CASE("R2B-3b-3: the role drifting under a live preparation refuses the read
     loom::Activated fact{7};
     REQUIRE(bus.admit_candidate(usurper_id, c.incumbent, kRole, host_lifecycle_authority(bus),
                                 Message(to_value(fact)), 7));
+    bus.pump(); // the admission is a dispatch now (R2B-3d); the drift is real after it
     REQUIRE(bus.role_holder(kRole) == usurper_id);
     CHECK(bus.transaction_state(t.id) == TxnState::Preparing); // nothing announced it
 
@@ -3275,10 +3320,16 @@ TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answ
     loom::Activated fact{2};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 2).ok);
+    // Scheduled (R2B-3d): v1 is still the service and still answers as one until
+    // the admission is dispatched. The commit call promised nothing else.
+    CHECK(bus.transaction_state(t.id) == TxnState::AdmissionPending);
+    CHECK(bus.role_holder(kService) == d.incumbent);
+    CHECK_FALSE(bus.sealed(d.incumbent));
+    CHECK(bus.sealed(d.candidate));
+    bus.pump();
     CHECK(bus.role_holder(kService) == d.candidate);
     CHECK(bus.sealed(d.incumbent));     // sealed for retirement, not merely renamed
     CHECK_FALSE(bus.sealed(d.candidate));
-    bus.pump();
     CHECK(state_field(bus, d.candidate, "activations") == 1);
     CHECK(state_field(bus, d.candidate, "last_activation") == 2);
 
@@ -3866,7 +3917,21 @@ TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's bo
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 2).ok);
 
-    // 8-12. IMMEDIATELY — no pump, no later host call, no reconciliation pass.
+    // 7a. WHILE THE ADMISSION IS PENDING THE BOOKS SAY WHAT IS TRUE (R2B-3d), and
+    //     they say it with the same immediacy: a queued admission is not a
+    //     topology change, so nothing here may report the candidate as production
+    //     yet. This is the half the Kernel could most easily have got wrong — it
+    //     is exactly where a cache would have been "helpfully" updated early.
+    CHECK(bus.transaction_state(t.id) == TxnState::AdmissionPending);
+    CHECK(service_query(kernel).holder == d.incumbent);
+    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.role_of("v2").empty());
+    CHECK(kernel.status("v1") == ArtifactStatus::Live);
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+
+    bus.pump();
+
+    // 8-12. IMMEDIATELY — no later host call, no reconciliation pass.
     CHECK(bus.role_holder(kService) == d.candidate);
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
@@ -3884,7 +3949,6 @@ TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's bo
     CHECK_FALSE(kernel.role_of("v2").empty());                 // candidate is not roleless
 
     // 13. And production answers "v2".
-    bus.pump();
     CHECK(d.ask(bus) == "v2");
     CHECK(state_field(bus, d.candidate, "activations") == 1);
 
@@ -3948,9 +4012,20 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
     // topology directly. The synchronization must not be a property of one call
     // site — so this exercises the road that bypasses the transaction layer
     // entirely, and the Kernel is never told.
-    REQUIRE(bus.admit_candidate(d.candidate, d.incumbent, kService,
-                                host_lifecycle_authority(bus),
-                                Message(to_value(loom::Activated{7})), 7));
+    const AdmitResult r = bus.admit_candidate(d.candidate, d.incumbent, kService,
+                                              host_lifecycle_authority(bus),
+                                              Message(to_value(loom::Activated{7})), 7);
+    REQUIRE(r.scheduled);
+
+    // Direct admission is SCHEDULED too (R2B-3d) — one primitive, one behaviour,
+    // so the direct road cannot keep the split-brain the transaction road lost.
+    // The Kernel says the truthful thing in both windows, immediately in both.
+    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.role_of("v2").empty());
+    CHECK(kernel.status("v1") == ArtifactStatus::Live);
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+
+    bus.pump();
 
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
@@ -3959,7 +4034,9 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
     CHECK(q.accepts);
     CHECK(kernel.status("v1") == ArtifactStatus::Sealed);
     CHECK(kernel.status("v2") == ArtifactStatus::Live);
-    bus.pump();
+    // ...and the direct caller learns the real outcome from its own receipt.
+    CHECK(bus.outcome(r.ticket).disposition == Disposition::Delivered);
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
     CHECK(d.ask(bus) == "v2");
 
     // ...and the LEGACY road agrees too: `unload_role` is what a graceful
