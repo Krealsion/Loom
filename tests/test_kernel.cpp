@@ -3385,9 +3385,13 @@ TEST_CASE("R2B-3b-3: a real candidate's refusal ends it, and v1 never notices") 
     CHECK_FALSE(bus.alive(d.candidate));
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Aborted, TxnReason::CandidateRefused);
     v1_still_the_service(bus, d);
-    // The kernel still holds the library the transaction discarded; unloading it
-    // is the host's ordinary cleanup and must stay safe.
-    CHECK(kernel.unload("v2"));
+    // AND THE KERNEL'S BOOKS FOLLOWED (R2B-3b-3a). The transaction discarded the
+    // candidate; nobody called the Kernel; the artifact is gone from it anyway.
+    // Before this phase the record survived, so `unload("v2")` answered true and
+    // meant "I closed a library whose weave had already been destroyed".
+    CHECK_FALSE(kernel.is_loaded("v2"));
+    CHECK(kernel.status("v2") == ArtifactStatus::NotLoaded);
+    CHECK_FALSE(kernel.unload("v2")); // truthfully not loaded, rather than falsely tidy
 }
 
 TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidate outside") {
@@ -3468,10 +3472,12 @@ TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidat
     if (how == 7) { // ...and replaced code is still the service, under its own name
         CHECK(state_field(bus, d.incumbent, "served") > 0);
     }
+    // EVERY ROUTE RELEASES THE ARTIFACT (R2B-3b-3a). Aborting discards the sealed
+    // candidate whatever ended the transaction, so the Kernel's books follow on
+    // all eight — with no cleanup call, from a lifecycle change it never saw.
+    CHECK_FALSE(kernel.is_loaded("v2"));
+    CHECK(kernel.status("v2") == ArtifactStatus::NotLoaded);
     CHECK(kernel.unload("v1"));
-    if (kernel.is_loaded("v2")) {
-        CHECK(kernel.unload("v2"));
-    }
 }
 
 TEST_CASE("R2B-3b-3: a candidate artifact that cannot load never becomes a candidate") {
@@ -3579,18 +3585,58 @@ TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation an
     CHECK(d.ask(bus) == "v2");
 }
 
-// ---- R2B-3b-3a (part 1): the Kernel's role answers follow the Switchboard ----
+// ---- R2B-3b-3a: the Kernel's books follow reality ---------------------------
+//
+//   When the Switchboard destroys a Kernel-loaded weave, the Kernel releases its
+//   artifact record and library exactly once.
 //
 //   When the Switchboard changes production topology, the Kernel's queries and
 //   cleanup immediately agree with it.
 //
-// The Kernel used to answer from its own map, on the reasoning that load was the
-// only thing that could bind a role. Admission ended that: a prepared
-// replacement committing — or a host admitting a candidate directly — moves a
-// role with NO Kernel call at all. Every case below changes the role through a
-// road the Kernel is never told about, and then asks it.
+// The Switchboard already changed reality correctly. What follows proves the
+// Kernel's records describe the world that actually exists.
 
 namespace {
+
+/// THE HOST-SIDE LIFETIME LEDGER, READ AS A DELTA. The counts are process-wide
+/// and monotonic, so an absolute number says nothing about one operation; an
+/// "exactly once" law needs the difference either side of the act. Constructed
+/// where the measurement starts.
+struct LifetimeDelta {
+    KernelLifetimeCounts before = kernel_lifetime_counts();
+
+    std::uint64_t created() const {
+        return kernel_lifetime_counts().instances_created - before.instances_created;
+    }
+    std::uint64_t destroyed() const {
+        return kernel_lifetime_counts().instances_destroyed - before.instances_destroyed;
+    }
+    std::uint64_t opened() const {
+        return kernel_lifetime_counts().libraries_opened - before.libraries_opened;
+    }
+    std::uint64_t closed() const {
+        return kernel_lifetime_counts().libraries_closed - before.libraries_closed;
+    }
+};
+
+/// Everything the Kernel can be asked about an artifact it must no longer hold.
+/// One place, because "released" is a conjunction and checking three of its five
+/// terms is how a partial release reads as a clean one.
+void artifact_released(Kernel& kernel, const char* name, const char* path) {
+    CHECK_FALSE(kernel.is_loaded(name));
+    CHECK(kernel.status(name) == ArtifactStatus::NotLoaded);
+    CHECK_FALSE(kernel.weave_id(name).valid());
+    CHECK(kernel.role_of(name).empty());
+    const std::vector<std::string> names = kernel.loaded();
+    CHECK(std::find(names.begin(), names.end(), std::string(name)) == names.end());
+    // ...and the two operations that would have touched stale state answer
+    // truthfully instead. `reload_from` is the one that MATTERED: unload never
+    // dereferenced the adapter, and reload does, on its very first line.
+    CHECK_FALSE(kernel.unload(name));
+    const ReloadResult r = kernel.reload_from(name, path);
+    CHECK_FALSE(r.ok);
+    CHECK(r.error == std::string("not loaded: ") + name);
+}
 
 /// The role query, asked with a shape ONLY the candidate declares — so the
 /// answer distinguishes the two artifacts on both of its fields rather than
@@ -3602,18 +3648,212 @@ Kernel::RoleQuery service_query(const Kernel& kernel) {
 
 } // namespace
 
-TEST_CASE("R2B-3b-3a: a role moved by a committed transaction is seen by the Kernel immediately") {
+TEST_CASE("R2B-3b-3a: a lifecycle-driven abort releases the candidate's artifact, and nobody "
+          "had to ask") {
+    int route = 0;
+    const char* plan = "defer";
+    SUBCASE("the candidate refuses, authentically") { route = 0; plan = "refuse"; }
+    SUBCASE("the candidate dies") { route = 1; }
+    SUBCASE("the candidate's code is replaced") { route = 2; }
+    SUBCASE("the coordinator dies") { route = 3; }
+    SUBCASE("the operator dies") { route = 4; }
+    SUBCASE("the incumbent's code is replaced") { route = 5; }
+    SUBCASE("preparation runs out of budget") { route = 6; }
+    SUBCASE("the operator aborts explicitly") { route = 7; }
+
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const WeaveId doomed = d.candidate;
+
+    // Measured from here: both artifacts are already open, and nothing below
+    // opens or creates anything. So the whole delta belongs to the abort.
+    LifetimeDelta ledger;
+
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 3);
+    REQUIRE(t.ok);
+    // BEFORE: the Kernel and the Switchboard agree about both artifacts.
+    CHECK(kernel.status("v1") == ArtifactStatus::Live);
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.role_of("v2").empty());
+    CHECK(service_query(kernel).holder == d.incumbent);
+
+    dyn_ask(bus, d, t.id, plan);
+
+    // THE ABORT. Every route but the first is a lifecycle change the Kernel never
+    // sees and never could: no Kernel call is made from here to the end.
+    if (route == 1) {
+        bus.kill(doomed);
+    } else if (route == 2) {
+        REQUIRE(bus.swap_state(doomed, bus.snapshot_bytes(doomed)).revived);
+    } else if (route == 3) {
+        bus.kill(d.coordinator.id);
+    } else if (route == 4) {
+        bus.kill(d.op.id);
+    } else if (route == 5) {
+        REQUIRE(bus.swap_state(d.incumbent, bus.snapshot_bytes(d.incumbent)).revived);
+    } else if (route == 6) {
+        REQUIRE(bus.tick_preparation(t.id).ok);
+        REQUIRE(bus.tick_preparation(t.id).ok);
+        CHECK_FALSE(bus.tick_preparation(t.id).ok);
+    } else if (route == 7) {
+        REQUIRE(bus.abort_prepared_replacement(t.id, d.op.id).ok);
+    }
+
+    // The Switchboard's side, as R2B-3b-3 left it.
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0);
+    CHECK(bus.weave(doomed) == nullptr); // the candidate is not merely dead: it is gone
+    CHECK_FALSE(bus.alive(doomed));
+    CHECK(bus.role_holder(kService) == d.incumbent);
+
+    // THE KERNEL'S SIDE — WITHOUT A CLEANUP CALL. This is the phase.
+    artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
+    CHECK(kernel.is_loaded("v1")); // and the incumbent's artifact is untouched
+    CHECK(kernel.role_of("v1") == kService);
+
+    // EXACTLY ONCE, both of them. One instance destroyed (the candidate's), one
+    // library closed (the candidate's) — and nothing created or opened, so a
+    // second destruction anywhere would show up here as a two.
+    CHECK(ledger.created() == 0);
+    CHECK(ledger.opened() == 0);
+    CHECK(ledger.destroyed() == 1);
+    CHECK(ledger.closed() == 1);
+
+    // The name is free, and the new artifact is a fresh live record — not the old
+    // one revived. (Loaded ordinarily: route 3 killed the coordinator, and a dead
+    // coordinator cannot own a seal.)
+    REQUIRE(kernel.load("v2", ZEN_SO_VERSIONED_V2).ok);
+    CHECK(kernel.status("v2") == ArtifactStatus::Live);
+    CHECK(kernel.weave_id("v2") != doomed);
+    CHECK(ledger.created() == 1);
+    CHECK(ledger.opened() == 1);
+
+    // ...and v1 is still the service throughout, except where v1 itself was the
+    // thing that changed.
+    if (route != 5) {
+        CHECK(d.ask(bus) == "v1");
+    }
+}
+
+TEST_CASE("R2B-3b-3a: shutdown after a lifecycle-driven abort repeats no destruction") {
+    Switchboard bus;
+    LifetimeDelta ledger;
+    WeaveId doomed{};
+    {
+        Kernel kernel(bus);
+        DynCast d = load_pair(bus, kernel);
+        doomed = d.candidate;
+        const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                           d.candidate, kService, 8);
+        REQUIRE(t.ok);
+        dyn_ask(bus, d, t.id, "defer");
+        REQUIRE(bus.abort_prepared_replacement(t.id, d.op.id).ok);
+        REQUIRE_FALSE(kernel.is_loaded("v2"));
+        CHECK(ledger.destroyed() == 1);
+        CHECK(ledger.closed() == 1);
+
+        // A fourth artifact with no connection to any of this, so the destructor
+        // has real work to do as well as an absence to not repeat.
+        REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+        // the Kernel is destroyed here
+    }
+    CHECK(bus.weave(doomed) == nullptr);
+    // Balanced: every instance the host created was destroyed once, every library
+    // it opened was closed once. A destructor walking a stale record would push
+    // `destroyed` or `closed` one past `created`/`opened`.
+    CHECK(ledger.created() == ledger.destroyed());
+    CHECK(ledger.opened() == ledger.closed());
+    CHECK(ledger.created() == 3); // v1, v2, t
+    CHECK(ledger.opened() == 3);
+}
+
+TEST_CASE("R2B-3b-3a: a released candidate name is reusable, and nothing of the old artifact "
+          "comes back with it") {
     Switchboard bus;
     Kernel kernel(bus);
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
-    // BEFORE: both layers agree, and the query discriminates on both fields.
+    std::vector<WeaveId> was;
+    TxnId stale_txn{};
+    for (int round = 0; round < 3; ++round) {
+        if (round > 0) {
+            REQUIRE(kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id).ok);
+            d.candidate = kernel.weave_id("v2");
+        }
+        was.push_back(d.candidate);
+        const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                           d.candidate, kService, 8);
+        REQUIRE(t.ok);
+        if (round == 0) {
+            stale_txn = t.id;
+        }
+        dyn_ask(bus, d, t.id, "defer");
+        REQUIRE(bus.abort_prepared_replacement(t.id, d.op.id).ok);
+        REQUIRE_FALSE(kernel.is_loaded("v2"));
+        v1_still_the_service(bus, d);
+    }
+
+    // IDENTITY IS THE WeaveId, NEVER AN ADDRESS. Three artifacts wore the same
+    // name in the same allocator, and very possibly the same memory — this test
+    // deliberately does not care, and asserts nothing about addresses. What it
+    // asserts is that each predecessor's id resolves to nothing, which stays true
+    // however the allocator behaved.
+    CHECK(was[0] != was[1]);
+    CHECK(was[1] != was[2]);
+    for (const WeaveId old : was) {
+        CHECK(bus.weave(old) == nullptr);
+        CHECK_FALSE(bus.alive(old));
+        CHECK(bus.role_of(old).empty());
+        const Ticket t = bus.send(old, Message(to_value(versioned::QueryVersion{1})));
+        bus.pump();
+        CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
+    }
+
+    // A fourth load under the same name gets a genuinely fresh live record — one
+    // more id nobody has held, sealed to the same coordinator, and unloadable
+    // like any other artifact.
+    REQUIRE(kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id).ok);
+    const WeaveId fresh = kernel.weave_id("v2");
+    CHECK(std::find(was.begin(), was.end(), fresh) == was.end());
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
+    CHECK(bus.candidate_owner(fresh).who == d.coordinator.id);
+    CHECK(kernel.unload("v2"));
+    artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
+
+    // ...and the first round's transaction id is worthless against the third
+    // round's artifact: it named a transaction that ended, not a slot to reuse.
+    CHECK_FALSE(bus.transaction_active(stale_txn));
+    const TxnResult late = bus.ask_candidate_to_prepare(
+        stale_txn, Message(to_value(versioned::PrepareReplacement{})));
+    CHECK_FALSE(late.ok);
+    CHECK(late.why == TxnReason::LateReadiness);
+}
+
+TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's books as well as "
+          "the Switchboard's") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    LifetimeDelta ledger;
+    // 1-2. The incumbent, and a sealed candidate beside it.
+    DynCast d = load_pair(bus, kernel);
+    announce_activation(bus, d.incumbent, 1);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // 5. BEFORE COMMIT the two layers agree: v1 owns production, v2 is loaded and
+    //    sealed. Asked with a shape only v2 declares, so both fields discriminate.
+    CHECK(kernel.status("v1") == ArtifactStatus::Live);
+    CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
     CHECK(kernel.role_of("v1") == kService);
     CHECK(kernel.role_of("v2").empty());
     CHECK(service_query(kernel).holder == d.incumbent);
     CHECK_FALSE(service_query(kernel).accepts);
 
+    // 3-4. One transaction, prepared and authenticated by the candidate itself.
     const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
                                                        d.candidate, kService, 16);
     REQUIRE(t.ok);
@@ -3621,35 +3861,82 @@ TEST_CASE("R2B-3b-3a: a role moved by a committed transaction is seen by the Ker
     REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
     CHECK(service_query(kernel).holder == d.incumbent); // readiness is not admission
 
+    // 6-7. Commit, which delegates to activation-first admission.
+    loom::Activated fact{2};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
-                                            Message(to_value(loom::Activated{2})), 2).ok);
+                                            Message(to_value(fact)), 2).ok);
 
-    // IMMEDIATELY — no pump, no later host call, no reconciliation pass.
+    // 8-12. IMMEDIATELY — no pump, no later host call, no reconciliation pass.
     CHECK(bus.role_holder(kService) == d.candidate);
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
     const Kernel::RoleQuery q = service_query(kernel);
     CHECK(q.holder == d.candidate);
     CHECK(q.accepts); // and the answer's SECOND field moved with it
+    CHECK(kernel.is_loaded("v1"));
+    CHECK(kernel.status("v1") == ArtifactStatus::Sealed); // retirement-private, still loaded
+    CHECK(kernel.status("v2") == ArtifactStatus::Live);
 
     // The four things the Kernel must never say about a committed topology.
-    CHECK(service_query(kernel).holder.valid());               // never "no holder"
+    CHECK(service_query(kernel).holder.valid());            // never "no holder"
     CHECK_FALSE(kernel.role_of("v1") == kernel.role_of("v2")); // never both
-    CHECK_FALSE(kernel.role_of("v1") == kService);             // incumbent is not production
+    CHECK_FALSE(kernel.status("v1") == ArtifactStatus::Live);  // incumbent is not live production
     CHECK_FALSE(kernel.role_of("v2").empty());                 // candidate is not roleless
 
+    // 13. And production answers "v2".
     bus.pump();
     CHECK(d.ask(bus) == "v2");
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
 
-    // ...and `unload_role` selects the LIVE holder, not whoever was loaded under
-    // that role's name. This is the road a graceful `SwapWeave` reaches through.
+    // 14-15. unload_role selects the LIVE holder — the candidate — not whoever
+    //        was loaded under that role's name.
+    LifetimeDelta unloading;
     REQUIRE(kernel.unload_role(kService));
-    CHECK_FALSE(kernel.is_loaded("v2"));
+    artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
     CHECK(kernel.is_loaded("v1")); // the retired incumbent was NOT the one selected
-    CHECK(bus.role_holder(kService) == WeaveId{});
+    CHECK(unloading.destroyed() == 1);
+    CHECK(unloading.closed() == 1);
+    CHECK(bus.role_holder(kService) == WeaveId{}); // the slot is free for a successor
+
+    // 16-17. The retired incumbent unloads explicitly, and each artifact's
+    //        instance and library went exactly once.
+    REQUIRE(kernel.unload("v1"));
+    artifact_released(kernel, "v1", ZEN_SO_VERSIONED_V1);
+    CHECK(ledger.created() == 2);
+    CHECK(ledger.destroyed() == 2);
+    CHECK(ledger.opened() == 2);
+    CHECK(ledger.closed() == 2);
 }
 
-TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all — is seen too") {
+TEST_CASE("R2B-3b-3a: unloading the retired incumbent does not disturb the new service") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "ready");
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{3})), 3).ok);
+    bus.pump();
+    REQUIRE(d.ask(bus) == "v2");
+
+    LifetimeDelta ledger;
+    REQUIRE(kernel.unload("v1"));
+    CHECK(ledger.destroyed() == 1);
+    CHECK(ledger.closed() == 1);
+    artifact_released(kernel, "v1", ZEN_SO_VERSIONED_V1);
+
+    // The successor is untouched by its predecessor's retirement.
+    CHECK(kernel.status("v2") == ArtifactStatus::Live);
+    CHECK(kernel.role_of("v2") == kService);
+    CHECK(bus.role_holder(kService) == d.candidate);
+    CHECK(d.ask(bus) == "v2");
+}
+
+TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all — is seen by the "
+          "Kernel immediately") {
     Switchboard bus;
     Kernel kernel(bus);
     DynCast d = load_pair(bus, kernel);
@@ -3659,17 +3946,24 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
     // `admit_candidate` is the sole admission mutation, and a prepared
     // transaction is not its only caller: a trusted host may move production
     // topology directly. The synchronization must not be a property of one call
-    // site, so this exercises the road that bypasses the transaction layer.
+    // site — so this exercises the road that bypasses the transaction layer
+    // entirely, and the Kernel is never told.
     REQUIRE(bus.admit_candidate(d.candidate, d.incumbent, kService,
                                 host_lifecycle_authority(bus),
                                 Message(to_value(loom::Activated{7})), 7));
 
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
-    CHECK(service_query(kernel).holder == d.candidate);
-    CHECK(service_query(kernel).accepts);
+    const Kernel::RoleQuery q = service_query(kernel);
+    CHECK(q.holder == d.candidate);
+    CHECK(q.accepts);
+    CHECK(kernel.status("v1") == ArtifactStatus::Sealed);
+    CHECK(kernel.status("v2") == ArtifactStatus::Live);
     bus.pump();
     CHECK(d.ask(bus) == "v2");
+
+    // ...and the LEGACY road agrees too: `unload_role` is what a graceful
+    // `SwapWeave` reaches through, and it selects the live holder.
     REQUIRE(kernel.unload_role(kService));
     CHECK_FALSE(kernel.is_loaded("v2"));
     CHECK(kernel.is_loaded("v1"));
@@ -3682,13 +3976,17 @@ TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up
     REQUIRE(d.ask(bus) == "v1");
 
     // The Kernel's own commit door. It used to patch two cached role fields after
-    // the bus answered; there is nothing to patch now, and the answers match the
-    // ones the other two roads produce.
+    // the bus answered; there is nothing to patch now, and the answers are the
+    // same ones the transaction road produces.
     REQUIRE(kernel.commit_candidate("v1", "v2", kService));
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
     CHECK(service_query(kernel).holder == d.candidate);
     CHECK(bus.role_holder(kService) == d.candidate);
+    // commit_candidate is R2B-3a's narrower door: it unseals without retiring, so
+    // v1 is left an ordinary weave holding no role.
+    CHECK(kernel.status("v1") == ArtifactStatus::Live);
+    CHECK(kernel.status("v2") == ArtifactStatus::Live);
 
     // A refused commit changes nothing, on either side.
     CHECK_FALSE(kernel.commit_candidate("v2", "v1", kService));
@@ -3696,28 +3994,155 @@ TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up
     CHECK(kernel.role_of("v1").empty());
 }
 
-TEST_CASE("R2B-3b-3a: a role held by a native weave is not the Kernel's to report or unload") {
+TEST_CASE("R2B-3b-3a: reloading a weave a transaction bound as its candidate releases the "
+          "artifact, and the reload says so") {
     Switchboard bus;
     Kernel kernel(bus);
-    // A native (host-mounted) weave holds the role. `holder == 0` conflates
-    // "unheld" with "held by somebody the Kernel never loaded" — deliberately,
-    // and that contract survives the move to deriving from the bus.
-    Registered native = register_probe(bus, {pong_schema()});
-    bus.unregister_weave(native.id);
-    Registered holder = register_probe(bus, {pong_schema()});
-    (void)holder;
-    REQUIRE(kernel.load("t", ZEN_SO_WEAVE, "solo").ok);
-    CHECK(kernel.role_of("t") == "solo");
-    CHECK(kernel.query_role("solo", "Ping", 1u).holder == kernel.weave_id("t"));
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    const WeaveId doomed = d.candidate;
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 8);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "defer");
 
-    // A role nobody holds, and the empty role, both answer with 0.
-    CHECK(kernel.query_role("nobody", "Ping", 1u).holder == WeaveId{});
-    CHECK(kernel.query_role("", "Ping", 1u).holder == WeaveId{});
-    CHECK_FALSE(kernel.unload_role("nobody"));
-    CHECK_FALSE(kernel.unload_role(""));
-    CHECK(kernel.role_of("no-such-artifact").empty());
-    CHECK(kernel.unload_role("solo"));
-    CHECK_FALSE(kernel.is_loaded("t"));
+    // THE REENTRANT CASE. New code is a new participant, so this reload aborts
+    // the transaction from inside `swap_state` — and the abort discards the
+    // candidate, which destroys the very adapter and record this call is holding.
+    // The reload must survive its own subject vanishing mid-flight.
+    LifetimeDelta ledger;
+    const ReloadResult r = kernel.reload_from("v2", ZEN_SO_VERSIONED_V2);
+    CHECK(r.ok);
+    CHECK_FALSE(r.reloaded); // the swap happened and was then undone by the discard
+    CHECK_FALSE(r.version_mismatch);
+    CHECK(r.error.find("prepared replacement") != std::string::npos);
+
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.weave(doomed) == nullptr);
+    artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
+    v1_still_the_service(bus, d);
+
+    // TWO instances and TWO libraries were in play — the incumbent code and the
+    // replacement — and each went exactly once. One library was opened here; two
+    // closed, because the artifact's original was released on the way out too.
+    CHECK(ledger.opened() == 1);
+    CHECK(ledger.created() == 1);
+    CHECK(ledger.destroyed() == 2);
+    CHECK(ledger.closed() == 2);
+}
+
+TEST_CASE("R2B-3b-3a: an adapter a host keeps holds its library open, and the Kernel says so") {
+    Switchboard bus;
+    LifetimeDelta ledger;
+    {
+        Kernel kernel(bus);
+        REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+        const WeaveId id = kernel.weave_id("t");
+        CHECK(kernel.status("t") == ArtifactStatus::Live);
+
+        // A host takes ownership of the adapter and does not destroy it. The
+        // artifact is real and its code can still run, so the library MUST stay
+        // open — and the Kernel must not call it a live weave.
+        std::unique_ptr<Weave> held = bus.unregister_weave(id);
+        REQUIRE(held != nullptr);
+        CHECK(kernel.is_loaded("t"));
+        CHECK(kernel.status("t") == ArtifactStatus::Unregistered);
+        CHECK(ledger.destroyed() == 0);
+        CHECK(ledger.closed() == 0);
+
+        // Dropping it destroys the instance and, only then, closes the library —
+        // and the same destructor releases the Kernel's record, so the artifact
+        // name is free without the Kernel being called at all.
+        held.reset();
+        CHECK(ledger.destroyed() == 1);
+        CHECK(ledger.closed() == 1);
+        CHECK_FALSE(kernel.is_loaded("t"));
+        CHECK(kernel.status("t") == ArtifactStatus::NotLoaded);
+    }
+    CHECK(ledger.opened() == 1);
+    CHECK(ledger.closed() == 1);
+    CHECK(ledger.created() == ledger.destroyed());
+}
+
+TEST_CASE("R2B-3b-3a: unloading an artifact whose adapter a host still holds does not close its "
+          "library early") {
+    Switchboard bus;
+    LifetimeDelta ledger;
+    std::unique_ptr<Weave> held;
+    {
+        Kernel kernel(bus);
+        REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+        held = bus.unregister_weave(kernel.weave_id("t"));
+        REQUIRE(held != nullptr);
+        // The Kernel gives up the name — and deliberately does NOT close, because
+        // an adapter that can still run code from that library exists.
+        CHECK(kernel.unload("t"));
+        CHECK_FALSE(kernel.is_loaded("t"));
+        CHECK(ledger.closed() == 0);
+        CHECK(ledger.destroyed() == 0);
+    }
+    CHECK(ledger.closed() == 0); // ...not even when the Kernel itself is gone
+    held.reset();
+    CHECK(ledger.destroyed() == 1);
+    CHECK(ledger.closed() == 1); // the last holder closes it, once
+}
+
+TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter") {
+    Switchboard bus;
+    LifetimeDelta ledger;
+    std::unique_ptr<Weave> held;
+    {
+        Kernel kernel(bus);
+        REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+        held = bus.unregister_weave(kernel.weave_id("t")); // a host takes the adapter
+        REQUIRE(held != nullptr);
+        REQUIRE(kernel.unload("t")); // ...and the Kernel gives up the name
+        REQUIRE_FALSE(kernel.is_loaded("t"));
+
+        // THE SAME NAME, A DIFFERENT ARTIFACT — while the predecessor's adapter is
+        // still alive and still remembers the string "t". This is the input every
+        // other case in this file fails to produce, which is why the namesake
+        // identity check survived a solo cut: it was unwatched, not redundant.
+        REQUIRE(kernel.load("t", ZEN_SO_WEAVE_B).ok);
+        const WeaveId fresh = kernel.weave_id("t");
+        CHECK(kernel.status("t") == ArtifactStatus::Live);
+
+        // Now the predecessor dies. It must reap NOTHING. Two independent walls
+        // stand between it and the namesake's record — it was detached when its own
+        // record was dropped, and it is not this record's adapter — and the paired
+        // mutation that cuts BOTH is what reddens here.
+        held.reset();
+        CHECK(kernel.is_loaded("t"));
+        CHECK(kernel.weave_id("t") == fresh);
+        CHECK(kernel.status("t") == ArtifactStatus::Live);
+        CHECK(bus.alive(fresh));
+        CHECK(kernel.unload("t"));
+    }
+    CHECK(ledger.created() == ledger.destroyed());
+    CHECK(ledger.opened() == ledger.closed());
+    CHECK(ledger.created() == 2);
+}
+
+TEST_CASE("R2B-3b-3a: a candidate that loads but cannot be sealed leaves no artifact behind") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // The artifact is fine; the SEAL is refused, because a dead coordinator
+    // cannot own a preparation. `load_candidate` is the ordinary load then the
+    // seal, so this is the one path where a record exists and is then undone.
+    bus.kill(d.coordinator.id);
+    LifetimeDelta ledger;
+    const LoadResult lr = kernel.load_candidate("v3", ZEN_SO_VERSIONED_V2, d.coordinator.id);
+    CHECK_FALSE(lr.ok);
+    CHECK(lr.error == "candidate could not be sealed");
+    artifact_released(kernel, "v3", ZEN_SO_VERSIONED_V2);
+    CHECK(ledger.created() == 1);
+    CHECK(ledger.destroyed() == 1);
+    CHECK(ledger.opened() == 1);
+    CHECK(ledger.closed() == 1);
+    v1_still_the_service(bus, d);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

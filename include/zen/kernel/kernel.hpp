@@ -5,14 +5,17 @@
 #include <zen/registry.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace loom {
 
-class HostAdapter; // host-side Weave wrapping a loaded library instance
+class HostAdapter;   // host-side Weave wrapping a loaded library instance
+class LoadedLibrary; // one open dynamic library, closed when the last holder lets go
 
 /// Thrown host-side when a library hands back bytes that fail the gate, or a
 /// thunk reports an error. The Kernel turns these into clean results.
@@ -20,6 +23,53 @@ class DllBoundaryError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+/// WHAT THIS KERNEL CAN HONESTLY SAY ABOUT ONE ARTIFACT NAME (R2B-3b-3a).
+///
+/// `is_loaded()` answers one bit — *do I hold this artifact* — and that bit is
+/// true of things an operator must not confuse: a live service, a prepared
+/// candidate nobody may address, an incumbent sealed for private retirement, and
+/// a weave that is registered but dead. They are all "loaded"; only one of them
+/// is a participant, and reporting the other three as live is exactly the stale
+/// bookkeeping this phase exists to end.
+///
+/// Every state below is derived from the Switchboard at the moment it is asked.
+/// The Kernel caches none of it.
+enum class ArtifactStatus : std::uint8_t {
+    NotLoaded,    ///< this Kernel holds no artifact under that name
+    Live,         ///< loaded, registered, alive, unsealed: an ordinary participant
+    Sealed,       ///< loaded and alive, but outside the world — a prepared candidate,
+                  ///< or an incumbent sealed for private retirement
+    Dead,         ///< loaded and registered, but killed and awaiting revival
+    /// Loaded here, and the Switchboard no longer has this participant: somebody
+    /// took ownership of the adapter through `unregister_weave` and still holds
+    /// it. The artifact is real and its library is open — it simply is not on the
+    /// bus. Named rather than folded into `Dead`, because "not a participant" and
+    /// "not even registered" send an operator to different places.
+    Unregistered,
+};
+
+const char* name_of(ArtifactStatus s) noexcept;
+
+/// HOST-SIDE ARTIFACT LIFETIME LEDGER — diagnostics only, process-wide, monotonic.
+///
+/// Every dynamic instance this host creates and destroys, and every library it
+/// opens and closes, counted at the one place each act happens. It exists because
+/// *exactly once* is the whole ownership law of the dynamic seam, and a law
+/// nobody can count is a law nobody can test: a caller takes a delta across an
+/// operation and asserts the balance.
+///
+/// A LEDGER AND NEVER AN INPUT — no code in the Kernel reads it to decide
+/// anything. Never reset, so a reader takes differences rather than absolutes,
+/// and it exposes no pointer, handle or generation value.
+struct KernelLifetimeCounts {
+    std::uint64_t instances_created = 0;   ///< abi->create() calls that yielded an instance
+    std::uint64_t instances_destroyed = 0; ///< abi->destroy() calls the host made
+    std::uint64_t libraries_opened = 0;    ///< dlopen/LoadLibrary calls that succeeded
+    std::uint64_t libraries_closed = 0;    ///< dlclose/FreeLibrary calls
+};
+
+KernelLifetimeCounts kernel_lifetime_counts() noexcept;
 
 struct LoadResult {
     bool ok = false;
@@ -39,6 +89,58 @@ struct ReloadResult {
 /// zen-switchboard (routing, lifecycle) and adds only the library boundary:
 /// everything a library hands back crosses as bytes and is re-admitted through
 /// the same gate. The Switchboard must outlive the Kernel.
+///
+/// ---- THE OWNERSHIP LAW OF ONE DYNAMIC ARTIFACT (R2B-3b-3a) -----------------
+///
+/// Two layers own different truths about the same artifact, and until this phase
+/// they could disagree: the Switchboard owns live participation and destroys a
+/// weave's adapter when a prepared replacement aborts; the Kernel owns the
+/// library handle and the artifact name and was never told. One explicit chain,
+/// now, with one owner per link:
+///
+///   LoadedLibrary        the open dynamic library. Held by SHARED ownership —
+///                        by this Kernel's record AND by the adapter — and closed
+///                        exactly once, when the last holder lets go. The adapter
+///                        holding one is what makes "the library closed while code
+///                        from it could still run" unrepresentable rather than
+///                        merely avoided.
+///
+///   HostAdapter          the loom::Weave wrapping the library instance. Owned by
+///                        the SWITCHBOARD from registration onward, exactly as
+///                        every other weave is. Its destructor destroys the
+///                        library instance — once, because a destructor runs once.
+///
+///   Kernel::Loaded       the artifact record: the name, the library, the ABI, and
+///                        a NON-OWNING pointer to the adapter.
+///
+/// The invariant that ties them, and it is deliberately ONE-DIRECTIONAL: **a
+/// Loaded record never outlives its HostAdapter.** Creating the record attaches
+/// the adapter to it; the adapter's destructor erases the record; and dropping a
+/// record detaches its adapter first. So the raw pointer in a record can never
+/// dangle — not because callers are careful, but because nothing removes the
+/// adapter without removing the record in the same breath.
+///
+/// THE CONVERSE IS FALSE, and saying so is the point. An adapter may outlive its
+/// record: a host that takes ownership through `unregister_weave` and keeps it
+/// still holds a working weave after this Kernel has let the name go. It is
+/// detached when that happens, so it reaps nothing later, and it keeps its share
+/// of the library so its own code stays mapped. `ArtifactStatus::Unregistered` is
+/// what that looks like from outside — and it is why `unload` on such an artifact
+/// gives up the name while deliberately closing nothing.
+///
+/// The detach and the namesake identity check in `adapter_destroyed` are a PAIR,
+/// and each masks the other: with the detach in place a former adapter never
+/// calls back at all, and with the check in place a call-back that did arrive
+/// would not match. Cutting either alone leaves the suite green; cutting both
+/// lets a predecessor's adapter reap its namesake's record, which the
+/// namesake-load case pins.
+///
+/// THE ADAPTER'S DESTRUCTOR IS THE REMOVAL NOTIFICATION, and that is the whole
+/// synchronization mechanism. It is the one object whose lifetime is exactly "this
+/// artifact's instance is live", so it is right no matter WHO initiated the
+/// destruction — this Kernel's own unload, a host calling `unregister_weave`, or a
+/// transaction aborting and discarding its candidate deep inside a delivery. The
+/// Switchboard needs no hook, no observer and no knowledge that a Kernel exists.
 class Kernel {
 public:
     explicit Kernel(loom::Switchboard& bus);
@@ -114,10 +216,16 @@ public:
     /// rebound BEFORE revival is known to have succeeded, so a candidate with an
     /// identical manifest whose revive() fails still leaves the incumbent
     /// unavailable. The prepared-candidate / rollback work is R2B's.
+    ///
+    /// A SECOND HONEST EDGE, named in R2B-3b-3a: reloading a weave that some
+    /// prepared replacement has bound as its CANDIDATE ends that transaction —
+    /// new code is a new participant — and ending it discards the candidate,
+    /// which is this very artifact. The swap really did happen and is then
+    /// undone by the discard, so it reports `reloaded == false` with the reason
+    /// rather than claiming a success whose subject no longer exists. Nothing is
+    /// left behind: the record is released and the library closed on the way out.
     ReloadResult reload_from(const std::string& name, const std::string& new_path);
 
-    /// Stop the Weave, destroy its instance, then close the library — in that
-    /// order, leaving no live pointer into the closed library.
     /// Load an artifact as a PREPARED CANDIDATE (R2B-3): opened, constructed,
     /// contract-validated and revivable — everything an ordinary load does — but
     /// SEALED, so it is not a participant in the live world. It receives no
@@ -141,6 +249,21 @@ public:
     bool commit_candidate(const std::string& incumbent_name, const std::string& candidate_name,
                           const std::string& role);
 
+    /// Release this artifact: take the Weave off the bus, destroy its instance,
+    /// then close the library — in that order, leaving no live pointer into a
+    /// closed library. False if this Kernel does not hold that name, which
+    /// INCLUDES an artifact a transaction already discarded: that is a truthful
+    /// "not loaded", not a silent success over wreckage.
+    ///
+    /// The order is not maintained by this function's statements. Destroying the
+    /// adapter destroys the instance and, in the same breath, releases one share
+    /// of the library; this Kernel's share goes with the record. The close is
+    /// whichever of those happens last, so no sequence of calls can invert it.
+    ///
+    /// ONE CASE DESTROYS NOTHING, deliberately: if a host took ownership of the
+    /// adapter through `unregister_weave` and still holds it, this gives up the
+    /// name and this Kernel's share and closes nothing at all — that adapter's
+    /// code is still reachable, and it closes the library itself when it goes.
     bool unload(const std::string& name);
 
     /// Unload whichever loaded library holds `role` RIGHT NOW (false if none
@@ -153,8 +276,19 @@ public:
     bool unload_role(const std::string& role);
 
     loom::WeaveId weave_id(const std::string& name) const;
+
+    /// Does this Kernel hold an artifact under that name? ONE BIT, and a coarse
+    /// one — see `status()` for what kind of thing it is. It is false the moment
+    /// the artifact is released, including when a transaction discarded the weave
+    /// without this Kernel asking for anything.
     bool is_loaded(const std::string& name) const;
     std::vector<std::string> loaded() const;
+
+    /// What kind of thing this artifact currently is, derived from the
+    /// Switchboard every time it is asked. `Dead` outranks `Sealed` outranks
+    /// `Live`: aliveness is the coarser fact, and a dead weave receives nothing
+    /// whatever its seal says.
+    ArtifactStatus status(const std::string& name) const;
 
     /// The role this artifact's weave holds RIGHT NOW, or empty.
     ///
@@ -204,15 +338,19 @@ public:
                  std::uint32_t shape_version) const;
 
 private:
+    friend class HostAdapter;
+
     struct Loaded {
         std::string name;
-        void* lib = nullptr;
+        /// SHARED with the adapter, so the library outlives any code that could
+        /// still run from it and closes exactly once when both let go.
+        std::shared_ptr<LoadedLibrary> lib;
         const ZenWeaveAbi* abi = nullptr;
-        HostAdapter* adapter = nullptr; // owned by the Switchboard
+        /// NON-OWNING (the Switchboard owns it), and never dangling: no path
+        /// destroys the adapter without erasing this record in the same breath.
+        /// The reverse does not hold — see the ownership law on the class.
+        HostAdapter* adapter = nullptr;
         loom::WeaveId id{};
-        // NO CACHED ROLE (R2B-3b-3a). There was one, written at load and patched
-        // by `commit_candidate`; admission moves a role with no Kernel call at
-        // all, so it could only ever have been right by luck. The queries derive.
     };
 
     struct Manifest {
@@ -222,8 +360,22 @@ private:
 
     Manifest reconstruct(const ZenWeaveAbi* abi, void* instance);
 
+    /// THE ADAPTER TELLING US IT IS GONE — called from `~HostAdapter`, after the
+    /// library instance has been destroyed and before the adapter releases its
+    /// share of the library. Whoever destroyed it, this runs.
+    ///
+    /// `who` is checked against the record's own adapter rather than trusted:
+    /// an artifact name may be reused after its predecessor was discarded, and a
+    /// late destructor must never reap a namesake's record.
+    void adapter_destroyed(const std::string& name, const HostAdapter* who) noexcept;
+
+    /// Drop the record for `name`, detaching its adapter first so the adapter no
+    /// longer names a record that has gone. Idempotent; releases this Kernel's
+    /// share of the library, which closes it unless an adapter still holds one.
+    void forget(const std::string& name) noexcept;
+
     /// Is this id one of ours? The kernel-loaded/native distinction `query_role`
-    /// and `unload_role` both need once the holder comes from the bus.
+    /// and `unload_role` both need.
     const Loaded* record_for(loom::WeaveId id) const;
 
     loom::Switchboard& bus_;

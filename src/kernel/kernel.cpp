@@ -24,6 +24,14 @@ namespace loom {
 
 namespace {
 
+/// The host-side lifetime ledger behind `kernel_lifetime_counts()`. Process-wide,
+/// monotonic, single-threaded like everything else here, and read by nothing that
+/// makes a decision.
+KernelLifetimeCounts& ledger() noexcept {
+    static KernelLifetimeCounts counts;
+    return counts;
+}
+
 // ---- platform loader ------------------------------------------------------
 
 void* lib_open(const std::string& path, std::string& error) {
@@ -50,6 +58,16 @@ void* lib_open(const std::string& path, std::string& error) {
 #endif
 }
 
+// Wrapped, so the ledger counts every successful open at the one place opening
+// happens rather than at each of its callers.
+void* lib_open_counted(const std::string& path, std::string& error) {
+    void* h = lib_open(path, error);
+    if (h != nullptr) {
+        ++ledger().libraries_opened;
+    }
+    return h;
+}
+
 void* lib_symbol(void* handle, const char* name) {
 #if defined(_WIN32)
     return reinterpret_cast<void*>(::GetProcAddress(static_cast<HMODULE>(handle), name));
@@ -62,11 +80,32 @@ void lib_close(void* handle) {
     if (handle == nullptr) {
         return;
     }
+    ++ledger().libraries_closed;
 #if defined(_WIN32)
     ::FreeLibrary(static_cast<HMODULE>(handle));
 #else
     ::dlclose(handle);
 #endif
+}
+
+// Destroying a library instance goes through here and nowhere else, so the
+// ledger's "the host called destroy" count is complete by construction. The
+// host is the ONLY caller of abi->destroy, which is what makes counting these
+// calls a real proof that no instance is destroyed twice.
+void destroy_instance(const ZenWeaveAbi* abi, void* instance) {
+    if (abi == nullptr || instance == nullptr) {
+        return;
+    }
+    ++ledger().instances_destroyed;
+    abi->destroy(instance);
+}
+
+void* create_instance(const ZenWeaveAbi* abi) {
+    void* instance = abi->create();
+    if (instance != nullptr) {
+        ++ledger().instances_created;
+    }
+    return instance;
 }
 
 std::string_view as_view(const std::uint8_t* data, std::size_t len) {
@@ -146,6 +185,56 @@ struct HostCtx {
     loom::Bus* gated;
     loom::Switchboard* sb;
 };
+
+} // namespace
+
+// ---- one open dynamic library, owned by everybody who could still need it ----
+
+/// ONE OPEN LIBRARY, CLOSED EXACTLY ONCE, BY THE LAST HOLDER TO LET GO.
+///
+/// The forbidden outcomes this exists to make unrepresentable rather than merely
+/// avoided: closing twice, and closing while code from the library could still
+/// execute. Both used to be questions about the ORDER of statements in the
+/// Kernel — destroy the instance, *then* close — which is a rule every future
+/// call site has to remember. It is now a question about who is still holding a
+/// `shared_ptr`, which nobody has to remember:
+///
+///   the Kernel's Loaded record   holds one while it owns the artifact name
+///   the HostAdapter              holds one for exactly as long as an instance
+///                                built by that library exists
+///
+/// So the close cannot precede the instance's destruction (the adapter's share
+/// outlives its own destructor body), and cannot happen twice (a refcount reaches
+/// zero once).
+///
+/// Deliberately neither copyable nor movable: this object IS the handle's
+/// identity, and "the same library, at a different address" has no meaning.
+class LoadedLibrary {
+public:
+    explicit LoadedLibrary(void* handle) noexcept : handle_(handle) {}
+    ~LoadedLibrary() { lib_close(handle_); }
+
+    LoadedLibrary(const LoadedLibrary&) = delete;
+    LoadedLibrary& operator=(const LoadedLibrary&) = delete;
+    LoadedLibrary(LoadedLibrary&&) = delete;
+    LoadedLibrary& operator=(LoadedLibrary&&) = delete;
+
+    void* get() const noexcept { return handle_; }
+
+private:
+    void* handle_;
+};
+
+namespace {
+
+/// Open `path` and hand back an owner for it, or nullptr with `error` set.
+std::shared_ptr<LoadedLibrary> open_library(const std::string& path, std::string& error) {
+    void* handle = lib_open_counted(path, error);
+    if (handle == nullptr) {
+        return nullptr;
+    }
+    return std::make_shared<LoadedLibrary>(handle);
+}
 
 } // namespace
 
@@ -277,29 +366,53 @@ static void zen_host_release_deferred(void* ctx, uint64_t token) {
 
 class HostAdapter final : public loom::Weave {
 public:
-    HostAdapter(const ZenWeaveAbi* abi, void* instance,
+    HostAdapter(const ZenWeaveAbi* abi, void* instance, std::shared_ptr<LoadedLibrary> lib,
                 std::vector<std::shared_ptr<const Schema>> accepted,
                 std::shared_ptr<const Schema> state_schema, loom::Switchboard* bus)
-        : abi_(abi), instance_(instance), accepted_(std::move(accepted)),
+        : abi_(abi), instance_(instance), lib_(std::move(lib)), accepted_(std::move(accepted)),
           state_schema_(std::move(state_schema)), bus_(bus) {}
 
+    /// THE ONE PLACE A LIVE DYNAMIC ARTIFACT ENDS — whoever caused it.
+    ///
+    /// The Switchboard owns this object, so this runs when the Kernel unloads,
+    /// when a host hands the adapter back and drops it, and when a prepared
+    /// replacement aborts deep inside a delivery and discards its candidate. That
+    /// last one is why the notification lives here and not in a hook the
+    /// Switchboard calls: the bus does not know a Kernel exists, and the only
+    /// thing that is true in every case is that this destructor ran.
+    ///
+    /// ORDER, and it is guaranteed by the language rather than by care: the body
+    /// destroys the instance and tells the Kernel to release the artifact record;
+    /// `lib_` — a MEMBER — is released afterwards. So the library cannot close
+    /// before the instance built from it is gone, whichever share is the last.
     ~HostAdapter() override {
-        if (abi_ != nullptr && instance_ != nullptr) {
-            abi_->destroy(instance_);
+        destroy_instance(abi_, instance_);
+        if (owner_ != nullptr) {
+            owner_->adapter_destroyed(artifact_, this);
         }
     }
 
     void set_self(loom::WeaveId id) { self_ = id; }
     const std::shared_ptr<const Schema>& state_schema() const { return state_schema_; }
 
+    /// Bind this adapter to the Kernel record that names it, and to nothing
+    /// otherwise: an adapter with no owner (one whose registration threw before a
+    /// record existed) simply destroys its instance and goes.
+    void attach(loom::Kernel* owner, std::string artifact) {
+        owner_ = owner;
+        artifact_ = std::move(artifact);
+    }
+    void detach() noexcept { owner_ = nullptr; }
+
     // Swap the backing library in place (hot-reload), destroying the old
-    // instance while the old library is still open.
-    void rebind(const ZenWeaveAbi* new_abi, void* new_instance) {
-        if (abi_ != nullptr && instance_ != nullptr) {
-            abi_->destroy(instance_);
-        }
+    // instance while the old library is still open — which the argument order
+    // guarantees: `lib_` is not reassigned until after the destroy above it.
+    void rebind(const ZenWeaveAbi* new_abi, void* new_instance,
+                std::shared_ptr<LoadedLibrary> new_lib) {
+        destroy_instance(abi_, instance_);
         abi_ = new_abi;
         instance_ = new_instance;
+        lib_ = std::move(new_lib);
     }
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
@@ -384,17 +497,50 @@ private:
 
     const ZenWeaveAbi* abi_;
     void* instance_;
+    /// DECLARED AFTER `instance_` ON PURPOSE, and it is load-bearing: members are
+    /// destroyed in reverse declaration order and after the destructor body, so
+    /// this share of the library outlives both the body's destroy() call and the
+    /// instance pointer it used.
+    std::shared_ptr<LoadedLibrary> lib_;
     std::vector<std::shared_ptr<const Schema>> accepted_;
     std::shared_ptr<const Schema> state_schema_;
     loom::Switchboard* bus_;
     loom::WeaveId self_{};
+    /// The Kernel whose record names this adapter, and under which name. Null
+    /// whenever no record does — before registration succeeds, and after a record
+    /// is dropped by anything other than this destructor.
+    loom::Kernel* owner_ = nullptr;
+    std::string artifact_;
 };
 
 // ---- Kernel ----------------------------------------------------------------
 
+const char* name_of(ArtifactStatus s) noexcept {
+    switch (s) {
+    case ArtifactStatus::NotLoaded:
+        return "NotLoaded";
+    case ArtifactStatus::Live:
+        return "Live";
+    case ArtifactStatus::Sealed:
+        return "Sealed";
+    case ArtifactStatus::Dead:
+        return "Dead";
+    case ArtifactStatus::Unregistered:
+        return "Unregistered";
+    }
+    return "Unknown";
+}
+
+KernelLifetimeCounts kernel_lifetime_counts() noexcept { return ledger(); }
+
 Kernel::Kernel(loom::Switchboard& bus) : bus_(bus) {}
 
 Kernel::~Kernel() {
+    // The names are copied first because unloading one artifact can release
+    // ANOTHER: taking a weave off the bus can invalidate a prepared replacement,
+    // which discards its candidate, whose adapter's destructor reaps that
+    // artifact's record here. A later `unload` of a name already reaped simply
+    // finds nothing and answers false.
     std::vector<std::string> names;
     names.reserve(libs_.size());
     for (const auto& entry : libs_) {
@@ -403,6 +549,44 @@ Kernel::~Kernel() {
     for (const std::string& n : names) {
         unload(n);
     }
+}
+
+void Kernel::adapter_destroyed(const std::string& name, const HostAdapter* who) noexcept {
+    auto it = libs_.find(name);
+    // THE NAMESAKE CHECK. An artifact name is reusable the moment its predecessor
+    // is released, so "there is a record under this name" is not the same question
+    // as "that record is mine". Identity, never the name alone.
+    if (it == libs_.end() || it->second.adapter != who) {
+        return;
+    }
+    // No detach(): `who` is mid-destruction, and its owner pointer dies with it.
+    libs_.erase(it);
+}
+
+void Kernel::forget(const std::string& name) noexcept {
+    auto it = libs_.find(name);
+    if (it == libs_.end()) {
+        return;
+    }
+    // The adapter may still be alive — a host that took ownership through
+    // `unregister_weave` and kept it. Cut its link to a record that is going, so
+    // its eventual destructor cannot reach a Kernel that no longer names it.
+    if (it->second.adapter != nullptr) {
+        it->second.adapter->detach();
+    }
+    libs_.erase(it);
+}
+
+const Kernel::Loaded* Kernel::record_for(loom::WeaveId id) const {
+    if (!id.valid()) {
+        return nullptr;
+    }
+    for (const auto& entry : libs_) {
+        if (entry.second.id == id) {
+            return &entry.second;
+        }
+    }
+    return nullptr;
 }
 
 Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
@@ -442,18 +626,19 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
         return {false, {}, "already loaded: " + name};
     }
     std::string error;
-    void* lib = lib_open(path, error);
-    if (lib == nullptr) {
+    // OWNED FROM THE FIRST MOMENT IT IS OPEN. Every refusal below simply returns:
+    // the handle closes when this local share goes out of scope, so there is no
+    // failure path that can forget to close and none that can close twice.
+    std::shared_ptr<LoadedLibrary> lib = open_library(path, error);
+    if (!lib) {
         return {false, {}, "open failed: " + error};
     }
-    const ZenWeaveAbi* abi = fetch_abi(lib, error);
+    const ZenWeaveAbi* abi = fetch_abi(lib->get(), error);
     if (abi == nullptr) {
-        lib_close(lib);
         return {false, {}, error};
     }
-    void* instance = abi->create();
+    void* instance = create_instance(abi);
     if (instance == nullptr) {
-        lib_close(lib);
         return {false, {}, "library create() returned null"};
     }
 
@@ -461,7 +646,7 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
     bool adapter_built = false;
     try {
         Manifest mf = reconstruct(abi, instance);
-        adapter = std::make_unique<HostAdapter>(abi, instance, std::move(mf.accepted),
+        adapter = std::make_unique<HostAdapter>(abi, instance, lib, std::move(mf.accepted),
                                                 std::move(mf.state), &bus_);
         adapter_built = true;
         HostAdapter* raw = adapter.get();
@@ -477,17 +662,22 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
         loom::WeaveId id =
             bus_.register_weave(std::move(adapter), loom::Grant{}.allow_any(), role);
         raw->set_self(id);
-        libs_.emplace(name, Loaded{name, lib, abi, raw, id});
+        libs_.emplace(name, Loaded{name, std::move(lib), abi, raw, id});
+        // THE RECORD AND THE ADAPTER ARE NOW ONE THING. From here the adapter's
+        // destructor releases this record, whoever destroys it — which is the
+        // whole synchronization mechanism, and it is wired last so that a failed
+        // registration leaves an adapter that reaps nothing.
+        raw->attach(this, name);
         return {true, id, ""};
     } catch (const std::exception& e) {
         if (!adapter_built) {
-            abi->destroy(instance); // instance never reached an adapter
+            destroy_instance(abi, instance); // instance never reached an adapter
         } else if (adapter) {
             adapter.reset(); // built but not handed to the bus; dtor destroys the instance
         }
         // else: handed to the bus and register threw -> the moved adapter's dtor
-        //       already destroyed the instance.
-        lib_close(lib);
+        //       already destroyed the instance. Either way it was never attached,
+        //       so nothing tried to reap a record that does not exist.
         return {false, {}, std::string("load refused: ") + e.what()};
     }
 }
@@ -545,18 +735,18 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
 
     std::string error;
-    void* new_lib = lib_open(new_path, error);
-    if (new_lib == nullptr) {
+    // Owned from the moment it is open, as in `load`: every refusal below returns,
+    // and the handle closes when this share leaves scope.
+    std::shared_ptr<LoadedLibrary> new_lib = open_library(new_path, error);
+    if (!new_lib) {
         return {false, false, false, "open failed: " + error};
     }
-    const ZenWeaveAbi* new_abi = fetch_abi(new_lib, error);
+    const ZenWeaveAbi* new_abi = fetch_abi(new_lib->get(), error);
     if (new_abi == nullptr) {
-        lib_close(new_lib);
         return {false, false, false, error};
     }
-    void* new_inst = new_abi->create();
+    void* new_inst = create_instance(new_abi);
     if (new_inst == nullptr) {
-        lib_close(new_lib);
         return {false, false, false, "library create() returned null"};
     }
 
@@ -566,8 +756,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     try {
         cand = reconstruct(new_abi, new_inst);
     } catch (const std::exception& e) {
-        new_abi->destroy(new_inst);
-        lib_close(new_lib);
+        destroy_instance(new_abi, new_inst);
         return {false, false, false, std::string("new library refused: ") + e.what()};
     }
 
@@ -575,8 +764,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (cand.state->name() != old_state->name() ||
         cand.state->version() != old_state->version() ||
         cand.state->content_id() != old_state->content_id()) {
-        new_abi->destroy(new_inst);
-        lib_close(new_lib);
+        destroy_instance(new_abi, new_inst);
         return {true, false, true, "state schema version mismatch; reload refused"};
     }
 
@@ -596,17 +784,18 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // not endorsed: whether admission is intentionally monotonic or belongs to a
     // future prepared-replacement transaction is R2B's decision (see the ledger).
     if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
-        new_abi->destroy(new_inst);
-        lib_close(new_lib);
+        destroy_instance(new_abi, new_inst);
         return {true, false, false, "accepted schema contract mismatch; reload refused"};
     }
 
     // Commit: swap the library behind the same adapter/WeaveId. rebind destroys
-    // the old instance while the old library is still open. From here the
-    // incumbent is gone — a revive failure below leaves the weave unavailable
-    // rather than rolling back (the honest edge named in the header; R2B).
-    void* old_lib = rec.lib;
-    rec.adapter->rebind(new_abi, new_inst);
+    // the old instance while the old library is still open — this local share is
+    // what keeps it so, and dropping it at the end of the function is the close.
+    // From here the incumbent is gone: a revive failure below leaves the weave
+    // unavailable rather than rolling back (the honest edge named in the header).
+    const std::shared_ptr<LoadedLibrary> old_lib = rec.lib;
+    const loom::WeaveId id = rec.id;
+    rec.adapter->rebind(new_abi, new_inst, new_lib);
     rec.abi = new_abi;
     rec.lib = new_lib;
 
@@ -614,10 +803,21 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // This is an intentional code swap, not crash recovery, so it uses the
     // unbudgeted swap_state path: a deliberate hot-reload must never be blocked by
     // (or draw down) the Weave's crash-revival allowance.
-    loom::ReviveOutcome ro = bus_.swap_state(rec.id, snapshot);
+    //
+    // ...AND `rec` MAY NOT SURVIVE IT. New code is a new participant, so if some
+    // prepared replacement bound this weave as its CANDIDATE, the swap ends that
+    // transaction, ending it discards the candidate, and the discard runs this
+    // adapter's destructor — which releases the very record this reference names.
+    // Nothing below touches `rec`; the two facts still needed were copied above.
+    loom::ReviveOutcome ro = bus_.swap_state(id, snapshot);
 
-    lib_close(old_lib); // the old instance is already gone; no live pointer remains
-
+    if (libs_.count(name) == 0) {
+        // The swap happened and was then undone by the discard. Saying `reloaded`
+        // here would name a success whose subject no longer exists.
+        return {true, false, false,
+                "the reload ended a prepared replacement that had bound this weave as its "
+                "candidate; the candidate was discarded and the artifact released"};
+    }
     if (!ro.revived) {
         return {true, false, false, "revive after swap was refused"};
     }
@@ -627,16 +827,29 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
 bool Kernel::unload(const std::string& name) {
     auto it = libs_.find(name);
     if (it == libs_.end()) {
-        return false;
+        return false; // including an artifact a transaction already discarded
     }
-    const Loaded rec = it->second;
-    libs_.erase(it);
+    // THE NAME MUST BE OURS, NOT A REFERENCE INTO THE RECORD WE ARE DESTROYING.
+    // `unload_role` legitimately passes a record's own `name` field, and the
+    // adapter's destructor below erases that record — so a borrowed reference
+    // dangles from that moment and `forget()` at the end would read freed memory.
+    // ASan found exactly this; the Debug lane was green on it. Copy first.
+    const std::string artifact = name;
+    const loom::WeaveId id = it->second.id;
 
-    // Destroy the adapter (and, in its dtor, the library instance) BEFORE closing
-    // the library — so no call ever lands in a closed library.
-    std::unique_ptr<loom::Weave> adapter = bus_.unregister_weave(rec.id);
+    // Take the weave off the bus and destroy the adapter it hands back. That
+    // destructor destroys the library instance and releases this artifact's
+    // record — so by the time it returns, `it` is dangling and the record is
+    // usually already gone. Nothing here dereferences it again.
+    std::unique_ptr<loom::Weave> adapter = bus_.unregister_weave(id);
     adapter.reset();
-    lib_close(rec.lib);
+
+    // Two cases leave the record standing: the bus never had this weave (a
+    // transaction discarded it earlier and something still held the name), or the
+    // bus handed the adapter to somebody else who is keeping it. Dropping our
+    // share is correct for both — and in the second it deliberately does NOT
+    // close the library, because a live adapter still holds one.
+    forget(artifact);
     return true;
 }
 
@@ -653,18 +866,6 @@ bool Kernel::unload_role(const std::string& role) {
     return unload(rec->name); // the unregister releases the role slot
 }
 
-const Kernel::Loaded* Kernel::record_for(loom::WeaveId id) const {
-    if (!id.valid()) {
-        return nullptr;
-    }
-    for (const auto& entry : libs_) {
-        if (entry.second.id == id) {
-            return &entry.second;
-        }
-    }
-    return nullptr;
-}
-
 loom::WeaveId Kernel::weave_id(const std::string& name) const {
     auto it = libs_.find(name);
     return it == libs_.end() ? loom::WeaveId{} : it->second.id;
@@ -675,6 +876,21 @@ std::string Kernel::role_of(const std::string& name) const {
     // Derived, never remembered: the Switchboard is the only thing that moves a
     // role, so it is the only thing that can answer for one.
     return it == libs_.end() ? std::string{} : bus_.role_of(it->second.id);
+}
+
+ArtifactStatus Kernel::status(const std::string& name) const {
+    auto it = libs_.find(name);
+    if (it == libs_.end()) {
+        return ArtifactStatus::NotLoaded;
+    }
+    const loom::WeaveId id = it->second.id;
+    if (bus_.weave(id) == nullptr) {
+        return ArtifactStatus::Unregistered;
+    }
+    if (!bus_.alive(id)) {
+        return ArtifactStatus::Dead; // aliveness is the coarser fact; it outranks the seal
+    }
+    return bus_.sealed(id) ? ArtifactStatus::Sealed : ArtifactStatus::Live;
 }
 
 Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string& shape_name,
