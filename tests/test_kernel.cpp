@@ -3579,6 +3579,147 @@ TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation an
     CHECK(d.ask(bus) == "v2");
 }
 
+// ---- R2B-3b-3a (part 1): the Kernel's role answers follow the Switchboard ----
+//
+//   When the Switchboard changes production topology, the Kernel's queries and
+//   cleanup immediately agree with it.
+//
+// The Kernel used to answer from its own map, on the reasoning that load was the
+// only thing that could bind a role. Admission ended that: a prepared
+// replacement committing — or a host admitting a candidate directly — moves a
+// role with NO Kernel call at all. Every case below changes the role through a
+// road the Kernel is never told about, and then asks it.
+
+namespace {
+
+/// The role query, asked with a shape ONLY the candidate declares — so the
+/// answer distinguishes the two artifacts on both of its fields rather than
+/// agreeing by accident.
+Kernel::RoleQuery service_query(const Kernel& kernel) {
+    return kernel.query_role(kService, versioned::PrepareReplacement::zen_name,
+                             versioned::PrepareReplacement::zen_version);
+}
+
+} // namespace
+
+TEST_CASE("R2B-3b-3a: a role moved by a committed transaction is seen by the Kernel immediately") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // BEFORE: both layers agree, and the query discriminates on both fields.
+    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.role_of("v2").empty());
+    CHECK(service_query(kernel).holder == d.incumbent);
+    CHECK_FALSE(service_query(kernel).accepts);
+
+    const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
+                                                       d.candidate, kService, 16);
+    REQUIRE(t.ok);
+    dyn_ask(bus, d, t.id, "ready");
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
+    CHECK(service_query(kernel).holder == d.incumbent); // readiness is not admission
+
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{2})), 2).ok);
+
+    // IMMEDIATELY — no pump, no later host call, no reconciliation pass.
+    CHECK(bus.role_holder(kService) == d.candidate);
+    CHECK(kernel.role_of("v2") == kService);
+    CHECK(kernel.role_of("v1").empty());
+    const Kernel::RoleQuery q = service_query(kernel);
+    CHECK(q.holder == d.candidate);
+    CHECK(q.accepts); // and the answer's SECOND field moved with it
+
+    // The four things the Kernel must never say about a committed topology.
+    CHECK(service_query(kernel).holder.valid());               // never "no holder"
+    CHECK_FALSE(kernel.role_of("v1") == kernel.role_of("v2")); // never both
+    CHECK_FALSE(kernel.role_of("v1") == kService);             // incumbent is not production
+    CHECK_FALSE(kernel.role_of("v2").empty());                 // candidate is not roleless
+
+    bus.pump();
+    CHECK(d.ask(bus) == "v2");
+
+    // ...and `unload_role` selects the LIVE holder, not whoever was loaded under
+    // that role's name. This is the road a graceful `SwapWeave` reaches through.
+    REQUIRE(kernel.unload_role(kService));
+    CHECK_FALSE(kernel.is_loaded("v2"));
+    CHECK(kernel.is_loaded("v1")); // the retired incumbent was NOT the one selected
+    CHECK(bus.role_holder(kService) == WeaveId{});
+}
+
+TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all — is seen too") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+    REQUIRE(service_query(kernel).holder == d.incumbent);
+
+    // `admit_candidate` is the sole admission mutation, and a prepared
+    // transaction is not its only caller: a trusted host may move production
+    // topology directly. The synchronization must not be a property of one call
+    // site, so this exercises the road that bypasses the transaction layer.
+    REQUIRE(bus.admit_candidate(d.candidate, d.incumbent, kService,
+                                host_lifecycle_authority(bus),
+                                Message(to_value(loom::Activated{7})), 7));
+
+    CHECK(kernel.role_of("v2") == kService);
+    CHECK(kernel.role_of("v1").empty());
+    CHECK(service_query(kernel).holder == d.candidate);
+    CHECK(service_query(kernel).accepts);
+    bus.pump();
+    CHECK(d.ask(bus) == "v2");
+    REQUIRE(kernel.unload_role(kService));
+    CHECK_FALSE(kernel.is_loaded("v2"));
+    CHECK(kernel.is_loaded("v1"));
+}
+
+TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // The Kernel's own commit door. It used to patch two cached role fields after
+    // the bus answered; there is nothing to patch now, and the answers match the
+    // ones the other two roads produce.
+    REQUIRE(kernel.commit_candidate("v1", "v2", kService));
+    CHECK(kernel.role_of("v2") == kService);
+    CHECK(kernel.role_of("v1").empty());
+    CHECK(service_query(kernel).holder == d.candidate);
+    CHECK(bus.role_holder(kService) == d.candidate);
+
+    // A refused commit changes nothing, on either side.
+    CHECK_FALSE(kernel.commit_candidate("v2", "v1", kService));
+    CHECK(kernel.role_of("v2") == kService);
+    CHECK(kernel.role_of("v1").empty());
+}
+
+TEST_CASE("R2B-3b-3a: a role held by a native weave is not the Kernel's to report or unload") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    // A native (host-mounted) weave holds the role. `holder == 0` conflates
+    // "unheld" with "held by somebody the Kernel never loaded" — deliberately,
+    // and that contract survives the move to deriving from the bus.
+    Registered native = register_probe(bus, {pong_schema()});
+    bus.unregister_weave(native.id);
+    Registered holder = register_probe(bus, {pong_schema()});
+    (void)holder;
+    REQUIRE(kernel.load("t", ZEN_SO_WEAVE, "solo").ok);
+    CHECK(kernel.role_of("t") == "solo");
+    CHECK(kernel.query_role("solo", "Ping", 1u).holder == kernel.weave_id("t"));
+
+    // A role nobody holds, and the empty role, both answer with 0.
+    CHECK(kernel.query_role("nobody", "Ping", 1u).holder == WeaveId{});
+    CHECK(kernel.query_role("", "Ping", 1u).holder == WeaveId{});
+    CHECK_FALSE(kernel.unload_role("nobody"));
+    CHECK_FALSE(kernel.unload_role(""));
+    CHECK(kernel.role_of("no-such-artifact").empty());
+    CHECK(kernel.unload_role("solo"));
+    CHECK_FALSE(kernel.is_loaded("t"));
+}
+
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
     Kernel kernel(bus);

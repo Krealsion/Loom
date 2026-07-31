@@ -477,7 +477,7 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
         loom::WeaveId id =
             bus_.register_weave(std::move(adapter), loom::Grant{}.allow_any(), role);
         raw->set_self(id);
-        libs_.emplace(name, Loaded{name, lib, abi, raw, id, role});
+        libs_.emplace(name, Loaded{name, lib, abi, raw, id});
         return {true, id, ""};
     } catch (const std::exception& e) {
         if (!adapter_built) {
@@ -522,14 +522,12 @@ bool Kernel::commit_candidate(const std::string& incumbent_name,
     if (inc == libs_.end() || cand == libs_.end()) {
         return false;
     }
-    if (!bus_.commit_candidate(cand->second.id, inc->second.id, role)) {
-        return false; // the bus refused; nothing moved, and our books are still true
-    }
-    // The bus is the authority on who holds the role; this is the kernel's own
-    // bookkeeping catching up, after the fact that mattered has already happened.
-    inc->second.role.clear();
-    cand->second.role = role;
-    return true;
+    // The bus is the authority on who holds the role, and since R2B-3b-3a it is
+    // the ONLY one: there is no kernel-side role to catch up afterwards, so this
+    // is the whole operation. A commit through any other door — a prepared
+    // replacement, or a direct `admit_candidate` this Kernel never hears about —
+    // therefore leaves the Kernel's answers just as true as this one does.
+    return bus_.commit_candidate(cand->second.id, inc->second.id, role);
 }
 
 ReloadResult Kernel::reload_from(const std::string& name, const std::string& new_path) {
@@ -646,12 +644,25 @@ bool Kernel::unload_role(const std::string& role) {
     if (role.empty()) {
         return false; // "no role" is not a role; never unload an unbound weave by it
     }
+    // THE BUS'S ROLE TABLE IS THE AUTHORITY, so a role that moved by admission
+    // selects the weave that holds it now, not whoever was loaded under it.
+    const Loaded* rec = record_for(bus_.role_holder(role));
+    if (rec == nullptr) {
+        return false; // unheld, or held by a native weave that is not ours to unload
+    }
+    return unload(rec->name); // the unregister releases the role slot
+}
+
+const Kernel::Loaded* Kernel::record_for(loom::WeaveId id) const {
+    if (!id.valid()) {
+        return nullptr;
+    }
     for (const auto& entry : libs_) {
-        if (entry.second.role == role) {
-            return unload(entry.first); // the unregister releases the role slot
+        if (entry.second.id == id) {
+            return &entry.second;
         }
     }
-    return false;
+    return nullptr;
 }
 
 loom::WeaveId Kernel::weave_id(const std::string& name) const {
@@ -661,7 +672,9 @@ loom::WeaveId Kernel::weave_id(const std::string& name) const {
 
 std::string Kernel::role_of(const std::string& name) const {
     auto it = libs_.find(name);
-    return it == libs_.end() ? std::string{} : it->second.role;
+    // Derived, never remembered: the Switchboard is the only thing that moves a
+    // role, so it is the only thing that can answer for one.
+    return it == libs_.end() ? std::string{} : bus_.role_of(it->second.id);
 }
 
 Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string& shape_name,
@@ -670,14 +683,15 @@ Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string&
     if (role.empty()) {
         return out; // "no role" is not a role
     }
-    for (const auto& entry : libs_) {
-        if (entry.second.role != role) {
-            continue;
-        }
-        out.holder = entry.second.id;
-        out.accepts = accepts(entry.second.id, shape_name, shape_version);
+    // Who holds it is the BUS's answer; whether that holder is one of ours is the
+    // only part the Kernel decides, and it is what the documented `holder == 0`
+    // means. A native holder answers the same as an unheld role, deliberately.
+    const Loaded* rec = record_for(bus_.role_holder(role));
+    if (rec == nullptr) {
         return out;
     }
+    out.holder = rec->id;
+    out.accepts = accepts(rec->id, shape_name, shape_version);
     return out;
 }
 
