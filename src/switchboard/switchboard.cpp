@@ -107,6 +107,14 @@ const char* name_of(TxnReason r) noexcept {
         return "IncumbentBusy";
     case TxnReason::CandidateBusy:
         return "CandidateBusy";
+    case TxnReason::CandidateRefused:
+        return "CandidateRefused";
+    case TxnReason::InvalidReadiness:
+        return "InvalidReadiness";
+    case TxnReason::LateReadiness:
+        return "LateReadiness";
+    case TxnReason::PreparationAlreadyAsked:
+        return "PreparationAlreadyAsked";
     }
     return "?";
 }
@@ -310,7 +318,7 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
 // it was delivered, but the moment it hands that Message to the bus the fact is
 // erased. Only answer_as() and announce_as() pass a non-empty one.
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
-                                     Provenance provenance) {
+                                     Provenance provenance, TxnId preparation) {
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = provenance;
@@ -319,7 +327,9 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     // the caller supplied, for exactly the reason provenance is: a weave hands the
     // bus a Message, and the bus decides the facts about it.
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
-    queue_.push_back(Envelope{std::move(msg), target, seq, gated, std::string{}, life});
+    Envelope env{std::move(msg), target, seq, gated, std::string{}, life};
+    env.preparation = preparation; // invalid for every caller but one
+    queue_.push_back(std::move(env));
     return Ticket{seq};
 }
 
@@ -354,7 +364,7 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
 
 Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
                                    std::uint64_t correlation, std::uint64_t requester_life,
-                                   std::uint64_t requester_incarnation) {
+                                   std::uint64_t requester_incarnation, TxnId preparation) {
     // Loom chooses the recipient and the correlation; the answerer chooses only
     // what it says. And Loom stamps WHICH requester the answer is for, so the
     // conversation survives in the envelope rather than only in the stack frame or
@@ -367,6 +377,11 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     msg.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
     Envelope env{std::move(msg), to, seq, /*gated=*/true, std::string{}, life_of(as_sender)};
     env.answer_target = AnswerTarget{true, requester_life, requester_incarnation};
+    // ...and WHICH ASK is being answered, carried out of the conversation the same
+    // way it was carried in. Both answer doors reach this line, so an immediate
+    // answer and one deferred across a dozen deliveries prove exactly the same
+    // thing — which is why there is one readiness definition rather than two.
+    env.preparation = preparation;
     queue_.push_back(std::move(env));
     return Ticket{seq};
 }
@@ -395,7 +410,7 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
     // keeps them from ever differing later.
     return enqueue_answer(authority_.requester, as_sender, std::move(msg),
                           authority_.correlation, authority_.requester_life,
-                          authority_.requester_incarnation);
+                          authority_.requester_incarnation, authority_.preparation);
 }
 
 // ---- deferred answers (R2B-2) ----------------------------------------------
@@ -534,7 +549,8 @@ DeferredAnswer Switchboard::defer_answer_as(WeaveId as_sender) {
                            authority_.requester_life, // captured at DELIVERY, not now
                            as_sender,
                            respondent_incarnation,
-                           authority_.correlation};
+                           authority_.correlation,
+                           authority_.preparation}; // likewise: the ask, not a number
     return DeferredAnswer{identity_, token};
 }
 
@@ -575,12 +591,13 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
     const std::uint64_t correlation = rec->correlation;
     const std::uint64_t requester_life = rec->requester_life;
     const std::uint64_t requester_incarnation = rec->requester_incarnation;
+    const TxnId preparation = rec->preparation;
     *rec = DeferredRecord{};
 
     // THE SAME DOOR THE IMMEDIATE ANSWER LEAVES BY, carrying the requester facts
     // the RECORD kept — the ones from when the ask was delivered, never today's.
     return enqueue_answer(to, as_sender, std::move(msg), correlation, requester_life,
-                          requester_incarnation);
+                          requester_incarnation, preparation);
 }
 
 void Switchboard::release_deferred_as(WeaveId as_sender, const DeferredAnswer& answer) {
@@ -932,12 +949,37 @@ void Switchboard::deliver_one(Envelope env) {
     // to the requester that actually asked rather than to whatever occupies that
     // id when the answer is finally written.
     const WeaveRecord* asker = find(env.msg.sender);
+    // AN ASK SEEDS AN ANSWERABLE CONVERSATION; ITS ANSWER DOES NOT SEED ANOTHER.
+    //
+    // Found by reading rather than by a failing test. Seeding this from every
+    // envelope meant an answer-to-an-answer INHERITED the ask's identity — and
+    // since `enqueue_answer` also copies the correlation forward at each hop, a
+    // coordinator that answered the readiness instead of consuming it could have
+    // a later, unrelated exchange satisfy every term:
+    //
+    //   ask (preparation = T)  ->  answer (T)  ->  answer-to-it (T)  ->  answer (T)
+    //                                                                    ^ not the
+    //                                                                      ask's answer
+    //
+    // The payload is not what decides readiness, so nothing could be smuggled
+    // through it — but "this delivery answers THAT ask" would have been false,
+    // which is the one thing this field exists to make exactly true.
+    const TxnId answerable = env.answer_target.present ? TxnId{} : env.preparation;
     authority_ = ReplyAuthority{env.msg.sender,
                                 env.msg.correlation,
                                 /*spent=*/false,
                                 trusted.payload.schema_ptr(),
                                 asker == nullptr ? 0 : asker->life,
-                                asker == nullptr ? 0 : asker->incarnation};
+                                asker == nullptr ? 0 : asker->incarnation,
+                                answerable};
+    // ...AND WHAT THIS DELIVERY IS, for a handler that must prove to the bus what
+    // it just heard (R2B-3b-3). Every field comes from the envelope Loom built:
+    // the provenance no ordinary enqueue can write, the sender stamp no weave can
+    // choose, and the correlation an answer door copied from the ask. A handler
+    // holding a Switchboard& can therefore say "this delivery is my readiness
+    // answer" and be *checked*, rather than believed.
+    delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
+                              env.msg.correlation, env.preparation};
     // The handler receives a WeaveBus bound to its own id — never the concrete
     // Switchboard — so anything it sends is stamped with its identity and gated
     // against its grant.
@@ -949,6 +991,7 @@ void Switchboard::deliver_one(Envelope env) {
     // return leaves an answerable delivery behind.
     current_target_ = WeaveId{};
     authority_ = ReplyAuthority{};
+    delivery_ = DeliveryFacts{};
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;
@@ -1367,30 +1410,157 @@ TxnResult Switchboard::tick_preparation(TxnId id) {
     return {true, id, TxnReason::None};
 }
 
-TxnResult Switchboard::mark_candidate_ready(TxnId id, WeaveId coordinator, WeaveId candidate) {
+// ---- the preparation conversation (R2B-3b-3) --------------------------------
+//
+//     A transaction becomes ready only when the exact sealed candidate
+//     authentically answers the exact preparation request that belongs to that
+//     transaction.
+
+TxnReason Switchboard::vanished_transaction_reason(TxnId id) const {
+    // An id below the next one is an id this Loom MINTED, so the transaction it
+    // named existed and is over; anything else was never a transaction here. The
+    // counter answers that without consulting — still less resurrecting — any
+    // terminal record, which is deliberate: a terminal result belongs to its
+    // operator and is not a lookup table for latecomers.
+    return id.valid() && id.value < next_txn_id_ ? TxnReason::LateReadiness
+                                                 : TxnReason::NoSuchTransaction;
+}
+
+TxnResult Switchboard::ask_candidate_to_prepare(TxnId id, Message ask) {
     PreparedReplacement* t = find_txn(id);
     if (t == nullptr) {
-        return {false, id, TxnReason::NoSuchTransaction};
+        return {false, id, vanished_transaction_reason(id)};
     }
     if (t->state != TxnState::Preparing) {
         return {false, id, TxnReason::WrongState};
     }
-    if (!(t->coordinator.who == coordinator) || !(t->candidate.who == candidate)) {
-        return {false, id, TxnReason::NotTheOwner};
+    if (t->conversation != Conversation::NotAsked) {
+        // ONE CONVERSATION. A second ask would leave the candidate holding an
+        // answer right for a correlation the transaction has stopped expecting,
+        // and would make "which of my asks is this answering?" a question the
+        // design has to have an opinion about. It does: there is only one.
+        return {false, id, TxnReason::PreparationAlreadyAsked};
     }
-    if (!still(t->coordinator) || !still(t->candidate) || !still(t->op) ||
-        !still(t->incumbent)) {
+    // The world must still be the one the transaction bound — checked BEFORE the
+    // ask is queued, so a preparation never begins under a coordinator that can no
+    // longer own it or against a candidate that is no longer sealed to it.
+    if (!still(t->op) || !still(t->coordinator) || !still(t->incumbent) ||
+        !still(t->candidate)) {
         return {false, id, TxnReason::PreconditionFailed};
     }
     const WeaveRecord* cand = find(t->candidate.who);
-    if (cand == nullptr || !cand->sealed_by.valid() ||
-        !(cand->sealed_by.who == t->coordinator.who) ||
-        cand->sealed_by.life != t->coordinator.life ||
-        cand->sealed_by.incarnation != t->coordinator.incarnation) {
+    if (cand == nullptr || !owns_seal(cand->sealed_by, t->coordinator.who, t->coordinator.life,
+                                      t->coordinator.incarnation)) {
         return {false, id, TxnReason::CandidateChanged};
     }
-    t->state = TxnState::Ready;
+
+    // THE ASK IS THE COORDINATOR'S SPEECH, and it is sent exactly as the
+    // coordinator's own speech would be: stamped with its id, gated against its
+    // grant at delivery, and admitted through the seal only because the sender IS
+    // the owner. Nothing here widens what a coordinator may say — it adds a fact
+    // the transaction will later recognise, not a right.
+    //
+    // The correlation is Loom's. The caller's is written over, exactly as
+    // `enqueue_answer` writes over an answerer's.
+    const std::uint64_t correlation = next_preparation_correlation_++;
+    ask.sender = t->coordinator.who;
+    ask.reply_to = WeaveId{};
+    ask.correlation = correlation;
+    (void)enqueue_directed(t->candidate.who, std::move(ask), /*gated=*/true, Provenance{}, id);
+
+    t->preparation_correlation = correlation;
+    t->conversation = Conversation::Open;
     return {true, id, TxnReason::None};
+}
+
+TxnResult Switchboard::accept_authenticated_readiness(PreparedReplacement& txn) {
+    // WHAT THE *WORLD* MUST STILL BE. The caller has already established who
+    // spoke; these are the facts about everyone else, re-read from the registry
+    // rather than from anything the transaction remembers being told.
+    if (!still(txn.op)) {
+        return {false, txn.id, TxnReason::OperatorChanged};
+    }
+    if (!still(txn.coordinator)) {
+        return {false, txn.id, TxnReason::CoordinatorChanged};
+    }
+    if (!still(txn.incumbent)) {
+        return {false, txn.id, TxnReason::IncumbentChanged};
+    }
+    if (!still(txn.candidate)) {
+        return {false, txn.id, TxnReason::CandidateChanged};
+    }
+    const WeaveRecord* cand = find(txn.candidate.who);
+    if (cand == nullptr || !owns_seal(cand->sealed_by, txn.coordinator.who,
+                                      txn.coordinator.life, txn.coordinator.incarnation)) {
+        // A candidate that is no longer sealed to this exact coordinator is not
+        // this transaction's candidate, whatever it just said.
+        return {false, txn.id, TxnReason::CandidateChanged};
+    }
+    const auto held = roles_.find(txn.role);
+    if (held == roles_.end() || !(held->second == txn.incumbent.who)) {
+        // Readiness is about the successor; the role moving is about the world.
+        // Becoming Ready over a role that has already drifted would promise a
+        // commit that could only refuse.
+        return {false, txn.id, TxnReason::RoleChanged};
+    }
+    txn.state = TxnState::Ready;
+    return {true, txn.id, TxnReason::None};
+}
+
+TxnResult Switchboard::accept_preparation_answer(TxnId id, PreparationAnswer answer) {
+    PreparedReplacement* t = find_txn(id);
+    if (t == nullptr) {
+        // The payload named a transaction that is over, or one that never was.
+        // Neither revives anything, and neither produces a second terminal result.
+        return {false, id, vanished_transaction_reason(id)};
+    }
+    if (t->state != TxnState::Preparing) {
+        return {false, id, TxnReason::WrongState};
+    }
+
+    // ---- WHOSE VOICE IS THIS? ------------------------------------------------
+    //
+    // Every term below is read from the delivery Loom is dispatching right now,
+    // never from an argument. `id` names the record; it authorizes nothing.
+    //
+    //   the conversation is open      - one ask, one answer, consumed once
+    //   this delivery IS that ask's answer - the bus-private envelope fact; a
+    //                                   correlation is a number anyone may write,
+    //                                   this is not
+    //   Loom attests it as an answer  - provenance no ordinary enqueue can set
+    //   the caller is the coordinator - `current_target_`, i.e. who is being
+    //                                   dispatched, not who says they are
+    //   the speaker is the candidate  - the bus's sender stamp
+    //   the correlation matches       - redundant while `preparation` holds, and
+    //                                   kept because a silent redundancy is how
+    //                                   the remaining wall gets removed by
+    //                                   somebody who thought it was the only one
+    //
+    // A failure here is a refusal of the COMMAND and nothing more: no state
+    // moves, no outcome is recorded, and the transaction the forger named is left
+    // exactly as legitimate as it was. Hostile traffic does not get to end
+    // somebody else's promise.
+    if (t->conversation != Conversation::Open || !delivery_.answers_ask ||
+        !(delivery_.preparation == t->id) || !current_target_.valid() ||
+        !(current_target_ == t->coordinator.who) || !(delivery_.sender == t->candidate.who) ||
+        delivery_.correlation != t->preparation_correlation) {
+        return {false, id, TxnReason::InvalidReadiness};
+    }
+
+    // The conversation is spent either way. An authentic answer is heard once,
+    // and "it said no" consumes it exactly as "it said yes" does.
+    t->conversation = Conversation::Consumed;
+
+    if (answer == PreparationAnswer::Refused) {
+        // THE CANDIDATE'S OWN VERDICT, and the ordinary ending law applies
+        // unchanged: exactly one terminal outcome, the slot returned, the sealed
+        // candidate discarded, and an incumbent that never learned any of it
+        // happened.
+        PreparedReplacement copy = *t;
+        finish_txn(copy, TxnState::Aborted, TxnReason::CandidateRefused);
+        return {true, id, TxnReason::CandidateRefused};
+    }
+    return accept_authenticated_readiness(*t);
 }
 
 TxnResult Switchboard::commit_prepared_replacement(TxnId id,

@@ -1,15 +1,21 @@
 #include <doctest.h>
 
 #include "switchboard_fixtures.hpp"
+#include "weavelib/prepared_replacement_protocol.hpp"
 
 #include <zen/gate.hpp>
 #include <zen/host/lifecycle_wiring.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/serialize.hpp>
 #include <zen/weave/lifecycle.hpp>
+#include <zen/weave/shape.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 using namespace loom;
 using namespace loom;
@@ -1552,16 +1558,68 @@ namespace {
 
 /// A production service that answers a version query, so "the incumbent never
 /// stopped being the service" is something a test can ASK rather than infer.
+///
+/// As a CANDIDATE it also holds up its end of the preparation conversation —
+/// deferring or answering immediately as the ask's plan directs. The dynamic
+/// `versioned.service` pair below is the same shape as a real artifact; this one
+/// keeps the native transaction cases readable without a `.so` per case.
 class VersionedService final : public Weave {
 public:
-    explicit VersionedService(std::string version) : version_(std::move(version)) {}
+    explicit VersionedService(std::string version, bool candidate = false)
+        : version_(std::move(version)), candidate_(candidate) {}
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
-        return {ping_schema(), schema_of<loom::Activated>()};
+        if (!candidate_) {
+            return {ping_schema(), schema_of<loom::Activated>()};
+        }
+        return {ping_schema(), schema_of<loom::Activated>(),
+                schema_of<versioned::PrepareReplacement>(),
+                schema_of<versioned::ContinuePreparation>()};
     }
     void handle(const Message& in, Bus& bus) override {
-        if (in.payload.schema().name() == std::string_view(loom::Activated::zen_name)) {
+        const std::string_view shape = in.payload.schema().name();
+        if (shape == std::string_view(loom::Activated::zen_name)) {
             ++activations;
+            return;
+        }
+        if (shape == std::string_view(versioned::PrepareReplacement::zen_name)) {
+            const versioned::PrepareReplacement ask =
+                from_value<versioned::PrepareReplacement>(in.payload);
+            ++prepares;
+            transaction = ask.transaction;
+            plan = ask.plan;
+            if (plan == "defer" || plan == "defer-refuse") {
+                pending = bus.make_deferred_answer(); // return without answering
+                return;
+            }
+            if (plan == "ready") {
+                versioned::CandidateReady yes{transaction};
+                answered = bus.answer(Message(to_value(yes))).valid();
+                return;
+            }
+            // "refuse", and anything it does not recognise: validating the ask is
+            // the candidate's own business, and refusing is a REAL answer that
+            // spends the same one right a readiness would have spent.
+            versioned::CandidateRefused no{transaction,
+                                           plan == "refuse" ? "declined" : "unknown plan"};
+            answered = bus.answer(Message(to_value(no))).valid();
+            return;
+        }
+        if (shape == std::string_view(versioned::ContinuePreparation::zen_name)) {
+            ++continues;
+            if (plan == "defer-refuse") {
+                versioned::CandidateRefused no{transaction, "changed my mind"};
+                answered = bus.spend_deferred(pending, Message(to_value(no))).valid();
+                return;
+            }
+            versioned::CandidateReady yes{transaction};
+            // Spend the retained right if it has one; otherwise answer THIS
+            // delivery. The second branch is what lets a coordinator's own
+            // answer-to-an-answer be echoed back, which is how the
+            // inherited-ask-identity case gets a third hop to test.
+            answered = pending.valid()
+                           ? bus.spend_deferred(pending, Message(to_value(yes))).valid()
+                           : bus.answer(Message(to_value(yes))).valid();
             return;
         }
         ++served;
@@ -1584,9 +1642,27 @@ public:
 
     std::int64_t served = 0;
     std::int64_t activations = 0;
+    std::int64_t prepares = 0;
+    std::int64_t continues = 0;
+    std::int64_t transaction = 0;
+    bool answered = false;
+    std::string plan;
+    loom::DeferredAnswer pending{};
 
 private:
     std::string version_;
+    bool candidate_ = false;
+};
+
+/// The mutable half of the cast, on the heap.
+///
+/// HELD BY shared_ptr SO THE HOOKS SURVIVE THE `Cast` BEING RETURNED. The hooks a
+/// cast installs run for the life of the bus and must reach durable storage; an
+/// earlier version captured the factory's local by reference and was correct only
+/// while NRVO elided the copy — true today, guaranteed by nothing.
+struct CastLog {
+    std::vector<std::string> answers;      ///< what the role said when asked
+    std::vector<TxnResult> readiness;      ///< every verdict the bus gave the coordinator
 };
 
 /// The whole cast a prepared replacement names, plus an observer that asks the
@@ -1599,32 +1675,118 @@ struct Cast {
     WeaveId candidate{};
     VersionedService* incumbent_raw = nullptr;
     VersionedService* candidate_raw = nullptr;
-    std::vector<std::string> answers;
+    std::shared_ptr<CastLog> log = std::make_shared<CastLog>();
+    /// The transaction the coordinator is currently preparing, if any. Set by the
+    /// test; read by the coordinator's hook.
+    std::shared_ptr<TxnId> live_txn = std::make_shared<TxnId>();
 
     std::string ask(Switchboard& bus, const char* role) {
-        const std::size_t before = answers.size();
+        const std::size_t before = log->answers.size();
         bus.send_as_to_role(observer.id, role,
                             Message(ping(1), observer.id, observer.id, 0));
         bus.pump();
-        return answers.size() > before ? answers.back() : std::string("<no answer>");
+        return log->answers.size() > before ? log->answers.back()
+                                            : std::string("<no answer>");
+    }
+
+    /// The last verdict the bus gave this coordinator, or a "nothing happened".
+    TxnResult last_readiness() const {
+        return log->readiness.empty() ? TxnResult{} : log->readiness.back();
     }
 };
 
-Cast cast_with_role(Switchboard& bus, const char* role) {
-    Cast c{register_probe(bus, {pong_schema()}), register_probe(bus, {pong_schema()}),
-           register_probe(bus, {greet_schema()}), WeaveId{}, WeaveId{}, nullptr, nullptr, {}};
-    c.observer.weave->on_handle = [&c](const Message& in, Bus&, ProbeWeave&) {
-        const Cell* m = in.payload.get("msg");
-        c.answers.push_back(m == nullptr ? std::string("<none>") : std::string(m->as_text()));
+/// THE SMALLEST HONEST COORDINATOR — and deliberately a CREDULOUS one.
+///
+/// It owns lifecycle conversation and nothing else: it does not route domain
+/// traffic, does not inspect who spoke, does not check provenance, and does not
+/// compare correlations. Every delivery it receives while a transaction is live,
+/// it offers to the bus as that transaction's readiness — reading only the
+/// transaction id out of the payload, exactly as the phase says a payload may be
+/// read: to NAME the record, never to authorize the transition.
+///
+/// That credulity is the point. If the coordinator were careful, a green suite
+/// would prove the coordinator careful rather than the mechanism sound. Here every
+/// forgery in the phase is offered to the bus by a party that believes it, and the
+/// bus is the only thing saying no.
+void wire_coordinator(Switchboard& bus, Cast& c) {
+    std::shared_ptr<CastLog> log = c.log;
+    std::shared_ptr<TxnId> live = c.live_txn;
+    c.coordinator.weave->on_handle = [&bus, log, live](const Message& in, Bus&, ProbeWeave&) {
+        if (!live->valid()) {
+            return;
+        }
+        // The payload names a record — whatever it claims, including another
+        // transaction's id or none at all.
+        const Cell* claimed = in.payload.get("transaction");
+        const TxnId named = claimed == nullptr
+                                ? *live
+                                : TxnId{static_cast<std::uint64_t>(claimed->as_int())};
+        const bool refusal =
+            in.payload.schema().name() == std::string_view(versioned::CandidateRefused::zen_name);
+        log->readiness.push_back(bus.accept_preparation_answer(
+            named, refusal ? PreparationAnswer::Refused : PreparationAnswer::Ready));
     };
+}
+
+Cast cast_with_role(Switchboard& bus, const char* role) {
+    Cast c{register_probe(bus, {pong_schema()}),
+           register_probe(bus, {schema_of<versioned::CandidateReady>(),
+                                schema_of<versioned::CandidateRefused>(), pong_schema()}),
+           register_probe(bus, {greet_schema()})};
+    std::shared_ptr<CastLog> log = c.log;
+    c.observer.weave->on_handle = [log](const Message& in, Bus&, ProbeWeave&) {
+        const Cell* m = in.payload.get("msg");
+        log->answers.push_back(m == nullptr ? std::string("<none>") : std::string(m->as_text()));
+    };
+    wire_coordinator(bus, c);
     auto inc = std::make_unique<VersionedService>("v1");
     c.incumbent_raw = inc.get();
     c.incumbent = bus.register_weave(std::move(inc), Grant{}.allow_any(), role);
-    auto cand = std::make_unique<VersionedService>("v2");
+    auto cand = std::make_unique<VersionedService>("v2", /*candidate=*/true);
     c.candidate_raw = cand.get();
     c.candidate = bus.register_weave(std::move(cand), Grant{}.allow_any());
     REQUIRE(bus.seal_weave(c.candidate, c.coordinator.id));
     return c;
+}
+
+/// Ask the candidate to prepare, and let the conversation run to its end.
+///
+/// This is what replaced `mark_candidate_ready` at every call site: not a shorter
+/// way to declare a transaction ready, but the real conversation — an ask through
+/// the sealed door, the candidate's own answer, and the bus deciding whether to
+/// believe it. `plan` is what the candidate is asked to do ("ready", "defer",
+/// "refuse", "defer-refuse"); a deferred plan needs the continuation below.
+void ask_to_prepare(Switchboard& bus, Cast& c, TxnId id, const char* plan = "ready") {
+    *c.live_txn = id;
+    versioned::PrepareReplacement ask;
+    ask.transaction = static_cast<std::int64_t>(id.value);
+    ask.plan = plan;
+    REQUIRE(bus.ask_candidate_to_prepare(id, Message(to_value(ask))).ok);
+    bus.pump();
+}
+
+/// A coordinator that offers every delivery to the bus TWICE, so "one ask, one
+/// answer" is exercised at the moment it matters instead of across a pump.
+void offer_readiness_twice(Switchboard& bus, Cast& c) {
+    std::shared_ptr<CastLog> log = c.log;
+    std::shared_ptr<TxnId> live = c.live_txn;
+    c.coordinator.weave->on_handle = [&bus, log, live](const Message&, Bus&, ProbeWeave&) {
+        log->readiness.push_back(bus.accept_preparation_answer(*live, PreparationAnswer::Ready));
+        log->readiness.push_back(bus.accept_preparation_answer(*live, PreparationAnswer::Ready));
+    };
+}
+
+/// The later delivery a deferred preparation finishes on.
+void continue_preparation(Switchboard& bus, Cast& c, TxnId id) {
+    versioned::ContinuePreparation more{static_cast<std::int64_t>(id.value)};
+    bus.send_as(c.coordinator.id, c.candidate, Message(to_value(more)));
+    bus.pump();
+}
+
+/// The whole conversation, for the cases whose subject is something else.
+void make_ready(Switchboard& bus, Cast& c, TxnId id) {
+    ask_to_prepare(bus, c, id, "ready");
+    REQUIRE(bus.transaction_state(id) == TxnState::Ready);
 }
 
 /// Everything a failure case must show is unchanged.
@@ -1669,7 +1831,7 @@ TEST_CASE("R2B-3b-2: one prepared replacement, remembered from Preparing to Comm
     CHECK(bus.transaction_state(begun.id) == TxnState::Preparing);
     CHECK(c.ask(bus, kRole) == "v1"); // ...and the incumbent is still the service
 
-    REQUIRE(bus.mark_candidate_ready(begun.id, c.coordinator.id, c.candidate).ok);
+    make_ready(bus, c, begun.id);
     CHECK(bus.transaction_state(begun.id) == TxnState::Ready);
     CHECK(c.ask(bus, kRole) == "v1"); // still
 
@@ -1775,7 +1937,7 @@ TEST_CASE("R2B-3b-2: the state machine has no back doors") {
         const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
                                                           c.incumbent, c.candidate, kRole, 4);
         REQUIRE(t.ok);
-        REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+        make_ready(bus, c, t.id);
         REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
         CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
         CHECK(bus.active_transactions() == 0);
@@ -1911,7 +2073,7 @@ TEST_CASE("R2B-3b-2: commit revalidates, and a precondition that drifts after Re
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
                                                        c.candidate, kRole, 8);
     REQUIRE(t.ok);
-    REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+    make_ready(bus, c, t.id);
     CHECK(bus.transaction_state(t.id) == TxnState::Ready);
 
     // Ready, and then the coordinator's code is replaced underneath it. The
@@ -1944,7 +2106,7 @@ TEST_CASE("R2B-3b-2: a Ready transaction whose ADMISSION refuses aborts terminal
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
                                                        c.candidate, kRole, 8);
     REQUIRE(t.ok);
-    REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+    make_ready(bus, c, t.id);
     REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
 
     loom::Activated fact{1};
@@ -1964,26 +2126,41 @@ TEST_CASE("R2B-3b-2: a Ready transaction whose ADMISSION refuses aborts terminal
     CHECK(out.reason == TxnReason::AdmissionRefused);
 }
 
-TEST_CASE("R2B-3b-2: readiness needs the exact coordinator and the exact candidate") {
+TEST_CASE("R2B-3b-3: readiness needs the exact coordinator and the exact candidate") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     Cast other = cast_with_role(bus, "other");
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
                                                        c.candidate, kRole, 8);
     REQUIRE(t.ok);
+    const TxnResult u = bus.begin_prepared_replacement(other.op.id, other.coordinator.id,
+                                                       other.incumbent, other.candidate,
+                                                       "other", 8);
+    REQUIRE(u.ok);
 
-    // Another coordinator cannot ready somebody else's transaction...
-    CHECK_FALSE(bus.mark_candidate_ready(t.id, other.coordinator.id, c.candidate).ok);
-    // ...and a valid coordinator cannot ready a different candidate.
-    CHECK_FALSE(bus.mark_candidate_ready(t.id, c.coordinator.id, other.candidate).ok);
-    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    // ANOTHER CANDIDATE'S AUTHENTIC ANSWER. Everything about it is real — a live
+    // preparation ask, a genuine deferred right, the bus's own answer provenance —
+    // and it belongs to somebody else's transaction. `other`'s coordinator is
+    // pointed at OUR transaction id, so the answer arrives naming `t`.
+    *other.live_txn = t.id;
+    versioned::PrepareReplacement ask;
+    ask.transaction = static_cast<std::int64_t>(t.id.value); // the id it will name
+    ask.plan = "ready";
+    REQUIRE(bus.ask_candidate_to_prepare(u.id, Message(to_value(ask))).ok);
+    bus.pump();
+
+    CHECK_FALSE(other.last_readiness().ok);
+    CHECK(other.last_readiness().why == TxnReason::InvalidReadiness);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing); // ours is untouched...
+    CHECK(bus.transaction_state(u.id) == TxnState::Preparing); // ...and so is theirs
 
     // Nor can a stranger abort it.
     CHECK_FALSE(bus.abort_prepared_replacement(t.id, other.op.id).ok);
     CHECK(bus.transaction_active(t.id));
 
-    // The exact pair still works.
-    CHECK(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+    // Our own candidate, answering our own ask, still works — the positive control
+    // that keeps the checks above from passing for the wrong reason.
+    make_ready(bus, c, t.id);
 }
 
 TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its queued speech "
@@ -1993,15 +2170,17 @@ TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
                                                        c.candidate, kRole, 8);
     REQUIRE(t.ok);
-    REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+    make_ready(bus, c, t.id);
 
     // The candidate says something to its coordinator, and the transaction is
-    // abandoned before the pump.
+    // abandoned before the pump. (The coordinator has already heard the readiness
+    // answer by now, so the question is whether anything MORE reaches it.)
+    const std::size_t heard = c.coordinator.weave->handled_names.size();
     bus.send_as(c.candidate, c.coordinator.id, Message(pong(1)));
     REQUIRE(bus.pending() == 1);
     REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
     bus.pump();
-    CHECK(c.coordinator.weave->handled_names.empty()); // R2B-2b: its life ended
+    CHECK(c.coordinator.weave->handled_names.size() == heard); // R2B-2b: its life ended
 
     // And the admission primitive itself will not take it: it is gone.
     loom::Activated fact{1};
@@ -2077,7 +2256,7 @@ TEST_CASE("R2B-3b-2a: every abort route produces exactly one terminal outcome") 
         REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
         break;
     case 1:
-        REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+        make_ready(bus, c, t.id);
         REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
         break;
     case 2:
@@ -2097,7 +2276,7 @@ TEST_CASE("R2B-3b-2a: every abort route produces exactly one terminal outcome") 
         expected = TxnReason::IncumbentChanged;
         break;
     default: {
-        REQUIRE(bus.mark_candidate_ready(t.id, c.coordinator.id, c.candidate).ok);
+        make_ready(bus, c, t.id);
         loom::Activated fact{1};
         CHECK_FALSE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(decoy),
                                                     Message(to_value(fact)), 1).ok);
@@ -2205,7 +2384,7 @@ TEST_CASE("R2B-3b-2a: a committed candidate is public, so it cannot be named as 
     const TxnResult t = bus.begin_prepared_replacement(a.op.id, a.coordinator.id, a.incumbent,
                                                        a.candidate, "role-a", 8);
     REQUIRE(t.ok);
-    REQUIRE(bus.mark_candidate_ready(t.id, a.coordinator.id, a.candidate).ok);
+    make_ready(bus, a, t.id);
     loom::Activated fact{1};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 1).ok);
@@ -2234,7 +2413,7 @@ TEST_CASE("R2B-3b-2a: aborting one transaction does not duplicate its result, di
                                                         b.candidate, "role-b", 8);
     REQUIRE(ta.ok);
     REQUIRE(tb.ok);
-    REQUIRE(bus.mark_candidate_ready(tb.id, b.coordinator.id, b.candidate).ok);
+    make_ready(bus, b, tb.id);
 
     REQUIRE(bus.abort_prepared_replacement(ta.id, a.op.id).ok);
 
@@ -2247,6 +2426,625 @@ TEST_CASE("R2B-3b-2a: aborting one transaction does not duplicate its result, di
     TxnOutcome none{};
     CHECK_FALSE(bus.take_outcome(b.op.id, none));
     incumbent_untouched(bus, b, "role-b");
+}
+
+// ---- R2B-3b-3: the candidate answers ------------------------------------------
+//
+// Until now a transaction became Ready because a trusted host said so. The state
+// machine was real and the readiness was scaffolding, named as such.
+//
+//     A transaction becomes ready only when the exact sealed candidate
+//     authentically answers the exact preparation request that belongs to that
+//     transaction.
+//
+// The coordinator in these cases is deliberately CREDULOUS (see wire_coordinator):
+// it offers every delivery it receives to the bus as readiness, reading only the
+// transaction id from the payload. So a green here is never "the coordinator was
+// careful" — it is always "the bus refused".
+
+TEST_CASE("R2B-3b-3: an immediate answer and one deferred across deliveries are the same "
+          "readiness") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+
+    SUBCASE("immediate: the candidate completes inside the preparation handler") {
+        ask_to_prepare(bus, c, t.id, "ready");
+        CHECK(c.candidate_raw->prepares == 1);
+        CHECK(c.candidate_raw->continues == 0);
+        CHECK(c.candidate_raw->answered); // the board took its answer
+        CHECK(c.last_readiness().ok);
+        CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    }
+
+    SUBCASE("deferred: it takes the answer away and finishes on a later delivery") {
+        ask_to_prepare(bus, c, t.id, "defer");
+        CHECK(c.candidate_raw->prepares == 1);
+        CHECK_FALSE(c.candidate_raw->answered);
+        CHECK(c.log->readiness.empty());                          // nothing was offered
+        CHECK(bus.transaction_state(t.id) == TxnState::Preparing); // ...so nothing moved
+        CHECK(c.ask(bus, kRole) == "v1"); // an unrelated delivery, and the incumbent serves it
+
+        continue_preparation(bus, c, t.id);
+        CHECK(c.candidate_raw->continues == 1);
+        CHECK(c.candidate_raw->answered);
+        CHECK(c.last_readiness().ok);
+        CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    }
+
+    // Whichever road it came by: the incumbent is untouched and still the service.
+    CHECK(bus.role_holder(kRole) == c.incumbent);
+    CHECK_FALSE(bus.sealed(c.incumbent));
+    CHECK(c.ask(bus, kRole) == "v1");
+}
+
+TEST_CASE("R2B-3b-3: an immediate readiness answer consumes no deferred-answer capacity") {
+    // THE BOUND IS ONLY AN INSTRUMENT WHILE IT IS HELD SATURATED (R2B-3b-1a's
+    // lesson, paid for once already): a test that defers and pumps between asks
+    // returns each slot before taking the next and never fills anything.
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+
+    // 64 genuinely OUTSTANDING deferrals, held open for the rest of the case.
+    std::vector<Registered> hoarders;
+    Registered asker = register_probe(bus, {greet_schema()});
+    for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+        Registered h = register_probe(bus, {pong_schema()});
+        h.weave->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
+            self.pending = b.make_deferred_answer(); // taken, and never spent
+        };
+        hoarders.push_back(h);
+        bus.send_as(asker.id, h.id, Message(pong(1), asker.id, asker.id, 0));
+    }
+    bus.pump();
+    for (Registered& h : hoarders) {
+        REQUIRE(h.weave->pending.valid()); // every slot really is taken
+    }
+
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+
+    SUBCASE("the immediate path is unaffected by a full deferred registry") {
+        ask_to_prepare(bus, c, t.id, "ready");
+        CHECK(c.candidate_raw->answered);
+        CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    }
+
+    SUBCASE("the deferred path is not — which is what proves the registry is full") {
+        // The POSITIVE CONTROL. Without it, "immediate still works" could mean the
+        // registry was never saturated at all.
+        ask_to_prepare(bus, c, t.id, "defer");
+        CHECK_FALSE(c.candidate_raw->pending.valid()); // Exhausted: nothing to retain
+        CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    }
+}
+
+TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    // A rogue that can reach the coordinator and knows the whole protocol.
+    Registered rogue = register_probe(bus, {pong_schema()});
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+    *c.live_txn = t.id;
+    // Open the real conversation so the transaction is genuinely WAITING for an
+    // answer — a forgery refused by a transaction that expected nothing would
+    // prove nothing.
+    ask_to_prepare(bus, c, t.id, "defer");
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Preparing);
+
+    versioned::CandidateReady yes{static_cast<std::int64_t>(t.id.value)};
+    versioned::CandidateRefused no{static_cast<std::int64_t>(t.id.value), "not really"};
+
+    SUBCASE("an authentic-looking answer offered before anybody was asked") {
+        // A transaction whose conversation was never opened has no readiness to
+        // be late for. Proven on a SECOND transaction, so the one above stays
+        // genuinely mid-preparation.
+        Cast quiet = cast_with_role(bus, "quiet");
+        const TxnResult q = bus.begin_prepared_replacement(quiet.op.id, quiet.coordinator.id,
+                                                           quiet.incumbent, quiet.candidate,
+                                                           "quiet", 16);
+        REQUIRE(q.ok);
+        *quiet.live_txn = q.id;
+        versioned::CandidateReady early{static_cast<std::int64_t>(q.id.value)};
+        bus.send_as(quiet.candidate, quiet.coordinator.id, Message(to_value(early)));
+        bus.pump();
+        REQUIRE(quiet.log->readiness.size() == 1);
+        CHECK(quiet.last_readiness().why == TxnReason::InvalidReadiness);
+        CHECK(bus.transaction_state(q.id) == TxnState::Preparing);
+    }
+
+    SUBCASE("an ordinary send of the right shape, with the right correlation") {
+        // The correlations Loom mints for preparation asks start at 1 and advance
+        // by one, so a forger that has read this file knows exactly which number
+        // to use. Knowing it is worth nothing, which is the point — try them all.
+        for (std::uint64_t correlation = 0; correlation < 4; ++correlation) {
+            bus.send_as(rogue.id, c.coordinator.id,
+                        Message(to_value(yes), rogue.id, rogue.id, correlation));
+            bus.send_as(rogue.id, c.coordinator.id,
+                        Message(to_value(no), rogue.id, rogue.id, correlation));
+        }
+        bus.pump();
+        CHECK(c.log->readiness.size() == 8); // the coordinator offered every one
+        for (const TxnResult& r : c.log->readiness) {
+            CHECK_FALSE(r.ok);
+            CHECK(r.why == TxnReason::InvalidReadiness);
+        }
+    }
+
+    SUBCASE("a hand-built answer provenance, which no enqueue path lets out") {
+        // The honest API CAN express this attack: `Provenance::attested` is public
+        // and safe precisely because every ordinary enqueue overwrites it. So the
+        // test forges the frame rather than asserting the attack is unsayable.
+        Message frame(to_value(yes), rogue.id, rogue.id, 1);
+        frame.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
+        bus.send_as(rogue.id, c.coordinator.id, std::move(frame));
+        bus.pump();
+        REQUIRE(c.log->readiness.size() == 1);
+        CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
+    }
+
+    SUBCASE("the GENUINE candidate, speaking ordinarily to its own coordinator") {
+        // The sharpest one in the suite: the right speaker, the right listener,
+        // the right shape, the right transaction — and nobody asked.
+        bus.send_as(c.candidate, c.coordinator.id, Message(to_value(yes)));
+        bus.pump();
+        REQUIRE(c.log->readiness.size() == 1);
+        CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
+    }
+
+    // Nothing above moved the transaction, and none of it ENDED the transaction
+    // either: hostile traffic does not get to abort somebody else's promise.
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    CHECK(bus.transaction_active(t.id));
+    incumbent_untouched(bus, c, kRole);
+
+    // ...and the real answer still lands, which is what keeps every refusal above
+    // from having passed for the wrong reason.
+    continue_preparation(bus, c, t.id);
+    CHECK(c.last_readiness().ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+}
+
+TEST_CASE("R2B-3b-3: an authentic answer to a DIFFERENT ask, with the right correlation, is not "
+          "the readiness answer") {
+    // THE CASE THE WHOLE `Envelope::preparation` FIELD EXISTS FOR, and the only
+    // one that can decide it. Everywhere else the answer's speaker, its recipient
+    // and its correlation are all already right — because they come from the real
+    // ask — so those terms cannot tell a true readiness from a false one.
+    //
+    // Here the coordinator asks its candidate the SAME QUESTION twice: once
+    // through `ask_candidate_to_prepare`, which opens the transaction's one
+    // conversation, and once as an ordinary send carrying the same correlation by
+    // hand. The candidate answers the second one, authentically, to the right
+    // party, with the right number. Only "which ask is this?" separates them.
+    //
+    // Loom mints preparation correlations from 1 on a fresh board, so the forging
+    // coordinator here knows exactly which number to write — as any real one
+    // could, since a correlation travels on the wire and is nobody's secret.
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+    ask_to_prepare(bus, c, t.id, "defer"); // the real conversation: open, unanswered
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Preparing);
+    REQUIRE(c.log->readiness.empty());
+
+    versioned::PrepareReplacement lookalike{static_cast<std::int64_t>(t.id.value), "ready", 0};
+    bus.send_as(c.coordinator.id, c.candidate,
+                Message(to_value(lookalike), c.coordinator.id, WeaveId{}, /*correlation=*/1));
+    bus.pump();
+
+    REQUIRE(c.log->readiness.size() == 1); // the candidate answered, and was offered
+    CHECK_FALSE(c.last_readiness().ok);
+    CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    incumbent_untouched(bus, c, kRole);
+
+    // ...and the real conversation is still open, still answerable, still the only
+    // one that counts.
+    continue_preparation(bus, c, t.id);
+    CHECK(c.last_readiness().ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+}
+
+TEST_CASE("R2B-3b-3: answering the readiness instead of consuming it does not make the next "
+          "exchange the readiness") {
+    // FOUND BY READING, NOT BY A FAILING TEST — and it is the subtlest thing in
+    // the phase. `enqueue_answer` copies the correlation forward at every hop, so
+    // if the ask's identity were inherited the same way, a coordinator that
+    // ANSWERED the readiness rather than consuming it would find a later,
+    // unrelated exchange satisfying every term:
+    //
+    //   coordinator -> candidate   the ask                 (preparation = T)
+    //   candidate   -> coordinator the real readiness      (T)
+    //   coordinator -> candidate   an answer to THAT       (T, if inherited)
+    //   candidate   -> coordinator an answer to that       (T, and indistinguishable)
+    //
+    // An ask seeds an answerable conversation; its answer does not seed another.
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+
+    // A coordinator that answers the first thing it hears, and only offers the
+    // SECOND one as readiness.
+    std::shared_ptr<CastLog> log = c.log;
+    std::shared_ptr<TxnId> live = c.live_txn;
+    int seen = 0;
+    c.coordinator.weave->on_handle = [&bus, &seen, log, live](const Message&, Bus& wb,
+                                                              ProbeWeave&) {
+        if (++seen == 1) {
+            // Answer the readiness back at the candidate instead of consuming it.
+            wb.answer(Message(to_value(versioned::ContinuePreparation{
+                static_cast<std::int64_t>(live->value)})));
+            return;
+        }
+        log->readiness.push_back(bus.accept_preparation_answer(*live, PreparationAnswer::Ready));
+    };
+
+    ask_to_prepare(bus, c, t.id, "ready");
+    CHECK(seen == 2); // the echo really did come back round
+    REQUIRE(c.log->readiness.size() == 1);
+    CHECK_FALSE(c.last_readiness().ok);
+    CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    incumbent_untouched(bus, c, kRole);
+}
+
+TEST_CASE("R2B-3b-3: a delivery live on one Loom confers nothing on another") {
+    // A transaction id is a number, and a number belongs to no world. The only
+    // thing that could make one mean something is a live delivery — and a delivery
+    // is live on exactly one board. So the decoy has nothing to offer, even at the
+    // precise instant the real board is dispatching a genuine readiness answer.
+    Switchboard bus;
+    Switchboard decoy;
+    Cast c = cast_with_role(bus, kRole);
+    Cast shadow = cast_with_role(decoy, kRole); // a real transaction, elsewhere
+    const TxnResult here = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                          c.candidate, kRole, 16);
+    const TxnResult there = decoy.begin_prepared_replacement(
+        shadow.op.id, shadow.coordinator.id, shadow.incumbent, shadow.candidate, kRole, 16);
+    REQUIRE(here.ok);
+    REQUIRE(there.ok);
+    CHECK(here.id == there.id); // the same NUMBER, in two worlds
+
+    std::vector<TxnResult> foreign;
+    std::shared_ptr<TxnId> live = c.live_txn;
+    std::shared_ptr<CastLog> log = c.log;
+    c.coordinator.weave->on_handle = [&bus, &decoy, &foreign, log, live](const Message&, Bus&,
+                                                                        ProbeWeave&) {
+        // Mid-delivery on `bus`, offer the very same id to the other board.
+        foreign.push_back(decoy.accept_preparation_answer(*live, PreparationAnswer::Ready));
+        log->readiness.push_back(bus.accept_preparation_answer(*live, PreparationAnswer::Ready));
+    };
+    ask_to_prepare(bus, c, here.id, "ready");
+
+    REQUIRE(foreign.size() == 1);
+    CHECK_FALSE(foreign[0].ok);
+    CHECK(foreign[0].why == TxnReason::InvalidReadiness); // no delivery is live there
+    CHECK(decoy.transaction_state(there.id) == TxnState::Preparing);
+    CHECK(c.last_readiness().ok); // ...while the real one, on its own board, lands
+    CHECK(bus.transaction_state(here.id) == TxnState::Ready);
+}
+
+TEST_CASE("R2B-3b-3: an authentic answer that names another transaction satisfies neither") {
+    Switchboard bus;
+    Cast a = cast_with_role(bus, "role-a");
+    Cast b = cast_with_role(bus, "role-b");
+    const TxnResult ta = bus.begin_prepared_replacement(a.op.id, a.coordinator.id, a.incumbent,
+                                                        a.candidate, "role-a", 16);
+    const TxnResult tb = bus.begin_prepared_replacement(b.op.id, b.coordinator.id, b.incumbent,
+                                                        b.candidate, "role-b", 16);
+    REQUIRE(ta.ok);
+    REQUIRE(tb.ok);
+
+    // A's candidate is asked, authentically, for A's transaction — but the ask
+    // tells it to write B's id in its answer, and A's coordinator dutifully offers
+    // the answer against B.
+    *a.live_txn = ta.id;
+    versioned::PrepareReplacement ask;
+    ask.transaction = static_cast<std::int64_t>(tb.id.value); // the lie
+    ask.plan = "ready";
+    REQUIRE(bus.ask_candidate_to_prepare(ta.id, Message(to_value(ask))).ok);
+    bus.pump();
+
+    CHECK_FALSE(a.last_readiness().ok);
+    CHECK(a.last_readiness().why == TxnReason::InvalidReadiness);
+    CHECK(bus.transaction_state(ta.id) == TxnState::Preparing); // not the one it answered
+    CHECK(bus.transaction_state(tb.id) == TxnState::Preparing); // not the one it named
+    incumbent_untouched(bus, a, "role-a");
+    incumbent_untouched(bus, b, "role-b");
+}
+
+TEST_CASE("R2B-3b-3: one ask, one answer — a replay and a second answer both refuse") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+
+    SUBCASE("the coordinator offers the same delivery twice") {
+        // Two independent walls stop a replay, and they answer in a definite
+        // order. The state machine speaks first: an accepted readiness has already
+        // moved the transaction to Ready, so the second offer is refused as
+        // WrongState — truthfully, and before the conversation is consulted at
+        // all. (The conversation's own consumed-check is what catches a replay
+        // after a REFUSED validation, where the state has not moved; the
+        // role-drift case pins that one.)
+        offer_readiness_twice(bus, c);
+        ask_to_prepare(bus, c, t.id, "ready");
+        REQUIRE(c.log->readiness.size() == 2);
+        CHECK(c.log->readiness[0].ok);
+        CHECK_FALSE(c.log->readiness[1].ok);
+        CHECK(c.log->readiness[1].why == TxnReason::WrongState);
+        CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    }
+
+    SUBCASE("the candidate tries to answer a second time") {
+        // The other wall, and it is the bus's answer registry rather than the
+        // transaction's: one delivered ask authorizes one answer, so the second
+        // continuation finds nothing left to spend.
+        ask_to_prepare(bus, c, t.id, "defer");
+        continue_preparation(bus, c, t.id);
+        REQUIRE(bus.transaction_state(t.id) == TxnState::Ready);
+        REQUIRE(c.log->readiness.size() == 1);
+
+        continue_preparation(bus, c, t.id); // ...and again
+        CHECK(c.candidate_raw->continues == 2);
+        CHECK_FALSE(c.candidate_raw->answered); // the spend was refused
+        CHECK(c.log->readiness.size() == 1);    // nothing reached the coordinator
+        CHECK(bus.transaction_state(t.id) == TxnState::Ready);
+    }
+
+    SUBCASE("a second preparation ask is refused before anything is sent") {
+        ask_to_prepare(bus, c, t.id, "defer");
+        versioned::PrepareReplacement again{static_cast<std::int64_t>(t.id.value), "ready", 0};
+        const TxnResult second = bus.ask_candidate_to_prepare(t.id, Message(to_value(again)));
+        CHECK_FALSE(second.ok);
+        CHECK(second.why == TxnReason::PreparationAlreadyAsked);
+        CHECK(bus.pending() == 0); // nothing was queued
+        CHECK(c.candidate_raw->prepares == 1);
+    }
+}
+
+TEST_CASE("R2B-3b-3: the candidate's own refusal ends the transaction once, and the incumbent "
+          "never learns of it") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const char* plan = "refuse";
+    SUBCASE("refused immediately") { plan = "refuse"; }
+    SUBCASE("refused after deferring") { plan = "defer-refuse"; }
+    SUBCASE("refused because the plan made no sense to it") { plan = "do-a-barrel-roll"; }
+
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+    ask_to_prepare(bus, c, t.id, plan);
+    if (std::string(plan) == "defer-refuse") {
+        CHECK(bus.transaction_active(t.id)); // still preparing, still nobody's problem
+        continue_preparation(bus, c, t.id);
+    }
+
+    CHECK(c.last_readiness().ok); // the answer was accepted — it simply said no
+    CHECK(c.last_readiness().why == TxnReason::CandidateRefused);
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0); // capacity reclaimed
+    CHECK_FALSE(bus.alive(c.candidate));   // discarded, per the existing cleanup law
+    exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, TxnReason::CandidateRefused);
+    incumbent_untouched(bus, c, kRole);
+}
+
+TEST_CASE("R2B-3b-3: a forged refusal cannot abort a legitimate transaction") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    Registered rogue = register_probe(bus, {pong_schema()});
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+    ask_to_prepare(bus, c, t.id, "defer");
+
+    versioned::CandidateRefused no{static_cast<std::int64_t>(t.id.value), "give up"};
+    bus.send_as(rogue.id, c.coordinator.id, Message(to_value(no), rogue.id, rogue.id, 1));
+    bus.pump();
+
+    CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
+    CHECK(bus.transaction_active(t.id));
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    TxnOutcome none{};
+    CHECK_FALSE(bus.take_outcome(c.op.id, none)); // no terminal result was manufactured
+    CHECK(bus.alive(c.candidate));                // and the candidate was not discarded
+    incumbent_untouched(bus, c, kRole);
+}
+
+TEST_CASE("R2B-3b-3: an authentic answer offered against a transaction that has ended is late, "
+          "and revives nothing") {
+    Switchboard bus;
+    Cast a = cast_with_role(bus, "role-a");
+    Cast b = cast_with_role(bus, "role-b");
+    const TxnResult ended = bus.begin_prepared_replacement(b.op.id, b.coordinator.id,
+                                                           b.incumbent, b.candidate,
+                                                           "role-b", 16);
+    REQUIRE(ended.ok);
+    REQUIRE(bus.abort_prepared_replacement(ended.id, b.op.id).ok);
+    TxnOutcome collected{};
+    REQUIRE(bus.take_outcome(b.op.id, collected)); // its ONE result, already taken
+
+    const TxnResult live = bus.begin_prepared_replacement(a.op.id, a.coordinator.id, a.incumbent,
+                                                          a.candidate, "role-a", 16);
+    REQUIRE(live.ok);
+    *a.live_txn = live.id;
+    versioned::PrepareReplacement ask;
+    ask.transaction = static_cast<std::int64_t>(ended.id.value); // names the dead one
+    ask.plan = "ready";
+    REQUIRE(bus.ask_candidate_to_prepare(live.id, Message(to_value(ask))).ok);
+    bus.pump();
+
+    CHECK_FALSE(a.last_readiness().ok);
+    CHECK(a.last_readiness().why == TxnReason::LateReadiness);
+    // An id this Loom never minted is a different truth, and says so.
+    CHECK(bus.accept_preparation_answer(TxnId{9999}, PreparationAnswer::Ready).why ==
+          TxnReason::NoSuchTransaction);
+
+    // No second outcome appeared for the dead transaction, and the live one did
+    // not advance on somebody else's answer.
+    TxnOutcome second{};
+    CHECK_FALSE(bus.take_outcome(b.op.id, second));
+    CHECK(bus.transaction_state(live.id) == TxnState::Preparing);
+    CHECK(bus.transaction_state(ended.id) == TxnState::Aborted);
+    incumbent_untouched(bus, a, "role-a");
+    incumbent_untouched(bus, b, "role-b");
+}
+
+TEST_CASE("R2B-3b-3: the budget keeps running through a deferred preparation, and exhausting it "
+          "ends the transaction once") {
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 3);
+    REQUIRE(t.ok);
+    ask_to_prepare(bus, c, t.id, "defer"); // the candidate holds the answer and stalls
+    REQUIRE(c.candidate_raw->pending.valid());
+
+    // A conversation in progress does not stop the accounting. No wall clock is
+    // involved: these are steps the operator chose to spend.
+    REQUIRE(bus.tick_preparation(t.id).ok);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
+    REQUIRE(bus.tick_preparation(t.id).ok);
+    const TxnResult last = bus.tick_preparation(t.id);
+    CHECK_FALSE(last.ok);
+    CHECK(last.why == TxnReason::PreparationExhausted);
+
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0);
+    CHECK_FALSE(bus.alive(c.candidate));
+    exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, TxnReason::PreparationExhausted);
+    incumbent_untouched(bus, c, kRole);
+
+    // AND THE STALLED ANSWER CANNOT ARRIVE LATE. Aborting discards the candidate,
+    // so the author of any answer still owed is gone — its queued speech is
+    // refused as SenderLifeEnded before it reaches anyone, and there is no
+    // transaction left to name in any case. That is stronger than "the late answer
+    // is refused": there is no late answer.
+    const std::size_t offered = c.log->readiness.size();
+    bus.pump();
+    CHECK(c.log->readiness.size() == offered);
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+}
+
+TEST_CASE("R2B-3b-3: a lifecycle change during preparation aborts before any answer can land") {
+    int how = 0;
+    SUBCASE("the candidate dies") { how = 0; }
+    SUBCASE("the candidate's code is replaced") { how = 1; }
+    SUBCASE("the coordinator dies") { how = 2; }
+    SUBCASE("the coordinator's code is replaced") { how = 3; }
+    SUBCASE("the operator dies") { how = 4; }
+
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+    ask_to_prepare(bus, c, t.id, "defer");
+    REQUIRE(bus.transaction_state(t.id) == TxnState::Preparing);
+    REQUIRE(c.candidate_raw->pending.valid()); // it really is holding the answer
+
+    const std::string op_state = bus.snapshot_bytes(c.op.id);
+    TxnReason expected = TxnReason::CandidateChanged;
+    if (how == 0) {
+        bus.kill(c.candidate);
+    } else if (how == 1) {
+        const std::string state = bus.snapshot_bytes(c.candidate);
+        REQUIRE(bus.swap_state(c.candidate, state).revived);
+    } else if (how == 2) {
+        bus.kill(c.coordinator.id);
+        expected = TxnReason::CoordinatorChanged;
+    } else if (how == 3) {
+        REQUIRE(bus.swap_state(c.coordinator.id, bus.snapshot_bytes(c.coordinator.id)).revived);
+        expected = TxnReason::CoordinatorChanged;
+    } else {
+        bus.kill(c.op.id);
+        expected = TxnReason::OperatorChanged;
+    }
+
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.active_transactions() == 0);
+    if (how != 4) {
+        exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, expected);
+    } else {
+        // THE OPERATOR SUCCESSOR INHERITS NOTHING. The result is kept for the
+        // exact life and incarnation that began the transaction, and that life is
+        // over — so bringing the same id back produces a participant with no
+        // standing to collect, exactly as it has no standing to converse.
+        REQUIRE(bus.reload(c.op.id, op_state).revived);
+        REQUIRE(bus.alive(c.op.id));
+        TxnOutcome inherited{};
+        CHECK_FALSE(bus.take_outcome(c.op.id, inherited));
+    }
+
+    // Whatever the candidate still owes, it cannot be readiness: there is no
+    // transaction to name, and the continuation reaches nothing that matters.
+    const std::size_t offered = c.log->readiness.size();
+    versioned::ContinuePreparation more{static_cast<std::int64_t>(t.id.value)};
+    bus.send_as(c.coordinator.id, c.candidate, Message(to_value(more)));
+    bus.pump();
+    CHECK(c.log->readiness.size() == offered);
+    CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
+    CHECK(bus.role_holder(kRole) == c.incumbent);
+    CHECK(bus.alive(c.incumbent));
+    CHECK_FALSE(bus.sealed(c.incumbent));
+    CHECK(bus.role_holder(kRole) != c.candidate);
+}
+
+TEST_CASE("R2B-3b-3: the role drifting under a live preparation refuses the readiness") {
+    // THE TERM NO LIFECYCLE CASE CAN REACH. Every death, revival and reload aborts
+    // the transaction outright, so readiness validation never sees a drifted role
+    // by those roads — which is exactly why R2B-3b-2's role-drift mutation stayed
+    // GREEN, and why it needs a road of its own.
+    //
+    // There is one: `admit_candidate` is the sole admission mutation and a trusted
+    // host may call it directly, outside any transaction. Doing so moves the role
+    // away from our incumbent and seals it — while leaving its life and its code
+    // untouched, so nothing announces anything and our transaction survives to
+    // meet the drift at validation time.
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 16);
+    REQUIRE(t.ok);
+    offer_readiness_twice(bus, c); // the second offer is what pins the consumption
+    ask_to_prepare(bus, c, t.id, "defer");
+
+    // A second sealed candidate, admitted against OUR incumbent by a direct host
+    // call. Nobody's life changed; the slot simply moved on.
+    auto usurper = std::make_unique<VersionedService>("v9");
+    const WeaveId usurper_id = bus.register_weave(std::move(usurper), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(usurper_id, c.coordinator.id));
+    loom::Activated fact{7};
+    REQUIRE(bus.admit_candidate(usurper_id, c.incumbent, kRole, host_lifecycle_authority(bus),
+                                Message(to_value(fact)), 7));
+    REQUIRE(bus.role_holder(kRole) == usurper_id);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing); // nothing announced it
+
+    continue_preparation(bus, c, t.id);
+    REQUIRE(c.log->readiness.size() == 2);
+    CHECK_FALSE(c.log->readiness[0].ok);
+    CHECK(c.log->readiness[0].why == TxnReason::RoleChanged);
+    // AND THE ANSWER IS SPENT ANYWAY. It was authentic and it was heard; a
+    // validation that refuses for a reason about the WORLD does not hand the
+    // conversation back. This is the only road to the consumed-conversation term:
+    // everywhere else an accepted readiness has already moved the state machine,
+    // so `WrongState` answers first.
+    CHECK_FALSE(c.log->readiness[1].ok);
+    CHECK(c.log->readiness[1].why == TxnReason::InvalidReadiness);
+    CHECK(bus.transaction_state(t.id) == TxnState::Preparing); // refused, never ended
+    CHECK(bus.role_holder(kRole) == usurper_id);               // and nothing moved back
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

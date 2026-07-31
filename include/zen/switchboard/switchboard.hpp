@@ -250,6 +250,46 @@ enum class TxnReason : std::uint8_t {
     /// elsewhere" are different problems with different fixes.
     IncumbentBusy,
     CandidateBusy,
+    /// THE CANDIDATE ITSELF SAID NO (R2B-3b-3) — authentically, spending the one
+    /// answer authority the preparation ask earned it. Its own reason, because it
+    /// is the only ending in the vocabulary that is neither a failure of the
+    /// mechanism nor a participant vanishing: preparation ran, and its verdict was
+    /// no. An operator reading `CandidateRefused` looks at the successor's own
+    /// judgement; every other reason sends them to the topology.
+    CandidateRefused,
+    /// Something arrived claiming to be the readiness answer and was not
+    /// (R2B-3b-3): not an authenticated answer at all, from the wrong speaker,
+    /// carrying another conversation's correlation, or offered when this
+    /// transaction's one preparation conversation was never opened or is already
+    /// consumed. Deliberately ONE reason for all of those: telling a forger
+    /// *which* term it failed is telling it what to fix next.
+    ///
+    /// It is a refusal of the COMMAND, never a terminal result — hostile traffic
+    /// does not get to end a legitimate transaction.
+    InvalidReadiness,
+    /// The answer is authentic and the transaction it names is over (R2B-3b-3):
+    /// it aborted, exhausted its budget, or committed while the answer sat in the
+    /// queue. Distinct from `NoSuchTransaction`, which means this Loom never
+    /// issued that id at all — "you are too late" and "that never existed" send an
+    /// operator to entirely different places, and a terminal record is never
+    /// resurrected to say either.
+    LateReadiness,
+    /// This transaction's one preparation conversation has already been opened
+    /// (R2B-3b-3). There is exactly one, deliberately: a second ask would leave a
+    /// candidate holding an authority for a correlation the transaction no longer
+    /// expects, and "which of my two asks is this answering?" is a question the
+    /// design refuses to have.
+    PreparationAlreadyAsked,
+};
+
+/// What an authentically-answering candidate said. ONE DOOR TAKES BOTH, because
+/// readiness and refusal differ in nothing but their effect: every authority
+/// check — that this is an answer, that the candidate spoke it, that it belongs
+/// to this conversation — is identical, and giving them separate doors is how two
+/// definitions of "authentic" start to drift apart.
+enum class PreparationAnswer : std::uint8_t {
+    Ready,   ///< preparation completed; the transaction may become Ready
+    Refused, ///< preparation will not complete; the transaction ends, once
 };
 
 const char* name_of(TxnState s) noexcept;
@@ -534,12 +574,58 @@ public:
     /// with PreparationExhausted.
     TxnResult tick_preparation(TxnId id);
 
-    /// TRUSTED NATIVE SCAFFOLDING FOR R2B-3b-3, and deliberately not a message
-    /// shape. The real readiness answer is an authenticated conversation between
-    /// the coordinator and the candidate; this seam exists so the STATE MACHINE
-    /// can be proven before that conversation exists, and the next slice replaces
-    /// its caller rather than adding a second way to become ready.
-    TxnResult mark_candidate_ready(TxnId id, WeaveId coordinator, WeaveId candidate);
+    // ---- the preparation conversation (R2B-3b-3) ---------------------------
+    //
+    //     A transaction becomes ready only when the exact sealed candidate
+    //     authentically answers the exact preparation request that belongs to
+    //     that transaction.
+    //
+    // R2B-3b-2 shipped `mark_candidate_ready` as named trusted scaffolding: a
+    // host call that ASSERTED readiness so the state machine could be proven
+    // before the conversation existed. It is gone. What replaces it is not a
+    // second door onto the same transition but the only one — the transition is
+    // now private, and the only expression that reaches it is the acceptance of a
+    // real answer.
+    //
+    // The two halves below are deliberately asymmetric. Opening the conversation
+    // is HOST authority (the transaction layer already is: begin, tick, commit and
+    // abort all live here). Closing it is not authority at all — it is the
+    // consumption of the candidate's own attested speech, and every fact it rests
+    // on is one the bus stamped rather than one a caller supplied.
+
+    /// Open this transaction's ONE readiness conversation: deliver `ask` to the
+    /// bound candidate AS the bound coordinator, through the sealed
+    /// coordinator-only door.
+    ///
+    /// THE CORRELATION IS LOOM'S, not the caller's — minted here, written over
+    /// whatever `ask` carried, and remembered on the transaction as the only
+    /// correlation a readiness answer may bear. That is what makes a copied
+    /// correlation worthless: the number is not a secret, it is simply not
+    /// something a second conversation can also be issued.
+    ///
+    /// The send is the ordinary gated one, so the coordinator's grant still
+    /// governs the shape and the seal still governs the reach. This call adds a
+    /// conversation the transaction will recognise; it adds no authority to speak.
+    TxnResult ask_candidate_to_prepare(TxnId id, Message ask);
+
+    /// Consume the candidate's answer to that ask — FROM INSIDE ITS DELIVERY.
+    ///
+    /// Called by the bound coordinator while handling the answer. `id` is the
+    /// transaction the ANSWER'S PAYLOAD names, and it is a lookup key, never a
+    /// credential: everything that authorizes the transition is read from the
+    /// delivery being dispatched (is this an authenticated answer? is the caller
+    /// the bound coordinator? is the speaker the bound candidate? is this the
+    /// correlation the transaction is waiting for?) and from the registry (are all
+    /// four participants still exactly who they were, is the candidate still
+    /// sealed by this coordinator, does the incumbent still hold the role?).
+    ///
+    /// So a payload naming another transaction satisfies neither: the id finds a
+    /// record whose expected correlation this delivery does not carry.
+    ///
+    /// Accepting consumes the conversation, so the same answer cannot be offered
+    /// twice — and the candidate's own answer authority was already spent, which
+    /// is the second, independent wall.
+    TxnResult accept_preparation_answer(TxnId id, PreparationAnswer answer);
 
     /// Commit: revalidate every exact participant, then delegate the topology
     /// change to `admit_candidate` — which remains the SOLE admission mutation.
@@ -697,6 +783,25 @@ private:
         /// struct up to `sender_life` and stops, so an ordinary send cannot carry a
         /// target expectation even by accident. Only `enqueue_answer` sets it.
         AnswerTarget answer_target{};
+        /// WHICH PREPARATION ASK THIS IS — or, on an answer, which one it answers
+        /// (R2B-3b-3). Invalid on every other envelope in the system.
+        ///
+        /// THE REASON THIS EXISTS RATHER THAN A CORRELATION COMPARISON. A
+        /// correlation is a number a sender chooses; Loom minting one for the
+        /// preparation ask makes it unique but not unforgeable, because any sender
+        /// may put any number on any message. So a transaction that believed a
+        /// matching correlation would be believing that the candidate answered
+        /// *some* question numbered N — not that it answered THE ask. Today the
+        /// gap is only a coordinator's capacity to confuse itself; the moment a
+        /// coordinator is an untrusted loaded weave it becomes the ability to
+        /// declare readiness by asking the candidate anything at all.
+        ///
+        /// It rides the same rails `answer_target` does, for the same reason: it
+        /// lives on the bus-private envelope, has no wire form, no schema and no
+        /// constructor a weave can reach, so there is nothing to read, copy or
+        /// replay. It is carried from the ask into the delivery's reply authority
+        /// (and a deferred record), and back out through the one answer door.
+        TxnId preparation{};
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
@@ -735,6 +840,11 @@ private:
         /// one capture point and no drift between the immediate and deferred paths.
         std::uint64_t requester_life = 0;
         std::uint64_t requester_incarnation = 0;
+        /// The preparation ask this delivery IS, if it is one (R2B-3b-3) — so the
+        /// answer it authorizes can carry the same fact back out. Invalid for
+        /// every ordinary delivery, which is every delivery but one per
+        /// transaction.
+        TxnId preparation{};
     };
 
     // The Bus a handler actually receives: it stamps the handling Weave's identity
@@ -772,8 +882,11 @@ private:
         WeaveId self_;
     };
 
+    /// `preparation` is set by exactly one caller — `ask_candidate_to_prepare` —
+    /// and is the invalid id everywhere else, so the ordinary send paths cannot
+    /// mark an envelope as a preparation ask even by accident.
     Ticket enqueue_directed(WeaveId target, Message msg, bool gated,
-                            Provenance provenance = Provenance{});
+                            Provenance provenance = Provenance{}, TxnId preparation = TxnId{});
     Ticket enqueue_role(std::string role, Message msg, bool gated);
     std::size_t fanout(Message msg, bool gated);
 
@@ -809,6 +922,10 @@ private:
         WeaveId respondent{};
         std::uint64_t respondent_incarnation = 0;
         std::uint64_t correlation = 0;
+        /// The preparation ask this retained right answers, if any (R2B-3b-3).
+        /// Carried so a DEFERRED readiness proves exactly what an immediate one
+        /// proves — one definition of readiness, not two.
+        TxnId preparation{};
     };
 
     /// The ONE door every authenticated answer leaves by (R2B-2c).
@@ -818,7 +935,8 @@ private:
     /// single place. Two nearly-identical enqueues either side of a registry is
     /// exactly the shape that drifts.
     Ticket enqueue_answer(WeaveId to, WeaveId as_sender, Message msg, std::uint64_t correlation,
-                          std::uint64_t requester_life, std::uint64_t requester_incarnation);
+                          std::uint64_t requester_life, std::uint64_t requester_incarnation,
+                          TxnId preparation);
 
     DeferredAnswer defer_answer_as(WeaveId as_sender);
     Ticket spend_deferred_as(WeaveId as_sender, const DeferredAnswer& answer, Message msg);
@@ -853,6 +971,13 @@ private:
     /// the record has already been erased from `weaves_`.
     void abandon_deferred_for(WeaveId id);
 
+    /// The life of this transaction's ONE readiness conversation (R2B-3b-3).
+    /// Three named states rather than two flags or an inference from a zero
+    /// correlation: "nobody has asked yet" and "the answer has been spent" are
+    /// different facts, and a transaction that confuses them would accept a
+    /// second readiness or refuse the first.
+    enum class Conversation : std::uint8_t { NotAsked, Open, Consumed };
+
     /// One prepared replacement, remembered in full. Nothing here is inferred
     /// from the absence of a field: the state is a state, and the reason is a
     /// reason.
@@ -866,6 +991,13 @@ private:
         TxnState state = TxnState::Preparing;
         std::uint32_t budget = 0;
         TxnReason reason = TxnReason::None;
+        /// WHAT A LATER ANSWER MUST PROVE IT IS (R2B-3b-3), kept privately here
+        /// and nowhere a weave can read it. It is not a secret — a correlation
+        /// travels on the wire and the candidate necessarily learns it — which is
+        /// exactly why knowing it authorizes nothing. What makes it useful is that
+        /// Loom minted it for one conversation and will mint no second one.
+        std::uint64_t preparation_correlation = 0;
+        Conversation conversation = Conversation::NotAsked;
     };
 
     /// Snapshot a participant as it is right now.
@@ -875,6 +1007,23 @@ private:
 
     PreparedReplacement* find_txn(TxnId id);
     const PreparedReplacement* find_txn(TxnId id) const;
+
+    /// THE ONE STATE TRANSITION INTO `Ready`, and it is private (R2B-3b-3).
+    ///
+    /// This is what `mark_candidate_ready` became. It was public trusted
+    /// scaffolding — a host could simply declare a transaction ready — and it is
+    /// now reachable from exactly one expression in the system: the acceptance of
+    /// an authenticated answer that has already proven whose it is. The checks it
+    /// still makes are the ones about the WORLD (is the candidate still sealed to
+    /// this coordinator, is the incumbent still the role holder); the checks about
+    /// the SPEAKER live in the caller, where the delivery is.
+    TxnResult accept_authenticated_readiness(PreparedReplacement& txn);
+
+    /// Did the transaction this id names simply end, rather than never exist?
+    /// Ids are minted monotonically, so one below the next is one this Loom
+    /// issued — which is the whole difference between "too late" and "no such
+    /// thing". Says nothing about WHICH transaction, and confers nothing.
+    TxnReason vanished_transaction_reason(TxnId id) const;
 
     /// End a transaction, record its outcome for its operator, and free the slot.
     void finish_txn(PreparedReplacement& txn, TxnState state, TxnReason reason);
@@ -978,6 +1127,34 @@ private:
     /// never be revived by a later board landing on the same address.
     std::shared_ptr<const LoomIdentity> identity_;
 
+    /// WHAT THE DELIVERY BEING DISPATCHED *IS* — the facts Loom stamped on it,
+    /// held for the length of the handler and gone when it returns (R2B-3b-3).
+    ///
+    /// A SECOND STRUCT ALONGSIDE `ReplyAuthority`, deliberately, even though two
+    /// of its three fields are today assigned from the same expressions. They
+    /// answer opposite questions: `ReplyAuthority` is *the right to speak next*
+    /// and is SPENT by exercising it; this is *what was just heard* and is spent
+    /// by nothing. Reading readiness out of a half-consumed reply authority would
+    /// be the "two nearly-identical things either side of a registry" shape this
+    /// file already warns about — and it would silently stop working the day a
+    /// coordinator answers the answer.
+    struct DeliveryFacts {
+        /// Loom's own word that this is THE authorized answer to a request the
+        /// recipient sent. Read from the envelope's provenance, which no enqueue
+        /// path except the two answer doors can write.
+        bool answers_ask = false;
+        /// The bus-stamped author. Not `reply_to`, not anything in the payload.
+        WeaveId sender{};
+        /// The conversation's correlation — Loom's, chosen when the ask was
+        /// enqueued and copied onto the answer by `enqueue_answer`. Kept for the
+        /// diagnostic and the redundant-but-true check; the fact below is the one
+        /// that decides.
+        std::uint64_t correlation = 0;
+        /// Which preparation ask this answers, if any. Invalid unless this
+        /// delivery is the answer to a real `ask_candidate_to_prepare`.
+        TxnId preparation{};
+    };
+
     bool in_dispatch_ = false;
     bool stop_requested_ = false;
     /// The delivery currently being dispatched, and its one reply authority.
@@ -985,6 +1162,7 @@ private:
     /// invalid means no delivery is live, so nobody may answer.
     WeaveId current_target_{};
     ReplyAuthority authority_{};
+    DeliveryFacts delivery_{};
     std::vector<DeferredRecord> deferred_;      ///< bounded; see kMaxDeferredAnswers
     /// Monotonic; a token is never reused. DELIBERATELY UNGUARDED against
     /// exhaustion, unlike the activation sequence, and the difference is the
@@ -998,6 +1176,12 @@ private:
     std::vector<TxnOutcome> outcomes_;      ///< bounded; oldest dropped
     std::vector<ParticipantRef> outcome_of_; ///< whose outcome each one is
     std::uint64_t next_txn_id_ = 1;
+    /// The correlation Loom puts on a preparation ask. Monotonic, so no two
+    /// preparation conversations ever share one — which is what the correlation
+    /// term is for. It is NOT what makes an answer authentic (a sender may write
+    /// any correlation on any message); `Envelope::preparation` is. Kept separate
+    /// from the delivery seq so a correlation never doubles as a queue position.
+    std::uint64_t next_preparation_correlation_ = 1;
 
     std::uint64_t next_deferred_token_ = 1;
 };
