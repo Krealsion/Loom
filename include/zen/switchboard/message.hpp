@@ -143,10 +143,26 @@ private:
 /// you were handed is ordinary — it is yours — and there is no path from "I know
 /// the shape" or "I may send it" to "I hold the authority".
 ///
-/// It does NOT widen the holder's grant either. An attested send is still
+/// It does NOT widen the holder's grant either. An attested SEND is still
 /// authorized against the sender's ordinary grant at delivery, so the authority
 /// answers "may this message carry Loom's word?" and never "may this weave send
-/// it?".
+/// it?". `announce_lifecycle` is a send, and stays one.
+///
+/// ONE THING IS NOT A SEND, AND IT IS THE EXCEPTION THAT KEEPS THE RULE HONEST
+/// (R2B-3d). The activation Loom delivers as part of an admission is not a
+/// weave's speech being decorated — it is Loom's own act, authorized by this
+/// authority at the moment the admission is scheduled and performed by the
+/// Switchboard itself. No ordinary grant is consulted for it, because there is
+/// no sender exercising one: the coordinator's id is stamped so the consumer's
+/// per-operator lineage rule has something to key on, and that stamp describes
+/// WHO ADMITTED rather than claiming who spoke.
+///
+/// The distinction is load-bearing rather than a carve-out. Before R2B-3d the
+/// committed activation travelled the ordinary gated path, so a coordinator
+/// without an `Emit<zen.Activated>` grant committed a replacement successfully
+/// and its successor was refused its own first breath — publicly the service,
+/// never told it was alive. An act the Loom performs cannot be un-performed by
+/// re-asking a question about somebody's permission to speak.
 ///
 /// AND IT IS RELATIVE TO THE LOOM THAT ISSUED IT (R2B-1a left this open;
 /// R2B-1b closes it). R2B-1a required a `Switchboard&` to mint — but the result
