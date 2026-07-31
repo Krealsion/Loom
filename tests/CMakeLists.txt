@@ -119,6 +119,19 @@ zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
 zen_add_test_weave(zen_test_weave_answers ZEN_WEAVE_ANSWERS)
 zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSWERS_TWICE)
 
+# R2B-3b-3: the `versioned.service` pair — ONE source, two real artifacts. v1 is
+# the incumbent that answers "v1" throughout; v2 (ZEN_VERSIONED_CANDIDATE) is the
+# same production service plus the preparation conversation. Built from the same
+# source on purpose: the artifact that prepares must be the artifact that goes live.
+function(zen_add_versioned_service target)
+    add_library(${target} SHARED weavelib/versioned_service.cpp)
+    target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+    target_compile_options(${target} PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+    target_compile_definitions(${target} PRIVATE ${ARGN})
+endfunction()
+
+zen_add_versioned_service(zen_test_versioned_v1)
+zen_add_versioned_service(zen_test_versioned_v2 ZEN_VERSIONED_CANDIDATE)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
@@ -136,7 +149,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
-    zen_test_weave_answers_twice)
+    zen_test_weave_answers_twice zen_test_versioned_v1 zen_test_versioned_v2)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -157,7 +170,9 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\""
     "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\""
     "ZEN_SO_ANSWERS=\"$<TARGET_FILE:zen_test_weave_answers>\""
-    "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\"")
+    "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\""
+    "ZEN_SO_VERSIONED_V1=\"$<TARGET_FILE:zen_test_versioned_v1>\""
+    "ZEN_SO_VERSIONED_V2=\"$<TARGET_FILE:zen_test_versioned_v2>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
 
