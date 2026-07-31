@@ -1074,6 +1074,11 @@ WeaveId Switchboard::role_holder(std::string_view role) const {
     return it == roles_.end() ? WeaveId{} : it->second;
 }
 
+std::string Switchboard::role_of(WeaveId id) const {
+    const WeaveRecord* rec = find(id);
+    return rec == nullptr ? std::string{} : rec->role;
+}
+
 bool Switchboard::sealed(WeaveId id) const {
     const WeaveRecord* rec = find(id);
     return rec != nullptr && rec->sealed_by.valid();

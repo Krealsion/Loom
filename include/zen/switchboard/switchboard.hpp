@@ -489,6 +489,17 @@ public:
     /// never consults this.
     WeaveId role_holder(std::string_view role) const;
 
+    /// Which role this weave holds right now — empty if none, or if there is no
+    /// such weave. The same fact as `role_holder` read from the other end.
+    ///
+    /// IT EXISTS SO NOBODY HAS TO CACHE IT (R2B-3b-3a). A host that binds a role
+    /// at registration used to be the only thing that could move one, so hosts
+    /// remembered what they bound. Admission changed that: a prepared replacement
+    /// committing — or a direct `admit_candidate` — moves a role with no host call
+    /// at all, and a remembered answer becomes a lie the moment it does. Read-only
+    /// and derived from the same table routing binds, so it cannot drift from it.
+    std::string role_of(WeaveId id) const;
+
     /// THE COMMIT. One operation, one visible change (R2B-3).
     ///
     /// Unseals `candidate` and moves `role` from `incumbent` to it. Everything an

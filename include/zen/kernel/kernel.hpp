@@ -143,17 +143,29 @@ public:
 
     bool unload(const std::string& name);
 
-    /// Unload whichever loaded library holds `role` (false if none does). The
-    /// role is released by the unregister itself — the Switchboard clears a
-    /// role when its holder is removed — so the slot is free for a successor.
+    /// Unload whichever loaded library holds `role` RIGHT NOW (false if none
+    /// does, or if the holder is a native weave this Kernel did not load). The
+    /// holder is resolved from the Switchboard's own role table, so a role that
+    /// moved by admission — a prepared replacement committing, or a direct
+    /// admission — selects the weave that actually holds it rather than whoever
+    /// was loaded under that name. The role is released by the unregister itself,
+    /// so the slot is free for a successor.
     bool unload_role(const std::string& role);
 
     loom::WeaveId weave_id(const std::string& name) const;
     bool is_loaded(const std::string& name) const;
     std::vector<std::string> loaded() const;
 
-    /// The role `name` was loaded under, or empty. The kernel's own map is the
-    /// truth here: it is the thing that bound the role.
+    /// The role this artifact's weave holds RIGHT NOW, or empty.
+    ///
+    /// THE LIVE ROLE, ASKED OF THE AUTHORITY — not the role it was loaded under.
+    /// The kernel's own map used to answer this, on the reasoning that load was
+    /// the thing that bound the role. That stopped being true when admission
+    /// learned to move a role (R2B-3b): a prepared replacement committing, or a
+    /// host admitting a candidate directly, changes the holder with no Kernel
+    /// call at all, and a cache with two mutators and one updater is a cache that
+    /// lies. There is no load-time role kept beside this, deliberately: two
+    /// independently mutable answers to one question is the shape being removed.
     std::string role_of(const std::string& name) const;
 
     /// What a role's holder is, as far as the kernel can honestly say.
@@ -163,8 +175,9 @@ public:
     };
 
     /// Ask whether the holder of `role` declares a given shape in its accept-set —
-    /// the "will you converse?" question, answered from data the kernel already
-    /// reconstructs at load plus the bus's own published accept-set.
+    /// the "will you converse?" question, answered from the bus's own role table
+    /// plus the bus's own published accept-set. Both halves come from the
+    /// Switchboard, so this cannot drift from what delivery would do.
     ///
     /// `holder == 0` means **no kernel-loaded weave holds this role**, which
     /// conflates two states the kernel genuinely cannot tell apart: the role is
@@ -197,7 +210,9 @@ private:
         const ZenWeaveAbi* abi = nullptr;
         HostAdapter* adapter = nullptr; // owned by the Switchboard
         loom::WeaveId id{};
-        std::string role{}; ///< the role slot it was bound to (empty if none)
+        // NO CACHED ROLE (R2B-3b-3a). There was one, written at load and patched
+        // by `commit_candidate`; admission moves a role with no Kernel call at
+        // all, so it could only ever have been right by luck. The queries derive.
     };
 
     struct Manifest {
@@ -206,6 +221,10 @@ private:
     };
 
     Manifest reconstruct(const ZenWeaveAbi* abi, void* instance);
+
+    /// Is this id one of ours? The kernel-loaded/native distinction `query_role`
+    /// and `unload_role` both need once the holder comes from the bus.
+    const Loaded* record_for(loom::WeaveId id) const;
 
     loom::Switchboard& bus_;
     loom::Registry registry_; ///< union of loaded Weaves' schemas, for callback resolution
