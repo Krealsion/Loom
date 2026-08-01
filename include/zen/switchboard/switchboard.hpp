@@ -748,6 +748,12 @@ public:
     /// a successor inherits no result, exactly as it inherits no conversation.
     bool take_outcome(WeaveId op, TxnOutcome& out);
 
+    /// The same law, narrowed to EXACTLY one transaction (R2B-4a). The store is
+    /// per-operator and may hold several results at once; a caller bound to one
+    /// transaction — the host authoring handle — must not consume a sibling's.
+    /// Same exact-operator binding, same consume-once; only the question narrows.
+    bool take_outcome(WeaveId op, TxnId id, TxnOutcome& out);
+
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
     ///
     /// THIS IS THE DEATH TRANSITION, and committing it ends every unfinished
@@ -1119,6 +1125,11 @@ private:
     /// One prepared replacement, remembered in full. Nothing here is inferred
     /// from the absence of a field: the state is a state, and the reason is a
     /// reason.
+    ///
+    /// DISTINCT from the public `loom::PreparedReplacement` (R2B-4a) — that is a
+    /// host-side authoring HANDLE that composes this class's public primitives;
+    /// this is the bus-private RECORD those primitives act on. Same concept,
+    /// deliberately two scopes: a weave can never see this one.
     struct PreparedReplacement {
         TxnId id{};
         ParticipantRef op{};
