@@ -1684,6 +1684,12 @@ private:
 struct CastLog {
     std::vector<std::string> answers;      ///< what the role said when asked
     std::vector<TxnResult> readiness;      ///< every verdict the bus gave the coordinator
+    /// EVERY SHAPE THE COORDINATOR WAS HANDED, and whether Loom called it an
+    /// answer (R2B-3d-1). The coordinator stays credulous — it judges nothing —
+    /// so a forged answer that got through would be visible here as a
+    /// `VersionReply` the coordinator never asked for.
+    std::vector<std::string> heard;
+    std::size_t answers_ask_deliveries = 0;
 };
 
 /// The whole cast a prepared replacement names, plus an observer that asks the
@@ -3118,6 +3124,10 @@ std::shared_ptr<const Schema> versioned_state_schema() {
                               .field("escapes", Kind::Int)
                               .field("retired", Kind::Int)
                               .field("token", Kind::Int)
+                              .field("act_answer", Kind::Int)
+                              .field("act_defer", Kind::Int)
+                              .field("act_send", Kind::Int)
+                              .field("act_late_spend", Kind::Int)
                               .field("plan", Kind::Text)
                               .build();
     return s;
@@ -3173,7 +3183,12 @@ DynCast load_pair(Switchboard& bus, Kernel& kernel,
               register_probe(bus,
                              {schema_of<versioned::CandidateReady>(),
                               schema_of<versioned::CandidateRefused>(),
-                              schema_of<versioned::VersionReply>()},
+                              schema_of<versioned::VersionReply>(),
+                              // R2B-3d-1: the coordinator hears the candidate's
+                              // ordinary speech from inside its activation — and
+                              // would equally have heard a forged answer, which
+                              // is why it accepts `VersionReply` above.
+                              schema_of<versioned::ActivationObserved>()},
                              2, true, std::move(coordinator_grant)),
               register_probe(bus, {schema_of<versioned::VersionReply>()})};
     std::shared_ptr<CastLog> log = d.log;
@@ -3183,7 +3198,22 @@ DynCast load_pair(Switchboard& bus, Kernel& kernel,
     };
     std::shared_ptr<TxnId> live = d.live_txn;
     d.coordinator.weave->on_handle = [&bus, log, live](const Message& in, Bus&, ProbeWeave&) {
+        // RECORDED BEFORE ANYTHING IS JUDGED (R2B-3d-1), and outside the
+        // `live` guard, so the record is of what ARRIVED rather than of what the
+        // coordinator felt like reacting to.
+        log->heard.push_back(std::string(in.payload.schema().name()));
+        if (in.provenance.answers_ask()) {
+            ++log->answers_ask_deliveries;
+        }
         if (!live->valid()) {
+            return;
+        }
+        // ORDINARY SPEECH IS NOT A READINESS OFFER, and skipping it here is not
+        // consumer caution: `ActivationObserved` carries no transaction and is
+        // the candidate's own initiative. A forged ANSWER would still be offered
+        // to the bus below, which is where credulity has to live.
+        if (in.payload.schema().name() ==
+            std::string_view(versioned::ActivationObserved::zen_name)) {
             return;
         }
         const Cell* claimed = in.payload.get("transaction");
@@ -5008,6 +5038,311 @@ TEST_CASE("R2B-3d: a stale queued admission cannot land on a namesake artifact l
     v1_still_the_service(bus, d);
     CHECK(bus.sealed(again.id));
     CHECK(state_field(bus, again.id, "activations") == 0);
+}
+
+// ---- R2B-3d-1: first breath is not a question -------------------------------
+//
+// R2B-3d made the committed activation Loom's own act rather than the
+// coordinator's speech — and then built its delivery context in the ordinary
+// path's image, which fabricated a requester. The stamped sender is the OPERATOR
+// that admitted the candidate, not a weave that asked it anything, so a reply
+// authority naming it let a candidate answer a request nobody made.
+//
+//     Lifecycle activation is an authenticated fact, not an ask.
+//
+// The model already had the right category: `answer_as` and `defer_answer_as`
+// refuse when there is no valid requester — the case they document as "the
+// request came from a root, so there is no requester to answer". Loom's own act
+// belongs there, and putting it there needed no new machinery, no new state and
+// no ABI change.
+
+namespace {
+
+/// A candidate that, from inside an accepted activation, tries everything a
+/// delivery-that-had-been-an-ask would grant — and then does the one thing that
+/// is genuinely still its right.
+struct ActivationAttempts {
+    bool answered = false;      ///< did `answer()` hand back a real ticket?
+    bool deferred_valid = false;///< did `defer_answer()` hand back a real capability?
+    bool sent = false;          ///< did ordinary domain speech go out?
+    bool late_spend = false;    ///< could what it kept ever be spent?
+    loom::DeferredAnswer kept{};
+};
+
+} // namespace
+
+TEST_CASE("R2B-3d-1: a candidate cannot answer its own activation, cannot defer an answer to it, "
+          "and is not thereby made mute") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema(), ping_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+
+    ActivationAttempts tried;
+    auto cand_weave = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+
+    cand_raw->on_handle = [&tried, coordinator](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() != std::string_view(loom::Activated::zen_name)) {
+            // A LATER, REAL ASK. Authority is scoped per delivery, not removed
+            // from the weave — so an ordinary request answers normally.
+            if (in.sender.valid()) {
+                (void)b.answer(Message(pong(99)));
+            }
+            return;
+        }
+        REQUIRE(in.provenance.lifecycle_activation()); // it IS an authentic activation...
+        tried.answered = b.answer(Message(pong(1))).valid();       // ...and not a question
+        tried.kept = b.make_deferred_answer();
+        tried.deferred_valid = tried.kept.valid();
+        tried.sent = b.send(coordinator.id, Message(pong(2))).valid();
+    };
+
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+
+    REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
+                                Message(to_value(loom::Activated{5})), 5));
+    bus.pump();
+
+    // THE ACTIVATION ITSELF IS UNTOUCHED: authentic, delivered, exactly once.
+    REQUIRE(cand_raw->handled_names.size() == 1);
+    CHECK(cand_raw->handled_names[0] == std::string(loom::Activated::zen_name));
+    CHECK(bus.role_holder("worker") == candidate);
+
+    // NOBODY ASKED, so there was nothing to answer and nothing to defer.
+    CHECK_FALSE(tried.answered);
+    CHECK_FALSE(tried.deferred_valid);
+    CHECK(tried.kept.opaque_token() == 0); // an invalid capability, not a real one
+
+    // ...AND IT IS NOT MUTE. Ordinary domain speech, to the very weave whose
+    // imaginary question it was just refused, went out and arrived.
+    CHECK(tried.sent);
+    REQUIRE(coordinator.weave->handled_names.size() == 1);
+    CHECK(coordinator.weave->handled_values[0] == 2);
+
+    // The refusal is VISIBLE and says AUTHORITY, and no answer envelope exists:
+    // the only refusal on the tap is the answer attempt, and the coordinator
+    // received exactly one message — the ordinary one.
+    std::size_t denied = 0;
+    for (const TapRecord& t : tap) {
+        if (t.kind == EventKind::Refused && t.reason == RefusalReason::CapabilityDenied) {
+            ++denied;
+        }
+        CHECK(t.reason != RefusalReason::Exhausted); // no bounded capacity was touched
+    }
+    CHECK(denied == 1);
+
+    // A LATER REAL ASK IS ANSWERABLE NORMALLY — the authority was scoped to a
+    // delivery, not taken away from the candidate.
+    bus.send_as(coordinator.id, candidate, Message(ping(7), coordinator.id, coordinator.id, 42));
+    bus.pump();
+    REQUIRE(coordinator.weave->handled_names.size() == 2);
+    CHECK(coordinator.weave->handled_values[1] == 99); // the answer to the real question
+}
+
+TEST_CASE("R2B-3d-1: an activation's refused deferral consumes none of the bounded capacity — "
+          "proven with the registry held one slot from full") {
+    // A BOUND IS ONLY AN INSTRUMENT IF THE TEST HOLDS IT SATURATED (R2B-3b-1a's
+    // lesson, applied again). Answering past the bound proves nothing if each
+    // slot is returned before the next is taken.
+    Switchboard bus;
+    Registered asker = register_probe(bus, {pong_schema()});
+    Registered coordinator = register_probe(bus, {pong_schema(), ping_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+
+    // A responder that keeps every answer right it is given, so the registry
+    // fills and STAYS full.
+    std::vector<loom::DeferredAnswer> held;
+    Registered responder = register_probe(bus, {ping_schema()});
+    responder.weave->on_handle = [&held](const Message&, Bus& b, ProbeWeave&) {
+        held.push_back(b.make_deferred_answer());
+    };
+
+    // Fill it to exactly one slot short of the bound.
+    const std::size_t bound = Switchboard::kMaxDeferredAnswers;
+    for (std::size_t i = 0; i < bound - 1; ++i) {
+        bus.send_as(asker.id, responder.id, Message(ping(static_cast<std::int64_t>(i))));
+    }
+    bus.pump();
+    REQUIRE(held.size() == bound - 1);
+    for (const loom::DeferredAnswer& d : held) {
+        REQUIRE(d.valid()); // every one of them is real
+    }
+
+    ActivationAttempts tried;
+    auto cand_weave = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+    cand_raw->on_handle = [&tried](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() != std::string_view(loom::Activated::zen_name)) {
+            return;
+        }
+        tried.kept = b.make_deferred_answer();
+        tried.deferred_valid = tried.kept.valid();
+    };
+
+    REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
+                                Message(to_value(loom::Activated{2})), 2));
+    bus.pump();
+    CHECK_FALSE(tried.deferred_valid);
+
+    // THE LAST SLOT IS STILL THERE. If the activation had taken it, this
+    // legitimate deferral — a real ask, from a real requester — would fail.
+    bus.send_as(asker.id, responder.id, Message(ping(1000)));
+    bus.pump();
+    REQUIRE(held.size() == bound);
+    CHECK(held.back().valid());
+
+    // ...and the bound is real, which is what makes the check above mean
+    // something: the next one has nowhere to go.
+    bus.send_as(asker.id, responder.id, Message(ping(1001)));
+    bus.pump();
+    REQUIRE(held.size() == bound + 1);
+    CHECK_FALSE(held.back().valid());
+}
+
+TEST_CASE("R2B-3d-1: nothing delivered because of an activation can later be made to look like "
+          "an answer") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema(), ping_schema()});
+    const WeaveId incumbent = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+
+    ActivationAttempts tried;
+    auto cand_weave = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<loom::Activated>(), ping_schema()});
+    ProbeWeave* cand_raw = cand_weave.get();
+    const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(candidate, coordinator.id));
+    cand_raw->on_handle = [&tried, coordinator](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() != std::string_view(loom::Activated::zen_name)) {
+            return;
+        }
+        tried.kept = b.make_deferred_answer();
+        // COPY EVERYTHING THE ACTIVATION CARRIED and send it back by hand: the
+        // coordinator's own id as the target, and the activation's correlation.
+        // An honest weave cannot forge provenance, so the sharpest attack it CAN
+        // express is to reproduce every visible fact and see whether the shape
+        // of the thing is enough. It is not.
+        (void)b.send(in.sender, Message(pong(1), in.sender, in.sender, in.correlation));
+        tried.sent = true;
+    };
+
+    // Whether Loom ever calls a delivery to the coordinator an ANSWER.
+    std::size_t answers_seen = 0;
+    coordinator.weave->on_handle = [&answers_seen](const Message& in, Bus&, ProbeWeave&) {
+        if (in.provenance.answers_ask()) {
+            ++answers_seen;
+        }
+    };
+
+    REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
+                                Message(to_value(loom::Activated{3})), 3));
+    bus.pump();
+
+    // The copy ARRIVED — it is ordinary speech and the candidate is entitled to
+    // send it — and Loom called it exactly what it is.
+    CHECK(tried.sent);
+    REQUIRE(coordinator.weave->handled_names.size() == 1);
+    CHECK(answers_seen == 0);
+
+    // Spending the kept capability LATER cannot work either: invalid is invalid
+    // forever, not merely at the moment it was refused.
+    CHECK_FALSE(bus.weave(candidate) == nullptr);
+    bus.send_as(coordinator.id, candidate, Message(ping(4)));
+    bus.pump();
+    CHECK(answers_seen == 0);
+    CHECK(coordinator.weave->handled_names.size() == 1); // still just the copy
+}
+
+TEST_CASE("R2B-3d-1: an ORDINARY zen.Activated-shaped message is still answerable — the "
+          "distinction is provenance, not payload type") {
+    // The correction must not spread by SHAPE. A weave that legitimately holds
+    // the grant may send `zen.Activated` as ordinary speech; that message is not
+    // a lifecycle fact (it carries no attestation, and the consumer ignores it
+    // as one) but it IS an ordinary delivery from a real sender — so the
+    // recipient may answer it exactly as it may answer anything else.
+    Switchboard bus;
+    Registered sender = register_probe(bus, {pong_schema()});
+    Registered target = register_probe(bus, {schema_of<loom::Activated>()});
+
+    bool answered = false;
+    bool attested = false;
+    target.weave->on_handle = [&answered, &attested](const Message& in, Bus& b, ProbeWeave&) {
+        attested = in.provenance.lifecycle_activation();
+        answered = b.answer(Message(pong(1))).valid();
+    };
+
+    bus.send_as(sender.id, target.id, Message(to_value(loom::Activated{1}), sender.id,
+                                              sender.id, 7));
+    bus.pump();
+
+    CHECK_FALSE(attested);  // not a lifecycle fact...
+    CHECK(answered);        // ...and still an ordinary question, answerable
+    REQUIRE(sender.weave->handled_names.size() == 1);
+    CHECK(sender.weave->handled_names[0] == "Pong");
+}
+
+TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library seam") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel);
+    auto log = watch(bus, d.candidate);
+    REQUIRE(d.ask(bus) == "v1");
+
+    const TxnId t = dyn_ready(bus, d);
+    const std::size_t heard_before = d.log->heard.size();
+    const std::size_t deliveries_before = log->delivery_mark();
+    const std::size_t refusals_before = log->refusal_mark();
+
+    REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{6})), 6)
+                .ok);
+    bus.pump();
+
+    // The activation is authentic, first, and exactly once.
+    CHECK(state_field(bus, d.candidate, "activations") == 1);
+    CHECK(state_field(bus, d.candidate, "last_activation") == 6);
+    const std::vector<std::string> live = log->delivered_since(deliveries_before);
+    REQUIRE(live.size() >= 1);
+    CHECK(live[0] == std::string(loom::Activated::zen_name));
+    no_activation_refusal(*log, d.candidate, refusals_before, deliveries_before);
+
+    // ANSWER: refused, and that verdict is REAL across the seam — R2B-3b-1a gave
+    // the dynamic `answer`/`defer_answer` doors genuine success/failure, so a
+    // zero here is the host refusing rather than the ABI shrugging. (An ordinary
+    // `send` is the one that always returns an invalid ticket, which is why
+    // `act_send` records only that the handler got that far; its ARRIVAL is
+    // judged below, from what the coordinator was actually handed.)
+    CHECK(state_field(bus, d.candidate, "act_answer") == 0);
+    CHECK(state_field(bus, d.candidate, "act_defer") == 0);
+    CHECK(state_field(bus, d.candidate, "act_send") == 1);
+
+    // The credulous coordinator heard exactly one thing from the new service —
+    // its ordinary speech — and Loom never called anything it received an answer.
+    std::vector<std::string> heard;
+    for (std::size_t i = heard_before; i < d.log->heard.size(); ++i) {
+        heard.push_back(d.log->heard[i]);
+    }
+    REQUIRE(heard.size() == 1);
+    CHECK(heard[0] == std::string(versioned::ActivationObserved::zen_name));
+    CHECK(d.log->answers_ask_deliveries == 1); // the readiness answer, and nothing else
+
+    // A LATER REAL ASK IS ANSWERED NORMALLY — production works, which is also
+    // the proof that the correction is per-delivery rather than a mute weave.
+    CHECK(d.ask(bus) == "v2");
+    // ...and the capability the activation kept still could not be spent.
+    CHECK(state_field(bus, d.candidate, "act_late_spend") == 0);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

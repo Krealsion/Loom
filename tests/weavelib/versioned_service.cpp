@@ -59,6 +59,13 @@ std::shared_ptr<const Schema> state_schema() {
                               .field("escapes", Kind::Int)
                               .field("retired", Kind::Int)
                               .field("token", Kind::Int)
+                              // R2B-3d-1: what the activation handler tried, and
+                              // what it got. Recorded rather than asserted here —
+                              // the fixture attempts, the suite judges.
+                              .field("act_answer", Kind::Int)
+                              .field("act_defer", Kind::Int)
+                              .field("act_send", Kind::Int)
+                              .field("act_late_spend", Kind::Int)
                               .field("plan", Kind::Text)
                               .build();
     return s;
@@ -96,6 +103,41 @@ public:
             }
             ++activations_;
             last_activation_ = claimed;
+
+            // ---- R2B-3d-1: FIRST BREATH IS NOT A QUESTION --------------------
+            //
+            // The fixture is the hostile witness again, and this is the whole
+            // attack surface in three lines. It TRIES, from inside an accepted
+            // activation, everything a delivery that had been an ask would
+            // grant — and then does the one thing that is genuinely still its
+            // right. Whether any of them worked is recorded, never judged here:
+            // a fixture that declined to try would pass this proof by not
+            // testing it.
+            //
+            // 1. answer the question nobody asked
+            versioned::VersionReply forged;
+            forged.version = kVersion;
+            act_answer_ = bus.answer(Message(to_value(forged))).valid();
+            // 2. keep an answer right for later
+            activation_pending_ = bus.make_deferred_answer();
+            act_defer_ = activation_pending_.valid();
+            // 3. ...and ORDINARY DOMAIN SPEECH, to the very weave whose
+            //    imaginary question it was just refused. This must work: not
+            //    being answerable is not being mute.
+            //
+            // RECORDED AS "ATTEMPTED", NOT "SUCCEEDED", and the distinction is
+            // the seam's rather than this phase's: the library side of an
+            // ordinary `send` returns `Ticket{}` ALWAYS — the C ABI carries no
+            // bus seq back — so `.valid()` here would be false even on a perfect
+            // delivery. (`answer` and `defer_answer` are different: R2B-3b-1a
+            // gave them real success/failure across the seam, which is exactly
+            // why the two fields above ARE verdicts.) Whether this arrived is
+            // the SUITE's to judge, from what the coordinator was handed.
+            versioned::ActivationObserved note;
+            note.sequence = claimed;
+            note.version = kVersion;
+            (void)bus.send(in.sender, Message(to_value(note)));
+            act_send_ = true; // the handler got this far, having been refused twice
             return;
         }
 
@@ -111,6 +153,18 @@ public:
             // THE PRODUCTION ANSWER, and it is a real authenticated answer across
             // the dynamic seam (ABI v4). A sealed candidate never reaches this
             // line, because no `QueryVersion` can reach a sealed candidate.
+            //
+            // R2B-3d-1: before answering the REAL question, try once more to
+            // spend whatever the activation handed back. Nothing it kept may
+            // become valid later — an invalid capability is invalid forever, not
+            // merely at the moment it was refused.
+            if (!activation_spend_tried_) {
+                activation_spend_tried_ = true;
+                versioned::VersionReply late;
+                late.version = kVersion;
+                act_late_spend_ =
+                    bus.spend_deferred(activation_pending_, Message(to_value(late))).valid();
+            }
             ++served_;
             versioned::VersionReply reply;
             reply.version = kVersion;
@@ -188,6 +242,10 @@ public:
         v.set("escapes", Cell::integer(escapes_));
         v.set("retired", Cell::integer(retired_ ? 1 : 0));
         v.set("token", Cell::integer(static_cast<std::int64_t>(pending_.opaque_token())));
+        v.set("act_answer", Cell::integer(act_answer_ ? 1 : 0));
+        v.set("act_defer", Cell::integer(act_defer_ ? 1 : 0));
+        v.set("act_send", Cell::integer(act_send_ ? 1 : 0));
+        v.set("act_late_spend", Cell::integer(act_late_spend_ ? 1 : 0));
         v.set("plan", Cell::text(plan_));
         return v;
     }
@@ -209,6 +267,10 @@ public:
         last_activation_ = state.get("last_activation")->as_int();
         escapes_ = state.get("escapes")->as_int();
         retired_ = state.get("retired")->as_int() != 0;
+        act_answer_ = state.get("act_answer")->as_int() != 0;
+        act_defer_ = state.get("act_defer")->as_int() != 0;
+        act_send_ = state.get("act_send")->as_int() != 0;
+        act_late_spend_ = state.get("act_late_spend")->as_int() != 0;
         plan_ = std::string(state.get("plan")->as_text());
         // THE SUCCESSOR INHERITS THE NUMBER AND BELIEVES IT HOLDS A CAPABILITY.
         // It is entitled to nothing, and the board — never this fixture — is what
@@ -273,9 +335,18 @@ private:
     bool deferred_ = false;
     bool answered_ = false;
     bool retired_ = false;
+    /// R2B-3d-1: what the activation handler's three attempts returned.
+    bool act_answer_ = false;
+    bool act_defer_ = false;
+    bool act_send_ = false;
+    bool act_late_spend_ = false;
+    bool activation_spend_tried_ = false;
     std::string plan_;
     WeaveId coordinator_{};
     loom::DeferredAnswer pending_{};
+    /// Whatever the activation's `defer_answer()` handed back. It must never
+    /// become spendable — kept precisely so the suite can watch it fail.
+    loom::DeferredAnswer activation_pending_{};
 };
 
 } // namespace

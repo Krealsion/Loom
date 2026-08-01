@@ -1405,17 +1405,37 @@ void Switchboard::deliver_admission(Envelope env) {
     }
 
     // ---- 6. the candidate's first breath -------------------------------------
+    //
+    // AND IT IS NOT A QUESTION (R2B-3d-1). The delivery context below is set by
+    // hand rather than by copying `deliver_one`'s, and the difference is the one
+    // field that is deliberately absent: THERE IS NO REPLY AUTHORITY.
+    //
+    // R2B-3d built this in the ordinary path's image, which fabricated a
+    // requester: the stamped sender is the OPERATOR that admitted this
+    // candidate, not a weave that asked it anything, so an authority naming it
+    // would have let a candidate answer a request nobody made — and `answer()`
+    // would have queued a real, provenance-carrying answer to a coordinator that
+    // never spoke. The same contradiction the phase closed for the activation's
+    // authority, one level down.
+    //
+    // It needs no new machinery, because the model already has this category:
+    // `answer_as` and `defer_answer_as` both refuse when there is no valid
+    // requester — the case they document as "the request came from a root, so
+    // there is no requester to answer". Loom's own act belongs in exactly that
+    // category. `answer()` therefore queues nothing and refuses visibly, and
+    // `defer_answer()` returns an invalid capability BEFORE the deferred
+    // registry is touched, so no bounded capacity is consumed.
+    //
+    // Everything truthful is kept. `current_target_` still names the exact
+    // candidate, so the bus still knows who is being dispatched; the delivery
+    // facts still describe what this delivery IS (not an answer, from this
+    // admitter, no conversation); and the attestation on the message is
+    // untouched, so activation is still authentic and still exactly once.
+    // Ordinary sends are unaffected — they never consulted this.
     Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
     current_target_ = env.target;
-    const WeaveRecord* asker = find(env.msg.sender);
-    authority_ = ReplyAuthority{env.msg.sender,
-                                env.msg.correlation,
-                                /*spent=*/false,
-                                trusted.payload.schema_ptr(),
-                                asker == nullptr ? 0 : asker->life,
-                                asker == nullptr ? 0 : asker->incarnation,
-                                TxnId{}};
+    authority_ = ReplyAuthority{};
     delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
                               env.msg.correlation, TxnId{}};
     WeaveBus weave_bus(*this, env.target);

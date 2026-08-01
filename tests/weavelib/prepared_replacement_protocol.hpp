@@ -85,6 +85,18 @@ struct CandidateRefused {
     ZEN_SHAPE(CandidateRefused, 1, ZEN_FIELD(transaction), ZEN_FIELD(reason));
 };
 
+/// ORDINARY DOMAIN SPEECH FROM INSIDE AN ACTIVATION (R2B-3d-1). The positive
+/// control that keeps "activation is not answerable" from quietly meaning
+/// "activation is mute": a freshly admitted candidate has no answer authority
+/// and still has every ordinary right its grant gives it, so it says something
+/// on its own initiative, to the very weave whose imaginary question it was just
+/// refused permission to answer.
+struct ActivationObserved {
+    std::int64_t sequence = 0;
+    std::string version;
+    ZEN_SHAPE(ActivationObserved, 1, ZEN_FIELD(sequence), ZEN_FIELD(version));
+};
+
 /// The private retirement word a coordinator says to an incumbent it has just
 /// sealed. Part of the fixture, not of Loom: retirement is a conversation the
 /// operator owns, and the substrate's only part in it is that a sealed weave can
