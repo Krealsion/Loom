@@ -5,6 +5,7 @@
 
 #include <zen/gate.hpp>
 #include <zen/host/lifecycle_wiring.hpp>
+#include <zen/host/prepared_replacement.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/serialize.hpp>
 #include <zen/weave/lifecycle.hpp>
@@ -15,6 +16,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace loom;
@@ -3177,8 +3180,13 @@ struct DynCast {
 /// `coordinator_grant` is a parameter because R2B-3d's keystone case is a
 /// coordinator that CANNOT emit `zen.Activated` — the exact grant shape that used
 /// to commit successfully and leave its candidate untold.
+///
+/// `with_candidate=false` loads only the incumbent (R2B-4a): the facade vertical
+/// must load its own candidate through the handle, or it would be proving the
+/// rig's plumbing instead of the handle's.
 DynCast load_pair(Switchboard& bus, Kernel& kernel,
-                  Grant coordinator_grant = Grant{}.allow_any()) {
+                  Grant coordinator_grant = Grant{}.allow_any(),
+                  bool with_candidate = true) {
     DynCast d{register_probe(bus, {pong_schema()}),
               register_probe(bus,
                              {schema_of<versioned::CandidateReady>(),
@@ -3229,9 +3237,11 @@ DynCast load_pair(Switchboard& bus, Kernel& kernel,
     LoadResult v1 = kernel.load("v1", ZEN_SO_VERSIONED_V1, kService);
     REQUIRE(v1.ok);
     d.incumbent = v1.id;
-    LoadResult v2 = kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id);
-    REQUIRE(v2.ok);
-    d.candidate = v2.id;
+    if (with_candidate) {
+        LoadResult v2 = kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id);
+        REQUIRE(v2.ok);
+        d.candidate = v2.id;
+    }
     return d;
 }
 
@@ -5343,6 +5353,712 @@ TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library se
     CHECK(d.ask(bus) == "v2");
     // ...and the capability the activation kept still could not be spent.
     CHECK(state_field(bus, d.candidate, "act_late_spend") == 0);
+}
+
+// ---- R2B-4a: one good handle ------------------------------------------------
+//
+// The substrate is complete; this is its authoring surface. `loom::
+// PreparedReplacement` composes the accepted primitives — it validates nothing
+// twice, caches nothing, decides nothing, and every one of its operations
+// visibly delegates. What these cases prove is exactly that: the sugar removed
+// the plumbing (id-carrying, authority wiring, cleanup branches) and removed
+// NOTHING else — not a state, not a refusal reason, not a decision.
+
+namespace {
+
+// The handle is honest about what it is at compile time: bound to a host
+// context at construction, never copied, moveable.
+static_assert(!std::is_copy_constructible_v<PreparedReplacement>);
+static_assert(!std::is_copy_assignable_v<PreparedReplacement>);
+static_assert(!std::is_default_constructible_v<PreparedReplacement>);
+static_assert(std::is_move_constructible_v<PreparedReplacement>);
+static_assert(std::is_move_assignable_v<PreparedReplacement>);
+
+/// The coordinator behaviour a facade author actually writes: when the
+/// candidate's domain answer arrives, OFFER the delivery being handled to the
+/// handle's gate and let the bus judge. The payload's `transaction` field is
+/// deliberately never read — the R2B-4a question, answered in the affirmative:
+/// domain payloads need no transaction id, because the bus (not the payload)
+/// proves which conversation an answer belongs to. `which` is a pointer so a
+/// test can retarget the same coordinator at a second replacement.
+void offer_through(DynCast& d, PreparedReplacement*& which, std::vector<TxnResult>& offers) {
+    d.coordinator.weave->on_handle = [&which, &offers](const Message& in, Bus&, ProbeWeave&) {
+        const std::string_view shape = in.payload.schema().name();
+        if (shape == std::string_view(versioned::CandidateReady::zen_name)) {
+            offers.push_back(which->offer_current_answer(PreparationAnswer::Ready));
+        } else if (shape == std::string_view(versioned::CandidateRefused::zen_name)) {
+            offers.push_back(which->offer_current_answer(PreparationAnswer::Refused));
+        }
+    };
+}
+
+/// A native sealed candidate for the existing-candidate road: accepts the
+/// activation contract plus Ping (the preparation ask), and authentically
+/// answers Pong to any ask it hears.
+WeaveId native_candidate(Switchboard& bus, WeaveId coordinator, ProbeWeave** raw_out = nullptr) {
+    auto weave = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
+        schema_of<loom::Activated>(), ping_schema()});
+    weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == std::string_view("Ping")) {
+            (void)b.answer(Message(pong(in.payload.get("seq")->as_int())));
+        }
+    };
+    if (raw_out != nullptr) {
+        *raw_out = weave.get();
+    }
+    const WeaveId id = bus.register_weave(std::move(weave), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(id, coordinator));
+    return id;
+}
+
+} // namespace
+
+TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement drives only the "
+          "handle, and the substrate underneath is unchanged") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+
+    // 1. v1 is the live service.
+    REQUIRE(d.ask(bus) == "v1");
+
+    // 2-3. One handle; the dynamic candidate starts THROUGH it. No raw
+    // prepared-replacement call appears anywhere in this case.
+    PreparedReplacement upgrade(bus, kernel);
+    CHECK_FALSE(upgrade.started());
+    const PreparedReplacement::StartResult started = upgrade.start({
+        .operator_id = d.op.id,
+        .coordinator = d.coordinator.id,
+        .role = kService,
+        .candidate_name = "v2",
+        .candidate_path = ZEN_SO_VERSIONED_V2,
+        .budget = 16,
+    });
+    REQUIRE_MESSAGE(started.ok, "stage=", static_cast<int>(started.stage), " ", started.error);
+    REQUIRE(upgrade.started());
+    d.candidate = upgrade.candidate();
+    auto log = watch(bus, upgrade.candidate());
+
+    // 4-5. The candidate is genuinely sealed; the incumbent — resolved from the
+    // role by the facade, never supplied — still serves.
+    CHECK(bus.sealed(upgrade.candidate()));
+    CHECK(upgrade.incumbent() == d.incumbent);
+    CHECK(upgrade.role() == kService);
+    CHECK(upgrade.candidate_name() == "v2");
+    CHECK(upgrade.state() == TxnState::Preparing);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // 6-8. The ask goes through the handle — the payload carries NO transaction
+    // id — and the coordinator offers the delivery it is handling to the gate.
+    PreparedReplacement* live_handle = &upgrade;
+    std::vector<TxnResult> offers;
+    offer_through(d, live_handle, offers);
+    versioned::PrepareReplacement ask;
+    ask.plan = "ready";
+    ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
+    REQUIRE(upgrade.ask(ask).ok);
+    bus.pump(); // pumping is always the caller's
+
+    // 9-10. Real Ready — the handle's word is the Switchboard's word — and the
+    // incumbent still serves.
+    REQUIRE(offers.size() == 1);
+    CHECK(offers[0].ok);
+    CHECK(upgrade.state() == TxnState::Ready);
+    CHECK(bus.transaction_state(upgrade.id()) == TxnState::Ready);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // 11-13. Commit means SCHEDULED. Production is queued first so ordering is
+    // observable; after commit the world is untouched until the dispatch.
+    bus.send_as_to_role(d.observer.id, kService,
+                        Message(to_value(versioned::QueryVersion{9}), d.observer.id,
+                                d.observer.id, 0));
+    const std::size_t deliveries_before = log->delivery_mark();
+    REQUIRE(upgrade.commit(41).ok);
+    CHECK(upgrade.state() == TxnState::AdmissionPending);
+    CHECK(bus.transaction_state(upgrade.id()) == TxnState::AdmissionPending);
+    CHECK(bus.role_holder(kService) == d.incumbent);
+    CHECK(bus.sealed(upgrade.candidate()));
+    CHECK_FALSE(bus.sealed(d.incumbent));
+    CHECK_FALSE(upgrade.take_outcome().has_value()); // nothing has ended
+
+    // 14-17. One EXTERNAL pump: activation first, then the queued production;
+    // the role moves; v2 serves.
+    bus.pump();
+    const std::vector<std::string> live = log->delivered_since(deliveries_before);
+    REQUIRE(live.size() >= 2);
+    CHECK(live[0] == std::string(loom::Activated::zen_name));
+    CHECK(live[1] == std::string(versioned::QueryVersion::zen_name));
+    CHECK(bus.role_holder(kService) == upgrade.candidate());
+    CHECK(state_field(bus, upgrade.candidate(), "activations") == 1);
+    CHECK(state_field(bus, upgrade.candidate(), "last_activation") == 41);
+    CHECK(d.ask(bus) == "v2");
+
+    // 18-20. Exactly one Committed outcome, consumed once; the raw state agrees;
+    // and the handle's incumbent is the one that was BOUND, not a re-resolution
+    // of a role that has since moved on.
+    const std::optional<TxnOutcome> outcome = upgrade.take_outcome();
+    REQUIRE(outcome.has_value());
+    CHECK(outcome->id == upgrade.id());
+    CHECK(outcome->state == TxnState::Committed);
+    CHECK(outcome->reason == TxnReason::None);
+    CHECK_FALSE(upgrade.take_outcome().has_value());
+    CHECK(upgrade.incumbent() == d.incumbent);
+    CHECK(bus.sealed(d.incumbent)); // retirement-private, exactly as the raw law says
+}
+
+TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's side") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+    REQUIRE(d.ask(bus) == "v1");
+
+    PreparedReplacement upgrade(bus, kernel);
+    REQUIRE(upgrade.start({
+        .operator_id = d.op.id,
+        .coordinator = d.coordinator.id,
+        .role = kService,
+        .candidate_name = "v2",
+        .candidate_path = ZEN_SO_VERSIONED_V2,
+        .budget = 16,
+    }).ok);
+    d.candidate = upgrade.candidate();
+
+    // THE SAME COORDINATOR CODE as the immediate case — that is the assertion.
+    PreparedReplacement* live_handle = &upgrade;
+    std::vector<TxnResult> offers;
+    offer_through(d, live_handle, offers);
+
+    versioned::PrepareReplacement ask;
+    ask.plan = "defer";
+    ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
+    REQUIRE(upgrade.ask(ask).ok);
+    bus.pump();
+
+    // The candidate took the answer right away with it: no answer yet, budget
+    // spendable while it works, the transaction honestly still Preparing.
+    CHECK(offers.empty());
+    CHECK(upgrade.state() == TxnState::Preparing);
+    CHECK(state_field(bus, upgrade.candidate(), "deferred") == 1);
+    REQUIRE(upgrade.tick().ok);
+
+    // The continuation is ordinary coordinator speech (application vocabulary,
+    // not a transaction operation) — and the answer it produces reaches the
+    // SAME hook, which offers it the same way.
+    bus.send_as(d.coordinator.id, upgrade.candidate(),
+                Message(to_value(versioned::ContinuePreparation{})));
+    bus.pump();
+    REQUIRE(offers.size() == 1);
+    CHECK(offers[0].ok);
+    CHECK(upgrade.state() == TxnState::Ready);
+    REQUIRE(d.ask(bus) == "v1"); // readiness is not admission
+
+    REQUIRE(upgrade.commit(7).ok);
+    bus.pump();
+    CHECK(d.ask(bus) == "v2");
+    const std::optional<TxnOutcome> outcome = upgrade.take_outcome();
+    REQUIRE(outcome.has_value());
+    CHECK(outcome->state == TxnState::Committed);
+}
+
+TEST_CASE("R2B-4a: the candidate's refusal arrives whole — reason, cleanup, and a serving "
+          "incumbent, with no facade interpretation on top") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+    REQUIRE(d.ask(bus) == "v1");
+
+    PreparedReplacement upgrade(bus, kernel);
+    REQUIRE(upgrade.start({
+        .operator_id = d.op.id,
+        .coordinator = d.coordinator.id,
+        .role = kService,
+        .candidate_name = "v2",
+        .candidate_path = ZEN_SO_VERSIONED_V2,
+        .budget = 16,
+    }).ok);
+    d.candidate = upgrade.candidate();
+    PreparedReplacement* live_handle = &upgrade;
+    std::vector<TxnResult> offers;
+    offer_through(d, live_handle, offers);
+
+    versioned::PrepareReplacement ask;
+    ask.plan = "refuse";
+    ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
+    REQUIRE(upgrade.ask(ask).ok);
+    bus.pump();
+
+    // The candidate said no, authentically; the transaction ended once with the
+    // candidate's OWN reason; the substrate discarded the candidate and released
+    // its artifact; the incumbent never learned any of it happened.
+    REQUIRE(offers.size() == 1);
+    CHECK(offers[0].ok);
+    CHECK(offers[0].why == TxnReason::CandidateRefused);
+    CHECK(upgrade.state() == TxnState::Aborted);
+    const std::optional<TxnOutcome> outcome = upgrade.take_outcome();
+    REQUIRE(outcome.has_value());
+    CHECK(outcome->state == TxnState::Aborted);
+    CHECK(outcome->reason == TxnReason::CandidateRefused); // never flattened
+    CHECK_FALSE(upgrade.take_outcome().has_value());
+    CHECK_FALSE(kernel.is_loaded("v2"));
+    CHECK(kernel.status("v2") == ArtifactStatus::NotLoaded);
+    CHECK(bus.role_holder(kService) == d.incumbent);
+    CHECK(d.ask(bus) == "v1");
+}
+
+TEST_CASE("R2B-4a: the start-failure ladder — every rung leaves the world exactly as it was") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    SUBCASE("nobody holds the role: refused before anything loads") {
+        Registered coordinator = register_probe(bus, {pong_schema()});
+        Registered op = register_probe(bus, {pong_schema()});
+        PreparedReplacement upgrade(bus, kernel);
+        const auto r = upgrade.start({
+            .operator_id = op.id,
+            .coordinator = coordinator.id,
+            .role = "nobody.holds.this",
+            .candidate_name = "v2",
+            .candidate_path = ZEN_SO_VERSIONED_V2,
+            .budget = 8,
+        });
+        CHECK_FALSE(r.ok);
+        CHECK(r.stage == PreparedReplacement::StartStage::NoRoleHolder);
+        CHECK_FALSE(kernel.is_loaded("v2")); // never loaded, so never leaked
+        CHECK(bus.active_transactions() == 0);
+        CHECK_FALSE(upgrade.started());
+    }
+
+    SUBCASE("the artifact refuses to load: the loader's words survive, no transaction exists") {
+        DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+        PreparedReplacement upgrade(bus, kernel);
+        const auto r = upgrade.start({
+            .operator_id = d.op.id,
+            .coordinator = d.coordinator.id,
+            .role = kService,
+            .candidate_name = "v2",
+            .candidate_path = "/nonexistent/not-a-service.so",
+            .budget = 8,
+        });
+        CHECK_FALSE(r.ok);
+        CHECK(r.stage == PreparedReplacement::StartStage::CandidateLoad);
+        CHECK_FALSE(r.error.empty()); // the loader's own words, not "start failed"
+        CHECK(bus.active_transactions() == 0);
+        CHECK_FALSE(kernel.is_loaded("v2"));
+        CHECK(d.ask(bus) == "v1");
+    }
+
+    SUBCASE("begin refuses after a successful load: the candidate is removed exactly once and "
+            "the name is reusable") {
+        DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+        // A REAL refusal road: somebody is already replacing this incumbent.
+        ProbeWeave* other_raw = nullptr;
+        const WeaveId other = native_candidate(bus, d.coordinator.id, &other_raw);
+        PreparedReplacement occupier(bus);
+        REQUIRE(occupier.start_existing({
+            .operator_id = d.op.id,
+            .coordinator = d.coordinator.id,
+            .role = kService,
+            .candidate = other,
+            .budget = 8,
+        }).ok);
+
+        LifetimeDelta cleanup;
+        PreparedReplacement upgrade(bus, kernel);
+        const auto r = upgrade.start({
+            .operator_id = d.op.id,
+            .coordinator = d.coordinator.id,
+            .role = kService,
+            .candidate_name = "v2",
+            .candidate_path = ZEN_SO_VERSIONED_V2,
+            .budget = 8,
+        });
+        CHECK_FALSE(r.ok);
+        CHECK(r.stage == PreparedReplacement::StartStage::BeginTransaction);
+        CHECK(r.begin_reason == TxnReason::IncumbentBusy); // the substrate's exact reason
+        CHECK_FALSE(r.cleanup_failed);
+        CHECK_FALSE(upgrade.started());
+        // Removed exactly once: one instance created and one destroyed, one
+        // library opened and one closed — the whole failed start, measured.
+        CHECK(cleanup.created() == 1);
+        CHECK(cleanup.destroyed() == 1);
+        CHECK(cleanup.opened() == 1);
+        CHECK(cleanup.closed() == 1);
+        artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
+        const LoadResult again = kernel.load("v2", ZEN_SO_VERSIONED_V2);
+        REQUIRE(again.ok); // the name is genuinely reusable...
+        REQUIRE(kernel.unload("v2"));
+        CHECK(d.ask(bus) == "v1"); // ...and the incumbent never noticed anything
+    }
+
+    SUBCASE("begin refuses around a candidate the CALLER brought: the facade destroys nothing") {
+        DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+        Registered other_coordinator = register_probe(bus, {pong_schema()});
+        // Sealed to a DIFFERENT coordinator than the transaction names — a
+        // representable coordinator mismatch, refused by begin.
+        const WeaveId candidate = native_candidate(bus, other_coordinator.id);
+        PreparedReplacement upgrade(bus);
+        const auto r = upgrade.start_existing({
+            .operator_id = d.op.id,
+            .coordinator = d.coordinator.id,
+            .role = kService,
+            .candidate = candidate,
+            .budget = 8,
+        });
+        CHECK_FALSE(r.ok);
+        CHECK(r.stage == PreparedReplacement::StartStage::BeginTransaction);
+        CHECK(r.begin_reason == TxnReason::CoordinatorChanged);
+        // THE CALLER BROUGHT IT; THE CALLER KEEPS IT. Alive, still sealed to its
+        // real owner, untouched.
+        CHECK(bus.alive(candidate));
+        CHECK(bus.sealed(candidate));
+        CHECK(bus.candidate_owner(candidate).who == other_coordinator.id);
+    }
+}
+
+TEST_CASE("R2B-4a: a delivery offered to the wrong handle refuses, consumes nothing, and the "
+          "right handle still collects it") {
+    // Two concurrent replacements under ONE coordinator — the case that decides
+    // whether the facade's answer surface is genuinely transaction-bound.
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered op = register_probe(bus, {pong_schema()});
+    const WeaveId inc_a = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "role-a");
+    const WeaveId inc_b = bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "role-b");
+    (void)inc_a;
+    (void)inc_b;
+    const WeaveId cand_a = native_candidate(bus, coordinator.id);
+    const WeaveId cand_b = native_candidate(bus, coordinator.id);
+
+    PreparedReplacement a(bus);
+    PreparedReplacement b(bus);
+    REQUIRE(a.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                              .role = "role-a", .candidate = cand_a, .budget = 8}).ok);
+    REQUIRE(b.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                              .role = "role-b", .candidate = cand_b, .budget = 8}).ok);
+
+    // Candidate A answers; inside that ONE delivery the coordinator offers it to
+    // B (wrong), then to A (right), then to A again (spent).
+    std::vector<TxnResult> results;
+    coordinator.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        if (in.payload.schema().name() != std::string_view("Pong")) {
+            return;
+        }
+        results.push_back(b.offer_current_answer(PreparationAnswer::Ready));
+        results.push_back(a.offer_current_answer(PreparationAnswer::Ready));
+        results.push_back(a.offer_current_answer(PreparationAnswer::Ready));
+    };
+    REQUIRE(a.ask(Message(ping(1))).ok);
+    bus.pump();
+
+    REQUIRE(results.size() == 3);
+    CHECK_FALSE(results[0].ok); // the wrong handle...
+    CHECK(results[0].why == TxnReason::InvalidReadiness);
+    CHECK(b.state() == TxnState::Preparing); // ...moved nothing
+    CHECK(results[1].ok); // the wrong offer consumed nothing: the right one lands
+    CHECK(a.state() == TxnState::Ready);
+    // The second offer to A refuses as WrongState, not InvalidReadiness — the
+    // accepted readiness already moved the state machine, and the state check
+    // answers first (the substrate's recorded law, reported rather than bent:
+    // the consumed-conversation term is reachable only when the state did NOT
+    // move, which is the role-drift road R2B-3b-3 pinned).
+    CHECK_FALSE(results[2].ok); // one ask, one answer — the second offer is spent
+    CHECK(results[2].why == TxnReason::WrongState);
+
+    // ...and offered OUTSIDE any delivery, the gate refuses the same way.
+    CHECK(b.offer_current_answer(PreparationAnswer::Ready).why == TxnReason::InvalidReadiness);
+}
+
+TEST_CASE("R2B-4a: two handles, one operator — each collects exactly its own outcome") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered op = register_probe(bus, {pong_schema()});
+    (void)bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "role-a");
+    (void)bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "role-b");
+    const WeaveId cand_a = native_candidate(bus, coordinator.id);
+    const WeaveId cand_b = native_candidate(bus, coordinator.id);
+
+    PreparedReplacement a(bus);
+    PreparedReplacement b(bus);
+    REQUIRE(a.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                              .role = "role-a", .candidate = cand_a, .budget = 8}).ok);
+    REQUIRE(b.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                              .role = "role-b", .candidate = cand_b, .budget = 8}).ok);
+
+    // B ends first. A — same operator — must see NOTHING: not B's outcome, and
+    // no outcome of its own, because A has not ended.
+    REQUIRE(b.abort().ok);
+    CHECK_FALSE(a.take_outcome().has_value());
+    const std::optional<TxnOutcome> b_out = b.take_outcome();
+    REQUIRE(b_out.has_value()); // B's result was still there to collect
+    CHECK(b_out->id == b.id());
+    CHECK(b_out->reason == TxnReason::ExplicitAbort);
+
+    REQUIRE(a.abort().ok);
+    const std::optional<TxnOutcome> a_out = a.take_outcome();
+    REQUIRE(a_out.has_value());
+    CHECK(a_out->id == a.id());
+    CHECK_FALSE(a.take_outcome().has_value()); // consumed once, each
+}
+
+TEST_CASE("R2B-4a: dropping a live handle changes nothing — a scope is not a lifecycle decision") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+    REQUIRE(d.ask(bus) == "v1");
+
+    TxnId id{};
+    WeaveId candidate{};
+    {
+        PreparedReplacement upgrade(bus, kernel);
+        REQUIRE(upgrade.start({
+            .operator_id = d.op.id,
+            .coordinator = d.coordinator.id,
+            .role = kService,
+            .candidate_name = "v2",
+            .candidate_path = ZEN_SO_VERSIONED_V2,
+            .budget = 8,
+        }).ok);
+
+        // Move once: the binding travels whole, and the source is unbound.
+        PreparedReplacement moved = std::move(upgrade);
+        CHECK_FALSE(upgrade.started());
+        CHECK(moved.started());
+        id = moved.id();
+        candidate = moved.candidate();
+        CHECK(moved.state() == TxnState::Preparing);
+        // ...and the moved-into handle is dropped here, live, with no abort call.
+    }
+
+    // No hidden abort, no hidden unload, no hidden pump: the transaction and its
+    // candidate are exactly as the Switchboard says, and the queue is untouched.
+    CHECK(bus.transaction_active(id));
+    CHECK(bus.transaction_state(id) == TxnState::Preparing);
+    CHECK(bus.sealed(candidate));
+    CHECK(kernel.is_loaded("v2"));
+    CHECK(bus.pending() == 0);
+    CHECK(d.ask(bus) == "v1");
+
+    // Explicit teardown, through the raw trusted surface this time.
+    REQUIRE(bus.abort_prepared_replacement(id, d.op.id).ok);
+    TxnOutcome out{};
+    REQUIRE(bus.take_outcome(d.op.id, out));
+    CHECK(out.id == id);
+    CHECK_FALSE(kernel.is_loaded("v2")); // the SUBSTRATE discarded it, as its law says
+}
+
+TEST_CASE("R2B-4a: the handle's state is the Switchboard's, under every mutation the facade "
+          "never saw coming") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+    PreparedReplacement upgrade(bus, kernel);
+    REQUIRE(upgrade.start({
+        .operator_id = d.op.id,
+        .coordinator = d.coordinator.id,
+        .role = kService,
+        .candidate_name = "v2",
+        .candidate_path = ZEN_SO_VERSIONED_V2,
+        .budget = 16,
+    }).ok);
+    REQUIRE(upgrade.state() == TxnState::Preparing);
+
+    SUBCASE("the coordinator dies underneath it") {
+        bus.kill(d.coordinator.id);
+        CHECK(upgrade.state() == TxnState::Aborted); // immediately, no refresh call
+        const auto out = upgrade.take_outcome();
+        REQUIRE(out.has_value());
+        CHECK(out->reason == TxnReason::CoordinatorChanged);
+    }
+    SUBCASE("the candidate is reloaded underneath it") {
+        REQUIRE(bus.swap_state(upgrade.candidate(),
+                               bus.snapshot_bytes(upgrade.candidate())).revived);
+        CHECK(upgrade.state() == TxnState::Aborted);
+        const auto out = upgrade.take_outcome();
+        REQUIRE(out.has_value());
+        CHECK(out->reason == TxnReason::CandidateChanged);
+    }
+    SUBCASE("the transaction is aborted through the RAW surface") {
+        REQUIRE(bus.abort_prepared_replacement(upgrade.id(), d.op.id).ok);
+        CHECK(upgrade.state() == TxnState::Aborted);
+    }
+    SUBCASE("the pending admission dispatches") {
+        PreparedReplacement* live_handle = &upgrade;
+        std::vector<TxnResult> offers;
+        offer_through(d, live_handle, offers);
+        versioned::PrepareReplacement ask;
+        ask.plan = "ready";
+        REQUIRE(upgrade.ask(ask).ok);
+        bus.pump();
+        REQUIRE(upgrade.state() == TxnState::Ready);
+        REQUIRE(upgrade.commit(3).ok);
+        CHECK(upgrade.state() == TxnState::AdmissionPending);
+        bus.pump();
+        CHECK(upgrade.state() == TxnState::Committed); // read straight off the store
+        REQUIRE(upgrade.take_outcome().has_value());
+    }
+}
+
+TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exactly — and gaps "
+          "obey the existing law") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
+    REQUIRE(d.ask(bus) == "v1");
+
+    // First replacement, with a distinctive sequence.
+    PreparedReplacement first(bus, kernel);
+    REQUIRE(first.start({
+        .operator_id = d.op.id,
+        .coordinator = d.coordinator.id,
+        .role = kService,
+        .candidate_name = "v2",
+        .candidate_path = ZEN_SO_VERSIONED_V2,
+        .budget = 8,
+    }).ok);
+    d.candidate = first.candidate();
+    PreparedReplacement* live_handle = &first;
+    std::vector<TxnResult> offers;
+    offer_through(d, live_handle, offers);
+    versioned::PrepareReplacement ask;
+    ask.plan = "ready";
+    REQUIRE(first.ask(ask).ok);
+    bus.pump();
+    REQUIRE(first.state() == TxnState::Ready);
+    REQUIRE(first.commit(31337).ok);
+    bus.pump();
+    CHECK(d.ask(bus) == "v2");
+    // The candidate observed EXACTLY the caller's number, through the same
+    // attested-sequence check the Zengine cursor applies.
+    CHECK(state_field(bus, first.candidate(), "activations") == 1);
+    CHECK(state_field(bus, first.candidate(), "last_activation") == 31337);
+    REQUIRE(first.take_outcome().has_value());
+
+    // Second replacement over the NEW incumbent — the facade re-resolves the
+    // role at ITS start, finding v2 — with a gapped higher sequence. Gaps are
+    // legal (the existing law), and the facade neither invents nor reuses.
+    PreparedReplacement second(bus, kernel);
+    REQUIRE(second.start({
+        .operator_id = d.op.id,
+        .coordinator = d.coordinator.id,
+        .role = kService,
+        .candidate_name = "v2b",
+        .candidate_path = ZEN_SO_VERSIONED_V2,
+        .budget = 8,
+    }).ok);
+    CHECK(second.incumbent() == first.candidate()); // v2 is the incumbent now
+    live_handle = &second;
+    REQUIRE(second.ask(ask).ok);
+    bus.pump();
+    REQUIRE(second.state() == TxnState::Ready);
+    REQUIRE(second.commit(31400).ok);
+    bus.pump();
+    CHECK(state_field(bus, second.candidate(), "last_activation") == 31400);
+    REQUIRE(second.take_outcome().has_value());
+}
+
+TEST_CASE("R2B-4a: the budget is the author's, one unit per tick, and nothing ticks it secretly") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered op = register_probe(bus, {pong_schema()});
+    (void)bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+    const WeaveId candidate = native_candidate(bus, coordinator.id);
+
+    SUBCASE("exactly one unit per tick") {
+        PreparedReplacement r(bus);
+        REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                                  .role = "worker", .candidate = candidate, .budget = 2}).ok);
+        REQUIRE(r.tick().ok);                                  // 2 -> 1
+        const TxnResult exhausted = r.tick();                  // 1 -> 0: aborts
+        CHECK_FALSE(exhausted.ok);
+        CHECK(exhausted.why == TxnReason::PreparationExhausted); // still visible, still exact
+        CHECK(r.state() == TxnState::Aborted);
+    }
+    SUBCASE("a budget of one survives the whole ceremony: nothing else spends it") {
+        PreparedReplacement r(bus);
+        REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                                  .role = "worker", .candidate = candidate, .budget = 1}).ok);
+        std::vector<TxnResult> offers;
+        coordinator.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+            if (in.payload.schema().name() == std::string_view("Pong")) {
+                offers.push_back(r.offer_current_answer(PreparationAnswer::Ready));
+            }
+        };
+        REQUIRE(r.ask(Message(ping(1))).ok);
+        bus.pump();
+        REQUIRE(offers.size() == 1);
+        REQUIRE(offers[0].ok);
+        // Ask, delivery, answer, offer, readiness — and the one budget unit is
+        // still there, because none of those is a tick.
+        CHECK(r.state() == TxnState::Ready);
+        REQUIRE(r.commit(2).ok);
+        bus.pump();
+        REQUIRE(r.take_outcome().has_value());
+    }
+}
+
+TEST_CASE("R2B-4a: every refusal keeps the substrate's own words") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    Registered op = register_probe(bus, {pong_schema()});
+    (void)bus.register_weave(
+        std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
+        Grant{}.allow_any(), "worker");
+    const WeaveId candidate = native_candidate(bus, coordinator.id);
+
+    // An unstarted handle refuses every transaction operation with the
+    // substrate's own word for "there is no such transaction".
+    PreparedReplacement unstarted(bus);
+    CHECK(unstarted.tick().why == TxnReason::NoSuchTransaction);
+    CHECK(unstarted.ask(Message(ping(1))).why == TxnReason::NoSuchTransaction);
+    CHECK(unstarted.commit(1).why == TxnReason::NoSuchTransaction);
+    CHECK(unstarted.abort().why == TxnReason::NoSuchTransaction);
+    CHECK_FALSE(unstarted.take_outcome().has_value());
+
+    PreparedReplacement r(bus);
+    REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                              .role = "worker", .candidate = candidate, .budget = 8}).ok);
+    // A second start on a bound handle refuses as the FACADE's own fact — the
+    // one truth it owns is which transaction it is.
+    const auto again = r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+                                         .role = "worker", .candidate = candidate, .budget = 8});
+    CHECK_FALSE(again.ok);
+    CHECK(again.stage == PreparedReplacement::StartStage::AlreadyStarted);
+    // Dynamic start without a Kernel refuses as itself, too.
+    PreparedReplacement kernel_less(bus);
+    const auto no_kernel = kernel_less.start({.operator_id = op.id,
+                                              .coordinator = coordinator.id,
+                                              .role = "worker",
+                                              .candidate_name = "x",
+                                              .candidate_path = "/nowhere",
+                                              .budget = 8});
+    CHECK_FALSE(no_kernel.ok);
+    CHECK(no_kernel.stage == PreparedReplacement::StartStage::NoKernel);
+
+    // One conversation, exactly: the second ask is the substrate's refusal,
+    // untranslated.
+    REQUIRE(r.ask(Message(ping(1))).ok);
+    CHECK(r.ask(Message(ping(2))).why == TxnReason::PreparationAlreadyAsked);
+
+    // After the transaction ends, the handle's operations answer as the
+    // substrate answers for a transaction that is over.
+    REQUIRE(r.abort().ok);
+    CHECK(r.abort().why == TxnReason::NoSuchTransaction);
+    CHECK(r.commit(1).why == TxnReason::NoSuchTransaction);
+    const auto out = r.take_outcome();
+    REQUIRE(out.has_value());
+    CHECK(out->reason == TxnReason::ExplicitAbort);
 }
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {

@@ -3641,6 +3641,31 @@ moves a role without retiring anything and has never promised an activation —
 still exists and still promises nothing about one. It requires no lifecycle
 authority and is host root authority, like `send`.
 
+### One good handle (R2B-4a)
+
+The substrate above is complete; `loom::PreparedReplacement`
+(`zen/host/prepared_replacement.hpp`) is its authoring surface — a move-only
+host-side handle bound to ONE transaction, composing the accepted primitives and
+adding nothing: no readiness authority (its `offer_current_answer` merely offers
+the delivery being handled to `accept_preparation_answer`, and the Switchboard
+still judges), no cached state (`state()` is `transaction_state(id())` every
+time), no hidden pump/retry/abort (dropping a live handle changes nothing —
+a scope ending is not a lifecycle decision), and no sequence invention (`commit`
+keeps the caller's number and merely spells the standard
+authority-plus-`Activated` wiring a host wrote by hand before).
+
+What it owns is plumbing: the incumbent is resolved from the role once at start
+and bound as an exact life; a dynamic candidate it loaded itself is unloaded
+exactly once if `begin` then refuses (a candidate the caller brought is never
+destroyed by a failed start); the `TxnId` stays inside the handle, so domain
+payloads need no transaction field — the bus, not the payload, proves which
+conversation an answer belongs to. One substrate addition, not a redesign:
+`take_outcome(op, TxnId, out)` narrows the per-operator outcome store to one
+transaction so a handle can never consume a sibling's result — the id narrows
+the question and never widens the authority. The raw primitives remain public,
+supported, and independently tested. The author-facing walkthrough is
+`docs/replacing-a-service-safely.md`.
+
 ---
 
 ## Future seams (designed for, not built)

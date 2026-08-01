@@ -1911,6 +1911,23 @@ bool Switchboard::take_outcome(WeaveId op, TxnOutcome& out) {
     return false;
 }
 
+bool Switchboard::take_outcome(WeaveId op, TxnId id, TxnOutcome& out) {
+    // The id NARROWS the question; it never widens the authority. Everything the
+    // wider overload requires — the exact operator life and incarnation — is
+    // required here identically, so possessing a transaction id buys a stranger
+    // nothing it did not already have.
+    const ParticipantRef now = participant(op);
+    for (std::size_t i = 0; i < outcomes_.size(); ++i) {
+        if (outcome_of_[i] == now && outcomes_[i].id == id) {
+            out = outcomes_[i];
+            outcomes_.erase(outcomes_.begin() + static_cast<std::ptrdiff_t>(i));
+            outcome_of_.erase(outcome_of_.begin() + static_cast<std::ptrdiff_t>(i));
+            return true; // consumed once
+        }
+    }
+    return false;
+}
+
 void Switchboard::kill(WeaveId id) {
     WeaveRecord* rec = find(id);
     if (rec == nullptr) {
