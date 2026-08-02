@@ -47,8 +47,9 @@ this — a sender does not observe its send's fate; observers do
 
 For a prepared replacement, the truth is the transaction:
 `upgrade.state()` and `upgrade.take_outcome()` — the `TxnReason` vocabulary is
-exact on purpose (`CandidateRefused` is the candidate's own verdict;
-`IncumbentBusy` means someone is already replacing that service; …). See
+exact on purpose (`CandidateRefused` means the coordinator mapped the
+candidate's authentic domain answer to Refused; `IncumbentBusy` means someone
+is already replacing that service; …). See
 [replacing a service](replacing-a-service.md#when-something-refuses).
 
 ## 5. Live inspection

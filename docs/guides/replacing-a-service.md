@@ -70,9 +70,14 @@ delivery currently being handled* to the transaction's readiness gate, and the
 Switchboard proves the rest: that this is an authenticated answer, from the exact
 sealed candidate, to this transaction's exact ask, heard by the exact coordinator.
 Offered from the wrong handler, the wrong coordinator, or the wrong handle, it
-refuses and nothing moves. A refusing candidate is offered the same way, as
-`PreparationAnswer::Refused` — that ends the transaction with the candidate's own
-verdict, and the incumbent simply continues.
+refuses and nothing moves.
+
+The division of labor is worth keeping straight: **the candidate authentically
+supplies the domain answer** (`StorageReady`, `StorageRefused` — the bus never
+reads what it means), and **the coordinator maps that answer to the
+transaction's Ready or Refused verdict**. A refusing candidate is offered the
+same way, as `PreparationAnswer::Refused` — the transaction ends as
+`CandidateRefused`, and the incumbent simply continues.
 
 ## Commit is a decision — and it means *scheduled*
 
@@ -147,11 +152,13 @@ Timer              cannot tolerate a stale moving snapshot at all —
                    so it authored an exact final boundary on top
 ```
 
-The common bridge (invented independently by every application that needed
-one): during preparation, ask the incumbent to *describe* itself with an
-ordinary domain question, and hand that description to the candidate inside
-your preparation ask. That is an application pattern filling a real hole — not
-a substrate feature — and what belongs in the description is your call:
+The common shape (reached independently by every application that needed
+one): ask the incumbent to *describe* itself with an ordinary, non-mutating
+domain question, and supply that description to the candidate — often captured
+*before* the successor is even loaded, sometimes during preparation; either
+way it is a snapshot the incumbent may outrun. That is an application pattern
+filling a real hole — not a substrate feature — and what belongs in the
+description is your call:
 [PR-09](../laws/replacement-laws.md) and
 [known-seams § continuity](../reference/known-seams.md#continuity-is-authored)
 carry the full story, including when the *graceful* ceremony (which preserves

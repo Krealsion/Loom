@@ -50,12 +50,19 @@ correlation Loom mints. The candidate answers through the ordinary answer doors
 not two). `accept_preparation_answer(id, Ready|Refused)`, called from inside
 the coordinator's delivery of that answer, consumes it: the deciding fact is
 the ask's own bus-private envelope identity carried into the answer — never the
-correlation, never the payload. The bus authenticates **that** the exact
-candidate answered **that** ask; mapping the domain payload onto
-Ready/Refused is the coordinator's trusted judgment.
+correlation, never the payload.
 
-`Refused` terminalizes with the candidate's own reason (`CandidateRefused`).
-Hostile or mis-addressed offers refuse the command (`InvalidReadiness`) and
+**The trust boundary, stated plainly.** The candidate authentically supplies
+the *domain* answer; the coordinator maps that answer to the transaction's
+`Ready` or `Refused` verdict; the Switchboard authenticates the
+**conversation** — that the current delivery is the exact candidate's answer
+to the exact preparation ask — and never reads the domain payload's meaning
+(`StationReady`, `TimerCandidateDeclined`, … are the coordinator's to
+interpret). A buggy or malicious coordinator could therefore map an authentic
+refusal to `Ready`; that is the current, deliberate boundary — coordinators
+are host-tier trusted infrastructure today — documented rather than papered
+over. Offering `Refused` terminalizes the transaction as `CandidateRefused`;
+hostile or mis-addressed offers refuse the command (`InvalidReadiness`) and
 terminalize nothing.
 
 ## Admission
@@ -89,10 +96,12 @@ one terminal outcome; Kernel queries agree in both windows.
 ## What replacement does NOT do
 
 It verifies the successor. It does **not** preserve incumbent work or state,
-and it tells the incumbent nothing ([PR-09](../laws/replacement-laws.md)).
-Continuity is an authored, domain-owned decision; the preparation window (the
-one interval where the incumbent is alive *and* the successor reachable) is
-where applications build it. See
+does not create an atomic continuity handoff from the incumbent, and tells the
+incumbent nothing ([PR-09](../laws/replacement-laws.md)). Continuity is an
+authored, domain-owned decision: applications capture a **snapshot** of the
+incumbent (an ordinary, non-mutating description — before or during
+preparation) and supply it to the candidate; the incumbent may change after
+any such snapshot unless a stronger domain/package boundary prevents it. See
 [known-seams § continuity](known-seams.md#continuity-is-authored).
 
 ## The authoring handle

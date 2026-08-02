@@ -179,8 +179,11 @@ automatically preserve incumbent work or state — and it tells the incumbent
 nothing.
 
 MEANS
-- the incumbent remains live and serving throughout preparation; a description
-  taken during that window is a **snapshot**, not an atomic final handoff;
+- the incumbent remains live and serving throughout preparation; any
+  description captured while the incumbent remains live — before or during
+  preparation — is a **snapshot**, not an atomic final handoff, and the
+  incumbent may change after it unless a stronger domain/package boundary
+  prevents mutation;
 - what (if anything) crosses a replacement is an authored, domain-owned
   decision — work, obligation, intent, a reopened question, or nothing
   (six independent Night Lab applications each answered differently);

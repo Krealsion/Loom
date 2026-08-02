@@ -63,8 +63,11 @@ MEANS
 
 DOES NOT MEAN
 - that a message *from* a role-holder carries any attestation of that office —
-  **role-authored provenance does not exist**; this is the system's most
-  evidence-backed open seam (five independent Night Lab sightings). See
+  **role-authored provenance does not exist**, and merely *holding* R could
+  never supply it anyway (the same weave, holding the same office, may speak
+  personally or as the office; holding is necessary, not sufficient). This is
+  the system's most evidence-backed open seam (five independent Night Lab
+  sightings). See
   [known-seams](../reference/known-seams.md#role-authored-provenance).
 
 PROVEN BY — delivery-time resolution: suite `switchboard`; the *absence* half is
