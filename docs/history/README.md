@@ -40,7 +40,7 @@ carry them; the law files cite the phases only as rationale.
 | R2B-3c | a live Timer crosses a prepared replacement; the boundary IS the admission; found the commit-then-refuse-activation defect | Zengine `332f9e9`,`d78e7da` | TIMER-04..05 |
 | R2B-3d (+3d-1) | admission and activation became **one envelope**; a committed activation is not a send and is **not answerable**; `AdmissionPending` | Loom `1447b4b`..`d42b4b7` | PR-07..09, LIFE-05 |
 | R2B-4a | `loom::PreparedReplacement` — the host authoring handle, pure delegation | Loom `b4bbd39`,`78d64ea` | the [replacing-a-service guide](../guides/replacing-a-service.md) |
-| Night Lab marathon | six applications as **evidence**: 178 facade ops / 0 raw; role-authored provenance (5 sightings); describe-then-hand-over invented 6/6 | night-lab `bf09f79` | [../evidence/night-lab.md](../evidence/night-lab.md) |
+| Night Lab marathon | six applications as **evidence**: 178 facade ops / 0 raw; role-authored provenance (5 sightings, holding ≠ speaking-as); continuity expressed as non-mutating description *snapshots* (staging varied; never an atomic handoff) | night-lab `bf09f79` | [../evidence/night-lab.md](../evidence/night-lab.md) |
 
 Notable ideas **rejected or superseded** along the way live in
 [`../decisions/`](../decisions/) — each records why, so it is not re-litigated

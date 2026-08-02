@@ -22,27 +22,43 @@ authoring handle is done; proposals to extend it start from this number.
 
 Escalating consequence chain: a dish nobody cooked → an operation ended by a
 guessed correlation → a fabricated "build succeeded" → a healthy build
-destroyed by a forged `WorkerOpen` (in the farm, an announcement is evidence)
-→ a lobby player sent to an attacker's server. Both application-level
-workarounds were built and measured: a registry (its belief rests on an
-unauthenticated announcement) and push-to-pull inversion (works; spends the
-Loom-wide deferral bound, strands strict receivers across honest replacement,
-covers no observers). The import pipeline is the control: identity works when
-you talk to *somebody*; it fails when you talk to *whoever holds an office*.
-Meaning: independent applications need trusted office authorship.
+destroyed by a forged `WorkerOpen` **publication** (in the farm, an
+announcement is evidence — and a publication is the case any direct-send-only
+authorship design would miss) → a lobby player sent to an attacker's server.
+The lobby also supplies the sharpest half of the finding: **the same exact
+weave, holding the same exact role, speaking personally versus speaking as
+the office** — holding is necessary and not sufficient, so the missing fact
+is two-part (the sender held R, *and* deliberately authored this message as
+R). Both application-level workarounds were built and measured: a registry
+(its belief rests on an unauthenticated announcement) and push-to-pull
+inversion (works; spends the Loom-wide deferral bound, strands strict
+receivers across honest replacement, covers no observers). The import
+pipeline is the control: identity works when you talk to *somebody*; it fails
+when you talk to *whoever holds an office*. Meaning: independent applications
+need trusted office authorship.
 → seam: [known-seams § role-authored provenance](../reference/known-seams.md#role-authored-provenance)
 (status: evidence-backed core candidate). Sightings: lobby `MatchCreated`,
 build-farm `JobDone` and `WorkerOpen`, kitchen and download cases —
 `marathon/EVIDENCE.md`.
 
-## Describe-then-hand-over — six of six, and it is a hole
+## Describe-then-hand-over — a domain pattern, not one ceremony
 
-Every project that needed continuity across a replacement independently
-invented the same bridge (ask the incumbent to describe itself during the
-preparation window; hand the description to the candidate) — and every project
+Applications that needed to decide what remains true across a replacement
+repeatedly expressed that decision by asking the incumbent for an ordinary,
+**non-mutating description** and supplying it to the candidate's preparation.
+The staging **varied**: several projects captured the description and *then*
+loaded and prepared the successor; others asked during preparation. In every
+case the description was a **snapshot taken while the incumbent remained
+live** — never a transaction-authenticated final handoff — and every project
 carried something *different* (work / obligation / intent / a reopened
-question / a waiting-fact / a fleet tally). Meaning: the repeated thing is a
-**domain hole, not a missing substrate helper**; whether continuity is
+question / a waiting-fact / a fleet tally): the kitchen tolerated staleness
+through idempotency; the download manager's inherited `bytes_done` was an
+obligation it could degrade honestly, not the exact incumbent state at
+admission; the import pipeline's snapshot could race later requester
+activity; the farm carried intent and restarted work. The Timer is the
+counterexample: it could not tolerate a stale moving snapshot, so it built an
+exact final boundary on the substrate. Meaning: the repeated thing is a
+**domain hole, not a missing substrate ceremony**; whether continuity is
 possible at all is a property of the domain.
 → law: [PR-09](../laws/replacement-laws.md) · guideline:
 [known-seams § continuity](../reference/known-seams.md#continuity-is-authored).

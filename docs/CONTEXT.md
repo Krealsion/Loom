@@ -26,15 +26,22 @@ the named laws → the reference page → tests when exactness matters.
 | known limitations | reference/known-seams.md | MSG-04, ANS-02, PR-09 | — | evidence/night-lab.md |
 | bounds/capacities | reference/bounds.md | — | grep the constant name | — |
 
-**Ten do-not-assume answers** (each resolvable from the row above): a
+**Do-not-assume answers** (each resolvable from the row above): a
 transaction id is never readiness authority (PR-04, ANS-05) · `Committed`
 becomes true only inside the admission dispatch (PR-07) · a candidate receives
 preparation conversation before activation, production never (PR-01, PR-08) ·
-activation is not answerable (LIFE-05) · replacement preserves nothing
-(PR-09) · `send_to_role` proves nothing about authorship (MSG-04, known-seams)
-· Timer transfers remaining duration because a due timestamp cannot cross
-clocks/downtime (TIMER-03) · `TimedWeave` bindings are authored, reconciled at
-activation/TimerReady only (TIMER-05) · role-authorship evidence lives in
+activation is not answerable (LIFE-05) · replacement preserves nothing and
+produces **no atomic incumbent snapshot** — a captured description can go
+stale before admission unless a stronger domain/package boundary prevents
+mutation (PR-09, known-seams § continuity) · current role *membership* is a
+live lookup (`role_holder`), but no delivery fact proves office **authorship**
+— a role-holder's ordinary message proves nothing about speaking *as* the
+office, since holding is necessary and not sufficient (MSG-04, known-seams §
+role-authored-provenance) · the candidate supplies the domain answer, the
+**coordinator** maps it to Ready/Refused, and the Switchboard authenticates
+only the conversation (PR-04) · Timer transfers remaining duration because a
+due timestamp cannot cross clocks/downtime (TIMER-03) · `TimedWeave` bindings
+are authored, reconciled at activation/TimerReady only (TIMER-05) · role-authorship evidence lives in
 [evidence/night-lab.md](evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced)
 · admission-at-dispatch rationale lives in
 [decisions/admission-and-activation-share-one-boundary.md](decisions/admission-and-activation-share-one-boundary.md).

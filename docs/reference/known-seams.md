@@ -11,25 +11,46 @@ applications), **KNOWN AUTHORING FRICTION** (ergonomics, not missing truth),
 
 **Status: OPEN / EVIDENCE-BACKED CORE CANDIDATE.**
 
-Current Loom can prove: *which weave* sent a delivery; *whether it answers my
-ask*; *whether it is lifecycle-attested*. It cannot prove: *the sender
-authored this message in the capacity of role R*. And `send_to_role(R, m)`
-means "deliver to whoever holds R" — never "I speak as R"
-([MSG-04](../laws/messaging-laws.md)).
+Four distinct facts, and only the first three exist today:
 
-Consequence: an *office's* announcements are unauthenticatable. Identity works
-when you talk to somebody; it fails when you talk to whoever holds an office.
-Five independent Night Lab sightings, escalating to a forged announcement
-destroying healthy work and a player joining an attacker's server — and both
-application-level workarounds are built and **priced**: a registry's belief
-rests on an unauthenticated announcement; inverting push to pull works but
-spends the Loom-wide deferral bound, strands strict receivers across honest
-replacement, and cannot cover observers of publications
+```text
+sender identity          who the exact weave was            EXISTS (the bus stamp)
+role-addressed delivery  where the message was routed       EXISTS (send_to_role)
+role membership          which office the weave holds now   EXISTS (role_holder lookup)
+role-authored provenance which office the weave
+                         DELIBERATELY SPOKE AS              OPEN — does not exist
+```
+
+Loom currently cannot prove that a delivery was **intentionally authored in
+the capacity of role R, with Loom verifying at authorship time that the sender
+actually held R**. The missing fact has two parts, and both are load-bearing:
+*authorization* (the sender actually held R) and *authorship intent* (this
+particular message was deliberately spoken as R). Holding the role is
+necessary; **holding the role is not sufficient** — the same exact weave,
+holding the same exact office, may speak personally or speak as the office,
+and those are different statements (Night Lab's lobby distinguishes them
+directly). A fact reduced to "the sender held role R" would authenticate
+personal speech merely because its author happened to occupy an office. And
+`send_to_role(R, m)` is none of this: it means "deliver to whoever holds R" —
+never "I speak as R" ([MSG-04](../laws/messaging-laws.md)).
+
+Consequence: an *office's* announcements are unauthenticatable — including
+**publications**, which any authorship design must cover (a direct-send-only
+answer misses the forged-`WorkerOpen` case). Identity works when you talk to
+somebody; it fails when you talk to whoever holds an office. Five independent
+Night Lab sightings, escalating to a forged announcement destroying healthy
+work and a player joining an attacker's server — and both application-level
+workarounds are built and **priced**: a registry's belief rests on an
+unauthenticated announcement; inverting push to pull works but spends the
+Loom-wide deferral bound, strands strict receivers across honest replacement,
+and cannot cover observers of publications
 ([evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced)).
 
-The narrowest shape, if built, is a delivery fact of the same family as
-`answers_ask()` — *"the sender held role R when this was sent."* Any syntax
-(e.g. `send_from_role`) is **SPECULATIVE**; do not document it as current.
+If built, the shape is a delivery fact of the same family as `answers_ask()`,
+carrying **both** halves: *this delivery was intentionally authored as role R,
+and Loom verified that the author held R at the moment of authorship*. Any
+syntax (e.g. `send_from_role`) is **SPECULATIVE**; do not document it as
+current.
 
 ## Sender cannot observe send fate
 
@@ -47,19 +68,25 @@ observer, not the sender.
 
 **Status: GUIDELINE (the negative half is law: [PR-09](../laws/replacement-laws.md)).**
 
-Prepared replacement verifies the successor and preserves nothing; graceful
-swap preserves authored work and verifies nothing. The two ceremonies are
-disjoint, and the preparation window — incumbent alive, successor reachable —
-is where applications bridge them: ask the incumbent to *describe* itself (an
-ordinary question that changes nothing) and hand that description to the
-candidate in the preparation ask. **What crosses is a domain decision** — six
+Prepared replacement verifies the successor and **does not create an atomic
+continuity handoff from the incumbent**; graceful swap preserves authored work
+and verifies nothing. The two ceremonies are disjoint. What applications do
+about it is a **domain pattern, not a substrate ceremony**: ask the incumbent
+to *describe* itself with an ordinary, non-mutating question, and supply that
+description to the candidate's preparation. The staging varies — several Night
+Lab projects captured the description *before* the successor was even loaded,
+others during preparation — and either way the description is a **snapshot
+taken while the incumbent remains live**: the incumbent may change after it,
+unless the application or package establishes a stronger boundary. The
+application decides whether stale, replayed, restarted, degraded, or exactly
+transferred state is acceptable. **What crosses is a domain decision** — six
 Night Lab applications carried six different things (work / obligation /
 intent / a reopened question / a waiting-fact / a fleet tally) — so the
-repeated thing is a *hole the domain fills*, not a substrate helper. A
-description taken while the incumbent remains live is a **snapshot**, not an
-atomic final handoff; the Timer package is the one domain that required an
-exact boundary and built it on the substrate (the letter written *after*
-admission freezes the incumbent).
+repeated thing is a *hole the domain fills*, not a missing Loom primitive. The
+Timer package is the counterexample that proves why generic snapshot
+continuity is insufficient: it could not tolerate a stale moving snapshot, so
+it built an exact final boundary on the substrate (its letter is written
+*after* admission freezes the incumbent).
 
 ## Minted identity needs a surviving namespace
 
