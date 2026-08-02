@@ -201,6 +201,13 @@ int main(int argc, char** argv) {
     // authority lives in the parent's delivery, and this pipe carries no
     // attestation, so an out-of-process weave's answer fails closed rather than
     // reaching for something the pipe cannot vouch for.
+    // Office authorship (v5) joins the same law, in both directions: the Emit
+    // frames carry no authorship request and the doors below are null, so an
+    // out-of-process weave's `as_role(...)` refuses honestly at the library shim
+    // (invalid ticket / unauthored publication — NEVER a silent downgrade to
+    // personal speech). Extending the trusted control protocol with a verified
+    // office frame is the seam the first out-of-process office pulls; the parent
+    // knows the exact connected weave, so the verification story is ready for it.
     ZenHostApi api{nullptr,
                    &zen_child_send,
                    &zen_child_publish,
@@ -208,7 +215,10 @@ int main(int argc, char** argv) {
                    /*defer_answer=*/nullptr,
                    /*answer_deferred=*/nullptr,
                    /*release_deferred=*/nullptr,
-                   /*answer=*/nullptr};
+                   /*answer=*/nullptr,
+                   /*office_send=*/nullptr,
+                   /*office_send_to_role=*/nullptr,
+                   /*office_publish=*/nullptr};
 
     for (;;) {
         Op op = Op::Hello;
@@ -230,11 +240,12 @@ int main(int argc, char** argv) {
             // attestation — cross-process authentication is deliberately out of
             // scope — so an out-of-process weave is told the truth: nothing here
             // is attested. It therefore fails CLOSED, which is the safe
-            // direction: such a weave never adopts an authenticated answer or an
-            // attested activation, rather than being handed a flag the parent
-            // could not actually vouch for across the pipe.
+            // direction: such a weave never adopts an authenticated answer, an
+            // attested activation, or an authored office (v5: the NULL role
+            // below), rather than being handed a fact the parent could not
+            // actually vouch for across the pipe.
             abi->handle(instance, sender, reply_to, correlation, ZEN_PROV_NONE,
-                        /*attested_sequence=*/0,
+                        /*attested_sequence=*/0, /*authored_role=*/nullptr,
                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
             (void)emit_snapshot(abi, instance);
         } else if (op == Op::Revive) {

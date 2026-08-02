@@ -1,6 +1,7 @@
 #include <doctest.h>
 
 #include "switchboard_fixtures.hpp"
+#include "weavelib/office_protocol.hpp"
 #include "weavelib/prepared_replacement_protocol.hpp"
 
 #include <zen/gate.hpp>
@@ -6087,6 +6088,219 @@ TEST_CASE("the kernel unloads everything it still holds at destruction") {
         CHECK(kernel.loaded().size() == 2);
         // kernel goes out of scope here: it must unload both, leaving the bus clean.
     }
+    CHECK(bus.list_weaves().empty());
+}
+
+// ---- R2D-0: office authorship across the dynamic seam (ABI v5) ---------------
+//
+// Full semantic parity: the same `mail.as_role(...)` a native weave writes, the
+// same `mail.authored_from_role(...)` a native recipient reads — spoken and
+// heard on the far side of the .so seam, with the HOST verifying membership at
+// every authorship moment. The fixture is deliberately obedient (it attempts
+// whatever it is told, including offices it does not hold) so these cases
+// measure the host's verdicts, not the fixture's manners.
+
+namespace {
+
+/// One durable record of a delivery the office suite's native probes heard.
+struct OfficeHeard {
+    std::string schema;
+    std::string authored_role;
+    // OfficeReport fields, when the delivery was one.
+    std::string what;
+    bool authored = false;
+    std::int64_t recipients = 0;
+    std::string seen_role;
+};
+
+void record_office(std::shared_ptr<std::vector<OfficeHeard>> log, const Message& in) {
+    OfficeHeard h;
+    h.schema = in.payload.schema().name();
+    h.authored_role = std::string(in.provenance.authored_role());
+    if (h.schema == office::OfficeReport::zen_name) {
+        const office::OfficeReport r = from_value<office::OfficeReport>(in.payload);
+        h.what = r.what;
+        h.authored = r.authored;
+        h.recipients = r.recipients;
+        h.seen_role = r.seen_role;
+    }
+    log->push_back(std::move(h));
+}
+
+/// The reports named `what`, in arrival order.
+std::vector<OfficeHeard> reports_named(const std::vector<OfficeHeard>& log,
+                                       const std::string& what) {
+    std::vector<OfficeHeard> out;
+    for (const OfficeHeard& h : log) {
+        if (h.schema == office::OfficeReport::zen_name && h.what == what) {
+            out.push_back(h);
+        }
+    }
+    return out;
+}
+
+/// The WorkerNews deliveries, in arrival order.
+std::vector<OfficeHeard> news_of(const std::vector<OfficeHeard>& log) {
+    std::vector<OfficeHeard> out;
+    for (const OfficeHeard& h : log) {
+        if (h.schema == office::WorkerNews::zen_name) {
+            out.push_back(h);
+        }
+    }
+    return out;
+}
+
+struct OfficeStage {
+    Switchboard bus;
+    Kernel kernel{bus};
+    std::shared_ptr<std::vector<OfficeHeard>> commander_log =
+        std::make_shared<std::vector<OfficeHeard>>();
+    std::shared_ptr<std::vector<OfficeHeard>> dispatcher_log =
+        std::make_shared<std::vector<OfficeHeard>>();
+    WeaveId commander{};
+    WeaveId dispatcher{};
+    WeaveId worker{};
+
+    OfficeStage() {
+        auto cmd = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
+            schema_of<office::OfficeReport>(), schema_of<office::WorkerNews>()});
+        auto cmd_log = commander_log;
+        cmd->on_handle = [cmd_log](const Message& in, Bus&, ProbeWeave&) {
+            record_office(cmd_log, in);
+        };
+        commander = bus.register_weave(std::move(cmd), Grant{}.allow_any(), "commander");
+
+        auto dsp = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
+            schema_of<office::WorkerNews>()});
+        auto dsp_log = dispatcher_log;
+        dsp->on_handle = [dsp_log](const Message& in, Bus&, ProbeWeave&) {
+            record_office(dsp_log, in);
+        };
+        dispatcher = bus.register_weave(std::move(dsp), Grant{}.allow_any(), "dispatcher");
+
+        LoadResult lr = kernel.load("worker", ZEN_SO_OFFICE_WORKER, "worker.a");
+        REQUIRE(lr.ok);
+        worker = lr.id;
+    }
+
+    void command(const char* mode, WeaveId target = WeaveId{}) {
+        office::OfficeCommand c;
+        c.mode = mode;
+        c.target = static_cast<std::int64_t>(target.value);
+        bus.send_as(commander, worker, Message(to_value(c)));
+        bus.pump();
+    }
+};
+
+} // namespace
+
+TEST_CASE("R2D-0/v5: a loaded weave deliberately authors office speech through every door, and "
+          "its personal speech stays personal") {
+    OfficeStage s;
+
+    s.command("direct", s.commander);
+    s.command("to-role");
+    s.command("publish");
+    s.command("personal");
+
+    // Outbound verdicts, reported from inside the .so: every office act was
+    // authored; the publication counted its real recipients (commander,
+    // dispatcher, and the worker itself accept WorkerNews); personal was not.
+    REQUIRE(reports_named(*s.commander_log, "direct").size() == 1);
+    CHECK(reports_named(*s.commander_log, "direct")[0].authored);
+    REQUIRE(reports_named(*s.commander_log, "to-role").size() == 1);
+    CHECK(reports_named(*s.commander_log, "to-role")[0].authored);
+    REQUIRE(reports_named(*s.commander_log, "publish").size() == 1);
+    CHECK(reports_named(*s.commander_log, "publish")[0].authored);
+    CHECK(reports_named(*s.commander_log, "publish")[0].recipients == 3);
+    REQUIRE(reports_named(*s.commander_log, "personal").size() == 1);
+    CHECK_FALSE(reports_named(*s.commander_log, "personal")[0].authored);
+
+    // What the native listeners actually received, with the stamped fact:
+    // direct + office publication authored as worker.a; the personal
+    // publication — same shape, same sender — carries no office.
+    const auto commander_news = news_of(*s.commander_log);
+    REQUIRE(commander_news.size() == 3); // direct, office publish, personal publish
+    CHECK(commander_news[0].authored_role == "worker.a");
+    CHECK(commander_news[1].authored_role == "worker.a");
+    CHECK(commander_news[2].authored_role.empty());
+    const auto dispatcher_news = news_of(*s.dispatcher_log);
+    REQUIRE(dispatcher_news.size() == 3); // role-addressed, office publish, personal publish
+    CHECK(dispatcher_news[0].authored_role == "worker.a");
+    CHECK(dispatcher_news[1].authored_role == "worker.a");
+    CHECK(dispatcher_news[2].authored_role.empty());
+
+    // The worker heard its own office publication as office speech, and its own
+    // personal publication as personal — the inbound facts crossed the seam.
+    const auto heard = reports_named(*s.commander_log, "heard");
+    REQUIRE(heard.size() == 2);
+    CHECK(heard[0].authored);
+    CHECK(heard[0].seen_role == "worker.a");
+    CHECK_FALSE(heard[1].authored);
+    CHECK(heard[1].seen_role.empty());
+}
+
+TEST_CASE("R2D-0/v5: a loaded weave's request to speak for an office it does not hold is "
+          "refused across the seam — precisely, and nothing is queued") {
+    OfficeStage s;
+    std::size_t denied = 0;
+    s.bus.add_observer([&denied](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused &&
+            ev.refusal.reason == RefusalReason::RoleAuthorshipDenied) {
+            ++denied;
+        }
+    });
+
+    s.command("forge-direct", s.commander);
+    s.command("forge-publish");
+
+    // The library was told the truth: not authored, zero recipients.
+    REQUIRE(reports_named(*s.commander_log, "forge-direct").size() == 1);
+    CHECK_FALSE(reports_named(*s.commander_log, "forge-direct")[0].authored);
+    REQUIRE(reports_named(*s.commander_log, "forge-publish").size() == 1);
+    CHECK_FALSE(reports_named(*s.commander_log, "forge-publish")[0].authored);
+    CHECK(reports_named(*s.commander_log, "forge-publish")[0].recipients == 0);
+    // No forged news reached anybody — refusal is never downgrade.
+    CHECK(news_of(*s.commander_log).empty());
+    CHECK(news_of(*s.dispatcher_log).empty());
+    // And the host's tap names the exact reason, once per attempt.
+    CHECK(denied == 2);
+}
+
+TEST_CASE("R2D-0/v5: inbound office provenance crosses the seam — authored_from_role answers "
+          "identically on both sides") {
+    OfficeStage s;
+
+    // Office speech from ANOTHER office: the dispatcher's own.
+    REQUIRE(s.bus
+                .office_send_as(s.dispatcher, "dispatcher", s.worker,
+                                Message(to_value(office::WorkerNews{"flash"})))
+                .valid());
+    // Personal speech from the same dispatcher.
+    s.bus.send_as(s.dispatcher, s.worker, Message(to_value(office::WorkerNews{"psst"})));
+    s.bus.pump();
+
+    const auto heard = reports_named(*s.commander_log, "heard");
+    REQUIRE(heard.size() == 2);
+    // The worker's Mail saw: authored as "dispatcher" — which is NOT worker.a,
+    // so authored_from_role("worker.a") is false while the exact office is
+    // visible; then personal speech with no office at all.
+    CHECK_FALSE(heard[0].authored);
+    CHECK(heard[0].seen_role == "dispatcher");
+    CHECK_FALSE(heard[1].authored);
+    CHECK(heard[1].seen_role.empty());
+}
+
+TEST_CASE("R2D-0/v5: the previous-ABI artifact refuses at load by version — no instance becomes "
+          "live, no capability goes silently missing") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
+    CHECK_FALSE(stale.ok);
+    CHECK(stale.error.find("abi_version") != std::string::npos);
+    CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
+    CHECK_FALSE(kernel.is_loaded("stale"));
     CHECK(bus.list_weaves().empty());
 }
 
