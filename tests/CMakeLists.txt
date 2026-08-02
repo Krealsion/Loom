@@ -134,6 +134,13 @@ endfunction()
 zen_add_versioned_service(zen_test_versioned_v1)
 zen_add_versioned_service(zen_test_versioned_v2 ZEN_VERSIONED_CANDIDATE)
 
+# R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
+# under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
+# where the pipe's fail-closed law is the thing under test.
+add_library(zen_test_office_worker SHARED weavelib/office_worker.cpp)
+target_link_libraries(zen_test_office_worker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+target_compile_options(zen_test_office_worker PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
 target_compile_options(zen_test_badabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
@@ -150,7 +157,8 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
-    zen_test_weave_answers_twice zen_test_versioned_v1 zen_test_versioned_v2)
+    zen_test_weave_answers_twice zen_test_versioned_v1 zen_test_versioned_v2
+    zen_test_office_worker)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -173,7 +181,8 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ANSWERS=\"$<TARGET_FILE:zen_test_weave_answers>\""
     "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\""
     "ZEN_SO_VERSIONED_V1=\"$<TARGET_FILE:zen_test_versioned_v1>\""
-    "ZEN_SO_VERSIONED_V2=\"$<TARGET_FILE:zen_test_versioned_v2>\"")
+    "ZEN_SO_VERSIONED_V2=\"$<TARGET_FILE:zen_test_versioned_v2>\""
+    "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
 

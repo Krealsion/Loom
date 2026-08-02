@@ -360,6 +360,86 @@ static void zen_host_release_deferred(void* ctx, uint64_t token) {
     h->gated->release_deferred(loom::DeferredAnswer::from_host_token(token));
 }
 
+// Deliberate office authorship (v5). Same shape as every outbound door: the
+// payload bytes are admitted through the gate host-side, then routed through the
+// gated WeaveBus — which stamps the loaded weave's id from the CONNECTION and
+// asks the Switchboard's authorship door to verify membership. The library
+// requested "speak as R"; the host decided whether that is true. An invalid
+// result maps to the precise status, so a loaded office learns "you do not hold
+// that role" rather than a generic failure.
+static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint64_t target,
+                                      std::uint64_t reply_to, std::uint64_t correlation,
+                                      const std::uint8_t* payload, std::size_t len) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+    if (!a.ok()) {
+        return ZEN_ERR_REFUSED;
+    }
+    const loom::Ticket t = h->gated->office_send(
+        as_role, loom::WeaveId{target},
+        loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                      correlation));
+    // On this door an invalid ticket means exactly one thing: the authorship was
+    // refused (shape and schema failures returned above).
+    return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+}
+
+static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, const char* to_role,
+                                              std::uint64_t reply_to, std::uint64_t correlation,
+                                              const std::uint8_t* payload, std::size_t len) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    loom::Admission a = loom::admit(u, door);
+    if (!a.ok()) {
+        return ZEN_ERR_REFUSED;
+    }
+    const loom::Ticket t = h->gated->office_send_to_role(
+        as_role, to_role,
+        loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                      correlation));
+    return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+}
+
+static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::uint64_t reply_to,
+                                         std::uint64_t correlation, const std::uint8_t* payload,
+                                         std::size_t len, std::uint64_t* recipients_out) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    if (recipients_out != nullptr) {
+        *recipients_out = 0;
+    }
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    loom::Admission a = loom::admit(u, door);
+    if (!a.ok()) {
+        return ZEN_ERR_REFUSED;
+    }
+    const loom::OfficePublication p = h->gated->office_publish(
+        as_role, loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                               correlation));
+    if (!p.authored) {
+        return ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+    }
+    if (recipients_out != nullptr) {
+        *recipients_out = p.recipients;
+    }
+    return ZEN_OK;
+}
+
 } // extern "C"
 
 // ---- the host adapter: a Weave backed by a library instance ---------------
@@ -431,11 +511,14 @@ public:
                        &zen_host_defer_answer,
                        &zen_host_answer_deferred,
                        &zen_host_release_deferred,
-                       &zen_host_answer};
-        // Provenance crosses as a host-computed flag word beside the sender, and
-        // it crosses ONE WAY ONLY: there is no callback a library can hand one
-        // back through, so the seam is a place a loaded weave learns Loom's word
-        // and never a place it can invent one.
+                       &zen_host_answer,
+                       &zen_host_office_send,
+                       &zen_host_office_send_to_role,
+                       &zen_host_office_publish};
+        // Provenance crosses as host-computed facts beside the sender, and it
+        // crosses ONE WAY ONLY: the office doors above carry REQUESTS the host
+        // verifies, never attested facts, so the seam is a place a loaded weave
+        // learns Loom's word and never a place it can invent one.
         std::uint32_t prov = ZEN_PROV_NONE;
         switch (in.provenance.kind()) {
         case loom::Provenance::Kind::Answer:
@@ -447,10 +530,14 @@ public:
         case loom::Provenance::Kind::None:
             break;
         }
+        // The authored office (v5): the delivery's STAMPED fact, NUL-terminated
+        // for the seam; NULL means personal speech.
+        const std::string authored(in.provenance.authored_role());
         // The DLL handler's status is contained: the message was validly
         // delivered; any internal library error is the library's own concern.
         abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation, prov,
                      in.provenance.attested_sequence(),
+                     authored.empty() ? nullptr : authored.c_str(),
                      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
     }
 

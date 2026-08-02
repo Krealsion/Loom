@@ -144,6 +144,61 @@ public:
         }
     }
 
+    // ---- deliberate office authorship across the seam (R2D-0 / v5) ----------
+    //
+    // The library REQUESTS the public operation; the host verifies membership
+    // and stamps. A missing door (an older or narrower host) refuses HONESTLY —
+    // invalid ticket / unauthored publication — and NEVER falls back to an
+    // ordinary send: a silent downgrade from office to personal speech is
+    // exactly the same-word-two-meanings failure v4 closed for answer().
+
+    loom::Ticket office_send(std::string_view as_role, loom::WeaveId target,
+                             loom::Message msg) override {
+        if (host_ == nullptr || host_->office_send == nullptr) {
+            return loom::Ticket{}; // no door: honestly refused, not downgraded
+        }
+        const std::string bytes = loom::serialize(msg.payload);
+        const std::string role_z(as_role); // NUL-terminated for the C ABI
+        const ZenStatus st = host_->office_send(
+            host_->ctx, role_z.c_str(), target.value, msg.reply_to.value, msg.correlation,
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
+    }
+
+    loom::Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+                                     loom::Message msg) override {
+        if (host_ == nullptr || host_->office_send_to_role == nullptr) {
+            return loom::Ticket{};
+        }
+        const std::string bytes = loom::serialize(msg.payload);
+        const std::string as_z(as_role);
+        const std::string to_z(to_role);
+        const ZenStatus st = host_->office_send_to_role(
+            host_->ctx, as_z.c_str(), to_z.c_str(), msg.reply_to.value, msg.correlation,
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
+    }
+
+    loom::OfficePublication office_publish(std::string_view as_role,
+                                           loom::Message msg) override {
+        if (host_ == nullptr || host_->office_publish == nullptr) {
+            return loom::OfficePublication{};
+        }
+        const std::string bytes = loom::serialize(msg.payload);
+        const std::string role_z(as_role);
+        std::uint64_t recipients = 0;
+        const ZenStatus st = host_->office_publish(
+            host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &recipients);
+        if (st != ZEN_OK) {
+            return loom::OfficePublication{};
+        }
+        // The host-side count is real here (unlike ordinary publish, whose count
+        // deliberately does not cross): the door carries it out-of-band so the
+        // authorized-but-unheard office is not confusable with a refused one.
+        return loom::OfficePublication{true, static_cast<std::size_t>(recipients)};
+    }
+
 private:
     const ZenHostApi* host_;
 };
@@ -224,27 +279,39 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
     }
 }
 
-/// Translate the host's provenance flags back into the C++ fact.
+/// Translate the host's provenance flags — and the authored office (v5) — back
+/// into the C++ fact.
 ///
 /// The library rebuilds a Provenance for its own dispatch and nothing else: the
 /// value never leaves this call, and the outbound host callbacks have no field
 /// to put one in. A library that lied here would be lying to itself.
-inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequence) {
+inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequence,
+                                        const char* authored_role) {
+    loom::Provenance p;
     switch (flags) {
     case ZEN_PROV_ANSWER:
-        return loom::Provenance::attested(loom::Provenance::Kind::Answer, 0);
+        p = loom::Provenance::attested(loom::Provenance::Kind::Answer, 0);
+        break;
     case ZEN_PROV_ACTIVATION:
-        return loom::Provenance::attested(loom::Provenance::Kind::Activation, sequence);
+        p = loom::Provenance::attested(loom::Provenance::Kind::Activation, sequence);
+        break;
     default:
-        return loom::Provenance{};
+        break;
     }
+    // The second axis, composed rather than switched: NULL/empty means personal
+    // speech, and either combines with any Kind — the same representation rule
+    // the native type keeps.
+    if (authored_role != nullptr && authored_role[0] != '\0') {
+        p = std::move(p).with_authored_role(std::string(authored_role));
+    }
+    return p;
 }
 
 template <class S>
 ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to,
                     std::uint64_t correlation, std::uint32_t provenance,
-                    std::int64_t attested_sequence, const std::uint8_t* payload, std::size_t len,
-                    const ZenHostApi* host) {
+                    std::int64_t attested_sequence, const char* authored_role,
+                    const std::uint8_t* payload, std::size_t len, const ZenHostApi* host) {
     try {
         S* s = static_cast<S*>(instance);
         loom::Unverified u = loom::parse(as_view(payload, len));
@@ -264,7 +331,7 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         }
         loom::Message msg(a.value(), loom::WeaveId{sender}, loom::WeaveId{reply_to},
                              correlation);
-        msg.provenance = provenance_from(provenance, attested_sequence);
+        msg.provenance = provenance_from(provenance, attested_sequence, authored_role);
         HostApiBus bus(host);
         s->handle(msg, bus);
         return ZEN_OK;
@@ -296,9 +363,10 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
     }                                                                                              \
     static ZenStatus zen__abi_handle(void* i, uint64_t sender, uint64_t reply_to,                  \
                                      uint64_t correlation, uint32_t prov, int64_t attested,        \
-                                     const uint8_t* p, size_t n, const ZenHostApi* h) {             \
+                                     const char* authored_role, const uint8_t* p, size_t n,        \
+                                     const ZenHostApi* h) {                                        \
         return ::loom::detail::do_handle<WeaveClass>(i, sender, reply_to, correlation, prov, \
-                                                            attested, p, n, h);                    \
+                                                            attested, authored_role, p, n, h);     \
     }                                                                                              \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
         static const ZenWeaveAbi abi = {ZEN_ABI_VERSION, zen__abi_create,   zen__abi_destroy,      \

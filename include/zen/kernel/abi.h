@@ -39,7 +39,7 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 4u
+#define ZEN_ABI_VERSION 5u
 
 /* v3 (R2B-2): the host API gained the deferred-answer door, so a DYNAMICALLY
  * LOADED weave can hold an answer right across handler boundaries — the case a
@@ -62,6 +62,26 @@ extern "C" {
  * a v4 host would be indistinguishable by number alone and would keep failing
  * silently, and a v4 library loaded by a v3 host would read past the struct. A
  * version is the thing that makes both refuse instead of guess. */
+
+/* v5 (R2D-0): role-authored delivery provenance crosses the seam, both ways.
+ *
+ * v5 carries the office-authorship fact into handle() beside the other
+ * host-computed delivery facts, and gives loaded weaves the explicit
+ * office-authorship doors native weaves have: office_send / office_send_to_role
+ * / office_publish. The host verifies role membership at the authorship moment —
+ * the library REQUESTS "speak as R" and never attests itself, exactly as it
+ * never chooses its own sender id.
+ *
+ * Inbound, the authored role travels as its own parameter rather than another
+ * ZEN_PROV_* kind, because it is a DIFFERENT AXIS: an answer or an activation
+ * could in principle also be office speech, and folding the office into the
+ * mutually-exclusive flag word would foreclose that representation for a layout
+ * convenience.
+ *
+ * Paid as a break, once again deliberately: a v4 artifact under a v5 host would
+ * be silently unable to author or observe office speech — the exact
+ * same-word-two-meanings failure v4 closed for answer(). Old artifacts refuse
+ * at load with the version named; nothing loads crippled. */
 
 /* Delivery provenance flags (ZEN_PROV_*). Zero means an ordinary message: it
  * stands on its shape and its sender stamp, and claims nothing more. These are
@@ -87,7 +107,13 @@ enum {
     ZEN_ERR = -1,                /* generic library-side failure */
     ZEN_ERR_REFUSED = -2,        /* the host gate refused the bytes */
     ZEN_ERR_UNKNOWN_SCHEMA = -3, /* the host could not resolve the payload's schema */
-    ZEN_ERR_NO_TARGET = -4       /* the host had no such routing target */
+    ZEN_ERR_NO_TARGET = -4,      /* the host had no such routing target */
+    /* Role authorship denied (v5): the sender does not currently hold the role
+     * it deliberately asked to speak for. NOT a gate refusal and NOT a grant
+     * problem — nothing was queued, and nothing was downgraded to personal
+     * speech. Distinct so a caller can tell "the office refused me" from "the
+     * payload was malformed". */
+    ZEN_ERR_ROLE_AUTHORSHIP_DENIED = -5
 };
 
 /* A host-provided byte sink. The library hands bytes to the host via write();
@@ -137,6 +163,27 @@ typedef struct ZenHostApi {
      * to spend (a root's request, or one already answered), which is a REAL
      * result the caller can act on rather than the silence it used to get. */
     ZenStatus (*answer)(void* ctx, const uint8_t* payload, size_t len);
+    /* Deliberate office authorship (v5): the same trusted operations a native
+     * weave reaches through `mail.as_role(...)`. The library REQUESTS "speak as
+     * as_role" — it cannot attest anything: the host knows the exact weave bound
+     * to this context, verifies role_holder(as_role) == that weave AT THIS
+     * MOMENT, and stamps the provenance itself. Every string is NUL-terminated
+     * and valid only for the call. ZEN_ERR_ROLE_AUTHORSHIP_DENIED means the
+     * sender does not hold that office — nothing was queued, nothing downgraded.
+     *
+     * office_send_to_role carries TWO roles that are different facts: as_role is
+     * the office spoken for (verified now); to_role is the destination slot
+     * (resolved at delivery). office_publish reports the recipient count through
+     * `recipients_out` (may be NULL) so "authorized, zero listeners" and
+     * "authorship denied" stay distinct across the seam. */
+    ZenStatus (*office_send)(void* ctx, const char* as_role, uint64_t target, uint64_t reply_to,
+                             uint64_t correlation, const uint8_t* payload, size_t len);
+    ZenStatus (*office_send_to_role)(void* ctx, const char* as_role, const char* to_role,
+                                     uint64_t reply_to, uint64_t correlation,
+                                     const uint8_t* payload, size_t len);
+    ZenStatus (*office_publish)(void* ctx, const char* as_role, uint64_t reply_to,
+                                uint64_t correlation, const uint8_t* payload, size_t len,
+                                uint64_t* recipients_out);
 } ZenHostApi;
 
 /* The single descriptor a Weave library exposes, returned by zen_weave_abi().
@@ -164,12 +211,18 @@ typedef struct ZenWeaveAbi {
      *
      * `provenance` is a ZEN_PROV_* flag word and `attested_sequence` is the
      * sequence Loom attested (meaningful only for ZEN_PROV_ACTIVATION, else 0).
-     * Both are host-computed delivery facts, not payload: a library may trust
+     * `authored_role` (v5) is the office this delivery was DELIBERATELY authored
+     * as, verified by the host at the authorship moment — NULL (or empty) means
+     * personal speech, which no real office can be confused with. It is a
+     * separate parameter, not a ZEN_PROV_* kind, because it is a separate axis:
+     * the conversation/lifecycle standing and the authored office may coexist.
+     * The string is NUL-terminated and valid only for the duration of the call.
+     * All are host-computed delivery facts, not payload: a library may trust
      * them exactly as far as it trusts `sender`, and can neither forge one on
      * the way out nor find one on an ordinary message. */
     ZenStatus (*handle)(void* instance, uint64_t sender, uint64_t reply_to, uint64_t correlation,
-                        uint32_t provenance, int64_t attested_sequence, const uint8_t* payload,
-                        size_t len, const ZenHostApi* host);
+                        uint32_t provenance, int64_t attested_sequence, const char* authored_role,
+                        const uint8_t* payload, size_t len, const ZenHostApi* host);
 } ZenWeaveAbi;
 
 /* The one exported symbol every Zen Weave library provides. Returns a pointer to
