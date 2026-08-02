@@ -95,6 +95,114 @@ public:
             role, loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
     }
 
+    // ---- deliberate office authorship (R2D-0) -------------------------------
+    //
+    // THE LAW: a weave may hold an office and still speak personally. Holding is
+    // never speaking-for: `mail.send(...)` from a role holder arrives as
+    // personal speech, always. Speaking AS the office is one deliberate,
+    // per-statement act:
+    //
+    //     mail.as_role("matchmaker").send(player, MatchCreated{server});
+    //     mail.as_role("worker.a").send_to_role("dispatcher", JobDone{...});
+    //     mail.as_role("worker.a").publish(WorkerOpen{...});
+    //
+    // and Loom verifies AT THAT MOMENT that this weave holds the office, then
+    // carries the fact as delivery provenance the recipient reads back with
+    // `authored_from_role()`. The grammar keeps the two roles impossible to
+    // confuse: who I speak AS lives in as_role(), where I speak TO lives in the
+    // same verb it always did.
+
+    /// The office view: this weave, deliberately speaking as `role` — for
+    /// exactly the statements made through it, each freshly verified.
+    ///
+    /// IT IS SYNTAX, NOT AUTHORITY. The view carries a role NAME and nothing
+    /// else — no verification result, no capability — so every send/publish
+    /// through it performs the full authorship request, membership check
+    /// included, exactly as if spelled longhand. Role tenure can change
+    /// between two statements; each statement answers for itself, at the bus.
+    ///
+    /// The type still refuses to be a convenient thing to keep: it cannot be
+    /// copied or passed onward, and its verbs are rvalue-qualified, so the
+    /// intended spelling is the one-expression form —
+    ///
+    ///     mail.as_role("worker.a").publish(WorkerOpen{...});
+    ///
+    /// A view wrestled into a named variable has no usable verbs without a
+    /// deliberate std::move — and even that gains nothing, because there is
+    /// nothing stored to gain: the check is fresh either way. (It also holds a
+    /// reference to this per-delivery Mail, which is the other reason not to
+    /// keep one.)
+    class Office {
+    public:
+        Office(const Office&) = delete;
+        Office& operator=(const Office&) = delete;
+        Office(Office&&) = delete;
+        Office& operator=(Office&&) = delete;
+
+        /// Office-authored direct send. An invalid Ticket means the authorship
+        /// was REFUSED — this weave does not hold the office — and nothing was
+        /// queued (the refusal is on the tap as RoleAuthorshipDenied). A valid
+        /// Ticket is a queued delivery, subject to every ordinary delivery law.
+        template <class T>
+        loom::Ticket send(loom::WeaveId target, const T& msg,
+                          std::uint64_t correlation = 0) && {
+            return mail_.bus_.office_send(
+                role_, target, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{},
+                                             correlation));
+        }
+
+        /// Office-authored send to whoever holds `to_role`. The authored office
+        /// and the destination are separate facts and stay separate: authorship
+        /// is verified now, the destination resolves at delivery.
+        template <class T>
+        loom::Ticket send_to_role(std::string_view to_role, const T& msg,
+                                  std::uint64_t correlation = 0) && {
+            return mail_.bus_.office_send_to_role(
+                role_, to_role, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{},
+                                              correlation));
+        }
+
+        /// Office-authored publication. `authored` says whether the office
+        /// spoke at all; `recipients` is the fanout count only when it did —
+        /// so a denied publication can never be mistaken for an authorized one
+        /// that found no listeners.
+        template <class T>
+        loom::OfficePublication publish(const T& msg, std::uint64_t correlation = 0) && {
+            return mail_.bus_.office_publish(
+                role_, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{}, correlation));
+        }
+
+    private:
+        friend class Mail;
+        Office(Mail& mail, std::string_view role) : mail_(mail), role_(role) {}
+
+        Mail& mail_;
+        std::string_view role_;
+    };
+
+    /// Deliberately speak as `role` for the statement(s) chained onto the
+    /// result. Verification happens per statement, at the bus — this call
+    /// itself checks nothing and grants nothing.
+    Office as_role(std::string_view role) { return Office(*this, role); }
+
+    /// Was THIS delivery deliberately authored as `role`, with Loom having
+    /// verified at the authorship moment that the sender held it? False for
+    /// personal speech from the very same holder — that is the entire point —
+    /// and false for empty `role`, which no delivery can be authored as.
+    ///
+    /// A historical fact about the statement, not about now: the office may
+    /// have moved since. It composes with, and never replaces, the ordinary
+    /// facts (`sender()`, `answers_ask()`): trust the OFFICE through this,
+    /// trust the exact WEAVE through the stamp.
+    bool authored_from_role(std::string_view role) const {
+        return in_.provenance.authored_from_role(role);
+    }
+
+    /// The office this delivery was deliberately authored as — empty for
+    /// personal speech. Diagnostics-friendly form of the same stamped fact;
+    /// empty can never name a real office (an empty role is not bindable).
+    std::string_view authored_role() const { return in_.provenance.authored_role(); }
+
     // ---- authenticated lifecycle conversation (R2B-1) -----------------------
     //
     // THE LAW: a role tells Loom WHERE to deliver an ask; an authenticated

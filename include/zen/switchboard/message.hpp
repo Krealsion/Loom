@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace loom {
@@ -57,12 +59,28 @@ private:
 /// claiming its inheritance by role had no way to know whether the answer came
 /// from the steward it actually reached.
 ///
+/// TWO AXES, DELIBERATELY, NOT ONE ENUM (R2D-0). The conversation/lifecycle
+/// fact (`Kind`) and the AUTHORED OFFICE are different questions about one
+/// delivery:
+///
+///   KIND          "what standing does Loom give this message in a
+///                  conversation or a lifecycle?"    (None / Answer / Activation)
+///   AUTHORED ROLE "which office did the sender deliberately speak as,
+///                  with Loom verifying it held that office at authorship?"
+///                  (empty = none — spoken personally)
+///
+/// They are carried as separate fields precisely so a future statement can be
+/// both — an authenticated answer that is also office speech — without this
+/// type being redesigned. The public V1 authoring surface does not produce the
+/// combination; the representation refuses to make it unrepresentable.
+///
 /// IT IS NOT A PAYLOAD FIELD, AND IT CANNOT BECOME ONE. There is no wire
 /// representation: it is never serialized, never part of any schema, and every
 /// ordinary enqueue path (`send`, `send_to_role`, `publish`, and their `_as`
 /// forms) OVERWRITES it with nothing. So a weave that stores a delivered Message
 /// and re-sends it — the copy-what-you-observed attack — sends an ordinary
-/// message. Only the Switchboard's two attesting paths write a non-empty one.
+/// message. Only the Switchboard's attesting paths (the answer doors, the
+/// lifecycle door, and the office-authorship doors) write a non-empty one.
 class Provenance {
 public:
     enum class Kind : std::uint8_t {
@@ -90,6 +108,18 @@ public:
         return p;
     }
 
+    /// Attach the authored-office fact to this provenance — the second axis,
+    /// composable onto any Kind. Public for exactly the reason `attested` is:
+    /// there is nothing to reach with it. Every enqueue path overwrites a
+    /// caller-supplied provenance, so the only writers whose value survives to a
+    /// recipient are the Switchboard's own authorship doors (which verified the
+    /// membership first) and a library dispatch shim describing a delivery its
+    /// host already stamped.
+    Provenance with_authored_role(std::string role) && {
+        authored_role_ = std::move(role);
+        return std::move(*this);
+    }
+
     Kind kind() const noexcept { return kind_; }
 
     /// Is this delivery THE one authorized answer to a request this weave sent?
@@ -103,9 +133,29 @@ public:
     /// authenticate another.
     std::int64_t attested_sequence() const noexcept { return sequence_; }
 
+    /// The office this delivery was DELIBERATELY authored as, verified by Loom
+    /// at the authorship moment — or empty, which means exactly "spoken
+    /// personally". Empty cannot be mistaken for a real office: an empty string
+    /// is never a bindable role, and `authored_from_role` never matches it.
+    ///
+    /// A historical fact about the statement, never a claim about now: the
+    /// author held the office when it deliberately spoke as it. Later role
+    /// movement does not rewrite it, and current membership is a different
+    /// question (`Switchboard::role_holder`).
+    std::string_view authored_role() const noexcept { return authored_role_; }
+
+    /// Was this delivery deliberately authored as `role`? False for empty
+    /// `role`, so "no office" can never satisfy a membership question.
+    bool authored_from_role(std::string_view role) const noexcept {
+        return !role.empty() && authored_role_ == role;
+    }
+
 private:
     Kind kind_ = Kind::None;
     std::int64_t sequence_ = 0;
+    /// The second axis. Empty = spoken personally (the overwhelmingly common
+    /// case, and the default every ordinary enqueue restores).
+    std::string authored_role_{};
 };
 
 /// The right to attach a lifecycle attestation — a capability OBJECT, not a

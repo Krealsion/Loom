@@ -87,6 +87,17 @@ enum class RefusalReason : std::uint8_t {
     /// happen. An operator reading it looks at the participants, not at a
     /// grant, a payload, or an address.
     AdmissionRevoked,
+    /// A weave deliberately asked to speak as an office it does not hold
+    /// (R2D-0): the role is unbound, held by somebody else, or the speaker has
+    /// no identity to hold one. Refused at the AUTHORSHIP moment — nothing was
+    /// queued, and the statement was NOT downgraded to personal speech.
+    ///
+    /// Its own reason for the family's usual reason: `CapabilityDenied` would
+    /// send an operator to edit a grant that may be perfectly correct, and
+    /// `ForeignAuthority` would imply a forged capability object where none was
+    /// presented. What failed is narrower than either — the sender is not the
+    /// current holder of the office it asked to represent.
+    RoleAuthorshipDenied,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -138,6 +149,12 @@ struct BusEvent {
     std::uint64_t expected_requester_incarnation = 0;
     std::uint64_t requester_life_now = 0;
     std::uint64_t requester_incarnation_now = 0;
+    /// The office this delivery was DELIBERATELY authored as (R2D-0) — the
+    /// envelope's STAMPED fact, never a lookup of the sender's current role.
+    /// Empty for personal speech, which is almost everything. A tap reading it
+    /// sees historical authorship: `role_of(sender)` at observation time answers
+    /// a different question and may already disagree.
+    std::string authored_role{};
 };
 
 using Observer = std::function<void(const BusEvent&)>;
@@ -454,6 +471,54 @@ public:
     /// at delivery (see Grant::permits_role).
     Ticket send_to_role(std::string_view role, Message msg) override;
     Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
+
+    // ---- deliberate office authorship (R2D-0) ------------------------------
+    //
+    //     A weave may deliberately author one statement in the capacity of a
+    //     role it currently holds. Loom verifies that membership at the
+    //     authorship moment and carries the office fact as immutable delivery
+    //     provenance. Merely holding the role attaches nothing.
+    //
+    // THE AUTHORIZATION MOMENT IS AUTHORSHIP/ENQUEUE, deliberately: "does this
+    // exact sender hold `as_role` NOW, as it deliberately asks to speak as it?"
+    // Deciding at delivery instead would let a statement's meaning change
+    // because the role moved while it waited in the queue. Once stamped, the
+    // fact is HISTORICAL — delivery never recomputes it, and later role
+    // movement never rewrites it. Every independent delivery law (sender life,
+    // the seal, the ordinary grant, routing) still applies unchanged: office
+    // authorship changes why a recipient may trust who spoke, never where the
+    // sender may speak or what it may emit.
+    //
+    // The `*_as` forms are the verified doors (the WeaveBus and a trusted
+    // host bridging a connection use them; the sender is stamped from the
+    // caller's authority, never from a payload). A refusal queues NOTHING and
+    // is visible on the tap as `RoleAuthorshipDenied` — never downgraded to
+    // personal speech. The Bus-inherited root forms below them refuse always:
+    // a root has no identity and holds no office.
+
+    /// Verified office-authored direct send. Invalid Ticket = authorship
+    /// refused, nothing queued (the refusal is on the tap and in the journal).
+    Ticket office_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
+                          Message msg);
+    /// Verified office-authored role-addressed send. `as_role` is the office
+    /// spoken for (verified now); `to_role` is the destination slot (resolved
+    /// at delivery). Carried separately end to end — an office-authored send to
+    /// another office preserves BOTH facts without conflating them.
+    Ticket office_send_to_role_as(WeaveId as_sender, std::string_view as_role,
+                                  std::string_view to_role, Message msg);
+    /// Verified office-authored publication. Keeps "authorship refused" and
+    /// "authorized, zero recipients" distinct; each recipient's delivery is
+    /// still independently authorized against the sender's ordinary grant.
+    OfficePublication office_publish_as(WeaveId as_sender, std::string_view as_role, Message msg);
+
+    /// The Bus office verbs, as the ROOT surface: refused, visibly. A root has
+    /// no weave identity, so it holds no office and cannot deliberately speak
+    /// for one — `send_as`/`office_send_as` exist precisely so a trusted host
+    /// speaks AS a weave when it must.
+    Ticket office_send(std::string_view as_role, WeaveId target, Message msg) override;
+    Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+                               Message msg) override;
+    OfficePublication office_publish(std::string_view as_role, Message msg) override;
 
 
     /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
@@ -1020,6 +1085,16 @@ private:
                                   std::int64_t sequence) override {
             return sb_.announce_as(self_, authority, target, std::move(msg), sequence);
         }
+        Ticket office_send(std::string_view as_role, WeaveId target, Message msg) override {
+            return sb_.office_send_as(self_, as_role, target, std::move(msg));
+        }
+        Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+                                   Message msg) override {
+            return sb_.office_send_to_role_as(self_, as_role, to_role, std::move(msg));
+        }
+        OfficePublication office_publish(std::string_view as_role, Message msg) override {
+            return sb_.office_publish_as(self_, as_role, std::move(msg));
+        }
 
     private:
         Switchboard& sb_;
@@ -1029,10 +1104,27 @@ private:
     /// `preparation` is set by exactly one caller — `ask_candidate_to_prepare` —
     /// and is the invalid id everywhere else, so the ordinary send paths cannot
     /// mark an envelope as a preparation ask even by accident.
+    ///
+    /// `provenance` defaults to NONE on all three, which is the clearing rule
+    /// itself: an ordinary enqueue overwrites whatever the caller's Message
+    /// carried with the default, so only the attesting doors — which pass one
+    /// explicitly — ever queue a non-empty fact.
     Ticket enqueue_directed(WeaveId target, Message msg, bool gated,
                             Provenance provenance = Provenance{}, TxnId preparation = TxnId{});
-    Ticket enqueue_role(std::string role, Message msg, bool gated);
-    std::size_t fanout(Message msg, bool gated);
+    Ticket enqueue_role(std::string role, Message msg, bool gated,
+                        Provenance provenance = Provenance{});
+    std::size_t fanout(Message msg, bool gated, Provenance provenance = Provenance{});
+
+    /// THE ONE MEMBERSHIP QUESTION every office-authorship door asks (R2D-0):
+    /// does `as_sender` hold `as_role` right now, at the moment it deliberately
+    /// asks to speak as it? True iff the role is bound and its holder is exactly
+    /// this sender. It reads the same table routing binds — no cache, no copy.
+    bool holds_role_now(WeaveId as_sender, std::string_view as_role) const;
+
+    /// Refuse an office-authorship request: visible on the tap and in the
+    /// journal as `RoleAuthorshipDenied`, and NOTHING queued. Returns the
+    /// invalid ticket every refused authorship door hands back.
+    Ticket refuse_office(WeaveId target, WeaveId as_sender, const Message& msg);
 
     /// The one write path for an attested answer. Refuses — visibly, on the tap
     /// and in the journal — when the caller is not the weave currently being

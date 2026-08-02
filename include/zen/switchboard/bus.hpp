@@ -16,6 +16,25 @@ struct Ticket {
     bool valid() const noexcept { return seq != 0; }
 };
 
+/// The result of an office-authored publication (R2D-0) — two facts that a bare
+/// count would collapse and that are different problems:
+///
+///   authorship refused          the sender does not hold the office it asked
+///                               to speak for; NOTHING fanned out
+///   authorized, zero listeners  the office spoke; nobody currently accepts
+///                               the shape — the same honest 0 an ordinary
+///                               publish can return
+///
+/// `authored` answers the authorship question; `recipients` is meaningful only
+/// when it is true. Deliberately small: a publication result, not a Result
+/// framework.
+struct OfficePublication {
+    bool authored = false;
+    std::size_t recipients = 0;
+
+    explicit operator bool() const noexcept { return authored; }
+};
+
 /// The abstract send/publish surface a Weave's handle() sends through. The
 /// Switchboard implements it directly; a host adapter for a library Weave
 /// implements it by forwarding serialized messages across the C ABI. Because a
@@ -113,6 +132,55 @@ public:
         (void)msg;
         (void)sequence;
         return Ticket{};
+    }
+
+    // ---- deliberate office authorship (R2D-0) -------------------------------
+    //
+    // THE LAW: *a weave may deliberately author one statement in the capacity of
+    // a role it currently holds; Loom verifies that membership at the authorship
+    // moment and carries the resulting office fact as immutable delivery
+    // provenance. Merely holding the role attaches nothing.*
+    //
+    // Every `office_*` verb's FIRST parameter is the office being spoken for;
+    // the remaining parameters are exactly the ordinary verb's. Authorship
+    // changes why a receiver may trust WHO spoke — it never widens where the
+    // sender may speak or what it may emit, so the ordinary grant still
+    // authorizes the delivery afterwards, unchanged.
+    //
+    // The defaults refuse, truthfully: a Bus that is not a live speaking context
+    // has no membership to verify and no standing to stamp an office fact. An
+    // invalid Ticket / unauthored publication means NOTHING WAS QUEUED — a
+    // refused authorship is never silently downgraded to personal speech.
+
+    /// Author `msg` deliberately as `as_role`, delivered to a direct target.
+    /// An invalid Ticket means authorship was refused and nothing was queued.
+    virtual Ticket office_send(std::string_view as_role, WeaveId target, Message msg) {
+        (void)as_role;
+        (void)target;
+        (void)msg;
+        return Ticket{};
+    }
+
+    /// Author `msg` deliberately as `as_role`, delivered to whoever holds
+    /// `to_role`. The two roles are DIFFERENT FACTS carried separately: the
+    /// first is the office spoken for (verified at authorship), the second is
+    /// the destination slot (resolved at delivery, exactly as send_to_role).
+    virtual Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+                                       Message msg) {
+        (void)as_role;
+        (void)to_role;
+        (void)msg;
+        return Ticket{};
+    }
+
+    /// Author `msg` deliberately as `as_role`, published to every accepter.
+    /// The result keeps "authorship refused" and "authorized, zero recipients"
+    /// distinct — a publication's honest 0 must not be confusable with a
+    /// refusal, and vice versa.
+    virtual OfficePublication office_publish(std::string_view as_role, Message msg) {
+        (void)as_role;
+        (void)msg;
+        return OfficePublication{};
     }
 
 protected:

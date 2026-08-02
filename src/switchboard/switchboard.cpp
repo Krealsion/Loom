@@ -37,6 +37,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "SealedSpeech";
     case RefusalReason::AdmissionRevoked:
         return "AdmissionRevoked";
+    case RefusalReason::RoleAuthorshipDenied:
+        return "RoleAuthorshipDenied";
     }
     return "?";
 }
@@ -166,6 +168,12 @@ std::string Refusal::message() const {
         // and the topology change it was carrying did not happen.
         return "the scheduled admission no longer described the world; nothing "
                "changed and the incumbent is still the service";
+    case RefusalReason::RoleAuthorshipDenied:
+        // Names the AUTHORSHIP, not a grant or a forged capability: the sender
+        // asked to speak for an office it does not currently hold. Nothing was
+        // queued, and nothing was downgraded to personal speech.
+        return "the sender does not hold the role it deliberately asked to "
+               "speak for; nothing was queued";
     }
     return "?";
 }
@@ -333,7 +341,7 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
                                      Provenance provenance, TxnId preparation) {
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
-    msg.provenance = provenance;
+    msg.provenance = std::move(provenance);
     // AND EVERY ENQUEUE PATH ALSO DECIDES WHOSE LIFE IS SPEAKING (R2B-2b). The
     // stamp is read from the bus's own record of the sender, never from anything
     // the caller supplied, for exactly the reason provenance is: a weave hands the
@@ -345,10 +353,15 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     return Ticket{seq};
 }
 
-Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated) {
+Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
+                                 Provenance provenance) {
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
-    msg.provenance = Provenance{};
+    // The same single assignment that makes provenance unforgeable on the
+    // directed path: ordinary callers pass nothing and the default ERASES
+    // whatever the Message carried; only the office-authorship door passes a
+    // verified fact.
+    msg.provenance = std::move(provenance);
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
     queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role), life});
     return Ticket{seq};
@@ -656,7 +669,7 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
                             Provenance::attested(Provenance::Kind::Activation, sequence));
 }
 
-std::size_t Switchboard::fanout(Message msg, bool gated) {
+std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) {
     const std::string name(msg.payload.schema().name());
     const std::uint32_t version = msg.payload.schema().version();
     const std::uint64_t sender_life = gated ? life_of(msg.sender) : 0;
@@ -679,9 +692,13 @@ std::size_t Switchboard::fanout(Message msg, bool gated) {
         // provenance whatever the caller's copy held. EVERY recipient's envelope is
         // stamped, so a publication cannot fan out past a dead author on the
         // strength of one check: each delivery answers the question for itself.
-        queue_.push_back(
-            Envelope{Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id,
-                     seq, gated, std::string{}, sender_life});
+        // An office-authored publication (the one caller that passes a
+        // provenance) stamps the SAME verified fact on every recipient's
+        // envelope — one authorship moment, one fact, every listener.
+        Envelope env{Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id,
+                     seq, gated, std::string{}, sender_life};
+        env.msg.provenance = provenance;
+        queue_.push_back(std::move(env));
         ++recipients;
     }
     return recipients;
@@ -728,6 +745,98 @@ Ticket Switchboard::send_as_to_role(WeaveId as_sender, std::string_view role, Me
     return enqueue_role(std::string(role), std::move(msg), /*gated=*/true);
 }
 
+// ---- deliberate office authorship (R2D-0) -----------------------------------
+//
+// THE AUTHORIZATION MOMENT IS HERE — authorship/enqueue, never delivery. Each
+// door asks the one question ("does this exact sender hold that role NOW, as it
+// deliberately asks to speak as it?"), stamps the verified fact into the
+// envelope's provenance on yes, and refuses visibly on no. From here on the
+// fact is HISTORY: deliver_one carries it untouched, rechecks nothing about it,
+// and every independent delivery law (sender life, the seal, the grant,
+// routing) still runs exactly as it always did.
+
+bool Switchboard::holds_role_now(WeaveId as_sender, std::string_view as_role) const {
+    if (!as_sender.valid() || as_role.empty()) {
+        return false; // no identity holds no office; the empty name is no office
+    }
+    const auto it = roles_.find(std::string(as_role));
+    return it != roles_.end() && it->second == as_sender;
+}
+
+Ticket Switchboard::refuse_office(WeaveId target, WeaveId as_sender, const Message& msg) {
+    // Visible on the tap and in the journal with the precise reason — and the
+    // caller receives the INVALID ticket, because nothing was queued. A refusal
+    // ticket here would tell an office its statement had been sent; silence
+    // would downgrade unauthorized office speech into a mystery. Neither is
+    // this: the attempt is named, the statement went nowhere.
+    (void)refuse_now(target, as_sender, msg, RefusalReason::RoleAuthorshipDenied);
+    return Ticket{};
+}
+
+Ticket Switchboard::office_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
+                                   Message msg) {
+    if (!holds_role_now(as_sender, as_role)) {
+        return refuse_office(target, as_sender, msg);
+    }
+    msg.sender = as_sender;
+    return enqueue_directed(target, std::move(msg), /*gated=*/true,
+                            Provenance{}.with_authored_role(std::string(as_role)));
+}
+
+Ticket Switchboard::office_send_to_role_as(WeaveId as_sender, std::string_view as_role,
+                                           std::string_view to_role, Message msg) {
+    if (!holds_role_now(as_sender, as_role)) {
+        return refuse_office(WeaveId{}, as_sender, msg);
+    }
+    // TWO ROLES, TWO FACTS, TWO FIELDS: the authored office rides the
+    // provenance; the destination rides the envelope's role slot and is
+    // resolved at delivery exactly as an ordinary send_to_role. Nothing
+    // downstream can mistake one for the other because they never share a
+    // representation.
+    msg.sender = as_sender;
+    return enqueue_role(std::string(to_role), std::move(msg), /*gated=*/true,
+                        Provenance{}.with_authored_role(std::string(as_role)));
+}
+
+OfficePublication Switchboard::office_publish_as(WeaveId as_sender, std::string_view as_role,
+                                                 Message msg) {
+    if (!holds_role_now(as_sender, as_role)) {
+        (void)refuse_office(WeaveId{}, as_sender, msg);
+        return OfficePublication{}; // refused: not authored, and 0 means nothing
+    }
+    // No sealed-speech check is needed before the fanout, and not because it
+    // was forgotten: a sealed weave holds no role — seal_weave refuses role
+    // holders, and admission unseals before it binds — so a candidate already
+    // failed the membership question above, with the precise reason.
+    msg.sender = as_sender;
+    const std::size_t recipients =
+        fanout(std::move(msg), /*gated=*/true,
+               Provenance{}.with_authored_role(std::string(as_role)));
+    return OfficePublication{true, recipients};
+}
+
+Ticket Switchboard::office_send(std::string_view as_role, WeaveId target, Message msg) {
+    // The root surface: a host program speaking with no weave identity. It
+    // holds no office by definition, and the refusal says so on the tap rather
+    // than silently returning the base default — "a root tried to author
+    // office speech" is exactly the kind of thing an operator wants to see.
+    (void)as_role;
+    return refuse_office(target, WeaveId{}, msg);
+}
+
+Ticket Switchboard::office_send_to_role(std::string_view as_role, std::string_view to_role,
+                                        Message msg) {
+    (void)as_role;
+    (void)to_role;
+    return refuse_office(WeaveId{}, WeaveId{}, msg);
+}
+
+OfficePublication Switchboard::office_publish(std::string_view as_role, Message msg) {
+    (void)as_role;
+    (void)refuse_office(WeaveId{}, WeaveId{}, msg);
+    return OfficePublication{};
+}
+
 void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refusal& refusal) {
     JournalSlot& slot = journal_[seq % kJournalCapacity];
     if (slot.seq == seq) {
@@ -766,6 +875,11 @@ void Switchboard::deliver_one(Envelope env) {
     ev.sender = env.msg.sender;
     ev.schema_name = env.msg.payload.schema().name();
     ev.schema_version = env.msg.payload.schema().version();
+    // The STAMPED authorship fact, read from the envelope — never a role_of()
+    // lookup, which would report current membership instead of historical
+    // authorship (R2D-0). Set before any refusal branch, so a refused
+    // office-authored delivery still shows which office it was authored as.
+    ev.authored_role = std::string(env.msg.provenance.authored_role());
 
     // Capability authorization — only for Weave-originated (gated) messages, and
     // *before* role resolution and the gate, so a denied message never reaches
