@@ -26,6 +26,7 @@ add_executable(zen-tests
     test_fuzz.cpp
     test_switchboard.cpp
     test_provenance.cpp
+    test_role_authorship.cpp
     test_harness.cpp
     test_breathing.cpp
     test_schema_codec.cpp
@@ -261,8 +262,8 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # exit-status check is the source of truth — no output-scraping needed. The portable
 # suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard provenance harness breathing schema_codec weave_shape weave poke console component
-    pixel bridge)
+    switchboard provenance role_authorship harness breathing schema_codec weave_shape weave poke
+    console component pixel bridge)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
