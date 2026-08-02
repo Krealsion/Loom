@@ -25,7 +25,7 @@ application-level workarounds are built and **priced**: a registry's belief
 rests on an unauthenticated announcement; inverting push to pull works but
 spends the Loom-wide deferral bound, strands strict receivers across honest
 replacement, and cannot cover observers of publications
-([evidence](../evidence/night-lab.md#role-authored-provenance)).
+([evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced)).
 
 The narrowest shape, if built, is a delivery fact of the same family as
 `answers_ask()` — *"the sender held role R when this was sent."* Any syntax
