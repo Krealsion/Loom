@@ -1,7 +1,7 @@
 # Messaging — reference
 
 The Switchboard: the in-process bus, first live boundary. Laws:
-[MSG-01..06](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
+[MSG-01..07](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
 Guide: [messaging](../guides/messaging.md).
 
 ## Dispatch model
@@ -33,10 +33,13 @@ distinct observable reason:
 8  the gate                      GateRefused (with the gate's error)
 ```
 
-Host/root sends (`Switchboard::send`, ungated) skip 1–3. Two further reasons
-exist: `ForeignAuthority` (an authority this Loom did not issue),
-`Exhausted` (a published bound), and `AdmissionRevoked` (a scheduled admission
-whose world drifted — an admission refusal, not a message failure).
+Host/root sends (`Switchboard::send`, ungated) skip 1–3. Further reasons
+exist: `ForeignAuthority` (an authority this Loom did not issue), `Exhausted`
+(a published bound), `AdmissionRevoked` (a scheduled admission whose world
+drifted — an admission refusal, not a message failure), and
+`RoleAuthorshipDenied` (an office-authorship request from a sender that does
+not hold the office — refused at the *authorship* moment, before anything is
+queued; see below).
 
 ## Addressing
 
@@ -51,6 +54,64 @@ Grants authorize by shape→target or shape→role
 ([reference/capabilities](capabilities.md)); authorization-by-role happens
 *before* resolution, so an unauthorized sender cannot learn whether a role is
 held.
+
+## Office authorship (role-authored provenance)
+
+A weave may **deliberately** author one statement in the capacity of a role it
+currently holds ([MSG-07](../laws/messaging-laws.md)). The maker surface is a
+per-statement view:
+
+```cpp
+mail.as_role("matchmaker").send(player, MatchCreated{server});
+mail.as_role("worker.a").send_to_role("dispatcher", JobDone{...});   // AS worker.a, TO dispatcher
+mail.as_role("worker.a").publish(WorkerOpen{...});
+```
+
+Loom verifies membership at the **authorship moment** (`role_holder(R) ==
+sender`, at enqueue) and stamps the fact as delivery provenance. The view
+carries a role name and no authority — every emission re-verifies; it is
+non-copyable with rvalue-qualified verbs, so the one-expression spelling is
+the intended one. Raw `loom::Weave` authors use the underlying Bus verbs
+(`office_send` / `office_send_to_role` / `office_publish`, office first,
+ordinary parameters after).
+
+The recipient reads the stamped fact off the delivery — no Switchboard
+access, no role lookup, no payload field:
+
+```cpp
+if (!mail.authored_from_role("matchmaker")) { reject(); return; }
+// mail.authored_role() — the exact office, empty for personal speech
+```
+
+Semantics, exactly:
+
+- **Holding attaches nothing.** The same holder's `mail.send(...)` arrives
+  with `authored_from_role(R) == false`; only the explicit act stamps.
+- **Historical, immutable.** The fact means "the author held R and
+  deliberately spoke as R *when the statement was made*" — later role
+  movement never rewrites or clears it, and delivery never recomputes it.
+  Current membership is `role_holder`'s question, a different one.
+- **Refusal is loud and precise.** A sender that does not hold the office gets
+  the invalid Ticket / `OfficePublication{authored=false}`, nothing is queued,
+  and the tap shows `RoleAuthorshipDenied` — never a downgrade to personal
+  speech. `OfficePublication{authored=true, recipients=0}` is the different,
+  honest fact of an office that spoke to an empty room.
+- **Orthogonal to destination** (MSG-04): an office-authored send to another
+  office preserves both facts — authored as `worker.a`, delivered to
+  `dispatcher` — in separate representations end to end.
+- **Not a super-grant.** Every office-authored delivery is still authorized
+  against the sender's ordinary grant, and sender-life/seal/routing laws
+  refuse independently — office speech from a dead life is `SenderLifeEnded`.
+- **Unlaunderable.** Provenance has no wire form; every ordinary enqueue
+  clears it, so a stored-and-resent Message is personal speech.
+- **Orthogonal to answers/activations in representation**: the authored office
+  is a second axis beside `answers_ask()`/`lifecycle_attested()`, so the type
+  admits combined facts (no public V1 door produces them; an answer's
+  provenance never inherits the ask's office).
+- **Dynamic parity** ([dynamic-abi](dynamic-abi.md), v5): the same authoring
+  and reading surface works in a loaded weave, with the host verifying every
+  request. Out-of-process weaves fail closed in both directions — the
+  isolation pipe carries no attestation in V1.
 
 ## Answers
 

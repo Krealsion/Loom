@@ -45,11 +45,17 @@ not talk.
 ## What is different from native (and what is not)
 
 Answers work identically — a dynamic `mail.answer()` succeeds or is refused
-*with the weave told* ([ANS-06](../laws/answer-authority-laws.md)). One
-structural difference: an ordinary dynamic `send` returns no bus ticket (no
-seq crosses the C seam), so delivery fate is observed at recipients and taps,
-not at the sender — which is the substrate-wide truth anyway
+*with the weave told* ([ANS-06](../laws/answer-authority-laws.md)). Office
+authorship works identically too (v5): `mail.as_role(...)` requests, the host
+verifies the membership at that moment, and incoming
+`mail.authored_from_role(...)` reads the same stamped fact a native recipient
+reads ([MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit)).
+One structural difference: an ordinary dynamic `send` returns no bus ticket
+(no seq crosses the C seam), so delivery fate is observed at recipients and
+taps, not at the sender — which is the substrate-wide truth anyway
 ([the seam](../reference/known-seams.md#sender-cannot-observe-send-fate)).
+An office-authored dynamic send is sharper: its ticket-validity does cross as
+a status, so a refused authorship is *told* rather than silent.
 
 Platforms: canonical on Linux/WSL; the opt-in Windows backend is
 development-only and says so ([reference/kernel](../reference/kernel.md)).
@@ -57,5 +63,5 @@ development-only and says so ([reference/kernel](../reference/kernel.md)).
 ## Deeper
 
 Reference: [kernel](../reference/kernel.md) ·
-[dynamic-abi](../reference/dynamic-abi.md) (v4). Real artifacts to crib:
-`tests/weavelib/` (e.g. `versioned_service.cpp`).
+[dynamic-abi](../reference/dynamic-abi.md) (v5). Real artifacts to crib:
+`tests/weavelib/` (e.g. `versioned_service.cpp`, `office_worker.cpp`).

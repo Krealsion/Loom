@@ -63,15 +63,14 @@ MEANS
 
 DOES NOT MEAN
 - that a message *from* a role-holder carries any attestation of that office —
-  **role-authored provenance does not exist**, and merely *holding* R could
-  never supply it anyway (the same weave, holding the same office, may speak
-  personally or as the office; holding is necessary, not sufficient). This is
-  the system's most evidence-backed open seam (five independent Night Lab
-  sightings). See
-  [known-seams](../reference/known-seams.md#role-authored-provenance).
+  merely *holding* R could never supply it (the same weave, holding the same
+  office, may speak personally or as the office; holding is necessary, not
+  sufficient). Deliberately speaking **as** R is its own explicit act with its
+  own law: [MSG-07](#msg-07--role-authorship-is-explicit).
 
-PROVEN BY — delivery-time resolution: suite `switchboard`; the *absence* half is
-documented, not pinned — see the seam entry and its evidence links.
+PROVEN BY — delivery-time resolution: suite `switchboard`; the
+destination/authorship orthogonality: suite `role_authorship` (all four
+combinations, and the two roles of an office-to-office send never conflating).
 
 ## MSG-05 — Refusals are structured and observable
 
@@ -101,8 +100,48 @@ MEANS
 - zero recipients is legal, not an error.
 
 DOES NOT MEAN
-- that publication is attestable — an observer of a publication can never prove
-  who held what office (part of the MSG-04 seam).
+- that an ordinary publication attests an office — office-authored publication
+  is the explicit act ([MSG-07](#msg-07--role-authorship-is-explicit)), whose
+  one authorship moment coincides with this law's one recipient-pick moment.
 
 PROVEN BY — `Switchboard::fanout`; suites `switchboard`, `kernel`
 (publication-across-admission ordering).
+
+## MSG-07 — Role authorship is explicit
+
+LAW — A delivery carries role-authored provenance only when the sender
+deliberately requested authorship as R **and** Loom verified at that moment
+that the sender held R. Holding R alone attaches nothing.
+
+MEANS
+- personal and office speech by the same WeaveId differ, and a recipient can
+  tell (`mail.authored_from_role(R)` / `mail.authored_role()`);
+- office identity can survive replacement: a successor legitimately authors as
+  the inherited role, a predecessor's *new* attempt refuses
+  (`RoleAuthorshipDenied` — never a silent downgrade to personal speech);
+- the recipient need not query current role topology — the delivery already
+  carries the historical fact, stamped at the authorship moment and never
+  recomputed from later topology;
+- publication can carry office provenance, to every recipient, with
+  "authorship refused" and "authorized, zero recipients" kept distinct
+  (`OfficePublication`);
+- the fact crosses the dynamic seam both ways (ABI v5), with the host
+  verifying membership — a library requests, never attests.
+
+DOES NOT MEAN
+- role R widens grants — every delivery is still authorized against the
+  sender's ordinary grant, and every independent delivery law (sender life,
+  the seal, routing) still applies;
+- role destination implies role authorship (MSG-04 is a different fact);
+- the current role holder necessarily authored old speech — the fact is
+  history, not a claim about now;
+- payload role strings have standing — provenance has no wire form, and a
+  copied Message re-sent is personal speech;
+- a successor inherits predecessor identity — the office survives its
+  officeholder precisely *without* conflating the two.
+
+PROVEN BY — `Switchboard::office_send_as` / `office_send_to_role_as` /
+`office_publish_as` (`holds_role_now` at enqueue); suite `role_authorship`
+(the hostile matrix, the replacement matrix, the definition-of-done program);
+suite `kernel` (dynamic parity, v4 refusal); suite `isolation` (fail-closed
+across the pipe); Night Lab follow-up `followups/role-authorship`.

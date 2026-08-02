@@ -30,7 +30,9 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
 - `Committed` at commit-call time — commit *schedules*; `AdmissionPending` is
   real (PR-07).
 - Prepared replacement preserves incumbent state — it does not (PR-09).
-- `send_to_role` says anything about the sender's office (MSG-04).
+- `send_to_role` says anything about the sender's office (MSG-04) — office
+  speech is its own explicit, verified act (`mail.as_role(...)`, MSG-07), and
+  merely holding a role attaches nothing.
 - A committed activation is answerable (LIFE-05).
 - Green means correct — "proven" means a regression test asserts it; check
   case *counts*, not just pass/fail.

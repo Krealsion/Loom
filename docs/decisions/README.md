@@ -12,6 +12,7 @@ the full narrative lives in [history](../history/README.md).
 | [admission-and-activation-share-one-boundary](admission-and-activation-share-one-boundary.md) | one envelope is both; commit schedules |
 | [committed-activation-is-not-answerable](committed-activation-is-not-answerable.md) | first breath is a fact, not an ask |
 | [no-rollback-after-committed-production](no-rollback-after-committed-production.md) | failure direction is refuse-before, never unwind-after |
+| [office-authorship-is-deliberate](office-authorship-is-deliberate.md) | speaking as an office is an explicit verified act, never inferred from holding |
 | [Zengine: timer-continuity-carries-remaining-duration](../../../Zengine/docs/decisions/timer-continuity-carries-remaining-duration.md) | durations cross; due times cannot |
 
 Shape of each: context → decision → alternatives considered → why rejected →
