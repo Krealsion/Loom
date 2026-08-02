@@ -4,8 +4,8 @@
 //
 // BUILD/VERIFY DIVISION: this backend is written by-the-book against the Console API but is NOT
 // compiled or run on the Linux CI box — it is Josh-verified in CLion on Windows. The Linux path is
-// proven; this is best-effort-correct. See DESIGN.md (the build-verify division) and the report's
-// Windows checklist.
+// proven; this is best-effort-correct. See docs/history/pre-r2c/DESIGN.md (the build-verify
+// division) and the report's Windows checklist.
 
 #include "terminal.hpp"
 
