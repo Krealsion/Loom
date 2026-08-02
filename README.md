@@ -1,250 +1,131 @@
 # loom
 
-The foundational layer of **Zen**: the message-representation and validation
-core every other part of the system links against.
+The substrate of **Zen**: a capability-secure fabric where makers compose each
+other's **native** code safely — each keeping ownership of their own work —
+with a machine-checkable, honest account of exactly what was contained.
 
-A Zen value **carries its own shape** — a reference to the schema it claims to
-be. That makes it typed enough to be *challenged* at any boundary, and dynamic
-enough to be *built at runtime* from a schema that was discovered (say, from a
-DLL loaded seconds ago) rather than compiled in. Exactly one gate, `admit`,
-guards every boundary: the live message bus and the persistence layer reach the
-same validator. Nothing crosses a boundary it cannot prove it belongs across.
-
-The library holds the **grammar, never the answers**: it provides schema, value,
-gate, registry, and serialization, and hard-codes no application message type
-and no policy.
-
-A second library, **`zen-switchboard`**, builds the first *live* boundary on top
-of the core: an in-process message bus that gates every delivery through the same
-`admit`. See `examples/heartbeat.cpp` and the Switchboard section of `DESIGN.md`.
-
-A third, **`zen-kernel`**, loads Weaves from dynamic libraries across a true C
-ABI: everything a `.so` hands back crosses as bytes and is re-admitted through
-the same gate, so the DLL seam is just another boundary the one gate guards (with
-hot-reload that survives a library swap). See the Kernel section of `DESIGN.md`.
-
-A fourth, header-only **weave** layer (`include/zen/weave/`), is pure sugar: a
-maker writes each shape once as a plain C++ struct (`ZEN_SHAPE`) and the runtime
-`Schema`, the typed conversions, and the derived `snapshot`/`revive`/dispatch all
-follow — a struct-derived schema shares a door with the hand-built one by
-content-id. See `examples/heartbeat_woven.cpp` and the weaving section of
-`DESIGN.md`.
-
-**Capabilities (B1):** every Weave carries a host-assigned **grant** (default
-empty), and the bus authorizes each Weave-originated send against it *before* the
-gate — a denied send is `CapabilityDenied`, never delivered, and never reaches the
-gate, so "one gate" stays literally true. The kernel's control Weave makes the
-load surface a gated message door. See the Capabilities section of `DESIGN.md`.
-
-```
-include/zen/             public headers (core)
-include/zen/switchboard/ public headers (bus)
-src/                     implementation        tests/   suite (doctest)
-examples/                quickstart, heartbeat  DESIGN.md  the full design rationale
-```
+A Zen value **carries its own shape**, typed enough to be challenged at any
+boundary and dynamic enough to be built at runtime from a schema discovered
+seconds ago. Exactly one gate, `admit`, guards every boundary — the live bus,
+persistence, the dynamic-library seam, IPC. Nothing crosses a boundary it
+cannot prove it belongs across. The library holds the **grammar, never the
+answers**: no application message type, no policy, is hard-coded anywhere.
 
 ## The spine
 
-- **One gate, every boundary.** A single validator admits live messages and
-  bytes read back from storage. There is no second code path.
-- **Untrusted until proven.** Deserialization yields an `Unverified` with no
-  field accessors; the only road to a usable `Value` is through `admit`. You
-  cannot forget to validate.
-- **Published schemas are immutable.** A registered `(name, version)` is frozen;
-  you register a new version, never mutate the old.
-- **No undefined behavior on hostile input.** Deserializing arbitrary or
-  malicious bytes never crashes, leaks, or produces a trusted value — it yields a
-  valid `Value` (post-gate) or a clean, machine-readable error.
+- **One gate, every boundary.** A single validator; there is no second path.
+- **Untrusted until proven.** Parsed bytes are `Unverified` — no accessors;
+  the only road to a usable `Value` is `admit`.
+- **Published schemas are immutable.** A `(name, version)` is frozen; identity
+  across boundaries is the content-id, never the C++ type.
+- **Authority is minimal and explicit.** A weave says nothing until granted
+  reach; grants are checked before the gate and never confused with it.
+- **Honest enforcement.** The runtime claims only what it imposed *and
+  confirmed*, fails safe when it cannot — and the containment tier is stated
+  plainly: **abuse, not escape**.
+
+## What is here
+
+| | |
+|---|---|
+| `loom` (core) | schema · value · the one gate · registry · canonical serialization |
+| `zen-switchboard` | the in-process bus: gated delivery, grants, lifecycle, prepared replacement |
+| `zen-kernel` | weaves from dynamic libraries across a true C ABI (v4); hot-reload; sealed candidates |
+| `include/zen/weave/` | authoring sugar: `ZEN_SHAPE`, `WeaveBase`, `Mail`, `mount` |
+| `include/zen/host/` | host wiring: lifecycle authority, `loom::PreparedReplacement` |
+| isolation · console · bridge | OS sandboxing (Linux) · the operator console/TUI · the remote-operator crossing |
+
+## Sixty seconds of weave
+
+```cpp
+struct Ping { std::int64_t seq; ZEN_SHAPE(Ping, 1, ZEN_FIELD(seq)); };
+struct Pong { std::int64_t seq; ZEN_SHAPE(Pong, 1, ZEN_FIELD(seq)); };
+struct Count { std::int64_t handled; ZEN_SHAPE(Count, 1, ZEN_FIELD(handled)); };
+
+class Responder : public loom::WeaveBase<Responder, Count,
+                                         loom::Accept<Ping>, loom::Emit<Pong>> {
+public:
+    void on(const Ping& p, loom::Mail& mail) { ++state_.handled; mail.reply(Pong{p.seq}); }
+};
+
+loom::Switchboard bus;
+loom::WeaveId id = loom::mount<Responder>(bus);
+bus.send(id, loom::Message(loom::to_value(Ping{7})));
+bus.pump();
+```
+
+Runnable versions live in [`examples/`](examples/) — `quickstart.cpp` (the
+value-and-gate core), `heartbeat_woven.cpp` (the above), `answering.cpp`
+(immediate and deferred answers).
+
+## Documentation
+
+**[docs/README.md](docs/README.md)** routes everything: start with the
+[mental model](docs/guides/mental-model.md) and
+[writing a weave](docs/guides/writing-a-weave.md); exact semantics in
+[reference](docs/reference/); the named invariants in
+[laws](docs/laws/README.md); why in [decisions](docs/decisions/README.md) and
+[history](docs/history/README.md); application evidence in
+[evidence](docs/evidence/README.md). Machine collaborators start at
+[docs/CONTEXT.md](docs/CONTEXT.md); build rules for agents in
+[AGENTS.md](AGENTS.md). The soul of the project is
+[zen-vision.md](zen-vision.md).
 
 ## Build & test
 
-Requires CMake ≥ 3.16 and a C++20 compiler (verified on GCC 11.4).
+CMake ≥ 3.16, a C++20 compiler (verified GCC 11.4, WSL/Linux canonical);
+builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
+-Wsign-conversion -Werror`.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ctest --test-dir build
 
-# with AddressSanitizer + UndefinedBehaviorSanitizer
+# AddressSanitizer + UBSan lane
 cmake -B build-san -DCMAKE_BUILD_TYPE=Debug -DZEN_SANITIZE=ON
-cmake --build build-san
-ctest --test-dir build-san
+cmake --build build-san && ctest --test-dir build-san
 ```
 
-The library builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
--Wsign-conversion -Werror`, and the suite is green under the sanitizers.
+The `isolation`/`policy` suites need a delegated cgroup-v2 scope; ctest
+launches them through `tests/run-under-scope.sh`, and outside such a scope the
+OS-enforcement cases **fail hard by design** rather than pass having verified
+nothing (`ZEN_ALLOW_UNENFORCEABLE=1` converts to marked-degraded skips on a
+host that genuinely cannot enforce). The portable suites run everywhere,
+including Windows/MinGW; the Windows kernel backend is an explicit
+development-only opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`).
 
-**The `isolation` and `policy` suites need a delegated cgroup-v2 scope** — real OS
-containment requires an unprivileged user namespace plus a delegated cgroup subtree, so
-these suites are launched via `tests/run-under-scope.sh` (which ctest invokes for them).
-Run outside such a scope — e.g. a plain `wsl bash` in the root cgroup — the OS-enforcement
-cases **fail hard by design**, naming the missing capability, rather than pass having
-verified nothing (see `tests/enforcement_gate.hpp`). On a host that genuinely cannot
-enforce, `ZEN_ALLOW_UNENFORCEABLE=1` converts those into marked-degraded skips. The
-portable suites (core, switchboard, bridge, …) need none of this and run everywhere,
-including the Windows/MinGW build.
-
-## Consuming loom from another project
-
-`loom` installs as a CMake package, so a separate project consumes it the way it
-would any third-party library — no sibling includes, no vendoring:
+## Consuming loom
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
 cmake --install build --prefix /path/to/prefix
 ```
 
 ```cmake
 find_package(loom 0.1 REQUIRED)
-
-add_executable(my_weave main.cpp)
 target_link_libraries(my_weave PRIVATE loom::core)          # values, schemas, the gate
 # target_link_libraries(my_weave PRIVATE loom::switchboard) # ...and the live bus
+# gate hosting on:  if(TARGET loom::kernel)                 # "can this install host weaves?"
 ```
 
-```sh
-cmake -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
-```
-
-The **exported surface is deliberately smaller than the build tree**: `loom::core`,
-`loom::switchboard`, and `loom::kernel`, plus the headers they need. (The package
-also defines `loom::sanitize` and `loom::warnings` — two INTERFACE targets that
-*must* ride the export set because they survive in the libraries' link interface.
-They are plumbing, not surface: `warnings` is carried `LINK_ONLY`, so the Loom's
-`-Werror` and `-Wconversion` never reach your sources.) The UI vocabulary, the
-console, the TUI, the bridge and the SDL skin build here today but are
-Zengine-destined — each moves out in its own port phase — so exporting them now
-would publish a surface about to be relocated.
-
-`loom::kernel` joined the export when its first hosting consumer appeared
-(Zengine's snake slice). It exists on Linux always; **on Windows only when the
-Loom was configured with `LOOM_ENABLE_WINDOWS_KERNEL=ON`** — an explicit
-development/demo backend (`LoadLibrary`) that hosts weaves with **no isolation
-and says so** (`Kernel::containment_note()`; the sandbox and the honesty
-lattice's enforced rungs are Linux-only, and the security story remains
-WSL-hosting). Gate on `if(TARGET loom::kernel)` — the honest question is "can
-this install host loadable weaves?", not "which OS is this?". Isolation still
-waits for its first out-of-process consumer.
-
-Exported target names match the in-tree aliases exactly, so a consumer can swap a
-sibling-source build (`add_subdirectory`) for the installed package without touching
-a single `target_link_libraries` line.
+The exported surface is deliberately smaller than the build tree —
+`loom::core`, `loom::switchboard`, `loom::kernel` (+ the `sanitize`/`warnings`
+interface plumbing, carried so `-Werror` never reaches your sources). Exported
+names match the in-tree aliases exactly, so a sibling-source build swaps for
+the installed package without touching a link line.
 
 ## Where this lives
-
-The Loom is one of two repositories under a shared `Zen/` root:
 
 ```
 Zen/
   Loom/        this repo — the substrate, everyone's
-  Zengine/     the default set of weaves; the Loom's first external consumer
+  Zengine/     the default weave set (Timer, Input, Surface, snake) — the first consumer
   playground/  your own weaves
 ```
 
-Zengine consumes the Loom by the stranger's path, which is what keeps the dependency
-arrow un-invertible: **the Loom's build cannot see Zengine.** Rough edges in the
-public surface therefore hit the house before they hit a guest.
-
-**Per-repo green.** The Loom's suite runs in the Loom; Zengine's lane runs Zengine's
-tests against its pinned/installed Loom and does *not* re-run this suite — a
-dependency's proof rides its version. Every report-back states which repo's green was
-proven; "green" must never silently mean "green in one of two." *Today-note:* the Loom
-is still under active development, so its delegated-scope suite runs here every phase;
-the don't-re-prove economy arrives as the Loom stabilizes.
-
-Assistant sessions are launched from the `Zen/` root, never from inside a sub-repo —
-the memory graph is keyed to that path. Run git per-repo (`git -C Loom status`).
-
-## Wire formats
-
-The **native** format is canonical binary: compact, positional, schema-guided,
-and byte-identical for equal values (so native bytes are content-addressable).
-`serialize` / `parse` are the native entry points. The original self-describing
-**JSON** format is retained as a compatibility / debug codec under
-`loom::compat::serialize` / `loom::compat::parse` — inspectable, but larger and not
-byte-canonical. Both formats funnel through the same gate; deserializing either
-yields an `Unverified` that the same `admit` validates.
-
-## End to end
-
-Define a schema → register it → build a value → admit it → serialize →
-deserialize → re-admit. (This is `examples/quickstart.cpp`.)
-
-```cpp
-#include <zen/zen.hpp>
-
-#include <cstdio>
-#include <iostream>
-
-int main() {
-    using namespace loom;
-
-    // 1. Define a schema (frozen once published).
-    auto player = SchemaBuilder("PlayerState", 1)
-                      .field("hp", Kind::Int)
-                      .field("name", Kind::Text)
-                      .build();
-
-    // 2. Register it — e.g. discovered at runtime from a freshly loaded module.
-    Registry registry;
-    registry.register_schema(player);
-
-    // 3. Build a value against the schema.
-    Value v(player);
-    v.set("hp", Cell::integer(30)).set("name", Cell::text("Ami"));
-
-    // 4. Admit it at the bus boundary (consumes the candidate, re-emits it trusted).
-    if (Admission live = admit(Value(v), *player); !live.ok()) {
-        std::cerr << "refused: " << live.first_error().message() << "\n";
-        return 1;
-    }
-
-    // 5. Serialize to the native canonical binary format (compact; the header
-    //    carries the schema identity). Show the size and the "ZN" magic.
-    std::string bytes = serialize(v);
-    std::printf("native: %zu bytes, magic '%c%c' v%d\n", bytes.size(), bytes[0], bytes[1],
-                static_cast<int>(static_cast<unsigned char>(bytes[2])));
-
-    // 6. Read it back. Untrusted until proven: this is an Unverified, not a Value.
-    Unverified candidate = parse(bytes);
-
-    // 7. Re-admit through the SAME gate, resolving the claim via the registry.
-    Admission revived = admit(candidate, registry);
-    if (!revived.ok()) {
-        std::cerr << "refused: " << revived.first_error().message() << "\n";
-        return 1;
-    }
-    std::cout << "revived hp=" << revived.value().get("hp")->as_int()
-              << " name=" << revived.value().get("name")->as_text() << "\n";
-
-    // The compat JSON codec gives an inspectable view of the same value.
-    std::cout << "compat json: " << compat::serialize(v) << "\n";
-
-    // A corrupted candidate is refused, never repaired (shown via the readable
-    // compat path so the diagnosis is legible).
-    Unverified corrupt =
-        compat::parse(R"({"zen":1,"schema":"PlayerState","version":1,"fields":{"hp":"oops"}})");
-    Admission refused = admit(corrupt, registry);
-    std::cout << "corrupt admitted? " << std::boolalpha << refused.ok() << "\n";
-    if (!refused.ok()) {
-        std::cout << "  " << refused.first_error().message() << "\n";
-    }
-    return 0;
-}
-```
-
-Running it prints the compact native size, the revived value, the inspectable
-JSON view, and a precise refusal for the corrupted one:
-
-```
-native: 34 bytes, magic 'ZN' v1
-revived hp=30 name=Ami
-compat json: {"zen":1,"schema":"PlayerState","version":1,"content_id":"0xb1d69bad13ae83d6","fields":{"hp":"30","name":"Ami"}}
-corrupt admitted? false
-  hp: MalformedField (expected Int, got json:string) — not a base-10 64-bit integer
-```
-
-See [DESIGN.md](DESIGN.md) for the public API, the ownership/threading model and
-why, the wire format, the version policy, and the seams left open for codegen,
-schema-as-value reflection, and behavioral contracts.
+Zengine consumes the Loom **by the stranger's path** (an installed package),
+which keeps the dependency arrow un-invertible and makes an unexported surface
+fail at home before it fails for a guest. **Per-repo green:** each repo's
+suite proves that repo; every report states *which* repo's green was proven.
+Assistant sessions launch from the `Zen/` root (the memory graph is keyed to
+it); git runs per-repo (`git -C Loom status`).

@@ -279,8 +279,9 @@ TEST_CASE("transport: a closed peer surfaces as eof (the disconnect-as-an-event 
 
 #ifndef _WIN32
 TEST_CASE("transport: framed messages round-trip over AF_UNIX (decision #4's local transport, POSIX)") {
-    // AF_UNIX gains its live consumer: DESIGN.md/decision-#4 say the fast local loop IS unix, so
-    // exercise it. (The crossing uses TCP; AF_UNIX is POSIX-only, hence the gate.)
+    // AF_UNIX gains its live consumer: the frozen design record (docs/history/pre-r2c/DESIGN.md,
+    // decision #4) says the fast local loop IS unix, so exercise it. (The crossing uses TCP;
+    // AF_UNIX is POSIX-only, hence the gate.)
     const std::string path = "/tmp/zen-bridge-hygiene-af-unix.sock";
     std::string err;
     const socket_t listener = bridge_listen_unix(path, &err);
