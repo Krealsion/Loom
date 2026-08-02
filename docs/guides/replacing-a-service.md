@@ -128,6 +128,35 @@ Two habits worth keeping:
 - **The budget is yours.** `upgrade.tick()` spends exactly one preparation unit;
   nothing else spends any.
 
+## What crosses a replacement? You decide — nothing crosses by itself
+
+Prepared replacement **verifies the incoming candidate. It does not
+automatically preserve incumbent work or state** — and it tells the incumbent
+nothing. The incumbent stays live and serving through the whole preparation, so
+anything you ask it about itself during that window is a **snapshot of a moving
+service, not an atomic final handoff**.
+
+Whether continuity is even possible is a property of *your domain*, and every
+domain answers differently:
+
+```text
+build farm         carries stable intent; the successor restarts work
+kitchen            tolerates stale work through idempotency
+download manager   carries an obligation snapshot; degrades honestly
+Timer              cannot tolerate a stale moving snapshot at all —
+                   so it authored an exact final boundary on top
+```
+
+The common bridge (invented independently by every application that needed
+one): during preparation, ask the incumbent to *describe* itself with an
+ordinary domain question, and hand that description to the candidate inside
+your preparation ask. That is an application pattern filling a real hole — not
+a substrate feature — and what belongs in the description is your call:
+[PR-09](../laws/replacement-laws.md) and
+[known-seams § continuity](../reference/known-seams.md#continuity-is-authored)
+carry the full story, including when the *graceful* ceremony (which preserves
+work but verifies nothing) fits better.
+
 ## Underneath
 
 The handle is composition, not a second implementation: every operation delegates
