@@ -9,48 +9,39 @@ applications), **KNOWN AUTHORING FRICTION** (ergonomics, not missing truth),
 
 ## Role-authored provenance
 
-**Status: OPEN / EVIDENCE-BACKED CORE CANDIDATE.**
+**Status: CLOSED (R2D-0) — current, law-backed.**
 
-Four distinct facts, and only the first three exist today:
+The fourth fact exists. All four now:
 
 ```text
 sender identity          who the exact weave was            EXISTS (the bus stamp)
 role-addressed delivery  where the message was routed       EXISTS (send_to_role)
 role membership          which office the weave holds now   EXISTS (role_holder lookup)
 role-authored provenance which office the weave
-                         DELIBERATELY SPOKE AS              OPEN — does not exist
+                         DELIBERATELY SPOKE AS              EXISTS (mail.as_role /
+                                                            authored_from_role, MSG-07)
 ```
 
-Loom currently cannot prove that a delivery was **intentionally authored in
-the capacity of role R, with Loom verifying at authorship time that the sender
-actually held R**. The missing fact has two parts, and both are load-bearing:
-*authorization* (the sender actually held R) and *authorship intent* (this
-particular message was deliberately spoken as R). Holding the role is
-necessary; **holding the role is not sufficient** — the same exact weave,
-holding the same exact office, may speak personally or speak as the office,
-and those are different statements (Night Lab's lobby distinguishes them
-directly). A fact reduced to "the sender held role R" would authenticate
-personal speech merely because its author happened to occupy an office. And
-`send_to_role(R, m)` is none of this: it means "deliver to whoever holds R" —
-never "I speak as R" ([MSG-04](../laws/messaging-laws.md)).
+Both load-bearing halves are carried: *authorization* (Loom verified the
+sender held R at the authorship moment) and *intent* (this statement was
+deliberately spoken as R). Holding remains insufficient by law — the same
+holder's personal speech arrives unauthored — and **publications are
+first-class** (the forged-`WorkerOpen` case is exactly what
+`as_role(R).publish` closes). Current semantics:
+[messaging](messaging.md#office-authorship-role-authored-provenance); law:
+[MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
+why explicit-not-inferred won:
+[decision](../decisions/office-authorship-is-deliberate.md); the discovery and
+pricing of the seam:
+[evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced)
+and the focused replay `playground/night-lab/followups/role-authorship/`.
 
-Consequence: an *office's* announcements are unauthenticatable — including
-**publications**, which any authorship design must cover (a direct-send-only
-answer misses the forged-`WorkerOpen` case). Identity works when you talk to
-somebody; it fails when you talk to whoever holds an office. Five independent
-Night Lab sightings, escalating to a forged announcement destroying healthy
-work and a player joining an attacker's server — and both application-level
-workarounds are built and **priced**: a registry's belief rests on an
-unauthenticated announcement; inverting push to pull works but spends the
-Loom-wide deferral bound, strands strict receivers across honest replacement,
-and cannot cover observers of publications
-([evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced)).
-
-If built, the shape is a delivery fact of the same family as `answers_ask()`,
-carrying **both** halves: *this delivery was intentionally authored as role R,
-and Loom verified that the author held R at the moment of authorship*. Any
-syntax (e.g. `send_from_role`) is **SPECULATIVE**; do not document it as
-current.
+What remains deliberately out of scope (seams, not gaps): office authorship
+across the **out-of-process pipe** fails closed in both directions (the pipe
+carries no attestation in V1; the first out-of-process office pulls the
+verified control-protocol frame), and no public door yet produces a combined
+answer+office fact (the representation admits it; `answer_as_role` waits for a
+consumer).
 
 ## Sender cannot observe send fate
 

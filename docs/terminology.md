@@ -14,6 +14,7 @@ Bold marks the normative reference for each.
 | **grant** | a weave's authorization: which shapes it may send where. Default empty | [reference/capabilities.md](reference/capabilities.md) |
 | **`Mail` / `WeaveBus`** | the only bus a handler holds: stamps the weave's identity, routes gated | [reference/messaging.md](reference/messaging.md) |
 | **role** | a named singleton capability slot; sends resolve to its holder at delivery. Destination, never office | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-04) |
+| **office authorship** | a delivery fact: the sender deliberately spoke *as* a role it held, verified by Loom at the authorship moment (`as_role` / `authored_from_role`). Holding attaches nothing | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-07) |
 | **publish** | fan-out to alive, unsealed, accept-matching weaves chosen at enqueue | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-06) |
 | **ask** | a delivered request whose handler holds one answer opportunity | [laws/answer-authority-laws.md](laws/answer-authority-laws.md) (ANS-01) |
 | **answer** | the one authorized response to an ask; provenance is a delivery fact (`answers_ask()`) | [laws/answer-authority-laws.md](laws/answer-authority-laws.md) |

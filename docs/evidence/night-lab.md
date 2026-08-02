@@ -1,11 +1,14 @@
 # Night Lab — the application evidence
 
-**Repository:** <https://github.com/Krealsion/zen-night-lab> · pinned commit
-**`bf09f79`** · built against Loom `78d64ea` / Zengine `f6a4c69` (ABI v4).
-Two experiments live side by side: `original/` (Night One, preserved against
-its own older substrate) and `marathon/` (Night Two — six applications, all
-green: 159 cases / 848 assertions, 86 mutations + 6 canaries). Reports:
-`marathon/FINAL-REPORT.md`, `marathon/EVIDENCE.md`, `marathon/FRICTION.md`.
+**Repository:** <https://github.com/Krealsion/zen-night-lab>. Three
+experiments live side by side, each pinned to the substrate it ran on:
+`original/` (Night One, its own older Loom), `marathon/` (Night Two at
+`bf09f79` — six applications against Loom `78d64ea` / Zengine `f6a4c69`,
+ABI v4, all green: 159 cases / 848 assertions, 86 mutations + 6 canaries),
+and `followups/role-authorship/` (the R2D-0 replay against Loom `30eab0a`,
+ABI v5 — 4 cases / 59 assertions, 3 mutations RED, verdict CLOSED). Reports:
+`marathon/FINAL-REPORT.md`, `marathon/EVIDENCE.md`, `marathon/FRICTION.md`,
+`followups/role-authorship/REPORT.md`.
 
 The six: `kitchen-replay` · `download-manager` · `build-farm` ·
 `import-pipeline` · `lobby` · `scheduler` (which replaces the **Zengine
@@ -36,10 +39,23 @@ receivers across honest replacement, covers no observers). The import
 pipeline is the control: identity works when you talk to *somebody*; it fails
 when you talk to *whoever holds an office*. Meaning: independent applications
 need trusted office authorship.
-→ seam: [known-seams § role-authored provenance](../reference/known-seams.md#role-authored-provenance)
-(status: evidence-backed core candidate). Sightings: lobby `MatchCreated`,
-build-farm `JobDone` and `WorkerOpen`, kitchen and download cases —
-`marathon/EVIDENCE.md`.
+
+**This evidence forced R2D-0, and the seam is CLOSED.** The follow-up replay
+(`followups/role-authorship/` in the same repository, pinned to its own
+vendored Loom at ABI v5) re-ran the three sharpest verticals on
+`mail.as_role(...)` / `mail.authored_from_role(...)`: the lobby's strict
+player joins the office push, rejects the same holder's chatter and every
+rogue, and follows the office through a real replacement — with the entire
+pull apparatus deleted; the farm's `WorkerOpen` **publication** verifies at
+every listener while the rogue's same-shaped one verifies as nothing; and the
+download manager attests BOTH halves of its long operation (the acceptance as
+the answer, the terminal truth as office speech) with zero deferred slots
+parked. → current law:
+[MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
+seam entry (closed):
+[known-seams § role-authored provenance](../reference/known-seams.md#role-authored-provenance).
+Original sightings: lobby `MatchCreated`, build-farm `JobDone` and
+`WorkerOpen`, kitchen and download cases — `marathon/EVIDENCE.md`.
 
 ## Describe-then-hand-over — a domain pattern, not one ceremony
 

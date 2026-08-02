@@ -8,7 +8,8 @@ everything. Vocabulary is canonical in [terminology.md](terminology.md);
 
 **Ownership:** Loom (this repo) owns substrate truth. Zengine owns
 package truth (Timer/Input/Surface) — `Zengine/docs/`. Night Lab
-(github.com/Krealsion/zen-night-lab, pinned `bf09f79`) is read-only evidence.
+(github.com/Krealsion/zen-night-lab: marathon pinned `bf09f79`, the
+role-authorship follow-up beside it) is read-only evidence.
 
 **Recommended order for a cold start:** this file → the topic row below →
 the named laws → the reference page → tests when exactness matters.
@@ -16,8 +17,9 @@ the named laws → the reference page → tests when exactness matters.
 | Topic | Read | Laws | Tests | Why / evidence |
 |---|---|---|---|---|
 | values, schemas, the gate | reference/values-and-admission.md | GATE-01..04 | tests/test_gate.cpp, test_schema.cpp, test_registry.cpp, test_serialize.cpp | decisions/one-gate-at-every-boundary.md |
-| message authority, dispatch, roles | reference/messaging.md | MSG-01..06 | tests/test_switchboard.cpp | history/pre-r2c/DESIGN.md §Switchboard |
+| message authority, dispatch, roles | reference/messaging.md | MSG-01..07 | tests/test_switchboard.cpp | history/pre-r2c/DESIGN.md §Switchboard |
 | answers, deferral, provenance | reference/messaging.md#answers | ANS-01..07 | tests/test_provenance.cpp | decisions/readiness-is-authenticated-conversation.md |
+| office authorship (speaking as a role) | reference/messaging.md#office-authorship-role-authored-provenance | MSG-07, MSG-04 | tests/test_role_authorship.cpp, test_kernel.cpp (v5), test_isolation.cpp (pipe) | decisions/office-authorship-is-deliberate.md, evidence/night-lab.md |
 | lifecycle, zen.Activated | reference/lifecycle.md | LIFE-01..05 | tests/test_provenance.cpp, test_manager.cpp | decisions/lifecycle-authority-is-loom-owned.md, decisions/committed-activation-is-not-answerable.md |
 | grants, isolation, powerbox | reference/capabilities.md | GATE-03, MSG-02 | tests/test_capabilities.cpp, test_isolation.cpp, test_policy.cpp | history (B1–B5, P1–P2) |
 | dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..04 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
@@ -34,10 +36,11 @@ activation is not answerable (LIFE-05) · replacement preserves nothing and
 produces **no atomic incumbent snapshot** — a captured description can go
 stale before admission unless a stronger domain/package boundary prevents
 mutation (PR-09, known-seams § continuity) · current role *membership* is a
-live lookup (`role_holder`), but no delivery fact proves office **authorship**
-— a role-holder's ordinary message proves nothing about speaking *as* the
-office, since holding is necessary and not sufficient (MSG-04, known-seams §
-role-authored-provenance) · the candidate supplies the domain answer, the
+live lookup (`role_holder`); office **authorship** is a stamped delivery fact
+(`mail.authored_from_role`, MSG-07) that only an explicit `as_role(...)` act
+produces — a role-holder's ordinary message still proves nothing about
+speaking *as* the office, since holding is necessary and not sufficient
+(MSG-04/MSG-07) · the candidate supplies the domain answer, the
 **coordinator** maps it to Ready/Refused, and the Switchboard authenticates
 only the conversation (PR-04) · Timer transfers remaining duration because a
 due timestamp cannot cross clocks/downtime (TIMER-03) · `TimedWeave` bindings
