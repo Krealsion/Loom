@@ -184,18 +184,32 @@ outer event loop:
 ```cpp
 while (serving) {
     poll_sockets();
-    bus.pump_bounded(64);   // control comes back, whatever the bus is doing
+    bus.pump_pending();     // exactly the backlog that was waiting; control returns
 }
 ```
 
-Without it, a perpetual in-process service starves the outer loop: a repeating
-Timer re-arms itself inside its own handler, so the queue never empties and a
-drain-to-empty pump never returns. Newly enqueued work **counts** toward the
-budget — any other rule would leave exactly that producer unbounded. The bound is
-a dispatch count, never a deadline; FIFO is untouched; `stop()` still ends the
-turn early and the return value keeps "budget exhausted" and "somebody stopped"
-apart. `BridgeServer::set_dispatch_budget` exposes the policy, defaulting to 0
-(drain to empty).
+Without a bound, a perpetual in-process service starves the outer loop: a
+repeating Timer re-arms itself inside its own handler, so the queue never empties
+and a drain-to-empty pump never returns.
+
+**Two bounds, and the difference is which one you want:**
+
+| | bound | newly enqueued work | you must pick |
+|---|---|---|---|
+| `pump_bounded(n)` | at most `n` dispatched | **counts** toward `n` | `n` |
+| `pump_pending()` | `pending()` at entry | waits for the next turn | nothing |
+
+Reach for `pump_pending()` first. Sizing `n` means knowing the producer's rate:
+with a real Zengine Timer, 64 throttled the Codex Rule Garden 17× and a value
+large enough not to throttle was drain-to-empty again. `pump_pending()` takes its
+bound from the queue itself, so a busy bus clears its backlog in one turn while a
+self-re-arming producer still cannot hold the turn open. `pump_bounded(n)` is the
+right tool when you want a hard cap on work per turn regardless of backlog.
+
+Both are counts, never deadlines; FIFO is untouched; `stop()` still ends the turn
+early and the return value keeps "bound reached" and "somebody stopped" apart.
+`BridgeServer::set_bounded_dispatch()` / `set_dispatch_budget(n)` expose the
+policy, defaulting to drain-to-empty.
 
 ## Tests
 

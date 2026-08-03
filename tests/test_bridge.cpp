@@ -1142,8 +1142,15 @@ TEST_CASE("R2E-0: a bridge host with a dispatch budget stays responsive while a 
 
     // THE HOST'S CHOICE, stated once. Without it, the first step() below never
     // returns: the driver re-arms inside its own handler forever.
+    //
+    // A fixed budget is used HERE because the case wants an exact count to
+    // assert; a real host generally wants `set_bounded_dispatch()` instead, and
+    // the next case pins that. The Rule Garden proved why: a budget of 64
+    // throttled it 17x, and a budget large enough not to throttle was
+    // drain-to-empty again.
     server.set_dispatch_budget(8);
     CHECK(server.dispatch_budget() == 8u);
+    CHECK_FALSE(server.bounded_dispatch());
 
     // Start the perpetual service.
     loom::Value kick(greet_schema());
@@ -1182,6 +1189,42 @@ TEST_CASE("R2E-0: a bridge host with a dispatch budget stays responsive while a 
     // The service never stopped: it advanced by exactly the budget on every step.
     CHECK(driver->turns > 8);
     CHECK(driver->turns % 8 == 0);
+}
+
+TEST_CASE("R2E-0: set_bounded_dispatch needs no number — the backlog at entry bounds the turn, "
+          "and the perpetual service keeps running") {
+    loom::Switchboard bus;
+    auto owned = std::make_unique<PerpetualDriver>();
+    PerpetualDriver* driver = owned.get();
+    const loom::WeaveId did = bus.register_weave(std::move(owned), loom::Grant{}.allow_any());
+    driver->self = did;
+
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    BridgeServer server(bus, listener);
+    server.set_bounded_dispatch();
+    CHECK(server.bounded_dispatch());
+
+    // A real backlog, plus the perpetual driver started inside it.
+    loom::Value kick(greet_schema());
+    kick.set("msg", loom::Cell::text("go"));
+    for (int i = 0; i < 12; ++i) {
+        bus.send(did, loom::Message(loom::Value(kick)));
+    }
+    REQUIRE(bus.pending() == 12u);
+
+    // ONE step clears the whole backlog and RETURNS — no number was chosen, and
+    // nothing was throttled. The 12 continuations wait for the next turn.
+    server.step();
+    CHECK(driver->turns == 12);
+    CHECK(bus.pending() == 12u);
+
+    // ...and it stays that way, turn after turn: bounded, adaptive, and the
+    // service never stopped.
+    server.step();
+    CHECK(driver->turns == 24);
+    CHECK(bus.pending() == 12u);
 }
 
 TEST_CASE("R2E-0: budget 0 is the pre-existing contract — step() still drains to empty") {

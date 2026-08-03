@@ -587,6 +587,35 @@ public:
     /// answer to event-loop composition.
     std::size_t pump_bounded(std::size_t budget);
 
+    /// DISPATCH EXACTLY WHAT WAS ALREADY QUEUED, THEN GIVE THE CALLER BACK
+    /// CONTROL (R2E-0). Returns how many were dispatched.
+    ///
+    /// The other bounded turn, and for most event-loop hosts the better one.
+    /// `pump_bounded(n)` needs the host to pick `n` — and picking it well means
+    /// knowing the producer's rate: too small throttles a busy bus to `n` per
+    /// turn, too large is drain-to-empty again and the starvation returns. The
+    /// Codex Rule Garden demonstrated both halves of that trap with a real
+    /// Zengine Timer, which is why this exists.
+    ///
+    /// This one needs no number. The bound is `pending()` **at entry** — a fact
+    /// about the queue, not a guess about the producer:
+    /// - **work a handler enqueues during this call is NOT dispatched now.** It
+    ///   lands behind the snapshot and waits for the next turn, which is exactly
+    ///   what makes a self-re-arming producer (a repeating Timer enqueues its
+    ///   next Drive before returning) unable to hold the turn open;
+    /// - **still deterministic.** A count taken from the queue, never a clock;
+    ///   two runs of the same program dispatch the same deliveries in the same
+    ///   turns;
+    /// - **still FIFO-exact.** The boundary lands between two envelopes, where
+    ///   `pump()` would already have been;
+    /// - **adaptive without being unbounded.** A busy bus drains its backlog in
+    ///   one turn instead of `size/n` turns, and the turn is still finite.
+    ///
+    /// `stop()` ends the turn early here too, and the return value reports what
+    /// actually happened. Non-reentrant, like every pump. An empty queue is a
+    /// no-op returning 0.
+    std::size_t pump_pending();
+
     // ---- Senses (R2E-0) -----------------------------------------------------
     //
     // THE LAW: *a Sense is a deliberate immutable claim of the latest observation

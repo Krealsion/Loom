@@ -355,6 +355,70 @@ TEST_CASE("R2E-0: a zero budget is a no-op, and pump() itself is unchanged — s
     CHECK(bus.pending() == 0);
 }
 
+TEST_CASE("R2E-0: pump_pending dispatches exactly the backlog present at entry — a self-re-arming "
+          "producer cannot extend the turn, and a busy bus is not throttled") {
+    Switchboard bus;
+    auto owned = std::make_unique<Perpetual>(1'000'000); // never stops
+    Perpetual* raw = owned.get();
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}.allow_any());
+    raw->self = id;
+
+    // A REAL BACKLOG plus a perpetual producer: 20 waiting, and the first one
+    // handled re-arms the producer forever.
+    for (int i = 0; i < 20; ++i) {
+        bus.send(id, Message(ping(i)));
+    }
+    CHECK(bus.pending() == 20);
+
+    // Exactly the 20 that were waiting. The 20 continuations they enqueued are
+    // NOT part of this turn — that is what bounds it.
+    CHECK(bus.pump_pending() == 20);
+    CHECK(raw->count == 20);
+    CHECK(bus.pending() == 20); // the next turn's backlog, already waiting
+
+    // ...and the next turn takes exactly that, forever, without ever being asked
+    // for a number. This is what `pump_bounded(n)` cannot do without the host
+    // knowing the producer's rate: too small throttles, too large starves.
+    CHECK(bus.pump_pending() == 20);
+    CHECK(raw->count == 40);
+}
+
+TEST_CASE("R2E-0: pump_pending on a quiet bus is a no-op, and drains a finite backlog whole") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+
+    CHECK(bus.pump_pending() == 0); // nothing waiting; no spin, no block
+
+    for (std::int64_t i = 1; i <= 5; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+    // A finite backlog with no re-arming producer clears in ONE turn — the
+    // throughput a fixed budget would have capped.
+    CHECK(bus.pump_pending() == 5);
+    CHECK(bus.pending() == 0);
+    const std::vector<std::int64_t> expected{1, 2, 3, 4, 5};
+    CHECK(r.weave->handled_values == expected);
+}
+
+TEST_CASE("R2E-0: pump_pending keeps FIFO exact and honours stop()") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    r.weave->on_handle = [&bus](const Message& in, Bus&, ProbeWeave&) {
+        if (in.payload.get("seq")->as_int() == 3) {
+            bus.stop();
+        }
+    };
+    for (std::int64_t i = 1; i <= 6; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+
+    CHECK(bus.pump_pending() == 3); // stopped at the third, and says so
+    CHECK(bus.pending() == 3);
+    CHECK(bus.pump_pending() == 3);
+    const std::vector<std::int64_t> expected{1, 2, 3, 4, 5, 6};
+    CHECK(r.weave->handled_values == expected);
+}
+
 TEST_CASE("R2E-0: bounded pump is non-reentrant, exactly as pump() is") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});

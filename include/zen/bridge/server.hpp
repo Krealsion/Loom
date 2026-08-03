@@ -83,8 +83,22 @@ public:
     /// way — the budget is a pause between two deliveries.
     void set_dispatch_budget(std::size_t deliveries_per_step) noexcept {
         dispatch_budget_ = deliveries_per_step;
+        bounded_dispatch_ = false;
     }
     std::size_t dispatch_budget() const noexcept { return dispatch_budget_; }
+
+    /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN — the setting
+    /// most event-loop hosts actually want, and the one a host serving a
+    /// perpetual in-process service should reach for first.
+    ///
+    /// `set_dispatch_budget(n)` makes the host pick `n`, and picking it well
+    /// means knowing the producer's rate: too small throttles the bus to `n` per
+    /// turn, too large is drain-to-empty and the starvation returns. This needs
+    /// no number — the bound is `Switchboard::pump_pending`'s snapshot, so a
+    /// busy bus clears its backlog in one turn while a self-re-arming producer
+    /// still cannot hold the turn open.
+    void set_bounded_dispatch() noexcept { bounded_dispatch_ = true; }
+    bool bounded_dispatch() const noexcept { return bounded_dispatch_; }
 
     /// Block in select() over {listener, all connection fds} until any is ready OR `timeout_ms`
     /// elapses (negative = indefinite), then step() once. This is the event-driven loop: bytes arrive
@@ -131,6 +145,7 @@ private:
     bool weaves_dirty_ = false;  ///< a Died/Revived seen in the tap; push a fresh Weaves after pump (E)
     bool stop_ = false;
     std::size_t dispatch_budget_ = 0; ///< 0 = drain to empty, the pre-R2E-0 contract
+    bool bounded_dispatch_ = false;   ///< dispatch only the backlog present at entry
 };
 
 } // namespace loom
