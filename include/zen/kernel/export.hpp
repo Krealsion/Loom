@@ -241,11 +241,13 @@ public:
         }
         const std::string name_z(shape->name());
         std::string bytes;
+        std::string office; // grows to whatever the host wrote; never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
+        ZenByteSink office_sink{&office, &collect_bytes};
         const ZenStatus st = host_->sense_observe(host_->ctx, author.value, name_z.c_str(),
-                                                  shape->version(), sink, &by);
-        return decode_reading(st, bytes, by, shape);
+                                                  shape->version(), sink, office_sink, &by);
+        return decode_reading(st, bytes, office, by, shape);
     }
 
     loom::SenseReading observe_office(std::string_view role, std::shared_ptr<const loom::Schema> shape) override {
@@ -255,11 +257,13 @@ public:
         const std::string role_z(role);
         const std::string name_z(shape->name());
         std::string bytes;
+        std::string office; // grows to whatever the host wrote; never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
+        ZenByteSink office_sink{&office, &collect_bytes};
         const ZenStatus st = host_->sense_observe_office(
-            host_->ctx, role_z.c_str(), name_z.c_str(), shape->version(), sink, &by);
-        return decode_reading(st, bytes, by, shape);
+            host_->ctx, role_z.c_str(), name_z.c_str(), shape->version(), sink, office_sink, &by);
+        return decode_reading(st, bytes, office, by, shape);
     }
 
 private:
@@ -289,7 +293,8 @@ private:
     /// library's own schema for the shape — so a library never holds a value that
     /// did not pass a gate on its own side of the seam either.
     loom::SenseReading decode_reading(ZenStatus st, const std::string& bytes,
-                                      const ZenSenseBy& by, const std::shared_ptr<const loom::Schema>& shape) {
+                                      const std::string& office, const ZenSenseBy& by,
+                                      const std::shared_ptr<const loom::Schema>& shape) {
         loom::SenseReading out;
         if (st != ZEN_OK) {
             out.refusal = sense_refusal_of(st);
@@ -307,7 +312,13 @@ private:
         out.by.author_life = by.author_life;
         out.by.author_incarnation = by.author_incarnation;
         out.by.author_life_is_current = by.author_life_is_current != 0;
-        out.by.office = by.office; // "" == personal, which no office name can be
+        // Independent of the life fact above: a same-life replacement moves the
+        // incarnation without ending the life, and collapsing the two would make
+        // a predecessor's claim read as the current incarnation's.
+        out.by.author_incarnation_is_current = by.author_incarnation_is_current != 0;
+        // EXACTLY what the host wrote, at any length — empty == personal, which
+        // no office name can be. Nothing here imposes or restores a bound.
+        out.by.office = office;
         out.by.office_holder_is_current = by.office_holder_is_current != 0;
         out.by.revision = by.revision;
         out.by.schema_name = shape->name();

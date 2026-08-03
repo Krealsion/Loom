@@ -25,6 +25,7 @@
 #include "switchboard_fixtures.hpp"
 
 #include <zen/host/lifecycle_wiring.hpp>
+#include <zen/serialize.hpp> // serialize() — the swap_state snapshot in S3b
 #include <zen/weave.hpp>
 
 #include <memory>
@@ -290,6 +291,95 @@ TEST_CASE("S3: role movement never relabels a predecessor's office claim, and th
 // relabelled — needs the real prepared-replacement ceremony (the only thing that
 // moves a role holder in place). It lives in the kernel suite beside that
 // ceremony: `test_kernel.cpp`, the R2E-0 Senses-across-replacement section.
+
+// ---- S3b: the two generation facts are independent --------------------------
+//
+// A LIVE code swap moves the INCARNATION and leaves the LIFE alone (`swap_state`
+// bumps the counter; `begin_new_life` advances only from `!alive`). So across a
+// same-life replacement a materialized claim is in a state no single "is the
+// author still current?" flag can describe:
+//
+//     life 7 / incarnation 3   claims X
+//     ... live replacement ...
+//     life 7 / incarnation 4   is now the code at that address
+//
+// The claim stays historically truthful — it IS incarnation 3's, and Loom never
+// rewrites it — but a reader needs to know the code behind it has moved on.
+// These cases pin that the two facts are asked separately, and that neither is
+// derived from the other.
+
+TEST_CASE("S3b: a same-life code replacement leaves the LIFE current and the INCARNATION "
+          "stale — a predecessor's claim is distinguishable from the current incarnation's") {
+    Switchboard bus;
+    auto [pid, producer] = put<Producer>(bus, Grant{}, "");
+
+    bus.send(pid, Message(to_value(Damage{10})));
+    bus.pump();
+    REQUIRE(producer->last_claim.accepted);
+
+    // BEFORE: the claim is the current code's, on the current life. Both true.
+    SenseReading fresh = bus.observe(pid, "Health", 1);
+    REQUIRE(fresh);
+    CHECK(hp_of(fresh) == 90);
+    const std::uint64_t life_at_claim = fresh.by.author_life;
+    const std::uint64_t inc_at_claim = fresh.by.author_incarnation;
+    CHECK(fresh.by.author_life_is_current);
+    CHECK(fresh.by.author_incarnation_is_current);
+
+    // NEW CODE BEHIND THE SAME LIVE ID. Not a death: the weave never stopped
+    // being alive, so the life stands and only the incarnation advances.
+    // (`revived` reports that the swap TOOK, not that a life restarted — the
+    // life question is asked of the reading below, which is where it belongs.)
+    const std::string snapshot = serialize(to_value(ProducerState{90}));
+    REQUIRE(bus.swap_state(pid, snapshot).revived);
+
+    // AFTER: the predecessor's claim is still there, still says who made it, and
+    // now says the code behind that author has been replaced. This is the whole
+    // correction — a single life-currentness flag reports `true` here and hides
+    // the replacement entirely.
+    SenseReading stale = bus.observe(pid, "Health", 1);
+    REQUIRE(stale);
+    CHECK(hp_of(stale) == 90);
+    CHECK(stale.by.author == pid);
+    CHECK(stale.by.author_life == life_at_claim);           // history is not rewritten
+    CHECK(stale.by.author_incarnation == inc_at_claim);     // ...in either field
+    CHECK(stale.by.author_life_is_current);                 // the life stands
+    CHECK_FALSE(stale.by.author_incarnation_is_current);    // the code does not
+
+    // The successor claims for itself, and reports both current — so the flag
+    // tracks the topology rather than latching once a swap has ever happened.
+    bus.send(pid, Message(to_value(Damage{5})));
+    bus.pump();
+    SenseReading current = bus.observe(pid, "Health", 1);
+    REQUIRE(current);
+    CHECK(hp_of(current) == 85);
+    CHECK(current.by.author_incarnation == inc_at_claim + 1);
+    CHECK(current.by.author_life_is_current);
+    CHECK(current.by.author_incarnation_is_current);
+}
+
+TEST_CASE("S3b: a DEATH-AND-REVIVAL moves both generations — incarnation-currentness is not "
+          "merely a slower copy of life-currentness") {
+    Switchboard bus;
+    auto [pid, producer] = put<Producer>(bus, Grant{}, "");
+
+    bus.send(pid, Message(to_value(Damage{10})));
+    bus.pump();
+    REQUIRE(producer->last_claim.accepted);
+    REQUIRE(bus.observe(pid, "Health", 1).by.author_life_is_current);
+
+    // A real death, then a revival: the life advances too, so BOTH facts go
+    // false. The pair of cases together is what proves the two are independent —
+    // one where they disagree, one where they agree.
+    bus.kill(pid);
+    const std::string snapshot = serialize(to_value(ProducerState{90}));
+    REQUIRE(bus.swap_state(pid, snapshot).revived); // and from DEAD it is a new life too
+
+    SenseReading after = bus.observe(pid, "Health", 1);
+    REQUIRE(after);
+    CHECK_FALSE(after.by.author_life_is_current);
+    CHECK_FALSE(after.by.author_incarnation_is_current);
+}
 
 // ---- S4: personal vs office -------------------------------------------------
 

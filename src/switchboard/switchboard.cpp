@@ -541,6 +541,13 @@ SenseAuthorship Switchboard::authorship_of(const ClaimRecord& rec, const std::st
     // ASKED NOW, NEVER STORED. A stored "is current" would be a fact that goes
     // stale inside the repository — the exact failure the whole design refuses.
     by.author_life_is_current = life_of(rec.author) == rec.author_life;
+    // ASKED OF THE TOPOLOGY SEPARATELY, never derived from the line above. A
+    // live replacement advances the incarnation while the life stands, so the
+    // two answers genuinely differ; the life must also match, because a fresh
+    // life at the same address restarts the incarnation counter and an
+    // incarnation-only comparison would call that a match.
+    by.author_incarnation_is_current =
+        by.author_life_is_current && incarnation_of(rec.author) == rec.author_incarnation;
     by.office = office;
     by.office_holder_is_current =
         !office.empty() && role_holder(office).value == rec.author.value;
