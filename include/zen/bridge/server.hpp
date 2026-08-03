@@ -68,35 +68,26 @@ public:
     /// in-process system's own pump(); the bridge never blocks the bus on a slow/hung operator.
     void step();
 
-    /// BOUND THE BUS DRAIN INSIDE step() (R2E-0). 0 (the default) keeps the
-    /// existing contract exactly: `step()` calls `pump()` and drains to empty.
+    /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN (R2E-0). Off by
+    /// default, which keeps the existing contract exactly: `step()` calls `pump()`
+    /// and drains to empty.
     ///
     /// A host serving a PERPETUAL in-process service — a repeating Zengine Timer
     /// re-arms itself inside its own handler, so the queue never empties — must
-    /// set this, or `step()` never returns to poll its sockets again. With a
-    /// budget, `step()` dispatches at most that many deliveries and then goes on
-    /// to flush and reap, so operators stay responsive while the service runs.
+    /// set this, or `step()` never returns to poll its sockets again. With it,
+    /// `step()` dispatches the backlog present at entry and then goes on to flush
+    /// and reap, so operators stay responsive while the service runs.
     ///
-    /// The policy is the host's because only the host knows what it is composing
-    /// with; the substrate supplies the deterministic bound
-    /// (`Switchboard::pump_bounded`) and nothing else. FIFO is unaffected either
-    /// way — the budget is a pause between two deliveries.
-    void set_dispatch_budget(std::size_t deliveries_per_step) noexcept {
-        dispatch_budget_ = deliveries_per_step;
-        bounded_dispatch_ = false;
-    }
-    std::size_t dispatch_budget() const noexcept { return dispatch_budget_; }
-
-    /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN — the setting
-    /// most event-loop hosts actually want, and the one a host serving a
-    /// perpetual in-process service should reach for first.
-    ///
-    /// `set_dispatch_budget(n)` makes the host pick `n`, and picking it well
-    /// means knowing the producer's rate: too small throttles the bus to `n` per
-    /// turn, too large is drain-to-empty and the starvation returns. This needs
-    /// no number — the bound is `Switchboard::pump_pending`'s snapshot, so a
-    /// busy bus clears its backlog in one turn while a self-re-arming producer
-    /// still cannot hold the turn open.
+    /// It takes NO NUMBER, and that is the correction R2E-0 paid for. The first
+    /// version of this was `set_dispatch_budget(n)`, which made the host pick `n`
+    /// — and picking it well means knowing the producer's rate: too small
+    /// throttles the bus to `n` per turn, too large is drain-to-empty and the
+    /// starvation returns. The Rule Garden measured both halves of that trap and
+    /// wanted neither, so the numeric surface is gone rather than kept beside
+    /// this one. The bound here is `Switchboard::pump_pending`'s snapshot: a busy
+    /// bus clears its backlog in one turn while a self-re-arming producer still
+    /// cannot hold the turn open. FIFO is unaffected — the boundary is a pause
+    /// between two deliveries.
     void set_bounded_dispatch() noexcept { bounded_dispatch_ = true; }
     bool bounded_dispatch() const noexcept { return bounded_dispatch_; }
 
@@ -144,8 +135,7 @@ private:
     std::size_t declined_ = 0;   ///< connections shed for the cap
     bool weaves_dirty_ = false;  ///< a Died/Revived seen in the tap; push a fresh Weaves after pump (E)
     bool stop_ = false;
-    std::size_t dispatch_budget_ = 0; ///< 0 = drain to empty, the pre-R2E-0 contract
-    bool bounded_dispatch_ = false;   ///< dispatch only the backlog present at entry
+    bool bounded_dispatch_ = false; ///< false = drain to empty, the pre-R2E-0 contract
 };
 
 } // namespace loom
