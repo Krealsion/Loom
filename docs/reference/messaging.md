@@ -1,7 +1,7 @@
 # Messaging — reference
 
 The Switchboard: the in-process bus, first live boundary. Laws:
-[MSG-01..07](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
+[MSG-01..10](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
 Guide: [messaging](../guides/messaging.md).
 
 ## Dispatch model
@@ -10,6 +10,18 @@ Single-threaded FIFO. `send`/`publish` enqueue; `pump()` drains, one envelope
 at a time, non-reentrant — a handler's sends become *later* deliveries
 ([MSG-01](../laws/messaging-laws.md)). "Between two deliveries" is therefore a
 real atomic boundary; the admission dispatch rides it.
+
+**If a native handler throws**, the exception propagates out of `pump()` /
+`pump_pending()` to whoever called it — Loom does not swallow it, does not turn
+it into a refusal, and does not terminate. What Loom guarantees is that it has
+put its own temporary state back first: dispatch is not left looking reentrant,
+and the finished delivery's answer authority is not left standing. The failed
+envelope is consumed (never silently retried, and its ticket keeps reading
+`Pending` — no outcome was recorded); anything queued behind it is delivered by
+the next turn
+([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
+A `.so` weave is a different boundary: its exceptions are caught at the ABI seam
+and never reach the Switchboard ([dynamic-abi](dynamic-abi.md)).
 
 ## The envelope and the delivery order
 
@@ -153,6 +165,10 @@ retains the last `kJournalCapacity = 1024` delivery outcomes by ticket
 (`outcome(Ticket)`); older entries read as `Pending`, exactly like unknown
 seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
 inspect/manipulate *by message* where a weave opts in.
+
+An observer that throws propagates to whoever was pumping and stops that event's
+remaining notifications; it is never silently swallowed
+([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
 
 Senders do not otherwise observe delivery fate
 ([known-seams](known-seams.md#sender-cannot-observe-send-fate)).

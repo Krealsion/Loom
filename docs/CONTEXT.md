@@ -18,6 +18,7 @@ the named laws → the reference page → tests when exactness matters.
 |---|---|---|---|---|
 | values, schemas, the gate | reference/values-and-admission.md | GATE-01..04 | tests/test_gate.cpp, test_schema.cpp, test_registry.cpp, test_serialize.cpp | decisions/one-gate-at-every-boundary.md |
 | message authority, dispatch, roles | reference/messaging.md | MSG-01..07 | tests/test_switchboard.cpp | history/pre-r2c/DESIGN.md §Switchboard |
+| native callback boundaries (a handler or observer that throws) | reference/messaging.md#dispatch-model | MSG-10 | tests/test_switchboard.cpp (STF-1 sections) | — |
 | answers, deferral, provenance | reference/messaging.md#answers | ANS-01..07 | tests/test_provenance.cpp | decisions/readiness-is-authenticated-conversation.md |
 | office authorship (speaking as a role) | reference/messaging.md#office-authorship-role-authored-provenance | MSG-07, MSG-04 | tests/test_role_authorship.cpp, test_kernel.cpp (v5), test_isolation.cpp (pipe) | decisions/office-authorship-is-deliberate.md, evidence/night-lab.md |
 | lifecycle, zen.Activated | reference/lifecycle.md | LIFE-01..05 | tests/test_provenance.cpp, test_manager.cpp | decisions/lifecycle-authority-is-loom-owned.md, decisions/committed-activation-is-not-answerable.md |
@@ -44,6 +45,9 @@ a send rule is never consulted (SENSE-05) · authored handoff added **no Loom
 API**: migration is an authored transformation before admission, never coercion
 inside the gate (HANDOFF-01) · `pump()` still drains to empty; `pump_pending()`
 is the bounded turn and leaves newly enqueued work for the next one (MSG-09) ·
+a native callback that throws propagates to the host and poisons nothing — the
+bus restores its own state, the failed envelope is consumed with no outcome
+recorded, and a deferred answer already minted survives (MSG-10) ·
 replacement
 preserves nothing and
 produces **no atomic incumbent snapshot** — a captured description can go

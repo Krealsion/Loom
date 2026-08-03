@@ -246,3 +246,56 @@ default still draining). Evidence: Codex Rule Garden finding 1, and its
 follow-up — the fake `GardenYieldPump → bus.stop()` message is deleted, replaced
 by `set_bounded_dispatch()`, and the live round-trip runs in the same 2s it did
 with the fake.
+
+## MSG-10 — A callback that throws costs the delivery, not the bus
+
+LAW — Loom calls two kinds of code it did not write: a native `Weave::handle`,
+and a host observer. An exception escaping either **propagates to the host
+caller** — and Loom restores its own temporary dispatch and delivery state
+before it leaves.
+
+MEANS
+- the exception is not swallowed, not translated into a `RefusalReason`, and not
+  answered by terminating the process; no weave is quarantined for having thrown;
+- the dispatch flag is restored, so the bus does not spend the rest of its life
+  believing itself reentrant. A later `pump()` or `pump_pending()` dispatches
+  normally, and the escaped exception is not a permanent poisoning;
+- the ambient delivery context — who is being dispatched, its one reply
+  authority, and the facts about what was just delivered — is cleared on the
+  throwing path exactly as on the returning one. Nothing that runs afterwards
+  inherits a finished delivery's right to answer, nor its standing as the
+  authenticated readiness answer a transaction is waiting for
+  ([PR-04](replacement-laws.md#pr-04--readiness-is-the-candidates-authenticated-answer));
+- the throwing envelope is **consumed**: it was taken off the queue before
+  dispatch, so it is not silently retried. Everything queued behind it is still
+  queued and is delivered by the next turn;
+- an observer that throws stops that event's remaining notifications and
+  propagates — ordinary C++ behaviour, kept because Loom has no error channel on
+  which to report the exception it would otherwise be swallowing.
+
+DOES NOT MEAN
+- that Loom says what the failed delivery *did*. Its journal slot stays
+  `Pending` — "no outcome was recorded", neither delivered nor refused. The
+  queue is what says the message was consumed, and STF-1 restores state rather
+  than inventing an outcome;
+- that a handler's effects are rolled back. There is no transaction: sends it
+  already enqueued stay enqueued and are delivered by the next turn. A claim it
+  already made likewise stands, which [SENSE-02](sense-laws.md) says in its own
+  place;
+- that a **deliberately minted** capability is revoked. A `DeferredAnswer` taken
+  before the throw is durable state the handler asked Loom for, not ambient
+  authority, and stays spendable ([ANS-02](answer-authority-laws.md)). Only the
+  ambient right dies with the frame;
+- that the dynamic seam works this way. A loaded weave's exceptions are caught
+  at the ABI boundary and never reach the Switchboard at all
+  ([dynamic-abi](../reference/dynamic-abi.md)); this law is about the **native**
+  boundary, and STF-1 did not touch the other one;
+- that Loom is exception-safe in any wider sense, or thread-safe in any sense.
+  Dispatch is still single-threaded
+  ([MSG-01](#msg-01--single-threaded-fifo-non-reentrant)).
+
+PROVEN BY — `Switchboard::DispatchGuard` and `Switchboard::DeliveryScope`
+(held across `pump`, `dispatch_at_most`, `deliver_one`, `deliver_admission`);
+suite `switchboard` (a handler throwing through `pump()` and through
+`pump_pending()`; the stale-readiness witness in both its handler and its
+observer form; the deferred answer that survives; the throwing observer).
