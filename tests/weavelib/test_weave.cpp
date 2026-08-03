@@ -88,7 +88,7 @@
 #endif
 
 #if defined(ZEN_WEAVE_MEM_BOMB)
-#include <cstring>
+#include <unistd.h> // sysconf(_SC_PAGESIZE) — the bomb must touch every page, not one byte
 #endif
 
 #if defined(ZEN_WEAVE_FORK_BOMB)
@@ -101,6 +101,56 @@ using namespace loom;
 using namespace loom;
 
 namespace {
+
+#if defined(ZEN_WEAVE_MEM_BOMB)
+/// WHAT THE BOMB REPORTS WHEN IT DID NOT DIE. Both are failures of the witness,
+/// and they are DIFFERENT failures: an allocation the kernel refused up front
+/// never produced any memory pressure, while surviving the page walk means
+/// pressure was applied and containment did not act. Collapsing them would let
+/// "malloc said no" be read as "the cgroup killed it", which is the one
+/// substitution this witness must never make.
+constexpr std::int64_t kBombAllocRefused = -101;
+constexpr std::int64_t kBombSurvived = -102;
+
+/// COMMIT ~200 MiB OF REAL, RESIDENT PAGES.
+///
+/// The previous shape — `malloc(bomb)` then `memset`, into a pointer never read
+/// and never freed — is DEAD CODE, and at `-O2` GCC deletes the pair outright.
+/// The Debug build kept it and passed; the Release build dropped it, so the
+/// process never grew, was never OOM-killed, and the case silently stopped
+/// testing anything while still reporting green (found by R2E-0a, repaired in
+/// STF-0).
+///
+/// Two properties make this version survive optimization, and both are needed:
+///   - the pointer is `volatile`, so every store is an observable side effect
+///     the compiler is forbidden to remove or sink out of the loop;
+///   - there is one store PER PAGE, so the writes actually fault in the whole
+///     range. A single volatile write would be equally un-removable and equally
+///     useless: it commits one page, not 200 MiB.
+///
+/// The allocation is deliberately never freed — the pages must stay resident for
+/// the cgroup to see them.
+std::int64_t detonate() {
+    const std::size_t bomb = 200UL * 1024UL * 1024UL;
+    auto* memory = static_cast<unsigned char*>(std::malloc(bomb));
+    if (memory == nullptr) {
+        return kBombAllocRefused; // refused BEFORE any pressure; not containment
+    }
+    volatile unsigned char* observable = memory;
+
+    const long queried_page_size = ::sysconf(_SC_PAGESIZE);
+    const std::size_t page_size =
+        queried_page_size > 0 ? static_cast<std::size_t>(queried_page_size) : 4096UL;
+
+    for (std::size_t offset = 0; offset < bomb; offset += page_size) {
+        observable[offset] = 1;
+    }
+    observable[bomb - 1] = 1; // the final partial page, whatever the page size is
+
+    // Reaching this line means every page was written and nothing killed us.
+    return kBombSurvived;
+}
+#endif
 
 std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("Ping", 1).field("seq", Kind::Int).build();
@@ -536,21 +586,22 @@ public:
         result.set("noexec_exec", Cell::integer(noexec));
         bus.send(in.reply_to, Message(std::move(result)));
 #elif defined(ZEN_WEAVE_MEM_BOMB)
-        // Allocate a large resident block to trip memory.max. Held (not freed) so RSS
-        // stays high; below the cgroup cap the kernel OOM-kills us mid-handle (the Pong
-        // below is only reached if we survived — proving the kill is the cap).
+        // Commit a large resident block to trip memory.max. Held (not freed) so RSS
+        // stays high; under the cgroup cap the kernel OOM-kills us mid-handle, and
+        // THE REPLY BELOW IS NEVER SENT. That silence is the witness: the test
+        // asserts the recorder heard nothing, so a bomb that fails to die is caught
+        // by a Pong arriving rather than by a missing one.
+        //
+        // When it does NOT die, the reply carries WHY as a sentinel seq instead of
+        // the echo, so "the kernel refused the allocation" and "the pages were all
+        // written and nothing killed us" stay distinguishable in the failure.
         {
-            const std::size_t bomb = 200UL * 1024 * 1024;
-            char* p = static_cast<char*>(std::malloc(bomb));
-            if (p != nullptr) {
-                std::memset(p, 1, bomb);
-            }
-        }
-        {
+            const std::int64_t outcome = detonate();
             Value pong(pong_schema());
-            pong.set("seq", Cell::integer(seq));
+            pong.set("seq", Cell::integer(outcome));
             bus.send(in.reply_to, Message(std::move(pong)));
         }
+        (void)seq;
 #elif defined(ZEN_WEAVE_FORK_BOMB)
         (void)seq;
         // Fork until the kernel refuses (pids.max), counting successes, then clean up.
@@ -636,12 +687,12 @@ public:
         std::abort(); // crash on revive; drives bounded reload-then-quarantine
 #elif defined(ZEN_WEAVE_MEM_BOMB)
         (void)state;
-        // Re-OOM on revive so a memory bomb exhausts its reload budget and quarantines.
-        const std::size_t bomb = 200UL * 1024 * 1024;
-        char* p = static_cast<char*>(std::malloc(bomb));
-        if (p != nullptr) {
-            std::memset(p, 1, bomb);
-        }
+        // RE-OOM ON REVIVE, so the bomb exhausts its reload budget and quarantines.
+        // This site matters as much as the handle() one: quarantine is reached by
+        // dying repeatedly until max_reloads runs out, so a revive that survived
+        // would leave the artifact alive and the witness would never conclude.
+        // Same volatile page walk, same reason — see detonate().
+        (void)detonate();
         count_ = 0;
 #else
         count_ = state.get("count")->as_int();

@@ -439,7 +439,23 @@ TEST_CASE("a memory bomb is OOM-killed within its cgroup; the host survives, the
     bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
     const bool quarantined = host.run_until([&] { return host.quarantined("bomb"); }, 8000);
     REQUIRE(quarantined);
-    CHECK(died >= 1);                        // OOM-killed (within its cgroup) at least once
+    CHECK(died >= 1); // OOM-killed (within its cgroup) at least once
+
+    // SILENCE IS THE WITNESS. The bomb replies on every path where it did NOT
+    // die, so a reply arriving means containment failed — and the sentinel says
+    // which failure it was, rather than leaving "it answered" to be interpreted.
+    // -101 = the kernel refused the allocation, so no pressure was ever applied
+    //        (this must never be read as containment working);
+    // -102 = every page was written and nothing killed us.
+    // STF-0: before the fixture was repaired, Release reported -102 here while
+    // Debug stayed silent, because the optimizer had deleted the allocation.
+    if (!rec.weave->handled_values.empty()) {
+        const std::int64_t why = rec.weave->handled_values.front();
+        INFO("bomb replied with sentinel " << why << " (-101 = allocation refused before any "
+                                                     "pressure, -102 = survived the full page walk)");
+        CHECK(why != -101);
+        CHECK(why != -102);
+    }
     CHECK(rec.weave->handled_names.empty()); // killed before it could reply
 
     // The host is unharmed: a fresh Weave still works.
