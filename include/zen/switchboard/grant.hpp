@@ -79,6 +79,22 @@ struct SendRule {
     std::string target_role{}; ///< non-empty iff a role rule (see Grant::allow_to_role)
 };
 
+/// One observe rule: may read the latest claim of shapes matching the selector
+/// (R2E-0). Deliberately NOT a `SendRule`: a send rule answers "may you emit this
+/// shape *there*", an observe rule answers "may you pull this shape". Reusing one
+/// for the other would be convenient and misleading, and an operator reading a
+/// refusal would go edit the wrong thing.
+///
+/// There is no author/office selector, on purpose: the SHAPE is what exposure is
+/// about, and shape-scoped authority is exactly the granularity `allow_to_any`
+/// already has for sending. Narrowing by claimant is a real future rule; it waits
+/// for a consumer that needs it rather than being guessed at now.
+struct ObserveRule {
+    bool any_shape = false;
+    std::string shape_name; ///< used iff !any_shape
+    std::uint32_t shape_version = 0;
+};
+
 /// Resource limits — a *quantitative* capability (B5, enforced via cgroup-v2). `0`
 /// means "use the host-computed conservative default" (bounded so one Weave can't
 /// starve the host); a positive value is an explicit raise. `unlimited_memory` is the
@@ -128,6 +144,21 @@ public:
     Grant& allow_to_role(std::string shape_name, std::uint32_t shape_version, std::string role) {
         rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, WeaveId{},
                                   std::move(role)});
+        return *this;
+    }
+    /// MAY READ THE LATEST CLAIM of shape (name, version), from any claimant and
+    /// from any office (R2E-0). Default-absent, like every other authority here:
+    /// no existing weave gains any reach from Senses existing, and a Sense
+    /// repository is therefore not a universal data-exfiltration rail — reading
+    /// it takes a deliberate host decision, out of band, exactly as sending does.
+    Grant& allow_observe(std::string shape_name, std::uint32_t shape_version) {
+        observe_.push_back(ObserveRule{false, std::move(shape_name), shape_version});
+        return *this;
+    }
+    /// May read the latest claim of ANY shape (permissive — an inspector, a
+    /// renderer, the host's own console).
+    Grant& allow_observe_any() {
+        observe_.push_back(ObserveRule{true, std::string{}, 0});
         return *this;
     }
     /// Record OS-capability flags (hard capabilities; Network enforced out-of-process
@@ -190,6 +221,17 @@ public:
         return false;
     }
 
+    /// True iff some rule permits observing the latest claim of this shape
+    /// (R2E-0). Send rules are never consulted: they answer a different question.
+    bool permits_observe(std::string_view shape_name, std::uint32_t shape_version) const {
+        for (const ObserveRule& r : observe_) {
+            if (r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::uint32_t os_capabilities() const noexcept { return os_; }
     bool has_os_capability(std::uint32_t cap) const noexcept {
         return cap != 0 && (os_ & cap) == cap;
@@ -198,9 +240,11 @@ public:
     const std::string& filesystem_path() const noexcept { return fs_path_; }
     const ResourceLimits& resources() const noexcept { return res_; }
     const std::vector<SendRule>& rules() const noexcept { return rules_; }
+    const std::vector<ObserveRule>& observe_rules() const noexcept { return observe_; }
 
 private:
     std::vector<SendRule> rules_;
+    std::vector<ObserveRule> observe_; ///< read authority for latest claims (R2E-0)
     std::uint32_t os_ = 0;
     FsAccess fs_ = FsAccess::None; // safe default
     std::string fs_path_;          // the tree ReadOnly exposes (empty otherwise)

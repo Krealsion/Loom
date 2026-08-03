@@ -6307,6 +6307,244 @@ TEST_CASE("R2D-0/v5: the previous-ABI artifact refuses at load by version — no
     CHECK(bus.list_weaves().empty());
 }
 
+// ---- R2E-0 / S3: Senses across a real replacement ---------------------------
+//
+// The half of S3 that needs THIS ceremony: a committed admission overwrites the
+// role holder IN PLACE, so the role never passes through unheld. That is exactly
+// the case where a predecessor's office claim must survive — stamped stale, and
+// never relabelled as the successor's.
+
+namespace {
+
+struct SenseStatus {
+    std::string text;
+    ZEN_SHAPE(SenseStatus, 1, ZEN_FIELD(text));
+};
+
+/// A probe that can be told to claim as an office from inside a delivery, which
+/// is the only place a weave can claim at all.
+struct OfficeClaimer : ProbeWeave {
+    explicit OfficeClaimer(std::string office)
+        : ProbeWeave({ping_schema(), schema_of<loom::Activated>()}), office_(std::move(office)) {}
+
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
+        return {schema_of<SenseStatus>()};
+    }
+    void handle(const Message& in, Bus& bus) override {
+        ProbeWeave::handle(in, bus);
+        if (!say.empty()) {
+            last = bus.office_claim(office_, to_value(SenseStatus{say}));
+            say.clear();
+        }
+    }
+    std::string say;
+    SenseClaimResult last{};
+
+private:
+    std::string office_;
+};
+
+} // namespace
+
+TEST_CASE("R2E-0/S3: a committed admission moves the role in place — the predecessor's office "
+          "claim survives, stamped stale, and is never attributed to the successor") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+
+    auto inc = std::make_unique<OfficeClaimer>("worker");
+    OfficeClaimer* incumbent = inc.get();
+    const WeaveId inc_id = bus.register_weave(std::move(inc), Grant{}.allow_any(), "worker");
+
+    auto cand = std::make_unique<OfficeClaimer>("worker");
+    OfficeClaimer* successor = cand.get();
+    const WeaveId cand_id = bus.register_weave(std::move(cand), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(cand_id, coordinator.id));
+
+    // The incumbent deliberately claims AS the office.
+    incumbent->say = "incumbent on duty";
+    bus.send(inc_id, Message(ping(1)));
+    bus.pump();
+    REQUIRE(incumbent->last.accepted);
+    SenseReading before = bus.observe_office("worker", "SenseStatus", 1);
+    REQUIRE(before);
+    CHECK(before.by.author == inc_id);
+    CHECK(before.by.office_holder_is_current);
+
+    // COMMIT THE REPLACEMENT. The role moves from the incumbent to the successor
+    // inside one dispatch, never passing through unheld.
+    loom::Activated fact{1};
+    REQUIRE(bus.admit_candidate(cand_id, inc_id, "worker", host_lifecycle_authority(bus),
+                                Message(to_value(fact)), 1));
+    bus.pump();
+    REQUIRE(bus.role_holder("worker") == cand_id);
+
+    // THE MANDATORY WITNESS. The claim is still readable and still the
+    // incumbent's — Loom does not relabel it, and does not delete it either.
+    SenseReading after = bus.observe_office("worker", "SenseStatus", 1);
+    REQUIRE(after);
+    CHECK(from_value<SenseStatus>(*after.value).text == "incumbent on duty");
+    CHECK(after.by.author == inc_id);           // the predecessor claimed it
+    CHECK(after.by.author != cand_id);          // NOT the successor
+    CHECK(after.by.office == "worker");         // as the office
+    CHECK_FALSE(after.by.office_holder_is_current); // whose holder has changed
+    CHECK(after.by.office_claim_is_stale());
+    // ...and the successor is not considered to have claimed anything at all.
+    CHECK_FALSE(bus.observe(cand_id, "SenseStatus", 1));
+
+    // Once the successor deliberately claims as the office — legally, after its
+    // activation — the role-bound view follows it and is current again.
+    successor->say = "successor on duty";
+    bus.send(cand_id, Message(ping(2)));
+    bus.pump();
+    REQUIRE(successor->last.accepted);
+    SenseReading now = bus.observe_office("worker", "SenseStatus", 1);
+    REQUIRE(now);
+    CHECK(from_value<SenseStatus>(*now.value).text == "successor on duty");
+    CHECK(now.by.author == cand_id);
+    CHECK(now.by.office_holder_is_current);
+    CHECK(now.by.revision == 2); // a replacement of the same office key, not a reset
+}
+
+TEST_CASE("R2E-0/S3: a SEALED candidate cannot claim as the office it does not yet hold — an "
+          "office Sense cannot appear before legal activation") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    const WeaveId inc_id = bus.register_weave(std::make_unique<OfficeClaimer>("worker"),
+                                              Grant{}.allow_any(), "worker");
+    auto cand = std::make_unique<OfficeClaimer>("worker");
+    OfficeClaimer* candidate = cand.get();
+    const WeaveId cand_id = bus.register_weave(std::move(cand), Grant{}.allow_any());
+    REQUIRE(bus.seal_weave(cand_id, coordinator.id));
+
+    // The sealed candidate tries to claim the office DURING preparation.
+    candidate->say = "I am the worker";
+    bus.send_as(coordinator.id, cand_id, Message(ping(1))); // its coordinator may reach it
+    bus.pump();
+
+    CHECK_FALSE(candidate->last.accepted);
+    CHECK(candidate->last.why == SenseRefusal::OfficeNotHeld);
+    // The office's claim is still the incumbent's business; nothing appeared.
+    CHECK_FALSE(bus.observe_office("worker", "SenseStatus", 1));
+    CHECK_FALSE(bus.observe(cand_id, "SenseStatus", 1));
+    CHECK(bus.role_holder("worker") == inc_id);
+}
+
+// ---- R2E-0 / v6: Senses across the dynamic seam -----------------------------
+//
+// The parity question, and it is the whole question: do the four public verbs
+// mean here what they mean natively? A Sense is meant for real loadable
+// components, so a gap would make the feature host-only in practice.
+
+namespace {
+
+/// Read the Sense fixture's own window on itself (Counter v6). A loaded weave has
+/// no window but its snapshot, so that is where the fixture puts what it learned.
+struct SenseWindow {
+    std::int64_t count = 0;
+    bool claimed = false;
+    std::int64_t revision = 0;
+    bool office_denied = false;
+    std::int64_t read_hp = -1;
+    std::uint64_t read_author = 0;
+    bool read_personal = false;
+};
+
+SenseWindow sense_window(Switchboard& bus, WeaveId id) {
+    static const auto counter6 = SchemaBuilder("Counter", 6)
+                                     .field("count", Kind::Int)
+                                     .field("claimed", Kind::Int)
+                                     .field("revision", Kind::Int)
+                                     .field("office_denied", Kind::Int)
+                                     .field("read_hp", Kind::Int)
+                                     .field("read_author", Kind::Int)
+                                     .field("read_personal", Kind::Int)
+                                     .build();
+    Unverified u = parse(bus.snapshot_bytes(id));
+    Admission a = admit(u, counter6);
+    REQUIRE(a.ok());
+    const Value& v = a.value();
+    SenseWindow w;
+    w.count = v.get("count")->as_int();
+    w.claimed = v.get("claimed")->as_int() != 0;
+    w.revision = v.get("revision")->as_int();
+    w.office_denied = v.get("office_denied")->as_int() != 0;
+    w.read_hp = v.get("read_hp")->as_int();
+    w.read_author = static_cast<std::uint64_t>(v.get("read_author")->as_int());
+    w.read_personal = v.get("read_personal")->as_int() != 0;
+    return w;
+}
+
+} // namespace
+
+TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, and reads its own "
+          "claim back synchronously — the same four verbs, the same meanings") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult dyn = kernel.load("sensor", ZEN_SO_SENSES, "",
+                                 Grant{}.allow_any().allow_observe("SenseHealth", 1));
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    // DISCOVERY BEFORE ANY CLAIM: the manifest carried the claim-set, so the host
+    // already knows what this artifact can provide and the shape resolves.
+    const auto declared = bus.claimed_schemas(dyn.id);
+    REQUIRE(declared.size() == 1);
+    CHECK(declared[0]->name() == "SenseHealth");
+    CHECK(bus.resolve_schema("SenseHealth", 1) != nullptr);
+    CHECK(bus.retained_claim_count() == 0);
+
+    // reply_to points the fixture's read-back at itself.
+    bus.send(dyn.id, Message(ping(42), WeaveId{}, dyn.id, 0));
+    bus.pump();
+
+    const SenseWindow w = sense_window(bus, dyn.id);
+    CHECK(w.claimed);            // the claim took, across the seam
+    CHECK(w.revision == 1);      // ...at revision 1 under its key
+    CHECK(w.office_denied);      // the forged office claim refused PRECISELY
+    CHECK(w.read_hp == 42);      // the synchronous read-back saw its own claim
+    CHECK(w.read_author == dyn.id.value); // with the host's authorship, not its own word
+    CHECK(w.read_personal);      // and it was a personal claim, correctly unstamped
+
+    // The host sees exactly the same claim natively — one repository, one truth.
+    SenseReading host_view = bus.observe(dyn.id, "SenseHealth", 1);
+    REQUIRE(host_view);
+    CHECK(host_view.value->get("hp")->as_int() == 42);
+    CHECK(host_view.by.author == dyn.id);
+    CHECK(host_view.by.office.empty());
+    CHECK(host_view.by.revision == 1);
+    CHECK(bus.retained_claim_count() == 1);
+
+    // A second claim REPLACES rather than accumulating, exactly as natively.
+    bus.send(dyn.id, Message(ping(7), WeaveId{}, dyn.id, 0));
+    bus.pump();
+    CHECK(bus.retained_claim_count() == 1);
+    CHECK(bus.observe(dyn.id, "SenseHealth", 1).by.revision == 2);
+
+    // ...and unloading takes its keys with it.
+    REQUIRE(kernel.unload("sensor"));
+    CHECK(bus.retained_claim_count() == 0);
+}
+
+TEST_CASE("R2E-0/v6: a loaded weave without observe authority is refused a read, and its claim "
+          "of an undeclared shape is refused — the seam carries the distinct reasons") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    // Full SEND authority, no observe rule: a send rule answers a different
+    // question and does not become a read.
+    LoadResult dyn = kernel.load("sensor", ZEN_SO_SENSES, "", Grant{}.allow_any());
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    bus.send(dyn.id, Message(ping(5), WeaveId{}, dyn.id, 0));
+    bus.pump();
+
+    const SenseWindow w = sense_window(bus, dyn.id);
+    CHECK(w.claimed);       // claiming needs no observe rule — it is its own act
+    CHECK(w.read_hp == -1); // ...but the read-back was refused
+    // The claim really is there; the loaded reader simply may not read it.
+    CHECK(bus.observe(dyn.id, "SenseHealth", 1));
+    CHECK(bus.observe_as(dyn.id, dyn.id, "SenseHealth", 1).refusal ==
+          SenseRefusal::NotAuthorized);
+}
+
 // ---- R2E-0 / P-011: the silent dynamic seam --------------------------------
 //
 // Night Lab III found that a loaded weave's emission whose shape nobody

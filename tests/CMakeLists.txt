@@ -27,6 +27,7 @@ add_executable(zen-tests
     test_switchboard.cpp
     test_provenance.cpp
     test_role_authorship.cpp
+    test_sense.cpp
     test_harness.cpp
     test_breathing.cpp
     test_schema_codec.cpp
@@ -122,6 +123,9 @@ zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSW
 # R2E-0 / Night Lab III P-011: the silent-seam reproducer. Emits a shape only this
 # artifact knows, so the host seam cannot resolve it.
 zen_add_test_weave(zen_test_weave_seam_emit ZEN_WEAVE_SEAM_EMIT)
+# R2E-0/v6: the Sense parity fixture — claims, forged-office refusal, and a
+# synchronous read-back, all from the far side of the seam.
+zen_add_test_weave(zen_test_weave_senses ZEN_WEAVE_SENSES)
 
 # R2B-3b-3: the `versioned.service` pair — ONE source, two real artifacts. v1 is
 # the incumbent that answers "v1" throughout; v2 (ZEN_VERSIONED_CANDIDATE) is the
@@ -160,7 +164,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
-    zen_test_weave_answers_twice zen_test_weave_seam_emit
+    zen_test_weave_answers_twice zen_test_weave_seam_emit zen_test_weave_senses
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_office_worker)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
@@ -185,6 +189,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ANSWERS=\"$<TARGET_FILE:zen_test_weave_answers>\""
     "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\""
     "ZEN_SO_SEAM_EMIT=\"$<TARGET_FILE:zen_test_weave_seam_emit>\""
+    "ZEN_SO_SENSES=\"$<TARGET_FILE:zen_test_weave_senses>\""
     "ZEN_SO_VERSIONED_V1=\"$<TARGET_FILE:zen_test_versioned_v1>\""
     "ZEN_SO_VERSIONED_V2=\"$<TARGET_FILE:zen_test_versioned_v2>\""
     "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\"")

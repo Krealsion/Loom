@@ -9,6 +9,7 @@
 #include <zen/schema.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
+#include <zen/switchboard/sense.hpp>
 #include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
 
@@ -21,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace loom {
@@ -585,6 +587,87 @@ public:
     /// answer to event-loop composition.
     std::size_t pump_bounded(std::size_t budget);
 
+    // ---- Senses (R2E-0) -----------------------------------------------------
+    //
+    // THE LAW: *a Sense is a deliberate immutable claim of the latest observation
+    // a participant has made available. It is read synchronously, carries
+    // truthful authorship, predicts nothing about queued work, and shares no
+    // memory with the claimant.*
+    //
+    // VISIBILITY / SETTLEMENT, exactly: **a claim becomes visible at the
+    // successful claim call.** Nothing defers it to handler completion and there
+    // is no settlement step to forget. That rule is chosen because it is the
+    // smallest one that is also indistinguishable from the alternative: dispatch
+    // is single-threaded and non-reentrant (MSG-01), so no other participant can
+    // run between a claim call and the end of the handler that made it. The only
+    // observer that can tell "at the call" from "at handler completion" is the
+    // claimant observing its own claim.
+    //
+    // WHAT THAT BUYS THE ORDERING WITNESS: a reader delivered BEFORE the
+    // state-changing message observes the previous claim; a reader delivered
+    // AFTER it observes the new one. The repository never reorders causality
+    // because it never participates in it, and Loom never applies queued work
+    // speculatively to make a claim look current.
+
+    /// CLAIM `value` AS `claimant`, PERSONALLY (host/root door; the gated weave
+    /// path is `claim_as`). The key is (claimant, shape) — a personal claim is
+    /// not reachable through any office key, which is what makes "holding an
+    /// office is not claiming as one" structural rather than a convention.
+    SenseClaimResult claim_as(WeaveId claimant, Value value);
+
+    /// CLAIM `value` DELIBERATELY AS THE OFFICE `as_role`. Verified at the claim
+    /// moment (`role_holder(as_role) == claimant`), exactly as office authorship
+    /// verifies at the authorship moment (MSG-07). A claimant that does not hold
+    /// the office is refused `OfficeNotHeld` and NOTHING is stored — never
+    /// downgraded to a personal claim.
+    ///
+    /// The key is (role, shape). The claim also records WHICH weave authored it,
+    /// so a later role movement can be reported rather than hidden.
+    SenseClaimResult office_claim_as(WeaveId claimant, std::string_view as_role, Value value);
+
+    /// THE LATEST CLAIM `author` MADE PERSONALLY of this shape, as an observation
+    /// gated by `reader`'s grant. Never reaches into the claimant: the value is a
+    /// copy the caller owns.
+    SenseReading observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
+                            std::uint32_t shape_version) const;
+
+    /// THE LATEST CLAIM MADE AS THE OFFICE `role`, gated by `reader`'s grant.
+    ///
+    /// ROLE MOVEMENT NEVER REWRITES HISTORY. After a replacement moves the role,
+    /// this still returns the predecessor's claim — stamped `author=predecessor`,
+    /// `office=role`, `office_holder_is_current=false`. It is NOT relabelled as
+    /// the successor's, and the successor is NOT considered to have claimed
+    /// anything until it deliberately does. Returning nothing instead was the
+    /// rejected alternative: it would collapse "this office has never claimed"
+    /// and "this office's claim is the previous holder's" into one empty answer,
+    /// and those are different facts. A reader wanting the stricter reading
+    /// writes `if (r && r.by.office_holder_is_current)`.
+    SenseReading observe_office_as(WeaveId reader, std::string_view role,
+                                   std::string_view shape_name,
+                                   std::uint32_t shape_version) const;
+
+    /// The host's own ungated observation — root authority reads, exactly as
+    /// `Switchboard::send` is the ungated send.
+    SenseReading observe(WeaveId author, std::string_view shape_name,
+                         std::uint32_t shape_version) const;
+    SenseReading observe_office(std::string_view role, std::string_view shape_name,
+                                std::uint32_t shape_version) const;
+
+    /// WHAT SENSES CAN THIS PARTICIPANT PROVIDE — the declared claim-set, so a
+    /// consumer can discover capability before any runtime claim happens rather
+    /// than after one accidentally appears. Empty for a weave that declares none.
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas(WeaveId id) const;
+
+    /// How many latest claims are retained right now, across both key spaces.
+    /// The lifecycle witness reads this: it is bounded by MEANINGFUL CURRENT KEYS
+    /// (registered weaves x shapes they declare, plus held roles x shapes), never
+    /// by the number of claims ever made and never one entry per historical
+    /// incarnation. A reload, a revival or a thousand re-claims replace the value
+    /// under one key; they do not add keys.
+    std::size_t retained_claim_count() const noexcept {
+        return personal_claims_.size() + office_claims_.size();
+    }
+
     /// RECORD A REJECTION THAT HAPPENED AT A BOUNDARY THIS LOOM OWNS BUT THE BUS
     /// NEVER SAW (R2E-0). The dynamic seam admits a loaded weave's bytes
     /// host-side *before* routing; when that fails, nothing is queued, so no
@@ -951,6 +1034,11 @@ private:
         WeaveId id{};
         std::unique_ptr<Weave> weave;
         std::vector<std::shared_ptr<const Schema>> accept;
+        /// THE DECLARED CLAIM-SET (R2E-0) — the Senses this weave says it can
+        /// claim. Recorded at registration (and re-read on a code swap, since the
+        /// successor's contract is its own), registered so the shapes resolve and
+        /// are discoverable, and checked by both claim doors.
+        std::vector<std::shared_ptr<const Schema>> claims;
         std::shared_ptr<const Schema> state_schema;
         Value last_known_good;
         Grant grant;
@@ -1176,6 +1264,18 @@ private:
         }
         OfficePublication office_publish(std::string_view as_role, Message msg) override {
             return sb_.office_publish_as(self_, as_role, std::move(msg));
+        }
+        SenseClaimResult claim(Value value) override {
+            return sb_.claim_as(self_, std::move(value));
+        }
+        SenseClaimResult office_claim(std::string_view as_role, Value value) override {
+            return sb_.office_claim_as(self_, as_role, std::move(value));
+        }
+        SenseReading observe(WeaveId author, std::shared_ptr<const Schema> shape) override {
+            return sb_.observe_as(self_, author, shape->name(), shape->version());
+        }
+        SenseReading observe_office(std::string_view role, std::shared_ptr<const Schema> shape) override {
+            return sb_.observe_office_as(self_, role, shape->name(), shape->version());
         }
 
     private:
@@ -1420,6 +1520,60 @@ private:
 
     void emit(const BusEvent& event);
     void record(std::uint64_t seq, Disposition disposition, const Refusal& refusal);
+
+    // ---- the latest-claim repository (R2E-0) --------------------------------
+    //
+    // TWO KEY SPACES, DELIBERATELY. A personal claim is keyed by the claimant's
+    // WeaveId; an office claim is keyed by the role name. They are separate maps
+    // so a personal claim cannot be reached through an office key and cannot be
+    // promoted into one — law 5 ("holding the office is not claiming as the
+    // office") is therefore structural, not a check somebody could forget.
+    //
+    // LATEST, NOT HISTORY. One record per key; a new claim REPLACES the value in
+    // place and bumps its revision. Nothing accumulates. Historical logging is
+    // the tap's job and always was.
+    struct ClaimRecord {
+        Value value;
+        WeaveId author{};
+        std::uint64_t author_life = 0;
+        std::uint64_t author_incarnation = 0;
+        std::uint64_t revision = 0;
+    };
+    /// key: (claimant id, shape name, shape version)
+    using PersonalKey = std::tuple<std::uint64_t, std::string, std::uint32_t>;
+    /// key: (role, shape name, shape version)
+    using OfficeKey = std::tuple<std::string, std::string, std::uint32_t>;
+
+    std::map<PersonalKey, ClaimRecord> personal_claims_;
+    std::map<OfficeKey, ClaimRecord> office_claims_;
+
+    /// Does this weave's declared claim-set contain the shape? The one place the
+    /// question is asked, so the claim door and discovery cannot drift.
+    bool declares_claim(const WeaveRecord& rec, std::string_view name,
+                        std::uint32_t version) const;
+    /// A prepared claim and its verdict, so the two claim doors share every check
+    /// and differ only in which map they write. `record` is engaged iff the
+    /// verdict accepted — there is no half-made claim to misread.
+    struct MadeClaim {
+        std::optional<ClaimRecord> record;
+        SenseClaimResult result;
+    };
+    /// Everything both claim doors do identically: check the declaration, gate
+    /// the value, and stamp the next revision. Writes nothing.
+    MadeClaim make_claim(const WeaveRecord& rec, Value value, std::uint64_t previous_revision);
+    /// Fill the authorship of a reading from a stored record, resolving the two
+    /// "is that still true?" questions AT READ TIME (never stored, so they cannot
+    /// go stale in the repository itself).
+    SenseAuthorship authorship_of(const ClaimRecord& rec, const std::string& office,
+                                  const std::string& name, std::uint32_t version) const;
+    /// DROP EVERY CLAIM UNDER KEYS THAT STOPPED MEANING ANYTHING. Called where a
+    /// weave is removed (its personal keys) and where a role becomes unheld (its
+    /// office keys). A replacement's admission overwrites the role holder IN
+    /// PLACE and never passes through unheld, so this never fires during one —
+    /// which is exactly why the predecessor's office claim survives it, stamped
+    /// stale rather than deleted or relabelled.
+    void forget_personal_claims(WeaveId id);
+    void forget_office_claims(const std::string& role);
 
     WeaveRecord* find(WeaveId id);
     const WeaveRecord* find(WeaveId id) const;

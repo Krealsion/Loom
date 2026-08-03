@@ -60,6 +60,22 @@ public:
     /// that passed the gate).
     virtual void revive(const Value& state) = 0;
 
+    /// THE SENSES THIS WEAVE DECLARES IT CAN CLAIM (R2E-0) — its claim-set.
+    /// Consulted at registration: each schema is registered (so the shape
+    /// resolves and is discoverable BEFORE any runtime claim), and the set is
+    /// what `claim` is checked against, so a weave cannot claim a shape it never
+    /// declared.
+    ///
+    /// Deliberately a virtual with a default rather than a sixth pure virtual:
+    /// this contract is a frozen surface every existing Weave implements, and a
+    /// weave that declares no Senses claims none — which is the honest default,
+    /// not a silent one. `Claims<...>` on `WeaveBase` writes it.
+    ///
+    /// Distinct from `accepted_schemas()` (what may be DELIVERED here) and from
+    /// `emitted_schemas()` (what may be SENT from here): a claim is neither a
+    /// door nor a message.
+    virtual std::vector<std::shared_ptr<const Schema>> claimed_schemas() const { return {}; }
+
 protected:
     Weave() = default;
 };

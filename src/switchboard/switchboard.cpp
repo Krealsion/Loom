@@ -276,6 +276,20 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
         accept.push_back(registry_.register_schema(s).schema);
     }
 
+    // Record the declared claim-set the same way (R2E-0), and for the same
+    // reason plus one more: registering these here is what makes a Sense
+    // DISCOVERABLE — its shape resolves, and a consumer can ask what this weave
+    // can claim — before any runtime claim has ever happened.
+    std::vector<std::shared_ptr<const Schema>> claims;
+    auto declared_claims = incoming->claimed_schemas();
+    claims.reserve(declared_claims.size());
+    for (auto& s : declared_claims) {
+        if (!s) {
+            throw std::invalid_argument("register_weave: a declared claim schema is null");
+        }
+        claims.push_back(registry_.register_schema(s).schema);
+    }
+
     // Seed last-known-good from an initial snapshot, gated against its own schema.
     Value snap = incoming->snapshot();
     std::shared_ptr<const Schema> state_schema = snap.schema_ptr();
@@ -291,6 +305,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     WeaveRecord rec{id,
                     std::move(incoming),
                     std::move(accept),
+                    std::move(claims),
                     state_schema,
                     std::move(seeded).value(),
                     std::move(grant),
@@ -326,7 +341,16 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     }
     if (!it->second.role.empty()) {
         roles_.erase(it->second.role); // a role has no holder once its Weave is removed
+        // ...and an office with no officeholder has no current claimant, so its
+        // latest claims go with it (R2E-0). This is the ONLY way office claims
+        // are dropped: an admission moves the role holder IN PLACE and never
+        // passes through unheld, so a replacement leaves the predecessor's claim
+        // standing — stamped stale, never deleted and never relabelled.
+        forget_office_claims(it->second.role);
     }
+    // The weave's own latest claims end with it. This is what bounds the
+    // repository by CURRENT keys rather than by claims ever made.
+    forget_personal_claims(id);
     std::unique_ptr<Weave> released = std::move(it->second.weave);
     weaves_.erase(it);
     // Its unfinished conversations end with it, in both directions: it can no
@@ -396,6 +420,201 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
     ev.refusal = r;
     emit(ev);
     return Ticket{seq};
+}
+
+// ---- Senses (R2E-0) --------------------------------------------------------
+
+const char* name_of(SenseRefusal r) noexcept {
+    switch (r) {
+    case SenseRefusal::None:
+        return "None";
+    case SenseRefusal::NoClaim:
+        return "NoClaim";
+    case SenseRefusal::NotAuthorized:
+        return "NotAuthorized";
+    case SenseRefusal::Undeclared:
+        return "Undeclared";
+    case SenseRefusal::OfficeNotHeld:
+        return "OfficeNotHeld";
+    case SenseRefusal::GateRefused:
+        return "GateRefused";
+    }
+    return "?";
+}
+
+bool Switchboard::declares_claim(const WeaveRecord& rec, std::string_view name,
+                                 std::uint32_t version) const {
+    for (const auto& s : rec.claims) {
+        if (s && s->name() == name && s->version() == version) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Switchboard::MadeClaim Switchboard::make_claim(const WeaveRecord& rec, Value value,
+                                               std::uint64_t previous_revision) {
+    const std::string name = value.schema().name();
+    const std::uint32_t version = value.schema().version();
+    if (!declares_claim(rec, name, version)) {
+        // A weave claims only what it declared. This is what makes the claim-set
+        // a real contract rather than documentation, and what makes discovery
+        // answerable before the first runtime claim.
+        return MadeClaim{std::nullopt, SenseClaimResult{false, SenseRefusal::Undeclared, 0}};
+    }
+    std::shared_ptr<const Schema> door = registry_.lookup(name, version);
+    if (!door) {
+        door = registry_.register_schema(value.schema_ptr()).schema;
+    }
+    // The same one gate every value crosses. A malformed claim is refused, not
+    // stored: a repository holding an unadmitted value would be the one place in
+    // Loom where a value was trusted without passing the gate.
+    Admission a = loom::admit(std::move(value), *door);
+    if (!a.ok()) {
+        return MadeClaim{std::nullopt, SenseClaimResult{false, SenseRefusal::GateRefused, 0}};
+    }
+    // REPLACE, NEVER ACCUMULATE. The revision advances; the number of retained
+    // claims does not. That is the whole of the lifecycle rule on the write side.
+    const std::uint64_t revision = previous_revision + 1;
+    return MadeClaim{ClaimRecord{std::move(a).value(), rec.id, rec.life, rec.incarnation, revision},
+                     SenseClaimResult{true, SenseRefusal::None, revision}};
+}
+
+SenseClaimResult Switchboard::claim_as(WeaveId claimant, Value value) {
+    auto it = weaves_.find(claimant.value);
+    if (it == weaves_.end() || !it->second.alive) {
+        // A weave that is not live has no declared claim-set to check against.
+        return SenseClaimResult{false, SenseRefusal::Undeclared, 0};
+    }
+    const PersonalKey key{claimant.value, value.schema().name(), value.schema().version()};
+    auto slot = personal_claims_.find(key);
+    const std::uint64_t previous =
+        slot == personal_claims_.end() ? 0 : slot->second.revision;
+
+    MadeClaim made = make_claim(it->second, std::move(value), previous);
+    if (!made.result.accepted) {
+        return made.result;
+    }
+    if (slot == personal_claims_.end()) {
+        personal_claims_.emplace(key, std::move(*made.record));
+    } else {
+        slot->second = std::move(*made.record);
+    }
+    return made.result;
+}
+
+SenseClaimResult Switchboard::office_claim_as(WeaveId claimant, std::string_view as_role,
+                                              Value value) {
+    auto it = weaves_.find(claimant.value);
+    if (it == weaves_.end() || !it->second.alive) {
+        return SenseClaimResult{false, SenseRefusal::OfficeNotHeld, 0};
+    }
+    // THE MSG-07 RULE, at the claim moment. Holding is necessary and not
+    // sufficient; not holding refuses and stores NOTHING — never a downgrade to
+    // a personal claim, which would silently answer a different question.
+    if (as_role.empty() || !holds_role_now(claimant, as_role)) {
+        return SenseClaimResult{false, SenseRefusal::OfficeNotHeld, 0};
+    }
+    const OfficeKey key{std::string(as_role), value.schema().name(), value.schema().version()};
+    auto slot = office_claims_.find(key);
+    const std::uint64_t previous = slot == office_claims_.end() ? 0 : slot->second.revision;
+
+    MadeClaim made = make_claim(it->second, std::move(value), previous);
+    if (!made.result.accepted) {
+        return made.result;
+    }
+    if (slot == office_claims_.end()) {
+        office_claims_.emplace(key, std::move(*made.record));
+    } else {
+        slot->second = std::move(*made.record);
+    }
+    return made.result;
+}
+
+SenseAuthorship Switchboard::authorship_of(const ClaimRecord& rec, const std::string& office,
+                                           const std::string& name,
+                                           std::uint32_t version) const {
+    SenseAuthorship by;
+    by.author = rec.author;
+    by.author_life = rec.author_life;
+    by.author_incarnation = rec.author_incarnation;
+    // ASKED NOW, NEVER STORED. A stored "is current" would be a fact that goes
+    // stale inside the repository — the exact failure the whole design refuses.
+    by.author_life_is_current = life_of(rec.author) == rec.author_life;
+    by.office = office;
+    by.office_holder_is_current =
+        !office.empty() && role_holder(office).value == rec.author.value;
+    by.revision = rec.revision;
+    by.schema_name = name;
+    by.schema_version = version;
+    return by;
+}
+
+SenseReading Switchboard::observe(WeaveId author, std::string_view shape_name,
+                                  std::uint32_t shape_version) const {
+    const PersonalKey key{author.value, std::string(shape_name), shape_version};
+    auto it = personal_claims_.find(key);
+    if (it == personal_claims_.end()) {
+        return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
+    }
+    SenseReading out;
+    out.refusal = SenseRefusal::None;
+    out.by = authorship_of(it->second, std::string{}, std::string(shape_name), shape_version);
+    out.value = it->second.value; // BY VALUE: the reader owns its copy, always
+    return out;
+}
+
+SenseReading Switchboard::observe_office(std::string_view role, std::string_view shape_name,
+                                         std::uint32_t shape_version) const {
+    const OfficeKey key{std::string(role), std::string(shape_name), shape_version};
+    auto it = office_claims_.find(key);
+    if (it == office_claims_.end()) {
+        return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
+    }
+    SenseReading out;
+    out.refusal = SenseRefusal::None;
+    out.by = authorship_of(it->second, std::string(role), std::string(shape_name), shape_version);
+    out.value = it->second.value;
+    return out;
+}
+
+SenseReading Switchboard::observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
+                                     std::uint32_t shape_version) const {
+    auto it = weaves_.find(reader.value);
+    if (it == weaves_.end() || !it->second.grant.permits_observe(shape_name, shape_version)) {
+        // Refused BEFORE the lookup, so an unauthorized reader cannot learn
+        // whether a claim exists — the same discipline role authorization
+        // follows, where authorization happens before role resolution.
+        return SenseReading{SenseRefusal::NotAuthorized, {}, std::nullopt};
+    }
+    return observe(author, shape_name, shape_version);
+}
+
+SenseReading Switchboard::observe_office_as(WeaveId reader, std::string_view role,
+                                            std::string_view shape_name,
+                                            std::uint32_t shape_version) const {
+    auto it = weaves_.find(reader.value);
+    if (it == weaves_.end() || !it->second.grant.permits_observe(shape_name, shape_version)) {
+        return SenseReading{SenseRefusal::NotAuthorized, {}, std::nullopt};
+    }
+    return observe_office(role, shape_name, shape_version);
+}
+
+std::vector<std::shared_ptr<const Schema>> Switchboard::claimed_schemas(WeaveId id) const {
+    auto it = weaves_.find(id.value);
+    return it == weaves_.end() ? std::vector<std::shared_ptr<const Schema>>{} : it->second.claims;
+}
+
+void Switchboard::forget_personal_claims(WeaveId id) {
+    for (auto it = personal_claims_.begin(); it != personal_claims_.end();) {
+        it = std::get<0>(it->first) == id.value ? personal_claims_.erase(it) : std::next(it);
+    }
+}
+
+void Switchboard::forget_office_claims(const std::string& role) {
+    for (auto it = office_claims_.begin(); it != office_claims_.end();) {
+        it = std::get<0>(it->first) == role ? office_claims_.erase(it) : std::next(it);
+    }
 }
 
 void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_view claimed_name,
@@ -2238,6 +2457,25 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // weave's unfinished conversations, is what keeps handler-surviving authority
     // from quietly becoming reload-surviving authority.
     ++rec->incarnation;
+    // THE CLAIM-SET BELONGS TO THE CODE (R2E-0), so new code re-declares it. A
+    // native swap changes nothing here (the same object answers the same way); a
+    // dynamic reload has rebound its library underneath, and the successor's
+    // contract is its own. Re-reading is the only way this record cannot end up
+    // describing code that is gone.
+    //
+    // The weave's existing latest claims are NOT dropped: a reload is not a death
+    // of the claimant, and the reading already carries the incarnation the claim
+    // was made under, so a consumer can see for itself that a claim predates the
+    // current code rather than having it silently withdrawn.
+    {
+        std::vector<std::shared_ptr<const Schema>> fresh;
+        for (auto& s : rec->weave->claimed_schemas()) {
+            if (s) {
+                fresh.push_back(registry_.register_schema(s).schema);
+            }
+        }
+        rec->claims = std::move(fresh);
+    }
     forget_deferred_for(id);
     // New code, or a revival, is a new participant as far as a transaction is
     // concerned — and this hook was MISSING in the first cut, which the

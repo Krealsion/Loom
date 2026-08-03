@@ -42,7 +42,7 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 5u
+#define ZEN_ABI_VERSION 6u
 
 /* v3 (R2B-2): the host API gained the deferred-answer door, so a DYNAMICALLY
  * LOADED weave can hold an answer right across handler boundaries — the case a
@@ -86,6 +86,32 @@ extern "C" {
  * same-word-two-meanings failure v4 closed for answer(). Old artifacts refuse
  * at load with the version named; nothing loads crippled. */
 
+/* v6 (R2E-0): SENSES cross the seam, both ways.
+ *
+ * A Sense is a deliberate immutable claim of the latest observation a
+ * participant has made available — the second thing a participant can say, read
+ * synchronously and carrying no causality. Senses are intended for real loadable
+ * components, so a loaded weave gets exactly the surface a native one has:
+ * claim / office_claim outbound, observe / observe_office inbound, and the
+ * declared claim-set in the manifest.
+ *
+ * The manifest half is what makes DISCOVERY work across the seam: the claim-set
+ * is descriptor bytes the host re-admits and registers at load, so "what Senses
+ * can this artifact provide?" is answerable before it has claimed anything —
+ * rather than after a runtime claim accidentally reveals a shape.
+ *
+ * The trust split is v5's, unchanged: the library REQUESTS "claim as R" and the
+ * host verifies membership at the claim moment; the library asks to observe and
+ * the host authorizes against the loaded weave's own grant. A library attests
+ * nothing about itself in either direction.
+ *
+ * Paid as a break for the third time, and for the third time deliberately: a v5
+ * artifact under a v6 host would compile against a Bus whose claim/observe verbs
+ * silently return the refusing defaults — a weave unable to claim, unable to
+ * read, and unable to say so. That is precisely the same-word-two-meanings
+ * failure v4 closed for answer() and v5 closed for office speech. Old artifacts
+ * refuse at load with both versions named; nothing loads crippled. */
+
 /* Delivery provenance flags (ZEN_PROV_*). Zero means an ordinary message: it
  * stands on its shape and its sender stamp, and claims nothing more. These are
  * set by the HOST from bus-owned state; they have no wire representation and no
@@ -116,7 +142,18 @@ enum {
      * problem — nothing was queued, and nothing was downgraded to personal
      * speech. Distinct so a caller can tell "the office refused me" from "the
      * payload was malformed". */
-    ZEN_ERR_ROLE_AUTHORSHIP_DENIED = -5
+    ZEN_ERR_ROLE_AUTHORSHIP_DENIED = -5,
+    /* Sense refusals (v6). Four distinct answers, kept distinct across the seam
+     * for the reason every refusal in Loom is kept distinct: they send a maker
+     * to four different places. NO_CLAIM is "nobody has claimed that"; NOT
+     * AUTHORIZED is "your grant does not permit reading that shape" — collapsing
+     * those two would let a misconfigured grant masquerade as an empty world.
+     * UNDECLARED is "you did not list that shape in Claims<...>"; OFFICE is the
+     * claim-side twin of ZEN_ERR_ROLE_AUTHORSHIP_DENIED. */
+    ZEN_ERR_SENSE_NO_CLAIM = -6,
+    ZEN_ERR_SENSE_NOT_AUTHORIZED = -7,
+    ZEN_ERR_SENSE_UNDECLARED = -8,
+    ZEN_ERR_SENSE_OFFICE_NOT_HELD = -9
 };
 
 /* A host-provided byte sink. The library hands bytes to the host via write();
@@ -127,6 +164,32 @@ typedef struct ZenByteSink {
     void* ctx;
     void (*write)(void* ctx, const uint8_t* data, size_t len);
 } ZenByteSink;
+
+/* THE AUTHORSHIP OF ONE OBSERVED CLAIM (v6), filled by the HOST. Plain data with
+ * a fixed layout, because it must cross a C boundary; every field is a fact the
+ * host computed, and none is anything the claiming library said about itself.
+ *
+ * `office` is a NUL-terminated buffer rather than a pointer so the library owns
+ * nothing and frees nothing: an empty string means the claim was PERSONAL, which
+ * no real office name can collide with. `office_holder_is_current` is meaningful
+ * only when `office` is non-empty — false says the office has moved since, and
+ * the claim is the previous holder's. `author_life_is_current` says whether the
+ * life that made the claim is still the life at that address.
+ *
+ * The buffer is deliberately fixed and generous rather than dynamic: a role name
+ * is a short identifier, and a truncating copy with a documented bound beats
+ * either an allocation across the seam or a pointer whose lifetime the library
+ * would have to reason about. */
+enum { ZEN_SENSE_OFFICE_MAX = 128 };
+typedef struct ZenSenseBy {
+    uint64_t author;
+    uint64_t author_life;
+    uint64_t author_incarnation;
+    uint32_t author_life_is_current;    /* 0/1 */
+    uint32_t office_holder_is_current;  /* 0/1; meaningful iff office[0] != 0 */
+    uint64_t revision;
+    char office[ZEN_SENSE_OFFICE_MAX];  /* "" == a personal claim */
+} ZenSenseBy;
 
 /* Host callbacks a Weave uses to send/publish from inside handle(). The payload
  * crosses as serialized message bytes; the host admits it through the gate
@@ -187,6 +250,33 @@ typedef struct ZenHostApi {
     ZenStatus (*office_publish)(void* ctx, const char* as_role, uint64_t reply_to,
                                 uint64_t correlation, const uint8_t* payload, size_t len,
                                 uint64_t* recipients_out);
+    /* SENSES (v6): the same trusted operations a native weave reaches through
+     * `mail.claim(...)` / `mail.as_role(R).claim(...)` / `mail.latest<T>(...)`.
+     *
+     * claim / office_claim take the claimed value as serialized bytes, which the
+     * host admits through the one gate before storing — a stored claim is never
+     * an unadmitted value. The host checks the loaded weave's DECLARED claim-set
+     * (from the manifest) and, for the office form, verifies role membership at
+     * the claim moment, exactly as office_send does. `revision_out` (may be NULL)
+     * receives the claim's sequence under its key.
+     *
+     * observe / observe_office name the shape by (name, version) rather than
+     * carrying a schema, and return the claim as bytes through `sink` plus its
+     * authorship through `by` — the host's own facts, never the library's. The
+     * library gets a COPY: no host pointer outlives the call, so a loaded reader
+     * has no more reach into a claimant than a native one does.
+     *
+     * A refusal crosses back as ZEN_ERR_SENSE_* so "not authorized", "nothing
+     * claimed", "you did not declare that" and "you do not hold that office"
+     * stay four distinct answers rather than one silence. */
+    ZenStatus (*sense_claim)(void* ctx, const uint8_t* payload, size_t len,
+                             uint64_t* revision_out);
+    ZenStatus (*sense_office_claim)(void* ctx, const char* as_role, const uint8_t* payload,
+                                    size_t len, uint64_t* revision_out);
+    ZenStatus (*sense_observe)(void* ctx, uint64_t author, const char* shape_name,
+                               uint32_t shape_version, ZenByteSink sink, ZenSenseBy* by);
+    ZenStatus (*sense_observe_office)(void* ctx, const char* role, const char* shape_name,
+                                      uint32_t shape_version, ZenByteSink sink, ZenSenseBy* by);
 } ZenHostApi;
 
 /* The single descriptor a Weave library exposes, returned by zen_weave_abi().
@@ -202,7 +292,15 @@ typedef struct ZenWeaveAbi {
     void* (*create)(void);
     void (*destroy)(void* instance);
 
-    /* Emit the manifest (accepted schemas + state schema) as descriptor bytes. */
+    /* Emit the manifest (accepted schemas + state schema + declared claim-set) as
+     * descriptor bytes.
+     *
+     * v6 adds the CLAIM-SET to the manifest rather than adding a second
+     * descriptor entry point, because it is the same kind of fact as the
+     * accept-set — what this weave's contract is — and one manifest means one
+     * decode, one gate crossing, and one place a maker can look. The host
+     * re-admits and registers the claim-set at load, which is what makes a loaded
+     * artifact's Sense capability discoverable BEFORE it has claimed anything. */
     ZenStatus (*describe)(void* instance, ZenByteSink sink);
     /* Emit persistable state as bytes. */
     ZenStatus (*snapshot)(void* instance, ZenByteSink sink);

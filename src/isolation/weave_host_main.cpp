@@ -211,6 +211,15 @@ int main(int argc, char** argv) {
     // personal speech). Extending the trusted control protocol with a verified
     // office frame is the seam the first out-of-process office pulls; the parent
     // knows the exact connected weave, so the verification story is ready for it.
+    // Senses (v6) join the same standing law, in both directions. The claim doors
+    // are null because the pipe carries no verified identity for the parent to
+    // check a claim-set or an office against, and the OBSERVE doors are null for
+    // the mirror reason: reading a Sense is authorized against the reader's own
+    // grant, and the child cannot present one the parent minted. So an
+    // out-of-process weave's `claim(...)` and `latest<T>(...)` refuse honestly at
+    // the library shim rather than silently doing nothing — the same
+    // fail-closed direction, and for the same reason, as the answer and office
+    // doors above.
     ZenHostApi api{nullptr,
                    &zen_child_send,
                    &zen_child_publish,
@@ -221,7 +230,11 @@ int main(int argc, char** argv) {
                    /*answer=*/nullptr,
                    /*office_send=*/nullptr,
                    /*office_send_to_role=*/nullptr,
-                   /*office_publish=*/nullptr};
+                   /*office_publish=*/nullptr,
+                   /*sense_claim=*/nullptr,
+                   /*sense_office_claim=*/nullptr,
+                   /*sense_observe=*/nullptr,
+                   /*sense_observe_office=*/nullptr};
 
     for (;;) {
         Op op = Op::Hello;
