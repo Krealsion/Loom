@@ -1126,7 +1126,7 @@ private:
     }
 };
 
-TEST_CASE("R2E-0: a bridge host with a dispatch budget stays responsive while a perpetual service "
+TEST_CASE("R2E-0: a bridge host with a bounded turn stays responsive while a perpetual service "
           "runs — no fake yield message, no second thread, FIFO intact") {
     loom::Switchboard bus;
     auto owned = std::make_unique<PerpetualDriver>();
@@ -1140,26 +1140,22 @@ TEST_CASE("R2E-0: a bridge host with a dispatch budget stays responsive while a 
     const std::uint16_t port = bridge_socket_port(listener);
     BridgeServer server(bus, listener);
 
-    // THE HOST'S CHOICE, stated once. Without it, the first step() below never
-    // returns: the driver re-arms inside its own handler forever.
-    //
-    // A fixed budget is used HERE because the case wants an exact count to
-    // assert; a real host generally wants `set_bounded_dispatch()` instead, and
-    // the next case pins that. The Rule Garden proved why: a budget of 64
-    // throttled it 17x, and a budget large enough not to throttle was
-    // drain-to-empty again.
-    server.set_dispatch_budget(8);
-    CHECK(server.dispatch_budget() == 8u);
-    CHECK_FALSE(server.bounded_dispatch());
+    // THE HOST'S CHOICE, stated once and with no number in it. Without it, the
+    // first step() below never returns: the driver re-arms inside its own
+    // handler forever.
+    server.set_bounded_dispatch();
+    CHECK(server.bounded_dispatch());
 
-    // Start the perpetual service.
+    // Start the perpetual service: ONE envelope waiting at entry.
     loom::Value kick(greet_schema());
     kick.set("msg", loom::Cell::text("go"));
     bus.send(did, loom::Message(std::move(kick)));
 
     // A step() with the service already running RETURNS. That is the whole fix.
+    // The backlog at entry was 1, so exactly one turn happened and the driver's
+    // own continuation was left for the next step.
     server.step();
-    CHECK(driver->turns == 8);
+    CHECK(driver->turns == 1);
 
     // ...and an operator can still connect and be served, turn after turn, while
     // the service keeps running.
@@ -1186,9 +1182,9 @@ TEST_CASE("R2E-0: a bridge host with a dispatch budget stays responsive while a 
     // The operator was accepted and welcomed — the outer loop kept control.
     CHECK(welcomed);
     CHECK(server.connection_count() == 1u);
-    // The service never stopped: it advanced by exactly the budget on every step.
-    CHECK(driver->turns > 8);
-    CHECK(driver->turns % 8 == 0);
+    // The service never stopped: every step took the backlog it found and gave
+    // control back, so the driver kept advancing while the operator was served.
+    CHECK(driver->turns > 1);
 }
 
 TEST_CASE("R2E-0: set_bounded_dispatch needs no number — the backlog at entry bounds the turn, "
@@ -1227,7 +1223,7 @@ TEST_CASE("R2E-0: set_bounded_dispatch needs no number — the backlog at entry 
     CHECK(bus.pending() == 12u);
 }
 
-TEST_CASE("R2E-0: budget 0 is the pre-existing contract — step() still drains to empty") {
+TEST_CASE("R2E-0: unbounded is the pre-existing contract — step() still drains to empty") {
     loom::Switchboard bus;
     auto g = std::make_unique<RecordingGreeter>();
     const loom::WeaveId gid = bus.register_weave(std::move(g), loom::Grant{}.allow_any());
@@ -1235,7 +1231,7 @@ TEST_CASE("R2E-0: budget 0 is the pre-existing contract — step() still drains 
     const socket_t listener = bridge_listen_tcp(0, &err);
     REQUIRE_MESSAGE(listener != kInvalidSocket, err);
     BridgeServer server(bus, listener);
-    CHECK(server.dispatch_budget() == 0u); // the default nobody had to opt into
+    CHECK_FALSE(server.bounded_dispatch()); // the default nobody had to opt into
 
     for (int i = 0; i < 20; ++i) {
         loom::Value v(greet_schema());

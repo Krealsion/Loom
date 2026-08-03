@@ -554,48 +554,25 @@ public:
     void run() { pump(); }
     void stop() noexcept { stop_requested_ = true; }
 
-    /// DISPATCH AT MOST `budget` DELIVERIES, THEN GIVE THE CALLER BACK CONTROL
-    /// (R2E-0). Returns how many were actually dispatched.
-    ///
-    /// `pump()` drains to empty, which is the right contract for a host that owns
-    /// its turn — and the wrong one for a host composing Loom with another event
-    /// loop. A perpetual service (a repeating Timer re-arms itself inside its own
-    /// handler) means the queue never becomes empty, so a drain-to-empty pump
-    /// never returns and the outer loop never polls its sockets again. This is
-    /// that host's primitive. `pump()` is untouched; every existing caller keeps
-    /// exactly the semantics it had.
-    ///
-    /// Exactly, so a host can reason about it:
-    /// - **The bound is on deliveries dispatched, not on the queue at entry.**
-    ///   Work a handler enqueues during this call counts. Any other rule would
-    ///   leave the self-re-arming producer this exists to bound unbounded.
-    /// - **Deterministic.** The result is `min(budget, deliveries available
-    ///   before something stops it)` — a count, never a clock. Two runs of the
-    ///   same program dispatch the same deliveries in the same turns.
-    /// - **FIFO is untouched.** A budget is a pause between two deliveries, never
-    ///   a reorder; the boundary lands where `pump()` would already have been
-    ///   between two envelopes.
-    /// - **`stop()` still ends the turn.** A handler calling `stop()` cuts the
-    ///   turn short and the return value reports what actually happened, so
-    ///   "budget exhausted" and "somebody stopped" are distinguishable by
-    ///   comparing it to `budget`.
-    /// - **Non-reentrant**, exactly as `pump()` is: called from inside a delivery
-    ///   it dispatches nothing and returns 0.
-    /// - **A zero budget is a no-op**, not a drain.
-    ///
-    /// No thread is created and no thread is required; this is the single-threaded
-    /// answer to event-loop composition.
-    std::size_t pump_bounded(std::size_t budget);
-
     /// DISPATCH EXACTLY WHAT WAS ALREADY QUEUED, THEN GIVE THE CALLER BACK
     /// CONTROL (R2E-0). Returns how many were dispatched.
     ///
-    /// The other bounded turn, and for most event-loop hosts the better one.
-    /// `pump_bounded(n)` needs the host to pick `n` — and picking it well means
-    /// knowing the producer's rate: too small throttles a busy bus to `n` per
-    /// turn, too large is drain-to-empty again and the starvation returns. The
-    /// Codex Rule Garden demonstrated both halves of that trap with a real
-    /// Zengine Timer, which is why this exists.
+    /// THE bounded turn, and the one an event-loop host wants. `pump()` drains to
+    /// empty, which is the right contract for a host that owns its turn — and the
+    /// wrong one for a host composing Loom with another event loop. A perpetual
+    /// service (a repeating Timer re-arms itself inside its own handler) means the
+    /// queue never becomes empty, so a drain-to-empty pump never returns and the
+    /// outer loop never polls its sockets again. `pump()` is untouched; every
+    /// existing caller keeps exactly the semantics it had.
+    ///
+    /// A NUMERIC BUDGET WAS TRIED FIRST AND WITHDRAWN. `pump_bounded(n)` needed
+    /// the host to pick `n` — and picking it well means knowing the producer's
+    /// rate: too small throttles a busy bus to `n` per turn, too large is
+    /// drain-to-empty again and the starvation returns. The Codex Rule Garden
+    /// demonstrated both halves of that trap with a real Zengine Timer —
+    /// `pump_bounded(64)` made its live round-trip 17x slower — and no consumer
+    /// ever wanted the number. It is not public API; the count survives only as
+    /// this function's private implementation detail.
     ///
     /// This one needs no number. The bound is `pending()` **at entry** — a fact
     /// about the queue, not a guess about the producer:
@@ -1513,6 +1490,13 @@ private:
     Ticket refuse_now(WeaveId target, WeaveId sender, const Message& msg, RefusalReason reason);
 
     void deliver_one(Envelope env);
+
+    /// Dispatch at most `budget` deliveries, counting work enqueued mid-turn.
+    /// PRIVATE, and deliberately so: as public API it asked a host to size its
+    /// turn against a producer rate it cannot know, and the Rule Garden showed
+    /// that number is unpickable in practice. `pump_pending()` is the only
+    /// bounded turn Loom offers; this is just how it counts.
+    std::size_t dispatch_at_most(std::size_t budget);
 
     /// DISPATCH AN ADMISSION (R2B-3d) — the whole of it, in one queue turn.
     ///
