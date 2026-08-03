@@ -19,6 +19,8 @@ claim an enforcement, or a proof, you did not earn.)
 | `ANS-xx` | [answer-authority-laws.md](answer-authority-laws.md) | answer authority, deferral, provenance |
 | `LIFE-xx` | [lifecycle-laws.md](lifecycle-laws.md) | `zen.Activated`, lifecycle authority |
 | `PR-xx` | [replacement-laws.md](replacement-laws.md) | the candidate seal, the transaction, admission |
+| `SENSE-xx` | [sense-laws.md](sense-laws.md) | latest claims: settlement, provenance, office claims, authority, lifetime |
+| `HANDOFF-xx` | [handoff-laws.md](handoff-laws.md) | authored continuity across an incompatible schema: migration, the FIFO boundary, protocol vs state |
 | `KERN-xx` | [kernel-laws.md](kernel-laws.md) | dynamic artifacts, lifetimes, role truth |
 | `TIMER-xx` | [Zengine `docs/laws/timer-laws.md`](../../../Zengine/docs/laws/timer-laws.md) | Timer continuity (Zengine owns that truth) |
 

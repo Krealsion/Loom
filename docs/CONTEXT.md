@@ -24,6 +24,9 @@ the named laws → the reference page → tests when exactness matters.
 | grants, isolation, powerbox | reference/capabilities.md | GATE-03, MSG-02 | tests/test_capabilities.cpp, test_isolation.cpp, test_policy.cpp | history (B1–B5, P1–P2) |
 | dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..04 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
 | prepared replacement | guides/replacing-a-service.md, reference/prepared-replacement.md | PR-01..09 | tests/test_kernel.cpp (R2B-3*/4a sections) | decisions/admission-and-activation-share-one-boundary.md, decisions/no-rollback-after-committed-production.md, evidence/night-lab.md |
+| senses (latest claims) | guides/observing.md, reference/senses.md | SENSE-01..05 | tests/test_sense.cpp, test_kernel.cpp (R2E-0 sections) | decisions/a-claim-is-not-a-message.md |
+| authored handoff (continuity across an incompatible schema) | reference/handoff.md | HANDOFF-01..03, PR-09 | tests/test_handoff.cpp | decisions/migration-is-authored-not-inferred.md |
+| event-loop composition | reference/messaging.md#bounded-dispatch | MSG-09 | tests/test_switchboard.cpp, test_bridge.cpp (R2E-0 sections) | Codex Rule Garden finding 1 |
 | Timer continuity | Zengine/docs/reference/timer-continuity.md | TIMER-01..05 | Zengine/tests/test_timer.cpp | Zengine/docs/decisions/timer-continuity-carries-remaining-duration.md |
 | known limitations | reference/known-seams.md | MSG-04, ANS-02, PR-09 | — | evidence/night-lab.md |
 | bounds/capacities | reference/bounds.md | — | grep the constant name | — |
@@ -32,7 +35,16 @@ the named laws → the reference page → tests when exactness matters.
 transaction id is never readiness authority (PR-04, ANS-05) · `Committed`
 becomes true only inside the admission dispatch (PR-07) · a candidate receives
 preparation conversation before activation, production never (PR-01, PR-08) ·
-activation is not answerable (LIFE-05) · replacement preserves nothing and
+activation is not answerable (LIFE-05) · a Sense is a **latest claim**, visible
+at the claim call, predicting nothing about queued work (SENSE-02) — and holding
+a role attaches no claim, exactly as it attaches no speech (SENSE-04) · role
+movement never relabels a predecessor's office claim; it stamps it stale
+(SENSE-03) · reading a Sense needs its own **observe rule**, absent by default —
+a send rule is never consulted (SENSE-05) · authored handoff added **no Loom
+API**: migration is an authored transformation before admission, never coercion
+inside the gate (HANDOFF-01) · `pump()` still drains to empty; `pump_bounded(n)`
+is the bounded turn and counts newly enqueued work (MSG-09) · replacement
+preserves nothing and
 produces **no atomic incumbent snapshot** — a captured description can go
 stale before admission unless a stronger domain/package boundary prevents
 mutation (PR-09, known-seams § continuity) · current role *membership* is a

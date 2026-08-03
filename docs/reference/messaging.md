@@ -36,10 +36,12 @@ distinct observable reason:
 Host/root sends (`Switchboard::send`, ungated) skip 1–3. Further reasons
 exist: `ForeignAuthority` (an authority this Loom did not issue), `Exhausted`
 (a published bound), `AdmissionRevoked` (a scheduled admission whose world
-drifted — an admission refusal, not a message failure), and
+drifted — an admission refusal, not a message failure),
 `RoleAuthorshipDenied` (an office-authorship request from a sender that does
 not hold the office — refused at the *authorship* moment, before anything is
-queued; see below).
+queued; see below), and `SeamUnresolved` (a loaded weave claimed a shape this
+Loom has never heard of — rejected at the library/host seam before routing, so
+no target was ever consulted; see [diagnostics](#diagnostics-and-the-seam)).
 
 ## Addressing
 
@@ -154,6 +156,46 @@ inspect/manipulate *by message* where a weave opts in.
 
 Senders do not otherwise observe delivery fate
 ([known-seams](known-seams.md#sender-cannot-observe-send-fate)).
+
+### Diagnostics and the seam
+
+A rejection Loom performs is observable somewhere Loom owns
+([MSG-08](../laws/messaging-laws.md)). The dynamic seam admits a loaded weave's
+bytes host-side *before* routing; when that fails nothing is queued, so no
+delivery-time refusal can report it. Those rejections now get a seq, a journal
+slot and a tap event — `SeamUnresolved` for an unresolvable claimed shape,
+`GateRefused` (with the gate's error) for bytes that fail the gate — carrying the
+**claimed** (name, version), the sending artifact, and a target *only where one
+was actually named*. A publication names none; a role is a slot resolved at a
+delivery that never happened. Nothing is manufactured.
+
+This is not send fate and does not become it: no ticket crosses the seam, nothing
+is returned to the sender that was not already returned, and there is no future,
+retry or dead letter. Found by Night Lab III (P-011), where a loaded weave's
+emission vanished entirely while the identical native reach refused loudly.
+
+## Bounded dispatch
+
+`pump()` drains to empty — unchanged, and the contract every existing caller
+has. `pump_bounded(n)` dispatches at most `n` deliveries and returns how many it
+made ([MSG-09](../laws/messaging-laws.md)), for a host composing Loom with an
+outer event loop:
+
+```cpp
+while (serving) {
+    poll_sockets();
+    bus.pump_bounded(64);   // control comes back, whatever the bus is doing
+}
+```
+
+Without it, a perpetual in-process service starves the outer loop: a repeating
+Timer re-arms itself inside its own handler, so the queue never empties and a
+drain-to-empty pump never returns. Newly enqueued work **counts** toward the
+budget — any other rule would leave exactly that producer unbounded. The bound is
+a dispatch count, never a deadline; FIFO is untouched; `stop()` still ends the
+turn early and the return value keeps "budget exhausted" and "somebody stopped"
+apart. `BridgeServer::set_dispatch_budget` exposes the policy, defaulting to 0
+(drain to empty).
 
 ## Tests
 

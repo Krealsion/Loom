@@ -1,16 +1,40 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v5**
+The C seam a weave library and the host agree on. Current version: **v6**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [ANS-06](../laws/answer-authority-laws.md),
-[MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit).
+[MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
+[SENSE-01..05](../laws/sense-laws.md).
 
-**v5 carries role-authored delivery provenance and gives loaded weaves the
-explicit office-authorship doors native weaves already have.** No binary
-compatibility is claimed: a v4 artifact refuses at load, naming both versions
-— the honest failure, since loading it would leave office speech silently
-unspeakable and unobservable on one side of the seam.
+**v6 carries Senses across the seam, both ways**, so a loaded weave has exactly
+the surface a native one has: `claim` / `office_claim` outbound, `observe` /
+`observe_office` inbound, and the declared **claim-set in the manifest** — which
+is what makes a loaded artifact's Sense capability discoverable at load rather
+than after some runtime claim accidentally reveals a shape. The claim-set rides
+the existing manifest rather than a second descriptor entry point: it is the same
+kind of fact as the accept-set, so one manifest still means one decode and one
+gate crossing.
+
+The trust split is v5's, unchanged: the library REQUESTS "claim as R" and the
+host verifies membership at the claim moment; the library asks to observe and the
+host authorizes against the loaded weave's own grant. A library attests nothing
+about itself in either direction. A reading crosses as **bytes** the library
+re-admits against its own definition of the shape — no host pointer into the
+repository reaches a library, so a loaded reader has exactly the reach a native
+one has: none. Sense refusals cross as their own statuses
+(`ZEN_ERR_SENSE_NO_CLAIM`, `_NOT_AUTHORIZED`, `_UNDECLARED`,
+`_OFFICE_NOT_HELD`), so four different problems stay four different answers
+rather than one silence.
+
+No binary compatibility is claimed: a v5 artifact refuses at load, naming both
+versions — the honest failure, since it would otherwise load compiled against a
+Bus whose claim/observe verbs silently return the refusing defaults: unable to
+claim, unable to read, and unable to say so.
+
+**v5 carried role-authored delivery provenance and gave loaded weaves the
+explicit office-authorship doors native weaves already have**, for the same
+reason and with the same honest refusal of its predecessor.
 
 ## Shape
 
@@ -52,7 +76,12 @@ recomputes its own truth.
 Out-of-process children receive **null** capability doors and fail closed
 (cross-process attestation is deliberately out of scope in V1) — including
 the v5 office doors, in both directions: an isolated weave genuinely holding
-its role is still refused office authorship at the pipe, and told so.
+its role is still refused office authorship at the pipe, and told so. The v6
+Sense doors join the same standing law: the claim doors are null because the pipe
+carries no verified identity for the parent to check a claim-set or an office
+against, and the **observe** doors are null for the mirror reason — reading is
+authorized against the reader's own grant, and the child cannot present one the
+parent minted.
 
 ## Compatibility discipline
 

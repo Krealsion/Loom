@@ -145,3 +145,78 @@ PROVEN BY — `Switchboard::office_send_as` / `office_send_to_role_as` /
 (the hostile matrix, the replacement matrix, the definition-of-done program);
 suite `kernel` (dynamic parity, v4 refusal); suite `isolation` (fail-closed
 across the pipe); Night Lab follow-up `followups/role-authorship`.
+
+## MSG-08 — A Loom-owned rejection is observable where Loom owns it
+
+LAW — Every rejection Loom performs leaves a fact on a surface Loom owns. A
+refusal that no recipient, no sender and no tap can see is not a refusal; it is
+silence, and silence is a defect.
+
+MEANS
+- the dynamic seam's pre-enqueue rejections — an unresolvable claimed shape, and
+  a gate refusal of the bytes — get a seq, a journal slot and a tap event, at
+  exactly the altitude a capability refusal already had;
+- `SeamUnresolved` is its own reason because every neighbour would mislead:
+  `NotAccepted` blames a target's accept-set when routing never ran,
+  `GateRefused` blames the payload when no schema existed to judge it against,
+  and `NoSuchTarget` blames an address that was never consulted;
+- the fact carries the **claimed** (name, version) and the sending artifact, and
+  a target **only where one was actually named** — a publication names none, a
+  role is a slot resolved at a delivery that never happened. Replacing silence
+  with a fabricated target would be the worse bug;
+- the observability floor is now the same on both tiers: a loaded weave's
+  unresolvable reach and a native weave's unresolvable reach are both loud, and
+  a comparable native failure is not reclassified.
+
+DOES NOT MEAN
+- that senders observe delivery fate — they still do not
+  ([known-seams](../reference/known-seams.md#sender-cannot-observe-send-fate)).
+  Nothing is returned to the sender that was not already returned, no ticket
+  crosses the seam, and no future, retry or dead letter exists;
+- that a diagnostic is an answer — it creates no provenance and no delivery;
+- that failures are reported twice. These fire only on the pre-enqueue path;
+  anything that passes both checks is queued and reported once by ordinary
+  delivery, so no path produces both.
+
+PROVEN BY — `Switchboard::note_seam_refusal` (deliberately `refuse_now`'s body,
+not a second mechanism); `kernel.cpp`'s one `seam_reject` helper behind all eight
+seam entry points; suite `kernel` (the Night Lab III P-011 reproducer against a
+real artifact, the native-still-loud control, the no-false-refusal case).
+Evidence: [night-lab](../evidence/night-lab.md), reproducer
+`workshop-marathon/repros/core/silent-seam-emission/`.
+
+## MSG-09 — A dispatch turn can be bounded without bending FIFO
+
+LAW — `pump()` drains to empty, unchanged and forever. `pump_bounded(n)`
+dispatches at most `n` deliveries and returns how many it made. Neither reorders
+anything.
+
+MEANS
+- a host composing Loom with an outer event loop has a deterministic way to get
+  control back, so a perpetual in-process service (a repeating Timer re-arms
+  itself inside its own handler, so the queue never empties) cannot starve the
+  socket poll;
+- the bound counts **deliveries dispatched**, not the queue as it stood at
+  entry: work a handler enqueues during the call counts. Any other rule would
+  leave the self-re-arming producer this exists to bound unbounded;
+- the bound is a **count, never a deadline** — a core primitive whose result
+  depends on host timing jitter cannot be reasoned about;
+- a budget is a pause between two deliveries, landing exactly where `pump()` was
+  already between two envelopes;
+- `stop()` still ends the turn early, and the return value keeps "budget
+  exhausted" and "somebody stopped" distinguishable;
+- non-reentrant, exactly as `pump()`; a zero budget is a no-op, not a drain.
+
+DOES NOT MEAN
+- that `pump()` changed. Every existing caller keeps drain-to-empty, and
+  `BridgeServer`'s dispatch budget defaults to 0, which is that same contract;
+- that Loom acquired a thread or a scheduler. It did not, and neither is planned;
+- that the substrate chose a budget. The primitive is the Switchboard's because
+  only the queue's owner can bound dispatch without reordering; the **policy** is
+  the host's, because only the host knows what it is composing with.
+
+PROVEN BY — `Switchboard::pump_bounded`; `BridgeServer::set_dispatch_budget`;
+suite `switchboard` (the starvation reproduction, exact-budget, newly-enqueued
+work counting, FIFO across boundaries, `stop()` interaction, zero, reentrancy),
+suite `bridge` (a bridge host staying responsive while a perpetual driver runs,
+and budget 0 still draining). Evidence: Codex Rule Garden finding 1.
