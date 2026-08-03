@@ -304,8 +304,8 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 # exit-status check is the source of truth — no output-scraping needed. The portable
 # suites register on every platform.
 set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard provenance role_authorship harness breathing schema_codec weave_shape weave poke
-    console component pixel bridge)
+    switchboard provenance role_authorship sense harness breathing schema_codec weave_shape weave
+    poke console component pixel bridge)
 foreach(suite IN LISTS ZEN_TEST_SUITES)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
@@ -327,7 +327,7 @@ endif()
 
 # The kernel-family suites register wherever the kernel target exists.
 if(TARGET zen-kernel)
-    foreach(suite IN ITEMS kernel manager capabilities)
+    foreach(suite IN ITEMS kernel handoff manager capabilities)
         add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
     endforeach()
 endif()
