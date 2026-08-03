@@ -366,7 +366,15 @@ void BridgeServer::step() {
             }
         }
     }
-    bus_.pump(); // proxies fire-and-continue (ship Delivered); the tap observer streams Tap
+    // Proxies fire-and-continue (ship Delivered); the tap observer streams Tap.
+    // Unbounded by default — the contract every existing caller has. A host
+    // composing with a perpetual in-process service sets a budget so this returns
+    // (R2E-0); FIFO is identical either way.
+    if (dispatch_budget_ == 0) {
+        bus_.pump();
+    } else {
+        bus_.pump_bounded(dispatch_budget_);
+    }
     // Drain the deferred weave-list refresh (E): the registry reads happen HERE, outside dispatch.
     if (weaves_dirty_) {
         for (auto& c : conns_) {

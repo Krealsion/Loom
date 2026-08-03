@@ -68,6 +68,24 @@ public:
     /// in-process system's own pump(); the bridge never blocks the bus on a slow/hung operator.
     void step();
 
+    /// BOUND THE BUS DRAIN INSIDE step() (R2E-0). 0 (the default) keeps the
+    /// existing contract exactly: `step()` calls `pump()` and drains to empty.
+    ///
+    /// A host serving a PERPETUAL in-process service — a repeating Zengine Timer
+    /// re-arms itself inside its own handler, so the queue never empties — must
+    /// set this, or `step()` never returns to poll its sockets again. With a
+    /// budget, `step()` dispatches at most that many deliveries and then goes on
+    /// to flush and reap, so operators stay responsive while the service runs.
+    ///
+    /// The policy is the host's because only the host knows what it is composing
+    /// with; the substrate supplies the deterministic bound
+    /// (`Switchboard::pump_bounded`) and nothing else. FIFO is unaffected either
+    /// way — the budget is a pause between two deliveries.
+    void set_dispatch_budget(std::size_t deliveries_per_step) noexcept {
+        dispatch_budget_ = deliveries_per_step;
+    }
+    std::size_t dispatch_budget() const noexcept { return dispatch_budget_; }
+
     /// Block in select() over {listener, all connection fds} until any is ready OR `timeout_ms`
     /// elapses (negative = indefinite), then step() once. This is the event-driven loop: bytes arrive
     /// when the FAR side decides, replies/tap push unbidden through pump(), and disconnect is an
@@ -112,6 +130,7 @@ private:
     std::size_t declined_ = 0;   ///< connections shed for the cap
     bool weaves_dirty_ = false;  ///< a Died/Revived seen in the tap; push a fresh Weaves after pump (E)
     bool stop_ = false;
+    std::size_t dispatch_budget_ = 0; ///< 0 = drain to empty, the pre-R2E-0 contract
 };
 
 } // namespace loom
