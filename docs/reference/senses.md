@@ -100,19 +100,29 @@ apply queued work speculatively to make a claim look current
 Every reading carries `SenseAuthorship`:
 
 ```text
-author                    the exact weave that claimed
-author_life               + author_incarnation, as of the claim
-author_life_is_current    is that still the life at that address?
-office                    the office it was authored as; empty = personal
-office_holder_is_current  meaningful only when office is non-empty
-revision                  monotonic per key; orders replacement of THIS claim
+author                         the exact weave that claimed
+author_life                    + author_incarnation, as of the claim
+author_life_is_current         is that still the life at that address?
+author_incarnation_is_current  is that still the CODE at that address?
+office                         the office it was authored as; empty = personal
+office_holder_is_current       meaningful only when office is non-empty
+revision                       monotonic per key; orders replacement of THIS claim
 schema_name + version
 ```
 
 `author_life_is_current` mirrors `BusEvent::sender_life` / `sender_life_now` —
-the same question, the same answer shape. Both "is that still true?" fields are
-asked **at read time and never stored**, so they cannot go stale inside the
+the same question, the same answer shape. All three "is that still true?" fields
+are asked **at read time and never stored**, so they cannot go stale inside the
 repository.
+
+**The two generation facts are independent, and that is the point.** A live
+replacement swaps the code behind an id without ending its life, so afterwards a
+predecessor's claim reads `author_life_is_current = true` and
+`author_incarnation_is_current = false`. The claim is not rewritten and not
+withdrawn — it still says which incarnation made it — but a reader can now tell a
+predecessor's still-valid historical claim from one the *current* incarnation
+authored. A real death-and-revival moves both, so neither field is a slower copy
+of the other.
 
 A Sense value is therefore never naked globally-trusted data: a reader can always
 answer *who claimed this?*
@@ -159,6 +169,27 @@ unauthorized reader cannot learn whether a claim exists.
 Loaded artifacts get their grant from `Kernel::load`'s explicit-grant overload:
 reading another participant's claims is a host decision, not a consequence of
 being loadable.
+
+### Who can author a claim as someone else
+
+Two different answers, and conflating them is the mistake:
+
+| | can author a claim attributed to another weave? |
+|---|---|
+| an ordinary participant (`Mail::claim` / `as_role(R).claim`) | **no.** It claims as itself, or as an office it holds at that moment; there is no spelling for anything else |
+| trusted root / host (`Switchboard::claim_as` / `office_claim_as`) | **yes, explicitly.** It names the claimant |
+
+`Switchboard::claim_as(claimant, value)` is the host/root door, exactly as
+`Switchboard::send` is the ungated send — the substrate's owner can attribute a
+claim, because it is the thing that decides who exists at all. This does not
+weaken the ordinary-weave law: `Mail` never exposes it, so an ordinary
+participant cannot reach it, and a *loaded* artifact reaches only the gated path
+where the host verifies membership itself and the library attests nothing.
+
+It is documented rather than hidden because the distinction is diagnostic and
+security-relevant: "no participant can forge an author" is true and useful; "no
+mechanism exists" would be false, and a reader auditing provenance needs to know
+that a host-authored claim is representable.
 
 ## Lifetime
 

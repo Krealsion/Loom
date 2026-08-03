@@ -187,54 +187,61 @@ Evidence: [night-lab](../evidence/night-lab.md), reproducer
 
 ## MSG-09 — A dispatch turn can be bounded without bending FIFO
 
-LAW — `pump()` drains to empty, unchanged and forever. Two bounded turns exist
-beside it: `pump_bounded(n)` dispatches at most `n` deliveries, and
-`pump_pending()` dispatches exactly the backlog present at entry. All three
-return how many they dispatched, and none reorders anything.
+LAW — `pump()` drains to empty, unchanged and forever. **One** bounded turn
+exists beside it: `pump_pending()` dispatches exactly the backlog present at
+entry. Both return how many they dispatched, and neither reorders anything.
 
 MEANS
 - a host composing Loom with an outer event loop has a deterministic way to get
   control back, so a perpetual in-process service (a repeating Timer re-arms
   itself inside its own handler, so the queue never empties) cannot starve the
   socket poll;
-- the two bounds differ in **what they count, and it matters**:
-  - `pump_bounded(n)` counts deliveries *dispatched*, so work a handler enqueues
-    during the call counts toward `n`. A hard cap, and the host must pick `n`;
-  - `pump_pending()` takes `pending()` **once, at entry**, so a handler's own
-    continuation lands behind the snapshot and belongs to the next turn. No
-    number is chosen, and a busy bus clears its backlog in one turn;
-- **`pump_pending()` is the one an event-loop host generally wants**, and that is
-  evidence rather than taste: with a real Zengine Timer, a fixed budget of 64
-  throttled the Codex Rule Garden 17× (2s → 34s), and a budget large enough not
-  to throttle was drain-to-empty again and the starvation returned. Sizing a
-  count against a producer's rate is the same class of fragility as a deadline,
-  arrived at from the other side;
-- both bounds are a **count, never a deadline** — a core primitive whose result
-  depends on host timing jitter cannot be reasoned about;
+- `pump_pending()` takes `pending()` **once, at entry**. That snapshot is the
+  whole contract:
+  - the backlog that existed at entry is dispatched, in FIFO order;
+  - work enqueued *during* the turn — including a handler's own continuation —
+    lands behind the snapshot and belongs to the **next** turn, which is exactly
+    what stops a self-re-arming producer from holding the turn open;
+  - a busy bus therefore clears its whole backlog in one turn rather than being
+    throttled;
+- **the bound is a work boundary, not a quota.** It is a count taken from the
+  queue, never a deadline — a core primitive whose result depends on host timing
+  jitter cannot be reasoned about;
 - a bound is a pause between two deliveries, landing exactly where `pump()` was
   already between two envelopes;
-- `stop()` still ends the turn early, and the return value keeps "bound reached"
-  and "somebody stopped" distinguishable;
-- non-reentrant, exactly as `pump()`; a zero budget and an empty queue are both
-  no-ops, not drains.
+- `stop()` still ends the turn early, and the return value reports what actually
+  happened;
+- non-reentrant, exactly as `pump()`; an empty queue is a no-op, not a drain.
 
 DOES NOT MEAN
 - that `pump()` changed. Every existing caller keeps drain-to-empty, and
   `BridgeServer` defaults to that same contract until a host says otherwise;
 - that Loom acquired a thread or a scheduler. It did not, and neither is planned;
-- that the substrate chose a bound. The primitives are the Switchboard's because
+- that the substrate chose a bound. The primitive is the Switchboard's because
   only the queue's owner can bound dispatch without reordering; the **policy** is
   the host's, because only the host knows what it is composing with;
 - that `pump_pending()` is unbounded because it takes no number. Its bound is a
   fact about the queue, read before anything runs, and a producer cannot extend
-  it from inside the turn.
+  it from inside the turn;
+- that a **numeric** budget is available. It was tried and withdrawn — see below.
 
-PROVEN BY — `Switchboard::pump_bounded` / `pump_pending`;
-`BridgeServer::set_dispatch_budget` / `set_bounded_dispatch`; suite `switchboard`
-(the starvation reproduction, exact-budget, newly-enqueued work counting, the
-entry-snapshot bound against a self-re-arming producer, FIFO across boundaries,
-`stop()` interaction, empty/zero, reentrancy), suite `bridge` (a bridge host
-staying responsive while a perpetual driver runs, under both bounds, and the
+A NUMERIC BUDGET WAS TRIED AND REJECTED. R2E-0 first shipped `pump_bounded(n)`
+and `BridgeServer::set_dispatch_budget(n)`, counting deliveries dispatched. The
+consumer disproved it: with a real Zengine Timer, `pump_bounded(64)` throttled
+the Codex Rule Garden 17× (2s → 34s), and a budget large enough not to throttle
+was drain-to-empty again with the starvation back. A count sized against a
+*producer's* rate, chosen from the *consumer's* side, is the same class of
+fragility as a deadline approached from the other direction. Both surfaces were
+removed in R2E-0a; the count survives only as `pump_pending`'s private
+implementation. The experiment is kept as history, not as API — see
+[`../decisions/`](../decisions/).
+
+PROVEN BY — `Switchboard::pump_pending`; `BridgeServer::set_bounded_dispatch`;
+suite `switchboard` (the starvation reproduction, the entry-snapshot bound
+against a self-re-arming producer, the finite backlog cleared whole, FIFO and
+`stop()` across the boundary, the empty-queue no-op, reentrancy, and `pump()`
+still draining to empty), suite `bridge` (a bridge host staying responsive —
+accepting and welcoming an operator — while a perpetual driver runs, and the
 default still draining). Evidence: Codex Rule Garden finding 1, and its
 follow-up — the fake `GardenYieldPump → bus.stop()` message is deleted, replaced
 by `set_bounded_dispatch()`, and the live round-trip runs in the same 2s it did

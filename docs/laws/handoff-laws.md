@@ -39,8 +39,16 @@ DOES NOT MEAN
   gate ([ADR](../decisions/migration-is-authored-not-inferred.md));
 - that a migrator is a Loom concept — it is an ordinary weave, and Loom knows
   nothing about its role in the ceremony;
-- that the candidate should accept old-schema input. That would be the two
-  schemas ceasing to be different, which is this law failing.
+- that a candidate **cannot** own its own migration. It can: a candidate may
+  declare an explicit migration protocol carrying the predecessor's state and
+  transform it itself, and that shape is admitted like any other — the version
+  boundary stands, because a `LedgerV1` value still fails `LedgerV2`'s gate. The
+  separate migrator is a recommended **pattern**, bought with independent
+  versioning, testing, refusal, lifetime and transformation ownership; it is not
+  a requirement, and Loom enforces neither choice. What *would* break this law is
+  a candidate quietly accepting the OLD schema as if it were the new one — that
+  is the two schemas ceasing to be different, which no explicit migration
+  protocol does.
 
 PROVEN BY — `loom::admit` (identity-keyed); suite `handoff` (the both-directions
 gate case, the full authored handoff, the refused migration, the unload

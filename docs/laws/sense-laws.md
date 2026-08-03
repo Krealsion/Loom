@@ -129,7 +129,15 @@ DOES NOT MEAN
 - that a role holder's ordinary claim becomes the office's (the exact
   MSG-04/MSG-07 mistake in a new costume);
 - that declaring a shape claims it: a declared, never-claimed Sense reads
-  `NoClaim`.
+  `NoClaim`;
+- that **no mechanism** can attribute a claim to another weave. The law binds
+  *participants*: `Mail` offers no spelling for it, so an ordinary weave claims
+  as itself or as an office it holds, and a loaded artifact reaches only the
+  gated path where the host verifies membership. The trusted root/host door
+  `Switchboard::claim_as` / `office_claim_as` names the claimant explicitly, as
+  `Switchboard::send` is the ungated send. Saying otherwise would overstate the
+  law and leave an operator auditing provenance unaware that a host-authored
+  claim is representable at all.
 
 PROVEN BY — `Switchboard::make_claim` (declaration check), `office_claim_as`
 (`holds_role_now` at the claim moment); suite `sense` (S4, S6, the discovery

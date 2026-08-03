@@ -45,16 +45,39 @@ Compared before committing:
 |---|---|---|---|---|---|
 | **temporary migrator weave** | yes | yes | yes | yes | yes |
 | host callback registry | no | awkward | no | no | **no** |
-| candidate-owned migration | yes | yes | yes | yes | yes — but see below |
+| candidate-owned migration | yes | yes | yes | yes | yes — a real option, see below |
 | gate migration hook | no | no | no | — | no |
 | plain library function | partly | yes | weakly | no | **no** |
 
 The weave wins because every required property is a fact **Loom already carries**
-about a weave, rather than a convention the domain must maintain. Candidate-owned
-migration was rejected on a different ground: it makes the candidate accept
-old-schema input, which is the two schemas ceasing to be different. A gate hook
-is invisible coercion inside the gate, and is forbidden
+about a weave, rather than a convention the domain must maintain. A gate hook is
+invisible coercion inside the gate, and is forbidden
 ([ADR](../decisions/migration-is-authored-not-inferred.md)).
+
+**Candidate-owned migration is a tradeoff, not an impossibility.** A candidate
+can perfectly well declare an explicit migration protocol — a distinct shape
+carrying the predecessor's state — and transform it itself. That does *not* make
+the two schemas identical and does not erase the version boundary: the migration
+shape is its own schema, admitted like any other, and `LedgerV1` still fails
+`LedgerV2`'s gate. Saying it was "impossible" would be wrong.
+
+What the separate migrator buys, and why this reference recommends it:
+
+- **independent versioning** — the transformation has its own version, so
+  v1→v2 and v2→v3 do not accumulate inside the successor;
+- **independent testing** — it can be exercised without standing up a
+  replacement ceremony;
+- **independent refusal** — it can decline a state it cannot faithfully
+  transform, and a refused migration reaches no candidate at all;
+- **independent lifetime and unload** — it exists only for the ceremony, and
+  is provably gone afterwards;
+- **clear ownership of the old→new transformation** — "who transformed this?"
+  has a bus identity as its answer, not a code path.
+
+The cost of candidate-owned migration is that the successor carries knowledge of
+every shape it may have to migrate *from*, for as long as it lives. That is a
+real design choice a domain may reasonably make; it is not a rule Loom enforces
+either way.
 
 ## Different schemas remain different
 

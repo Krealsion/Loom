@@ -27,10 +27,33 @@ one has: none. Sense refusals cross as their own statuses
 `_OFFICE_NOT_HELD`), so four different problems stay four different answers
 rather than one silence.
 
+**An observed reading loses nothing to the seam.** The authorship a loaded reader
+receives carries every fact a native one gets: author id, life and incarnation as
+of the claim, whether that **life** is still current, whether that
+**incarnation** is still current (a separate question — a live replacement moves
+the code without ending the life), the authored office, whether that office's
+holder is still current, and the claim's revision. The shape's identity is not
+carried back because it is the *query* — a reading answers for the (name,
+version) that was asked for.
+
+**The office name crosses exactly, at any length.** It travels through a
+caller-provided `ZenByteSink` — the same mechanism the claim's value uses — and
+is *not* a field in `ZenSenseBy`. The first v6 draft carried it as a fixed
+`char office[128]` and truncated at the bound, which let an observation report an
+office identity nobody ever authored: a 200-character role arrived as a plausible
+127-character prefix, and two offices agreeing for their first 127 bytes were
+indistinguishable. R2E-0a removed the bound rather than raising it — a bigger
+buffer only moves the lie further out — so no representability limit remains and
+no truncation refusal was needed. An office sink that is never written means the
+claim was personal, which no real role name can imitate.
+
 No binary compatibility is claimed: a v5 artifact refuses at load, naming both
 versions — the honest failure, since it would otherwise load compiled against a
 Bus whose claim/observe verbs silently return the refusing defaults: unable to
-claim, unable to read, and unable to say so.
+claim, unable to read, and unable to say so. R2E-0a changed v6's layout **without
+bumping to v7**, deliberately: v6 was never published, so no released artifact
+could observe the difference, and a bump would assert a compatibility boundary
+that does not exist.
 
 **v5 carried role-authored delivery provenance and gave loaded weaves the
 explicit office-authorship doors native weaves already have**, for the same

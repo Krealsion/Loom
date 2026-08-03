@@ -39,9 +39,18 @@ The phase required migrations to be inspectable, testable, versioned, refusable
 and attributable. An ordinary temporary weave has all five as facts Loom already
 carries. A callback registry has none of the last three; a plain library function
 cannot be attributed at all; a gate hook is invisible by construction. The
-alternative that looked closest — letting the *candidate* accept old-schema input
-— fails on a different axis: it makes the two schemas stop being different, which
-is the premise collapsing.
+alternative that looked closest — letting the *candidate* own the migration — was
+not ruled out, and later prose overstating it as impossible was corrected in
+R2E-0a. A candidate may declare an explicit migration protocol carrying the
+predecessor's state and transform it itself; that shape is admitted like any
+other, and the version boundary stands. What it costs is the five properties
+above: the transformation is versioned with the successor rather than
+independently, cannot be tested or refused apart from it, and lives as long as
+the successor does — so the successor accumulates knowledge of every shape it may
+ever have to migrate from. The separate migrator was chosen for those reasons, as
+a **tradeoff**. What genuinely would collapse the premise is a candidate silently
+accepting the OLD schema as though it were the new one — that is the two schemas
+ceasing to be different, and no explicit migration protocol does it.
 
 **3. Nothing needed to be added.** Prepared replacement already verifies the
 successor; FIFO already supplies an exact boundary; the accept-set door already
