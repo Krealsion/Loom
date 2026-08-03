@@ -32,5 +32,13 @@ Bold marks the normative reference for each.
 | **Preparing / Ready / AdmissionPending / Committed / Aborted** | the transaction states; `AdmissionPending` = scheduled, world unchanged | [laws/replacement-laws.md](laws/replacement-laws.md) (PR-07) |
 | **admission** | the one dispatch that moves topology *and* delivers activation, as one event | [laws/replacement-laws.md](laws/replacement-laws.md) (PR-08) |
 | **graceful swap / the letter** | the legacy continuity ceremony: `PrepareShutdown` → `Bequest`/`ClaimBequest`, talking to the outgoing holder | [reference/lifecycle.md](reference/lifecycle.md) |
+| **Sense / latest claim** | a deliberate immutable claim of the latest observation a participant made available; read synchronously, by value, carrying truthful authorship. Never "current state" | [reference/senses.md](reference/senses.md) (SENSE-01) |
+| **claim-set / `Claims<...>`** | the Senses a weave declares it can claim; registered at mount, enforced at claim time. Not `Accept`, not `Emit` | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-04) |
+| **observe rule** | the grant rule authorizing a reader to pull a shape's latest claim; absent by default, never a send rule | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-05) |
+| **revision** | monotonic per Sense key; orders replacement of *that* claim. Not a clock, not comparable across keys | [reference/senses.md](reference/senses.md) |
+| **authored handoff** | the domain pattern by which one incarnation's meaning deliberately becomes a successor's: boundary → final value → authored migration → prepared replacement. Not a Loom API | [reference/handoff.md](reference/handoff.md) (HANDOFF-01) |
+| **migrator** | an ordinary, temporary weave that transforms one schema identity into another; inspectable, testable, versioned, refusable, attributable, and unloaded afterwards | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-01) |
+| **handoff boundary** | an ordinary domain message at an exact FIFO position, after which the domain's declared policy applies. Loom gives it no standing | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-02) |
+| **bounded pump** | `pump_bounded(n)`: at most n deliveries, then control returns. `pump()` is unchanged and still drains to empty | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-09) |
 | **handoff / remaining duration** | the Timer's letter: schedule progress as durations, never due times | [Zengine laws (TIMER-03)](../../Zengine/docs/laws/timer-laws.md) |
 | **`TimerReady`** | the Timer package's service announcement, after its continuity decision | [Zengine laws (TIMER-04)](../../Zengine/docs/laws/timer-laws.md) |

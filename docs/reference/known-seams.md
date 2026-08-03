@@ -45,7 +45,7 @@ consumer).
 
 ## Sender cannot observe send fate
 
-**Status: KNOWN SEAM.**
+**Status: KNOWN SEAM.** (Narrowed at R2E-0, not closed — see below.)
 
 A weave-originated send may be refused later at delivery; the sending weave
 receives no eventual delivery result (native tickets are journal handles the
@@ -55,9 +55,63 @@ application-level acknowledgment. Do not invent ticket-outcome semantics in
 docs or designs; the refusals are observable on the tap/journal — by an
 observer, not the sender.
 
+What R2E-0 changed is only the **observer's** side, and only where a refusal was
+observable *nowhere*: see the next entry. Nothing about the sender's view moved.
+
+## The silent dynamic seam
+
+**Status: CLOSED (R2E-0) — current, law-backed
+([MSG-08](../laws/messaging-laws.md)).**
+
+Night Lab III (P-011) found the one place a Loom-owned rejection was silence: a
+loaded weave emits a shape whose registrar was never loaded, the host seam cannot
+resolve it, and the emission disappeared — no recipient, no `BusEvent`, no
+journal entry, and the shim is fire-and-forget by design. The identical intent
+from a native weave refused loudly (`NoSuchTarget`), so the observability floor
+differed **by tier**.
+
+Seam rejections now leave a host-side fact at the same altitude a capability
+refusal already had: `SeamUnresolved` for an unresolvable claimed shape,
+`GateRefused` for bytes that fail the gate, carrying the claimed (name, version),
+the sending artifact, and a target only where one was actually named. Reproducer:
+`playground/night-lab/workshop-marathon/repros/core/silent-seam-emission/`, and a
+real-artifact regression fixture in suite `kernel`.
+
+Deliberately **not** closed by this: send fate (above). No ticket crosses the
+seam, no future exists, and nothing is returned to a sender that was not returned
+before.
+
+## Event-loop composition
+
+**Status: CLOSED (R2E-0) — current, law-backed
+([MSG-09](../laws/messaging-laws.md)).**
+
+`pump()`'s drain-to-empty contract does not compose with a perpetual in-process
+service: a repeating Timer re-arms itself inside its own handler, so the queue
+never empties and a single-threaded host never returns to poll its sockets. Found
+by the Codex Rule Garden, whose workaround was a fake application message whose
+handler called `Switchboard::stop()`.
+
+`pump_bounded(n)` is the bounded turn; `pump()` is unchanged for every existing
+caller, and `BridgeServer::set_dispatch_budget` defaults to 0 (drain to empty).
+The Rule Garden's fake yield message is replaced by the legitimate surface in
+suite `bridge`.
+
 ## Continuity is authored
 
-**Status: GUIDELINE (the negative half is law: [PR-09](../laws/replacement-laws.md)).**
+**Status: NARROWED (R2E-0) — the pattern is now law-backed
+([HANDOFF-01..03](../laws/handoff-laws.md)) and worked end to end in
+[reference/handoff](handoff.md); the negative half remains law
+([PR-09](../laws/replacement-laws.md)). No Loom API was added.**
+
+R2E-0 built the case this note said the substrate did not have: two real
+artifacts with genuinely incompatible state schemas, a temporary migrator, an
+exact FIFO boundary, and a full prepared replacement across them. The conclusion
+is the one below, sharpened rather than replaced — **what crosses is still a
+domain decision**, and the migration that carries it is authored, refusable and
+attributable. What is new is that the *shape* of the authoring is now written
+down and pinned, and that the migration layer trigger in the standing map below
+has fired and been answered without a migration registry.
 
 Prepared replacement verifies the successor and **does not create an atomic
 continuity handoff from the incumbent**; graceful swap preserves authored work
@@ -81,7 +135,13 @@ it built an exact final boundary on the substrate (its letter is written
 
 ## Minted identity needs a surviving namespace
 
-**Status: GUIDELINE.**
+**Status: GUIDELINE — reinforced (R2E-0), still no allocator.**
+
+R2E-0 added a fourth sighting and, for the first time, a **control case**: the
+handoff witness carries a high-water mark across an incompatible state schema (47
+issued → 48 next), and its twin drops it deliberately and mints a duplicate id.
+The difference is the migration's. No Loom identity allocator exists, and none is
+planned by this note.
 
 An identity may be minted by one incarnation, but its **namespace must live at
 least as long as references to it may live** — in practice, cross a
@@ -93,12 +153,21 @@ none is planned by this note.
 
 ## PreparedReplacement host/coordinator friction
 
-**Status: KNOWN AUTHORING FRICTION — not missing truth.**
+**Status: KNOWN AUTHORING FRICTION — not missing truth. Sighting count rose at
+R2E-0; still not extracted.**
 
 The handle is host-owned; `offer_current_answer()` must run inside the
 coordinator's current delivery. Applications bridge it with a host-provided
 handle reference in the coordinator. Ubiquitous in Night Lab, harmless in
 practice, recorded so the pattern is recognized rather than re-derived.
+
+R2E-0's Handoff Garden hit it once more, and the phase deliberately did **not**
+fix it: the friction was the same single `PreparedReplacement*` member the
+existing evidence describes, and one more instance of a known pattern is not
+repeated *independent* friction. What would earn an extraction is a coordinator
+needing to pass something the handle cannot reach — and the authored handoff did
+not: the migration result travelled as an ordinary domain message, and the
+transaction handle carried only what it always carried.
 
 ## `reply_to` — low observed use
 
@@ -112,12 +181,34 @@ See [messaging](messaging.md#answers).
 deferrals anywhere exhaust the 65th everywhere
 ([ANS-02](../laws/answer-authority-laws.md), [bounds](bounds.md)).
 
+## Activation-sequence ownership
+
+**Status: WATCHING — two sightings, deliberately unsolved.**
+
+`commit(sequence)` takes a number the operator supplies, and no host sequence
+owner exists to consume. The Codex Rule Garden invented `++activation_sequence`
+solely to satisfy the call; R2E-0's Handoff Garden passed a literal `1` for the
+same reason. Two sightings whose only meaning is *"the API needs a number"*.
+
+Not solved here, on purpose: the number is real authority (it is what Loom
+attests, and what consumers order their lineage by), so an allocator would have
+to decide *whose* lineage it belongs to — and neither sighting has an opinion
+about that. What would earn a fix is a consumer for which the sequence carries
+domain meaning, rather than one that needs any monotonic integer.
+
+Notably, Senses did **not** add a third: a claim's `revision` is minted by Loom
+per key and never passed in by a caller, so it created no synthetic counter.
+
 ## Deferred-with-intent (the standing trigger map)
 
-Certain triggers (hooks left deliberately): the **migration layer** (first
-persisted value that must evolve); **weaver identity** (first cross-restart
-persistence / author-trust decision); the **role→protocol registry** (the
-third broker). Maybe/never: native Windows containment (WSL-hosting
-dominates), seccomp (escape-tier threat model), multi-threaded dispatch,
-production broker hardening. History holds the reasoning
+Certain triggers (hooks left deliberately): **weaver identity** (first
+cross-restart persistence / author-trust decision); the **role→protocol
+registry** (the third broker). Maybe/never: native Windows containment
+(WSL-hosting dominates), seccomp (escape-tier threat model), multi-threaded
+dispatch, production broker hardening. History holds the reasoning
 ([history](../history/README.md)).
+
+**The migration layer trigger has fired and been answered (R2E-0)** — by an
+authored pattern and two laws, not by a migration registry. See
+[handoff](handoff.md) and the
+[ADR](../decisions/migration-is-authored-not-inferred.md).
