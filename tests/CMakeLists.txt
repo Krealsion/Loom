@@ -43,6 +43,7 @@ add_executable(zen-tests
 if(TARGET zen-kernel)
     target_sources(zen-tests PRIVATE
         test_kernel.cpp
+        test_handoff.cpp
         test_manager.cpp
         test_capabilities.cpp)
 endif()
@@ -141,6 +142,24 @@ endfunction()
 zen_add_versioned_service(zen_test_versioned_v1)
 zen_add_versioned_service(zen_test_versioned_v2 ZEN_VERSIONED_CANDIDATE)
 
+# R2E-0: the Handoff Garden. Two REAL ledger artifacts whose state schemas are
+# genuinely incompatible (flat scalars vs nested messages + a list), plus the
+# temporary migrator that authors v1 -> v2 meaning and is unloaded afterwards.
+function(zen_add_handoff_ledger target)
+    add_library(${target} SHARED weavelib/handoff_ledger.cpp)
+    target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+    target_compile_options(${target} PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+    target_compile_definitions(${target} PRIVATE ${ARGN})
+endfunction()
+
+zen_add_handoff_ledger(zen_test_handoff_v1)
+zen_add_handoff_ledger(zen_test_handoff_v2 ZEN_HANDOFF_V2)
+
+add_library(zen_test_handoff_migrator SHARED weavelib/handoff_migrator.cpp)
+target_link_libraries(zen_test_handoff_migrator
+    PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+target_compile_options(zen_test_handoff_migrator PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+
 # R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
 # under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
 # where the pipe's fail-closed law is the thing under test.
@@ -166,6 +185,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
     zen_test_weave_answers_twice zen_test_weave_seam_emit zen_test_weave_senses
     zen_test_versioned_v1 zen_test_versioned_v2
+    zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
     zen_test_office_worker)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
@@ -192,6 +212,9 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_SENSES=\"$<TARGET_FILE:zen_test_weave_senses>\""
     "ZEN_SO_VERSIONED_V1=\"$<TARGET_FILE:zen_test_versioned_v1>\""
     "ZEN_SO_VERSIONED_V2=\"$<TARGET_FILE:zen_test_versioned_v2>\""
+    "ZEN_SO_HANDOFF_V1=\"$<TARGET_FILE:zen_test_handoff_v1>\""
+    "ZEN_SO_HANDOFF_V2=\"$<TARGET_FILE:zen_test_handoff_v2>\""
+    "ZEN_SO_HANDOFF_MIGRATOR=\"$<TARGET_FILE:zen_test_handoff_migrator>\""
     "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\"")
 
 endif() # TARGET zen-kernel (portable fixtures)
