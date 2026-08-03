@@ -33,6 +33,14 @@ using namespace sbfx;
 namespace {
 const std::string kHostExe = ZEN_WEAVE_HOST_EXE;
 
+/// What the memory-bomb fixture reports when it did NOT die (see `detonate()` in
+/// `weavelib/test_weave.cpp`). Mirrored here rather than shared because the
+/// fixture is a separate artifact built into its own `.so`; the two failures stay
+/// distinct so "the kernel refused the allocation" can never be read as "the
+/// cgroup killed it".
+constexpr std::int64_t kBombAllocRefused = -101; ///< refused BEFORE any pressure
+constexpr std::int64_t kBombSurvived = -102;     ///< the full page walk completed
+
 // Matches the net-probe weave's emitted shape (NetResult{code}); the child reports
 // the connect() errno here so a test can read it off the bus.
 std::shared_ptr<const Schema> netresult_schema() {
@@ -438,24 +446,29 @@ TEST_CASE("a memory bomb is OOM-killed within its cgroup; the host survives, the
 
     bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
     const bool quarantined = host.run_until([&] { return host.quarantined("bomb"); }, 8000);
-    REQUIRE(quarantined);
-    CHECK(died >= 1); // OOM-killed (within its cgroup) at least once
 
     // SILENCE IS THE WITNESS. The bomb replies on every path where it did NOT
     // die, so a reply arriving means containment failed — and the sentinel says
-    // which failure it was, rather than leaving "it answered" to be interpreted.
-    // -101 = the kernel refused the allocation, so no pressure was ever applied
-    //        (this must never be read as containment working);
-    // -102 = every page was written and nothing killed us.
-    // STF-0: before the fixture was repaired, Release reported -102 here while
-    // Debug stayed silent, because the optimizer had deleted the allocation.
-    if (!rec.weave->handled_values.empty()) {
-        const std::int64_t why = rec.weave->handled_values.front();
-        INFO("bomb replied with sentinel " << why << " (-101 = allocation refused before any "
-                                                     "pressure, -102 = survived the full page walk)");
-        CHECK(why != -101);
-        CHECK(why != -102);
-    }
+    // WHICH failure, rather than leaving "it answered" to be interpreted.
+    //
+    // READ IT BEFORE THE REQUIRE BELOW, DELIBERATELY. `REQUIRE(quarantined)`
+    // aborts the case, so a diagnostic placed after it is computed only on the
+    // runs that did not need it — and never on the one failure it exists to
+    // explain. The interesting failure is exactly "the bomb lived, so nothing
+    // was quarantined", and that is the run that must say why.
+    const std::int64_t sentinel =
+        rec.weave->handled_values.empty() ? 0 : rec.weave->handled_values.front();
+    INFO("bomb reply sentinel = "
+         << sentinel
+         << "  (0 = no reply, which is the expected kill; " << kBombAllocRefused
+         << " = the kernel refused the allocation, so NO pressure was ever applied and this is "
+            "not evidence of containment; "
+         << kBombSurvived << " = the full page walk completed and containment did not act)");
+    CHECK(sentinel != kBombAllocRefused);
+    CHECK(sentinel != kBombSurvived);
+
+    REQUIRE(quarantined);
+    CHECK(died >= 1);                        // OOM-killed (within its cgroup) at least once
     CHECK(rec.weave->handled_names.empty()); // killed before it could reply
 
     // The host is unharmed: a fresh Weave still works.
@@ -484,6 +497,18 @@ TEST_CASE("negative control: the same allocation under a high cap survives (the 
     bus.send(r.id, Message(ping(5), WeaveId{}, rec.id));
     REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 3000));
     CHECK(rec.weave->handled_names.back() == "Pong"); // survived → the cap, not the alloc, kills
+
+    // ...and it survived the WHOLE walk. Merely receiving a reply is too weak a
+    // control: the fixture also replies when the kernel refused the allocation
+    // outright, and that run would prove the opposite of what this case exists to
+    // prove — that ~200 MiB genuinely fits under a 512 MiB cap, so the 64 MiB cap
+    // next door is the cause of the kill rather than the allocation size itself.
+    REQUIRE_FALSE(rec.weave->handled_values.empty());
+    const std::int64_t sentinel = rec.weave->handled_values.back();
+    INFO("negative-control sentinel = " << sentinel << " (expected " << kBombSurvived
+                                        << " = every page written; " << kBombAllocRefused
+                                        << " would mean the allocation never happened)");
+    CHECK(sentinel == kBombSurvived);
     CHECK_FALSE(host.quarantined("roomy"));
 }
 
