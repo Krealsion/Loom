@@ -117,9 +117,14 @@ constexpr std::int64_t kBombSurvived = -102;
 /// The previous shape — `malloc(bomb)` then `memset`, into a pointer never read
 /// and never freed — is DEAD CODE, and at `-O2` GCC deletes the pair outright.
 /// The Debug build kept it and passed; the Release build dropped it, so the
-/// process never grew, was never OOM-killed, and the case silently stopped
-/// testing anything while still reporting green (found by R2E-0a, repaired in
-/// STF-0).
+/// process never grew and was never OOM-killed.
+///
+/// Release did NOT report green — `isolation` and the aggregate `all` both
+/// failed. What was silent was the CAUSE, not the lane: the failure surfaced
+/// several steps downstream at the quarantine assertion, and nothing in it said
+/// the allocation had been deleted. A witness that stops applying its pressure
+/// still fails, just not where or why you would look (found by R2E-0a, repaired
+/// in STF-0).
 ///
 /// Two properties make this version survive optimization, and both are needed:
 ///   - the pointer is `volatile`, so every store is an observable side effect
