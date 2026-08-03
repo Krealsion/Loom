@@ -139,6 +139,13 @@ std::shared_ptr<const Schema> ping_schema() {
 #endif
     return s;
 }
+[[maybe_unused]] std::shared_ptr<const Schema> sensehealth_schema() { // only the senses variant
+    // The Sense this artifact declares it can claim. Declared in the manifest's
+    // claim-set (v6), so the host registers it at load and a consumer can ask
+    // what this artifact provides before it has claimed anything.
+    static const auto s = SchemaBuilder("SenseHealth", 1).field("hp", Kind::Int).build();
+    return s;
+}
 [[maybe_unused]] std::shared_ptr<const Schema> seamonly_schema() { // only the seam-emit variant
     // DECLARED NOWHERE ELSE. Not in accepted_schemas(), not in any other library,
     // not by the host — so no registry in the process has ever heard of it. That
@@ -147,7 +154,21 @@ std::shared_ptr<const Schema> ping_schema() {
     return s;
 }
 std::shared_ptr<const Schema> counter_schema() {
-#if defined(ZEN_WEAVE_ANSWERS)
+#if defined(ZEN_WEAVE_SENSES)
+    // Counter v6 — the Sense fixture's own window. A loaded weave has no window on
+    // itself but its snapshot, so what the test needs to see (did my claim take?
+    // at what revision? what did I read back, and with what authorship?) is
+    // persisted state like anything else, rather than a back channel.
+    static const auto s = SchemaBuilder("Counter", 6)
+                              .field("count", Kind::Int)
+                              .field("claimed", Kind::Int)     // 1 = the personal claim took
+                              .field("revision", Kind::Int)    // its revision under the key
+                              .field("office_denied", Kind::Int) // 1 = office claim refused
+                              .field("read_hp", Kind::Int)     // what it read back, -1 = nothing
+                              .field("read_author", Kind::Int) // whom the reading named
+                              .field("read_personal", Kind::Int) // 1 = the reading carried no office
+                              .build();
+#elif defined(ZEN_WEAVE_ANSWERS)
     // Counter v5 — the immediate-answer fixture's own window: did the board accept
     // its answer, and did it refuse a second one?
     static const auto s = SchemaBuilder("Counter", 5)
@@ -218,6 +239,15 @@ public:
         return {ping_schema()};
 #endif
     }
+
+#if defined(ZEN_WEAVE_SENSES)
+    /// THE DECLARED CLAIM-SET (v6), from a raw `loom::Weave`. It rides the
+    /// manifest, so the host registers SenseHealth at load and can answer "what
+    /// Senses does this artifact provide?" before it has claimed anything.
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
+        return {sensehealth_schema()};
+    }
+#endif
 
     void handle(const Message& in, Bus& bus) override {
 #if defined(ZEN_WEAVE_ANSWERS)
@@ -342,7 +372,37 @@ public:
         }
 #endif
         ++count_;
-#if defined(ZEN_WEAVE_SEAM_EMIT)
+#if defined(ZEN_WEAVE_SENSES)
+        // THE DYNAMIC-PARITY FIXTURE (R2E-0/v6). The same four public verbs a
+        // native weave writes, from the far side of the seam — and the whole
+        // question is whether they mean here what they mean natively.
+        Value obs(sensehealth_schema());
+        obs.set("hp", Cell::integer(seq));
+        const SenseClaimResult claim = bus.claim(std::move(obs));
+        sense_claimed_ = claim.accepted;
+        revision_ = static_cast<std::int64_t>(claim.revision);
+
+        // Asking to claim as an office this artifact does not hold must refuse
+        // precisely — never a silent downgrade to a personal claim.
+        Value forged(sensehealth_schema());
+        forged.set("hp", Cell::integer(9000));
+        const SenseClaimResult denied = bus.office_claim("nobody.holds.this", std::move(forged));
+        office_denied_ = !denied.accepted && denied.why == SenseRefusal::OfficeNotHeld;
+
+        // ...and read a claim back, synchronously, with the authorship the HOST
+        // computed. `reply_to` is where the test points it — an address handed in
+        // by the sender, which is exactly what that field is for. The test points
+        // it at this weave itself, so the read-back is of its own claim.
+        const SenseReading r = bus.observe(in.reply_to, sensehealth_schema());
+        if (r) {
+            read_hp_ = r.value->get("hp")->as_int();
+            read_author_ = static_cast<std::int64_t>(r.by.author.value);
+            read_personal_ = r.by.office.empty();
+        } else {
+            read_hp_ = -1;
+        }
+        return;
+#elif defined(ZEN_WEAVE_SEAM_EMIT)
         // THE SILENT-SEAM FIXTURE (R2E-0, from Night Lab III P-011). Reach for a
         // service by role, carrying a shape no registry in this process knows.
         // Both halves matter: the role may well be unheld, but the emission never
@@ -501,6 +561,14 @@ public:
         v.set("spent", Cell::integer(spends_ok_));
         v.set("token", Cell::integer(static_cast<std::int64_t>(pending_.opaque_token())));
 #endif
+#if defined(ZEN_WEAVE_SENSES)
+        v.set("claimed", Cell::integer(sense_claimed_ ? 1 : 0));
+        v.set("revision", Cell::integer(revision_));
+        v.set("office_denied", Cell::integer(office_denied_ ? 1 : 0));
+        v.set("read_hp", Cell::integer(read_hp_));
+        v.set("read_author", Cell::integer(read_author_));
+        v.set("read_personal", Cell::integer(read_personal_ ? 1 : 0));
+#endif
         return v;
     }
 
@@ -563,6 +631,14 @@ private:
 #if defined(ZEN_WEAVE_ACTIVATES)
     std::int64_t activations_ = 0;      // how many zen.Activated this incarnation has handled
     std::int64_t last_activation_ = 0;  // the newest sequence it was told
+#endif
+#if defined(ZEN_WEAVE_SENSES)
+    bool sense_claimed_ = false;   // did the host accept the personal claim?
+    std::int64_t revision_ = 0;    // ...at what revision under its key
+    bool office_denied_ = false;   // did the forged office claim refuse precisely?
+    std::int64_t read_hp_ = -1;    // what the synchronous read-back saw (-1 = nothing)
+    std::int64_t read_author_ = 0; // whom the reading named as author
+    bool read_personal_ = false;   // did the reading carry NO office (a personal claim)?
 #endif
 };
 

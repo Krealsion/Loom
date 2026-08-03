@@ -202,7 +202,119 @@ public:
         return loom::OfficePublication{true, static_cast<std::size_t>(recipients)};
     }
 
+    // ---- Senses (v6) --------------------------------------------------------
+    //
+    // The same four public verbs a native weave reaches, forwarded. A missing
+    // door refuses honestly rather than silently doing nothing — the failure v4
+    // closed for answer() and v5 for office speech, closed here too.
+
+    loom::SenseClaimResult claim(loom::Value value) override {
+        if (host_ == nullptr || host_->sense_claim == nullptr) {
+            return loom::SenseClaimResult{};
+        }
+        const std::string bytes = loom::serialize(value);
+        std::uint64_t revision = 0;
+        const ZenStatus st = host_->sense_claim(
+            host_->ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(),
+            &revision);
+        return st == ZEN_OK ? loom::SenseClaimResult{true, loom::SenseRefusal::None, revision}
+                            : loom::SenseClaimResult{false, sense_refusal_of(st), 0};
+    }
+
+    loom::SenseClaimResult office_claim(std::string_view as_role, loom::Value value) override {
+        if (host_ == nullptr || host_->sense_office_claim == nullptr) {
+            return loom::SenseClaimResult{};
+        }
+        const std::string bytes = loom::serialize(value);
+        const std::string role_z(as_role);
+        std::uint64_t revision = 0;
+        const ZenStatus st = host_->sense_office_claim(
+            host_->ctx, role_z.c_str(), reinterpret_cast<const std::uint8_t*>(bytes.data()),
+            bytes.size(), &revision);
+        return st == ZEN_OK ? loom::SenseClaimResult{true, loom::SenseRefusal::None, revision}
+                            : loom::SenseClaimResult{false, sense_refusal_of(st), 0};
+    }
+
+    loom::SenseReading observe(loom::WeaveId author, std::shared_ptr<const loom::Schema> shape) override {
+        if (host_ == nullptr || host_->sense_observe == nullptr) {
+            return loom::SenseReading{};
+        }
+        const std::string name_z(shape->name());
+        std::string bytes;
+        ZenSenseBy by{};
+        ZenByteSink sink{&bytes, &collect_bytes};
+        const ZenStatus st = host_->sense_observe(host_->ctx, author.value, name_z.c_str(),
+                                                  shape->version(), sink, &by);
+        return decode_reading(st, bytes, by, shape);
+    }
+
+    loom::SenseReading observe_office(std::string_view role, std::shared_ptr<const loom::Schema> shape) override {
+        if (host_ == nullptr || host_->sense_observe_office == nullptr) {
+            return loom::SenseReading{};
+        }
+        const std::string role_z(role);
+        const std::string name_z(shape->name());
+        std::string bytes;
+        ZenSenseBy by{};
+        ZenByteSink sink{&bytes, &collect_bytes};
+        const ZenStatus st = host_->sense_observe_office(
+            host_->ctx, role_z.c_str(), name_z.c_str(), shape->version(), sink, &by);
+        return decode_reading(st, bytes, by, shape);
+    }
+
 private:
+    /// The host's status, back to the four distinct answers. A status this side
+    /// does not recognize becomes `NoClaim` rather than a fabricated success.
+    static loom::SenseRefusal sense_refusal_of(ZenStatus st) {
+        switch (st) {
+        case ZEN_ERR_SENSE_NOT_AUTHORIZED:
+            return loom::SenseRefusal::NotAuthorized;
+        case ZEN_ERR_SENSE_UNDECLARED:
+            return loom::SenseRefusal::Undeclared;
+        case ZEN_ERR_SENSE_OFFICE_NOT_HELD:
+            return loom::SenseRefusal::OfficeNotHeld;
+        case ZEN_ERR_REFUSED:
+            return loom::SenseRefusal::GateRefused;
+        default:
+            return loom::SenseRefusal::NoClaim;
+        }
+    }
+
+    static void collect_bytes(void* ctx, const std::uint8_t* data, std::size_t len) {
+        static_cast<std::string*>(ctx)->append(reinterpret_cast<const char*>(data), len);
+    }
+
+    /// Rebuild a reading library-side. The bytes were serialized from a value the
+    /// HOST had already admitted, and they are re-admitted here against this
+    /// library's own schema for the shape — so a library never holds a value that
+    /// did not pass a gate on its own side of the seam either.
+    loom::SenseReading decode_reading(ZenStatus st, const std::string& bytes,
+                                      const ZenSenseBy& by, const std::shared_ptr<const loom::Schema>& shape) {
+        loom::SenseReading out;
+        if (st != ZEN_OK) {
+            out.refusal = sense_refusal_of(st);
+            return out;
+        }
+        loom::Unverified u = loom::parse(bytes);
+        loom::Admission a = loom::admit(u, shape);
+        if (!a.ok()) {
+            out.refusal = loom::SenseRefusal::GateRefused;
+            return out;
+        }
+        out.refusal = loom::SenseRefusal::None;
+        out.value = std::move(a).value();
+        out.by.author = loom::WeaveId{by.author};
+        out.by.author_life = by.author_life;
+        out.by.author_incarnation = by.author_incarnation;
+        out.by.author_life_is_current = by.author_life_is_current != 0;
+        out.by.office = by.office; // "" == personal, which no office name can be
+        out.by.office_holder_is_current = by.office_holder_is_current != 0;
+        out.by.revision = by.revision;
+        out.by.schema_name = shape->name();
+        out.by.schema_version = shape->version();
+        return out;
+    }
+
     const ZenHostApi* host_;
 };
 
@@ -235,8 +347,13 @@ ZenStatus do_describe(void* instance, ZenByteSink sink) {
         if constexpr (requires { s->zen_requested_capabilities(); }) {
             ask = s->zen_requested_capabilities();
         }
+        // The declared claim-set (v6) rides the same manifest, so a loaded
+        // artifact's Sense capability is discoverable at load rather than after
+        // some runtime claim accidentally reveals a shape.
+        const std::vector<std::shared_ptr<const loom::Schema>> claims = s->claimed_schemas();
         sink_write(sink, loom::serialize(loom::encode_manifest(accepted, state.schema(),
-                                                                     ask ? &*ask : nullptr)));
+                                                                     ask ? &*ask : nullptr,
+                                                                     &claims)));
         return ZEN_OK;
     } catch (...) {
         return ZEN_ERR;

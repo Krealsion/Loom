@@ -4,7 +4,9 @@
 #ifndef ZEN_SWITCHBOARD_BUS_HPP
 #define ZEN_SWITCHBOARD_BUS_HPP
 
+#include <zen/schema.hpp>
 #include <zen/switchboard/message.hpp>
+#include <zen/switchboard/sense.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -184,6 +186,63 @@ public:
         (void)as_role;
         (void)msg;
         return OfficePublication{};
+    }
+
+    // ---- Senses (R2E-0) ------------------------------------------------------
+    //
+    // THE LAW: *a Sense is a deliberate immutable claim of the latest observation
+    // a participant has made available; reading one is synchronous, authorized,
+    // and shares no memory with the claimant.*
+    //
+    // Claiming sits beside send/publish because it is the same kind of act — a
+    // participant deliberately making something available — and the office form
+    // reuses the `as_role` grammar because it is the SAME law (MSG-07): holding
+    // an office is not speaking, or claiming, as one.
+    //
+    // Observing is the one verb on this surface that RETURNS DATA rather than
+    // queueing anything. It is synchronous by design: that is the whole point of
+    // the category. It confers nothing else — a reader cannot mutate the
+    // claimant through a reading, because a reading owns its value outright.
+    //
+    // The defaults refuse, truthfully, exactly as the answer and office doors do:
+    // a Bus that is not a live participating context has no identity to claim as
+    // and no standing to read on anyone's behalf.
+
+    /// Claim `value` personally. The shape must be in this weave's declared
+    /// `Claims<...>` set; an undeclared shape is refused, never stored.
+    virtual SenseClaimResult claim(Value value) {
+        (void)value;
+        return SenseClaimResult{};
+    }
+
+    /// Claim `value` deliberately AS the office `as_role`. Membership is verified
+    /// at the claim moment; a refusal stores nothing and is never downgraded to a
+    /// personal claim.
+    virtual SenseClaimResult office_claim(std::string_view as_role, Value value) {
+        (void)as_role;
+        (void)value;
+        return SenseClaimResult{};
+    }
+
+    /// The latest claim `author` made personally of `shape`.
+    ///
+    /// The SHAPE is passed, not just its (name, version), because a reading
+    /// crossing the dynamic seam must be re-admitted against the reader's own
+    /// definition of the shape on its own side. Handing back a value that passed
+    /// only the *other* side's gate would be the one place in Loom a value
+    /// arrived un-admitted.
+    virtual SenseReading observe(WeaveId author, std::shared_ptr<const Schema> shape) {
+        (void)author;
+        (void)shape;
+        return SenseReading{};
+    }
+
+    /// The latest claim made AS the office `role`. A predecessor's claim survives
+    /// role movement, stamped stale — never relabelled as the successor's.
+    virtual SenseReading observe_office(std::string_view role, std::shared_ptr<const Schema> shape) {
+        (void)role;
+        (void)shape;
+        return SenseReading{};
     }
 
 protected:

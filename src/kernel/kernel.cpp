@@ -477,6 +477,144 @@ static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::ui
     return ZEN_OK;
 }
 
+// ---- Senses (v6) -----------------------------------------------------------
+//
+// Same shape as every other outbound door: the value crosses as bytes, the HOST
+// admits it through the one gate, and the host — not the library — knows which
+// weave is speaking, whether it declared the shape, and whether it holds the
+// office. A library requests; it never attests.
+
+/// The four distinct Sense refusals, back to the seam's four distinct statuses.
+static ZenStatus sense_status_of(loom::SenseRefusal why) {
+    switch (why) {
+    case loom::SenseRefusal::NoClaim:
+        return ZEN_ERR_SENSE_NO_CLAIM;
+    case loom::SenseRefusal::NotAuthorized:
+        return ZEN_ERR_SENSE_NOT_AUTHORIZED;
+    case loom::SenseRefusal::Undeclared:
+        return ZEN_ERR_SENSE_UNDECLARED;
+    case loom::SenseRefusal::OfficeNotHeld:
+        return ZEN_ERR_SENSE_OFFICE_NOT_HELD;
+    case loom::SenseRefusal::GateRefused:
+        return ZEN_ERR_REFUSED;
+    case loom::SenseRefusal::None:
+        break;
+    }
+    return ZEN_OK;
+}
+
+/// Fill the C-layout authorship from the host's own reading. `office` is copied
+/// into the fixed buffer and always NUL-terminated; a name at or past the bound
+/// is truncated rather than allocated across the seam — see ZenSenseBy.
+static void fill_sense_by(const loom::SenseReading& r, ZenSenseBy* by) {
+    if (by == nullptr) {
+        return;
+    }
+    *by = ZenSenseBy{};
+    by->author = r.by.author.value;
+    by->author_life = r.by.author_life;
+    by->author_incarnation = r.by.author_incarnation;
+    by->author_life_is_current = r.by.author_life_is_current ? 1u : 0u;
+    by->office_holder_is_current = r.by.office_holder_is_current ? 1u : 0u;
+    by->revision = r.by.revision;
+    const std::size_t n = r.by.office.size() < (ZEN_SENSE_OFFICE_MAX - 1)
+                              ? r.by.office.size()
+                              : (ZEN_SENSE_OFFICE_MAX - 1);
+    std::memcpy(by->office, r.by.office.data(), n);
+    by->office[n] = '\0';
+}
+
+static ZenStatus zen_host_sense_claim(void* ctx, const std::uint8_t* payload, std::size_t len,
+                                      std::uint64_t* revision_out) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        // A claim of a shape this Loom never heard of is a seam rejection like
+        // any other, and is observable for the same reason (R2E-0 / P-011).
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+    }
+    loom::Admission a = loom::admit(u, door);
+    if (!a.ok()) {
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+    }
+    const loom::SenseClaimResult r = h->gated->claim(std::move(a).value());
+    if (revision_out != nullptr) {
+        *revision_out = r.revision;
+    }
+    return r.accepted ? ZEN_OK : sense_status_of(r.why);
+}
+
+static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
+                                             const std::uint8_t* payload, std::size_t len,
+                                             std::uint64_t* revision_out) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+    }
+    loom::Admission a = loom::admit(u, door);
+    if (!a.ok()) {
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+    }
+    const loom::SenseClaimResult r =
+        h->gated->office_claim(as_role != nullptr ? as_role : "", std::move(a).value());
+    if (revision_out != nullptr) {
+        *revision_out = r.revision;
+    }
+    return r.accepted ? ZEN_OK : sense_status_of(r.why);
+}
+
+static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const char* shape_name,
+                                        std::uint32_t shape_version, ZenByteSink sink,
+                                        ZenSenseBy* by) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    // The host resolves the shape it was NAMED. A library asking for a shape this
+    // Loom never registered is the same seam rejection as an emission of one, and
+    // is observable for the same reason (R2E-0 / P-011).
+    std::shared_ptr<const loom::Schema> shape =
+        h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
+    if (!shape) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    const loom::SenseReading r = h->gated->observe(loom::WeaveId{author}, std::move(shape));
+    if (!r) {
+        return sense_status_of(r.refusal);
+    }
+    fill_sense_by(r, by);
+    // The value crosses as BYTES the library copies out of the sink — the same
+    // ownership rule every other outbound value follows. No host pointer into
+    // the repository ever reaches the library, so a loaded reader has exactly the
+    // reach a native one has: none.
+    const std::string bytes = loom::serialize(*r.value);
+    sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+    return ZEN_OK;
+}
+
+static ZenStatus zen_host_sense_observe_office(void* ctx, const char* role,
+                                               const char* shape_name,
+                                               std::uint32_t shape_version, ZenByteSink sink,
+                                               ZenSenseBy* by) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    std::shared_ptr<const loom::Schema> shape =
+        h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
+    if (!shape) {
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    }
+    const loom::SenseReading r =
+        h->gated->observe_office(role != nullptr ? role : "", std::move(shape));
+    if (!r) {
+        return sense_status_of(r.refusal);
+    }
+    fill_sense_by(r, by);
+    const std::string bytes = loom::serialize(*r.value);
+    sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+    return ZEN_OK;
+}
+
 } // extern "C"
 
 // ---- the host adapter: a Weave backed by a library instance ---------------
@@ -485,9 +623,10 @@ class HostAdapter final : public loom::Weave {
 public:
     HostAdapter(const ZenWeaveAbi* abi, void* instance, std::shared_ptr<LoadedLibrary> lib,
                 std::vector<std::shared_ptr<const Schema>> accepted,
-                std::shared_ptr<const Schema> state_schema, loom::Switchboard* bus)
+                std::shared_ptr<const Schema> state_schema, loom::Switchboard* bus,
+                std::vector<std::shared_ptr<const Schema>> claims = {})
         : abi_(abi), instance_(instance), lib_(std::move(lib)), accepted_(std::move(accepted)),
-          state_schema_(std::move(state_schema)), bus_(bus) {}
+          claims_(std::move(claims)), state_schema_(std::move(state_schema)), bus_(bus) {}
 
     /// THE ONE PLACE A LIVE DYNAMIC ARTIFACT ENDS — whoever caused it.
     ///
@@ -536,6 +675,13 @@ public:
         return accepted_;
     }
 
+    /// The declared claim-set the library published in its manifest (v6), so a
+    /// loaded artifact answers "what Senses can you provide?" exactly as a native
+    /// weave does — at load, before it has claimed anything.
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
+        return claims_;
+    }
+
     void handle(const loom::Message& in, loom::Bus& bus) override {
         const std::string bytes = loom::serialize(in.payload);
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
@@ -551,7 +697,11 @@ public:
                        &zen_host_answer,
                        &zen_host_office_send,
                        &zen_host_office_send_to_role,
-                       &zen_host_office_publish};
+                       &zen_host_office_publish,
+                       &zen_host_sense_claim,
+                       &zen_host_sense_office_claim,
+                       &zen_host_sense_observe,
+                       &zen_host_sense_observe_office};
         // Provenance crosses as host-computed facts beside the sender, and it
         // crosses ONE WAY ONLY: the office doors above carry REQUESTS the host
         // verifies, never attested facts, so the seam is a place a loaded weave
@@ -627,6 +777,7 @@ private:
     /// instance pointer it used.
     std::shared_ptr<LoadedLibrary> lib_;
     std::vector<std::shared_ptr<const Schema>> accepted_;
+    std::vector<std::shared_ptr<const Schema>> claims_; ///< the declared claim-set (v6)
     std::shared_ptr<const Schema> state_schema_;
     loom::Switchboard* bus_;
     loom::WeaveId self_{};
@@ -741,11 +892,30 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     }
     result.state = decode_schema(*manifest.get("state")->as_message(), registry_);
     registry_.register_schema(result.state);
+    // The declared claim-set (v6). Optional: a weave that claims nothing emits no
+    // section, which is a declaration rather than an absence. Registered through
+    // the same agreement wall, so a Sense shape two libraries disagree about
+    // refuses the load exactly as a message shape does.
+    if (const loom::Cell* claims = manifest.get("claims")) {
+        for (const loom::Cell& c : claims->as_list()) {
+            auto s = decode_schema(*c.as_message(), registry_);
+            registry_.register_schema(s);
+            result.claims.push_back(std::move(s));
+        }
+    }
     return result;
 }
 
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::string& role) {
+    // The kernel's default: permissive bus sends, and no Sense read authority.
+    // Grant's floor is empty and R2E-0 did not move it — observing another
+    // participant's claims is a decision, not a consequence of being loadable.
+    return load(name, path, role, loom::Grant{}.allow_any());
+}
+
+LoadResult Kernel::load(const std::string& name, const std::string& path, const std::string& role,
+                        Grant grant) {
     if (libs_.count(name) != 0) {
         return {false, {}, "already loaded: " + name};
     }
@@ -771,7 +941,7 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
     try {
         Manifest mf = reconstruct(abi, instance);
         adapter = std::make_unique<HostAdapter>(abi, instance, lib, std::move(mf.accepted),
-                                                std::move(mf.state), &bus_);
+                                                std::move(mf.state), &bus_, std::move(mf.claims));
         adapter_built = true;
         HostAdapter* raw = adapter.get();
         // A loaded .so can bypass the bus and reach syscalls directly, so a
@@ -783,8 +953,7 @@ LoadResult Kernel::load(const std::string& name, const std::string& path,
         // bound. register_weave throws if the role is already held; that throw is
         // caught below and becomes a clean LoadResult failure — the incumbent
         // keeps its role and its life.
-        loom::WeaveId id =
-            bus_.register_weave(std::move(adapter), loom::Grant{}.allow_any(), role);
+        loom::WeaveId id = bus_.register_weave(std::move(adapter), std::move(grant), role);
         raw->set_self(id);
         libs_.emplace(name, Loaded{name, std::move(lib), abi, raw, id});
         // THE RECORD AND THE ADAPTER ARE NOW ONE THING. From here the adapter's

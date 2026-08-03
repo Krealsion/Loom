@@ -179,6 +179,18 @@ public:
     LoadResult load(const std::string& name, const std::string& path,
                     const std::string& role = "");
 
+    /// As `load`, with the host naming the artifact's grant explicitly (R2E-0).
+    ///
+    /// The default `load` gives a loaded weave permissive bus SENDS and no
+    /// Sense read authority, because Grant's floor is empty and Senses did not
+    /// change it: reading a claim is a deliberate host decision, not something a
+    /// weave acquires by being loadable. A host that wants a loaded renderer,
+    /// inspector or status panel to observe says so here — at the same moment it
+    /// decides to load the thing at all, which is the moment it is already
+    /// deciding how much to trust it.
+    LoadResult load(const std::string& name, const std::string& path, const std::string& role,
+                    Grant grant);
+
     /// Hot-reload `name` from `new_path`: snapshot the live Weave to host-owned
     /// bytes, swap the library behind the same WeaveId, and revive from the
     /// snapshot through the gate.
@@ -359,6 +371,9 @@ private:
     struct Manifest {
         std::vector<std::shared_ptr<const Schema>> accepted;
         std::shared_ptr<const Schema> state;
+        /// The declared claim-set (R2E-0/v6) — the Senses this artifact says it
+        /// can claim. Empty when it declares none.
+        std::vector<std::shared_ptr<const Schema>> claims;
     };
 
     Manifest reconstruct(const ZenWeaveAbi* abi, void* instance);

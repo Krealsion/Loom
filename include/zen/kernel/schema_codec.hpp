@@ -93,12 +93,20 @@ inline std::shared_ptr<const Schema> manifest_schema() {
     // List<Pos> + a Pos field) and the gap refused its load. Optional, so a
     // flat manifest stays lean. Each bump — never mutation — keeps the
     // invariant that a published (name, version) is a frozen shape.
-    static const auto s = SchemaBuilder("zen.Manifest", 3)
+    // v4 (R2E-0) adds the optional `claims` list: the SENSES this weave declares
+    // it can claim. It rides the manifest rather than a second descriptor entry
+    // because it is the same kind of fact as the accept-set — part of what this
+    // weave's contract IS — so one manifest still means one decode and one gate
+    // crossing. Optional, so a weave that claims nothing stays lean; its nested
+    // shapes are collected into `referenced` exactly as the accept-set's are.
+    static const auto s = SchemaBuilder("zen.Manifest", 4)
                               .list("referenced", type_message(schema_desc_schema()),
                                     /*required=*/false)
                               .list("accepted", type_message(schema_desc_schema()))
                               .message("state", schema_desc_schema())
                               .message("requests", capability_ask_schema(), /*required=*/false)
+                              .list("claims", type_message(schema_desc_schema()),
+                                    /*required=*/false)
                               .build();
     return s;
 }
@@ -201,13 +209,21 @@ inline void collect_referenced(const TypeRef& t,
 // because the manifest's requests field is optional. The `referenced` section is
 // likewise emitted only when the accept-set or state actually nests something.
 inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& accepted,
-                             const Schema& state, const CapabilityAsk* ask = nullptr) {
+                             const Schema& state, const CapabilityAsk* ask = nullptr,
+                             const std::vector<std::shared_ptr<const Schema>>* claims = nullptr) {
     Value m(manifest_schema());
     std::vector<std::shared_ptr<const Schema>> referenced;
     for (const auto& s : accepted) {
         collect_referenced(*s, referenced);
     }
     collect_referenced(state, referenced);
+    // A claimed shape may nest others exactly as an accepted one may, so its
+    // dependencies join the same section — the manifest stays self-contained.
+    if (claims != nullptr) {
+        for (const auto& s : *claims) {
+            collect_referenced(*s, referenced);
+        }
+    }
     if (!referenced.empty()) {
         std::vector<Cell> refs;
         refs.reserve(referenced.size());
@@ -225,6 +241,14 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
     m.set("state", Cell::message(encode_schema(state)));
     if (ask != nullptr) {
         m.set("requests", Cell::message(encode_capability_ask(*ask)));
+    }
+    if (claims != nullptr && !claims->empty()) {
+        std::vector<Cell> cl;
+        cl.reserve(claims->size());
+        for (const auto& s : *claims) {
+            cl.push_back(Cell::message(encode_schema(*s)));
+        }
+        m.set("claims", Cell::list(std::move(cl)));
     }
     return m;
 }

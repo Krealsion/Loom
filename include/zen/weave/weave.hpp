@@ -42,6 +42,23 @@ struct Accept {};
 template <class... S>
 struct Emit {};
 
+/// THE SENSES A WEAVE DECLARES IT CAN CLAIM (R2E-0) — its claim-set.
+///
+/// A third list, because a claim is neither of the other two: `Accept<...>` is
+/// what may be DELIVERED here, `Emit<...>` is what may be SENT from here, and
+/// `Claims<...>` is what this weave may say it currently observes to be so.
+/// Reusing `Emit<...>` was the obvious shortcut and was rejected twice over — a
+/// Sense is not an emitted message, and `Emit` is informational and does not
+/// register, so discovery would still have to wait for a runtime claim to
+/// accidentally reveal the shape.
+///
+/// Unlike `Emit<...>`, this IS enforced and it DOES register: the schemas are
+/// registered at mount (so the shape resolves and a consumer can ask what this
+/// weave can claim before anything has been claimed), and claiming a shape that
+/// is not in this list is refused (`SenseRefusal::Undeclared`).
+template <class... S>
+struct Claims {};
+
 /// The Switchboard's fixed lifecycle grammar, typed. (Not a registered shape —
 /// it targets lifecycle_policy_schema() directly.)
 struct LifecyclePolicy {
@@ -175,6 +192,19 @@ public:
                 role_, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{}, correlation));
         }
 
+        /// CLAIM `observation` DELIBERATELY AS THIS OFFICE (R2E-0) — the same
+        /// law as office speech, in the same grammar, because it IS the same
+        /// law: holding the office is not claiming as the office.
+        ///
+        /// The claim-set must declare the shape, and this weave must hold the
+        /// office at this moment. A refusal stores nothing and is never
+        /// downgraded to a personal claim — the two are different keys, and
+        /// conflating them is exactly what MSG-04/MSG-07 refuse for speech.
+        template <class T>
+        loom::SenseClaimResult claim(const T& observation) && {
+            return mail_.bus_.office_claim(role_, to_value(observation));
+        }
+
     private:
         friend class Mail;
         Office(Mail& mail, std::string_view role) : mail_(mail), role_(role) {}
@@ -187,6 +217,54 @@ public:
     /// result. Verification happens per statement, at the bus — this call
     /// itself checks nothing and grants nothing.
     Office as_role(std::string_view role) { return Office(*this, role); }
+
+    // ---- Senses (R2E-0) -----------------------------------------------------
+
+    /// CLAIM `observation` PERSONALLY — "this is what I most recently claim is
+    /// so". The shape must be declared in this weave's `Claims<...>`.
+    ///
+    /// VISIBLE IMMEDIATELY, at this call. Nothing waits for the handler to
+    /// return; there is no settlement step. A reader delivered later in FIFO
+    /// order observes this claim, and one delivered earlier observed the
+    /// previous one — which is the whole ordering guarantee, and it comes free
+    /// from single-threaded dispatch rather than from anything this repository
+    /// does.
+    ///
+    /// A personal claim by a role holder is NOT an office claim. Use
+    /// `as_role(R).claim(...)` to make one deliberately.
+    template <class T>
+    loom::SenseClaimResult claim(const T& observation) {
+        return bus_.claim(to_value(observation));
+    }
+
+    /// THE LATEST CLAIM `author` MADE PERSONALLY of shape `T`, read
+    /// synchronously — no ask, no answer, no queue.
+    ///
+    /// The value is a COPY this caller owns. There is no reference into the
+    /// claimant anywhere in the result, so a reader cannot mutate a producer
+    /// through it; mutation remains ordinary Loom traffic.
+    ///
+    /// A claim is not prophecy: this is the latest claim Loom has accepted from
+    /// that author, and queued work may already make it stale with respect to
+    /// what happens next. Loom will not apply queued work speculatively to make
+    /// it look current.
+    template <class T>
+    loom::SenseReading latest(loom::WeaveId author) {
+        return bus_.observe(author, schema_of<T>());
+    }
+
+    /// THE LATEST CLAIM MADE AS THE OFFICE `role`.
+    ///
+    /// After a replacement moves the role, this still returns the PREDECESSOR's
+    /// claim, stamped `by.author = predecessor` and
+    /// `by.office_holder_is_current = false` — never relabelled as the
+    /// successor's, and the successor is not considered to have claimed anything
+    /// until it deliberately does. Ask `by.office_claim_is_stale()`; the
+    /// stricter reading is `if (r && r.by.office_holder_is_current)`.
+    template <class T>
+    loom::SenseReading latest_from_office(std::string_view role) {
+        return bus_.observe_office(role, schema_of<T>());
+    }
 
     /// Was THIS delivery deliberately authored as `role`, with Loom having
     /// verified at the authorship moment that the sender held it? False for
@@ -308,11 +386,12 @@ inline void release_deferred(const loom::DeferredAnswer& pending, Mail& mail) {
 ///       void on(const Ping&, loom::Mail&) { ... }   // one per accepted shape
 ///   };
 /// State is a ZEN_SHAPE; the protected `state_` is the live state.
-template <class Self, class State, class AcceptList, class EmitList = Emit<>>
+template <class Self, class State, class AcceptList, class EmitList = Emit<>,
+          class ClaimList = Claims<>>
 class WeaveBase;
 
-template <class Self, class State, class... A, class... E>
-class WeaveBase<Self, State, Accept<A...>, Emit<E...>> : public loom::Weave {
+template <class Self, class State, class... A, class... E, class... C>
+class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>> : public loom::Weave {
     // The zen.Poke* protocol shapes are the construction layer's own doors:
     // every woven Weave answers them from its declared access model, and the
     // maker cannot intercept them — which is what makes an answered structure
@@ -347,6 +426,15 @@ public:
     /// not enforced at publish in this phase.
     std::vector<std::shared_ptr<const loom::Schema>> emitted_schemas() const {
         return {schema_of<E>()...};
+    }
+
+    /// The Senses this Weave declares it can claim (R2E-0). Unlike the emit-set
+    /// this one is real: registered at mount, answerable as discovery, and
+    /// checked by the claim doors. `final` for the same reason the accept-set is
+    /// — a woven weave must not be able to advertise one claim-set and claim from
+    /// another.
+    std::vector<std::shared_ptr<const loom::Schema>> claimed_schemas() const final {
+        return {schema_of<C>()...};
     }
 
     loom::Value snapshot() const override { return to_value(state_); }
