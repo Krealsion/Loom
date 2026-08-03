@@ -364,6 +364,11 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
     //    the handoff, and the retired incumbent is genuinely retired.
     CHECK(g.kernel.unload("migrator"));
     CHECK(g.kernel.unload("ledger.v1"));
+    // ...and they are GONE, not merely reported gone. A "temporary" artifact
+    // that is still loaded is still a dependency, whatever the return value said.
+    CHECK_FALSE(g.kernel.is_loaded("migrator"));
+    CHECK_FALSE(g.kernel.is_loaded("ledger.v1"));
+    CHECK_FALSE(g.bus.observe(g.incumbent, "LedgerStatus", 1)); // its keys went too
     // ...and the successor keeps serving with both of them gone, which is what
     // "temporary" has to mean to be worth the word.
     g.bus.send_as(g.client_id, candidate,
