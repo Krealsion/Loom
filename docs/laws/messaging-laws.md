@@ -263,9 +263,8 @@ MEANS
 - the ambient delivery context — who is being dispatched, its one reply
   authority, and the facts about what was just delivered — is cleared on the
   throwing path exactly as on the returning one. Nothing that runs afterwards
-  inherits a finished delivery's right to answer, nor its standing as the
-  authenticated readiness answer a transaction is waiting for
-  ([PR-04](replacement-laws.md#pr-04--readiness-is-the-candidates-authenticated-answer));
+  inherits a finished delivery's right to answer, nor its standing as an
+  authenticated readiness answer ([PR-04](replacement-laws.md));
 - the throwing envelope is **consumed**: it was taken off the queue before
   dispatch, so it is not silently retried. Everything queued behind it is still
   queued and is delivered by the next turn;
@@ -279,9 +278,9 @@ DOES NOT MEAN
   queue is what says the message was consumed, and STF-1 restores state rather
   than inventing an outcome;
 - that a handler's effects are rolled back. There is no transaction: sends it
-  already enqueued stay enqueued and are delivered by the next turn. A claim it
-  already made likewise stands, which [SENSE-02](sense-laws.md) says in its own
-  place;
+  already enqueued stay enqueued and are delivered by the next turn. (A claim it
+  already made likewise stands — [SENSE-02](sense-laws.md) says so, and says it
+  there.);
 - that a **deliberately minted** capability is revoked. A `DeferredAnswer` taken
   before the throw is durable state the handler asked Loom for, not ambient
   authority, and stays spendable ([ANS-02](answer-authority-laws.md)). Only the
@@ -299,3 +298,38 @@ PROVEN BY — `Switchboard::DispatchGuard` and `Switchboard::DeliveryScope`
 suite `switchboard` (a handler throwing through `pump()` and through
 `pump_pending()`; the stale-readiness witness in both its handler and its
 observer form; the deferred answer that survives; the throwing observer).
+
+## MSG-11 — Every event has its own view of the tap list
+
+LAW — `emit()` fixes an event's recipients when the event begins. An observer
+**added** during a notification does not receive the event it was added during;
+one **removed** during a notification does not receive it either, unless it had
+already been called.
+
+MEANS
+- an observer may subscribe or unsubscribe from inside its own callback, and
+  from another observer's, without undefined behaviour;
+- self-removal is safe: the callable outlives the registration that named it,
+  for the length of the call;
+- removal is honoured **within** the current event, deliberately departing from
+  a pure snapshot. `remove_observer` is how the console and the bridge stop a
+  callback *before the members it captured die*; a notification that ran the
+  removed callback anyway would be a use-after-free. Addition has no such
+  pressure, so it waits for the next event;
+- growth of the observer list during a notification cannot derail that
+  notification — the view is not a pointer into the live container;
+- a **nested** event (one an observer causes) takes its own view at its own
+  entry, and the observers added before it began are in it.
+
+DOES NOT MEAN
+- that notification is transactional. Mutations made before a throw stand;
+- that removal is retroactive — an observer already notified for this event
+  stays notified;
+- that observers gained ordering guarantees beyond registration order, or any
+  concurrency guarantee. There are no locks here and none are planned
+  ([MSG-01](#msg-01--single-threaded-fifo-non-reentrant)).
+
+PROVEN BY — `Switchboard::emit` (the per-event view; `observers_` held by
+`shared_ptr` so a self-removing callback outlives its registration); suite
+`switchboard` (add-during-notification, self-removal, removing another,
+reallocation pressure, mutation followed by a throw, nested emission).
