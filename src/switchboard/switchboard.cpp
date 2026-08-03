@@ -1331,61 +1331,64 @@ void Switchboard::deliver_one(Envelope env) {
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
-    // THE REPLY AUTHORITY IS THIS STACK FRAME. It is created after routing has
-    // chosen the recipient — so it names the incarnation that ACTUALLY received
-    // the request, not the one the sender guessed or the one the role names now —
-    // and it dies when the handler returns. A role changing hands after this
-    // point hands the new holder nothing: it never received this request.
-    current_target_ = env.target;
-    // ...AND IT REMEMBERS WHO ASKED, not merely where to send (R2B-2c). Captured
-    // HERE, at the delivery that earns the authority, so that an answer produced
-    // later — this handler's, or a deferred one spent minutes from now — is bound
-    // to the requester that actually asked rather than to whatever occupies that
-    // id when the answer is finally written.
-    const WeaveRecord* asker = find(env.msg.sender);
-    // AN ASK SEEDS AN ANSWERABLE CONVERSATION; ITS ANSWER DOES NOT SEED ANOTHER.
-    //
-    // Found by reading rather than by a failing test. Seeding this from every
-    // envelope meant an answer-to-an-answer INHERITED the ask's identity — and
-    // since `enqueue_answer` also copies the correlation forward at each hop, a
-    // coordinator that answered the readiness instead of consuming it could have
-    // a later, unrelated exchange satisfy every term:
-    //
-    //   ask (preparation = T)  ->  answer (T)  ->  answer-to-it (T)  ->  answer (T)
-    //                                                                    ^ not the
-    //                                                                      ask's answer
-    //
-    // The payload is not what decides readiness, so nothing could be smuggled
-    // through it — but "this delivery answers THAT ask" would have been false,
-    // which is the one thing this field exists to make exactly true.
-    const TxnId answerable = env.answer_target.present ? TxnId{} : env.preparation;
-    authority_ = ReplyAuthority{env.msg.sender,
-                                env.msg.correlation,
-                                /*spent=*/false,
-                                trusted.payload.schema_ptr(),
-                                asker == nullptr ? 0 : asker->life,
-                                asker == nullptr ? 0 : asker->incarnation,
-                                answerable};
-    // ...AND WHAT THIS DELIVERY IS, for a handler that must prove to the bus what
-    // it just heard (R2B-3b-3). Every field comes from the envelope Loom built:
-    // the provenance no ordinary enqueue can write, the sender stamp no weave can
-    // choose, and the correlation an answer door copied from the ask. A handler
-    // holding a Switchboard& can therefore say "this delivery is my readiness
-    // answer" and be *checked*, rather than believed.
-    delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
-                              env.msg.correlation, env.preparation};
-    // The handler receives a WeaveBus bound to its own id — never the concrete
-    // Switchboard — so anything it sends is stamped with its identity and gated
-    // against its grant.
-    WeaveBus weave_bus(*this, env.target);
-    rec->weave->handle(trusted, weave_bus); // may enqueue further deliveries
-    // The authority does not outlive the handler. Cleared even on the throwing
-    // path would be better still, but handle() escaping is already a programming
-    // bug that unwinds past the pump; what matters here is that no ordinary
-    // return leaves an answerable delivery behind.
-    current_target_ = WeaveId{};
-    authority_ = ReplyAuthority{};
-    delivery_ = DeliveryFacts{};
+    {
+        // THE AMBIENT DELIVERY CONTEXT LIVES IN THIS BLOCK AND NOWHERE ELSE (STF-1).
+        // The guard is what makes "this stack frame" true on the path where the
+        // handler does not return one — a throw leaving an answerable delivery behind
+        // is a standing right to speak into a conversation that is over.
+        const DeliveryScope delivering(*this);
+        // THE REPLY AUTHORITY IS THIS STACK FRAME. It is created after routing has
+        // chosen the recipient — so it names the incarnation that ACTUALLY received
+        // the request, not the one the sender guessed or the one the role names now —
+        // and it dies when the handler returns. A role changing hands after this
+        // point hands the new holder nothing: it never received this request.
+        current_target_ = env.target;
+        // ...AND IT REMEMBERS WHO ASKED, not merely where to send (R2B-2c). Captured
+        // HERE, at the delivery that earns the authority, so that an answer produced
+        // later — this handler's, or a deferred one spent minutes from now — is bound
+        // to the requester that actually asked rather than to whatever occupies that
+        // id when the answer is finally written.
+        const WeaveRecord* asker = find(env.msg.sender);
+        // AN ASK SEEDS AN ANSWERABLE CONVERSATION; ITS ANSWER DOES NOT SEED ANOTHER.
+        //
+        // Found by reading rather than by a failing test. Seeding this from every
+        // envelope meant an answer-to-an-answer INHERITED the ask's identity — and
+        // since `enqueue_answer` also copies the correlation forward at each hop, a
+        // coordinator that answered the readiness instead of consuming it could have
+        // a later, unrelated exchange satisfy every term:
+        //
+        //   ask (preparation = T)  ->  answer (T)  ->  answer-to-it (T)  ->  answer (T)
+        //                                                                    ^ not the
+        //                                                                      ask's answer
+        //
+        // The payload is not what decides readiness, so nothing could be smuggled
+        // through it — but "this delivery answers THAT ask" would have been false,
+        // which is the one thing this field exists to make exactly true.
+        const TxnId answerable = env.answer_target.present ? TxnId{} : env.preparation;
+        authority_ = ReplyAuthority{env.msg.sender,
+                                    env.msg.correlation,
+                                    /*spent=*/false,
+                                    trusted.payload.schema_ptr(),
+                                    asker == nullptr ? 0 : asker->life,
+                                    asker == nullptr ? 0 : asker->incarnation,
+                                    answerable};
+        // ...AND WHAT THIS DELIVERY IS, for a handler that must prove to the bus what
+        // it just heard (R2B-3b-3). Every field comes from the envelope Loom built:
+        // the provenance no ordinary enqueue can write, the sender stamp no weave can
+        // choose, and the correlation an answer door copied from the ask. A handler
+        // holding a Switchboard& can therefore say "this delivery is my readiness
+        // answer" and be *checked*, rather than believed.
+        delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
+                                  env.msg.correlation, env.preparation};
+        // The handler receives a WeaveBus bound to its own id — never the concrete
+        // Switchboard — so anything it sends is stamped with its identity and gated
+        // against its grant.
+        WeaveBus weave_bus(*this, env.target);
+        rec->weave->handle(trusted, weave_bus); // may enqueue further deliveries
+    } // ...and the authority does not outlive the handler, by ANY exit path.
+    // Cleared BEFORE the journal and the tap, exactly as it was when the three
+    // assignments sat here: an observer of a Delivered event is not inside the
+    // delivery and must not find one live.
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;
@@ -1396,14 +1399,16 @@ void Switchboard::pump() {
     if (in_dispatch_) {
         return; // non-reentrant: a handler's sends were enqueued, not nested
     }
-    in_dispatch_ = true;
+    // Scoped, because a native handler that throws unwinds straight past this
+    // line — and a dispatch flag left standing makes every later pump believe
+    // itself reentrant and return without delivering anything (STF-1).
+    const DispatchGuard dispatching(*this);
     stop_requested_ = false;
     while (!queue_.empty() && !stop_requested_) {
         Envelope env = std::move(queue_.front());
         queue_.pop_front();
         deliver_one(std::move(env));
     }
-    in_dispatch_ = false;
 }
 
 std::size_t Switchboard::pump_pending() {
@@ -1419,7 +1424,7 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
     if (in_dispatch_) {
         return 0; // non-reentrant, exactly as pump() is
     }
-    in_dispatch_ = true;
+    const DispatchGuard dispatching(*this); // and unpoisoned by a throw, exactly as pump() is
     stop_requested_ = false;
     std::size_t dispatched = 0;
     // `dispatched < budget` is checked against deliveries ACTUALLY MADE, so an
@@ -1432,7 +1437,6 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
         deliver_one(std::move(env));
         ++dispatched;
     }
-    in_dispatch_ = false;
     return dispatched;
 }
 
@@ -1834,15 +1838,20 @@ void Switchboard::deliver_admission(Envelope env) {
     // Ordinary sends are unaffected — they never consulted this.
     Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
-    current_target_ = env.target;
-    authority_ = ReplyAuthority{};
-    delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
-                              env.msg.correlation, TxnId{}};
-    WeaveBus weave_bus(*this, env.target);
-    cand->weave->handle(trusted, weave_bus);
-    current_target_ = WeaveId{};
-    authority_ = ReplyAuthority{};
-    delivery_ = DeliveryFacts{};
+    {
+        // Scoped exactly as the ordinary path is (STF-1): a candidate's very
+        // first breath is still native code, and it may still throw. The topology
+        // has already moved and the transaction has already committed, both
+        // deliberately — what must not also happen is the bus being left inside a
+        // delivery that ended.
+        const DeliveryScope delivering(*this);
+        current_target_ = env.target;
+        authority_ = ReplyAuthority{};
+        delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
+                                  env.msg.correlation, TxnId{}};
+        WeaveBus weave_bus(*this, env.target);
+        cand->weave->handle(trusted, weave_bus);
+    }
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;

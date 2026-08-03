@@ -1707,6 +1707,61 @@ private:
     WeaveId current_target_{};
     ReplyAuthority authority_{};
     DeliveryFacts delivery_{};
+
+    // ---- scoped bookkeeping across a callback Loom did not write (STF-1) -----
+    //
+    // Loom calls two kinds of foreign code: a native `Weave::handle`, and a host
+    // observer. Either may throw, and the exception is the HOST'S to handle —
+    // Loom neither swallows it, translates it into a refusal, nor terminates.
+    // What Loom owes is that its own temporary state is restored before the
+    // exception leaves, so an escaped throw costs the host that one delivery and
+    // not the bus.
+    //
+    // Guards rather than an assignment after the call, because "after the call"
+    // is only one of the exit paths. `stop_requested_` deliberately has no guard:
+    // it is re-initialised at the top of every dispatch turn, so it cannot carry
+    // anything across one.
+
+    /// Hold `in_dispatch_` for the length of a dispatch turn. Restores the value
+    /// it found rather than a constant, so the guard states the invariant it
+    /// keeps ("the turn leaves dispatch as it found it") instead of a fact about
+    /// today's only caller.
+    class DispatchGuard {
+    public:
+        explicit DispatchGuard(Switchboard& sb) noexcept : sb_(sb), was_(sb.in_dispatch_) {
+            sb_.in_dispatch_ = true;
+        }
+        ~DispatchGuard() { sb_.in_dispatch_ = was_; }
+        DispatchGuard(const DispatchGuard&) = delete;
+        DispatchGuard& operator=(const DispatchGuard&) = delete;
+
+    private:
+        Switchboard& sb_;
+        bool was_;
+    };
+
+    /// Hold the ambient delivery context for the length of ONE handler call.
+    ///
+    /// It clears rather than restores, because that is the truth being kept: a
+    /// delivery's answer authority and delivery facts belong to that delivery
+    /// alone, and dispatch is non-reentrant, so there is never an outer delivery
+    /// to hand them back to. Each site still ASSIGNS the fields itself — the
+    /// ordinary path mints a reply authority, an admission deliberately mints
+    /// none (R2B-3d-1) — and the guard is only responsible for the end.
+    class DeliveryScope {
+    public:
+        explicit DeliveryScope(Switchboard& sb) noexcept : sb_(sb) {}
+        ~DeliveryScope() {
+            sb_.current_target_ = WeaveId{};
+            sb_.authority_ = ReplyAuthority{};
+            sb_.delivery_ = DeliveryFacts{};
+        }
+        DeliveryScope(const DeliveryScope&) = delete;
+        DeliveryScope& operator=(const DeliveryScope&) = delete;
+
+    private:
+        Switchboard& sb_;
+    };
     std::vector<DeferredRecord> deferred_;      ///< bounded; see kMaxDeferredAnswers
     /// Monotonic; a token is never reused. DELIBERATELY UNGUARDED against
     /// exhaustion, unlike the activation sequence, and the difference is the

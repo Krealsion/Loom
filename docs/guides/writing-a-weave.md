@@ -74,6 +74,14 @@ event — the usual first three:
 
 See [diagnostics](diagnostics.md) for reading the tap and the journal.
 
+**If your handler throws**, the exception travels out to whoever called `pump()`
+— it is the host's to catch, and Loom neither hides it nor punishes you for it.
+Loom puts its own bookkeeping back before it leaves, so the bus keeps working and
+the messages queued behind yours are still delivered; what you lose is that one
+delivery, and the ambient right to answer it
+([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
+A `DeferredAnswer` you had already taken is yours to keep and still spendable.
+
 ## Deeper
 
 [Messaging](messaging.md) (answers, roles, publish) ·

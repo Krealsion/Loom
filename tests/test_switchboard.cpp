@@ -9,6 +9,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace loom;
@@ -357,6 +360,216 @@ TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as pump() is") {
     CHECK(bus.pump_pending() == 2);
     CHECK(nested == 0);
     CHECK(r.weave->count == 2);
+}
+
+// ---------------------------------------------------------------------------
+// STF-1 — the native callback boundary (MSG-10).
+//
+// Loom calls two kinds of code it did not write: a native `Weave::handle`, and a
+// host observer. Both may throw. These cases pin what Loom owes the host when
+// one does — the exception itself is the host's business, the bookkeeping is
+// Loom's.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("STF-1: a native handler that throws through pump() leaves no poisoned dispatch") {
+    Switchboard bus;
+    Registered a = reg(bus, {ping_schema()});
+    Registered b = reg(bus, {pong_schema()});
+    a.weave->on_handle = [bid = b.id](const Message&, Bus& bus_, ProbeWeave&) {
+        bus_.send(bid, Message(pong(7))); // enqueued BEFORE the failure
+        throw std::runtime_error("native handler failure");
+    };
+
+    const Ticket doomed = bus.send(a.id, Message(ping(1)));
+    bus.send(b.id, Message(pong(2)));
+    REQUIRE(bus.pending() == 2);
+
+    // 1. THE EXCEPTION REACHES THE HOST. Not swallowed, not translated into a
+    //    refusal, not turned into a process abort.
+    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK(a.weave->count == 1); // the handler did run
+
+    // 2. The failed message was consumed — it is not silently retried — and what
+    //    was queued behind it is untouched. The handler's own send, made before
+    //    it threw, is queued too: there is no rollback, and none is claimed.
+    CHECK(bus.pending() == 2);
+
+    // 3. THE FAILED DELIVERY GETS NO OUTCOME. Its ticket reads Pending — not
+    //    Delivered, not Refused — because STF-1 restores state rather than
+    //    inventing a disposition for a delivery that neither finished nor was
+    //    refused. The QUEUE is what says the message was consumed.
+    CHECK(bus.outcome(doomed).disposition == Disposition::Pending);
+
+    // 4. DISPATCH IS NOT POISONED. Without the restore this pump would return
+    //    immediately, believing itself reentrant, and the backlog would never
+    //    move again.
+    bus.pump();
+    CHECK(bus.pending() == 0);
+    CHECK(b.weave->handled_values == std::vector<std::int64_t>{2, 7});
+    CHECK(bus.outcome(doomed).disposition == Disposition::Pending); // still, and forever
+
+    // 5. ...and the bus is an ordinary working bus afterwards.
+    const Ticket later = bus.send(b.id, Message(pong(3)));
+    bus.pump();
+    CHECK(bus.outcome(later).disposition == Disposition::Delivered);
+    CHECK(b.weave->handled_values.size() == 3);
+}
+
+TEST_CASE("STF-1: a native handler that throws through pump_pending() leaves no poisoned dispatch") {
+    Switchboard bus;
+    Registered a = reg(bus, {ping_schema()});
+    Registered b = reg(bus, {pong_schema()});
+    a.weave->on_handle = [](const Message&, Bus&, ProbeWeave&) {
+        throw std::runtime_error("native handler failure");
+    };
+
+    bus.send(a.id, Message(ping(1)));
+    bus.send(b.id, Message(pong(2)));
+
+    CHECK_THROWS_AS(bus.pump_pending(), std::runtime_error);
+    CHECK(bus.pending() == 1);
+
+    // The backlog-at-entry turn is serviceable again, and still bounded by the
+    // queue as it stands NOW — one envelope, dispatched.
+    CHECK(bus.pump_pending() == 1);
+    REQUIRE(b.weave->handled_values.size() == 1);
+    CHECK(b.weave->handled_values[0] == 2);
+
+    // And pump() is equally unpoisoned by a pump_pending() that threw.
+    bus.send(b.id, Message(pong(4)));
+    bus.pump();
+    CHECK(b.weave->handled_values.size() == 2);
+}
+
+namespace {
+/// The whole authenticated-readiness staging, native and .so-free: an operator,
+/// a coordinator, an incumbent holding the production role, and a candidate
+/// sealed to the coordinator. Used to witness DELIVERY-SCOPED authority, which
+/// is otherwise reachable only from inside a handler.
+struct ReadinessStage {
+    Switchboard bus;
+    Registered op = register_probe(bus, {ping_schema()});
+    Registered coordinator = register_probe(bus, {pong_schema()});
+    WeaveId incumbent{};
+    Registered cand = register_probe(bus, {ping_schema()});
+    TxnId txn{};
+
+    ReadinessStage() {
+        auto held = std::make_unique<ProbeWeave>(
+            std::vector<std::shared_ptr<const Schema>>{ping_schema()});
+        incumbent = bus.register_weave(std::move(held), Grant{}.allow_any(), std::string("service"));
+        REQUIRE(bus.seal_weave(cand.id, coordinator.id));
+        const TxnResult begun =
+            bus.begin_prepared_replacement(op.id, coordinator.id, incumbent, cand.id, "service", 8);
+        REQUIRE(begun.ok);
+        txn = begun.id;
+        // The candidate answers its one preparation ask authentically.
+        cand.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
+            (void)b.answer(Message(pong(1)));
+        };
+    }
+
+    void ask() { REQUIRE(bus.ask_candidate_to_prepare(txn, Message(ping(7))).ok); }
+};
+} // namespace
+
+TEST_CASE("STF-1: a callback that throws leaves no delivery-scoped authority behind") {
+    ReadinessStage s;
+
+    // The readiness gate reads the delivery Loom is dispatching RIGHT NOW. Its
+    // documented contract is that offering from outside a delivery refuses. An
+    // escaped exception must not turn the coordinator's finished delivery into a
+    // standing right to declare its candidate ready.
+    SUBCASE("the handler itself throws") {
+        s.coordinator.weave->on_handle = [](const Message&, Bus&, ProbeWeave&) {
+            throw std::runtime_error("coordinator failure mid-readiness");
+        };
+        s.ask();
+        CHECK_THROWS_AS(s.bus.pump(), std::runtime_error);
+    }
+
+    SUBCASE("an observer throws while the coordinator's delivery is live") {
+        // A second answer has no authority left, so it refuses SYNCHRONOUSLY and
+        // taps the refusal — which is how an observer gets to run while the
+        // delivery's ambient authority is still set.
+        s.coordinator.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
+            (void)b.answer(Message(pong(2))); // spends this delivery's one answer
+            (void)b.answer(Message(pong(3))); // refused now, on the spot
+        };
+        s.bus.add_observer([](const BusEvent& e) {
+            if (e.kind == EventKind::Refused) {
+                throw std::runtime_error("observer failure");
+            }
+        });
+        s.ask();
+        CHECK_THROWS_AS(s.bus.pump(), std::runtime_error);
+    }
+
+    const TxnResult late = s.bus.accept_preparation_answer(s.txn, PreparationAnswer::Ready);
+    CHECK_FALSE(late.ok);
+    CHECK(late.why == TxnReason::InvalidReadiness);
+    CHECK(s.bus.transaction_state(s.txn) == TxnState::Preparing);
+    CHECK(s.bus.role_holder("service") == s.incumbent); // and nothing moved
+}
+
+TEST_CASE("STF-1: an already-minted deferred answer survives a handler that later throws") {
+    Switchboard bus;
+    Registered asker = reg(bus, {pong_schema()});
+    Registered responder = reg(bus, {ping_schema()});
+
+    responder.weave->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
+        self.pending = b.make_deferred_answer(); // a DURABLE capability, deliberately taken
+        throw std::runtime_error("failed after deferring");
+    };
+
+    bus.send_as(asker.id, responder.id, Message(ping(1), asker.id, asker.id, 0));
+    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+
+    // AMBIENT authority is delivery-scoped and gone. A capability the handler
+    // deliberately minted is neither, and STF-1 does not revoke it: the answer is
+    // still spendable from a later delivery, exactly as R2B-2 defines it.
+    REQUIRE(responder.weave->pending.valid());
+    responder.weave->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
+        (void)b.spend_deferred(self.pending, Message(pong(9)));
+    };
+    bus.send(responder.id, Message(ping(2)));
+    bus.pump();
+    REQUIRE(asker.weave->handled_values.size() == 1);
+    CHECK(asker.weave->handled_values[0] == 9);
+}
+
+TEST_CASE("STF-1: an observer that throws propagates, and later observation still happens") {
+    Switchboard bus;
+    Registered a = reg(bus, {ping_schema()});
+    Registered b = reg(bus, {pong_schema()});
+    int seen = 0;
+    int behind = 0;
+    bool armed = true;
+    bus.add_observer([&seen, &armed](const BusEvent&) {
+        ++seen;
+        if (armed) {
+            armed = false;
+            throw std::runtime_error("observer failure");
+        }
+    });
+    bus.add_observer([&behind](const BusEvent&) { ++behind; });
+
+    bus.send(a.id, Message(ping(1)));
+    bus.send(b.id, Message(pong(2)));
+    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK(seen == 1);
+    CHECK(a.weave->count == 1); // the delivery itself completed
+    CHECK(bus.pending() == 1);  // the message behind it is still queued
+
+    // ORDINARY C++ PROPAGATION, PRESERVED: notification stops at the throwing
+    // observer. Continuing past it would swallow the exception for the observers
+    // behind it, and Loom has no error channel to report that on.
+    CHECK(behind == 0);
+
+    bus.pump();
+    CHECK(b.weave->handled_values.size() == 1); // later dispatch succeeds
+    CHECK(seen == 2);                           // ...and so does later observation
+    CHECK(behind == 1);
 }
 
 } // TEST_SUITE
