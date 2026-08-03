@@ -677,6 +677,16 @@ public:
 
     /// The host's own ungated observation — root authority reads, exactly as
     /// `Switchboard::send` is the ungated send.
+    ///
+    /// These take a (name, version) pair where `Bus`'s virtuals take a resolved
+    /// `Schema`, so without the `using` below the name-lookup rules would hide
+    /// the base overloads on every `Switchboard&` — a participant reaching the
+    /// bus through a `Switchboard` reference would silently lose the schema-typed
+    /// door. Both spellings stay reachable, and `-Woverloaded-virtual` stays
+    /// quiet because the hiding is declared rather than accidental.
+    using Bus::observe;
+    using Bus::observe_office;
+
     SenseReading observe(WeaveId author, std::string_view shape_name,
                          std::uint32_t shape_version) const;
     SenseReading observe_office(std::string_view role, std::string_view shape_name,

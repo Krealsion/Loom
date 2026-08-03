@@ -30,6 +30,7 @@
 #include <zen/serialize.hpp>
 #include <zen/weave.hpp>
 
+#include <algorithm> // std::sort, std::adjacent_find — the namespace witness
 #include <memory>
 #include <string>
 #include <utility>
