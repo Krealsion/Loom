@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The smallest end-to-end use of loom: define a schema, register it, build a
 // value, admit it at the bus, serialize to the native binary format, read it back
 // as Unverified, and re-admit through the same gate. The compat JSON codec is

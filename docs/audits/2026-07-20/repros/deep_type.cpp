@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // Repro: a hostile child's manifest can drive unbounded recursion in
 // loom::decode_type (schema_codec.hpp:206) inside the HOST parent process.
 // Path in production: IsolationHost::reconstruct_and_cache (src/isolation/host.cpp:516)

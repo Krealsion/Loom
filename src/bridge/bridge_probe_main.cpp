@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // zen-bridge-probe: a NON-interactive remote operator that proves the operator-protocol end-to-end
 // over a real socket — the Windows end of the crossing. It connects (TCP), discovers the bus, fetches
 // a shape, composes + gate-sends a message, waits for the echoed reply to buffer, prints PASS, then

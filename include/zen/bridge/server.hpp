@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 #ifndef ZEN_BRIDGE_SERVER_HPP
 #define ZEN_BRIDGE_SERVER_HPP
 

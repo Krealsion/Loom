@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // Answers, immediate and deferred — the compiled twin of docs/guides/messaging.md.
 //
 // The Chef asks a Station to prepare. If the oven is already hot the Station

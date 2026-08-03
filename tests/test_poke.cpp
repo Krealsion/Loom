@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 #include <doctest.h>
 
 // The poke phase: live inspect / manipulate by message, under the

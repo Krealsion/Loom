@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The B2 milestone: a Weave hosted out-of-process is indistinguishable to the bus
 // from one hosted in-process, a crashing child is contained (host survives, bounded
 // reload, then quarantine), and the process boundary is gated exactly like every

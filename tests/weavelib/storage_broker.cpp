@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The StorageBroker: an ecosystem Weave (not host code), shipped as a .so and mounted
 // out-of-process at the TCB tier with FsAccess::WriteScoped(storage_root) and role
 // "storage". It holds the real (scoped) disk capability on behalf of untrusted mods

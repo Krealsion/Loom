@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // UI-as-data (Stage 3), the console-side implementation: the engine-side guidance and tree
 // emission (renderer-agnostic, built from the engine's public domain data) and the renderer-
 // agnostic UI controller. The tree vocabulary itself (constructors, spellings, the outline

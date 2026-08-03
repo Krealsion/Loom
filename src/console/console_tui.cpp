@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The full-screen TUI frontend: the in-process console driving a local Switchboard. It owns its I/O
 // loop SYNCHRONOUSLY (block on read_byte -> dispatch -> redraw), which is correct here because the
 // ONLY event source is the keyboard. The renderer + key mapping live in tui_render.cpp (shared with

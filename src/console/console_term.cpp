@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The Console's first, throwaway skin: a deliberately plain terminal REPL over the
 // ConsoleEngine. It calls the engine API and formats the returned DOMAIN DATA as plain
 // text — no cursor addressing, no panes (that is Stage 3). Its only job is to exercise

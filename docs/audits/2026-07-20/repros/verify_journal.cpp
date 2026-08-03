@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // Independent verifier probe for EQD-1: does Switchboard::journal_ grow without
 // bound (one retained DeliveryOutcome per enqueued delivery, never reclaimed)?
 //

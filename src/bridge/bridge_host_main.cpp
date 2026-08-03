@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // zen-bridge-host: a minimal WSL-side host that stands up a bus with one demo weave (a Greeter that
 // echoes Greet), listens for remote operators on 127.0.0.1:<port>, and runs the BridgeServer's
 // event-driven multiplexer. This is the WSL end of the real Windows->WSL crossing: a Windows console

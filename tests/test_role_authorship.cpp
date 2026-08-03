@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // Deliberate office authorship — role-authored provenance (R2D-0).
 //
 // THE LAW UNDER TEST:

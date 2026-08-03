@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // A real Weave, woven as a clean C++ loom::Weave subclass and shipped as a
 // .so with a single ZEN_EXPORT_WEAVE line. No senses, no std::any — the same
 // Weave one would compile in. Compile-time switches produce adversarial variants

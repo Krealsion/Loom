@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // End-to-end repro mirroring IsolationHost::reconstruct_and_cache (host.cpp:501-548):
 // a hostile .so's describe() emits a manifest whose STATE schema has a field with
 // N nested List type-tokens. The manifest passes the gate (manifest_schema) and then

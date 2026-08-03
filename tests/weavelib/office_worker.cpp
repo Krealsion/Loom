@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The office worker — the R2D-0 dynamic-parity fixture.
 //
 // A loadable weave that exercises every half of role authorship from the FAR

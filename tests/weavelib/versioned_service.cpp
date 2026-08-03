@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The `versioned.service` fixture pair (R2B-3b-3): two REAL loadable artifacts,
 // v1 and v2, that implement one production role and one domain query.
 //

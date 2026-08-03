@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // A net-client "mod": woven with WeaveBase, mounted on the floor. A mod that needs
 // network (a multiplayer mod, say) reaches it ONLY through the NetworkBroker — never as
 // a raw grant. With a recorded `net` delta it holds the net role send-rule (it may *talk

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The host side of the bridge: the connect-authority chokepoint, the per-operator proxy-participant,
 // and the single-threaded multiplexer. The send path mirrors the out-of-process weave's Emit path in
 // IsolationHost::handle_child_frame exactly — re-admit the operator's bytes through the one gate and

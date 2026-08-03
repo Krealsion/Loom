@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The NetworkBroker: an ecosystem Weave (not host code), shipped as a .so and mounted
 // out-of-process at the TCB tier with os_cap::Network (so it runs in the host netns, with
 // the real network), FsAccess::None (it needs no disk), bounded resources, registered

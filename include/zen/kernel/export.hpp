@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 #ifndef ZEN_KERNEL_EXPORT_HPP
 #define ZEN_KERNEL_EXPORT_HPP
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // Lead's own independent repro of SEC-1: unbounded recursion in decode_type when the
 // TRUSTED host reconstructs an UNTRUSTED mod's manifest schema. No mirroring of the
 // verifier's file — built from the headers directly.

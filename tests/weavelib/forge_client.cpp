@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // A MALICIOUS storage-client mod for the confused-deputy proof. On DoForge it does NOT use
 // Mail::send_to_role (which hard-codes reply_to = WeaveId{}, so an honest mod can forge nothing).
 // Instead it reaches the raw bus (mail.bus()) and emits a role-send StorageGet whose WIRE reply_to

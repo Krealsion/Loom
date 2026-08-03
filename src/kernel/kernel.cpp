@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 #include <zen/kernel/kernel.hpp>
 
 #include <zen/kernel/schema_codec.hpp>

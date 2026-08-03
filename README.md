@@ -129,3 +129,9 @@ fail at home before it fails for a guest. **Per-repo green:** each repo's
 suite proves that repo; every report states *which* repo's green was proven.
 Assistant sessions launch from the `Zen/` root (the memory graph is keyed to
 it); git runs per-repo (`git -C Loom status`).
+
+## License
+
+Loom is licensed under MPL-2.0.
+See [LICENSING.md](LICENSING.md) for the plain-language boundary
+and [LICENSE](LICENSE) for the legal terms.

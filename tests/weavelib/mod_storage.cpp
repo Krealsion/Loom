@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // An untrusted "mod", woven with the WeaveBase layer. It declares (via ZEN_ASK)
 // that it would like the world — network AND filesystem write — plus a send-rule to
 // the storage broker role. The host reads that ask, but decides alone: with no

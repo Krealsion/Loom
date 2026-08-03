@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // B3/B4 enforcement, native and Linux-specific. The detection probe and the
 // enforcement share one mechanism (an unprivileged user namespace plus a network
 // and/or mount namespace), so the report reflects what we can actually impose.

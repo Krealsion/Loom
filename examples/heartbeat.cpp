@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The kernel is alive: two Weaves on the Switchboard exchange a gated message
 // and a reply, a publish reaches only its accepters, a malformed message is
 // refused at the boundary, and a Weave dies and revives through native bytes —

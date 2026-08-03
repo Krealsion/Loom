@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // A storage-client "mod": woven with WeaveBase, mounted on the floor
 // (FsAccess::None, no network), holding only the floor's storage role send-rules. It
 // persists and retrieves purely by messaging the "storage" broker — zero disk. The

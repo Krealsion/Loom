@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The component vocabulary's mechanics: the lossless flatten/tree_of pair between the ONE
 // tree's two representations (in-memory recursive Widget / flat wire node list), the stress
 // canon, the design-time constructors, and the contract check. tree_of is the vocabulary's own

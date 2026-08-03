@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The portable bridge transport: BridgeChannel's framing (shared) + the per-platform raw socket I/O
 // and the connect/listen/accept helpers. The framing mirrors the proven isolation Channel exactly;
 // only recv/send/close/set-nonblocking and the socket setup differ between POSIX and Winsock.

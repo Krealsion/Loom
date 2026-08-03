@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The heartbeat, rewritten on the weaving layer. Compare with heartbeat.cpp:
 // Ping/Pong/Counter are plain structs declared once, the Weaves are typed
 // handlers with derived snapshot/revive, and each is mounted in one call. No

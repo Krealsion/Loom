@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // Scratch probe (READ-ONLY audit): demonstrate that Switchboard::journal_ grows
 // without bound — one DeliveryOutcome retained per message ever enqueued, never
 // reclaimed — even after the queue is fully drained by pump().

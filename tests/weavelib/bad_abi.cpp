@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // A library that exports a descriptor with an unsupported abi_version. The
 // kernel must reject it cleanly, before calling any of its function pointers
 // (which are therefore left null).

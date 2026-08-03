@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The Windows terminal backend — the Win32 Console API behind the same TerminalBackend seam, so
 // the SAME ANSI-emitting renderer and the SAME escape-sequence key parsing run unchanged on
 // Windows. No new third-party dependency (Win32 only). Compiled only on Windows.

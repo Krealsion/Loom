@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 #include <doctest.h>
 
 #include "switchboard_fixtures.hpp"

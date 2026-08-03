@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // nucleus.cpp — a seed of Zen.
 //
 // The decision this resolves:

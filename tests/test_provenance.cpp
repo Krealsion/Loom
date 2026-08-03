@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The authenticated lifecycle conversation — Loom's side (R2B-1).
 //
 // THE LAW UNDER TEST:

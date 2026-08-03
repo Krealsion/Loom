@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 #ifndef ZEN_SWITCHBOARD_HPP
 #define ZEN_SWITCHBOARD_HPP
 

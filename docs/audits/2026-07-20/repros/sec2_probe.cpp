@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // SEC-2 live reproduction probe.
 // Must be run while the process sits inside a cgroup whose parent enabled +pids
 // but NOT +memory in subtree_control (a "pids-without-memory" base). We then call

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The tree vocabulary's mechanics: the widget named-constructors, the stable spellings, and the
 // headless outline renderer (the renderer-agnosticism proof). NOTHING here knows about cells,
 // pixels, coordinates, termios, or SDL — layout is a renderer's job alone. Lifted verbatim out

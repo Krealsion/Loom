@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The client side: a Console/LadderHost over the operator-protocol socket. The frontend drives this
 // exactly as it drives the in-process ConsoleEngine; only the transport differs. Compose runs the
 // SHARED ladder client-side against a wire-fetched schema and the local buffer, then ships the

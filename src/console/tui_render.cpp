@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The shared TUI renderer: it LAYS OUT the renderer-agnostic Widget tree (intent + relationship)
 // into a character grid — the only place positions, sizes, and cells exist — and maps raw key bytes
 // to semantic Actions. Both the in-process and remote consoles reuse this unchanged; a GUI later

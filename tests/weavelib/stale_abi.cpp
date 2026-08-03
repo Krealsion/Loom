@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // A library built against the PREVIOUS ABI — the stale artifact R2B-1 creates.
 //
 // R2B-1 bumped ZEN_ABI_VERSION 1 -> 2 so that a delivery's provenance can cross

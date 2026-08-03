@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Joshua DeMoss
+
 // The SDL2 skin's implementation: execute the pure layout's draw commands, translate raw SDL
 // events to semantic InputEvents. Thin on purpose — every layout decision already happened in
 // px_layout (suite-proven); everything here is mechanical execution and mapping.
