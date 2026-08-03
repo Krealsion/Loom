@@ -6639,6 +6639,74 @@ TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office id
     CHECK(w.read_office == native.by.office);   // native and dynamic agree exactly
 }
 
+// The generation facts have to cross the seam SEPARATELY, not just exist natively.
+// `author_life_is_current` and `author_incarnation_is_current` answer different
+// questions, and a live replacement is the case where they disagree — so a
+// dynamic reader that collapses them, or drops the second in transport or decode,
+// reports a predecessor's claim as the current incarnation's. This case runs the
+// disagreement through a real .so; the native-only twin lives in suite `sense`
+// (S3b) and cannot catch a seam that loses the fact.
+
+TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the life stood — the "
+          "two generation facts cross the seam separately") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    // A short role on purpose: what this pins is the generation facts, not name
+    // length (that is the pair of cases above).
+    const std::string role = "clinic.duty";
+    const WeaveId officer =
+        bus.register_weave(std::make_unique<HealthOfficer>(role), Grant{}.allow_any(), role);
+    bus.send(officer, Message(ping(42)));
+    bus.pump();
+
+    LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
+                                 Grant{}.allow_any().allow_observe("SenseHealth", 1));
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    // BEFORE: the claim is the current code's, on the current life. Both true,
+    // as reported to the LIBRARY through ZenSenseBy.
+    bus.send(dyn.id, Message(sense_probe(role)));
+    bus.pump();
+    const SenseWindow before = sense_window(bus, dyn.id);
+    REQUIRE(before.read_hp == 42);
+    CHECK(before.read_life_current);
+    CHECK(before.read_inc_current);
+
+    // NEW CODE BEHIND THE SAME LIVE ID. `swap_state` bumps the incarnation, and
+    // `begin_new_life` advances only from `!alive` — so the life stands.
+    REQUIRE(bus.swap_state(officer, bus.snapshot_bytes(officer)).revived);
+
+    // AFTER: the predecessor's claim is still materialized, still says who made
+    // it, and the loaded reader is told the code behind that author has been
+    // replaced. A seam that derived this from life-currentness reports `true`
+    // here and hides the replacement completely.
+    bus.send(dyn.id, Message(sense_probe(role)));
+    bus.pump();
+    const SenseWindow stale = sense_window(bus, dyn.id);
+    REQUIRE(stale.read_hp == 42);        // not rewritten, not withdrawn
+    CHECK(stale.read_life_current);      // the life stands
+    CHECK_FALSE(stale.read_inc_current); // the code does not
+
+    // The successor claims for itself, and both read current again — so the flag
+    // tracks the topology rather than latching once a swap has ever happened.
+    bus.send(officer, Message(ping(7)));
+    bus.pump();
+    bus.send(dyn.id, Message(sense_probe(role)));
+    bus.pump();
+    const SenseWindow current = sense_window(bus, dyn.id);
+    REQUIRE(current.read_hp == 7);
+    CHECK(current.read_life_current);
+    CHECK(current.read_inc_current);
+
+    // ...and the host's own reading agrees at every step, so the seam neither
+    // invented a fact nor lost one.
+    const SenseReading native = bus.observe_office(role, "SenseHealth", 1);
+    REQUIRE(native);
+    CHECK(native.by.author_life_is_current == current.read_life_current);
+    CHECK(native.by.author_incarnation_is_current == current.read_inc_current);
+}
+
 TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay distinguishable "
           "across the seam — truncation would report them as the same office") {
     Switchboard bus;
