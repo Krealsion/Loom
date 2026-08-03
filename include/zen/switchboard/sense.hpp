@@ -88,6 +88,22 @@ struct SenseAuthorship {
     /// life that has ended. The same question, and the same answer shape, as
     /// `BusEvent::sender_life` / `sender_life_now`.
     bool author_life_is_current = false;
+    /// Is that INCARNATION still the code at that address? A SEPARATE QUESTION
+    /// from the life, and the reason it exists is live replacement: a prepared
+    /// replacement swaps the code behind an id without ending its life, so
+    ///
+    ///     life 7 / incarnation 3   claims X
+    ///     ... replacement ...
+    ///     life 7 / incarnation 4   is now current
+    ///
+    /// leaves `author_life_is_current == true` and this `false`. The claim stays
+    /// historically truthful — it is still incarnation 3's, and Loom never
+    /// rewrites it — but a reader that cannot tell "the predecessor's still-valid
+    /// claim" from "the current incarnation's claim" cannot tell whether what it
+    /// is reading survived the swap on purpose. Deriving this from
+    /// `author_life_is_current` would erase exactly that distinction, which is
+    /// why it is asked of the topology separately.
+    bool author_incarnation_is_current = false;
     /// The office this claim was DELIBERATELY authored as; empty for a personal
     /// claim. Holding a role attaches nothing: a role-holder's personal claim
     /// arrives with this empty, which is the entire point.

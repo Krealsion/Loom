@@ -6447,6 +6447,9 @@ struct SenseWindow {
     std::int64_t read_hp = -1;
     std::uint64_t read_author = 0;
     bool read_personal = false;
+    std::string read_office;      // the office identity the reading carried, VERBATIM
+    bool read_life_current = false;
+    bool read_inc_current = false;
 };
 
 SenseWindow sense_window(Switchboard& bus, WeaveId id) {
@@ -6458,6 +6461,9 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
                                      .field("read_hp", Kind::Int)
                                      .field("read_author", Kind::Int)
                                      .field("read_personal", Kind::Int)
+                                     .field("read_office", Kind::Text, /*required=*/false)
+                                     .field("read_life_current", Kind::Int, /*required=*/false)
+                                     .field("read_inc_current", Kind::Int, /*required=*/false)
                                      .build();
     Unverified u = parse(bus.snapshot_bytes(id));
     Admission a = admit(u, counter6);
@@ -6471,6 +6477,15 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
     w.read_hp = v.get("read_hp")->as_int();
     w.read_author = static_cast<std::uint64_t>(v.get("read_author")->as_int());
     w.read_personal = v.get("read_personal")->as_int() != 0;
+    if (const Cell* c = v.get("read_office")) {
+        w.read_office = std::string(c->as_text());
+    }
+    if (const Cell* c = v.get("read_life_current")) {
+        w.read_life_current = c->as_int() != 0;
+    }
+    if (const Cell* c = v.get("read_inc_current")) {
+        w.read_inc_current = c->as_int() != 0;
+    }
     return w;
 }
 
@@ -6522,6 +6537,146 @@ TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, an
     // ...and unloading takes its keys with it.
     REQUIRE(kernel.unload("sensor"));
     CHECK(bus.retained_claim_count() == 0);
+}
+
+// ---- R2E-0a: the observed office identity IS the authored one ---------------
+//
+// The v6 seam first carried the office name in a fixed `char office[128]` and
+// TRUNCATED at the bound. That is not a smaller answer, it is a WRONG one: a
+// 200-character role came back as a plausible 127-character prefix, and nothing
+// in the reading said so. A reader cannot audit "who claims this?" against an
+// identity that was manufactured on the way out, and two genuinely different
+// offices could arrive looking identical.
+//
+// The bound is gone rather than raised — a larger buffer only moves the lie
+// further out — and the name now crosses through the same caller-owned
+// ZenByteSink the VALUE already used. These cases are written so that restoring
+// any truncation fails them.
+
+namespace {
+
+/// The shape the loaded Sense fixture declares, spelled natively. Agreement is
+/// by content-id over the shape, so this and the artifact's own are one schema.
+std::shared_ptr<const Schema> sensehealth_v1() {
+    static const auto s = SchemaBuilder("SenseHealth", 1).field("hp", Kind::Int).build();
+    return s;
+}
+
+/// A native office-holder that claims the shape the dynamic fixture reads, so
+/// the two tiers are looking at one repository and one claim.
+struct HealthOfficer : ProbeWeave {
+    explicit HealthOfficer(std::string office)
+        : ProbeWeave({ping_schema()}), office_(std::move(office)) {}
+
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
+        return {sensehealth_v1()};
+    }
+    void handle(const Message& in, Bus& bus) override {
+        ProbeWeave::handle(in, bus);
+        Value v(sensehealth_v1());
+        v.set("hp", Cell::integer(in.payload.get("seq")->as_int()));
+        last = bus.office_claim(office_, std::move(v));
+    }
+    SenseClaimResult last{};
+
+private:
+    std::string office_;
+};
+
+/// A role name far past the old 127-byte bound, built so that the ONLY thing
+/// distinguishing two of them lives past that bound. Under truncation both
+/// names collapse to the same prefix and the test cannot tell them apart —
+/// which is precisely the failure being pinned.
+std::string long_role(char suffix) {
+    std::string r = "this-is-a-real-role-name-";
+    r.append(200, 'x'); // well past 127, and past any plausible "generous" bound
+    r += "-suffix-";
+    r += suffix;
+    return r;
+}
+
+Value sense_probe(const std::string& role) {
+    static const auto s = SchemaBuilder("SenseProbe", 1).field("role", Kind::Text).build();
+    Value v(s);
+    v.set("role", Cell::text(role));
+    return v;
+}
+
+} // namespace
+
+TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office identity — a "
+          "name past the old buffer bound crosses whole, not as a plausible prefix") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    const std::string role_a = long_role('A');
+    REQUIRE(role_a.size() > 128); // the case is meaningless if it fits the old buffer
+
+    // A native holder of the long office claims through it.
+    const WeaveId officer =
+        bus.register_weave(std::make_unique<HealthOfficer>(role_a), Grant{}.allow_any(), role_a);
+    bus.send(officer, Message(ping(42)));
+    bus.pump();
+
+    // NATIVE: exact, and it always was — std::string imposes no bound.
+    SenseReading native = bus.observe_office(role_a, "SenseHealth", 1);
+    REQUIRE(native);
+    CHECK(native.by.office == role_a);
+    CHECK(native.by.office.size() == role_a.size());
+
+    // DYNAMIC: the same question across the seam, and the same answer required.
+    LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
+                                 Grant{}.allow_any().allow_observe("SenseHealth", 1));
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+    bus.send(dyn.id, Message(sense_probe(role_a)));
+    bus.pump();
+
+    SenseWindow w = sense_window(bus, dyn.id);
+    CHECK(w.read_hp == 42);                    // it really did read the claim
+    CHECK_FALSE(w.read_personal);              // ...as an office claim
+    CHECK(w.read_office.size() == role_a.size()); // nothing was dropped
+    CHECK(w.read_office == role_a);             // ...and nothing was altered
+    CHECK(w.read_office == native.by.office);   // native and dynamic agree exactly
+}
+
+TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay distinguishable "
+          "across the seam — truncation would report them as the same office") {
+    Switchboard bus;
+    Kernel kernel(bus);
+
+    const std::string role_a = long_role('A');
+    const std::string role_b = long_role('B');
+    // The adversarial property: identical for far longer than the old buffer,
+    // so a truncating seam hands back one identity for two different offices.
+    REQUIRE(role_a.size() == role_b.size());
+    REQUIRE(role_a.substr(0, 128) == role_b.substr(0, 128));
+    REQUIRE(role_a != role_b);
+
+    bus.register_weave(std::make_unique<HealthOfficer>(role_a), Grant{}.allow_any(), role_a);
+    bus.register_weave(std::make_unique<HealthOfficer>(role_b), Grant{}.allow_any(), role_b);
+    bus.send_to_role(role_a, Message(ping(1)));
+    bus.send_to_role(role_b, Message(ping(2)));
+    bus.pump();
+
+    LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
+                                 Grant{}.allow_any().allow_observe("SenseHealth", 1));
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    bus.send(dyn.id, Message(sense_probe(role_a)));
+    bus.pump();
+    const SenseWindow saw_a = sense_window(bus, dyn.id);
+
+    bus.send(dyn.id, Message(sense_probe(role_b)));
+    bus.pump();
+    const SenseWindow saw_b = sense_window(bus, dyn.id);
+
+    // Each reading names ITS OWN office, and the two are not confusable.
+    CHECK(saw_a.read_office == role_a);
+    CHECK(saw_b.read_office == role_b);
+    CHECK(saw_a.read_office != saw_b.read_office);
+    // ...and they really were different claims, not one office read twice.
+    CHECK(saw_a.read_hp == 1);
+    CHECK(saw_b.read_hp == 2);
 }
 
 TEST_CASE("R2E-0/v6: a loaded weave without observe authority is refused a read, and its claim "

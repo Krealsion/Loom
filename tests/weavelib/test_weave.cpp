@@ -146,6 +146,15 @@ std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("SenseHealth", 1).field("hp", Kind::Int).build();
     return s;
 }
+[[maybe_unused]] std::shared_ptr<const Schema> senseprobe_schema() { // only the senses variant
+    // "Observe this office and tell me EXACTLY what identity you were given."
+    // The role travels as Text with no bound, because the whole point of the
+    // case that uses it is a role name longer than any buffer the seam used to
+    // impose — the test names the office, the artifact reports what it saw, and
+    // the two are compared byte for byte.
+    static const auto s = SchemaBuilder("SenseProbe", 1).field("role", Kind::Text).build();
+    return s;
+}
 [[maybe_unused]] std::shared_ptr<const Schema> seamonly_schema() { // only the seam-emit variant
     // DECLARED NOWHERE ELSE. Not in accepted_schemas(), not in any other library,
     // not by the host — so no registry in the process has ever heard of it. That
@@ -167,6 +176,15 @@ std::shared_ptr<const Schema> counter_schema() {
                               .field("read_hp", Kind::Int)     // what it read back, -1 = nothing
                               .field("read_author", Kind::Int) // whom the reading named
                               .field("read_personal", Kind::Int) // 1 = the reading carried no office
+                              // The OFFICE IDENTITY an office reading carried, verbatim. Text
+                              // rather than a length or a digest because the claim under test
+                              // is `observed == authored` byte for byte: anything summarised
+                              // could agree while the identity itself differed.
+                              .field("read_office", Kind::Text, /*required=*/false)
+                              // ...and the two generation facts the reading reported, which a
+                              // truncating or deriving seam would get wrong independently.
+                              .field("read_life_current", Kind::Int, /*required=*/false)
+                              .field("read_inc_current", Kind::Int, /*required=*/false)
                               .build();
 #elif defined(ZEN_WEAVE_ANSWERS)
     // Counter v5 — the immediate-answer fixture's own window: did the board accept
@@ -235,6 +253,10 @@ public:
         return {ping_schema(), greet_schema()};
 #elif defined(ZEN_WEAVE_ACTIVATES)
         return {ping_schema(), schema_of<loom::Activated>()};
+#elif defined(ZEN_WEAVE_SENSES)
+        // Ping drives the claim/read-back parity case; SenseProbe asks this
+        // artifact to observe a named OFFICE and report the identity verbatim.
+        return {ping_schema(), senseprobe_schema()};
 #else
         return {ping_schema()};
 #endif
@@ -362,6 +384,28 @@ public:
             // repeated, nothing announced. Activation is a fact, not an order.
             ++activations_;
             last_activation_ = claimed;
+            return; // never falls through to the Ping path below ('seq' is absent)
+        }
+#elif defined(ZEN_WEAVE_SENSES)
+        // THE EXACT-OFFICE PROBE (R2E-0a). Observe the office this message names
+        // and record the identity VERBATIM. Nothing here shortens, hashes or
+        // normalises it: the test compares what came back against what it
+        // authored, so a seam that truncates is caught by the comparison rather
+        // than by a bound this artifact would have to know about.
+        if (in.payload.schema().name() == "SenseProbe") {
+            const std::string role(in.payload.get("role")->as_text());
+            const SenseReading r = bus.observe_office(role, sensehealth_schema());
+            if (r) {
+                read_office_ = r.by.office;
+                read_hp_ = r.value->get("hp")->as_int();
+                read_author_ = static_cast<std::int64_t>(r.by.author.value);
+                read_personal_ = r.by.office.empty();
+                read_life_current_ = r.by.author_life_is_current;
+                read_inc_current_ = r.by.author_incarnation_is_current;
+            } else {
+                read_hp_ = -1;
+                read_office_.clear();
+            }
             return; // never falls through to the Ping path below ('seq' is absent)
         }
 #endif
@@ -568,6 +612,9 @@ public:
         v.set("read_hp", Cell::integer(read_hp_));
         v.set("read_author", Cell::integer(read_author_));
         v.set("read_personal", Cell::integer(read_personal_ ? 1 : 0));
+        v.set("read_office", Cell::text(read_office_));
+        v.set("read_life_current", Cell::integer(read_life_current_ ? 1 : 0));
+        v.set("read_inc_current", Cell::integer(read_inc_current_ ? 1 : 0));
 #endif
         return v;
     }
@@ -639,6 +686,9 @@ private:
     std::int64_t read_hp_ = -1;    // what the synchronous read-back saw (-1 = nothing)
     std::int64_t read_author_ = 0; // whom the reading named as author
     bool read_personal_ = false;   // did the reading carry NO office (a personal claim)?
+    std::string read_office_;      // the office identity a reading carried, VERBATIM
+    bool read_life_current_ = false; // was the author's life still current?
+    bool read_inc_current_ = false;  // ...and its incarnation? (a separate question)
 #endif
 };
 

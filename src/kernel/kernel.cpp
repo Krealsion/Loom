@@ -503,25 +503,33 @@ static ZenStatus sense_status_of(loom::SenseRefusal why) {
     return ZEN_OK;
 }
 
-/// Fill the C-layout authorship from the host's own reading. `office` is copied
-/// into the fixed buffer and always NUL-terminated; a name at or past the bound
-/// is truncated rather than allocated across the seam — see ZenSenseBy.
-static void fill_sense_by(const loom::SenseReading& r, ZenSenseBy* by) {
-    if (by == nullptr) {
-        return;
+/// Fill the C-layout authorship from the host's own reading, and write the
+/// AUTHORED OFFICE NAME into the library's own sink — exactly, at whatever
+/// length it is. The office deliberately does not travel in `ZenSenseBy`: a
+/// fixed buffer there truncated silently, which let a dynamic observation report
+/// an office identity that was never authored (see ZenSenseBy). A personal claim
+/// leaves the sink untouched, so "nothing written" means "no office", which no
+/// real role name can imitate.
+static void fill_sense_by(const loom::SenseReading& r, ZenByteSink office_sink, ZenSenseBy* by) {
+    if (by != nullptr) {
+        *by = ZenSenseBy{};
+        by->author = r.by.author.value;
+        by->author_life = r.by.author_life;
+        by->author_incarnation = r.by.author_incarnation;
+        by->author_life_is_current = r.by.author_life_is_current ? 1u : 0u;
+        // Carried separately from the life fact on purpose: a same-life
+        // replacement moves the incarnation and not the life, so deriving this
+        // from the line above would report a predecessor's claim as the current
+        // incarnation's.
+        by->author_incarnation_is_current = r.by.author_incarnation_is_current ? 1u : 0u;
+        by->office_holder_is_current = r.by.office_holder_is_current ? 1u : 0u;
+        by->revision = r.by.revision;
     }
-    *by = ZenSenseBy{};
-    by->author = r.by.author.value;
-    by->author_life = r.by.author_life;
-    by->author_incarnation = r.by.author_incarnation;
-    by->author_life_is_current = r.by.author_life_is_current ? 1u : 0u;
-    by->office_holder_is_current = r.by.office_holder_is_current ? 1u : 0u;
-    by->revision = r.by.revision;
-    const std::size_t n = r.by.office.size() < (ZEN_SENSE_OFFICE_MAX - 1)
-                              ? r.by.office.size()
-                              : (ZEN_SENSE_OFFICE_MAX - 1);
-    std::memcpy(by->office, r.by.office.data(), n);
-    by->office[n] = '\0';
+    if (office_sink.write != nullptr && !r.by.office.empty()) {
+        office_sink.write(office_sink.ctx,
+                          reinterpret_cast<const std::uint8_t*>(r.by.office.data()),
+                          r.by.office.size());
+    }
 }
 
 static ZenStatus zen_host_sense_claim(void* ctx, const std::uint8_t* payload, std::size_t len,
@@ -570,7 +578,7 @@ static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
 
 static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const char* shape_name,
                                         std::uint32_t shape_version, ZenByteSink sink,
-                                        ZenSenseBy* by) {
+                                        ZenByteSink office_sink, ZenSenseBy* by) {
     auto* h = static_cast<HostCtx*>(ctx);
     // The host resolves the shape it was NAMED. A library asking for a shape this
     // Loom never registered is the same seam rejection as an emission of one, and
@@ -584,7 +592,7 @@ static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const c
     if (!r) {
         return sense_status_of(r.refusal);
     }
-    fill_sense_by(r, by);
+    fill_sense_by(r, office_sink, by);
     // The value crosses as BYTES the library copies out of the sink — the same
     // ownership rule every other outbound value follows. No host pointer into
     // the repository ever reaches the library, so a loaded reader has exactly the
@@ -597,7 +605,7 @@ static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const c
 static ZenStatus zen_host_sense_observe_office(void* ctx, const char* role,
                                                const char* shape_name,
                                                std::uint32_t shape_version, ZenByteSink sink,
-                                               ZenSenseBy* by) {
+                                               ZenByteSink office_sink, ZenSenseBy* by) {
     auto* h = static_cast<HostCtx*>(ctx);
     std::shared_ptr<const loom::Schema> shape =
         h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
@@ -609,7 +617,7 @@ static ZenStatus zen_host_sense_observe_office(void* ctx, const char* role,
     if (!r) {
         return sense_status_of(r.refusal);
     }
-    fill_sense_by(r, by);
+    fill_sense_by(r, office_sink, by);
     const std::string bytes = loom::serialize(*r.value);
     sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
     return ZEN_OK;

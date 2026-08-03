@@ -169,26 +169,41 @@ typedef struct ZenByteSink {
  * a fixed layout, because it must cross a C boundary; every field is a fact the
  * host computed, and none is anything the claiming library said about itself.
  *
- * `office` is a NUL-terminated buffer rather than a pointer so the library owns
- * nothing and frees nothing: an empty string means the claim was PERSONAL, which
- * no real office name can collide with. `office_holder_is_current` is meaningful
- * only when `office` is non-empty — false says the office has moved since, and
- * the claim is the previous holder's. `author_life_is_current` says whether the
- * life that made the claim is still the life at that address.
+ * THE OFFICE NAME IS NOT IN THIS STRUCT, AND THAT IS THE POINT. It crosses
+ * through a caller-provided ZenByteSink instead, exactly as the claim's VALUE
+ * does — so the identity a reader observes is the identity that was authored,
+ * byte for byte, at any length. An earlier draft carried it as a fixed
+ * `char office[128]` and truncated silently at the bound; that let a dynamic
+ * observation report an office identity NOBODY EVER AUTHORED — a 200-character
+ * role arriving as a plausible 127-character prefix, indistinguishable from a
+ * real name. A fabricated identity is worse than a refusal and far worse than a
+ * long copy, so the bound is gone rather than raised: a bigger buffer would only
+ * move the lie further out. The sink keeps the original ownership property that
+ * motivated the buffer — the library allocates the storage and the host only
+ * writes into it, so nothing crosses the seam that either side must free.
  *
- * The buffer is deliberately fixed and generous rather than dynamic: a role name
- * is a short identifier, and a truncating copy with a documented bound beats
- * either an allocation across the seam or a pointer whose lifetime the library
- * would have to reason about. */
-enum { ZEN_SENSE_OFFICE_MAX = 128 };
+ * An office sink that is never written means the claim was PERSONAL, which no
+ * real office name can collide with (a zero-length role is not a role).
+ * `office_holder_is_current` is meaningful only for an office claim — false says
+ * the office has moved since, and the claim is the previous holder's.
+ *
+ * THE TWO GENERATION FACTS ARE INDEPENDENT and both are carried, because a
+ * live replacement moves the incarnation WITHOUT ending the life:
+ *   author_life_is_current         the life that claimed is still at that address
+ *   author_incarnation_is_current  the code that claimed is still the code there
+ * After a same-life replacement the first is true and the second is false, and a
+ * reader that cannot tell those apart cannot tell a predecessor's still-valid
+ * historical claim from one the current incarnation just authored. Deriving the
+ * second from the first would erase exactly that distinction. */
 typedef struct ZenSenseBy {
     uint64_t author;
     uint64_t author_life;
     uint64_t author_incarnation;
-    uint32_t author_life_is_current;    /* 0/1 */
-    uint32_t office_holder_is_current;  /* 0/1; meaningful iff office[0] != 0 */
+    uint32_t author_life_is_current;         /* 0/1 */
+    uint32_t author_incarnation_is_current;  /* 0/1; NOT implied by the line above */
+    uint32_t office_holder_is_current;       /* 0/1; meaningful iff an office was written */
+    uint32_t reserved_;                      /* keep the 64-bit field below aligned */
     uint64_t revision;
-    char office[ZEN_SENSE_OFFICE_MAX];  /* "" == a personal claim */
 } ZenSenseBy;
 
 /* Host callbacks a Weave uses to send/publish from inside handle(). The payload
@@ -261,10 +276,18 @@ typedef struct ZenHostApi {
      * receives the claim's sequence under its key.
      *
      * observe / observe_office name the shape by (name, version) rather than
-     * carrying a schema, and return the claim as bytes through `sink` plus its
-     * authorship through `by` — the host's own facts, never the library's. The
+     * carrying a schema, and return the claim as bytes through `sink`, the
+     * AUTHORED OFFICE NAME through `office_sink`, and the remaining authorship
+     * facts through `by` — the host's own facts, never the library's. The
      * library gets a COPY: no host pointer outlives the call, so a loaded reader
      * has no more reach into a claimant than a native one does.
+     *
+     * `office_sink` is written only for an office claim, and is written EXACTLY:
+     * a personal claim leaves it untouched, and no length bound is imposed in
+     * either direction. Two sinks rather than one struct field is what makes
+     * "the observed identity is the authored identity" true at any name length —
+     * see ZenSenseBy for why the earlier fixed buffer was a defect rather than a
+     * simplification.
      *
      * A refusal crosses back as ZEN_ERR_SENSE_* so "not authorized", "nothing
      * claimed", "you did not declare that" and "you do not hold that office"
@@ -274,9 +297,11 @@ typedef struct ZenHostApi {
     ZenStatus (*sense_office_claim)(void* ctx, const char* as_role, const uint8_t* payload,
                                     size_t len, uint64_t* revision_out);
     ZenStatus (*sense_observe)(void* ctx, uint64_t author, const char* shape_name,
-                               uint32_t shape_version, ZenByteSink sink, ZenSenseBy* by);
+                               uint32_t shape_version, ZenByteSink sink,
+                               ZenByteSink office_sink, ZenSenseBy* by);
     ZenStatus (*sense_observe_office)(void* ctx, const char* role, const char* shape_name,
-                                      uint32_t shape_version, ZenByteSink sink, ZenSenseBy* by);
+                                      uint32_t shape_version, ZenByteSink sink,
+                                      ZenByteSink office_sink, ZenSenseBy* by);
 } ZenHostApi;
 
 /* The single descriptor a Weave library exposes, returned by zen_weave_abi().
