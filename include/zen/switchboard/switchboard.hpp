@@ -101,6 +101,28 @@ enum class RefusalReason : std::uint8_t {
     /// presented. What failed is narrower than either — the sender is not the
     /// current holder of the office it asked to represent.
     RoleAuthorshipDenied,
+    /// A LOADED WEAVE CLAIMED A SHAPE THIS LOOM HAS NEVER HEARD OF (R2E-0). The
+    /// emission crossed the library/host seam carrying a (name, version) that
+    /// `resolve_schema` cannot resolve, so there is no door to admit it against
+    /// and it is rejected before anything is queued and before any target is
+    /// resolved.
+    ///
+    /// Its own reason, by the same test every neighbour passed. `NotAccepted`
+    /// would blame a target's accept-set, when routing never ran and there may be
+    /// no target at all. `GateRefused` would blame the payload, when no schema
+    /// existed to judge it against — the value may be perfectly well-formed for
+    /// the shape its author meant. `NoSuchTarget` would blame an address that was
+    /// never consulted. What failed is the SEAM: the shape's registrar was never
+    /// loaded (or was denied), so the vocabulary does not exist on this side.
+    ///
+    /// It carries the CLAIMED name and version, the sending artifact, and a
+    /// target only where one was actually named — a publication names none, and
+    /// inventing one would replace silence with a fiction. It is a diagnostic
+    /// fact, not an answer and not a delivery: nothing is returned to the sender
+    /// that was not already returned (the shim's status), and no ticket crosses
+    /// the seam. See known-seams § sender cannot observe send fate — still true,
+    /// still separate.
+    SeamUnresolved,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -529,6 +551,30 @@ public:
     void pump();
     void run() { pump(); }
     void stop() noexcept { stop_requested_ = true; }
+
+    /// RECORD A REJECTION THAT HAPPENED AT A BOUNDARY THIS LOOM OWNS BUT THE BUS
+    /// NEVER SAW (R2E-0). The dynamic seam admits a loaded weave's bytes
+    /// host-side *before* routing; when that fails, nothing is queued, so no
+    /// delivery-time refusal can report it and the sender's shim is
+    /// fire-and-forget. Without this, the rejection was observable nowhere at all
+    /// — while the comparable native failure refused loudly.
+    ///
+    /// It is a DIAGNOSTIC, and deliberately nothing else:
+    /// - it gets a seq, a journal slot and a tap event, exactly like `refuse_now`,
+    ///   so a seam rejection reads at the same altitude as a capability refusal;
+    /// - it carries the CLAIMED (name, version) — the shape could not be
+    ///   resolved, so there is no schema object to name;
+    /// - `target` is the invalid id wherever the emission named no target. Nothing
+    ///   is manufactured: a publication has no target, and a role is a slot that
+    ///   is resolved at a delivery which never happened;
+    /// - it creates no answer provenance, no delivery, and no sender-visible
+    ///   future. Send fate remains the separate seam it was.
+    ///
+    /// Callable by the host (holding a `Switchboard&` is already root authority)
+    /// because the Kernel's seam callbacks are the only intended caller and they
+    /// hold exactly that.
+    void note_seam_refusal(WeaveId sender, WeaveId target, std::string_view claimed_name,
+                           std::uint32_t claimed_version, const Refusal& refusal);
 
     /// The fate of a previously-issued Ticket (Pending until pumped). The journal retains
     /// only the most recent `kJournalCapacity` outcomes (see below), so a Ticket older than

@@ -50,6 +50,15 @@
 //                                   it meets the registry's agreement wall (R2A-1a:
 //                                   makes a rejected candidate's schema admission
 //                                   observable from outside the kernel)
+//   ZEN_WEAVE_SEAM_EMIT           — on Ping, reaches for a role with a shape THIS
+//                                   LIBRARY ALONE knows: SeamOnly v1 is built here and
+//                                   declared in no accept-set, so nothing ever
+//                                   registers it. The Night Lab III P-011 shape
+//                                   exactly (the lamp's EnsureTimer to zengine.timer
+//                                   when the sole registrar of that vocabulary was
+//                                   never loaded). The emission cannot resolve at the
+//                                   host seam; whether that leaves a Loom-owned fact
+//                                   is the question the reproducer asks.
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
@@ -128,6 +137,13 @@ std::shared_ptr<const Schema> ping_schema() {
 #else
     static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
 #endif
+    return s;
+}
+[[maybe_unused]] std::shared_ptr<const Schema> seamonly_schema() { // only the seam-emit variant
+    // DECLARED NOWHERE ELSE. Not in accepted_schemas(), not in any other library,
+    // not by the host — so no registry in the process has ever heard of it. That
+    // is the whole fixture: an emission the host seam cannot resolve.
+    static const auto s = SchemaBuilder("SeamOnly", 1).field("want", Kind::Int).build();
     return s;
 }
 std::shared_ptr<const Schema> counter_schema() {
@@ -326,7 +342,18 @@ public:
         }
 #endif
         ++count_;
-#if defined(ZEN_WEAVE_SILENT)
+#if defined(ZEN_WEAVE_SEAM_EMIT)
+        // THE SILENT-SEAM FIXTURE (R2E-0, from Night Lab III P-011). Reach for a
+        // service by role, carrying a shape no registry in this process knows.
+        // Both halves matter: the role may well be unheld, but the emission never
+        // gets far enough for that to be the reason — it is rejected at the
+        // library/host seam, before any target is resolved. Fire-and-forget by
+        // design (a dynamic send returns no ticket), so this weave learns nothing
+        // and asserts nothing; the test watches the HOST side.
+        Value want(seamonly_schema());
+        want.set("want", Cell::integer(seq));
+        bus.send_to_role("nobody.home", Message(std::move(want)));
+#elif defined(ZEN_WEAVE_SILENT)
         (void)seq;
         (void)bus; // a deliberately silent Weave: it never replies
 #elif defined(ZEN_WEAVE_MALFORMED_MESSAGE)

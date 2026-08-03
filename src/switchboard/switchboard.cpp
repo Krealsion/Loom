@@ -42,6 +42,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "AdmissionRevoked";
     case RefusalReason::RoleAuthorshipDenied:
         return "RoleAuthorshipDenied";
+    case RefusalReason::SeamUnresolved:
+        return "SeamUnresolved";
     }
     return "?";
 }
@@ -177,6 +179,12 @@ std::string Refusal::message() const {
         // queued, and nothing was downgraded to personal speech.
         return "the sender does not hold the role it deliberately asked to "
                "speak for; nothing was queued";
+    case RefusalReason::SeamUnresolved:
+        // Names the SEAM and the VOCABULARY, not the payload, the target or the
+        // grant: the shape's registrar was never loaded here, so there is no door
+        // to admit this against and no target was ever consulted.
+        return "the shape claimed across the library seam is not registered in "
+               "this Loom; nothing was queued";
     }
     return "?";
 }
@@ -388,6 +396,25 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
     ev.refusal = r;
     emit(ev);
     return Ticket{seq};
+}
+
+void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_view claimed_name,
+                                    std::uint32_t claimed_version, const Refusal& refusal) {
+    // Deliberately `refuse_now`'s body rather than a second mechanism — the only
+    // difference is that no admitted Message exists to read a schema off, so the
+    // CLAIMED name and version are passed in. Same seq, same journal slot, same
+    // tap event: one refusal altitude, whichever side of the seam it happened on.
+    const std::uint64_t seq = next_seq_++;
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{Disposition::Refused, refusal}};
+    BusEvent ev;
+    ev.kind = EventKind::Refused;
+    ev.seq = seq;
+    ev.target = target;
+    ev.sender = sender;
+    ev.schema_name = std::string(claimed_name);
+    ev.schema_version = claimed_version;
+    ev.refusal = refusal;
+    emit(ev);
 }
 
 Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
