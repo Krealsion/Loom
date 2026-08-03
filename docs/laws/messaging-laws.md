@@ -187,36 +187,55 @@ Evidence: [night-lab](../evidence/night-lab.md), reproducer
 
 ## MSG-09 — A dispatch turn can be bounded without bending FIFO
 
-LAW — `pump()` drains to empty, unchanged and forever. `pump_bounded(n)`
-dispatches at most `n` deliveries and returns how many it made. Neither reorders
-anything.
+LAW — `pump()` drains to empty, unchanged and forever. Two bounded turns exist
+beside it: `pump_bounded(n)` dispatches at most `n` deliveries, and
+`pump_pending()` dispatches exactly the backlog present at entry. All three
+return how many they dispatched, and none reorders anything.
 
 MEANS
 - a host composing Loom with an outer event loop has a deterministic way to get
   control back, so a perpetual in-process service (a repeating Timer re-arms
   itself inside its own handler, so the queue never empties) cannot starve the
   socket poll;
-- the bound counts **deliveries dispatched**, not the queue as it stood at
-  entry: work a handler enqueues during the call counts. Any other rule would
-  leave the self-re-arming producer this exists to bound unbounded;
-- the bound is a **count, never a deadline** — a core primitive whose result
+- the two bounds differ in **what they count, and it matters**:
+  - `pump_bounded(n)` counts deliveries *dispatched*, so work a handler enqueues
+    during the call counts toward `n`. A hard cap, and the host must pick `n`;
+  - `pump_pending()` takes `pending()` **once, at entry**, so a handler's own
+    continuation lands behind the snapshot and belongs to the next turn. No
+    number is chosen, and a busy bus clears its backlog in one turn;
+- **`pump_pending()` is the one an event-loop host generally wants**, and that is
+  evidence rather than taste: with a real Zengine Timer, a fixed budget of 64
+  throttled the Codex Rule Garden 17× (2s → 34s), and a budget large enough not
+  to throttle was drain-to-empty again and the starvation returned. Sizing a
+  count against a producer's rate is the same class of fragility as a deadline,
+  arrived at from the other side;
+- both bounds are a **count, never a deadline** — a core primitive whose result
   depends on host timing jitter cannot be reasoned about;
-- a budget is a pause between two deliveries, landing exactly where `pump()` was
+- a bound is a pause between two deliveries, landing exactly where `pump()` was
   already between two envelopes;
-- `stop()` still ends the turn early, and the return value keeps "budget
-  exhausted" and "somebody stopped" distinguishable;
-- non-reentrant, exactly as `pump()`; a zero budget is a no-op, not a drain.
+- `stop()` still ends the turn early, and the return value keeps "bound reached"
+  and "somebody stopped" distinguishable;
+- non-reentrant, exactly as `pump()`; a zero budget and an empty queue are both
+  no-ops, not drains.
 
 DOES NOT MEAN
 - that `pump()` changed. Every existing caller keeps drain-to-empty, and
-  `BridgeServer`'s dispatch budget defaults to 0, which is that same contract;
+  `BridgeServer` defaults to that same contract until a host says otherwise;
 - that Loom acquired a thread or a scheduler. It did not, and neither is planned;
-- that the substrate chose a budget. The primitive is the Switchboard's because
+- that the substrate chose a bound. The primitives are the Switchboard's because
   only the queue's owner can bound dispatch without reordering; the **policy** is
-  the host's, because only the host knows what it is composing with.
+  the host's, because only the host knows what it is composing with;
+- that `pump_pending()` is unbounded because it takes no number. Its bound is a
+  fact about the queue, read before anything runs, and a producer cannot extend
+  it from inside the turn.
 
-PROVEN BY — `Switchboard::pump_bounded`; `BridgeServer::set_dispatch_budget`;
-suite `switchboard` (the starvation reproduction, exact-budget, newly-enqueued
-work counting, FIFO across boundaries, `stop()` interaction, zero, reentrancy),
-suite `bridge` (a bridge host staying responsive while a perpetual driver runs,
-and budget 0 still draining). Evidence: Codex Rule Garden finding 1.
+PROVEN BY — `Switchboard::pump_bounded` / `pump_pending`;
+`BridgeServer::set_dispatch_budget` / `set_bounded_dispatch`; suite `switchboard`
+(the starvation reproduction, exact-budget, newly-enqueued work counting, the
+entry-snapshot bound against a self-re-arming producer, FIFO across boundaries,
+`stop()` interaction, empty/zero, reentrancy), suite `bridge` (a bridge host
+staying responsive while a perpetual driver runs, under both bounds, and the
+default still draining). Evidence: Codex Rule Garden finding 1, and its
+follow-up — the fake `GardenYieldPump → bus.stop()` message is deleted, replaced
+by `set_bounded_dispatch()`, and the live round-trip runs in the same 2s it did
+with the fake.

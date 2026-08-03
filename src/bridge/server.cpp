@@ -370,10 +370,14 @@ void BridgeServer::step() {
     // Unbounded by default — the contract every existing caller has. A host
     // composing with a perpetual in-process service sets a budget so this returns
     // (R2E-0); FIFO is identical either way.
-    if (dispatch_budget_ == 0) {
-        bus_.pump();
-    } else {
+    if (bounded_dispatch_) {
+        // Exactly the backlog that existed when this turn began. A perpetual
+        // in-process service cannot extend it, and a busy bus is not throttled.
+        bus_.pump_pending();
+    } else if (dispatch_budget_ != 0) {
         bus_.pump_bounded(dispatch_budget_);
+    } else {
+        bus_.pump();
     }
     // Drain the deferred weave-list refresh (E): the registry reads happen HERE, outside dispatch.
     if (weaves_dirty_) {

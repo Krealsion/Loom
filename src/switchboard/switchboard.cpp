@@ -1399,6 +1399,15 @@ void Switchboard::pump() {
     in_dispatch_ = false;
 }
 
+std::size_t Switchboard::pump_pending() {
+    // The bound is a FACT ABOUT THE QUEUE, taken once, before anything runs —
+    // which is the whole difference from pump_bounded. A handler's own
+    // continuation is enqueued behind this snapshot and is simply not part of
+    // this turn, so a self-re-arming producer cannot hold the turn open and a
+    // busy bus still clears its backlog in one go.
+    return pump_bounded(queue_.size());
+}
+
 std::size_t Switchboard::pump_bounded(std::size_t budget) {
     if (in_dispatch_) {
         return 0; // non-reentrant, exactly as pump() is
