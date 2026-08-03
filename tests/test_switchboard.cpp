@@ -572,4 +572,185 @@ TEST_CASE("STF-1: an observer that throws propagates, and later observation stil
     CHECK(behind == 1);
 }
 
+// ---------------------------------------------------------------------------
+// Observer notification under subscription mutation.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("STF-1: an observer added during notification joins at the NEXT event") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    int early = 0;
+    int late = 0;
+    bool added = false;
+    bus.add_observer([&](const BusEvent&) {
+        ++early;
+        if (!added) {
+            added = true;
+            bus.add_observer([&late](const BusEvent&) { ++late; });
+        }
+    });
+
+    bus.send(r.id, Message(ping(1)));
+    bus.pump();
+    CHECK(early == 1);
+    CHECK(late == 0); // the newcomer did not join the event it was added during
+
+    bus.send(r.id, Message(ping(2)));
+    bus.pump();
+    CHECK(early == 2);
+    CHECK(late == 1); // ...and does receive the next one
+}
+
+TEST_CASE("STF-1: an observer may remove itself while being notified") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    ObserverId self{};
+    int calls = 0;
+    int after = 0;
+    self = bus.add_observer([&](const BusEvent&) {
+        ++calls;
+        bus.remove_observer(self);
+    });
+    bus.add_observer([&after](const BusEvent&) { ++after; });
+
+    bus.send(r.id, Message(ping(1)));
+    bus.pump();
+    CHECK(calls == 1);
+    CHECK(after == 1); // the observer behind the self-removing one still ran
+
+    bus.send(r.id, Message(ping(2)));
+    bus.pump();
+    CHECK(calls == 1); // never again
+    CHECK(after == 2);
+}
+
+TEST_CASE("STF-1: removing another observer during notification takes effect at once") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    int victim_calls = 0;
+    int survivor_calls = 0;
+    ObserverId victim{};
+    bool cut = false;
+
+    bus.add_observer([&](const BusEvent&) {
+        if (!cut) {
+            cut = true;
+            bus.remove_observer(victim); // registered AFTER us: not yet notified
+        }
+    });
+    victim = bus.add_observer([&victim_calls](const BusEvent&) { ++victim_calls; });
+    bus.add_observer([&survivor_calls](const BusEvent&) { ++survivor_calls; });
+
+    bus.send(r.id, Message(ping(1)));
+    bus.pump();
+
+    // REMOVAL IS IMMEDIATE, and that is the point: `remove_observer` is how the
+    // console and the bridge stop a callback before the object it captures dies.
+    // A notification that ran the removed callback anyway would be a use-after-
+    // free, so removal wins over the snapshot.
+    CHECK(victim_calls == 0);
+    CHECK(survivor_calls == 1); // and the traversal was not derailed
+
+    bus.send(r.id, Message(ping(2)));
+    bus.pump();
+    CHECK(victim_calls == 0);
+    CHECK(survivor_calls == 2);
+}
+
+TEST_CASE("STF-1: observer notification survives reallocation of the observer list") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    int first = 0;
+    int second = 0;
+    int newcomers = 0;
+    bool grown = false;
+    bus.add_observer([&](const BusEvent&) {
+        ++first;
+        if (grown) {
+            return;
+        }
+        grown = true;
+        // Far past any small-vector capacity: the live container is guaranteed
+        // to reallocate while an iteration is walking it.
+        for (int i = 0; i < 64; ++i) {
+            bus.add_observer([&newcomers](const BusEvent&) { ++newcomers; });
+        }
+    });
+    // REGISTERED SECOND, so the event's view still owes it a notification after
+    // the reallocation. Reaching it through the container the first observer just
+    // grew is precisely the dangling read; reaching it through the view is not.
+    bus.add_observer([&second](const BusEvent&) { ++second; });
+
+    bus.send(r.id, Message(ping(1)));
+    bus.pump();
+    CHECK(first == 1);
+    CHECK(second == 1);
+    CHECK(newcomers == 0); // this event's view was fixed before they existed
+
+    bus.send(r.id, Message(ping(2)));
+    bus.pump();
+    CHECK(first == 2);
+    CHECK(second == 2);
+    CHECK(newcomers == 64); // ...and all of them are in the next one
+}
+
+TEST_CASE("STF-1: an observer may mutate the observer list and then throw") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    ObserverId victim{};
+    int victim_calls = 0;
+    int newcomer_calls = 0;
+    bool armed = true;
+
+    bus.add_observer([&](const BusEvent&) {
+        if (!armed) {
+            return;
+        }
+        armed = false;
+        bus.remove_observer(victim);
+        bus.add_observer([&newcomer_calls](const BusEvent&) { ++newcomer_calls; });
+        throw std::runtime_error("observer failure after mutating");
+    });
+    victim = bus.add_observer([&victim_calls](const BusEvent&) { ++victim_calls; });
+
+    bus.send(r.id, Message(ping(1)));
+    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK(victim_calls == 0);
+    CHECK(newcomer_calls == 0);
+
+    // The mutations stand — they were not a transaction — and the NEXT event uses
+    // the updated set.
+    bus.send(r.id, Message(ping(2)));
+    bus.pump();
+    CHECK(victim_calls == 0);
+    CHECK(newcomer_calls == 1);
+}
+
+TEST_CASE("STF-1: a nested event takes its own observer view") {
+    Switchboard bus;
+    Registered doomed = reg(bus, {ping_schema()});
+    Registered other = reg(bus, {pong_schema()});
+    std::vector<EventKind> outer;
+    int nested_only = 0;
+    bool nested = false;
+
+    bus.add_observer([&](const BusEvent& e) {
+        outer.push_back(e.kind);
+        if (nested || e.kind != EventKind::Died) {
+            return;
+        }
+        nested = true;
+        // An observer registered DURING the outer event is absent from it and
+        // present in the event this callback itself causes.
+        bus.add_observer([&nested_only](const BusEvent&) { ++nested_only; });
+        bus.kill(other.id); // a second, nested emission
+    });
+
+    bus.kill(doomed.id);
+    REQUIRE(outer.size() == 2); // the outer Died, then the nested one
+    CHECK(outer[0] == EventKind::Died);
+    CHECK(outer[1] == EventKind::Died);
+    CHECK(nested_only == 1); // the newcomer saw the nested event, not the outer one
+}
+
 } // TEST_SUITE

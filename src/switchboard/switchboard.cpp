@@ -1104,10 +1104,45 @@ void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refus
     }
 }
 
+bool Switchboard::observer_registered(ObserverId id) const noexcept {
+    for (const auto& observer : observers_) {
+        if (observer.first == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Switchboard::emit(const BusEvent& event) {
-    for (auto& observer : observers_) {
-        if (observer.second) {
-            observer.second(event);
+    // EACH EVENT HAS ITS OWN VIEW OF THE TAP LIST (STF-1).
+    //
+    // An observer may subscribe or unsubscribe from inside a notification — the
+    // console and the bridge already do the second, from destructors — and the
+    // live container is a vector, so walking it while a callback grows it read
+    // freed memory and walking it while a callback erased from it silently
+    // SKIPPED the observer that shifted into the vacated slot. Neither was
+    // documented; the skip was not even loud.
+    //
+    // The view is taken here, at entry, so every emission — including one an
+    // observer causes from inside another — decides its own recipients once.
+    const std::vector<std::pair<ObserverId, std::shared_ptr<Observer>>> view = observers_;
+    for (const auto& observer : view) {
+        // A REMOVAL TAKES EFFECT WITHIN THE EVENT IT IS MADE IN, and that is the
+        // one place this deliberately departs from a pure snapshot. Both the
+        // console and the bridge call `remove_observer` to stop a callback
+        // *before the members it captured die*; honouring the snapshot instead
+        // would turn that idiom into a use-after-free. An ADDITION is the
+        // opposite case — nothing is unsafe about waiting — so it waits, and the
+        // event a subscriber was added during is not one it hears.
+        if (!observer_registered(observer.first)) {
+            continue;
+        }
+        // The strong reference is what makes self-removal safe: `remove_observer`
+        // may drop the registration mid-call, and the callable still outlives its
+        // own body.
+        const std::shared_ptr<Observer> callback = observer.second;
+        if (callback != nullptr && *callback) {
+            (*callback)(event);
         }
     }
 }
@@ -1453,7 +1488,7 @@ DeliveryOutcome Switchboard::outcome(Ticket t) const {
 
 ObserverId Switchboard::add_observer(Observer obs) {
     const ObserverId id = next_observer_id_++;
-    observers_.emplace_back(id, std::move(obs));
+    observers_.emplace_back(id, std::make_shared<Observer>(std::move(obs)));
     return id;
 }
 

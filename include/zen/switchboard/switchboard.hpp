@@ -1622,8 +1622,22 @@ private:
     std::vector<JournalSlot> journal_; ///< ring of the last kJournalCapacity outcomes, by seq % cap
     std::uint64_t next_seq_ = 1;
 
-    std::vector<std::pair<ObserverId, Observer>> observers_;
+    /// THE TAP LIST, HELD BY SHARED POINTER (STF-1).
+    ///
+    /// The indirection buys exactly one thing, and it is a lifetime: an observer
+    /// is allowed to remove itself while it is being notified, and erasing the
+    /// vector element would destroy the `std::function` whose body is still
+    /// running. `emit()` holds a strong reference for the length of each call,
+    /// so the callable outlives the registration that named it.
+    ///
+    /// One allocation per `add_observer` — a registration, not a hot path — in
+    /// exchange for none per notification.
+    std::vector<std::pair<ObserverId, std::shared_ptr<Observer>>> observers_;
     ObserverId next_observer_id_ = 1;
+
+    /// Is this id still registered? Asked between notifications so a removal made
+    /// during an event takes effect within that event.
+    bool observer_registered(ObserverId id) const noexcept;
 
     /// Mint the capability that lets trusted infrastructure attach Loom's
     /// lifecycle attestation.

@@ -1,7 +1,7 @@
 # Messaging — reference
 
 The Switchboard: the in-process bus, first live boundary. Laws:
-[MSG-01..10](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
+[MSG-01..11](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
 Guide: [messaging](../guides/messaging.md).
 
 ## Dispatch model
@@ -166,9 +166,13 @@ retains the last `kJournalCapacity = 1024` delivery outcomes by ticket
 seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
 inspect/manipulate *by message* where a weave opts in.
 
-An observer that throws propagates to whoever was pumping and stops that event's
-remaining notifications; it is never silently swallowed
-([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
+An observer may **subscribe or unsubscribe from inside a notification**
+([MSG-11](../laws/messaging-laws.md#msg-11--every-event-has-its-own-view-of-the-tap-list)).
+Each event fixes its recipients at entry, so one added during an event joins at
+the *next* one; one removed during an event does not hear it, which is what makes
+the `remove_observer`-in-a-destructor idiom safe. An observer that throws
+propagates to whoever was pumping and stops that event's remaining
+notifications; it is never silently swallowed.
 
 Senders do not otherwise observe delivery fate
 ([known-seams](known-seams.md#sender-cannot-observe-send-fate)).
