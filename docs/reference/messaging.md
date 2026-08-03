@@ -177,9 +177,9 @@ emission vanished entirely while the identical native reach refused loudly.
 ## Bounded dispatch
 
 `pump()` drains to empty — unchanged, and the contract every existing caller
-has. `pump_bounded(n)` dispatches at most `n` deliveries and returns how many it
-made ([MSG-09](../laws/messaging-laws.md)), for a host composing Loom with an
-outer event loop:
+has. `pump_pending()` dispatches exactly the backlog present at entry and returns
+how many it made ([MSG-09](../laws/messaging-laws.md)), for a host composing Loom
+with an outer event loop:
 
 ```cpp
 while (serving) {
@@ -192,24 +192,28 @@ Without a bound, a perpetual in-process service starves the outer loop: a
 repeating Timer re-arms itself inside its own handler, so the queue never empties
 and a drain-to-empty pump never returns.
 
-**Two bounds, and the difference is which one you want:**
+**One bound, and it takes no number:**
 
 | | bound | newly enqueued work | you must pick |
 |---|---|---|---|
-| `pump_bounded(n)` | at most `n` dispatched | **counts** toward `n` | `n` |
+| `pump()` | drains to empty | dispatched in the same call | nothing |
 | `pump_pending()` | `pending()` at entry | waits for the next turn | nothing |
 
-Reach for `pump_pending()` first. Sizing `n` means knowing the producer's rate:
-with a real Zengine Timer, 64 throttled the Codex Rule Garden 17× and a value
-large enough not to throttle was drain-to-empty again. `pump_pending()` takes its
-bound from the queue itself, so a busy bus clears its backlog in one turn while a
-self-re-arming producer still cannot hold the turn open. `pump_bounded(n)` is the
-right tool when you want a hard cap on work per turn regardless of backlog.
+The snapshot is a **work boundary, not a quota**: the backlog you walked in with
+is processed in FIFO order, and a handler's own continuation lands behind it. So
+a busy bus clears its whole backlog in one turn while a self-re-arming producer
+still cannot hold the turn open.
+
+A numeric `pump_bounded(n)` existed briefly and was withdrawn in R2E-0a: sizing
+`n` means knowing the producer's rate, and with a real Zengine Timer 64 throttled
+the Codex Rule Garden 17× while a value large enough not to throttle was
+drain-to-empty again. If you want a hard cap on work per turn, bound it in your
+own loop — Loom will not pretend it can pick the number for you.
 
 Both are counts, never deadlines; FIFO is untouched; `stop()` still ends the turn
-early and the return value keeps "bound reached" and "somebody stopped" apart.
-`BridgeServer::set_bounded_dispatch()` / `set_dispatch_budget(n)` expose the
-policy, defaulting to drain-to-empty.
+early and the return value reports what actually happened.
+`BridgeServer::set_bounded_dispatch()` exposes the policy, defaulting to
+drain-to-empty.
 
 ## Tests
 

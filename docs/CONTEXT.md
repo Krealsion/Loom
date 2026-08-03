@@ -42,8 +42,9 @@ movement never relabels a predecessor's office claim; it stamps it stale
 (SENSE-03) · reading a Sense needs its own **observe rule**, absent by default —
 a send rule is never consulted (SENSE-05) · authored handoff added **no Loom
 API**: migration is an authored transformation before admission, never coercion
-inside the gate (HANDOFF-01) · `pump()` still drains to empty; `pump_bounded(n)`
-is the bounded turn and counts newly enqueued work (MSG-09) · replacement
+inside the gate (HANDOFF-01) · `pump()` still drains to empty; `pump_pending()`
+is the bounded turn and leaves newly enqueued work for the next one (MSG-09) ·
+replacement
 preserves nothing and
 produces **no atomic incumbent snapshot** — a captured description can go
 stale before admission unless a stronger domain/package boundary prevents

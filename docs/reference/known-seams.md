@@ -83,7 +83,7 @@ before.
 
 ## Event-loop composition
 
-**Status: CLOSED (R2E-0) — current, law-backed
+**Status: CLOSED (R2E-0, corrected R2E-0a) — current, law-backed
 ([MSG-09](../laws/messaging-laws.md)).**
 
 `pump()`'s drain-to-empty contract does not compose with a perpetual in-process
@@ -92,10 +92,20 @@ never empties and a single-threaded host never returns to poll its sockets. Foun
 by the Codex Rule Garden, whose workaround was a fake application message whose
 handler called `Switchboard::stop()`.
 
-`pump_bounded(n)` is the bounded turn; `pump()` is unchanged for every existing
-caller, and `BridgeServer::set_dispatch_budget` defaults to 0 (drain to empty).
-The Rule Garden's fake yield message is replaced by the legitimate surface in
-suite `bridge`.
+`pump_pending()` is the bounded turn, and the only one: it dispatches the backlog
+present at entry and leaves work enqueued during the turn for the next one.
+`pump()` is unchanged for every existing caller, and
+`BridgeServer::set_bounded_dispatch()` is off by default (drain to empty). The
+Rule Garden's fake yield message is deleted and replaced by that surface in suite
+`bridge`.
+
+**The first attempt is kept as evidence, not as API.** R2E-0 shipped a *numeric*
+bound first — `pump_bounded(n)` and `BridgeServer::set_dispatch_budget(n)` — and
+the same consumer that found the seam disproved it: `pump_bounded(64)` made the
+Rule Garden's live round-trip 17× slower, and a budget large enough not to
+throttle was drain-to-empty again. Asking a host to size its turn against a
+producer's rate is a number nobody can pick. R2E-0a removed both surfaces; what
+survives is the work boundary, not the quota.
 
 ## Continuity is authored
 
