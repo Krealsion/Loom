@@ -1180,6 +1180,27 @@ void Switchboard::pump() {
     in_dispatch_ = false;
 }
 
+std::size_t Switchboard::pump_bounded(std::size_t budget) {
+    if (in_dispatch_) {
+        return 0; // non-reentrant, exactly as pump() is
+    }
+    in_dispatch_ = true;
+    stop_requested_ = false;
+    std::size_t dispatched = 0;
+    // `dispatched < budget` is checked against deliveries ACTUALLY MADE, so an
+    // envelope a handler enqueues during this loop is as bounded as one that was
+    // already waiting. That is the whole point: the producer this exists to
+    // contain is precisely the one that re-arms itself from inside its handler.
+    while (dispatched < budget && !queue_.empty() && !stop_requested_) {
+        Envelope env = std::move(queue_.front());
+        queue_.pop_front();
+        deliver_one(std::move(env));
+        ++dispatched;
+    }
+    in_dispatch_ = false;
+    return dispatched;
+}
+
 DeliveryOutcome Switchboard::outcome(Ticket t) const {
     if (t.seq == 0 || t.seq >= next_seq_) {
         return DeliveryOutcome{}; // the invalid ticket, or a seq never issued

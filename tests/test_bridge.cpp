@@ -1080,4 +1080,127 @@ TEST_CASE("operator-protocol: a SIGKILLed operator PROCESS is reaped as an event
 }
 #endif // _WIN32
 
+// ---- R2E-0: composing with a perpetual in-process service --------------------
+//
+// The Rule Garden's sharpest seam, at the altitude it was found: a repeating
+// Zengine Timer paces itself inside Drive and enqueues its next Drive before
+// returning, so the queue never empties and BridgeServer::step()'s drain-to-empty
+// pump never returns to poll sockets. Its playground workaround was to append a
+// fake application message (`GardenYieldPump`) whose handler called
+// Switchboard::stop() — observable machinery with no business purpose. This is
+// the same composition with the legitimate surface instead.
+
+/// A weave that re-arms itself on every delivery, exactly as a repeating Timer
+/// does. Nothing bounds it; that is the point.
+class PerpetualDriver final : public loom::Weave {
+public:
+    std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
+        return {greet_schema()};
+    }
+    void handle(const loom::Message&, loom::Bus& bus) override {
+        ++turns;
+        loom::Value v(greet_schema());
+        v.set("msg", loom::Cell::text("drive"));
+        bus.send(self, loom::Message(std::move(v))); // the next Drive, before returning
+    }
+    loom::Value snapshot() const override {
+        loom::Value v(state_schema());
+        v.set("n", loom::Cell::integer(0));
+        return v;
+    }
+    loom::Value policy() const override {
+        loom::Value v(loom::lifecycle_policy_schema());
+        v.set("max_reloads", loom::Cell::integer(2));
+        v.set("revive_from_last_good", loom::Cell::boolean(true));
+        return v;
+    }
+    void revive(const loom::Value&) override {}
+
+    loom::WeaveId self{};
+    std::int64_t turns = 0;
+
+private:
+    static std::shared_ptr<const loom::Schema> state_schema() {
+        static const auto s = loom::SchemaBuilder("Counter", 1).field("n", loom::Kind::Int).build();
+        return s;
+    }
+};
+
+TEST_CASE("R2E-0: a bridge host with a dispatch budget stays responsive while a perpetual service "
+          "runs — no fake yield message, no second thread, FIFO intact") {
+    loom::Switchboard bus;
+    auto owned = std::make_unique<PerpetualDriver>();
+    PerpetualDriver* driver = owned.get();
+    const loom::WeaveId did = bus.register_weave(std::move(owned), loom::Grant{}.allow_any());
+    driver->self = did;
+
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    BridgeServer server(bus, listener);
+
+    // THE HOST'S CHOICE, stated once. Without it, the first step() below never
+    // returns: the driver re-arms inside its own handler forever.
+    server.set_dispatch_budget(8);
+    CHECK(server.dispatch_budget() == 8u);
+
+    // Start the perpetual service.
+    loom::Value kick(greet_schema());
+    kick.set("msg", loom::Cell::text("go"));
+    bus.send(did, loom::Message(std::move(kick)));
+
+    // A step() with the service already running RETURNS. That is the whole fix.
+    server.step();
+    CHECK(driver->turns == 8);
+
+    // ...and an operator can still connect and be served, turn after turn, while
+    // the service keeps running.
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, err);
+    BridgeChannel client(cs);
+    std::string hello;
+    put_u32(hello, kBridgeProtocolVersion);
+    client.queue(BridgeOp::Hello, hello);
+    client.flush();
+
+    bool welcomed = false;
+    for (int i = 0; i < 500 && !welcomed; ++i) {
+        server.step();
+        std::vector<BridgeIncoming> frames;
+        client.poll(frames);
+        for (const BridgeIncoming& f : frames) {
+            if (f.op == BridgeOp::Welcome) {
+                welcomed = true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    // The operator was accepted and welcomed — the outer loop kept control.
+    CHECK(welcomed);
+    CHECK(server.connection_count() == 1u);
+    // The service never stopped: it advanced by exactly the budget on every step.
+    CHECK(driver->turns > 8);
+    CHECK(driver->turns % 8 == 0);
+}
+
+TEST_CASE("R2E-0: budget 0 is the pre-existing contract — step() still drains to empty") {
+    loom::Switchboard bus;
+    auto g = std::make_unique<RecordingGreeter>();
+    const loom::WeaveId gid = bus.register_weave(std::move(g), loom::Grant{}.allow_any());
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    BridgeServer server(bus, listener);
+    CHECK(server.dispatch_budget() == 0u); // the default nobody had to opt into
+
+    for (int i = 0; i < 20; ++i) {
+        loom::Value v(greet_schema());
+        v.set("msg", loom::Cell::text("hi"));
+        bus.send(gid, loom::Message(std::move(v)));
+    }
+    server.step();
+    CHECK(bus.pending() == 0u); // drained, exactly as before R2E-0
+}
+
 TEST_SUITE_END();

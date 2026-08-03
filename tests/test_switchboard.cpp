@@ -210,4 +210,164 @@ TEST_CASE("two weaves declaring the same (name,version) with different shapes co
     CHECK_THROWS_AS(bus.register_weave(std::move(bad)), loom::SchemaConflict);
 }
 
+// ---- R2E-0: event-loop composition ----------------------------------------
+//
+// The Rule Garden's sharpest seam: a perpetual service (Zengine's Timer paces
+// itself inside Drive and enqueues its next Drive before returning) means the
+// queue never becomes empty, so a drain-to-empty pump never returns to the
+// outer network loop. Both components work as designed; their liveness
+// assumptions do not compose. Reproduced here with the same SHAPE as a Timer —
+// a weave whose handler re-enqueues its own next turn — without needing Zengine.
+
+// A weave that re-arms itself on every delivery, exactly as a repeating Timer
+// does. `stop_after` bounds the reproduction so the test terminates; the seam
+// is what happens when nothing bounds it.
+struct Perpetual : ProbeWeave {
+    explicit Perpetual(std::int64_t stop_after)
+        : ProbeWeave({ping_schema()}), stop_after_(stop_after) {}
+
+    void handle(const Message& in, Bus& bus) override {
+        ProbeWeave::handle(in, bus);
+        if (count < stop_after_) {
+            bus.send(self, Message(ping(count))); // the next Drive, enqueued before returning
+        }
+    }
+    WeaveId self{};
+
+private:
+    std::int64_t stop_after_;
+};
+
+TEST_CASE("R2E-0: a perpetual service starves the outer loop — pump() returns only when the "
+          "PRODUCER stops, not when the host wants control back") {
+    Switchboard bus;
+    auto owned = std::make_unique<Perpetual>(500);
+    Perpetual* raw = owned.get();
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}.allow_any());
+    raw->self = id;
+
+    bus.send(id, Message(ping(0)));
+    bus.pump(); // ONE call
+
+    // 500 deliveries in a single pump: the queue emptied only because the weave
+    // chose to stop re-arming. A real Timer never does. This is the starvation.
+    CHECK(raw->count == 500);
+}
+
+TEST_CASE("R2E-0: pump_bounded dispatches exactly its budget and hands control back while the "
+          "perpetual service is still running") {
+    Switchboard bus;
+    auto owned = std::make_unique<Perpetual>(1'000'000); // never stops within this test
+    Perpetual* raw = owned.get();
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}.allow_any());
+    raw->self = id;
+
+    bus.send(id, Message(ping(0)));
+
+    // The outer loop gets control back after every budget, forever.
+    for (int turn = 0; turn < 10; ++turn) {
+        const std::size_t did = bus.pump_bounded(4);
+        CHECK(did == 4); // EXACTLY the budget — never more
+    }
+    CHECK(raw->count == 40);
+    // ...and the service is still alive and still armed: bounding the dispatch
+    // did not end anything.
+    CHECK(bus.pending() == 1);
+}
+
+TEST_CASE("R2E-0: work enqueued DURING a bounded pump counts toward that budget — the bound is "
+          "on deliveries dispatched, not on the queue as it stood at entry") {
+    Switchboard bus;
+    auto owned = std::make_unique<Perpetual>(1'000'000);
+    Perpetual* raw = owned.get();
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}.allow_any());
+    raw->self = id;
+
+    bus.send(id, Message(ping(0)));
+    // One envelope stood in the queue at entry. If newly enqueued work were
+    // exempt, this would dispatch 1 and the budget would be meaningless against
+    // exactly the self-re-arming producer it exists to bound.
+    CHECK(bus.pump_bounded(7) == 7);
+    CHECK(raw->count == 7);
+}
+
+TEST_CASE("R2E-0: a bounded pump under budget drains and stops, reporting what it actually did") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    bus.send(r.id, Message(ping(1)));
+    bus.send(r.id, Message(ping(2)));
+
+    // Fewer deliveries available than the budget: it drains and reports 2, not 5.
+    CHECK(bus.pump_bounded(5) == 2);
+    CHECK(r.weave->count == 2);
+    CHECK(bus.pump_bounded(5) == 0); // nothing left; no spin, no block
+}
+
+TEST_CASE("R2E-0: FIFO is exact across bounded-pump boundaries — a budget is a pause, never a "
+          "reorder") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    for (std::int64_t i = 1; i <= 9; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+
+    CHECK(bus.pump_bounded(2) == 2);
+    CHECK(bus.pump_bounded(3) == 3);
+    CHECK(bus.pump_bounded(9) == 4);
+
+    const std::vector<std::int64_t> expected{1, 2, 3, 4, 5, 6, 7, 8, 9};
+    CHECK(r.weave->handled_values == expected);
+}
+
+TEST_CASE("R2E-0: stop() inside a handler ends the bounded turn early, and says how much it "
+          "actually did") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    r.weave->on_handle = [&bus](const Message& in, Bus&, ProbeWeave&) {
+        if (in.payload.get("seq")->as_int() == 2) {
+            bus.stop();
+        }
+    };
+    for (std::int64_t i = 1; i <= 6; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+
+    // Budget 5, but the second delivery asked to stop: 2 dispatched, honestly
+    // reported, and the rest are still queued in order.
+    CHECK(bus.pump_bounded(5) == 2);
+    CHECK(bus.pending() == 4);
+    CHECK(bus.pump_bounded(10) == 4);
+    const std::vector<std::int64_t> expected{1, 2, 3, 4, 5, 6};
+    CHECK(r.weave->handled_values == expected);
+}
+
+TEST_CASE("R2E-0: a zero budget is a no-op, and pump() itself is unchanged — still drain-to-empty") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    bus.send(r.id, Message(ping(1)));
+
+    CHECK(bus.pump_bounded(0) == 0); // asks for nothing, does nothing
+    CHECK(r.weave->count == 0);
+    CHECK(bus.pending() == 1);
+
+    bus.pump(); // the existing contract, untouched
+    CHECK(r.weave->count == 1);
+    CHECK(bus.pending() == 0);
+}
+
+TEST_CASE("R2E-0: bounded pump is non-reentrant, exactly as pump() is") {
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    std::size_t nested = 1; // a sentinel the handler must overwrite
+    r.weave->on_handle = [&bus, &nested](const Message&, Bus&, ProbeWeave&) {
+        nested = bus.pump_bounded(4); // must dispatch nothing from inside a delivery
+    };
+    bus.send(r.id, Message(ping(1)));
+    bus.send(r.id, Message(ping(2)));
+
+    CHECK(bus.pump_bounded(1) == 1);
+    CHECK(nested == 0);
+    CHECK(r.weave->count == 1);
+}
+
 } // TEST_SUITE
