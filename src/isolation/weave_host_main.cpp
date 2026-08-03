@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // zen-weave-host: the child process that runs one Weave out-of-process. It reuses
 // the kernel C ABI directly — load the .so, get its descriptor, drive the same
 // create/describe/snapshot/policy/revive/handle thunks — and bridges to the parent

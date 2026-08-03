@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // A library that exports a descriptor with an unsupported abi_version. The
 // kernel must reject it cleanly, before calling any of its function pointers
 // (which are therefore left null).

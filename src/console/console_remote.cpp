@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // zen-console-remote: the REMOTE-operator console. It is exactly the in-process TUI (console_tui.cpp)
 // with two differences, and only two: the engine lives behind a SOCKET (a RemoteConsole Console impl,
 // not an in-process ConsoleEngine), and the synchronous read loop becomes an EVENT-DRIVEN

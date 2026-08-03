@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 #include <doctest.h>
 
 // The poke phase: live inspect / manipulate by message, under the

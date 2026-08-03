@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // The authenticated lifecycle conversation — Loom's side (R2B-1).
 //
 // THE LAW UNDER TEST:

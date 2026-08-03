@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // nucleus.cpp — a seed of Zen.
 //
 // The decision this resolves:

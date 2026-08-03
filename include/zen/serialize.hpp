@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 #ifndef ZEN_SERIALIZE_HPP
 #define ZEN_SERIALIZE_HPP
 

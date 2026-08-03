@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // The pixel projection's layout: intent + relationship -> paint-ordered draw commands. Pure
 // (injected metrics, no SDL, no display) so the projection LOGIC is provable in the ordinary
 // suite on every platform; the SDL skin merely executes the commands. Mirrors the TUI's layout

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // The Windows terminal backend — the Win32 Console API behind the same TerminalBackend seam, so
 // the SAME ANSI-emitting renderer and the SAME escape-sequence key parsing run unchanged on
 // Windows. No new third-party dependency (Win32 only). Compiled only on Windows.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // The POSIX terminal backend — the existing console_tui.cpp terminal control, MOVED behind the
 // TerminalBackend seam, behavior-identical. termios raw mode (the isatty gate + the atexit restore),
 // ioctl(TIOCGWINSZ) size, the blocking byte read, and the VTIME-grace timed read (the old inline

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // The Console's first, throwaway skin: a deliberately plain terminal REPL over the
 // ConsoleEngine. It calls the engine API and formats the returned DOMAIN DATA as plain
 // text — no cursor addressing, no panes (that is Stage 3). Its only job is to exercise

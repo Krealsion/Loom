@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 #include <zen/isolation/host.hpp>
 
 #include <zen/kernel/schema_codec.hpp> // manifest_schema, decode_schema (shared encode/decode)

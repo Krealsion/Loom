@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // The SDL2 demo: Josh's visual-verify surface. Renders a PLACEHOLDER-DATA schematic (Phase A's
 // stress defaults + the Unicode case) — no live weaves, no binding, no Builder (those are later
 // phases). Input demonstrates input-as-messages end to end: raw SDL events become semantic

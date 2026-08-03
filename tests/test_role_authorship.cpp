@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Joshua DeMoss
+
 // Deliberate office authorship — role-authored provenance (R2D-0).
 //
 // THE LAW UNDER TEST:
