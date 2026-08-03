@@ -119,6 +119,9 @@ zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
 # R2B-3b-1a: the immediate-answer parity fixture, and its answer-twice twin.
 zen_add_test_weave(zen_test_weave_answers ZEN_WEAVE_ANSWERS)
 zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSWERS_TWICE)
+# R2E-0 / Night Lab III P-011: the silent-seam reproducer. Emits a shape only this
+# artifact knows, so the host seam cannot resolve it.
+zen_add_test_weave(zen_test_weave_seam_emit ZEN_WEAVE_SEAM_EMIT)
 
 # R2B-3b-3: the `versioned.service` pair — ONE source, two real artifacts. v1 is
 # the incumbent that answers "v1" throughout; v2 (ZEN_VERSIONED_CANDIDATE) is the
@@ -157,7 +160,8 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
-    zen_test_weave_answers_twice zen_test_versioned_v1 zen_test_versioned_v2
+    zen_test_weave_answers_twice zen_test_weave_seam_emit
+    zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_office_worker)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
@@ -180,6 +184,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\""
     "ZEN_SO_ANSWERS=\"$<TARGET_FILE:zen_test_weave_answers>\""
     "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\""
+    "ZEN_SO_SEAM_EMIT=\"$<TARGET_FILE:zen_test_weave_seam_emit>\""
     "ZEN_SO_VERSIONED_V1=\"$<TARGET_FILE:zen_test_versioned_v1>\""
     "ZEN_SO_VERSIONED_V2=\"$<TARGET_FILE:zen_test_versioned_v2>\""
     "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\"")

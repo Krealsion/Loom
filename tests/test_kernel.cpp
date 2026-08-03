@@ -6307,4 +6307,113 @@ TEST_CASE("R2D-0/v5: the previous-ABI artifact refuses at load by version — no
     CHECK(bus.list_weaves().empty());
 }
 
+// ---- R2E-0 / P-011: the silent dynamic seam --------------------------------
+//
+// Night Lab III found that a loaded weave's emission whose shape nobody
+// registered vanishes: no recipient, no BusEvent, no journal entry, and the
+// shim is fire-and-forget by design. The identical NATIVE intent refuses
+// loudly. These cases pin the tier-parity claim from both sides, and pin the
+// three ways this fix could over-reach: a false refusal on a healthy dynamic
+// send, a doubled refusal on a path that already reported one, and a
+// manufactured target where none was ever named.
+
+// Count Refused events carrying `reason`, and remember the last one whole.
+struct RefusalTap {
+    std::size_t count = 0;
+    BusEvent last{};
+
+    ObserverId arm(Switchboard& bus, RefusalReason reason) {
+        return bus.add_observer([this, reason](const BusEvent& ev) {
+            if (ev.kind == EventKind::Refused && ev.refusal.reason == reason) {
+                ++count;
+                last = ev;
+                last.payload = nullptr; // valid only during the callback
+            }
+        });
+    }
+};
+
+TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-owned fact, "
+          "naming the sender, the claimed shape and the seam that refused it") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    RefusalTap seam;
+    seam.arm(bus, RefusalReason::SeamUnresolved);
+    std::size_t all_refusals = 0;
+    bus.add_observer([&all_refusals](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused) {
+            ++all_refusals;
+        }
+    });
+
+    LoadResult dyn = kernel.load("lamp", ZEN_SO_SEAM_EMIT);
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    // One Ping in; the fixture reaches for `nobody.home` carrying SeamOnly v1,
+    // a shape no registry in this process has ever heard of.
+    bus.send(dyn.id, Message(ping(7)));
+    bus.pump();
+
+    // THE FACT THAT USED TO NOT EXIST.
+    CHECK(seam.count == 1);
+    CHECK(seam.last.sender == dyn.id);          // which artifact attempted it
+    CHECK(seam.last.schema_name == "SeamOnly"); // which shape it claimed
+    CHECK(seam.last.schema_version == 1u);
+    // NO TARGET IS MANUFACTURED. The emission never reached role resolution, so
+    // there is no weave to name — and inventing one would be a second lie on top
+    // of the silence this fixes.
+    CHECK_FALSE(seam.last.target.valid());
+
+    // ...and it is exactly one refusal in total: the seam rejection is the only
+    // thing that happened. Nothing was queued, so no delivery-time refusal
+    // follows it (that is what a doubled report would look like).
+    CHECK(all_refusals == 1);
+}
+
+TEST_CASE("R2E-0/P-011: the comparable NATIVE reach is still observable, and now the two tiers "
+          "report at the same altitude") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    std::size_t native_refusals = 0;
+    RefusalTap seam;
+    seam.arm(bus, RefusalReason::SeamUnresolved);
+    bus.add_observer([&native_refusals](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused && ev.refusal.reason == RefusalReason::NoSuchTarget) {
+            ++native_refusals;
+        }
+    });
+
+    // A native weave reaching for the same unheld role with a shape it holds
+    // typed: no registry resolution is involved, so it refuses at DELIVERY, as
+    // NoSuchTarget — the loud failure Night Lab witnessed in the control arm.
+    Registered native = register_probe(bus, {ping_schema()});
+    bus.send_as_to_role(native.id, "nobody.home", Message(ping(7)));
+    bus.pump();
+
+    CHECK(native_refusals == 1);
+    // The native path is a DIFFERENT refusal for a different reason, and this fix
+    // does not reclassify it: the seam was never involved.
+    CHECK(seam.count == 0);
+}
+
+TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam refusal — the "
+          "diagnostic fires on rejection only") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    RefusalTap seam;
+    seam.arm(bus, RefusalReason::SeamUnresolved);
+
+    Registered listener = register_probe(bus, {pong_schema()});
+    LoadResult dyn = kernel.load("dyn", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+
+    // The plain fixture replies Pong to reply_to — a shape the listener's
+    // accept-set registered, so the seam resolves it and the delivery lands.
+    bus.send(dyn.id, Message(ping(3), WeaveId{}, listener.id, 0));
+    bus.pump();
+
+    CHECK(seam.count == 0);
+    CHECK(listener.weave->count == 1);
+}
+
 } // TEST_SUITE

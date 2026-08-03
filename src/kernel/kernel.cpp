@@ -187,7 +187,35 @@ const ZenWeaveAbi* fetch_abi(void* lib, std::string& error) {
 struct HostCtx {
     loom::Bus* gated;
     loom::Switchboard* sb;
+    /// WHO IS SPEAKING (R2E-0). The gated Bus stamps this on everything it
+    /// routes, but a seam rejection never reaches the routing path — so the
+    /// diagnostic needs the id here to name the artifact that attempted the
+    /// emission. It is the host's own record, never anything the library says.
+    loom::WeaveId self;
 };
+
+/// Report a seam rejection to the host's diagnostics, and return the status the
+/// library was always given. ONE place, so no entry point can quietly forget:
+/// every `resolve_schema`/`admit` failure below routes through here.
+///
+/// `target` is the invalid id wherever the emission named no target (a
+/// publication, an answer whose conversation partner the seam never looked up) —
+/// see RefusalReason::SeamUnresolved on why a fabricated one would be worse than
+/// the silence this replaces.
+ZenStatus seam_reject(HostCtx* h, const loom::Unverified& u, loom::WeaveId target,
+                      const loom::Refusal& refusal) {
+    h->sb->note_seam_refusal(h->self, target, u.claimed_name(), u.claimed_version(), refusal);
+    return refusal.reason == loom::RefusalReason::SeamUnresolved ? ZEN_ERR_UNKNOWN_SCHEMA
+                                                                 : ZEN_ERR_REFUSED;
+}
+
+/// The two seam refusals, named once.
+inline loom::Refusal seam_unresolved() {
+    return loom::Refusal{loom::RefusalReason::SeamUnresolved, {}};
+}
+inline loom::Refusal seam_gate_refused(const loom::Admission& a) {
+    return loom::Refusal{loom::RefusalReason::GateRefused, a.first_error()};
+}
 
 } // namespace
 
@@ -258,11 +286,12 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
     loom::Unverified u = loom::parse(loom::as_view(payload, len));
     std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        // The one target the seam CAN honestly name: the library said where.
+        return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
     }
     // Route through the gated WeaveBus (it stamps the loaded Weave's id and
     // authorizes against its grant), exactly as a native Weave's send is.
@@ -278,11 +307,13 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
     loom::Unverified u = loom::parse(loom::as_view(payload, len));
     std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        // A publication names NO target. The diagnostic says so rather than
+        // inventing one; fanout never ran, so there is nobody to blame.
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
     }
     h->gated->publish(loom::Message(std::move(a).value(), loom::WeaveId{},
                                        loom::WeaveId{reply_to}, correlation));
@@ -299,11 +330,13 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        // A ROLE is a destination slot, not a WeaveId, and it is resolved at
+        // delivery — which never happens here. No target is named.
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
     }
     h->gated->send_to_role(role, loom::Message(std::move(a).value(), loom::WeaveId{},
                                                   loom::WeaveId{reply_to}, correlation));
@@ -326,11 +359,12 @@ static ZenStatus zen_host_answer_deferred(void* ctx, uint64_t token, const std::
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        // The conversation partner is bus-private; the seam never looked it up.
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
     }
     const loom::Ticket t = h->gated->spend_deferred(
         loom::DeferredAnswer::from_host_token(token),
@@ -344,11 +378,11 @@ static ZenStatus zen_host_answer(void* ctx, const std::uint8_t* payload, std::si
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
     }
     // Straight to the gated WeaveBus of the delivery in progress — the SAME
     // trusted operation `mail.answer()` reaches natively. The host owns the
@@ -378,11 +412,11 @@ static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint6
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
     }
     const loom::Ticket t = h->gated->office_send(
         as_role, loom::WeaveId{target},
@@ -401,11 +435,11 @@ static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, co
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
     }
     const loom::Ticket t = h->gated->office_send_to_role(
         as_role, to_role,
@@ -425,11 +459,11 @@ static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::ui
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
-        return ZEN_ERR_REFUSED;
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
     }
     const loom::OfficePublication p = h->gated->office_publish(
         as_role, loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
@@ -506,7 +540,7 @@ public:
         const std::string bytes = loom::serialize(in.payload);
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
-        HostCtx ctx{&bus, bus_};
+        HostCtx ctx{&bus, bus_, self_};
         ZenHostApi api{&ctx,
                        &zen_host_send,
                        &zen_host_publish,
