@@ -32,6 +32,56 @@ Depth and size caps make hostile input total (see
 `values-and-admission` and the fuzz suite); the UI vocabulary pins tree depth
 ≤ 256 and per-kind child arity.
 
+| Bound | Value | Scope | Overflow behavior |
+|---|---|---|---|
+| `kMaxBinaryDepth` | 64 | one nesting chain | `MalformedBytes` |
+| `kMaxListCount` | 2^20 | **one** list | `MalformedField`, "list count exceeds cap" |
+| `kMaxFieldBytes` | 2^28 | **one** `Text`/`Bytes` | `MalformedField` (also capped by remaining input) |
+| `kMaxDecodedCells` | **65,536** | **the whole decoded value** | `MalformedBytes`, "…exceeds the materialization budget…" |
+| `kMaxTypeDepth` | 64 | one schema descriptor's type | thrown refusal from `decode_schema` |
+
+### The decode-materialization bound
+
+**Wire-size limits bound serialized bytes. Decode-materialization limits bound
+the trusted host structure those bytes may create. Neither implies
+application-semantic validity.**
+
+Serialized size and decoded structural size are different facts. A zero-field
+`Message` has a zero-byte presence bitmask, so it costs no body bytes at all — a
+list of them commands a host-side population unrelated to the input's length. A
+compact value may legitimately represent many values; it may not command
+effectively unbounded host work.
+
+- **Unit** — one *decoded cell*: one `Cell`-sized slot the decoder
+  materialises. One per **declared** field of every message it enters (a `Value`
+  allocates exactly that many `std::optional<Cell>` slots, present or not) and
+  one per element of every list it decodes. So a message of *n* fields costs *n*
+  whether or not those fields arrive; a list of *k* elements costs *k*, plus
+  whatever each element then costs. `Text`/`Bytes` **payload** bytes are not
+  counted — a 1 MiB `Bytes` field is one cell (its size is `kMaxFieldBytes`'
+  business).
+- **Scope** — one allowance per **top-level decode**, shared by every nested
+  message, list, field and recursive helper. It is never reset per container, so
+  two individually-modest lists cannot be summed past it. Schema descriptors are
+  ordinary values and spend the same budget.
+- **Boundary** — **inclusive**: a decode totalling exactly 65,536 cells is
+  accepted; the first cell beyond it is refused.
+- **When** — spent *before* the cells exist. A list charges its whole declared
+  element count before building the first element. Exhaustion is a refusal, not
+  an allocation regretted afterwards, and never a `std::bad_alloc` backstop.
+- **Failure** — the ordinary parse-failure model: `admit()` returns a rejection
+  with `ErrorKind::MalformedBytes` and a detail naming the budget. No partial
+  `Value` escapes, none is admitted, no registry entry is derived from it, no
+  message is delivered.
+- **Ownership** — host-owned and automatic. Not a `parse()` parameter, not
+  widenable by a message, grant, schema, or payload; changing it is a build
+  decision (`src/detail/binary.hpp`).
+
+65,536 cells is roughly 6 MiB of worst-case decoded structure — an order of
+magnitude above the largest value any current consumer sends. A value larger
+than the bound cannot cross a serialized boundary at all: an in-process `Value`
+may exceed it, but nothing will re-admit its bytes.
+
 ## Isolation resource defaults (computed, no knob)
 
 memory = RAM/8 (cap 1 GiB, floor 128 MiB) · pids = 512 · cpu_weight = 100.

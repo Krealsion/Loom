@@ -49,7 +49,10 @@ a native callback that throws propagates to the host and poisons nothing — the
 bus restores its own state, the failed envelope is consumed with no outcome
 recorded, and a deferred answer already minted survives (MSG-10) · an observer
 may add or remove observers mid-notification: additions join the next event,
-removals take effect at once (MSG-11) ·
+removals take effect at once (MSG-11) · a value's serialized size does not bound
+what decoding it costs — a compact encoding may legitimately stand for many
+values, so decode carries its own shared, host-owned materialization budget
+(GATE-02, [reference/bounds.md](reference/bounds.md#the-decode-materialization-bound)) ·
 replacement
 preserves nothing and
 produces **no atomic incumbent snapshot** — a captured description can go
