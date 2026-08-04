@@ -82,6 +82,42 @@ std::string type_label(const TypeRef& t) {
 }
 
 // ===========================================================================
+//  The decode budget: bounded host-side materialization (R2F-A)
+// ===========================================================================
+
+// ONE budget per top-level decode, shared by every nested message, list, field
+// and recursive helper inside it — never reset per container, so two lists that
+// are each individually modest still cannot add up past the bound.
+//
+// It is spent BEFORE the cells it pays for exist: a list charges its whole
+// declared element count before the first element is built, and a message
+// charges its whole slot vector before the Value is constructed. Exhaustion is
+// therefore a refusal, never an allocation that is regretted afterwards, and it
+// is deliberately not a std::bad_alloc backstop.
+//
+// It is host-owned and automatic. Neither decoder takes a caller-supplied
+// budget, and nothing on the wire can widen it — an untrusted participant does
+// not get to choose how much host work it may command.
+struct DecodeBudget {
+    std::uint64_t remaining = detail::kMaxDecodedCells;
+
+    /// Charge `n` cells. On refusal nothing is charged and nothing is built —
+    /// the caller turns it into a fatal parse failure.
+    bool take(std::uint64_t n) noexcept {
+        if (n > remaining) {
+            return false;
+        }
+        remaining -= n;
+        return true;
+    }
+};
+
+std::string budget_exhausted_detail() {
+    return "decoded structure exceeds the materialization budget of " +
+           std::to_string(detail::kMaxDecodedCells) + " cells (shared by the whole value)";
+}
+
+// ===========================================================================
 //  Native binary: encode (Value -> bytes)
 // ===========================================================================
 
@@ -174,14 +210,26 @@ void bin_encode_value(const Cell& c, const TypeRef& t, std::string& out) {
 // absent fields are reported there, not here.
 struct BinaryDecoder {
     detail::BinReader& r;
+    DecodeBudget& budget; ///< shared by the whole top-level decode (R2F-A)
     std::vector<Error> errs;
     bool fatal = false;
 
-    explicit BinaryDecoder(detail::BinReader& reader) : r(reader) {}
+    BinaryDecoder(detail::BinReader& reader, DecodeBudget& b) : r(reader), budget(b) {}
 
     void fail(ErrorKind kind, std::string path, std::string expected, std::string detail) {
         errs.push_back(Error{kind, std::move(path), std::move(expected), "binary", std::move(detail)});
         fatal = true;
+    }
+
+    /// Charge `cells` against the shared budget, failing the whole decode if the
+    /// value's materialization would exceed the bound. Called before the cells
+    /// are created, never after.
+    bool afford(std::uint64_t cells, const std::string& path, std::string expected) {
+        if (budget.take(cells)) {
+            return true;
+        }
+        fail(ErrorKind::MalformedBytes, path, std::move(expected), budget_exhausted_detail());
+        return false;
     }
 
     void body(const Schema& door, Value& out, const std::string& base, int depth) {
@@ -304,6 +352,11 @@ struct BinaryDecoder {
             return true;
         }
         case Kind::Message: {
+            // A Value allocates one slot per DECLARED field, present or not, so
+            // the slot vector is charged before it exists.
+            if (!afford(t.message->fields().size(), path, type_label(t))) {
+                return false;
+            }
             Value nested(t.message);
             body(*t.message, nested, path, depth + 1);
             if (fatal) {
@@ -320,6 +373,12 @@ struct BinaryDecoder {
             }
             if (count > detail::kMaxListCount) {
                 fail(ErrorKind::MalformedField, path, type_label(t), "list count exceeds cap");
+                return false;
+            }
+            // The WHOLE commanded population is charged here, against the value's
+            // one shared budget, before a single element is built — an element
+            // may cost zero wire bytes, so nothing downstream would stop it.
+            if (!afford(count, path, type_label(t))) {
                 return false;
             }
             Cell::Array arr;
@@ -510,13 +569,26 @@ void json_encode_cell(const Cell& c, std::string& out) {
 struct JsonDecoder {
     std::vector<Error>& errs;
     bool collect_all;
+    DecodeBudget& budget;  ///< the SAME budget domain as native (R2F-A)
+    bool exhausted = false; ///< budget exhaustion halts collection: no coherent candidate
 
-    bool stop() const { return !collect_all && !errs.empty(); }
+    bool stop() const { return exhausted || (!collect_all && !errs.empty()); }
 
     void push(ErrorKind kind, std::string path, std::string expected, std::string actual,
               std::string detail = "") {
         errs.push_back(Error{kind, std::move(path), std::move(expected), std::move(actual),
                              std::move(detail)});
+    }
+
+    /// Charge `cells` before materialising them; on refusal the whole decode ends.
+    bool afford(std::uint64_t cells, const std::string& path, std::string expected) {
+        if (budget.take(cells)) {
+            return true;
+        }
+        push(ErrorKind::MalformedBytes, path, std::move(expected), "json",
+             budget_exhausted_detail());
+        exhausted = true;
+        return false;
     }
 
     bool cell(const detail::JsonValue& node, const TypeRef& t, Cell& out, const std::string& path);
@@ -637,6 +709,9 @@ bool JsonDecoder::cell(const detail::JsonValue& node, const TypeRef& t, Cell& ou
             push(ErrorKind::TypeMismatch, path, type_label(t), json_type_name(node));
             return false;
         }
+        if (!afford(t.message->fields().size(), path, type_label(t))) {
+            return false;
+        }
         Value nested(t.message);
         fields(node, *t.message, nested, path);
         out = Cell::message(std::move(nested));
@@ -645,6 +720,9 @@ bool JsonDecoder::cell(const detail::JsonValue& node, const TypeRef& t, Cell& ou
     case Kind::List: {
         if (node.type != JT::Array) {
             push(ErrorKind::TypeMismatch, path, type_label(t), json_type_name(node));
+            return false;
+        }
+        if (!afford(node.items.size(), path, type_label(t))) {
             return false;
         }
         Cell::Array arr;
@@ -722,10 +800,20 @@ Admission admit_against(const Unverified::Impl& impl, const std::shared_ptr<cons
             "the bytes were written against a different shape of this name and version"});
     }
 
+    // R2F-A: ONE budget for this whole decode, created here — the single place
+    // every untrusted seam funnels through (bus delivery, kernel re-admission,
+    // isolation manifests/snapshots/emissions, Bridge frames, persistence loads),
+    // in both encodings. No transport carries its own copy of this law.
+    DecodeBudget budget;
+    if (!budget.take(door->fields().size())) {
+        return Admission::reject(Error{ErrorKind::MalformedBytes, "", version_label(*door), "",
+                                       budget_exhausted_detail()});
+    }
     Value candidate(door);
+
     if (impl.format == Unverified::Impl::Format::Native) {
         detail::BinReader reader(impl.body);
-        BinaryDecoder dec(reader);
+        BinaryDecoder dec(reader, budget);
         dec.body(*door, candidate, "", 0);
         if (!dec.fatal && !reader.at_end()) {
             dec.fail(ErrorKind::MalformedBytes, "", "", "trailing bytes after the value");
@@ -734,9 +822,11 @@ Admission admit_against(const Unverified::Impl& impl, const std::shared_ptr<cons
     }
 
     std::vector<Error> decode_errs;
-    JsonDecoder dec{decode_errs, collect_all};
+    JsonDecoder dec{decode_errs, collect_all, budget};
     dec.fields(impl.json_fields, *door, candidate, "");
-    return finish(std::move(candidate), std::move(decode_errs), /*fatal=*/false, *door, collect_all);
+    // Exhaustion is fatal in both encodings: there is no coherent candidate to
+    // judge, so no partial value reaches validate_into and none can be accepted.
+    return finish(std::move(candidate), std::move(decode_errs), dec.exhausted, *door, collect_all);
 }
 
 Error envelope_error_of(const Unverified& u, const std::shared_ptr<const Unverified::Impl>& impl) {

@@ -25,6 +25,27 @@ inline constexpr int kMaxBinaryDepth = 64;            // nested message/list dep
 inline constexpr std::uint64_t kMaxListCount = 1u << 20; // elements in one list
 inline constexpr std::uint64_t kMaxFieldBytes = 1u << 28; // bytes in one Text/Bytes
 
+// The total decoded structure ONE top-level decode may materialise, shared by
+// every nested message and list inside it.
+//
+// The three caps above bound the *serialized* side — how deep, how many per
+// container, how many bytes in one field. None of them bounds the *decoded*
+// side, and the two are different facts: a zero-field Message has a zero-byte
+// presence bitmask, so it consumes no body bytes at all, and a list of them
+// commands a host-side population entirely unrelated to the input's length.
+//
+// The unit is one decoded cell: one Cell-sized slot the decoder materialises —
+// one per DECLARED field of every message it enters (a Value allocates exactly
+// that many std::optional<Cell> slots, present or not) and one per element of
+// every list it decodes. Text/Bytes payload bytes are not counted here; they are
+// bounded by kMaxFieldBytes and by the remaining input.
+//
+// Host-owned and automatic: no message, schema, payload, or caller may widen it;
+// changing it is a build decision. 65,536 cells is roughly 6 MiB of worst-case
+// decoded structure, an order of magnitude above the largest value any current
+// consumer sends. See docs/reference/bounds.md.
+inline constexpr std::uint64_t kMaxDecodedCells = 1u << 16; // cells in one decode
+
 // The single canonical quiet-NaN bit pattern (sign 0, exponent all ones, only the
 // most-significant mantissa bit set). Encode normalizes every NaN to this; decode
 // rejects any other NaN payload, keeping the format content-addressable.

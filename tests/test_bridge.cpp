@@ -86,6 +86,61 @@ private:
     }
 };
 
+// ---- R2F-A: a weave whose door is the amplification carrier -----------------------------------
+//
+// A zero-field Message costs ZERO wire bytes, so `Bulk`'s list is the shape whose decoded
+// population is unrelated to its serialized size. Registering this weave is what puts that door in
+// the bus's registry — which is exactly how a hostile participant reaches the host's decoder: it
+// declares a schema, the host registers it, and thereafter the host parses that participant's bytes
+// against it, IN THE HOST PROCESS, before any grant is consulted.
+
+std::shared_ptr<const loom::Schema> bulk_nothing_schema() {
+    static const auto s = loom::SchemaBuilder("R2FA.Nothing", 1).build();
+    return s;
+}
+std::shared_ptr<const loom::Schema> bulk_schema() {
+    static const auto s = loom::SchemaBuilder("R2FA.Bulk", 1)
+                              .list("items", loom::type_message(bulk_nothing_schema()))
+                              .build();
+    return s;
+}
+
+class BulkSink final : public loom::Weave {
+public:
+    std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
+        return {bulk_schema()};
+    }
+    void handle(const loom::Message& in, loom::Bus&) override {
+        const loom::Cell* items = in.payload.get("items");
+        delivered_.fetch_add(1);
+        received_.store(items != nullptr ? items->as_list().size() : 0);
+    }
+    loom::Value snapshot() const override {
+        loom::Value v(state_schema());
+        v.set("n", loom::Cell::integer(0));
+        return v;
+    }
+    loom::Value policy() const override {
+        loom::Value v(loom::lifecycle_policy_schema());
+        v.set("max_reloads", loom::Cell::integer(0));
+        v.set("revive_from_last_good", loom::Cell::boolean(true));
+        return v;
+    }
+    void revive(const loom::Value&) override {}
+
+    std::uint64_t delivered() const noexcept { return delivered_.load(); }
+    std::size_t received() const noexcept { return received_.load(); }
+
+private:
+    std::atomic<std::uint64_t> delivered_{0};
+    std::atomic<std::size_t> received_{0};
+    static std::shared_ptr<const loom::Schema> state_schema() {
+        static const auto s =
+            loom::SchemaBuilder("BulkSinkState", 1).field("n", loom::Kind::Int).build();
+        return s;
+    }
+};
+
 // Spin `predicate` (with a brief grace) until it holds or the timeout elapses; returns its final value.
 bool wait_until(const std::function<bool()>& predicate, int timeout_ms) {
     const auto deadline =
@@ -109,7 +164,9 @@ bool wait_until(const std::function<bool()>& predicate, int timeout_ms) {
 struct Host {
     loom::Switchboard bus;
     RecordingGreeter* greeter = nullptr;
+    BulkSink* bulk = nullptr; ///< non-null only under Host(WithBulk) — see R2F-A below
     loom::WeaveId gid{};
+    loom::WeaveId bulk_id{};
     socket_t listener = kInvalidSocket;
     std::uint16_t port = 0;
     std::string err;
@@ -117,10 +174,21 @@ struct Host {
     std::atomic<bool> stop{false};
     std::thread th;
 
-    Host() {
+    /// Opt-in second participant, so the default host every other case uses is unchanged.
+    enum WithBulk { kWithBulk };
+
+    Host() : Host(false) {}
+    explicit Host(WithBulk) : Host(true) {}
+
+    explicit Host(bool with_bulk) {
         auto g = std::make_unique<RecordingGreeter>();
         greeter = g.get();
         gid = bus.register_weave(std::move(g), loom::Grant{}.allow_any());
+        if (with_bulk) {
+            auto b = std::make_unique<BulkSink>();
+            bulk = b.get();
+            bulk_id = bus.register_weave(std::move(b), loom::Grant{}.allow_any());
+        }
         listener = bridge_listen_tcp(0, &err);
         REQUIRE_MESSAGE(listener != kInvalidSocket, err);
         port = bridge_socket_port(listener);
@@ -865,6 +933,123 @@ TEST_CASE("hardening (value, unknown schema): a distinct branch is refused, no l
     loom::Value greet(greet_schema());
     greet.set("msg", loom::Cell::text("ok"));
     raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 22, loom::serialize(greet)));
+    raw.flush();
+    CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
+}
+
+TEST_CASE("R2F-A (end-to-end): a compact frame cannot command an unbounded host decode") {
+    // The whole chain, over a REAL loopback socket, with the bytes chosen by the peer:
+    //   peer's schema is registered host-side  ->  peer sends a tiny frame  ->  the HOST
+    //   process parses and admits it, before any grant is consulted.
+    // That is the shape COLD-1 measured (37 wire bytes -> 1,048,576 admitted cells -> +102 MB
+    // of HOST RSS). It is refused here by the decoder, at the seam, for the whole host.
+    Host h{Host::kWithBulk};
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
+    BridgeChannel raw(cs);
+    std::string hello;
+    put_u32(hello, kBridgeProtocolVersion);
+    raw.queue(BridgeOp::Hello, hello);
+    raw.flush();
+    REQUIRE(wait_until(
+        [&] {
+            std::vector<BridgeIncoming> fr;
+            raw.poll(fr);
+            for (const BridgeIncoming& f : fr) {
+                if (f.op == BridgeOp::Welcome) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+
+    auto next_refusal = [&]() -> std::string {
+        std::string reason;
+        (void)wait_until(
+            [&] {
+                std::vector<BridgeIncoming> fr;
+                raw.poll(fr);
+                for (const BridgeIncoming& f : fr) {
+                    if (f.op == BridgeOp::SendRefused) {
+                        Cursor c(f.payload);
+                        std::uint64_t corr = 0;
+                        std::string_view r;
+                        if (c.u64(corr) && c.bytes(r)) {
+                            reason = std::string(r);
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            },
+            2000);
+        return reason;
+    };
+
+    // The forged payload: a Bulk v1 envelope whose one list claims 1,048,576 zero-body elements.
+    // The honest client cannot compose this — loom::serialize writes a count matching an array it
+    // actually holds — so it is built byte by byte, exactly as the sender-forge case does.
+    auto bulk_bytes = [](std::uint64_t count) {
+        const std::shared_ptr<const loom::Schema> s = bulk_schema();
+        std::string b;
+        b.push_back('\x5A');
+        b.push_back('\x4E');
+        b.push_back('\x01');
+        const auto nlen = static_cast<std::uint16_t>(s->name().size());
+        b.push_back(static_cast<char>(nlen & 0xFF));
+        b.push_back(static_cast<char>((nlen >> 8) & 0xFF));
+        b += s->name();
+        const std::uint32_t ver = s->version();
+        for (int i = 0; i < 4; ++i) {
+            b.push_back(static_cast<char>((ver >> (8 * i)) & 0xFF));
+        }
+        const std::uint64_t cid = s->content_id();
+        for (int i = 0; i < 8; ++i) {
+            b.push_back(static_cast<char>((cid >> (8 * i)) & 0xFF));
+        }
+        b.push_back('\x01'); // presence: field 0 present
+        std::uint64_t v = count;
+        while (v >= 0x80) {
+            b.push_back(static_cast<char>((v & 0x7F) | 0x80));
+            v >>= 7;
+        }
+        b.push_back(static_cast<char>(v));
+        return b;
+    };
+
+    const std::string hostile = bulk_bytes(1u << 20);
+    CHECK(hostile.size() < 64); // the entire attack, in fewer bytes than this comment
+
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.bulk_id.value, 0, 41, hostile));
+    raw.flush();
+
+    // (1) refused at the gate — the decoder's branch, not the unknown-schema branch: the door IS
+    //     registered, so this is the amplification path and nothing else.
+    const std::string reason = next_refusal();
+    CHECK(reason.find("gate refused") != std::string::npos);
+    CHECK(reason.find("materialization budget") != std::string::npos);
+    // (2) it did not become trusted state: no delivery, and nothing was ever handed to the weave.
+    CHECK(h.bulk->delivered() == 0);
+    CHECK(h.bulk->received() == 0);
+
+    // (3) the host is still usable afterwards — an HONEST Bulk of the same shape delivers, which
+    //     also proves the repair did not simply outlaw zero-field-message lists.
+    loom::Value honest(bulk_schema());
+    loom::Cell::Array arr;
+    for (int i = 0; i < 3; ++i) {
+        arr.push_back(loom::Cell::message(loom::Value(bulk_nothing_schema())));
+    }
+    honest.set("items", loom::Cell::list(std::move(arr)));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.bulk_id.value, 0, 42, loom::serialize(honest)));
+    raw.flush();
+    CHECK(wait_until([&] { return h.bulk->delivered() == 1; }, 2000));
+    CHECK(h.bulk->received() == 3);
+
+    // (4) and the OTHER participant on the same host is unharmed: the stream is in sync.
+    loom::Value greet(greet_schema());
+    greet.set("msg", loom::Cell::text("still here"));
+    raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 43, loom::serialize(greet)));
     raw.flush();
     CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
 }
