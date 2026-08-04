@@ -100,3 +100,48 @@ DOES NOT MEAN
 
 PROVEN BY — `deliver_admission` sets no reply authority; suite `kernel`
 ("first breath is not a question" cases, held-full capacity proof).
+
+## LIFE-06 — A weave outlives its own callback
+
+LAW — A Weave cannot be permanently removed, handed back, or destroyed while
+Loom is executing that same Weave's callback. `unregister_weave(id)` returns
+`nullptr`, changing nothing, when `id` is the weave whose `handle()` is running.
+
+MEANS
+- `nullptr` has exactly two meanings, both of them *nothing was removed*: the id
+  is unknown, or the id is the active target. A host may simply retry once the
+  callback has exited — by normal return **or** by exception unwind — and gets
+  the weave then;
+- the refusal is total, because the check precedes every mutation: no role
+  released, no personal or office claim forgotten, no deferred conversation
+  abandoned, no transaction invalidated, no registry entry erased, no ownership
+  transferred;
+- it covers **both** paths that call `Weave::handle` — ordinary delivery and the
+  committed-activation delivery — through one check on one fact, the ambient
+  active target each of them assigns around its own call;
+- Loom's own internal discard obeys it too: `finish_txn` unregisters an aborted
+  transaction's sealed candidate, and if that candidate is the running weave the
+  discard fails and leaves sealed wreckage (nonpublic, belonging to a
+  transaction that no longer exists) rather than destroying a live handler.
+
+DOES NOT MEAN
+- that no weave may be removed during a dispatch turn — removing a **different**
+  weave from inside a callback works exactly as before, returns its owner, and
+  performs its ordinary cleanup. The guard is exact to the active target, never
+  to `in_dispatch_`;
+- that removal became asynchronous, deferred, or queued — success still transfers
+  a unique owner the caller may destroy immediately, which is *why* refusing is
+  the only honest answer: Loom cannot both hand over unique ownership and keep it;
+- that ownership became shared, that any lifecycle operation is forbidden from a
+  callback, or that observers changed — a tap removing the just-delivered weave
+  runs after that weave's member call has already returned
+  ([MSG-11](messaging-laws.md));
+- that ordinary weave code gained this reach. A handler is delivered a `WeaveBus`,
+  which has no `unregister_weave`; the case exists only where host wiring
+  deliberately supplies concrete `Switchboard&` access.
+
+PROVEN BY — the active-target early return at the top of
+`Switchboard::unregister_weave`; suites `switchboard` (R2F-B cases: self-removal
+refused, retry after return, a different weave still removable, mutation-free
+refusal, exception unwind) and `kernel` (committed activation, the `finish_txn`
+discard route).
