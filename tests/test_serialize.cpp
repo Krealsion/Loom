@@ -7,9 +7,15 @@
 
 #include <zen/serialize.hpp>
 
+// The decoder's caps live with the wire primitives, internal to loom (the same
+// reach test_sdl.cpp already takes into src/). The R2F-A cases pin the exact
+// boundary, so they must read the real constant rather than a copy of it.
+#include "../src/detail/binary.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 
 using namespace loom;
@@ -37,6 +43,124 @@ Value round_trip(const Value& v, std::shared_ptr<const Schema> door) {
 // byte-identical (the format is canonical, so this is exact — and it treats all
 // NaNs as equal, since encode normalizes them).
 bool same_value(const Value& a, const Value& b) { return serialize(a) == serialize(b); }
+
+// ---- R2F-A wire forgery helpers -------------------------------------------
+//
+// The honest API cannot express the attack these cases pin: `serialize()` writes
+// a count that matches an array it actually holds, so a value commanding a
+// million elements would first have to BE a million elements. The hostile frame
+// therefore has to be forged byte by byte (the unsayable-attack rule).
+
+// The self-describing native envelope: magic, format version, schema name,
+// schema version, mandatory content id. Everything after it is the body.
+std::string native_header(const std::shared_ptr<const Schema>& s) {
+    std::string h;
+    h.push_back('\x5A'); // 'Z'
+    h.push_back('\x4E'); // 'N'
+    h.push_back('\x01'); // format version
+    const auto nlen = static_cast<std::uint16_t>(s->name().size());
+    h.push_back(static_cast<char>(nlen & 0xFF));
+    h.push_back(static_cast<char>((nlen >> 8) & 0xFF));
+    h += s->name();
+    const std::uint32_t v = s->version();
+    for (int i = 0; i < 4; ++i) {
+        h.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+    }
+    const std::uint64_t cid = s->content_id();
+    for (int i = 0; i < 8; ++i) {
+        h.push_back(static_cast<char>((cid >> (8 * i)) & 0xFF));
+    }
+    return h;
+}
+
+// Minimal (canonical) unsigned LEB128, matching detail::put_uvarint.
+void put_varint(std::string& out, std::uint64_t v) {
+    while (v >= 0x80) {
+        out.push_back(static_cast<char>((v & 0x7F) | 0x80));
+        v >>= 7;
+    }
+    out.push_back(static_cast<char>(v));
+}
+
+// A message with NO fields. Its presence bitmask is (0 + 7) / 8 = ZERO bytes
+// wide, so an element of this type consumes no body bytes at all — the encoding
+// whose decoded population is entirely unrelated to its serialized size. It is a
+// legitimate shape, not a malformation, which is exactly why the repair may not
+// simply outlaw it.
+std::shared_ptr<const Schema> nothing_schema() {
+    static const auto s = SchemaBuilder("R2FA.Nothing", 1).build();
+    return s;
+}
+
+// { items: List<Nothing> } — the amplification carrier.
+std::shared_ptr<const Schema> nothing_list_schema() {
+    static const auto s =
+        SchemaBuilder("R2FA.NothingList", 1).list("items", type_message(nothing_schema())).build();
+    return s;
+}
+
+// A forged NothingList whose one list field claims `count` zero-body elements.
+std::string nothing_list_bytes(std::uint64_t count) {
+    std::string b = native_header(nothing_list_schema());
+    b.push_back('\x01'); // presence bitmask: field 0 present
+    put_varint(b, count);
+    return b;
+}
+
+// { a: List<Nothing>?, b: List<Nothing>? } — two independently modest lists, for
+// proving the budget is one shared allowance and not one allowance per container.
+std::shared_ptr<const Schema> two_lists_schema() {
+    static const auto s = SchemaBuilder("R2FA.TwoLists", 1)
+                              .list("a", type_message(nothing_schema()), /*required=*/false)
+                              .list("b", type_message(nothing_schema()), /*required=*/false)
+                              .build();
+    return s;
+}
+
+// Present `a` and/or `b` with the given counts (a nullopt field stays absent).
+std::string two_lists_bytes(std::optional<std::uint64_t> a, std::optional<std::uint64_t> b) {
+    std::string out = native_header(two_lists_schema());
+    unsigned char mask = 0;
+    if (a) {
+        mask |= 0x01u;
+    }
+    if (b) {
+        mask |= 0x02u;
+    }
+    out.push_back(static_cast<char>(mask));
+    if (a) {
+        put_varint(out, *a);
+    }
+    if (b) {
+        put_varint(out, *b);
+    }
+    return out;
+}
+
+// A two-field message, both optional, so an element costs exactly one wire byte
+// (its presence bitmask) and exactly two decoded cells (its slot vector).
+std::shared_ptr<const Schema> pair_schema() {
+    static const auto s = SchemaBuilder("R2FA.Pair", 1)
+                              .field("x", Kind::Int, /*required=*/false)
+                              .field("y", Kind::Int, /*required=*/false)
+                              .build();
+    return s;
+}
+
+std::shared_ptr<const Schema> pair_list_schema() {
+    static const auto s =
+        SchemaBuilder("R2FA.PairList", 1).list("items", type_message(pair_schema())).build();
+    return s;
+}
+
+// `count` Pairs, each with no field present: 1 body byte per element.
+std::string pair_list_bytes(std::uint64_t count) {
+    std::string b = native_header(pair_list_schema());
+    b.push_back('\x01'); // presence bitmask: field 0 present
+    put_varint(b, count);
+    b.append(static_cast<std::size_t>(count), '\0'); // each Pair's empty presence mask
+    return b;
+}
 
 } // namespace
 
@@ -343,6 +467,179 @@ TEST_CASE("a payload missing a required field is refused via the gate") {
     REQUIRE_FALSE(a.ok());
     CHECK(a.first_error().kind == ErrorKind::MissingField);
     CHECK(a.first_error().path == "name");
+}
+
+// ---- R2F-A: bounded decode materialization ---------------------------------
+
+TEST_CASE("R2F-A: a compact value cannot command an unbounded decoded population") {
+    // The COLD-1 amplification, verbatim in shape: a few dozen wire bytes claim
+    // 1,048,576 zero-body elements — exactly kMaxListCount, so the per-list cap
+    // has nothing to say — and the pre-R2F-A decoder MATERIALISED all of them and
+    // ADMITTED the value (measured: 37 B -> 1,048,576 cells -> +102,336 kB RSS).
+    const std::string bytes = nothing_list_bytes(detail::kMaxListCount);
+    CHECK(bytes.size() < 64); // a compact value by any measure
+
+    Unverified u = parse(bytes);
+    REQUIRE(u.well_formed()); // the ENVELOPE is fine; the amplification is in the body
+
+    Admission a = admit(u, nothing_list_schema());
+    REQUIRE_FALSE(a.ok());
+    CHECK(a.first_error().kind == ErrorKind::MalformedBytes);
+    // The refusal names the LIST, never an element index: the budget is spent for
+    // the whole population before the first element is built, so there is no
+    // "items[65537]" to point at. This is the check-before-materialisation witness.
+    CHECK(a.first_error().path == "items");
+    CHECK(a.first_error().detail.find("materialization budget") != std::string::npos);
+}
+
+TEST_CASE("R2F-A: a valid compact list of zero-field messages still decodes") {
+    // The repair must not be `count <= remaining_wire_bytes`. A zero-field Message
+    // legitimately consumes zero body bytes, so 1,000 of them ride 4 body bytes —
+    // and that is a VALID value, not an attack.
+    const std::string bytes = nothing_list_bytes(1000);
+    CHECK(bytes.size() < 64);
+
+    Admission a = admit(parse(bytes), nothing_list_schema());
+    REQUIRE_MESSAGE(a.ok(), (a.ok() ? "" : a.first_error().message()));
+    CHECK(a.value().get("items")->as_list().size() == 1000);
+    for (const Cell& e : a.value().get("items")->as_list()) {
+        CHECK(e.kind() == Kind::Message);
+        CHECK(e.as_message() != nullptr);
+        CHECK(e.as_message()->field_count() == 0);
+    }
+}
+
+TEST_CASE("R2F-A: the materialization boundary is exact and inclusive") {
+    // The bound is INCLUSIVE: a decode whose total materialization is exactly
+    // kMaxDecodedCells is accepted; the first cell beyond it is refused.
+    // NothingList costs 1 (the door's own slot vector) + one cell per element.
+    const std::uint64_t at_the_bound = detail::kMaxDecodedCells - 1;
+
+    Admission exact = admit(parse(nothing_list_bytes(at_the_bound)), nothing_list_schema());
+    REQUIRE_MESSAGE(exact.ok(), (exact.ok() ? "" : exact.first_error().message()));
+    CHECK(exact.value().get("items")->as_list().size() == at_the_bound);
+
+    Admission over = admit(parse(nothing_list_bytes(at_the_bound + 1)), nothing_list_schema());
+    REQUIRE_FALSE(over.ok());
+    CHECK(over.first_error().kind == ErrorKind::MalformedBytes);
+    CHECK(over.first_error().path == "items");
+}
+
+TEST_CASE("R2F-A: the budget is ONE allowance shared by the whole value, not one per container") {
+    // Two lists, each comfortably inside the bound on its own. Their SUM is not.
+    // A per-container budget would admit the pair; one shared budget refuses it.
+    const std::uint64_t each = 40000; // 2 door slots + 40,000 << 65,536
+
+    Admission only_a = admit(parse(two_lists_bytes(each, std::nullopt)), two_lists_schema());
+    REQUIRE_MESSAGE(only_a.ok(), (only_a.ok() ? "" : only_a.first_error().message()));
+    CHECK(only_a.value().get("a")->as_list().size() == each);
+
+    Admission only_b = admit(parse(two_lists_bytes(std::nullopt, each)), two_lists_schema());
+    REQUIRE_MESSAGE(only_b.ok(), (only_b.ok() ? "" : only_b.first_error().message()));
+
+    Admission both = admit(parse(two_lists_bytes(each, each)), two_lists_schema());
+    REQUIRE_FALSE(both.ok());
+    CHECK(both.first_error().kind == ErrorKind::MalformedBytes);
+    CHECK(both.first_error().path == "b"); // the allowance ran out in the SECOND list
+    CHECK(both.first_error().detail.find("materialization budget") != std::string::npos);
+}
+
+TEST_CASE("R2F-A: a nested message charges its whole slot vector, present fields or not") {
+    // The unit is a decoded CELL SLOT, so the accounting is exact and checkable:
+    //   PairList of N  =  1 (door slot) + N (element cells) + 2N (each Pair's slots)
+    //                  =  1 + 3N
+    // Not one of the 2N is a *present* field — every Pair below arrives empty — and
+    // they still cost, because Value allocates one std::optional<Cell> per DECLARED
+    // field. A count-the-decoded-values unit would miss them entirely.
+    const std::uint64_t at_the_bound = (detail::kMaxDecodedCells - 1) / 3; // 1 + 3N == 65,536
+
+    Admission exact = admit(parse(pair_list_bytes(at_the_bound)), pair_list_schema());
+    REQUIRE_MESSAGE(exact.ok(), (exact.ok() ? "" : exact.first_error().message()));
+    CHECK(exact.value().get("items")->as_list().size() == at_the_bound);
+    CHECK(1 + 3 * at_the_bound == detail::kMaxDecodedCells);
+
+    Admission over = admit(parse(pair_list_bytes(at_the_bound + 1)), pair_list_schema());
+    REQUIRE_FALSE(over.ok());
+    CHECK(over.first_error().kind == ErrorKind::MalformedBytes);
+    // Here the list's own population fits; the allowance runs out inside an ELEMENT,
+    // and the path names the exact element whose slots could not be paid for.
+    CHECK(over.first_error().path.rfind("items[", 0) == 0);
+    CHECK(over.first_error().detail.find("materialization budget") != std::string::npos);
+}
+
+TEST_CASE("R2F-A: the budget counts STRUCTURE, not bytes — a big payload is one cell") {
+    // Wire-size limits (kMaxFieldBytes, and the remaining-input check) bound how
+    // many BYTES a field may carry. The materialization budget bounds how much
+    // STRUCTURE the decode may build. A 1 MiB Bytes field is a single cell and must
+    // stay perfectly legal.
+    Value v(fx::Blob());
+    v.set("data", Cell::bytes(Bytes(1u << 20, 0xAB)));
+    const std::string bytes = serialize(v);
+    CHECK(bytes.size() > (1u << 20));
+
+    Admission a = admit(parse(bytes), fx::Blob());
+    REQUIRE_MESSAGE(a.ok(), (a.ok() ? "" : a.first_error().message()));
+    CHECK(a.value().get("data")->as_bytes().size() == (1u << 20));
+}
+
+TEST_CASE("R2F-A: the budget does not swallow the older, more precise refusals") {
+    // A count past the per-list cap keeps its own diagnosis (MalformedField, "list
+    // count exceeds cap") — the cheaper container check still runs first, so the
+    // new bound weakened no existing malformed-input handling.
+    {
+        std::string bytes = native_header(fx::Inventory());
+        bytes.push_back('\x02'); // presence: only 'items'
+        for (int i = 0; i < 9; ++i) {
+            bytes.push_back('\xFF'); // a ~64-bit varint count
+        }
+        bytes.push_back('\x01');
+        Admission a = admit(parse(bytes), fx::Inventory());
+        REQUIRE_FALSE(a.ok());
+        CHECK(a.first_error().kind == ErrorKind::MalformedField);
+        CHECK(a.first_error().detail.find("exceeds cap") != std::string::npos);
+    }
+    // And a list whose elements DO cost bytes still runs out of input first: the
+    // truncation is reported as truncation, not as exhaustion.
+    {
+        std::string bytes = native_header(fx::Inventory());
+        bytes.push_back('\x04'); // presence: only 'counts' (List<Int>)
+        put_varint(bytes, 1000); // ...but no element bytes follow
+        Admission a = admit(parse(bytes), fx::Inventory());
+        REQUIRE_FALSE(a.ok());
+        CHECK(a.first_error().kind == ErrorKind::MalformedField);
+        CHECK(a.first_error().path == "counts[0]");
+    }
+}
+
+TEST_CASE("R2F-A: the compat (JSON) decoder shares the same budget domain") {
+    // The law lives in the decoder, not in a transport, and both encodings reach it
+    // through the same admit(). JSON cannot express the COMPACT amplification (an
+    // array element costs text), but the structure it builds is bounded identically.
+    std::string json = "{\"zen\":1,\"schema\":\"Inventory\",\"version\":1,\"fields\":{\"items\":[";
+    const std::uint64_t over = detail::kMaxDecodedCells + 1;
+    json.reserve(static_cast<std::size_t>(over) * 3 + 128);
+    for (std::uint64_t i = 0; i < over; ++i) {
+        if (i != 0) {
+            json.push_back(',');
+        }
+        json += "\"\"";
+    }
+    json += "]}}";
+
+    Unverified u = compat::parse(json);
+    REQUIRE(u.well_formed());
+    Admission a = admit(u, fx::Inventory());
+    REQUIRE_FALSE(a.ok());
+    CHECK(a.first_error().kind == ErrorKind::MalformedBytes);
+    CHECK(a.first_error().detail.find("materialization budget") != std::string::npos);
+
+    // ...and a modest JSON list still decodes, in the same breath.
+    Admission ok = admit(compat::parse("{\"zen\":1,\"schema\":\"Inventory\",\"version\":1,"
+                                       "\"fields\":{\"owner\":\"a\",\"items\":[\"x\",\"y\"],"
+                                       "\"counts\":[]}}"),
+                         fx::Inventory());
+    REQUIRE_MESSAGE(ok.ok(), (ok.ok() ? "" : ok.first_error().message()));
+    CHECK(ok.value().get("items")->as_list().size() == 2);
 }
 
 TEST_CASE("resolving the claim against a registry (native)") {
