@@ -14,15 +14,37 @@
 #include "switchboard_fixtures.hpp"
 #include "weavelib/office_protocol.hpp"
 
+#include <zen/isolation/channel.hpp>
 #include <zen/isolation/host.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/switchboard.hpp>
 
+#include <algorithm>
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <sys/socket.h>
+#include <unistd.h>
+
+namespace loom {
+/// The R2F-C observation instrument (see the friend declaration in zen/isolation/channel.hpp):
+/// reads the channel's OWN retained buffers, so the bounded-storage law is stated as an assertion
+/// about transport state rather than inferred from process memory -- RSS is allocator- and
+/// OS-sensitive and cannot tell "capacity remains reusable" from "sent bytes remain part of the
+/// live buffer". Those are different claims and only the second is F-18. This adds no member and
+/// no code path: channel.cpp's object file is byte-identical with and without the declaration.
+struct ChannelStorageProbe {
+    static std::size_t live(const Channel& c) { return c.outbox_.size(); }
+    static std::size_t sent(const Channel& c) { return c.out_pos_; }
+    static std::size_t unsent(const Channel& c) { return c.outbox_.size() - c.out_pos_; }
+    static std::size_t inbox(const Channel& c) { return c.inbox_.size(); }
+};
+} // namespace loom
 
 using namespace loom;
 using namespace loom;
@@ -954,6 +976,316 @@ TEST_CASE("harness honesty: an unprovable security proof FAILS by default, skips
     std::string none;
     CHECK(zenh::enforcement_decision(ok, {Capability::Filesystem}, none) == zenh::Gate::Proceed);
     CHECK(none.empty());
+}
+
+// ---- R2F-C: consumed transport bytes are history, not live channel storage (LIFE-07) -----------
+//
+// COLD-1 F-18 named BOTH framers. The isolation Channel is the parent side of every out-of-process
+// Weave link, so a long-lived host with a child that keeps up but never lets the socket run dry
+// retained the whole session's byte volume: flush() clear()ed the outbox only on an EXACT drain,
+// and kMaxBacklog measures the UNSENT residue, so nothing ever noticed. Measured pre-repair on this
+// shape: +261 B per round, strictly linear, 524,160 bytes already sent and still retained after
+// 2,000 rounds, failed() never set.
+//
+// These are deliberately INDEPENDENT of the BridgeChannel proofs in test_bridge.cpp: the two
+// framers are separate source files with separate repairs, and one is not evidence for the other.
+
+namespace {
+
+struct ChannelPair { // a socketpair with a deliberately small in-flight window
+    int producer = -1;
+    int consumer = -1;
+};
+
+ChannelPair channel_pair(bool shrink = true) {
+    int sv[2] = {-1, -1};
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    if (shrink) {
+        const int small = 2048; // the point is the RULE, not the volume
+        (void)::setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+        (void)::setsockopt(sv[1], SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+    }
+    return ChannelPair{sv[0], sv[1]};
+}
+
+constexpr std::size_t kChBodyLen = 200;
+constexpr std::size_t kChFrameLen = 5 + kChBodyLen;
+
+std::string ch_body(int i) {
+    std::string p = "frame:" + std::to_string(i) + ":";
+    p.resize(kChBodyLen, static_cast<char>('a' + (i % 26)));
+    return p;
+}
+
+/// Where a byte offset falls in the uniform frame layout above. The outbox itself has no such
+/// structure -- it is an undifferentiated byte stream, so a compaction boundary may land anywhere
+/// and the move is the same either way. This only classifies what the run actually exercised.
+enum class ChLanding { FrameEdge, InHeader, InPayload };
+ChLanding ch_classify(std::size_t offset) {
+    const std::size_t off = offset % kChFrameLen;
+    if (off == 0) {
+        return ChLanding::FrameEdge;
+    }
+    return off < 5 ? ChLanding::InHeader : ChLanding::InPayload;
+}
+
+} // namespace
+
+TEST_CASE("R2F-C (isolation): a channel that is never idle still reclaims what it has already sent") {
+    using P = ChannelStorageProbe;
+    const ChannelPair fds = channel_pair();
+    Channel ch(fds.producer);
+    Channel peer(fds.consumer);
+
+    int next = 0;
+    std::size_t queued_bytes = 0; // counted here, so it survives every clear() and compaction
+    const auto queue_one = [&]() {
+        ch.queue(Op::Emit, ch_body(next++));
+        queued_bytes += kChFrameLen;
+    };
+
+    // Phase 1 -- measure the socket's in-flight window: nothing has been drained yet, so everything
+    // queued minus what is still unsent is exactly what the socket swallowed.
+    for (int i = 0; i < 20000 && P::unsent(ch) == 0; ++i) {
+        queue_one();
+        ch.flush();
+    }
+    REQUIRE(P::unsent(ch) > 0);
+    const std::size_t window = queued_bytes - P::unsent(ch);
+
+    // Phase 2 -- a standing backlog LARGER than that window, so no later flush can empty the buffer.
+    for (int i = 0; i < 20000 && P::unsent(ch) < window + 8192; ++i) {
+        queue_one();
+        ch.flush();
+    }
+    const std::size_t target = P::unsent(ch);
+    REQUIRE(target > window);
+
+    std::vector<Incoming> got;
+    std::size_t compactions = 0;
+    std::size_t bytes_moved = 0;
+    std::size_t max_live = 0;
+    int in_header = 0;
+    int in_payload = 0;
+    int on_edge = 0;
+    int law_violations = 0;
+    int idle_rounds = 0;
+    constexpr int kRounds = 400;
+    for (int r = 0; r < kRounds; ++r) {
+        peer.poll(got);                  // the child keeps up: it drains everything available ...
+        while (P::unsent(ch) < target) { // ... and the host tops the backlog straight back up
+            queue_one();
+        }
+        const std::size_t live_before = P::live(ch);
+        ch.flush();
+        if (P::live(ch) < live_before) { // only a clear()/compaction can shrink the buffer
+            ++compactions;
+            bytes_moved += P::live(ch);  // after erase(0, out_pos_) the size IS the bytes moved
+            switch (ch_classify(queued_bytes - P::unsent(ch))) {
+            case ChLanding::InHeader:
+                ++in_header;
+                break;
+            case ChLanding::InPayload:
+                ++in_payload;
+                break;
+            case ChLanding::FrameEdge:
+                ++on_edge;
+                break;
+            }
+        }
+        if (P::unsent(ch) == 0) {
+            ++idle_rounds; // the exact-drain clear() would have been reachable after all
+        }
+        if (P::live(ch) > 2 * P::unsent(ch)) {
+            ++law_violations; // THE LAW: live storage tracks the BACKLOG, never the history
+        }
+        max_live = std::max(max_live, P::live(ch));
+    }
+
+    MESSAGE("window " << window << " B; queued " << queued_bytes << " B over " << next
+                      << " frames; live " << P::live(ch) << " B (high-water " << max_live
+                      << " B, backlog target " << target << " B); " << compactions
+                      << " compactions moved " << bytes_moved << " B; boundary landed in-header "
+                      << in_header << ", in-payload " << in_payload << ", on-edge " << on_edge);
+
+    CHECK(idle_rounds == 0);      // the buffer never once became empty -- the F-18 shape held
+    CHECK(law_violations == 0);   // ... and live storage stayed bounded by twice the backlog anyway
+    CHECK(compactions > 0);       // reclamation actually ran (guards a vacuously bounded pass)
+    CHECK(bytes_moved <= queued_bytes); // amortized: a move never costs more than the bytes it drops
+    CHECK(queued_bytes > 20 * max_live); // history dwarfs the high-water of live storage
+    CHECK(in_header + in_payload > 0);   // a compaction really did split a frame and carry the rest
+    CHECK_FALSE(ch.failed());
+    CHECK_FALSE(peer.failed());
+
+    // Every frame still arrives, exactly once, in order, byte for byte.
+    for (int i = 0; i < 20000 && static_cast<int>(got.size()) < next; ++i) {
+        ch.flush();
+        peer.poll(got);
+    }
+    REQUIRE(static_cast<int>(got.size()) == next);
+    std::size_t first_bad = static_cast<std::size_t>(-1);
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        if (got[i].op != Op::Emit || got[i].payload != ch_body(static_cast<int>(i))) {
+            first_bad = i;
+            break;
+        }
+    }
+    CHECK(first_bad == static_cast<std::size_t>(-1)); // index of the first corrupted/reordered frame
+}
+
+TEST_CASE("R2F-C (isolation): frames queued behind a half-sent one keep their order and bytes") {
+    using P = ChannelStorageProbe;
+    const ChannelPair fds = channel_pair();
+    Channel ch(fds.producer);
+    Channel peer(fds.consumer);
+
+    int next = 0;
+    std::size_t queued_bytes = 0;
+    const auto queue_one = [&]() {
+        ch.queue(Op::Emit, ch_body(next++));
+        queued_bytes += kChFrameLen;
+    };
+    for (int i = 0; i < 20000 && P::unsent(ch) == 0; ++i) {
+        queue_one();
+        ch.flush();
+    }
+    REQUIRE(P::unsent(ch) > 0);
+    const std::size_t window = queued_bytes - P::unsent(ch);
+    for (int i = 0; i < 20000 && P::unsent(ch) < 4 * window + 4096; ++i) {
+        queue_one();
+        ch.flush();
+    }
+    // Three COMPLETE frames behind the half-sent one, none of them yet touched by the socket.
+    const int first_untouched = next;
+    for (int i = 0; i < 3; ++i) {
+        queue_one();
+    }
+    REQUIRE(P::unsent(ch) > 3 * kChFrameLen);
+
+    std::vector<Incoming> got;
+    std::size_t compactions_with_unsent_data = 0;
+    for (int i = 0; i < 20000 && static_cast<int>(got.size()) < next; ++i) {
+        peer.poll(got);
+        const std::size_t live_before = P::live(ch);
+        ch.flush();
+        if (P::live(ch) < live_before && P::unsent(ch) > 0) {
+            ++compactions_with_unsent_data;
+        }
+    }
+    MESSAGE("compactions carrying live data: " << compactions_with_unsent_data);
+    CHECK(compactions_with_unsent_data > 0); // the reclamation under test actually ran
+
+    REQUIRE(static_cast<int>(got.size()) == next);
+    std::size_t first_bad = static_cast<std::size_t>(-1);
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        if (got[i].op != Op::Emit || got[i].payload != ch_body(static_cast<int>(i))) {
+            first_bad = i;
+            break;
+        }
+    }
+    CHECK(first_bad == static_cast<std::size_t>(-1));
+    CHECK(got[static_cast<std::size_t>(first_untouched)].payload == ch_body(first_untouched));
+    CHECK(got[static_cast<std::size_t>(first_untouched) + 1].payload == ch_body(first_untouched + 1));
+    CHECK(got[static_cast<std::size_t>(first_untouched) + 2].payload == ch_body(first_untouched + 2));
+}
+
+TEST_CASE("R2F-C (isolation): reclamation moves the backlog, it does not shrink it") {
+    using P = ChannelStorageProbe;
+    const ChannelPair fds = channel_pair();
+    Channel ch(fds.producer);
+    Channel peer(fds.consumer);
+
+    // kMaxBacklog is measured as `outbox_.size() - out_pos_`. A compaction subtracts the SAME
+    // amount from both terms, so the number the cap reads is invariant -- which is what keeps a
+    // child that will not drain contained exactly as before.
+    int next = 0;
+    for (int i = 0; i < 20000 && P::unsent(ch) == 0; ++i) {
+        ch.queue(Op::Emit, ch_body(next++));
+        ch.flush();
+    }
+    REQUIRE(P::unsent(ch) > 0);
+    for (int i = 0; i < 200; ++i) {
+        ch.queue(Op::Emit, ch_body(next++));
+    }
+
+    std::vector<Incoming> got;
+    bool saw_compaction = false;
+    for (int i = 0; i < 20000 && !saw_compaction; ++i) {
+        peer.poll(got);
+        const std::size_t live_before = P::live(ch);
+        const std::size_t unsent_before = P::unsent(ch);
+        if (unsent_before == 0) {
+            break;
+        }
+        ch.flush();
+        if (P::live(ch) < live_before && P::unsent(ch) > 0) {
+            saw_compaction = true;
+            CHECK(P::sent(ch) == 0);               // the offset moved to the front ...
+            CHECK(P::live(ch) == P::unsent(ch));   // ... and the buffer is now exactly the backlog
+            CHECK(P::unsent(ch) <= unsent_before); // the backlog never grew across the move
+        }
+    }
+    REQUIRE(saw_compaction);
+
+    // The caps still fire on a channel whose reclamation has already been exercised.
+    const std::string mib(1024u * 1024u, 'z');
+    for (int i = 0; i < 80 && !ch.failed(); ++i) {
+        ch.queue(Op::Emit, mib);
+    }
+    CHECK(ch.failed()); // an undrained backlog is contained, exactly as before the repair
+
+    const std::size_t live_when_failed = P::live(ch);
+    ch.flush();
+    CHECK(ch.failed());
+    CHECK(ch.done());
+    CHECK(P::live(ch) == live_when_failed); // flush() on a failed channel compacts nothing
+    ch.queue(Op::Emit, "ignored");
+    CHECK(P::live(ch) == live_when_failed); // and queue() is still a no-op
+}
+
+TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
+    // The finding named the outbox. Its sibling already reclaims decoded bytes unconditionally
+    // (`inbox_.erase(0, pos)`), so a permanently incomplete suffix does NOT pin consumed history in
+    // place. Measured, not assumed -- the evidence for "inspected, already correct".
+    using P = ChannelStorageProbe;
+    const ChannelPair fds = channel_pair(/*shrink=*/false); // raw pushes must never block the test
+    Channel ch(fds.consumer);
+
+    constexpr int kFrames = 400;
+    std::string stream;
+    for (int i = 0; i <= kFrames; ++i) {
+        put_u32(stream, static_cast<std::uint32_t>(kChBodyLen));
+        put_u8(stream, static_cast<std::uint8_t>(Op::Emit));
+        stream += ch_body(i);
+    }
+
+    std::vector<Incoming> got;
+    std::size_t max_inbox = 0;
+    std::size_t pos = 0;
+    for (int i = 0; i < kFrames; ++i) {
+        // Round 1 pushes one frame plus three bytes; every later round pushes exactly one frame's
+        // worth. So EVERY poll() completes one frame and is left holding a 3-byte partial header.
+        // The suffix is a GENUINE prefix of the next frame; junk would merely desync the framer,
+        // which is a different (and already covered) question.
+        const std::size_t push = (i == 0) ? kChFrameLen + 3 : kChFrameLen;
+        std::size_t off = 0;
+        for (int spin = 0; off < push && spin < 10000; ++spin) {
+            const ssize_t w = ::send(fds.producer, stream.data() + pos + off, push - off, 0);
+            if (w > 0) {
+                off += static_cast<std::size_t>(w); // the unshrunk socket holds the whole run
+            }
+        }
+        pos += push;
+        ch.poll(got);
+        max_inbox = std::max(max_inbox, P::inbox(ch));
+    }
+    MESSAGE("pushed " << pos << " B through the framer; high-water live inbox " << max_inbox << " B");
+    CHECK(static_cast<int>(got.size()) == kFrames);
+    CHECK(P::inbox(ch) == 3);           // exactly the incomplete suffix, and nothing behind it
+    CHECK(max_inbox < 2 * kChFrameLen); // bounded by framing state, never by the traffic volume
+    CHECK(pos > 20 * max_inbox);
+    CHECK_FALSE(ch.failed());
+    ::close(fds.producer);
 }
 
 // Keep this LAST in the file: a positive tally so a green can never mean "every OS-enforcement case
