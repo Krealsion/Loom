@@ -1,7 +1,7 @@
 # Lifecycle — reference
 
 How a weave lives, dies, revives, is replaced in place, and is told it went
-live. Laws: [LIFE-01..05](../laws/lifecycle-laws.md). For replacing a *role
+live. Laws: [LIFE-01..06](../laws/lifecycle-laws.md). For replacing a *role
 holder* with a verified successor, see
 [prepared-replacement](prepared-replacement.md).
 
@@ -30,7 +30,45 @@ deferred answer rights bind to the **incarnation**
   fails visibly). Advances the incarnation.
 - `unregister_weave(id)` — permanent removal; hands the weave back to the
   caller. Pending deliveries to it refuse `NoSuchTarget`; its own queued
-  speech dies with it (fail-closed).
+  speech dies with it (fail-closed). Returns `nullptr` — changing nothing — for
+  an unknown id **and** for the weave whose callback is running (below).
+
+## Permanent removal and the active callback
+
+*A weave outlives its own callback* ([LIFE-06](../laws/lifecycle-laws.md)).
+
+| | |
+|---|---|
+| success | transfers ownership: a `unique_ptr` the caller may destroy at once |
+| unknown id | `nullptr`, nothing mutated |
+| the id is the weave whose callback is running | `nullptr`, nothing mutated |
+
+Success is what makes the refusal necessary rather than tidy: the caller
+receives a **unique** owner, so there is no honest "erase now, destroy later" —
+Loom cannot both hand over unique ownership and secretly retain it. Refusing is
+the only answer that keeps the returned owner true.
+
+The rule is **exact to the active target**:
+
+- retry after the callback exits — by return *or* by exception unwind — and the
+  removal succeeds normally, with every ordinary effect (role released, claims
+  forgotten, deferred conversations ended, transactions invalidated);
+- another weave may still be removed **during** the callback, immediately and
+  with its ordinary cleanup. This is not `in_dispatch_`, and the distinction is
+  load-bearing — the transaction layer removes a *different* weave from inside a
+  delivery whenever a candidate refuses its preparation;
+- it covers both callbacks Loom makes: ordinary `handle` and the
+  committed-activation `handle`. The second matters most — the topology has
+  already moved by then, and there is no rollback to reach for;
+- Loom's own discard obeys it. `finish_txn` unregisters an aborted transaction's
+  sealed candidate; when that candidate *is* the running weave, the discard
+  fails and leaves sealed wreckage (nonpublic, owned by no live transaction)
+  rather than destroying a live handler.
+
+**Authority, honestly:** ordinary weave code is handed a `WeaveBus`, which has no
+`unregister_weave`. This case exists only where host wiring deliberately gives a
+weave concrete `Switchboard&` access — a supported pattern, not ambient weave
+authority.
 
 ## `zen.Activated`
 

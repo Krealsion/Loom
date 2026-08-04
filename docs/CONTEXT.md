@@ -22,6 +22,7 @@ the named laws → the reference page → tests when exactness matters.
 | answers, deferral, provenance | reference/messaging.md#answers | ANS-01..07 | tests/test_provenance.cpp | decisions/readiness-is-authenticated-conversation.md |
 | office authorship (speaking as a role) | reference/messaging.md#office-authorship-role-authored-provenance | MSG-07, MSG-04 | tests/test_role_authorship.cpp, test_kernel.cpp (v5), test_isolation.cpp (pipe) | decisions/office-authorship-is-deliberate.md, evidence/night-lab.md |
 | lifecycle, zen.Activated | reference/lifecycle.md | LIFE-01..05 | tests/test_provenance.cpp, test_manager.cpp | decisions/lifecycle-authority-is-loom-owned.md, decisions/committed-activation-is-not-answerable.md |
+| permanent removal during a callback (a weave, or its host, unregistering the weave whose handler is running) | reference/lifecycle.md#permanent-removal-and-the-active-callback | LIFE-06 | tests/test_switchboard.cpp, test_kernel.cpp (R2F-B cases) | — |
 | grants, isolation, powerbox | reference/capabilities.md | GATE-03, MSG-02 | tests/test_capabilities.cpp, test_isolation.cpp, test_policy.cpp | history (B1–B5, P1–P2) |
 | dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..04 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
 | prepared replacement | guides/replacing-a-service.md, reference/prepared-replacement.md | PR-01..09 | tests/test_kernel.cpp (R2B-3*/4a sections) | decisions/admission-and-activation-share-one-boundary.md, decisions/no-rollback-after-committed-production.md, evidence/night-lab.md |
@@ -49,7 +50,10 @@ a native callback that throws propagates to the host and poisons nothing — the
 bus restores its own state, the failed envelope is consumed with no outcome
 recorded, and a deferred answer already minted survives (MSG-10) · an observer
 may add or remove observers mid-notification: additions join the next event,
-removals take effect at once (MSG-11) · a value's serialized size does not bound
+removals take effect at once (MSG-11) · `unregister_weave` returns `nullptr`
+without mutating anything when the id names the weave whose callback is running,
+and the host may simply retry after it exits — while a **different** weave is
+still removable during that same callback (LIFE-06) · a value's serialized size does not bound
 what decoding it costs — a compact encoding may legitimately stand for many
 values, so decode carries its own shared, host-owned materialization budget
 (GATE-02, [reference/bounds.md](reference/bounds.md#the-decode-materialization-bound)) ·

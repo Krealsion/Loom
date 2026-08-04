@@ -23,6 +23,13 @@ the next turn
 A `.so` weave is a different boundary: its exceptions are caught at the ABI seam
 and never reach the Switchboard ([dynamic-abi](dynamic-abi.md)).
 
+**The weave being dispatched cannot be removed under itself.**
+`unregister_weave` refuses — `nullptr`, nothing mutated — for the exact weave
+whose callback is running, on both the ordinary and the committed-activation
+call, and works again the moment that callback exits
+([LIFE-06](../laws/lifecycle-laws.md), [lifecycle](lifecycle.md#permanent-removal-and-the-active-callback)).
+Removing a *different* weave mid-callback is untouched.
+
 ## The envelope and the delivery order
 
 `Message{payload, sender, reply_to, correlation}` is what crosses; everything
