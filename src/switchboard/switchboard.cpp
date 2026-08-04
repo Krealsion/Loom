@@ -335,6 +335,38 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 }
 
 std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
+    // A WEAVE OUTLIVES ITS OWN CALLBACK (R2F-B).
+    //
+    // FIRST, before the lookup and before any mutation whatever, because the
+    // entire content of this refusal is that NOTHING happened: no role
+    // released, no office or personal claim forgotten, no conversation
+    // abandoned, no transaction invalidated, no registry entry erased and no
+    // ownership transferred. A check placed one line later would be a check
+    // that undoes things.
+    //
+    // WHY IT MUST REFUSE RATHER THAN DEFER. This function's contract is that a
+    // successful removal hands the caller a `unique_ptr` — a unique owner it may
+    // reset on the next line. So "erase now, destroy later" is not an
+    // implementation this signature can have: Loom cannot both transfer unique
+    // ownership and secretly retain the same object. Refusing is the only answer
+    // that keeps the returned owner honest.
+    //
+    // `current_target_` IS THE EXACT OBJECT WHOSE MEMBER FUNCTION IS RUNNING —
+    // assigned immediately around each of the two `Weave::handle` calls
+    // (`deliver_one` and `deliver_admission`) and cleared by `DeliveryScope` on
+    // every exit path including a throw, so removability returns the moment the
+    // callback does. Deliberately NOT `in_dispatch_`, which names a much wider
+    // interval: a dispatch turn may legitimately remove a DIFFERENT weave — the
+    // transaction layer does exactly that when a candidate refuses preparation —
+    // and freezing the whole registry for the length of a turn would make one
+    // participant's delivery everybody's problem.
+    //
+    // `nullptr` therefore now carries two meanings, both of them "nothing was
+    // removed": the id is unknown, or the id is the weave whose callback is
+    // active. A host that cares retries once the callback has returned.
+    if (current_target_.valid() && current_target_ == id) {
+        return nullptr;
+    }
     auto it = weaves_.find(id.value);
     if (it == weaves_.end()) {
         return nullptr;
