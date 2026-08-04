@@ -26,6 +26,29 @@ Also structural (not knobs): one active replacement transaction per incumbent
 | `kMaxOperatorConnections` | 32 | accept-then-shed, `declined_count()` visible |
 | `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone` |
 
+## Transport channels (framed byte channels)
+
+Both framers -- the isolation `Channel` (parent side of an out-of-process Weave
+host) and the portable `BridgeChannel` -- share these.
+
+| Bound | Value | Scope | Behavior |
+|---|---|---|---|
+| `kMaxFrameLen` | 64 MiB | one frame's payload | over-cap: the channel is marked `failed()` (send) / the framer fails cleanly, no over-read (receive) |
+| `kMaxBacklog` | 64 MiB | the **unsent** send backlog, and the unread receive buffer | `failed()` -- a peer that will not drain is contained, never allowed to block, hang or OOM the host |
+| live send storage | < 2x the unsent backlog | the outbox buffer | not a knob: an invariant of the amortized prefix reclamation ([LIFE-07](../laws/lifecycle-laws.md)) |
+| live receive storage | the unread/incomplete suffix | the inbox buffer | not a knob: the decoded prefix is erased at the end of every poll that decoded it |
+
+The two caps overlap on the send side: since `kMaxFrameLen == kMaxBacklog`, a
+single frame at exactly the frame cap already exceeds the backlog cap by its
+5-byte header, so the largest frame that can actually be queued is
+`kMaxBacklog - 5`. The per-frame check is therefore **masked** by the backlog
+check for any one frame -- deliberate overlap, not a redundant guard: the frame
+cap is what a *receiver* enforces on a length it was told.
+
+Neither live-storage row is a capacity a caller can exhaust; both are statements
+about what the channel is allowed to keep. They are bounds on *history*, and
+that is the whole content of [LIFE-07](../laws/lifecycle-laws.md).
+
 ## Gate / serialization
 
 Depth and size caps make hostile input total (see

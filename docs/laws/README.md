@@ -17,7 +17,7 @@ claim an enforcement, or a proof, you did not earn.)
 | `GATE-xx` | [admission-laws.md](admission-laws.md) | the gate, schemas, untrusted-until-proven |
 | `MSG-xx` | [messaging-laws.md](messaging-laws.md) | the Switchboard: dispatch, identity, roles, refusals |
 | `ANS-xx` | [answer-authority-laws.md](answer-authority-laws.md) | answer authority, deferral, provenance |
-| `LIFE-xx` | [lifecycle-laws.md](lifecycle-laws.md) | `zen.Activated`, lifecycle authority |
+| `LIFE-xx` | [lifecycle-laws.md](lifecycle-laws.md) | `zen.Activated`, lifecycle authority, and lifetime — of a weave through its callback, and of bytes in a transport buffer |
 | `PR-xx` | [replacement-laws.md](replacement-laws.md) | the candidate seal, the transaction, admission |
 | `SENSE-xx` | [sense-laws.md](sense-laws.md) | latest claims: settlement, provenance, office claims, authority, lifetime |
 | `HANDOFF-xx` | [handoff-laws.md](handoff-laws.md) | authored continuity across an incompatible schema: migration, the FIFO boundary, protocol vs state |

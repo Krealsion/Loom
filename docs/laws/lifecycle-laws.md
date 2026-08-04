@@ -145,3 +145,53 @@ PROVEN BY — the active-target early return at the top of
 refused, retry after return, a different weave still removable, mutation-free
 refusal, exception unwind) and `kernel` (committed activation, the `finish_txn`
 discard route).
+
+## LIFE-07 — Consumed transport bytes are history, not live channel storage
+
+LAW — A framed channel's live receive and send buffers hold only the bytes that
+still matter to framing: the unread/incomplete suffix on the way in, the backlog
+still owed to the peer on the way out. Neither grows with the total volume that
+has crossed the channel.
+
+MEANS
+- **the send side is bounded by the backlog, not the session.** After every
+  `flush()` the already-sent prefix is smaller than the unsent remainder, so
+  live storage is under **twice the backlog still owed** — and that backlog is
+  itself capped by `kMaxBacklog`. A channel alive for weeks that has passed a
+  terabyte holds no more than one that has just started;
+- **reclamation is amortized, not per-frame.** The prefix is compacted only when
+  it is at least as large as the remainder, so a move never copies more bytes
+  than it discards: total copying stays linear in the bytes ever queued, never
+  quadratic in the frame count. Ten thousand tiny frames do not perform ten
+  thousand moves of the whole buffer;
+- **the receive side reclaims unconditionally.** Every decoded prefix is erased
+  at the end of the poll that decoded it, so a permanently incomplete suffix —
+  the shape that defeats "clear only when the buffer is exactly empty" — pins
+  nothing behind it;
+- **nothing about framing moved.** Frame bytes, order, the length encoding,
+  `kMaxFrameLen`, `kMaxBacklog`, EOF, failed state, non-blocking behavior and
+  readiness are exactly as before. A compaction subtracts the same amount from
+  both terms of the backlog cap, so the number that cap reads is invariant.
+
+DOES NOT MEAN
+- an **RSS guarantee**. The allocation is kept for reuse at its high-water mark;
+  what is bounded is the channel's *live* buffer, not what the allocator has
+  returned to the OS. "Capacity remains reusable" and "sent bytes remain part of
+  the live buffer" are different claims, and only the second was the defect;
+- `shrink_to_fit()` after every frame, a ring buffer, scatter/gather parsing, or
+  any new transport machinery;
+- a **message-history** feature. Nothing retains delivered frames for replay;
+- flow control, backpressure, congestion control, or a queue-size policy. A peer
+  that will not drain is still contained by `kMaxBacklog` failing the channel,
+  exactly as before — reclamation moves the backlog, it never shrinks it;
+- that a failed channel reclaims. Once `failed()`, `flush()` returns before
+  doing anything: the state that records why it died is not disturbed.
+
+PROVEN BY — the compaction branch at the end of `Channel::flush()`
+(`src/isolation/channel.cpp`) and `BridgeChannel::flush()`
+(`src/bridge/channel.cpp`), and the unconditional `inbox_.erase(0, pos)` in each
+`poll()`. Suites `isolation` and `bridge` (R2F-C cases, one independent set per
+framer: a never-idle channel over a persistent backlog, frames queued behind a
+half-sent one, backlog-cap and failed-channel invariance, over-length refusal,
+EOF, and the receive-side parity case). Published values:
+[bounds](../reference/bounds.md#transport-channels-framed-byte-channels).
