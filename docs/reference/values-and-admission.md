@@ -36,6 +36,21 @@ acceptance) and total (caps on depth/size make hostile input safe — see
 [bounds](bounds.md)). Refusals carry kind, field path, expected/actual.
 `gate_invocations()` exists so tests can prove every boundary funneled through.
 
+**Decoding is bounded, and that is a separate fact from the wire size.**
+Wire-size limits bound how many *serialized bytes* a value may carry.
+The decode-materialization limit bounds how much *trusted host structure* those
+bytes may create — one shared allowance of `kMaxDecodedCells` per top-level
+decode, spent before the cells exist, in both encodings
+([bounds](bounds.md#the-decode-materialization-bound)). The two are different
+because a compact encoding can legitimately stand for many values: a zero-field
+`Message` costs no body bytes, so without the second bound a few dozen bytes
+could command millions of cells in the receiving process.
+
+Neither limit implies application-semantic validity. A width, an interval, a
+board dimension: the gate does not judge whether those are *sensible*, only
+whether the value conforms to its declared shape and fits the decoder's own
+work bound. Ranges remain the receiving service's own contract.
+
 Authorization (may this *sender* say this, to this target) is a distinct,
 prior step and never folds into the gate
 ([GATE-03](../laws/admission-laws.md), [capabilities](capabilities.md)).

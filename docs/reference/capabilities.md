@@ -57,6 +57,33 @@ known-gap refusal into a visibly-uncontained warning — never a false claim).
 greedy code. seccomp is the named, unbuilt escalation to escape-tier. Any
 prose implying "hostile-proof" is wrong; say abuse-tier.
 
+### Work the host does *on behalf of* a contained participant
+
+A cgroup bounds the child's own process. It does not bound work the child asks
+the **host** to do, and the host does real work for it: an isolated child
+declares its schemas in its manifest, the host registers them, and the host then
+parses and admits that child's emissions in the host process, before any grant
+is consulted. Anything unbounded on that path is a resource cap the sandbox
+exists to impose and does not.
+
+One such path is closed and pinned: **an isolated participant cannot command
+unbounded host-side decode materialization through a compact serialized value.**
+Every decode of untrusted bytes spends one shared, host-owned allowance of
+`kMaxDecodedCells`, spent before the structure exists
+([bounds](bounds.md#the-decode-materialization-bound)) — the same central
+decoder every seam funnels through (child emissions, manifests, snapshots,
+Bridge frames, dynamic-library bytes, persistence loads).
+
+That claim is exactly this wide. It does **not** say all denial of service is
+impossible, that all host work is bounded, or that host memory cannot be
+exhausted through any API. Specifically still true:
+
+- a large but in-budget value is still allowed to be expensive;
+- queue growth, channel buffers, and service-specific state have their own,
+  separate bounds — this one is the decoder's;
+- application services must still validate their own semantic ranges;
+- native in-process code is trusted and is bounded by nothing here.
+
 Delegation is invocation-dependent: enforcement suites run under a delegated
 cgroup scope (`tests/run-under-scope.sh`); a plain shell lands in the root
 cgroup and the harness **fails hard** rather than skipping green.

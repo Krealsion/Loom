@@ -29,14 +29,21 @@ is unusable until `admit()` accepts it.
 
 MEANS
 - there is no road from bytes to a readable `Value` that skips the gate;
-- a gate refusal drops the candidate entirely — no partial acceptance.
+- a gate refusal drops the candidate entirely — no partial acceptance;
+- decoding untrusted bytes costs a **bounded** amount of host structure: one
+  shared, host-owned allowance per top-level decode, spent before the structure
+  exists, so a compact value cannot command unbounded host allocation
+  ([bounds](../reference/bounds.md#the-decode-materialization-bound)).
 
 DOES NOT MEAN
 - that parsing is validation — `parse` only decodes structure; conformance to a
-  *door* happens at `admit`.
+  *door* happens at `admit`;
+- that an in-budget value is cheap, or that the bound judges what a value
+  *means* — semantic ranges stay the receiving service's contract.
 
 PROVEN BY — `include/zen/admission.hpp` (`Unverified`'s accessor-free surface is
-a compile-time fact); suites `gate`, `serialize`, `fuzz`.
+a compile-time fact); suites `gate`, `serialize`, `fuzz`, `schema_codec`,
+`bridge` (the R2F-A cases).
 
 ## GATE-03 — Authorization is not conformance
 
