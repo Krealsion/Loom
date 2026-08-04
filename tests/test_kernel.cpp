@@ -6944,7 +6944,13 @@ TEST_CASE("R2F-B: a candidate cannot unregister itself from its committed activa
     WeaveId holder_inside{};
     bool sealed_inside = true;
     c.candidate_raw->on_activation = [&]() {
-        returned_null = (bus.unregister_weave(candidate_id) == nullptr);
+        // HELD IN A NAMED LOCAL, deliberately. Post-repair it is always null, so
+        // this is ordinary code. It matters when the guard is REMOVED: binding
+        // the result keeps the object alive to the end of this hook, so the pins
+        // below still record what they saw and the case fails SEMANTICALLY
+        // rather than only tripping an allocator.
+        std::unique_ptr<Weave> mine = bus.unregister_weave(candidate_id);
+        returned_null = (mine == nullptr);
         destroyed_at_the_attempt = candidate_destroyed;
         // The committed state, read from inside the callback: the guard must not
         // partially undo what the admission already made true.
