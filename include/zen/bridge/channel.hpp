@@ -75,6 +75,14 @@ public:
     void poll(std::vector<BridgeIncoming>& out);
 
 private:
+    /// TEST SEAM ONLY: reads the retained transport buffers so a regression test can state the
+    /// bounded-storage law (LIFE-07) as an assertion about this channel's own state rather than
+    /// inferring it from process memory, which is allocator- and OS-sensitive. A friend
+    /// declaration adds no member, no vtable entry and no code path -- it cannot change behavior --
+    /// and the name is never declared for ordinary lookup, so it is not part of the public surface.
+    /// Defined in tests/test_bridge.cpp; no production caller.
+    friend struct BridgeChannelStorageProbe;
+
     socket_t fd_;
     std::string outbox_;
     std::size_t out_pos_ = 0;
