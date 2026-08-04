@@ -753,4 +753,336 @@ TEST_CASE("STF-1: a nested event takes its own observer view") {
     CHECK(nested_only == 1); // the newcomer saw the nested event, not the outer one
 }
 
+// ---- R2F-B: a weave outlives its own callback -------------------------------
+//
+//     A Weave cannot be permanently removed, handed back, or destroyed while
+//     Loom is executing that same Weave's callback.
+//
+// EXACT TO THE ACTIVE TARGET, and nothing wider. It does not mean no weave may
+// be removed during a dispatch turn, that no lifecycle operation may run from a
+// callback, or that ownership became shared. Once the callback has exited — by
+// return OR by exception — ordinary unregistration works again.
+//
+// AUTHORITY, HONESTLY. The `Bus&` a handler is delivered has no
+// `unregister_weave`; every case below reaches the concrete board because the
+// test — standing in for HOST WIRING — captured it. That is a supported pattern
+// and it is not ambient weave authority.
+//
+// None of these cases performs the invalid access itself: they assert the
+// repaired contract (nullptr, no destruction, no cleanup) rather than reading
+// through a freed object and hoping an allocator notices.
+
+namespace {
+
+/// A ledger that OUTLIVES the weave, so "was it destroyed?" is answered from
+/// outside the object in question. Reading a flag stored *in* the weave would be
+/// the very use-after-free the law forbids.
+///
+/// DECLARE IT BEFORE THE `Switchboard` at every use site. `~Switchboard`
+/// destroys the weaves it still owns, and those destructors write here — so a
+/// ledger declared after the board would already be gone when they run.
+struct LifeLedger {
+    int destroyed = 0;
+};
+
+/// A probe with a destructor that reports to an external ledger, and an optional
+/// declared claim-set so the Sense half of unregistration cleanup is reachable.
+class LedgeredProbe : public ProbeWeave {
+public:
+    LedgeredProbe(std::vector<std::shared_ptr<const Schema>> accept, LifeLedger& ledger,
+                  std::vector<std::shared_ptr<const Schema>> claims = {})
+        : ProbeWeave(std::move(accept)), ledger_(ledger), claims_(std::move(claims)) {}
+    ~LedgeredProbe() override { ++ledger_.destroyed; }
+
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override { return claims_; }
+
+private:
+    LifeLedger& ledger_;
+    std::vector<std::shared_ptr<const Schema>> claims_;
+};
+
+struct Ledgered {
+    WeaveId id{};
+    LedgeredProbe* weave = nullptr;
+};
+
+Ledgered reg_ledgered(Switchboard& bus, LifeLedger& ledger,
+                      std::vector<std::shared_ptr<const Schema>> accept,
+                      std::string role = {},
+                      std::vector<std::shared_ptr<const Schema>> claims = {}) {
+    auto owned = std::make_unique<LedgeredProbe>(std::move(accept), ledger, std::move(claims));
+    LedgeredProbe* raw = owned.get();
+    const WeaveId id =
+        role.empty() ? bus.register_weave(std::move(owned), Grant{}.allow_any())
+                     : bus.register_weave(std::move(owned), Grant{}.allow_any(), std::move(role));
+    return {id, raw};
+}
+
+} // namespace
+
+TEST_CASE("R2F-B: a weave that unregisters itself from inside its handler stays alive") {
+    LifeLedger ledger; // before the board, always: ~Switchboard writes here
+    Switchboard bus;
+    Ledgered w = reg_ledgered(bus, ledger, {ping_schema()});
+
+    bool returned_null = false;
+    int destroyed_at_the_attempt = -1;
+    bool ran_to_the_end = false;
+    w.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        std::unique_ptr<Weave> mine = bus.unregister_weave(w.id); // host-wired board
+        returned_null = (mine == nullptr);
+        destroyed_at_the_attempt = ledger.destroyed; // read from OUTSIDE the weave
+        ran_to_the_end = true;
+    };
+
+    const Ticket t = bus.send(w.id, Message(ping(1)));
+    bus.pump();
+
+    CHECK(returned_null);                    // no ownership transferred
+    CHECK(destroyed_at_the_attempt == 0);    // the destructor did not run inside the callback
+    CHECK(ledger.destroyed == 0);            // ...nor by the time the turn ended
+    CHECK(ran_to_the_end);                   // the handler continued and completed normally
+    CHECK(w.weave->count == 1);
+    CHECK(bus.weave(w.id) != nullptr);       // still registered
+    CHECK(bus.alive(w.id));                  // still alive
+    CHECK(bus.list_weaves().size() == 1);
+    CHECK(bus.outcome(t).disposition == Disposition::Delivered); // recorded normally
+}
+
+TEST_CASE("R2F-B: the host retries once the callback is over, and receives the weave") {
+    LifeLedger ledger;
+    Switchboard bus;
+    Ledgered w = reg_ledgered(bus, ledger, {ping_schema()});
+    w.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        CHECK(bus.unregister_weave(w.id) == nullptr);
+    };
+    bus.send(w.id, Message(ping(1)));
+    bus.pump();
+    REQUIRE(ledger.destroyed == 0);
+
+    // Immediately after the delivery returns to the host: the ordinary contract,
+    // unchanged. R2F-B moves WHEN the active target may be removed, never what a
+    // successful removal means.
+    std::unique_ptr<Weave> owner = bus.unregister_weave(w.id);
+    REQUIRE(owner != nullptr);
+    CHECK(owner.get() == static_cast<Weave*>(w.weave)); // the original object, not a copy
+    CHECK(bus.weave(w.id) == nullptr);                  // the registry no longer holds it
+    CHECK(bus.list_weaves().empty());
+    CHECK(ledger.destroyed == 0); // removal transfers; it does not destroy
+
+    owner.reset();
+    CHECK(ledger.destroyed == 1); // exactly once, when the host's owner is reset
+}
+
+TEST_CASE("R2F-B: a DIFFERENT weave may still be removed from inside a callback") {
+    // THE WITNESS AGAINST GUARDING ALL OF `in_dispatch_`. A broad
+    // `if (in_dispatch_) return nullptr;` refuses this removal and fails here.
+    LifeLedger active_ledger;
+    LifeLedger victim_ledger;
+    Switchboard bus;
+    Ledgered active = reg_ledgered(bus, active_ledger, {ping_schema()});
+    Ledgered victim = reg_ledgered(bus, victim_ledger, {pong_schema()}, "doomed-role");
+
+    std::unique_ptr<Weave> taken;
+    int victim_destroyed_at_removal = -1;
+    bool active_ran_to_the_end = false;
+    active.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        taken = bus.unregister_weave(victim.id);
+        victim_destroyed_at_removal = victim_ledger.destroyed;
+        active_ran_to_the_end = true;
+    };
+
+    const Ticket to_active = bus.send(active.id, Message(ping(1)));
+    const Ticket to_victim = bus.send(victim.id, Message(pong(9))); // queued behind
+    bus.pump();
+
+    REQUIRE(taken != nullptr);                                 // returned
+    CHECK(taken.get() == static_cast<Weave*>(victim.weave));
+    CHECK(bus.weave(victim.id) == nullptr);                    // and removed immediately
+    CHECK(victim_destroyed_at_removal == 0);                   // destruction is HOST-timed
+    CHECK(victim_ledger.destroyed == 0);
+    CHECK_FALSE(bus.role_holder("doomed-role").valid());       // ordinary cleanup happened
+    CHECK(bus.outcome(to_victim).disposition == Disposition::Refused);
+    CHECK(bus.outcome(to_victim).refusal.reason == RefusalReason::NoSuchTarget);
+
+    CHECK(active_ran_to_the_end);              // the active caller completed...
+    CHECK(active_ledger.destroyed == 0);       // ...and is alive
+    CHECK(bus.weave(active.id) != nullptr);
+    CHECK(bus.outcome(to_active).disposition == Disposition::Delivered);
+
+    taken.reset();
+    CHECK(victim_ledger.destroyed == 1); // when the host chose, not when the bus did
+}
+
+namespace {
+
+/// EVERYTHING `unregister_weave` TOUCHES, gathered onto ONE weave so that "the
+/// refusal changed nothing" and "a later success changes all of it" are the same
+/// six facts read twice. The pair is the proof: the mutation-free case alone
+/// would also pass on an `unregister_weave` that had simply stopped working.
+///
+/// `svc` is the interesting weave. It holds a role, has claimed a Sense both
+/// personally and as its office, is one party to an unfinished deferred
+/// conversation, and is the incumbent of an active prepared replacement.
+struct RemovalSurface {
+    LifeLedger ledger; // FIRST: destroyed last, i.e. after the board below
+    Switchboard bus;
+    Registered op = register_probe(bus, {tick_schema()});
+    Registered coordinator = register_probe(bus, {tick_schema()});
+    Registered helper = register_probe(bus, {ping_schema(), tick_schema()});
+    Ledgered svc = reg_ledgered(bus, ledger, {ping_schema(), pong_schema()}, "service",
+                                {greet_schema()});
+    Registered cand = register_probe(bus, {ping_schema()});
+    TxnId txn{};
+
+    RemovalSurface() {
+        // 1. two claims under two different key spaces.
+        REQUIRE(bus.claim_as(svc.id, greet("personal")).accepted);
+        REQUIRE(bus.office_claim_as(svc.id, "service", greet("official")).accepted);
+        REQUIRE(bus.retained_claim_count() == 2);
+
+        // 2. an unfinished conversation svc is a party to: svc asks, the helper
+        //    keeps the answer right instead of answering.
+        helper.weave->on_handle = [this](const Message&, Bus& b, ProbeWeave& self) {
+            if (!self.pending.valid()) {
+                self.pending = b.make_deferred_answer();
+            }
+        };
+        svc.weave->on_handle = [this](const Message&, Bus& b, ProbeWeave&) {
+            (void)b.send(helper.id, Message(ping(1)));
+        };
+        bus.send(svc.id, Message(ping(0)));
+        bus.pump();
+        REQUIRE(helper.weave->pending.valid());
+        svc.weave->on_handle = nullptr;
+
+        // 3. an active transaction naming svc as the incumbent.
+        REQUIRE(bus.seal_weave(cand.id, coordinator.id));
+        const TxnResult begun =
+            bus.begin_prepared_replacement(op.id, coordinator.id, svc.id, cand.id, "service", 8);
+        REQUIRE(begun.ok);
+        txn = begun.id;
+        REQUIRE(bus.active_transactions() == 1);
+    }
+
+    /// The six facts, sampled. Every one of them is something `unregister_weave`
+    /// would change on the way to handing back an owner.
+    void expect_untouched() {
+        CHECK(bus.role_holder("service") == svc.id);                    // role binding
+        CHECK(bus.observe(svc.id, "Greet", 1).refusal == SenseRefusal::None);  // personal claim
+        CHECK(bus.observe_office("service", "Greet", 1).refusal == SenseRefusal::None); // office
+        CHECK(bus.retained_claim_count() == 2);
+        CHECK(bus.weave(svc.id) != nullptr);                            // registry
+        CHECK(bus.alive(svc.id));
+        CHECK(ledger.destroyed == 0);                                   // ownership
+        CHECK(bus.active_transactions() == 1);                          // transactions
+        CHECK(bus.transaction_state(txn) == TxnState::Preparing);
+        CHECK(bus.sealed(cand.id));
+    }
+
+    /// The unfinished conversation, proven live by spending it — there is no
+    /// count to read, and an arriving answer is the honest observable.
+    void expect_conversation_alive() {
+        helper.weave->on_handle = [this](const Message&, Bus& b, ProbeWeave& self) {
+            (void)b.spend_deferred(self.pending, Message(pong(5)));
+        };
+        const std::size_t before = svc.weave->handled_names.size();
+        bus.send(helper.id, Message(tick(1)));
+        bus.pump();
+        REQUIRE(svc.weave->handled_names.size() == before + 1);
+        CHECK(svc.weave->handled_names.back() == "Pong");
+    }
+};
+
+} // namespace
+
+TEST_CASE("R2F-B: a refused active-target removal performs no part of unregistration") {
+    RemovalSurface s;
+
+    bool returned_null = false;
+    s.svc.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        returned_null = (s.bus.unregister_weave(s.svc.id) == nullptr);
+        // Read from INSIDE the still-running callback: the early return has to
+        // sit ahead of every cleanup statement, not merely ahead of the erase.
+        s.expect_untouched();
+    };
+    s.bus.send(s.svc.id, Message(ping(2)));
+    s.bus.pump();
+
+    CHECK(returned_null);
+    s.expect_untouched();               // ...and still, after the turn
+    s.svc.weave->on_handle = nullptr;   // the hook has said everything it has to say
+    s.expect_conversation_alive();      // including the conversation nothing abandoned
+}
+
+TEST_CASE("R2F-B: an ordinary removal outside a callback still does all of it") {
+    // The complement of the case above, and the reason it means anything: the
+    // exact same six facts, all of them changed, because a successful removal
+    // still means everything it meant before R2F-B.
+    RemovalSurface s;
+
+    std::unique_ptr<Weave> owner = s.bus.unregister_weave(s.svc.id);
+    REQUIRE(owner != nullptr);
+    CHECK(owner.get() == static_cast<Weave*>(s.svc.weave)); // the same unique owner
+
+    CHECK_FALSE(s.bus.role_holder("service").valid());            // role released
+    CHECK(s.bus.observe(s.svc.id, "Greet", 1).refusal == SenseRefusal::NoClaim); // personal gone
+    CHECK(s.bus.observe_office("service", "Greet", 1).refusal == SenseRefusal::NoClaim); // office
+    CHECK(s.bus.retained_claim_count() == 0);
+    CHECK(s.bus.weave(s.svc.id) == nullptr);                      // gone from the registry
+    CHECK(s.bus.active_transactions() == 0);                      // its transaction invalidated
+    CHECK(s.bus.transaction_state(s.txn) == TxnState::Aborted);
+
+    // Its unfinished conversation ended with it: the helper's retained right no
+    // longer names a live conversation, so spending it reaches nobody.
+    const std::size_t before = s.svc.weave->handled_names.size();
+    s.helper.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave& self) {
+        (void)b.spend_deferred(self.pending, Message(pong(5)));
+    };
+    s.bus.send(s.helper.id, Message(tick(1)));
+    s.bus.pump();
+    CHECK(s.svc.weave->handled_names.size() == before); // nothing arrived
+
+    CHECK(s.ledger.destroyed == 0); // teardown order is the host's, exactly as before
+    owner.reset();
+    CHECK(s.ledger.destroyed == 1);
+}
+
+TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave removable") {
+    LifeLedger ledger;
+    Switchboard bus;
+    Ledgered w = reg_ledgered(bus, ledger, {ping_schema()});
+
+    bool returned_null = false;
+    int destroyed_at_the_attempt = -1;
+    w.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        returned_null = (bus.unregister_weave(w.id) == nullptr);
+        destroyed_at_the_attempt = ledger.destroyed;
+        throw std::runtime_error("handler failure after a refused self-removal");
+    };
+
+    bus.send(w.id, Message(ping(1)));
+    // The exception is the host's, exactly as MSG-10 already says. R2F-B neither
+    // catches it, translates it, nor suppresses it.
+    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK(returned_null);
+    CHECK(destroyed_at_the_attempt == 0);
+    CHECK(ledger.destroyed == 0); // not destroyed during the callback
+
+    // FIRST THING AFTER THE UNWIND, before any further pump could clear anything:
+    // the delivery scope is not left standing, so the weave is removable again.
+    std::unique_ptr<Weave> owner = bus.unregister_weave(w.id);
+    REQUIRE(owner != nullptr);
+    CHECK(bus.weave(w.id) == nullptr);
+    CHECK(ledger.destroyed == 0);
+    owner.reset();
+    CHECK(ledger.destroyed == 1); // destroyed exactly once
+
+    // ...and dispatch itself is unpoisoned, as STF-1 established.
+    Registered other = reg(bus, {pong_schema()});
+    const Ticket t = bus.send(other.id, Message(pong(2)));
+    bus.pump();
+    CHECK(bus.outcome(t).disposition == Disposition::Delivered);
+}
+
 } // TEST_SUITE

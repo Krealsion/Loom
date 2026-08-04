@@ -428,12 +428,39 @@ public:
     Switchboard(Switchboard&&) = delete;
     Switchboard& operator=(Switchboard&&) = delete;
 
-    /// Remove a Weave and hand its ownership back to the caller (or nullptr if
-    /// the id is unknown). Used by hosts that must destroy a Weave — and any
-    /// resources it holds, such as a loaded library instance — in a controlled
-    /// order. Pending deliveries to a removed Weave are refused (NoSuchTarget) at
-    /// delivery. Its registered schemas remain published, and any role it held is
-    /// released — the slot is free for a successor.
+    /// Remove a Weave and hand its ownership back to the caller. Used by hosts
+    /// that must destroy a Weave — and any resources it holds, such as a loaded
+    /// library instance — in a controlled order. Pending deliveries to a removed
+    /// Weave are refused (NoSuchTarget) at delivery. Its registered schemas
+    /// remain published, and any role it held is released — the slot is free for
+    /// a successor.
+    ///
+    /// `nullptr` MEANS NOTHING WAS REMOVED, and there are two ways to earn it:
+    ///
+    ///   the id is unknown
+    ///   the id names the weave whose callback is running right now (R2F-B)
+    ///
+    /// The second is the lifetime law: *a Weave cannot be permanently removed,
+    /// handed back, or destroyed while Loom is executing that same Weave's
+    /// callback.* Success transfers a unique owner the caller may reset
+    /// immediately, so there is no honest "erase now, destroy later" — Loom
+    /// cannot both hand over unique ownership and keep it. The call therefore
+    /// refuses, changing nothing at all: no role released, no claim forgotten,
+    /// no conversation abandoned, no transaction invalidated, no registry entry
+    /// erased. A host may simply retry once the callback has returned — by
+    /// normal return OR by exception unwind — and receives the weave then.
+    ///
+    /// It is exact to the ACTIVE TARGET and nothing wider: removing a *different*
+    /// weave from inside a callback keeps working exactly as it did, which the
+    /// transaction layer relies on when a candidate refuses its preparation. The
+    /// protection covers both paths that invoke `Weave::handle` — ordinary
+    /// delivery and the committed-activation delivery.
+    ///
+    /// AUTHORITY, HONESTLY: ordinary weave code is handed a `WeaveBus`, which has
+    /// no such member, so this is not ambient weave authority. The active-removal
+    /// case exists only where host wiring deliberately supplies a weave with
+    /// concrete `Switchboard&` access — a supported pattern, and the one this law
+    /// is about.
     ///
     /// Symmetrically, and less obviously: pending deliveries *from* a removed
     /// Weave are refused too, as CapabilityDenied. A gated message is authorized

@@ -1608,6 +1608,10 @@ public:
         const std::string_view shape = in.payload.schema().name();
         if (shape == std::string_view(loom::Activated::zen_name)) {
             ++activations;
+            if (on_activation) {
+                on_activation();
+                ++survived_hook; // the member call carried on past the hook
+            }
             return;
         }
         if (shape == std::string_view(versioned::PrepareReplacement::zen_name)) {
@@ -1616,6 +1620,11 @@ public:
             ++prepares;
             transaction = ask.transaction;
             plan = ask.plan;
+            if (on_preparation_ask) {
+                on_preparation_ask();
+                ++survived_hook;
+                return; // nothing else to say on this delivery
+            }
             if (plan == "defer" || plan == "defer-refuse") {
                 pending = bus.make_deferred_answer(); // return without answering
                 return;
@@ -1676,6 +1685,32 @@ public:
     bool answered = false;
     std::string plan;
     loom::DeferredAnswer pending{};
+
+    // ---- host wiring, for the R2F-B callback-lifetime cases -----------------
+    //
+    // Both hooks are null everywhere else, so no existing case changes shape.
+    // Whoever builds this fixture chooses to hand it a concrete `Switchboard&`
+    // by capture — the honest form of the pattern, and not something the `Bus&`
+    // this weave is delivered could ever provide.
+
+    /// Run INSIDE the committed-activation callback.
+    std::function<void()> on_activation;
+    /// Run INSIDE the preparation-ask callback; when set, the candidate says
+    /// nothing else on that delivery.
+    std::function<void()> on_preparation_ask;
+    /// Bumped after a hook returns, so "the handler ran on to its own end" is a
+    /// fact the case can assert rather than assume.
+    std::int64_t survived_hook = 0;
+
+    /// DESTRUCTION COUNTED OUTSIDE THE OBJECT. A flag stored in the weave could
+    /// only be read through freed memory, which is the very thing under test.
+    /// The counter must outlive the Switchboard that owns this weave.
+    int* destroyed_counter = nullptr;
+    ~VersionedService() override {
+        if (destroyed_counter != nullptr) {
+            ++*destroyed_counter;
+        }
+    }
 
 private:
     std::string version_;
@@ -6875,6 +6910,142 @@ TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam
 
     CHECK(seam.count == 0);
     CHECK(listener.weave->count == 1);
+}
+
+// ---- R2F-B: the law reaches the committed activation too --------------------
+//
+// The activation handler is the second — and only other — place Loom calls
+// `Weave::handle`. It matters more than the ordinary one, not less: by the time
+// it runs the topology has ALREADY moved and the transaction has ALREADY
+// committed, so a removal accepted here would destroy the live role holder
+// mid-callback and there is no rollback to reach for.
+//
+// Both paths are protected by ONE check on one fact — the ambient
+// `current_target_` that each of them assigns around its own `handle` call — so
+// there is no second rule to keep in step with the first.
+
+TEST_CASE("R2F-B: a candidate cannot unregister itself from its committed activation") {
+    // Counters FIRST: `~Switchboard` destroys the weaves that write to them.
+    int candidate_destroyed = 0;
+    int incumbent_destroyed = 0;
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    c.candidate_raw->destroyed_counter = &candidate_destroyed;
+    c.incumbent_raw->destroyed_counter = &incumbent_destroyed;
+
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+    make_ready(bus, c, t.id); // the real conversation, not a declared readiness
+
+    const WeaveId candidate_id = c.candidate;
+    bool returned_null = false;
+    int destroyed_at_the_attempt = -1;
+    WeaveId holder_inside{};
+    bool sealed_inside = true;
+    c.candidate_raw->on_activation = [&]() {
+        returned_null = (bus.unregister_weave(candidate_id) == nullptr);
+        destroyed_at_the_attempt = candidate_destroyed;
+        // The committed state, read from inside the callback: the guard must not
+        // partially undo what the admission already made true.
+        holder_inside = bus.role_holder(kRole);
+        sealed_inside = bus.sealed(candidate_id);
+    };
+
+    REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
+                                            Message(to_value(loom::Activated{7})), 7)
+                .ok);
+    REQUIRE(bus.transaction_state(t.id) == TxnState::AdmissionPending);
+    bus.pump();
+
+    CHECK(returned_null);                 // the attempted removal returned nullptr
+    CHECK(destroyed_at_the_attempt == 0); // nothing was destroyed inside the callback
+    CHECK(candidate_destroyed == 0);
+    REQUIRE(c.candidate_raw->activations == 1);
+    CHECK(c.candidate_raw->survived_hook == 1); // the handler remained alive through return
+
+    // The committed activation stands, whole: the candidate IS the role holder,
+    // already unsealed, and the incumbent is sealed for retirement as ever.
+    CHECK(holder_inside == candidate_id);
+    CHECK_FALSE(sealed_inside);
+    CHECK(bus.role_holder(kRole) == candidate_id);
+    CHECK_FALSE(bus.sealed(candidate_id));
+    CHECK(bus.sealed(c.incumbent));
+    CHECK(bus.alive(c.incumbent));
+    CHECK(incumbent_destroyed == 0); // no predecessor destroyed, let alone twice
+
+    // EXACTLY ONE terminal outcome, and it is Committed.
+    CHECK(bus.active_transactions() == 0);
+    exactly_one_outcome(bus, c.op.id, t.id, TxnState::Committed, TxnReason::None);
+
+    // ...and a host retry after the activation succeeds normally.
+    std::unique_ptr<Weave> owner = bus.unregister_weave(candidate_id);
+    REQUIRE(owner != nullptr);
+    CHECK_FALSE(bus.role_holder(kRole).valid()); // ordinary removal, ordinary effects
+    CHECK(candidate_destroyed == 0);
+    owner.reset();
+    CHECK(candidate_destroyed == 1); // destroyed exactly once, when the host chose
+    CHECK(incumbent_destroyed == 0);
+}
+
+TEST_CASE("R2F-B: the transaction's own discard cannot destroy the weave whose callback is "
+          "running") {
+    // THE INTERNAL ROUTE, and it is reachable rather than theoretical.
+    // `finish_txn` discards an ABORTED transaction's sealed candidate by calling
+    // `unregister_weave`. A host-wired candidate that kills itself from inside
+    // its own preparation callback invalidates the transaction it belongs to —
+    // and that abort's cleanup then names the very weave whose `handle` is on
+    // the stack. Pre-repair that discarded a `unique_ptr` on the spot, destroying
+    // a running object.
+    //
+    // The central active-target guard covers it with no special case, and the
+    // consequence is the one `finish_txn` already documents in the source: the
+    // discard fails and leaves SEALED WRECKAGE — nonpublic by construction,
+    // belonging to a transaction that no longer exists, and producing no second
+    // terminal result.
+    int candidate_destroyed = 0;
+    Switchboard bus;
+    Cast c = cast_with_role(bus, kRole);
+    c.candidate_raw->destroyed_counter = &candidate_destroyed;
+
+    const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
+                                                       c.candidate, kRole, 8);
+    REQUIRE(t.ok);
+
+    const WeaveId candidate_id = c.candidate;
+    int destroyed_at_the_kill = -1;
+    bool still_registered_inside = false;
+    c.candidate_raw->on_preparation_ask = [&]() {
+        bus.kill(candidate_id); // -> invalidate -> finish_txn -> unregister_weave(self)
+        destroyed_at_the_kill = candidate_destroyed;
+        still_registered_inside = (bus.weave(candidate_id) != nullptr);
+    };
+
+    ask_to_prepare(bus, c, t.id, "ready"); // asks, then pumps
+
+    REQUIRE(c.candidate_raw->prepares == 1);
+    CHECK(c.candidate_raw->survived_hook == 1); // the callback ran on to its own end
+    CHECK(destroyed_at_the_kill == 0);          // ...and was never destroyed under it
+    CHECK(still_registered_inside);             // the discard was refused, not deferred
+    CHECK(candidate_destroyed == 0);
+
+    // The transaction ended, once, for the honest reason.
+    CHECK(bus.active_transactions() == 0);
+    exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, TxnReason::CandidateChanged);
+
+    // The wreckage, exactly as documented: still registered, still sealed, dead,
+    // and reachable by nobody. The incumbent never learned any of it happened.
+    CHECK(bus.weave(candidate_id) != nullptr);
+    CHECK(bus.sealed(candidate_id));
+    CHECK_FALSE(bus.alive(candidate_id));
+    incumbent_untouched(bus, c, kRole);
+
+    // And the host can still clear it up, once the callback is long over.
+    std::unique_ptr<Weave> owner = bus.unregister_weave(candidate_id);
+    REQUIRE(owner != nullptr);
+    CHECK(candidate_destroyed == 0);
+    owner.reset();
+    CHECK(candidate_destroyed == 1);
 }
 
 } // TEST_SUITE
