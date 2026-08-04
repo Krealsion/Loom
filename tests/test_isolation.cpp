@@ -1243,6 +1243,44 @@ TEST_CASE("R2F-C (isolation): reclamation moves the backlog, it does not shrink 
     CHECK(P::live(ch) == live_when_failed); // and queue() is still a no-op
 }
 
+TEST_CASE("R2F-C (isolation): a failed channel neither sends nor reclaims") {
+    using P = ChannelStorageProbe;
+    const ChannelPair fds = channel_pair();
+    Channel ch(fds.producer);
+    Channel peer(fds.consumer);
+
+    // Stage the state where a HEALTHY flush would visibly act: a small unsent remainder and a
+    // socket with room for all of it, so an honest flush would send everything and empty the
+    // buffer. Behind a 64 MiB backlog and a full socket the guard cannot be observed at all,
+    // because flush() would have nothing it could do either way.
+    int next = 0;
+    for (int i = 0; i < 20000 && P::unsent(ch) == 0; ++i) {
+        ch.queue(Op::Emit, ch_body(next++));
+        ch.flush();
+    }
+    REQUIRE(P::unsent(ch) > 0);
+    std::vector<Incoming> got;
+    peer.poll(got); // the socket is now empty: room for the whole remainder
+    const std::size_t delivered_before = got.size();
+
+    // Channel has no fail() affordance; an over-length frame is the ordinary way in, and it
+    // returns BEFORE touching the buffer, so the staged state survives intact.
+    const std::string over(static_cast<std::size_t>(kMaxFrameLen) + 1u, 'x');
+    ch.queue(Op::Emit, over);
+    REQUIRE(ch.failed());
+    const std::size_t live_when_failed = P::live(ch);
+    const std::size_t sent_when_failed = P::sent(ch);
+    REQUIRE(live_when_failed > 0);
+
+    ch.flush();
+    peer.poll(got);
+    CHECK(ch.failed());                     // still failed ...
+    CHECK(ch.done());                       // ... and still done
+    CHECK(P::live(ch) == live_when_failed); // nothing cleared, nothing compacted ...
+    CHECK(P::sent(ch) == sent_when_failed); // ... and nothing sent
+    CHECK(got.size() == delivered_before);  // ... so the peer received nothing more
+}
+
 TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
     // The finding named the outbox. Its sibling already reclaims decoded bytes unconditionally
     // (`inbox_.erase(0, pos)`), so a permanently incomplete suffix does NOT pin consumed history in

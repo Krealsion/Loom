@@ -684,8 +684,7 @@ TEST_CASE("R2F-C (bridge): reclamation moves the backlog, it does not shrink it"
     }
     CHECK(ch.failed()); // a peer that will not drain is contained, exactly as before the repair
 
-    // A failed channel stays failed and stays inert: flush() must not compact it, resurrect it, or
-    // otherwise disturb the state that records why it died.
+    // A failed channel stays failed and stays inert.
     const std::size_t live_when_failed = P::live(ch);
     ch.flush();
     CHECK(ch.failed());
@@ -693,6 +692,40 @@ TEST_CASE("R2F-C (bridge): reclamation moves the backlog, it does not shrink it"
     CHECK(P::live(ch) == live_when_failed);
     ch.queue(BridgeOp::Send, "ignored");
     CHECK(P::live(ch) == live_when_failed); // queue() on a failed channel is still a no-op
+}
+
+TEST_CASE("R2F-C (bridge): a failed channel neither sends nor reclaims") {
+    using P = BridgeChannelStorageProbe;
+    const TinyPair fds = tiny_pair();
+    BridgeChannel ch(static_cast<socket_t>(fds.producer));
+    BridgeChannel peer(static_cast<socket_t>(fds.consumer));
+
+    // Stage the state where a HEALTHY flush would visibly act: a small unsent remainder and a
+    // socket with room for all of it, so an honest flush would send everything and empty the
+    // buffer. Without this the failed channel sits behind a 64 MiB backlog and a full socket,
+    // where flush() has nothing it could do anyway and the guard cannot be observed at all.
+    int next = 0;
+    for (int i = 0; i < 20000 && P::unsent(ch) == 0; ++i) {
+        ch.queue(BridgeOp::Tap, body(next++));
+        ch.flush();
+    }
+    REQUIRE(P::unsent(ch) > 0);
+    std::vector<BridgeIncoming> got;
+    peer.poll(got); // the socket is now empty: room for the whole remainder
+    const std::size_t delivered_before = got.size();
+
+    ch.fail(); // the existing severance affordance (a protocol violation uses it)
+    const std::size_t live_when_failed = P::live(ch);
+    const std::size_t sent_when_failed = P::sent(ch);
+    REQUIRE(live_when_failed > 0);
+
+    ch.flush();
+    peer.poll(got);
+    CHECK(ch.failed());                     // still failed ...
+    CHECK(ch.done());                       // ... and still done
+    CHECK(P::live(ch) == live_when_failed); // nothing cleared, nothing compacted ...
+    CHECK(P::sent(ch) == sent_when_failed); // ... and nothing sent
+    CHECK(got.size() == delivered_before);  // ... so the peer received nothing more
 }
 
 TEST_CASE("R2F-C (bridge): an over-length frame is still refused, and EOF still arrives whole") {
