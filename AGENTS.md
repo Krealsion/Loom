@@ -14,6 +14,11 @@ cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
 ```
 
 - `-Werror` is on; C++20; avoid GCC-12+-only features.
+- **Every loadable weave target goes through `loom_weave_build_contract()`**
+  (`cmake/loom-weave.cmake`, KERN-05) — including the fixtures in `tests/`, and
+  including `loom`/`zen-switchboard` themselves, since their objects land inside
+  the image. Never hand-write the compiler option; the `weave_contract` entry
+  reads the built artifacts and will say so.
 - The isolation/policy/all suites need a delegated cgroup scope: run the whole
   binary via `tests/run-under-scope.sh ./build/tests/zen-tests` — a bare run
   fails ~33 enforcement cases **by design** (fail-hard beats silent skip).

@@ -25,7 +25,8 @@ the named laws → the reference page → tests when exactness matters.
 | permanent removal during a callback (a weave, or its host, unregistering the weave whose handler is running) | reference/lifecycle.md#permanent-removal-and-the-active-callback | LIFE-06 | tests/test_switchboard.cpp, test_kernel.cpp (R2F-B cases) | — |
 | long-lived transport channels (a framed channel's retained send/receive buffers; a peer that keeps up but never lets the socket run dry) | reference/bounds.md#transport-channels-framed-byte-channels | LIFE-07 | tests/test_bridge.cpp, test_isolation.cpp (R2F-C cases) | — |
 | grants, isolation, powerbox | reference/capabilities.md | GATE-03, MSG-02 | tests/test_capabilities.cpp, test_isolation.cpp, test_policy.cpp | history (B1–B5, P1–P2) |
-| dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..04 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
+| dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..05 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
+| building a loadable weave | guides/dynamic-weaves.md, reference/kernel.md | KERN-05 | tests/check_weave_contract.cmake | — |
 | prepared replacement | guides/replacing-a-service.md, reference/prepared-replacement.md | PR-01..09 | tests/test_kernel.cpp (R2B-3*/4a sections) | decisions/admission-and-activation-share-one-boundary.md, decisions/no-rollback-after-committed-production.md, evidence/night-lab.md |
 | senses (latest claims) | guides/observing.md, reference/senses.md | SENSE-01..05 | tests/test_sense.cpp, test_kernel.cpp (R2E-0 sections) | decisions/a-claim-is-not-a-message.md |
 | authored handoff (continuity across an incompatible schema) | reference/handoff.md | HANDOFF-01..03, PR-09 | tests/test_handoff.cpp | decisions/migration-is-authored-not-inferred.md |
