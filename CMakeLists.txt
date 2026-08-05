@@ -24,6 +24,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # rules because the exported targets below carry an INSTALL_INTERFACE include path.
 include(GNUInstallDirs)
 
+# The reloadable-weave build contract (KERN-05). ONE definition, included here for the
+# build tree and installed beside loomConfig.cmake for the stranger, so the two paths
+# cannot come to mean different things -- the same identity argument the EXPORT_NAMEs
+# make for the targets. Loom's own dynamic-weave fixtures call it too: the house builds
+# its weaves through exactly the surface it hands a guest.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave.cmake)
+
 option(ZEN_WERROR    "Treat warnings as errors (CI default)"        ON)
 option(ZEN_SANITIZE  "Build with -fsanitize=address,undefined"     OFF)
 option(ZEN_BUILD_TESTS    "Build the test suite"                    ON)
@@ -86,6 +93,26 @@ target_link_libraries(zen-switchboard
     PRIVATE zen-warnings)
 
 add_library(loom::switchboard ALIAS zen-switchboard)
+
+# ---- The substrate itself is built under the weave contract (KERN-05) ------------------
+#
+# These two are what a weave statically links, so their objects land INSIDE the loadable
+# image and their symbol bindings are the image's. Compiling them without the contract
+# was enough, on its own, to keep every weave in this tree resident after dlclose: R2F-E
+# measured 20 STB_GNU_UNIQUE symbols in libloom.a (std::piecewise_construct, the variant
+# vtables, _Sp_make_shared_tag's tag, the to_chars digit tables — libstdc++ inline
+# variables and template statics, instantiated here and vague-linkage by nature), and a
+# single one of those marks the whole image NODELETE. The flag on the weave author's own
+# translation unit could never have reached them.
+#
+# It rides the INSTALLED libraries too, which is the part that matters most: a stranger's
+# weave gets a unique-free substrate from find_package(loom) without doing anything, and
+# only has to contract their OWN sources. Applying it here is also strictly more correct
+# for hosts — the design already says a host and a library must never interpose (the
+# kernel opens with RTLD_LOCAL for exactly that reason), and unique binding is the one
+# thing that was quietly making them share anyway.
+loom_weave_build_contract(loom)
+loom_weave_build_contract(zen-switchboard)
 
 # ---- The kernel + isolation (dynamic loading; namespaces/cgroups are Linux-only) ---------------
 #
@@ -468,8 +495,12 @@ if(LOOM_INSTALL)
         VERSION ${PROJECT_VERSION}
         COMPATIBILITY SameMajorVersion)
 
+    # loom-weave.cmake rides along verbatim -- the SAME file the build tree included
+    # above, not a generated copy of it, so the stranger's contract and the house's
+    # cannot drift apart. loomConfig.cmake includes it from beside itself.
     install(FILES
         ${CMAKE_CURRENT_BINARY_DIR}/loomConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/loomConfigVersion.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
 endif()
