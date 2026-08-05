@@ -1,0 +1,235 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  loom-linux-debug:
+    name: Loom / Linux / Debug
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: |
+          g++ --version
+          cmake --version
+          nm --version
+
+      # Hosted-image workaround, not a Loom requirement. R2F-Fa's control pair
+      # measured the official verifier failing on ubuntu-24.04 as shipped and
+      # passing after this ephemeral change. Remove only with replacement evidence.
+      - name: Permit Loom's unprivileged sandbox namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Verify the repository-owned population
+        run: cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake
+
+  loom-linux-release:
+    name: Loom / Linux / Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: |
+          g++ --version
+          cmake --version
+          nm --version
+
+      # Hosted-image workaround, not a Loom requirement. R2F-Fa's control pair
+      # measured the official verifier failing on ubuntu-24.04 as shipped and
+      # passing after this ephemeral change. Remove only with replacement evidence.
+      - name: Permit Loom's unprivileged sandbox namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Configure
+        run: cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-rel --parallel "$(nproc)"
+
+      - name: Verify the repository-owned population
+        run: cmake -DZEN_BUILD_DIR=build-rel -P tests/verify.cmake
+
+  loom-linux-asan-ubsan:
+    name: Loom / Linux / ASan + UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: |
+          g++ --version
+          cmake --version
+          nm --version
+
+      # Hosted-image workaround, not a Loom requirement. R2F-Fa's control pair
+      # measured the official verifier failing on ubuntu-24.04 as shipped and
+      # passing after this ephemeral change. Remove only with replacement evidence.
+      - name: Permit Loom's unprivileged sandbox namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Configure
+        run: cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DZEN_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build-san --parallel "$(nproc)"
+
+      - name: Verify the repository-owned population
+        run: cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake
+
+  loom-zengine-stranger:
+    name: Loom -> canonical Zengine stranger
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: |
+          g++ --version
+          cmake --version
+          nm --version
+
+      - name: Resolve canonical Zengine once
+        id: zengine
+        run: |
+          zengine_sha="$(git ls-remote https://github.com/Krealsion/Zengine.git refs/heads/main | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$zengine_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve canonical Zengine main" >&2
+            exit 1
+          fi
+          echo "Canonical Zengine: $zengine_sha"
+          echo "sha=$zengine_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch pinned canonical Zengine
+        env:
+          ZENGINE_SHA: ${{ steps.zengine.outputs.sha }}
+        run: |
+          zengine_source="$RUNNER_TEMP/zengine-src"
+          git init "$zengine_source"
+          git -C "$zengine_source" remote add origin https://github.com/Krealsion/Zengine.git
+          git -C "$zengine_source" fetch --depth=1 origin "$ZENGINE_SHA"
+          git -C "$zengine_source" checkout --detach FETCH_HEAD
+          test "$(git -C "$zengine_source" rev-parse HEAD)" = "$ZENGINE_SHA"
+
+      - name: Build and install Loom to a fresh prefix
+        run: |
+          loom_prefix="$RUNNER_TEMP/loom-prefix"
+          test ! -e "$loom_prefix"
+          cmake -S . -B build-stranger -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-stranger --parallel "$(nproc)"
+          cmake --install build-stranger --prefix "$loom_prefix"
+
+      - name: Configure canonical Zengine as a stranger
+        run: |
+          cmake -S "$RUNNER_TEMP/zengine-src" -B "$RUNNER_TEMP/zengine-build" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/loom-prefix" \
+            -DZEN_LOOM_DEV=OFF \
+            -DBUILD_TESTING=ON
+
+      - name: Build canonical Zengine
+        run: cmake --build "$RUNNER_TEMP/zengine-build" --parallel "$(nproc)"
+
+      - name: Verify canonical Zengine
+        run: ctest --test-dir "$RUNNER_TEMP/zengine-build" --no-tests=error --output-on-failure
+
+  loom-windows-kernel-full:
+    name: Loom / Windows / kernel-full (advisory)
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record selected MinGW-w64 toolchain
+        shell: pwsh
+        run: |
+          & 'C:\mingw64\bin\g++.exe' --version
+          cmake --version
+          & 'C:\mingw64\bin\nm.exe' --version
+          ninja --version
+
+      - name: Configure with MinGW-w64
+        shell: pwsh
+        run: >-
+          cmake -S . -B build-win-kernel -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=C:/mingw64/bin/gcc.exe
+          -DCMAKE_CXX_COMPILER=C:/mingw64/bin/g++.exe
+          -DLOOM_ENABLE_WINDOWS_KERNEL=ON
+
+      - name: Build
+        run: cmake --build build-win-kernel
+
+      - name: Verify the repository-owned population
+        run: cmake -DZEN_BUILD_DIR=build-win-kernel -P tests/verify.cmake
+
+  loom-windows-kernel-less:
+    name: Loom / Windows / default kernel-less (advisory)
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record selected MinGW-w64 toolchain
+        shell: pwsh
+        run: |
+          & 'C:\mingw64\bin\g++.exe' --version
+          cmake --version
+          & 'C:\mingw64\bin\nm.exe' --version
+          ninja --version
+
+      - name: Configure with MinGW-w64
+        shell: pwsh
+        run: >-
+          cmake -S . -B build-win-default -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=C:/mingw64/bin/gcc.exe
+          -DCMAKE_CXX_COMPILER=C:/mingw64/bin/g++.exe
+
+      - name: Build
+        run: cmake --build build-win-default
+
+      - name: Verify the repository-owned population
+        run: cmake -DZEN_BUILD_DIR=build-win-default -P tests/verify.cmake
