@@ -10,6 +10,9 @@
 
 #include <doctest.h>
 
+// This suite owns the "isolation" OS-enforcement population; the gate keys its tally by
+// this name so isolation's executions can never satisfy another suite's floor (POP-02).
+#define ZEN_ENFORCEMENT_DOMAIN "isolation"
 #include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/office_protocol.hpp"
@@ -1329,14 +1332,14 @@ TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
 // Keep this LAST in the file: a positive tally so a green can never mean "every OS-enforcement case
 // silently skipped." (Relies on doctest's default registration order; a --order-by=rand run would
 // instead assert the count in a reporter hook.)
+//
+// EXACTLY 15, from this suite's own witnesses only (POP-02). Twelve ZEN_REQUIRE_ENFORCEABLE guard
+// sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 15 executions,
+// not 12. The number is exact rather than a floor because `>= 12` had three executions of slack:
+// a genuine enforcement witness could be deleted and this suite stayed 32/32 green with 230
+// assertions, nothing moved. When a new OS-enforcement proof is added, raise this deliberately.
 TEST_CASE("enforcement coverage: the OS-enforcement proofs actually executed, not silently skipped") {
-    if (!zenh::require_enforcement_strict() || zenh::degraded_run()) {
-        MESSAGE("degraded run (opt-out set): the enforcement-coverage floor is relaxed");
-        return;
-    }
-    // 12 OS-enforcement guard sites in this suite; on a provisioned host every one executes.
-    MESSAGE("OS-enforcement cases executed: " << zenh::enforced_case_count());
-    CHECK(zenh::enforced_case_count() >= 12);
+    ZEN_ENFORCEMENT_POPULATION(15);
 }
 
 } // TEST_SUITE

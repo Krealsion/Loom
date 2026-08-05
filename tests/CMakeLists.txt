@@ -2,6 +2,16 @@
 # doctest_main.cpp. Each suite is registered with CTest so `ctest` reports them
 # individually and `-R <suite>` can target one.
 #
+# Population honesty (R2F-D). Three mechanisms, none of which trusts the other two:
+#   * registration is DERIVED from the TEST_SUITE(...) declarations in the compiled
+#     sources, so there is no second list to drift out of sync with them;
+#   * doctest_main.cpp refuses a run that selected zero cases, so a registered name that
+#     no longer matches anything fails instead of passing in 0.00 s;
+#   * suite_population.txt + check_population.cmake pin the exact suite inventory per
+#     platform gate and a per-suite case floor, so a suite that VANISHES is caught even
+#     though a vanished suite registers nothing to fail.
+# The official lane that ties them together is tests/verify.cmake (see AGENTS.md).
+#
 # Gating: KERNEL-dependent pieces (the kernel/manager/capabilities suites and the portable
 # loadable-weave fixtures) ride `if(TARGET zen-kernel)` — the kernel exists on Linux always and
 # on Windows only under LOOM_ENABLE_WINDOWS_KERNEL (the opt-in development/demo backend), so the
@@ -14,8 +24,14 @@
 # ZEN_SO_WEAVE (it exercises capability enforcement through the kernel loader) — despite
 # "capabilities" reading as portable, it cannot build without the loader.
 
-add_executable(zen-tests
-    doctest_main.cpp
+# The test sources, kept in named lists rather than inline: they are the AUTHORITATIVE
+# suite inventory, and the CTest registration below is derived from them by reading the
+# TEST_SUITE(...) declarations out of exactly the sources this configuration compiles.
+# (R2F-D / POP-01. Before it, a hand-maintained ZEN_TEST_SUITES list sat beside them, and
+# a renamed suite left the old CTest name registered against nothing: `ctest -R switchboard`
+# reported Passed in 0.00 s having run 0 cases. Two lists that must agree, with nothing
+# making them agree, is the whole defect.)
+set(ZEN_TEST_SOURCES_PORTABLE
     test_schema.cpp
     test_value.cpp
     test_gate.cpp
@@ -38,20 +54,36 @@ add_executable(zen-tests
     test_component.cpp
     test_pixel.cpp
     test_bridge.cpp)
-
 # Kernel-dependent suites: compiled wherever the kernel target exists.
-if(TARGET zen-kernel)
-    target_sources(zen-tests PRIVATE
-        test_kernel.cpp
-        test_handoff.cpp
-        test_manager.cpp
-        test_capabilities.cpp)
-endif()
+set(ZEN_TEST_SOURCES_KERNEL
+    test_kernel.cpp
+    test_handoff.cpp
+    test_manager.cpp
+    test_capabilities.cpp)
 # Isolation-dependent suites: Linux-only (the sandbox exists only there).
+set(ZEN_TEST_SOURCES_POSIX
+    test_policy.cpp
+    test_isolation.cpp)
+
+add_executable(zen-tests doctest_main.cpp ${ZEN_TEST_SOURCES_PORTABLE})
+
+# The sources actually compiled here, split by how their suites must be LAUNCHED (the
+# sandbox suites need a delegated cgroup scope), and the gates that are actually on. Both
+# feed the derived registration and the population contract; a gate that is OFF makes its
+# suites DECLARED ABSENT, which is a different thing from "ran and passed".
+set(ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_PORTABLE})
+set(ZEN_TEST_SOURCES_SCOPED "")
+set(ZEN_POPULATION_GATES portable)
+
+if(TARGET zen-kernel)
+    target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_KERNEL})
+    list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_KERNEL})
+    list(APPEND ZEN_POPULATION_GATES kernel)
+endif()
 if(NOT WIN32)
-    target_sources(zen-tests PRIVATE
-        test_policy.cpp
-        test_isolation.cpp)
+    target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_POSIX})
+    list(APPEND ZEN_TEST_SOURCES_SCOPED ${ZEN_TEST_SOURCES_POSIX})
+    list(APPEND ZEN_POPULATION_GATES posix)
 endif()
 
 target_include_directories(zen-tests PRIVATE
@@ -300,15 +332,63 @@ endif() # NOT WIN32 (isolation/policy fixtures + child host)
 target_include_directories(zen-tests SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
-# doctest returns the failed-assertion count as its exit code, so CTest's default
-# exit-status check is the source of truth — no output-scraping needed. The portable
-# suites register on every platform.
-set(ZEN_TEST_SUITES schema value gate registry serialize compat integration fuzz
-    switchboard provenance role_authorship sense harness breathing schema_codec weave_shape weave
-    poke console component pixel bridge)
-foreach(suite IN LISTS ZEN_TEST_SUITES)
+# ---- CTest registration, DERIVED from the suite declarations in the sources ----------
+#
+# doctest returns the failed-assertion count as its exit code, and doctest_main.cpp turns a
+# zero-case run into exit 70, so CTest's exit-status check is the source of truth for both
+# "did it fail" and "was there anything to run at all" — no output-scraping needed.
+#
+# Reading the names out of the sources is what removes the F-2 drift by construction: there
+# is no second place to keep in sync, so a rename MOVES the registered test instead of
+# orphaning it. The three things a derivation cannot see on its own are covered elsewhere,
+# deliberately:
+#   * a suite compiled out by an #if, or one whose cases all vanish — the source still names
+#     it, so it still registers, and the run selects 0 cases → doctest_main.cpp fails it;
+#   * a source that disappears from the lists above — its suite leaves the built binary, and
+#     tests/suite_population.txt no longer matches → the `population` test fails;
+#   * a suite absent because its platform gate is off — declared absent in the manifest,
+#     reported as absent, never reported as passed.
+function(zen_suites_from_sources out_var)
+    set(discovered "")
+    foreach(src IN LISTS ARGN)
+        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/${src}" declarations
+             REGEX "^[ ]*TEST_SUITE(_BEGIN)?[ ]*\\(\"[A-Za-z0-9_]+\"")
+        set(in_this_source "")
+        foreach(declaration IN LISTS declarations)
+            string(REGEX MATCH "\"([A-Za-z0-9_]+)\"" _matched "${declaration}")
+            list(APPEND in_this_source "${CMAKE_MATCH_1}")
+        endforeach()
+        if(NOT in_this_source)
+            message(FATAL_ERROR
+                "zen tests: ${src} is compiled into zen-tests but declares no TEST_SUITE(...). "
+                "Suite registration is derived from those declarations, so this source's cases "
+                "would run only in the aggregate `all` lane and no named CTest entry could ever "
+                "select them.")
+        endif()
+        list(APPEND discovered ${in_this_source})
+    endforeach()
+    list(REMOVE_DUPLICATES discovered)
+    set(${out_var} "${discovered}" PARENT_SCOPE)
+endfunction()
+
+zen_suites_from_sources(ZEN_TEST_SUITES_DIRECT ${ZEN_TEST_SOURCES_DIRECT})
+foreach(suite IN LISTS ZEN_TEST_SUITES_DIRECT)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
+
+# The guard's own witnesses, and the reason they are two entries rather than one: CTest
+# ignores the exit code when PASS_REGULAR_EXPRESSION is set, so a single test could pin
+# either the refusal or the diagnostic but not both. This IS the F-2 control, run every
+# lane: a filter naming a suite that no compiled case belongs to (the shape a rename, an
+# #if or a deletion produces) must exit nonzero AND say why.
+add_test(NAME empty_population_refused
+    COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
+set_tests_properties(empty_population_refused PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME empty_population_says_so
+    COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
+set_tests_properties(empty_population_says_so PROPERTIES
+    PASS_REGULAR_EXPRESSION "EMPTY TEST POPULATION")
 
 # The SDL skin's smoke: a SEPARATE binary (zen-tests stays SDL-free) that runs the full
 # pipeline headless under SDL's dummy video driver — real SDL, real TTF metrics, no display.
@@ -325,25 +405,42 @@ if(TARGET zen-ui-sdl)
     set_tests_properties(sdl PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 endif()
 
-# The kernel-family suites register wherever the kernel target exists.
-if(TARGET zen-kernel)
-    foreach(suite IN ITEMS kernel handoff manager capabilities)
-        add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
-    endforeach()
-endif()
-
-# The cgroup-scoped isolation/policy/all suites are Linux-only.
+# The cgroup-scoped suites are Linux-only, and their NAMES are derived exactly like the
+# direct ones — only the launcher differs. The isolation and policy suites mount
+# out-of-process Weaves under the default resource containment, which needs cgroup-v2
+# delegation a plain invocation lacks (it lands in the root cgroup). run-under-scope.sh
+# launches the binary inside an unprivileged delegated systemd scope when one is available.
 if(NOT WIN32)
-    # The isolation and policy suites mount out-of-process Weaves under the default resource
-    # containment, which needs cgroup-v2 delegation a plain invocation lacks (it lands in the root
-    # cgroup). run-under-scope.sh launches the binary inside an unprivileged delegated systemd scope
-    # when one is available.
-    add_test(NAME isolation COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
-        $<TARGET_FILE:zen-tests> --test-suite=isolation --no-skipped-summary)
-    add_test(NAME policy COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
-        $<TARGET_FILE:zen-tests> --test-suite=policy --no-skipped-summary)
+    zen_suites_from_sources(ZEN_TEST_SUITES_SCOPED ${ZEN_TEST_SOURCES_SCOPED})
+    foreach(suite IN LISTS ZEN_TEST_SUITES_SCOPED)
+        add_test(NAME ${suite} COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
+            $<TARGET_FILE:zen-tests> --test-suite=${suite} --no-skipped-summary)
+    endforeach()
 
     # A catch-all that runs everything (also under a scope, since it includes isolation).
     add_test(NAME all COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run-under-scope.sh
         $<TARGET_FILE:zen-tests>)
 endif() # NOT WIN32 (isolation/policy/all suites)
+
+# ---- The population contract (POP-01 / POP-02) ---------------------------------------
+#
+# The registration above cannot see its own absences: a suite that is gone is simply not
+# registered, and a CTest listing that is short by six entries looks exactly like a
+# platform where six entries were never meant to exist. tests/suite_population.txt is
+# where the difference is written down, and this entry is what enforces it — exact suite
+# inventory per active gate, plus a per-suite case floor. It runs no cases (doctest query
+# modes only), so it costs a fraction of a second and can sit in every lane.
+set(zen_sdl_tests_exe "")
+if(TARGET zen-sdl-tests)
+    list(APPEND ZEN_POPULATION_GATES sdl)
+    set(zen_sdl_tests_exe "$<TARGET_FILE:zen-sdl-tests>")
+endif()
+# Comma-separated: a ;-list would be split into separate arguments on the command line.
+string(REPLACE ";" "," zen_population_gates_arg "${ZEN_POPULATION_GATES}")
+
+add_test(NAME population COMMAND ${CMAKE_COMMAND}
+    -DZEN_TESTS_EXE=$<TARGET_FILE:zen-tests>
+    -DZEN_SDL_TESTS_EXE=${zen_sdl_tests_exe}
+    -DZEN_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/suite_population.txt
+    -DZEN_GATES=${zen_population_gates_arg}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_population.cmake)

@@ -15,9 +15,28 @@
 // This gate flips the default: a security-relevant skip FAILS, naming the missing capability — UNLESS
 // the explicit opt-out `ZEN_ALLOW_UNENFORCEABLE=1` (or `ZEN_REQUIRE_ENFORCEMENT=0`) converts it to a
 // marked-degraded skip. Plus a positive tally: the suites count how many OS-enforcement cases actually
-// executed, and a final coverage case asserts that count clears a floor — so a green can never mean
-// "every case silently skipped." The runtime's own fail-safe behavior is unchanged; this is purely
-// the harness no longer reporting a pass it did not earn.
+// executed, and a final coverage case asserts that count — so a green can never mean "every case
+// silently skipped." The runtime's own fail-safe behavior is unchanged; this is purely the harness no
+// longer reporting a pass it did not earn.
+//
+// POP-02 (R2F-D): THE TALLY IS PER DOMAIN, AND THE EXPECTED COUNT IS EXACT.
+//
+// It used to be one process-global `static int n` that both suites incremented and both floors read
+// as `>= N`. In a dedicated run each suite saw only its own contribution and the numbers looked
+// right; in the aggregate `all` lane — which is the one lane that mitigates a vanished suite —
+// isolation ran first and left 15 on the counter, so policy's floor of 11 was already satisfied
+// before policy executed a single proof. Neutering every one of policy's eleven OS-enforcement
+// guards left the `all` lane reporting 584/584, exit 0 (COLD-1 F-24). A floor named for one
+// population must be computed from that population's own witnesses, so the counter is keyed by
+// ZEN_ENFORCEMENT_DOMAIN, which each suite's translation unit declares for itself.
+//
+// And the count is `==`, not `>=`. A `>=` floor with slack hides a deletion: isolation ran 15
+// against a floor of 12, so a genuine enforcement witness could be removed and the suite stayed
+// fully green, 32/32, 230 assertions, nothing moved. An exact expected population makes a missing
+// witness fail — and makes a NEW witness an intentional edit here, which is the correct price for a
+// small, security-relevant, deliberately stable population. (The per-suite CASE floors in
+// suite_population.txt are minimums instead, for the opposite reason: that population grows every
+// phase by design. Two populations, two policies, each argued.)
 //
 // Linux-only: included by test_isolation.cpp / test_policy.cpp (which already depend on the isolation
 // host). It is deliberately NOT in switchboard_fixtures.hpp, which portable suites include.
@@ -28,7 +47,16 @@
 
 #include <cstdlib>
 #include <initializer_list>
+#include <map>
 #include <string>
+
+// The including translation unit must name the enforcement population it belongs to, before the
+// include. There is no default on purpose: a domain that fell back to something shared would
+// silently re-create F-24, and this way the mistake is a compile error at the first new suite
+// rather than a wrong number in a green run.
+#ifndef ZEN_ENFORCEMENT_DOMAIN
+#error "define ZEN_ENFORCEMENT_DOMAIN (the suite's own name, as a string literal) before including enforcement_gate.hpp"
+#endif
 
 namespace zenh { // zen test harness
 
@@ -67,15 +95,21 @@ inline Gate enforcement_decision(const loom::EnforcementReport& rep,
     return require_enforcement_strict() ? Gate::FailHard : Gate::SkipDegraded;
 }
 
-/// Process-global tally of OS-enforcement cases that actually executed (imposed-and-confirmed), and
-/// a flag set when any case ran degraded (opt-out). The coverage TEST_CASE reads both.
-inline int& enforced_case_count() {
-    static int n = 0;
-    return n;
+/// Per-DOMAIN tally of OS-enforcement cases that actually executed (imposed-and-confirmed), and a
+/// per-domain flag set when any of that domain's cases ran degraded (opt-out). The domain is the
+/// suite that owns the population; isolation's executions can never be read as policy's. The
+/// coverage TEST_CASE at the end of each suite reads both, for its own domain only.
+///
+/// The maps are process-global storage, but nothing process-global is ever the ANSWER: every read
+/// and every write is keyed, so the aggregate lane and a dedicated lane report the same number for
+/// the same domain.
+inline int& enforced_case_count(const std::string& domain) {
+    static std::map<std::string, int> counts;
+    return counts[domain];
 }
-inline bool& degraded_run() {
-    static bool d = false;
-    return d;
+inline bool& degraded_run(const std::string& domain) {
+    static std::map<std::string, bool> degraded;
+    return degraded[domain];
 }
 
 } // namespace zenh
@@ -96,12 +130,39 @@ inline bool& degraded_run() {
             return;                                                                                \
         }                                                                                          \
         if (zen_gate__ == ::zenh::Gate::SkipDegraded) {                                            \
-            ::zenh::degraded_run() = true;                                                         \
+            ::zenh::degraded_run(ZEN_ENFORCEMENT_DOMAIN) = true;                                   \
             MESSAGE("DEGRADED SKIP: OS enforcement unavailable for "                               \
                     << (WHAT) << ": " << zen_missing__ << " (opt-out set)");                       \
             return;                                                                                \
         }                                                                                          \
-        ++::zenh::enforced_case_count();                                                           \
+        ++::zenh::enforced_case_count(ZEN_ENFORCEMENT_DOMAIN);                                     \
+    } while (false)
+
+// The coverage case at the end of a suite: assert that THIS domain's OS-enforcement population is
+// exactly the one it claims. Two outcomes, and they are not interchangeable.
+//
+//   strict mode   -> the exact expected count, by name. A missing witness fails; so does an
+//                    unannounced extra one.
+//   opt-out mode  -> NON-ENFORCEMENT MODE. The population did not run, so there is nothing to
+//                    assert about it, and the output says so in words that cannot be mistaken for
+//                    the proof. The official lane (tests/verify.cmake) refuses to run at all in
+//                    this mode, so an opt-out run can never be minted as enforcement evidence.
+#define ZEN_ENFORCEMENT_POPULATION(EXPECTED)                                                       \
+    do {                                                                                           \
+        if (!::zenh::require_enforcement_strict() ||                                               \
+            ::zenh::degraded_run(ZEN_ENFORCEMENT_DOMAIN)) {                                        \
+            MESSAGE("*** NON-ENFORCEMENT MODE *** the OS-enforcement population for '"             \
+                    << ZEN_ENFORCEMENT_DOMAIN                                                      \
+                    << "' did NOT execute (ZEN_ALLOW_UNENFORCEABLE=1 / "                           \
+                       "ZEN_REQUIRE_ENFORCEMENT=0). This run is NOT evidence that containment "    \
+                       "was imposed; the expected " << (EXPECTED)                                  \
+                    << " proofs were converted to marked-degraded skips.");                        \
+            return;                                                                                \
+        }                                                                                          \
+        MESSAGE("OS-enforcement cases executed for '" << ZEN_ENFORCEMENT_DOMAIN                    \
+                << "': " << ::zenh::enforced_case_count(ZEN_ENFORCEMENT_DOMAIN) << " of "          \
+                << (EXPECTED) << " expected");                                                     \
+        CHECK(::zenh::enforced_case_count(ZEN_ENFORCEMENT_DOMAIN) == (EXPECTED));                   \
     } while (false)
 
 // The full powerbox floor needs all three capabilities OS-enforceable. A single preprocessor token

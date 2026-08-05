@@ -3,6 +3,9 @@
 
 #include <doctest.h>
 
+// This suite owns the "policy" OS-enforcement population; the gate keys its tally by this
+// name so isolation's fifteen executions can never stand in for policy's eleven (POP-02).
+#define ZEN_ENFORCEMENT_DOMAIN "policy"
 #include "enforcement_gate.hpp"
 #include "weavelib/net_protocol.hpp"
 #include "weavelib/storage_protocol.hpp"
@@ -734,15 +737,14 @@ TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and n
 
 // Keep this LAST: a positive tally so a green policy run can never mean "every floor proof silently
 // skipped." (Default doctest registration order; a --order-by=rand run would assert in a reporter.)
+//
+// EXACTLY 11, from this suite's own witnesses only (POP-02) — the eleven full-floor
+// ZEN_REQUIRE_ENFORCEABLE guard sites, including the forged-reply_to proof, none of them in a
+// subcase. This is the number COLD-1 F-24 was about: the tally used to be process-global, so in the
+// aggregate `all` lane this case read 26 (isolation's 15 plus policy's 11) and would have passed
+// its `>= 11` floor with all eleven of policy's own proofs neutered.
 TEST_CASE("enforcement coverage: the floor proofs actually executed, not silently skipped") {
-    if (!zenh::require_enforcement_strict() || zenh::degraded_run()) {
-        MESSAGE("degraded run (opt-out set): the enforcement-coverage floor is relaxed");
-        return;
-    }
-    // 11 full-floor OS-enforcement guard sites in this suite (incl. the forged-reply_to proof); on a
-    // provisioned host all execute.
-    MESSAGE("OS-enforcement cases executed: " << zenh::enforced_case_count());
-    CHECK(zenh::enforced_case_count() >= 11);
+    ZEN_ENFORCEMENT_POPULATION(11);
 }
 
 } // TEST_SUITE
