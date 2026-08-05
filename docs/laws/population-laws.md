@@ -139,7 +139,12 @@ MEANS
 DOES NOT MEAN
 - that the opt-out is deprecated, or that a run under it fails. It passes, loudly
   labelled;
-- that a developer opt-out mode is ever security evidence.
+- that a developer opt-out mode is ever security evidence;
+- that a bare `ctest` **summary line** distinguishes the two. It does not, and cannot:
+  CTest shows a passing test's output only under `-V` or on failure, and making the run
+  fail would destroy the very portability the opt-out exists for. Every other surface
+  says so — the run's own output, the assertion count, and the official lane's refusal to
+  start — which is exactly why the lane, not a bare summary line, is what gets quoted.
 
 PROVEN BY — `ZEN_ENFORCEMENT_POPULATION` in `tests/enforcement_gate.hpp`; the refusal in
 `tests/verify.cmake`; observable by running `ZEN_ALLOW_UNENFORCEABLE=1 ctest -V -R policy`.
