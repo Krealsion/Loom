@@ -25,6 +25,14 @@
 //                                   denial stand in for that — they are different facts
 //                                   and COLD-2 found the second true while the first
 //                                   was false)
+//   ZEN_WEAVE_ENV_PROBE           — on handle, report the child's COMPLETE environment:
+//                                   how many entries exist, how many are LD_*, whether
+//                                   the planted ambient secret is visible, and the NAMES
+//                                   (never the values — a value could be a real token
+//                                   from the developer's shell, and a name is enough to
+//                                   identify a leak). C-2a: the environment the child
+//                                   receives must be the one Zen authored, not the one
+//                                   the host happened to hold
 //   ZEN_WEAVE_MEM_BOMB            — on handle (and revive), allocate a large resident
 //                                   block to trip memory.max (B5: OOM-kill containment)
 //   ZEN_WEAVE_FORK_BOMB           — on handle, fork until it can't and report the count
@@ -103,6 +111,12 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
+
+#ifdef ZEN_WEAVE_ENV_PROBE
+#include <cstring>
+#include <string>
+extern char** environ; // the child's OWN environment — the thing under test
 #endif
 
 #if defined(ZEN_WEAVE_MEM_BOMB)
@@ -198,6 +212,21 @@ std::shared_ptr<const Schema> ping_schema() {
 }
 [[maybe_unused]] std::shared_ptr<const Schema> forkresult_schema() { // only the fork-bomb variant
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
+    return s;
+}
+[[maybe_unused]] std::shared_ptr<const Schema> envresult_schema() { // only the env-probe variant
+    // The COMPLETE environment, not a lookup of the names a test thought to ask about.
+    // `count` is what makes an unknown future variable fail this on its own; the other
+    // three are the named questions C-2a asks, kept separate so a failure says which.
+    // `names` carries NAMES ONLY: a value could be a real credential from the host
+    // shell, and putting one in test output (or a CI log) to prove it should not be
+    // there would be its own leak.
+    static const auto s = SchemaBuilder("EnvResult", 1)
+                              .field("count", Kind::Int)
+                              .field("ld_count", Kind::Int)
+                              .field("secret_present", Kind::Int)
+                              .field("names", Kind::Text)
+                              .build();
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> fdresult_schema() { // only the fd-probe variant
@@ -681,6 +710,38 @@ public:
             result.set("open_high", Cell::integer(open_high));
             result.set("parked_write", Cell::integer(parked_write));
             result.set("fresh_connect", Cell::integer(fresh_connect));
+            bus.send(in.reply_to, Message(std::move(result)));
+        }
+#elif defined(ZEN_WEAVE_ENV_PROBE)
+        (void)seq;
+        // THE C-2a WITNESS, from inside the sandbox. It reads its OWN `environ` — the
+        // thing execve actually installed — rather than asking about names a test
+        // remembered to name. `count` is therefore the load-bearing field: a variable
+        // some future embedding host introduces raises it without anyone editing this.
+        {
+            std::int64_t count = 0;
+            std::int64_t ld_count = 0;
+            std::string names;
+            for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+                ++count;
+                const char* eq = std::strchr(*e, '=');
+                const std::string name =
+                    eq != nullptr ? std::string(*e, static_cast<std::size_t>(eq - *e))
+                                  : std::string(*e); // a nameless entry cannot happen, but say so
+                if (name.rfind("LD_", 0) == 0) {
+                    ++ld_count;
+                }
+                if (names.size() < 4000) { // bounded: this rides an ordinary framed message
+                    names += name;
+                    names += "\n";
+                }
+            }
+            Value result(envresult_schema());
+            result.set("count", Cell::integer(count));
+            result.set("ld_count", Cell::integer(ld_count));
+            result.set("secret_present",
+                       Cell::integer(std::getenv("ZEN_C2A_AMBIENT_SECRET") != nullptr ? 1 : 0));
+            result.set("names", Cell::text(names));
             bus.send(in.reply_to, Message(std::move(result)));
         }
 #elif defined(ZEN_WEAVE_MEM_BOMB)

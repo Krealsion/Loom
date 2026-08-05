@@ -91,6 +91,16 @@ std::shared_ptr<const Schema> forkresult_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
     return s;
 }
+// Matches the env-probe weave's emitted shape (C-2a): the child's COMPLETE environment.
+std::shared_ptr<const Schema> envresult_schema() {
+    static const auto s = SchemaBuilder("EnvResult", 1)
+                              .field("count", Kind::Int)
+                              .field("ld_count", Kind::Int)
+                              .field("secret_present", Kind::Int)
+                              .field("names", Kind::Text)
+                              .build();
+    return s;
+}
 // Matches the fd-probe weave's emitted shape (C-2): the descriptor inventory the child
 // actually holds, whether the parked one can still move bytes, and — kept separate on
 // purpose — whether the network namespace is still imposed.
@@ -1032,6 +1042,149 @@ TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is 
     (void)::unlink(file_path.c_str());
 }
 
+TEST_CASE("C-2a: the child's environment is the one Zen authored, not the host's ambient one") {
+    // C2 closed the descriptor half of the exec boundary; this is the other half. The
+    // child used to receive `environ` wholesale, so a weave at FsAccess::None with no
+    // network was still handed the host's HOME, PATH, session-bus and compositor
+    // addresses, whatever tokens the embedding process held -- and any LD_*, which the
+    // loader acts on BEFORE any Zen code in the child runs.
+    //
+    // The load-bearing assertion is `count`, not any named lookup. A test that only
+    // asked "is ZEN_C2A_AMBIENT_SECRET absent?" would pass forever while every other
+    // host variable kept crossing, and would say nothing about a variable introduced
+    // next year. Asserting the COMPLETE set against the authored one is what makes an
+    // unknown future variable fail here with nobody remembering to add it.
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
+                            "C-2a: the child's environment is authored, not inherited");
+
+    // Plant ambient state in THIS process, the way an embedding host really would. Each
+    // is chosen to be inert if it did cross: a fake secret, a loader search path that
+    // does not exist, a preload of a file that does not exist (the loader warns and
+    // continues -- deliberately NOT a real preload, which would be an arbitrary-code
+    // experiment), and a sanitizer option equal to its own default.
+    struct Planted {
+        const char* name;
+        const char* value;
+    };
+    const Planted planted[] = {
+        {"ZEN_C2A_AMBIENT_SECRET", "should-not-cross"},
+        {"LD_LIBRARY_PATH", "/zen-c2a-nonexistent-lib-dir"},
+        {"LD_PRELOAD", "/zen-c2a-nonexistent-preload.so"},
+        {"ASAN_OPTIONS", "verbosity=0"},
+    };
+    for (const Planted& p : planted) {
+        REQUIRE(::setenv(p.name, p.value, 1) == 0);
+    }
+    // Proof the planting worked: without this, everything below could pass because the
+    // variables were never set rather than because they did not cross.
+    for (const Planted& p : planted) {
+        const char* here = std::getenv(p.name);
+        REQUIRE(here != nullptr);
+        CHECK(std::string(here) == p.value);
+    }
+
+    std::int64_t count = -1;
+    std::int64_t ld_count = -1;
+    std::int64_t secret_present = -1;
+    std::string names = "<no reply>";
+    Registered rec = register_probe(bus, {envresult_schema()});
+    rec.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        count = in.payload.get("count")->as_int();
+        ld_count = in.payload.get("ld_count")->as_int();
+        secret_present = in.payload.get("secret_present")->as_int();
+        names = std::string(in.payload.get("names")->as_text());
+    };
+    Grant grant;
+    grant.allow("EnvResult", 1, rec.id); // it may REPORT freely: a sandbox is not a muzzle
+    OutOfProcessResult mounted = host.mount("c2a", ZEN_SO_ENVPROBE, std::move(grant));
+    REQUIRE_MESSAGE(mounted.ok, mounted.error);
+
+    // The full supported child path had to work to get here and to get a reply back:
+    // execve, dynamic-loader startup, dlopen of the weave, the ABI check, create(), the
+    // handshake (manifest + policy + snapshot), and now an ordinary message round trip
+    // -- all under the authored environment. A successful execve alone would prove none
+    // of that.
+    bus.send(mounted.id, Message(ping(1), WeaveId{}, rec.id));
+    REQUIRE(host.run_until([&] { return !rec.weave->handled_names.empty(); }, 4000));
+    CHECK(rec.weave->handled_names.back() == "EnvResult");
+
+    MESSAGE("child environment (" << count << " entries): " << (names.empty() ? "<empty>" : names));
+
+    // THE COMPLETE SET. build_child_environment() authors nothing today, so the child's
+    // environment is empty; if a future phase authors a variable, this number changes
+    // deliberately here and in that builder, together.
+    CHECK(count == 0);
+    CHECK(names.empty());
+
+    // The named questions, kept separate so a failure says WHICH boundary moved.
+    CHECK(secret_present == 0); // the planted ambient secret is not visible to the child
+    CHECK(ld_count == 0);       // no loader variable crossed -- LD_* is capability-bearing
+
+    host.unmount("c2a");
+    for (const Planted& p : planted) {
+        REQUIRE(::unsetenv(p.name) == 0); // do not leave planted state to the next case
+    }
+}
+
+TEST_CASE("C-2a: an authored environment refuses malformed entries rather than half-applying") {
+    // The refusal path the spawn depends on (there is no fallback to `environ`, so a
+    // malformed authored environment must be a REFUSAL, not a smaller environment).
+    // Cheap and pure, so every posture is testable without a spawn.
+    ChildEnvironment empty = build_child_environment();
+    CHECK(empty.ok());
+    CHECK(empty.size() == 0);
+    REQUIRE(empty.data() != nullptr);
+    CHECK(empty.data()[0] == nullptr); // an empty environment is still NULL-terminated
+
+    ChildEnvironment one;
+    one.set("ZEN_EXAMPLE", "value");
+    CHECK(one.ok());
+    CHECK(one.size() == 1);
+    CHECK(std::string(one.data()[0]) == "ZEN_EXAMPLE=value");
+    CHECK(one.data()[1] == nullptr);
+
+    // An empty value is legitimate -- "set but empty" is a real, distinct state.
+    ChildEnvironment blank;
+    blank.set("ZEN_EXAMPLE", "");
+    CHECK(blank.ok());
+    CHECK(std::string(blank.data()[0]) == "ZEN_EXAMPLE=");
+
+    // Each refusal poisons the WHOLE environment: an environment missing something Zen
+    // meant to author is not the authored one, and a caller that cannot see the
+    // difference would spawn against a silently different set.
+    ChildEnvironment named;
+    named.set("", "value");
+    CHECK_FALSE(named.ok());
+
+    ChildEnvironment equals;
+    equals.set("ZEN=EXAMPLE", "value");
+    CHECK_FALSE(equals.ok());
+
+    ChildEnvironment nul_name;
+    nul_name.set(std::string_view("ZEN\0X", 5), "value");
+    CHECK_FALSE(nul_name.ok());
+
+    ChildEnvironment nul_value;
+    nul_value.set("ZEN_EXAMPLE", std::string_view("a\0b", 3));
+    CHECK_FALSE(nul_value.ok());
+
+    ChildEnvironment duplicated;
+    duplicated.set("ZEN_EXAMPLE", "first");
+    duplicated.set("ZEN_EXAMPLE", "second");
+    CHECK_FALSE(duplicated.ok()); // which one the child would see is a lookup-order detail
+    CHECK(duplicated.size() == 1);
+
+    // A name that merely SHARES A PREFIX is not a duplicate -- the check must compare
+    // the name, not a substring, or authoring ZEN_A and ZEN_AB would refuse.
+    ChildEnvironment prefixed;
+    prefixed.set("ZEN_A", "1");
+    prefixed.set("ZEN_AB", "2");
+    CHECK(prefixed.ok());
+    CHECK(prefixed.size() == 2);
+}
+
 TEST_CASE("a SURPRISE sandbox-entry failure fails safe: refuses in strict AND dev mode") {
     // The probe passes (Network IS enforceable here), but the *real* entry is forced
     // to fail at spawn — the catastrophic path to rule out. It must refuse in BOTH
@@ -1599,9 +1752,9 @@ TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
 // silently skipped." (Relies on doctest's default registration order; a --order-by=rand run would
 // instead assert the count in a reporter hook.)
 //
-// EXACTLY 16, from this suite's own witnesses only (POP-02). Thirteen ZEN_REQUIRE_ENFORCEABLE guard
-// sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 16 executions,
-// not 13. The number is exact rather than a floor because `>= 12` had three executions of slack:
+// EXACTLY 17, from this suite's own witnesses only (POP-02). Fourteen ZEN_REQUIRE_ENFORCEABLE guard
+// sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 17 executions,
+// not 14. The number is exact rather than a floor because `>= 12` had three executions of slack:
 // a genuine enforcement witness could be deleted and this suite stayed 32/32 green with 230
 // assertions, nothing moved. When a new OS-enforcement proof is added, raise this deliberately.
 //
@@ -1609,8 +1762,13 @@ TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
 // OS-enforcement witness — it asserts ENETUNREACH from inside the namespace alongside the
 // descriptor inventory — so it belongs in this population, and raising the number on purpose is
 // exactly the price this contract charges for adding one.
+//
+// 16 -> 17 at C2a: the exec-boundary ENVIRONMENT case is the fourteenth. It mounts under the
+// enforced floor and reads the environment from inside it, so it needs the same gate. Its pure
+// companion (the ChildEnvironment well-formedness case) deliberately does NOT take the gate — it
+// spawns nothing and asserts nothing about the OS — which is why the population moved by one.
 TEST_CASE("enforcement coverage: the OS-enforcement proofs actually executed, not silently skipped") {
-    ZEN_ENFORCEMENT_POPULATION(16);
+    ZEN_ENFORCEMENT_POPULATION(17);
 }
 
 } // TEST_SUITE

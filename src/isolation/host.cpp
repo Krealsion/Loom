@@ -28,8 +28,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-extern char** environ;
-
 namespace loom {
 
 namespace {
@@ -239,12 +237,13 @@ std::string describe_resolution(const CapabilityResolution& r) {
     if (r.capability == Capability::Network) {
         switch (r.outcome) {
             case Outcome::Enforced:
-                // Two different facts, kept apart on purpose (C-2). The namespace decides
-                // what a FRESH socket can do; the exec-boundary sweep decides which
-                // ALREADY-OPEN descriptors exist at all. COLD-2 found the second missing
-                // while the first was real, and this sentence used to describe only the
-                // first — so a reader had no way to learn that an inherited, connected
-                // host socket walked straight through the containment being claimed.
+                // THREE different facts, kept apart on purpose (C-2, C-2a). The namespace
+                // decides what a FRESH socket can do; the descriptor sweep decides which
+                // ALREADY-OPEN descriptors exist at all; the authored environment decides
+                // what the child is TOLD. COLD-2 found the first true while the second was
+                // false, and this sentence used to describe only the first — so a reader
+                // had no way to learn that an inherited, connected host socket walked
+                // straight through the containment being claimed.
                 return std::string(
                            "network: contained — private user+net namespace, no external "
                            "interface, so new outbound connections fail at the syscall level") +
@@ -252,9 +251,12 @@ std::string describe_resolution(const CapabilityResolution& r) {
                        "; ambient host descriptors do not cross the boundary: every "
                        "descriptor is closed immediately before execve except the control "
                        "fd and stdin/stdout/stderr, which are deliberately kept (the child "
-                       "shares the host's console). So 'contained' means no external "
-                       "reachability and no inherited reach, and still not no-IPC: the "
-                       "control fd is a channel to this host, by design";
+                       "shares the host's console); nor does ambient host environment — the "
+                       "child's environment is authored by Zen and is currently EMPTY, so "
+                       "no host token, path, session address or LD_* variable crosses. So "
+                       "'contained' means no external reachability, no inherited reach and "
+                       "no inherited environment, and still not no-IPC: the control fd is a "
+                       "channel to this host, by design";
             case Outcome::Granted:
                 return "network: granted — full host network by the grant, NOT OS-scoped (no "
                        "namespace limits its reach); any per-destination limit is the holder's "
@@ -370,6 +372,22 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     char* argv[] = {const_cast<char*>(exe_.c_str()), const_cast<char*>(fd_arg.c_str()),
                     const_cast<char*>(link.so_path.c_str()), nullptr};
 
+    // The exec boundary's SECOND authority surface (C-2a). Built here, in the parent,
+    // where allocation is fine — exactly as the mount plan is — so the fork-child does
+    // nothing but hand the finished array to execve. `environ` is never consulted: a
+    // variable reaches the child because Zen authored it, not because this process
+    // happened to hold it.
+    ChildEnvironment child_env = build_child_environment();
+    if (!child_env.ok()) {
+        ::close(sv[0]);
+        ::close(sv[1]);
+        error = "child environment could not be constructed (the authored environment was "
+                "malformed), so the spawn refused rather than fall back to this host's "
+                "ambient environment";
+        return false;
+    }
+    char* const* envp = child_env.data(); // allocates: parent-side, before the fork
+
     const bool sandbox_net = network_sandboxed(link);
     const bool sandbox_fs = filesystem_sandboxed(link);
     const bool sandbox_res = resources_contained(link);
@@ -446,11 +464,13 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         if (sv[0] != kChildFd) {
             ::close(sv[0]);
         }
-        // THE DESCRIPTOR BOUNDARY. Everything the embedding host happened to hold open
-        // — its Bridge sockets, its files, its pipes, its terminal — stops existing for
-        // this child here, one syscall before it becomes zen-weave-host. The explicit
-        // closes above are subsumed by this and kept anyway: they state the intent, and
-        // the sweep enforces it over descriptors this code never knew about.
+        // THE DESCRIPTOR BOUNDARY, the first of the exec boundary's two authority
+        // surfaces (the second, the authored environment, was built above and is handed
+        // to execve below). Everything the embedding host happened to hold open — its
+        // Bridge sockets, its files, its pipes, its terminal — stops existing for this
+        // child here, one syscall before it becomes zen-weave-host. The explicit closes
+        // above are subsumed by this and kept anyway: they state the intent, and the
+        // sweep enforces it over descriptors this code never knew about.
         if (close_inherited_descriptors(kChildKeepFds,
                                         sizeof(kChildKeepFds) / sizeof(kChildKeepFds[0])) != 0) {
             // Fail SAFE, loudly. stderr is in the allow-list and still open, and a raw
@@ -462,8 +482,8 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
             (void)!::write(2, msg, sizeof(msg) - 1);
             ::_exit(kExitFdHygieneFailed);
         }
-        ::execve(exe_.c_str(), argv, environ);
-        ::_exit(kExitPreExecFailed); // exec failed
+        ::execve(exe_.c_str(), argv, envp); // the AUTHORED environment, never `environ`
+        ::_exit(kExitPreExecFailed);        // exec failed
     }
     ::close(sync_c2p[1]);
     ::close(sync_p2c[0]);

@@ -266,6 +266,87 @@ int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcep
     return close_descriptors_by_enumeration(keep, keep_count);
 }
 
+// ---- The exec-boundary environment policy (C-2a) ---------------------------------
+
+void ChildEnvironment::set(std::string_view name, std::string_view value) {
+    // A refusal poisons the whole environment rather than skipping one entry: an
+    // environment missing a variable Zen meant to author is not the authored one, and
+    // silently continuing would put the caller's refusal decision behind a value it
+    // never sees. Same shape as the descriptor allow-list's well-formedness contract.
+    if (name.empty() || name.find('=') != std::string_view::npos ||
+        name.find('\0') != std::string_view::npos || value.find('\0') != std::string_view::npos) {
+        ok_ = false;
+        return;
+    }
+    const std::string prefix = std::string(name) + "=";
+    for (const std::string& existing : entries_) {
+        if (existing.compare(0, prefix.size(), prefix) == 0) {
+            ok_ = false; // a duplicate makes "what the child sees" a lookup-order detail
+            return;
+        }
+    }
+    entries_.push_back(prefix + std::string(value));
+}
+
+char* const* ChildEnvironment::data() {
+    pointers_.clear();
+    pointers_.reserve(entries_.size() + 1);
+    for (std::string& entry : entries_) {
+        pointers_.push_back(entry.data());
+    }
+    pointers_.push_back(nullptr); // execve reads until this, so it is never optional
+    return pointers_.data();
+}
+
+ChildEnvironment build_child_environment() {
+    ChildEnvironment env;
+
+    // IT IS EMPTY, AND THAT IS THE MEASURED ANSWER RATHER THAN an aesthetic one.
+    //
+    // The question this function exists to answer is "what does the supported child
+    // actually need", asked of the running system rather than of convention. Measured
+    // on the canonical toolchain, in all three lanes (Debug, Release, ASan+UBSan):
+    // zen-weave-host reaches main(), completes dynamic-loader startup, dlopens a real
+    // weave, checks the ABI, constructs the instance and unloads it, under `env -i`.
+    // Nothing before main() needs a variable either -- the binary carries no RPATH or
+    // RUNPATH, and every library it needs (libstdc++, libgcc_s, libm, libc, and under
+    // the sanitizer lane libasan and libubsan) resolves from the standard system paths,
+    // which the restricted view already binds read-only.
+    //
+    // So each variable a conventional list would add is here by its absence, deliberately:
+    //
+    //   LD_LIBRARY_PATH   not needed (no RPATH/RUNPATH, system paths suffice), and it is
+    //   LD_PRELOAD        capability-bearing: the loader acts on these BEFORE any Zen
+    //   LD_AUDIT, LD_*    code in the child runs, so inheriting one would let whatever
+    //                     the embedding host had set choose what executes inside the
+    //                     sandbox. Withheld even where a value would be harmless.
+    //   ASAN_OPTIONS      not needed: this tree configures its sanitizers entirely
+    //   UBSAN_OPTIONS     through compile and link flags (-fsanitize=address,undefined
+    //   LSAN_OPTIONS      -fno-sanitize-recover=all) and reads no *SAN_OPTIONS anywhere.
+    //                     The instrumentation is in the binary, not in the environment.
+    //   PATH              nothing in the child execs or searches for a program.
+    //   HOME, USER,       identity and session state. At FsAccess::None there is no home
+    //   LOGNAME, SHELL    to point at; the value would be an ambient fact, not a need.
+    //   TMPDIR            nothing in the child creates temporary files. A write-level
+    //                     grant gives the view its own /scratch, which is a mount fact
+    //                     rather than an environment one -- so pointing at a host path
+    //                     here would leak a host pathname for no gain.
+    //   LANG, LC_*, TZ    no locale- or time-zone-dependent formatting on any child
+    //                     path; the C/POSIX default the runtime starts in is already
+    //                     the deterministic one.
+    //   TERM              the child renders nothing.
+    //   DISPLAY,          the ones that make the point best: these are ADDRESSES OF
+    //   WAYLAND_DISPLAY,  RUNNING SERVICES. Under the old behavior a weave at
+    //   DBUS_SESSION_     FsAccess::None with no network was still told where the
+    //   BUS_ADDRESS,      session bus, the compositor and the audio server listen.
+    //   PULSE_SERVER,     Nothing reaches them through the sandbox's view -- but Zen
+    //   XDG_RUNTIME_DIR   never decided to say, and that is the whole objection.
+    //
+    // Adding one is a deliberate edit HERE, with its reason beside it, and it changes
+    // the exact set the isolation suite asserts -- which is what keeps this honest.
+    return env;
+}
+
 #if defined(__linux__)
 
 namespace {
