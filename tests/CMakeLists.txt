@@ -348,6 +348,14 @@ target_include_directories(zen-tests SYSTEM PRIVATE
 #     tests/suite_population.txt no longer matches → the `population` test fails;
 #   * a suite absent because its platform gate is off — declared absent in the manifest,
 #     reported as absent, never reported as passed.
+#
+# The derivation runs at CONFIGURE time, and deliberately does not add the sources to
+# CMAKE_CONFIGURE_DEPENDS: on the WSL/drvfs lane that would re-configure for minutes on every
+# test edit, and it buys nothing, because the stale window fails closed from both ends. Rename
+# a suite and merely rebuild: the old name is still registered, selects zero cases, and
+# doctest_main.cpp fails it. Re-configure: the registration moves to the truthful new name and
+# the `population` contract fails until the manifest is updated on purpose. Neither path can
+# produce a green.
 function(zen_suites_from_sources out_var)
     set(discovered "")
     foreach(src IN LISTS ARGN)
