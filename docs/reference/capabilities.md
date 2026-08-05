@@ -53,19 +53,23 @@ and **positively re-confirms** from the kernel's own view:
 the runtime **fails safe** when it cannot confirm (dev-mode converts a
 known-gap refusal into a visibly-uncontained warning — never a false claim).
 
-### Fresh access, inherited descriptors, and the exec boundary
+### The exec boundary: three independent facts
 
-Three different facts, and reading any one as the others is the mistake C-2
-was. A **capability namespace** decides what a *fresh* attempt can reach. It
-decides nothing about a descriptor that was **already open** and crossed
-`execve` — a connected socket, an open file, a pipe, a terminal is simply
-*there*, at `FsAccess::None`, in a netns with no interface. So the child gets
-a third, separate guarantee:
+Reading any one of these as the others is exactly the mistake C-2 was. A
+**capability namespace** decides what a *fresh* attempt can reach — and nothing
+else. It says nothing about a descriptor that was **already open** and crossed
+`execve`, nor about what the child was **told**. Each has its own boundary:
 
-**Exec-boundary descriptor hygiene.** Every spawn of `zen-weave-host` goes
-through one fork/`execve` path, and immediately before `execve` the child
-closes **every descriptor except an explicit allow-list**. The embedding host's
-own descriptors — which Loom never created and cannot annotate — do not cross.
+| fact | what decides it |
+|---|---|
+| namespace / resource containment | the netns, mountns and cgroup leaf, positively re-confirmed |
+| **descriptor** inheritance | the exec-boundary sweep — an explicit allow-list |
+| **environment** inheritance | the authored child environment — explicit entries only |
+
+**Descriptor hygiene.** Every spawn of `zen-weave-host` goes through one
+fork/`execve` path, and immediately before `execve` the child closes **every
+descriptor except an explicit allow-list**. The embedding host's own
+descriptors — which Loom never created and cannot annotate — do not cross.
 
 The intentional set is exactly:
 
@@ -85,10 +89,42 @@ that kept the host's descriptors is never allowed to run under a containment
 claim. Loom's own sockets additionally set `FD_CLOEXEC` at creation, which is
 defence in depth and explicitly *not* the boundary.
 
-What this does **not** say: nothing here constrains the child's **environment**
-(`execve` passes the host environment through), and the control fd is a real
-channel to the host, by design — *contained* has always meant no external
-reachability, not no-IPC.
+**The environment is authored, not inherited.** `execve` used to receive
+`environ`, so a weave at `FsAccess::None` with no network was still handed the
+host's `HOME` and `PATH`, the addresses of the session bus, the compositor and
+the audio server, whatever tokens the embedding process held — and any `LD_*`,
+which the loader acts on *before* any Zen code in the child runs. None of that
+was a capability Zen granted; it crossed because the host possessed it.
+
+The child's environment is now built entry by entry, and the current authored
+set is:
+
+```text
+<empty>
+```
+
+That is a measurement, not a preference. On the canonical toolchain, in all
+three lanes, `zen-weave-host` reaches `main()`, completes loader startup,
+`dlopen`s a real weave, checks the ABI and constructs the instance under
+`env -i`; the binary carries no `RPATH`/`RUNPATH`, and every library it needs
+(including `libasan`/`libubsan` in the sanitizer lane) resolves from the system
+paths the view already binds. Sanitizer behaviour is compiled in
+(`-fsanitize=… -fno-sanitize-recover=all`); this tree reads no `*SAN_OPTIONS`
+anywhere, so none is forwarded and none is needed.
+
+Default deny is **structural**: the builder starts empty and the only way in is
+an explicit entry, so a variable a future host introduces is absent without
+anyone maintaining a list. There is no blacklist — a blacklist of
+secret-looking names leaves every unlisted variable's authority intact. If the
+authored environment cannot be constructed the spawn **refuses**; it never
+falls back to `environ`, and there is no option that disables this.
+
+Two consequences worth stating plainly: a host-set `LD_PRELOAD` (or any `LD_*`)
+does **not** reach the sandbox, and a host-set `ASAN_OPTIONS` no longer
+configures the child's sanitizer runtime.
+
+What this still does **not** say: the control fd is a real channel to the host,
+by design — *contained* has always meant no external reachability, not no-IPC.
 
 **The honest threat tier: abuse, not escape.** The sandbox stops buggy or
 greedy code. seccomp is the named, unbuilt escalation to escape-tier. Any

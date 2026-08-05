@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <sys/types.h> // pid_t
@@ -151,6 +152,51 @@ int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcep
 /// refuses only an unbounded `RLIMIT_NOFILE`. Same allow-list contract as above.
 int close_descriptors_by_close_range(const int* keep, std::size_t keep_count) noexcept;
 int close_descriptors_by_enumeration(const int* keep, std::size_t keep_count) noexcept;
+
+/// THE EXEC-BOUNDARY ENVIRONMENT POLICY (C-2a), and the second of the boundary's two
+/// authority surfaces — the first being the descriptor allow-list above.
+///
+/// The environment a child receives is AUTHORED, never inherited. `execve(exe, argv,
+/// environ)` handed a weave with `FsAccess::None` the embedding host's whole ambient
+/// state: session-bus and compositor socket addresses, `HOME`/`USER`, `PATH`, whatever
+/// tokens or keys the host process happened to hold, and — read before Zen's own code
+/// runs — any `LD_*` the host had set. None of that is a capability Zen decided to
+/// grant; it crossed because the host possessed it.
+///
+/// Built in the PARENT (allocation is fine there) and handed to the fork-child as a
+/// ready `char* const*`, exactly as the mount plan is precomputed for the same reason.
+/// Default deny is structural rather than filtered: the builder starts empty and the
+/// only way in is an explicit `set`, so a variable a future host introduces is absent
+/// without anyone maintaining a list. There is no blacklist — a blacklist of
+/// secret-looking names leaves every unlisted variable's authority intact.
+class ChildEnvironment {
+public:
+    /// Author one variable. Refuses — and marks the WHOLE environment invalid, because
+    /// a partially-authored environment is not the one that was authored — an empty
+    /// name, a name containing '=' or a NUL, a value containing a NUL, or a duplicate
+    /// name (which would make "what the child sees" depend on lookup order).
+    void set(std::string_view name, std::string_view value);
+
+    /// False if any `set` was refused. The caller must then REFUSE THE SPAWN; falling
+    /// back to `environ` would hand over exactly what this exists to withhold.
+    bool ok() const noexcept { return ok_; }
+    std::size_t size() const noexcept { return entries_.size(); }
+
+    /// The NUL-terminated array `execve` wants (never null; an empty environment is a
+    /// one-element array holding only the terminator). Call it in the PARENT: it
+    /// allocates, and the child must not. Valid until the next `set`.
+    char* const* data();
+
+private:
+    std::vector<std::string> entries_; ///< "NAME=VALUE", in authored order
+    std::vector<char*> pointers_;      ///< rebuilt by data(); back() is always nullptr
+    bool ok_ = true;
+};
+
+/// The authored environment for `zen-weave-host`. Every entry it contains exists
+/// because Zen put it there for a measured reason; see reference/capabilities.md for
+/// the current set and why it is what it is.
+ChildEnvironment build_child_environment();
 
 /// Host-side **positive confirmation** that `child` is in a namespace of the given
 /// kind ("net" or "mnt") distinct from this process — a hard-to-fool check (different
