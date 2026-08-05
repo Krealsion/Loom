@@ -55,8 +55,21 @@ reported correctly at once, including truthfully-unchanged during
 
 Canonical: Linux/WSL (`dlopen`). `LOOM_ENABLE_WINDOWS_KERNEL` is an opt-in
 **development/demo** `LoadLibrary` backend with no isolation, truth-pinned at
-every surface (`containment_note()`); never a default. Weave libraries build
-with `-fno-gnu-unique` (the law that keeps `dlclose` real).
+every surface (`containment_note()`); never a default.
+
+## The reloadable-weave build contract
+
+`loom_weave_build_contract(<target>)` ships with the package
+(`lib/cmake/loom/loom-weave.cmake`, included by `loomConfig.cmake`) and is what
+keeps `dlclose` real ([KERN-05](../laws/kernel-laws.md)). It applies the
+platform's requirement to exactly the target handed to it, records the verdict
+on that target's `LOOM_WEAVE_BUILD_CONTRACT` property, and refuses a target type
+that is never `dlopen`'ed. ELF/GNU is the affected combination; PE-COFF and
+Mach-O have no unique symbol binding, and the function says so rather than
+injecting an option a compiler merely tolerates. It is present in kernel-less
+packages too — what you can *author* is not gated on what an install can *host*,
+which stays `if(TARGET loom::kernel)`. See
+[guides/dynamic-weaves](../guides/dynamic-weaves.md) for the authoring shape.
 
 ## Tests
 

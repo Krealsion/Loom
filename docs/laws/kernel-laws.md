@@ -77,3 +77,42 @@ DOES NOT MEAN
   protects mixed artifacts.
 
 PROVEN BY — descriptor version gate; suite `kernel` (stale-ABI case).
+
+## KERN-05 — A reloadable artifact's statics live and die with it
+
+LAW — A weave built through Loom's supported path receives, automatically, the
+platform's requirement for `dlclose` to actually end that image's static
+lifetime. The requirement is Loom's to state and apply, never the author's to
+remember.
+
+MEANS
+- `loom_weave_build_contract(<target>)` is exported with the package and is the
+  whole supported path; a consumer never spells a compiler option for this;
+- it covers a **compilation**, not a file — the installed `loom::core` and
+  `loom::switchboard` are built under it too, because one unique symbol
+  anywhere in the image marks the whole image `NODELETE`;
+- it reaches exactly the target handed to it: a host executable, or any other
+  consumer that merely links Loom, is untouched;
+- the platform predicate is semantic. ELF/GNU is affected; PE-COFF and Mach-O
+  have no such binding and receive nothing, notwithstanding that MinGW GCC
+  accepts the ELF option's spelling;
+- the verdict is recorded on the target (`LOOM_WEAVE_BUILD_CONTRACT`), and a
+  compiler that cannot express the contract is refused, not assumed.
+
+DOES NOT MEAN
+- that a `dlopen`'ed weave is isolated, sandboxed, or trusted — the threat tier
+  is unchanged and `RTLD_LOCAL` was never containment;
+- that every shared library in the process is reload-safe;
+- that every `dlclose` hazard is solved: a weave leaving a callback, an
+  `atexit` handler, or a thread behind is still its author's problem;
+- that Loom reaches a build system that never calls it. It defines a correct
+  path; it is not a cage. The uncontracted twin in `tests/` exists to keep that
+  boundary visible;
+- that anything is checked at load time. Nothing inspects a loaded artifact's
+  symbols — this is a build contract, and only a build contract.
+
+PROVEN BY — `cmake/loom-weave.cmake`; CTest entry `weave_contract` (reads the
+built artifacts with `nm`, over a roll of contracted targets derived from the
+function itself, with a deliberately uncontracted twin as the control); suite
+`kernel` (a contracted image releases and each load gets a fresh lifetime; the
+uncontracted one stays resident while `dlclose` reports success).

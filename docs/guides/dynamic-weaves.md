@@ -13,8 +13,39 @@ In the library source, after the class from
 ZEN_EXPORT_WEAVE(Responder)   // writes the whole C-ABI descriptor for you
 ```
 
-Build it as a shared library linking `loom::switchboard` and `loom::core`,
-with `-fno-gnu-unique` (the law that keeps unloading real on GCC).
+## Build it
+
+A weave is a shared library linking `loom::switchboard` and `loom::core` — the
+kernel is the *host's* dependency, not yours. Hand the target to Loom's
+reloadable-weave build contract and it applies whatever this platform and
+compiler require for `dlclose` to genuinely end that image's static lifetime
+([KERN-05](../laws/kernel-laws.md)):
+
+```cmake
+find_package(loom REQUIRED)
+
+add_library(my-weave SHARED my_weave.cpp)
+target_link_libraries(my-weave PRIVATE loom::core loom::switchboard)
+loom_weave_build_contract(my-weave)   # <- the one line that is not yours to skip
+```
+
+You do not need to know which compiler option that is, and you should not spell
+one yourself. On ELF/GNU it stops your vague-linkage statics — every
+`schema_of<T>()` the maker path instantiates for your shapes — from being
+emitted `STB_GNU_UNIQUE`, a binding glibc resolves through a process-wide table
+that ignores `RTLD_LOCAL` and outlives `dlclose`. Skip it and the second library
+sharing your vocabulary header silently reads the first one's destroyed statics;
+`dlclose` returns success and `kernel.unload()` returns true while it happens.
+On PE-COFF there is nothing to apply and the function applies nothing.
+
+The contract covers a **compilation**, not a file: every translation unit inside
+the image needs it. The installed `loom::core` and `loom::switchboard` already
+carry it, so linking them costs you nothing extra — but a static library of your
+own that you link into a weave is yours to hand over too.
+
+**Building without CMake?** Reproduce the equivalent non-unique symbol semantics
+for your toolchain yourself, and then verify the artifact rather than trusting
+the flag: `nm -D --defined-only my-weave.so | grep ' u '` must print nothing.
 
 ## Load it
 
