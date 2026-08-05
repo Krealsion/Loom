@@ -1,0 +1,81 @@
+# The suite population contract (POP-01 / POP-02, R2F-D).
+#
+# This file is the INVENTORY half of "green means the named population ran". It is
+# checked by tests/check_population.cmake, which CTest runs as the `population` test.
+#
+# The check is two claims, both of them fail-closed:
+#
+#   1. INVENTORY, exact.  For every gate active in this configuration, the set of
+#      suites listed here must equal, exactly, the set of suites present in the built
+#      test binary (`zen-tests --list-test-suites`). A suite that vanished fails. A
+#      suite that appeared and was never declared here fails too. Adding or renaming a
+#      SUITE is therefore a deliberate act with a line in this file; it can never
+#      happen silently.
+#
+#   2. FLOOR, per suite.  Each suite must select at least `min-cases` test cases.
+#      The floors below are the R2F-D measured baseline, so they carry ZERO downward
+#      slack -- deleting a single case from any suite crosses its floor -- while
+#      leaving healthy ADDITIONS free, which is the traffic this project actually
+#      generates (most phases add regression cases and change nothing else).
+#      Raise a floor when a phase's new cases should become permanent.
+#
+#      This is deliberately NOT the same policy as the OS-enforcement tallies in
+#      tests/enforcement_gate.hpp, which are EXACT counts: those populations are small,
+#      security-relevant and intentionally stable, so an unexplained extra witness
+#      there should be noticed as loudly as a missing one.
+#
+# `gate` says WHY a suite may be legitimately absent -- the conditional subpopulation,
+# modelled explicitly instead of hidden behind a slack floor:
+#
+#   portable  compiled everywhere; absence is always a defect.
+#   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
+#             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
+#   posix     rides `NOT WIN32`; the OS sandbox exists only there.
+#   sdl       rides `TARGET zen-ui-sdl`; lives in the separate zen-sdl-tests binary.
+#
+# A suite may carry MORE THAN ONE row, and its floor is the SUM of the rows whose gate is
+# active. That is how a conditional subpopulation INSIDE a suite is stated exactly instead
+# of being papered over: `bridge` is 17 cases everywhere plus 8 more behind `#ifndef _WIN32`
+# (test_bridge.cpp:368-823 and :1645-1704 -- the unix-socket pair and its lifetime cases),
+# so its contract reads 25 on Linux and 17 on Windows and neither number has any give. The
+# native Windows lane is what found this: a single portable floor of 25 was wrong there, and
+# a slack floor would have hidden the fact rather than stated it.
+#
+# Counts are `--test-suite=<name> --count`: test CASES, not assertions. Assertion
+# totals are not a population (COLD-1 section 8: ~90% of this tree's assertion headline
+# came from one fuzz branch), so they are reported but never an acceptance oracle.
+#
+# Keep this file plain ASCII: it is read with file(STRINGS), which treats a non-ASCII
+# byte as a string terminator and would silently split the line around it.
+#
+# suite            gate      min-cases
+schema             portable  8
+value              portable  8
+gate               portable  11
+registry           portable  7
+serialize          portable  31
+compat             portable  10
+integration        portable  4
+fuzz               portable  9
+switchboard        portable  35
+provenance         portable  62
+role_authorship    portable  17
+sense              portable  19
+harness            portable  7
+breathing          portable  1
+schema_codec       portable  7
+weave_shape        portable  4
+weave              portable  10
+poke               portable  20
+console            portable  21
+component          portable  15
+pixel              portable  9
+bridge             portable  17
+bridge             posix     8
+kernel             kernel    132
+handoff            kernel    10
+manager            kernel    43
+capabilities       kernel    4
+isolation          posix     32
+policy             posix     23
+sdl                sdl       3
