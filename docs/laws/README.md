@@ -22,6 +22,7 @@ claim an enforcement, or a proof, you did not earn.)
 | `SENSE-xx` | [sense-laws.md](sense-laws.md) | latest claims: settlement, provenance, office claims, authority, lifetime |
 | `HANDOFF-xx` | [handoff-laws.md](handoff-laws.md) | authored continuity across an incompatible schema: migration, the FIFO boundary, protocol vs state |
 | `KERN-xx` | [kernel-laws.md](kernel-laws.md) | dynamic artifacts, lifetimes, role truth |
+| `POP-xx` | [population-laws.md](population-laws.md) | what a green result means: suite/case/enforcement populations, declared absence, the opt-out |
 | `TIMER-xx` | [Zengine `docs/laws/timer-laws.md`](../../../Zengine/docs/laws/timer-laws.md) | Timer continuity (Zengine owns that truth) |
 
 Identifiers are stable and deliberately carry **no phase coordinates** — phase
