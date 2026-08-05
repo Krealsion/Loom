@@ -14,6 +14,7 @@
 #include <zen/isolation/sandbox.hpp>
 
 #include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -44,12 +45,23 @@
 #ifndef SYS_mount_setattr
 #define SYS_mount_setattr 442 // x86_64
 #endif
+// close_range (kernel 5.9+); the glibc wrapper only arrived in 2.34, so it is called by
+// number for the same reason mount_setattr is — using the wrapper would raise this
+// library's glibc floor for a syscall we already have a fallback for.
+#ifndef SYS_close_range
+#define SYS_close_range 436
+#endif
 namespace {
 struct zen_mount_attr {
     unsigned long long attr_set, attr_clr, propagation, userns_fd;
 };
 } // namespace
 #endif
+
+// The descriptor sweep is POSIX, not Linux — close_range accelerates it where the
+// kernel has it, and the rlimit fallback is what every other POSIX host uses.
+#include <sys/resource.h>
+#include <unistd.h>
 
 namespace loom {
 
@@ -145,6 +157,113 @@ const CapabilityStatus* EnforcementReport::find(Capability c) const noexcept {
 bool EnforcementReport::enforceable(Capability c) const noexcept {
     const CapabilityStatus* s = find(c);
     return s != nullptr && s->enforceable;
+}
+
+// ---- The exec-boundary descriptor policy (C-2) -----------------------------------
+//
+// ONE definition, deliberately outside the platform split: the boundary is not a
+// Linux capability the way a namespace is, and a host that cannot impose a namespace
+// must still not hand its descriptors to a child. Everything here is
+// async-signal-safe (raw syscalls, no allocation, no locks) because it runs in the
+// fork-child, after the mount plan has already pivoted away from /proc.
+
+namespace {
+
+/// One inclusive gap [lo, hi], via close_range(2). -1 with errno set when the kernel
+/// does not have the syscall, which is the caller's signal to switch mechanism.
+int close_gap_by_range(unsigned lo, unsigned hi) noexcept {
+#if defined(__linux__)
+    return static_cast<int>(::syscall(SYS_close_range, lo, hi, 0u));
+#else
+    (void)lo;
+    (void)hi;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+bool is_kept(int fd, const int* keep, std::size_t keep_count) noexcept {
+    for (std::size_t i = 0; i < keep_count; ++i) {
+        if (keep[i] == fd) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The allow-list must be strictly ascending and non-negative: the sweep walks the
+/// gaps BETWEEN its entries, so an unsorted list would leave a range unswept while
+/// reporting success. Checked rather than assumed — a wrong list here is a silent
+/// hole, and this function's whole value is that it has none.
+bool allow_list_is_well_formed(const int* keep, std::size_t keep_count) noexcept {
+    if (keep == nullptr && keep_count != 0) {
+        return false;
+    }
+    for (std::size_t i = 0; i < keep_count; ++i) {
+        if (keep[i] < 0) {
+            return false;
+        }
+        if (i > 0 && keep[i] <= keep[i - 1]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+int close_descriptors_by_close_range(const int* keep, std::size_t keep_count) noexcept {
+    if (!allow_list_is_well_formed(keep, keep_count)) {
+        return -1;
+    }
+    // One close_range per gap between kept entries, the last of which runs to UINT_MAX
+    // — so a descriptor cannot survive merely by living at a high number.
+    unsigned lo = 0;
+    for (std::size_t i = 0; i < keep_count; ++i) {
+        const unsigned k = static_cast<unsigned>(keep[i]);
+        if (k > lo && close_gap_by_range(lo, k - 1u) != 0) {
+            return -1; // no close_range here: the caller falls back
+        }
+        lo = k + 1u;
+    }
+    return close_gap_by_range(lo, ~0u) == 0 ? 0 : -1;
+}
+
+int close_descriptors_by_enumeration(const int* keep, std::size_t keep_count) noexcept {
+    if (!allow_list_is_well_formed(keep, keep_count)) {
+        return -1;
+    }
+    // Enumerate to the RLIMIT_NOFILE HARD limit. A descriptor can never exceed the soft
+    // limit in force when it was opened, and the soft limit can never exceed the hard
+    // one, so that bound is sound. An UNBOUNDED hard limit leaves nothing sound to
+    // enumerate — refuse rather than sweep an arbitrary prefix and call it a boundary.
+    struct rlimit lim {};
+    if (::getrlimit(RLIMIT_NOFILE, &lim) != 0) {
+        return -1;
+    }
+    if (lim.rlim_max == RLIM_INFINITY) {
+        return -1;
+    }
+    // A descriptor number is an int, so nothing above INT_MAX is representable as one;
+    // clamping there loses no reachable descriptor.
+    const rlim_t representable = static_cast<rlim_t>(INT_MAX);
+    const rlim_t ceiling = lim.rlim_max > representable ? representable : lim.rlim_max;
+    for (rlim_t fd = 0; fd < ceiling; ++fd) {
+        const int n = static_cast<int>(fd);
+        if (!is_kept(n, keep, keep_count)) {
+            (void)::close(n); // EBADF on a number that was never open: exactly right
+        }
+    }
+    return 0;
+}
+
+int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcept {
+    if (close_descriptors_by_close_range(keep, keep_count) == 0) {
+        return 0;
+    }
+    // A partial close_range sweep having already run changes nothing: closing an
+    // already-closed number is EBADF, which the enumeration ignores by design.
+    return close_descriptors_by_enumeration(keep, keep_count);
 }
 
 #if defined(__linux__)

@@ -17,6 +17,14 @@
 //   ZEN_WEAVE_FS_PROBE            — on handle, probe filesystem reach (read a secret,
 //                                   write in/out of scratch, exec from scratch) and
 //                                   report each errno (B4: proves the mount-ns view)
+//   ZEN_WEAVE_FD_PROBE            — on handle, inventory every descriptor it actually
+//                                   holds, try to USE the one named by the Ping's seq,
+//                                   and separately attempt a fresh socket. Reports all
+//                                   three (C-2: proves ambient host descriptors do not
+//                                   cross execve, WITHOUT letting the network-namespace
+//                                   denial stand in for that — they are different facts
+//                                   and COLD-2 found the second true while the first
+//                                   was false)
 //   ZEN_WEAVE_MEM_BOMB            — on handle (and revive), allocate a large resident
 //                                   block to trip memory.max (B5: OOM-kill containment)
 //   ZEN_WEAVE_FORK_BOMB           — on handle, fork until it can't and report the count
@@ -84,6 +92,16 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+#ifdef ZEN_WEAVE_FD_PROBE
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
@@ -180,6 +198,23 @@ std::shared_ptr<const Schema> ping_schema() {
 }
 [[maybe_unused]] std::shared_ptr<const Schema> forkresult_schema() { // only the fork-bomb variant
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
+    return s;
+}
+[[maybe_unused]] std::shared_ptr<const Schema> fdresult_schema() { // only the fd-probe variant
+    // FOUR SEPARATE FACTS, deliberately not collapsed (C-2). COLD-2's whole finding was
+    // that `fresh_connect == ENETUNREACH` was true while an inherited connected socket
+    // was simultaneously usable — so a witness that reported only the namespace verdict
+    // would have called that host contained. Each field answers its own question:
+    //   open_low      WHICH descriptors exist at all, as a bitmap of fds 0..62
+    //   open_high     whether any survived by living at a high number instead
+    //   parked_write  whether the one this Ping names can still MOVE BYTES
+    //   fresh_connect whether the network namespace is still genuinely imposed
+    static const auto s = SchemaBuilder("FdResult", 1)
+                              .field("open_low", Kind::Int)
+                              .field("open_high", Kind::Int)
+                              .field("parked_write", Kind::Int)
+                              .field("fresh_connect", Kind::Int)
+                              .build();
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> greet_schema() { // only the accepted-drift variants
@@ -590,6 +625,64 @@ public:
         result.set("outside_write", Cell::integer(outside));
         result.set("noexec_exec", Cell::integer(noexec));
         bus.send(in.reply_to, Message(std::move(result)));
+#elif defined(ZEN_WEAVE_FD_PROBE)
+        // THE C-2 WITNESS, from inside the sandbox. Instruction-level descriptor reach:
+        // no bus grant can stop any of this, and no namespace covers it either — an
+        // already-open descriptor that crossed execve is simply THERE, or it is not.
+        //
+        // The Ping's `seq` names the fd the host parked before spawning. Writing the
+        // COLD-2 payload to it is the exact escape COLD-2 demonstrated; the host holds
+        // the other end and asserts that nothing arrives.
+        {
+            // (1) What do we actually hold? A bitmap of the low numbers, plus a count of
+            //     anything hiding higher up — so "the leak just moved to another fd" is
+            //     not mistakable for "the leak is gone".
+            std::int64_t open_low = 0;
+            for (int fd = 0; fd < 63; ++fd) {
+                if (::fcntl(fd, F_GETFD) != -1) {
+                    open_low |= (static_cast<std::int64_t>(1) << fd);
+                }
+            }
+            std::int64_t open_high = 0;
+            for (int fd = 63; fd < 65536; ++fd) {
+                if (::fcntl(fd, F_GETFD) != -1) {
+                    ++open_high;
+                }
+            }
+
+            // (2) Can the parked descriptor still be USED? Presence and usability are
+            //     asked separately because a closed number and a live socket both answer
+            //     "an int" — only a write says which.
+            const char payload[] = "COLD2-ESCAPE-PAYLOAD";
+            errno = 0;
+            const ssize_t wrote = ::write(static_cast<int>(seq), payload, sizeof(payload) - 1);
+            const std::int64_t parked_write = wrote > 0 ? 0 : (errno != 0 ? errno : -1);
+
+            // (3) Is the network namespace still real? The control that keeps this test
+            //     honest in the other direction: if a future change removed the netns,
+            //     descriptor hygiene alone must not be read as containment.
+            std::int64_t fresh_connect = 0;
+            const int fresh = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (fresh < 0) {
+                fresh_connect = errno != 0 ? errno : -1;
+            } else {
+                sockaddr_in addr{};
+                addr.sin_family = AF_INET;
+                addr.sin_port = htons(1);
+                addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                errno = 0;
+                const int rc = ::connect(fresh, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+                fresh_connect = rc == 0 ? 0 : errno;
+                ::close(fresh);
+            }
+
+            Value result(fdresult_schema());
+            result.set("open_low", Cell::integer(open_low));
+            result.set("open_high", Cell::integer(open_high));
+            result.set("parked_write", Cell::integer(parked_write));
+            result.set("fresh_connect", Cell::integer(fresh_connect));
+            bus.send(in.reply_to, Message(std::move(result)));
+        }
 #elif defined(ZEN_WEAVE_MEM_BOMB)
         // Commit a large resident block to trip memory.max. Held (not freed) so RSS
         // stays high; under the cgroup cap the kernel OOM-kills us mid-handle, and

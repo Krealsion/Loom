@@ -58,6 +58,7 @@ void set_nonblocking(socket_t s) {
     u_long mode = 1;
     (void)::ioctlsocket(static_cast<SOCKET>(s), static_cast<long>(FIONBIO), &mode);
 }
+void set_cloexec(socket_t) {} // Windows has no execve; advisory behavior stays untouched
 SOCKET native(socket_t s) { return static_cast<SOCKET>(s); } // the native arg type for socket calls
 
 #else
@@ -75,6 +76,20 @@ void set_nonblocking(socket_t s) {
     const int flags = ::fcntl(s, F_GETFL, 0);
     if (flags >= 0) {
         (void)::fcntl(s, F_SETFL, flags | O_NONBLOCK);
+    }
+}
+/// DEFENCE IN DEPTH, not the boundary (C-2). Loom's own sockets should not walk into
+/// any child anyone spawns — including a child spawned by an embedding host that has
+/// never heard of the isolation sandbox. What this can NEVER do is make the sandbox
+/// safe, because the embedding host's own descriptors are not Loom's to annotate;
+/// that is what the exec-boundary sweep in the isolation host is for. fcntl rather
+/// than SOCK_CLOEXEC/accept4 so this stays plain POSIX (no Linux-only entry point in
+/// a file that also builds for Windows and could build for other POSIX hosts); the
+/// window between create and flag is not a race here because Loom is single-threaded.
+void set_cloexec(socket_t s) {
+    const int flags = ::fcntl(s, F_GETFD, 0);
+    if (flags >= 0) {
+        (void)::fcntl(s, F_SETFD, flags | FD_CLOEXEC);
     }
 }
 int native(socket_t s) { return s; } // on POSIX a socket IS an int fd
@@ -256,6 +271,7 @@ socket_t bridge_listen_tcp(std::uint16_t port, std::string* err) {
         set_err(err, "socket(AF_INET) failed");
         return kInvalidSocket;
     }
+    set_cloexec(s);
     int yes = 1;
     (void)::setsockopt(native(s), SOL_SOCKET, SO_REUSEADDR,
                        reinterpret_cast<const char*>(&yes), sizeof(yes));
@@ -299,6 +315,7 @@ socket_t bridge_connect_tcp(const std::string& host, std::uint16_t port, std::st
         set_err(err, "socket(AF_INET) failed");
         return kInvalidSocket;
     }
+    set_cloexec(s);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
@@ -324,6 +341,7 @@ socket_t bridge_listen_unix(const std::string& path, std::string* err) {
         set_err(err, "socket(AF_UNIX) failed");
         return kInvalidSocket;
     }
+    set_cloexec(s);
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (path.size() + 1 > sizeof(addr.sun_path)) {
@@ -353,6 +371,7 @@ socket_t bridge_connect_unix(const std::string& path, std::string* err) {
         set_err(err, "socket(AF_UNIX) failed");
         return kInvalidSocket;
     }
+    set_cloexec(s);
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (path.size() + 1 > sizeof(addr.sun_path)) {
@@ -445,6 +464,7 @@ socket_t bridge_accept(socket_t listener, bool* would_block, std::string* err) {
         }
         return kInvalidSocket;
     }
+    set_cloexec(a); // an accepted connection inherits nothing from the listener's flags
     return a;
 #endif
 }

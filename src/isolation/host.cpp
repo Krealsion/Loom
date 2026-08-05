@@ -21,7 +21,6 @@
 #include <csignal>
 #include <fcntl.h>
 #include <poll.h>
-#include <spawn.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -37,6 +36,50 @@ namespace {
 
 constexpr int kChildFd = 3;            // the child reads its socket from this fd
 constexpr int kHandshakeTimeoutMs = 5000;
+
+// THE INTENTIONAL CHILD DESCRIPTOR SET (C-2). Derived from what the child actually
+// needs across execve, not guessed:
+//
+//   0,1,2      stdin/stdout/stderr — DELIBERATELY PRESERVED, and therefore an
+//              intentional ambient capability, not an accident: a contained child
+//              shares the host's console. It is what carries a crashing child's
+//              sanitizer report and its libc/loader diagnostics, and closing it would
+//              also arm the classic trap where the child's next open() silently
+//              becomes fd 0. containment() and reference/capabilities.md both say so
+//              in words, because a reader must not infer "the child gets nothing".
+//   kChildFd   the weave-host protocol transport (the socketpair end dup2'd here and
+//              named to the child as argv[1]).
+//
+// Nothing else. The spawn-synchronisation pipes are closed by the child before the
+// mount plan runs and never cross exec; sv[0]/sv[1] are closed just above the sweep;
+// the .so and the executable are opened by the loader AFTER exec. The list must stay
+// strictly ascending — close_inherited_descriptors sweeps the gaps between entries.
+constexpr int kChildKeepFds[] = {0, 1, 2, kChildFd};
+static_assert(kChildFd > 2, "kChildKeepFds must remain strictly ascending");
+
+// Child exit codes on the pre-exec path. 127 is the generic "the sandbox could not be
+// entered"; the hygiene failure gets its own so the parent's refusal can name it
+// instead of reporting a bare failed handshake.
+constexpr int kExitPreExecFailed = 127;
+constexpr int kExitFdHygieneFailed = 126;
+
+// Reap `pid` if it has already exited, waiting briefly for it. Returns its exit code,
+// or -1 if it did not exit within the budget (or died by signal). Used ONLY on the
+// handshake-failure path, to turn "the child said nothing" into a reason.
+int reap_exit_code(pid_t pid, int attempts) noexcept {
+    for (int i = 0; i < attempts; ++i) {
+        int status = 0;
+        const pid_t r = ::waitpid(pid, &status, WNOHANG);
+        if (r == pid) {
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+        if (r < 0) {
+            return -1; // already reaped, or not ours
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return -1; // still running: an unresponsive child, not a pre-exec refusal
+}
 
 // Bounded, blocking wait for the child's first Hello frame. The child has nothing
 // to do but handshake, so a short wait is enough; a child that never speaks is a
@@ -196,12 +239,22 @@ std::string describe_resolution(const CapabilityResolution& r) {
     if (r.capability == Capability::Network) {
         switch (r.outcome) {
             case Outcome::Enforced:
+                // Two different facts, kept apart on purpose (C-2). The namespace decides
+                // what a FRESH socket can do; the exec-boundary sweep decides which
+                // ALREADY-OPEN descriptors exist at all. COLD-2 found the second missing
+                // while the first was real, and this sentence used to describe only the
+                // first — so a reader had no way to learn that an inherited, connected
+                // host socket walked straight through the containment being claimed.
                 return std::string(
                            "network: contained — private user+net namespace, no external "
                            "interface, so new outbound connections fail at the syscall level") +
                        (r.confirmed ? " (confirmed: child netns distinct from host)" : "") +
-                       "; the inherited host-control fd and filesystem-path sockets remain by "
-                       "design, so 'contained' means no external reachability, not no-IPC";
+                       "; ambient host descriptors do not cross the boundary: every "
+                       "descriptor is closed immediately before execve except the control "
+                       "fd and stdin/stdout/stderr, which are deliberately kept (the child "
+                       "shares the host's console). So 'contained' means no external "
+                       "reachability and no inherited reach, and still not no-IPC: the "
+                       "control fd is a channel to this host, by design";
             case Outcome::Granted:
                 return "network: granted — full host network by the grant, NOT OS-scoped (no "
                        "namespace limits its reach); any per-destination limit is the holder's "
@@ -303,10 +356,15 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         error = "socketpair failed";
         return false;
     }
-    // The parent end gets CLOEXEC so it is not inherited by *other* children we
-    // later spawn; the child end is placed at a known fd via dup2 (which clears
-    // CLOEXEC, so it survives this child's exec).
+    // BOTH ends get CLOEXEC, so neither is inherited by any *other* child this host
+    // (or its embedder) may spawn. The child end reaches its own exec by an explicit
+    // act instead: dup2 onto kChildFd clears CLOEXEC on the copy, and in the rare case
+    // where socketpair already handed back kChildFd itself the child clears the flag
+    // by hand. Loom's own descriptors being CLOEXEC is defence in depth, never the
+    // boundary — the boundary is the sweep below, because the embedding host owns
+    // descriptors Loom never created (C-2).
     (void)::fcntl(sv[0], F_SETFD, FD_CLOEXEC);
+    (void)::fcntl(sv[1], F_SETFD, FD_CLOEXEC);
 
     const std::string fd_arg = std::to_string(kChildFd);
     char* argv[] = {const_cast<char*>(exe_.c_str()), const_cast<char*>(fd_arg.c_str()),
@@ -316,7 +374,6 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     const bool sandbox_fs = filesystem_sandboxed(link);
     const bool sandbox_res = resources_contained(link);
     const bool needs_userns = sandbox_net || sandbox_fs;
-    const bool sandboxed = needs_userns || sandbox_res;
 
     if (sandbox_fs && !link.fs_root.empty()) {
         (void)::mkdir(link.fs_root.c_str(), 0700); // (re)create the view-root mountpoint for spawn
@@ -329,117 +386,122 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         return false;
     }
 
-    pid_t pid = -1;
-    if (sandboxed) {
-        // B3/B4: launch the child into a network and/or mount namespace. posix_spawn
-        // cannot unshare, so we fork. This host refuses a child's self-map (EPERM), so
-        // the PARENT writes the child's uid/gid maps over a pipe handshake: the child
-        // unshares and signals, the parent maps it and releases it, then the child
-        // builds its restricted view and execs. Everything the child does is
-        // async-signal-safe (the mount plan was precomputed); the parent's map-writing
-        // uses ordinary libc. The socket dance mirrors the posix_spawn branch.
-        int sync_c2p[2];
-        int sync_p2c[2];
-        if (::pipe(sync_c2p) != 0 || ::pipe(sync_p2c) != 0) {
-            ::close(sv[0]);
-            ::close(sv[1]);
-            error = "sandbox sync pipe failed";
-            return false;
-        }
-        pid = ::fork();
-        if (pid == 0) {
-            ::close(sync_c2p[0]);
-            ::close(sync_p2c[1]);
-            // force_entry_failure_ simulates a *surprise* entry failure: the child dies
-            // before exec exactly as a true unshare()/mount()/cgroup failure would, so the
-            // handshake fails and the mount refuses — strict and dev mode alike.
-            if (force_entry_failure_) {
-                ::_exit(127);
-            }
-            if (needs_userns && unshare_isolation(sandbox_net, sandbox_fs) != 0) {
-                ::_exit(127);
-            }
-            char one = 1;
-            (void)!::write(sync_c2p[1], &one, 1); // "I have unshared"
-            char go = 0;
-            (void)!::read(sync_p2c[0], &go, 1); // wait to be mapped by the parent
-            ::close(sync_c2p[1]);
-            ::close(sync_p2c[0]);
-            if (go != 1 || (sandbox_fs && run_mount_plan(link.fs_plan) != 0)) {
-                ::_exit(127); // not mapped, or the restricted view could not be built
-            }
-            if (sv[1] != kChildFd && ::dup2(sv[1], kChildFd) < 0) {
-                ::_exit(127);
-            }
-            if (sv[0] != kChildFd) {
-                ::close(sv[0]);
-            }
-            if (sv[1] != kChildFd) {
-                ::close(sv[1]);
-            }
-            ::execve(exe_.c_str(), argv, environ);
-            ::_exit(127); // exec failed
-        }
-        ::close(sync_c2p[1]);
-        ::close(sync_p2c[0]);
-        if (pid < 0) {
-            ::close(sync_c2p[0]);
-            ::close(sync_p2c[1]);
-            ::close(sv[0]);
-            ::close(sv[1]);
-            error = "fork (sandboxed spawn) failed";
-            return false;
-        }
-        char one = 0;
-        const bool signaled = (::read(sync_c2p[0], &one, 1) == 1 && one == 1);
-        // At the sync point (child unshared, blocked on "go") the parent does the
-        // privileged setup the child cannot: write its id maps (if it made a userns) and
-        // move it into its cgroup leaf — so the whole subtree it execs/spawns runs under
-        // the limits before it can consume anything.
-        bool prepared = signaled;
-        if (prepared && needs_userns) {
-            prepared = write_isolation_id_maps(pid);
-        }
-        if (prepared && sandbox_res) {
-            prepared = cgroup_move_pid(link.cg_leaf, pid);
-        }
-        if (signaled) {
-            // Only write when the child is alive and waiting; otherwise its read end is
-            // gone and the write would raise SIGPIPE (e.g. the forced-failure path).
-            const char go = prepared ? 1 : 2;
-            (void)!::write(sync_p2c[1], &go, 1); // release the child (or tell it to die)
-        }
+    // ONE spawn path, and therefore ONE exec boundary (C-2). It used to be two: a
+    // fork/execve for the sandboxed case (posix_spawn cannot unshare) and a posix_spawn
+    // for the granted/dev-mode case. Two boundaries meant two descriptor policies, and
+    // posix_spawn's file actions cannot express "close everything except these" without
+    // enumerating — so the second path could only ever have had the weaker one. The
+    // guarantee this phase makes is unconditional (a network-GRANTED weave has no more
+    // business inheriting the host's open database handle than a contained one does),
+    // so the guarantee gets a single place to live.
+    //
+    // B3/B4: the child unshares into a network and/or mount namespace. This host refuses
+    // a child's self-map (EPERM), so the PARENT writes the child's uid/gid maps over a
+    // pipe handshake: the child unshares and signals, the parent maps it and releases it,
+    // then the child builds its restricted view and execs. Everything the child does is
+    // async-signal-safe (the mount plan was precomputed); the parent's map-writing uses
+    // ordinary libc. When nothing is sandboxed the same handshake runs and simply has no
+    // privileged work to do in the middle of it.
+    int sync_c2p[2];
+    int sync_p2c[2];
+    if (::pipe(sync_c2p) != 0 || ::pipe(sync_p2c) != 0) {
+        ::close(sv[0]);
+        ::close(sv[1]);
+        error = "sandbox sync pipe failed";
+        return false;
+    }
+    pid_t pid = ::fork();
+    if (pid == 0) {
         ::close(sync_c2p[0]);
         ::close(sync_p2c[1]);
-        if (!prepared) {
-            ::close(sv[0]);
-            ::close(sv[1]);
-            link.pid = pid; // let teardown reap the child that is now exiting
-            error = "could not prepare the sandboxed child (id-map or cgroup move failed)";
-            return false;
+        // force_entry_failure_ simulates a *surprise* entry failure: the child dies
+        // before exec exactly as a true unshare()/mount()/cgroup failure would, so the
+        // handshake fails and the mount refuses — strict and dev mode alike.
+        if (force_entry_failure_) {
+            ::_exit(kExitPreExecFailed);
         }
-    } else {
-        // Granted (or dev-mode uncontained): the original B2 spawn, unchanged.
-        posix_spawn_file_actions_t fa;
-        posix_spawn_file_actions_init(&fa);
-        posix_spawn_file_actions_adddup2(&fa, sv[1], kChildFd);
-        // Close the original ends in the child — but never the fd we just dup'd onto
-        // (socketpair may hand back kChildFd itself, and closing it would leave the
-        // child with no socket).
-        if (sv[0] != kChildFd) {
-            posix_spawn_file_actions_addclose(&fa, sv[0]);
+        if (needs_userns && unshare_isolation(sandbox_net, sandbox_fs) != 0) {
+            ::_exit(kExitPreExecFailed);
         }
+        char one = 1;
+        (void)!::write(sync_c2p[1], &one, 1); // "I have unshared"
+        char go = 0;
+        (void)!::read(sync_p2c[0], &go, 1); // wait to be mapped by the parent
+        ::close(sync_c2p[1]);
+        ::close(sync_p2c[0]);
+        if (go != 1 || (sandbox_fs && run_mount_plan(link.fs_plan) != 0)) {
+            ::_exit(kExitPreExecFailed); // not mapped, or the view could not be built
+        }
+        // Place the protocol transport at the fd the child is told to read. dup2 clears
+        // CLOEXEC on the copy; where socketpair already handed back kChildFd there is no
+        // copy to make, so the flag the parent set is cleared by hand instead.
         if (sv[1] != kChildFd) {
-            posix_spawn_file_actions_addclose(&fa, sv[1]);
-        }
-        const int rc = ::posix_spawn(&pid, exe_.c_str(), &fa, nullptr, argv, environ);
-        posix_spawn_file_actions_destroy(&fa);
-        if (rc != 0) {
-            ::close(sv[0]);
+            if (::dup2(sv[1], kChildFd) < 0) {
+                ::_exit(kExitPreExecFailed);
+            }
             ::close(sv[1]);
-            error = "posix_spawn failed";
-            return false;
+        } else if (::fcntl(kChildFd, F_SETFD, 0) != 0) {
+            ::_exit(kExitPreExecFailed);
         }
+        if (sv[0] != kChildFd) {
+            ::close(sv[0]);
+        }
+        // THE DESCRIPTOR BOUNDARY. Everything the embedding host happened to hold open
+        // — its Bridge sockets, its files, its pipes, its terminal — stops existing for
+        // this child here, one syscall before it becomes zen-weave-host. The explicit
+        // closes above are subsumed by this and kept anyway: they state the intent, and
+        // the sweep enforces it over descriptors this code never knew about.
+        if (close_inherited_descriptors(kChildKeepFds,
+                                        sizeof(kChildKeepFds) / sizeof(kChildKeepFds[0])) != 0) {
+            // Fail SAFE, loudly. stderr is in the allow-list and still open, and a raw
+            // write of a fixed string is async-signal-safe; the parent turns the exit
+            // code below into the refusal the operator reads.
+            static const char msg[] =
+                "[zen-isolation] refusing to exec zen-weave-host: the exec-boundary "
+                "descriptor sweep could not be established\n";
+            (void)!::write(2, msg, sizeof(msg) - 1);
+            ::_exit(kExitFdHygieneFailed);
+        }
+        ::execve(exe_.c_str(), argv, environ);
+        ::_exit(kExitPreExecFailed); // exec failed
+    }
+    ::close(sync_c2p[1]);
+    ::close(sync_p2c[0]);
+    if (pid < 0) {
+        ::close(sync_c2p[0]);
+        ::close(sync_p2c[1]);
+        ::close(sv[0]);
+        ::close(sv[1]);
+        error = "fork (child spawn) failed";
+        return false;
+    }
+    char one = 0;
+    const bool signaled = (::read(sync_c2p[0], &one, 1) == 1 && one == 1);
+    // At the sync point (child unshared, blocked on "go") the parent does the
+    // privileged setup the child cannot: write its id maps (if it made a userns) and
+    // move it into its cgroup leaf — so the whole subtree it execs/spawns runs under
+    // the limits before it can consume anything.
+    bool prepared = signaled;
+    if (prepared && needs_userns) {
+        prepared = write_isolation_id_maps(pid);
+    }
+    if (prepared && sandbox_res) {
+        prepared = cgroup_move_pid(link.cg_leaf, pid);
+    }
+    if (signaled) {
+        // Only write when the child is alive and waiting; otherwise its read end is
+        // gone and the write would raise SIGPIPE (e.g. the forced-failure path).
+        const char go = prepared ? 1 : 2;
+        (void)!::write(sync_p2c[1], &go, 1); // release the child (or tell it to die)
+    }
+    ::close(sync_c2p[0]);
+    ::close(sync_p2c[1]);
+    if (!prepared) {
+        ::close(sv[0]);
+        ::close(sv[1]);
+        link.pid = pid; // let teardown reap the child that is now exiting
+        error = "could not prepare the sandboxed child (id-map or cgroup move failed)";
+        return false;
     }
     ::close(sv[1]); // the parent never uses the child end
     link.pid = pid;
@@ -448,6 +510,19 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     Incoming hello;
     if (!wait_for_hello(*link.channel, hello, kHandshakeTimeoutMs)) {
         error = "child did not complete the handshake";
+        // A silent child is alive and says nothing; a child that refused before exec is
+        // already gone and carries its reason in its exit code. Distinguish them, so a
+        // descriptor-hygiene refusal reads as itself rather than as a mystery timeout.
+        const int code = reap_exit_code(link.pid, 50); // ~100 ms, only on this path
+        if (code >= 0) {
+            link.pid = -1; // reaped here; teardown must not wait on it again
+        }
+        if (code == kExitFdHygieneFailed) {
+            error = "descriptor hygiene could not be established at the exec boundary "
+                    "(no close_range(2) on this kernel and no bounded RLIMIT_NOFILE to "
+                    "enumerate), so the spawn refused rather than exec a child still "
+                    "holding this host's descriptors";
+        }
         return false; // caller tears down
     }
 

@@ -20,6 +20,7 @@
 // (seccomp, cgroups, filesystem) layer onto this proven detect → apply → know →
 // refuse-or-proceed frame in their own phases.
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -104,6 +105,52 @@ bool write_isolation_id_maps(pid_t child) noexcept;
 /// plan's strings — no allocation. 0 on success, -1 on the first failing op. Must run
 /// AFTER enter_isolation_namespaces (which grants CAP_SYS_ADMIN in the userns).
 int run_mount_plan(const MountPlan& plan) noexcept;
+
+/// Child-side, async-signal-safe: THE EXEC-BOUNDARY DESCRIPTOR POLICY (C-2).
+///
+/// Close every descriptor this process holds EXCEPT the ones named in `keep`, which
+/// must be strictly ascending and non-negative (the caller writes it as a literal, so
+/// this is a precondition — a malformed list is refused, never partially applied).
+/// Run it immediately before `execve`: whatever the embedding host happened to hold
+/// open — sockets, files, pipes, terminals, a Bridge connection — stops existing for
+/// the child at that instant, so the child begins execution owning exactly what Zen
+/// decided to give it and nothing it merely inherited.
+///
+/// This is a *boundary*, not a hardening pass. A network namespace makes a FRESH
+/// socket fail; it says nothing about an ALREADY-CONNECTED descriptor that crossed
+/// `execve`, and COLD-2 demonstrated exactly that gap: a host socket parked without
+/// `FD_CLOEXEC` arrived usable inside a network-denied child and moved bytes back.
+/// `FD_CLOEXEC` at each creation site is worth having (and Loom's own sockets now set
+/// it), but it can never be the boundary: the embedding host owns descriptors Loom
+/// never created and cannot annotate.
+///
+/// Mechanism, stated honestly. `close_range(2)` (Linux 5.9+) is used first, called by
+/// syscall number rather than through the glibc 2.34+ wrapper so no new toolchain
+/// floor is introduced; one call per gap covers every descriptor number up to
+/// UINT_MAX, so nothing can hide at a high fd. Where the kernel lacks it, the
+/// fallback closes every number below the `RLIMIT_NOFILE` HARD limit — sound because
+/// a descriptor can never exceed the soft limit in force when it was opened, which
+/// can never exceed the hard limit. `/proc/self/fd` is deliberately NOT used: the
+/// restricted view does not mount `/proc`, so at the exec point it is not there.
+///
+/// 0 on success. -1 when neither mechanism can be applied (no `close_range` AND an
+/// unbounded hard limit, so there is nothing sound to enumerate) or the allow-list is
+/// malformed — and a -1 here must REFUSE the spawn. Reporting containment over a
+/// child that kept the host's descriptors is the one thing this lattice forbids.
+int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcept;
+
+/// The two mechanisms behind it, named separately so BOTH can be exercised rather than
+/// only whichever one the running kernel happens to select — the same reason
+/// `resource_note`/`resource_attestation` are pure. A fallback that only runs on hosts
+/// nobody tests on is a claim with no witness, and this project does not make those.
+/// Nothing in the runtime chooses between them: `close_inherited_descriptors` is the
+/// policy, these are its implementations, and there is no knob that weakens it.
+///
+/// `..._by_close_range` returns -1 with `errno == ENOSYS` where the kernel lacks the
+/// syscall (and on every non-Linux host); `..._by_enumeration` is plain POSIX and
+/// refuses only an unbounded `RLIMIT_NOFILE`. Same allow-list contract as above.
+int close_descriptors_by_close_range(const int* keep, std::size_t keep_count) noexcept;
+int close_descriptors_by_enumeration(const int* keep, std::size_t keep_count) noexcept;
 
 /// Host-side **positive confirmation** that `child` is in a namespace of the given
 /// kind ("net" or "mnt") distinct from this process — a hard-to-fool check (different
