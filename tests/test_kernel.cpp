@@ -15,6 +15,10 @@
 #include <zen/weave/lifecycle.hpp>
 #include <zen/weave/shape.hpp>
 
+#if !defined(_WIN32)
+#include <dlfcn.h> // KERN-05: ask the loader directly whether an image is still mapped
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -7053,5 +7057,79 @@ TEST_CASE("R2F-B: the transaction's own discard cannot destroy the weave whose c
     owner.reset();
     CHECK(candidate_destroyed == 1);
 }
+
+// ---- The reloadable-weave build contract, at runtime (KERN-05, R2F-E) --------------
+//
+// The `weave_contract` CTest entry reads the built artifacts' symbol bindings. These
+// two cases read what those bindings DO, which is the reason anyone should care: the
+// binding is a mechanism, an image that will not die is the consequence.
+//
+// Linux-only, and not because the law is: the observation is. RTLD_NOLOAD asks this
+// process's loader, directly, whether an image is still mapped -- no /proc, no timing,
+// no RSS. PE has no unique-symbol binding to begin with, so on Windows there is no
+// claim here to test.
+#if !defined(_WIN32)
+
+TEST_CASE("a contracted weave library really leaves when it is closed") {
+    // Three cycles, because one proves nothing about a coincidence. Each load must
+    // start its own life from 1: the sentinel counts calls within an image, so a
+    // second cycle that begins anywhere else is reading a dead image's statics.
+    const char* path = ZEN_SO_CONTRACT_APPLIED;
+
+    void* pre = ::dlopen(path, RTLD_NOLOAD | RTLD_NOW);
+    REQUIRE_MESSAGE(pre == nullptr, "fixture was already resident before the first load");
+
+    for (int cycle = 1; cycle <= 3; ++cycle) {
+        void* h = ::dlopen(path, RTLD_NOW | RTLD_LOCAL); // the Kernel's own flags
+        REQUIRE(h != nullptr);
+
+        auto touch = reinterpret_cast<int (*)()>(::dlsym(h, "zen_contract_touch"));
+        REQUIRE(touch != nullptr);
+
+        CHECK(touch() == 1); // a FRESH lifetime, every cycle
+        CHECK(touch() == 2);
+
+        CHECK(::dlclose(h) == 0);
+
+        void* still = ::dlopen(path, RTLD_NOLOAD | RTLD_NOW);
+        CHECK_MESSAGE(still == nullptr, "image still resident after its last handle closed");
+        if (still != nullptr) { ::dlclose(still); }
+    }
+}
+
+TEST_CASE("without the contract the same source will not unload -- and dlclose says it did") {
+    // The negative control, and the point of the whole phase. This is not a defect in
+    // the fixture: it is F-22 reproduced on demand, so the case above cannot quietly
+    // become unfalsifiable. Same source, same compiler, same flags but one.
+    //
+    // Note what the loader reports on the way: dlclose returns SUCCESS. Nothing in the
+    // API tells a host that the image it just released is still there -- which is why
+    // the fix has to be at build time and why prose was never enough.
+    const char* path = ZEN_SO_CONTRACT_BYPASS;
+
+    void* h = ::dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    REQUIRE(h != nullptr);
+    auto touch = reinterpret_cast<int (*)()>(::dlsym(h, "zen_contract_touch"));
+    REQUIRE(touch != nullptr);
+    CHECK(touch() == 1);
+
+    CHECK(::dlclose(h) == 0); // "success"
+
+    void* still = ::dlopen(path, RTLD_NOLOAD | RTLD_NOW);
+    CHECK_MESSAGE(still != nullptr,
+                  "the uncontracted control unloaded cleanly, so it no longer reproduces "
+                  "the hazard the contracted case is contrasted against");
+    if (still == nullptr) { return; }
+
+    // ...and the image that would not leave keeps its statics: a "fresh" load continues
+    // the previous one's count instead of starting over. That is the aliasing that cost
+    // Zengine an ASan use-after-free when the second library was a DIFFERENT one.
+    auto again = reinterpret_cast<int (*)()>(::dlsym(still, "zen_contract_touch"));
+    REQUIRE(again != nullptr);
+    CHECK(again() == 2);
+    ::dlclose(still);
+}
+
+#endif // !_WIN32
 
 } // TEST_SUITE

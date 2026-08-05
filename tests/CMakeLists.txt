@@ -108,17 +108,19 @@ endif()
 # Linux-only, as ever.
 if(TARGET zen-kernel)
 
-# The -fno-gnu-unique weave-library law (ELF-only; DESIGN "Weaving stays Zen-invisible"):
-# a loadable weave's statics must live and die with its own library. PE has no gnu-unique
-# mechanism — Windows DLL statics are per-DLL by construction — so the flag is ELF/GCC ground.
-set(ZEN_WEAVE_LIB_FLAGS
-    $<$<AND:$<CXX_COMPILER_ID:GNU>,$<NOT:$<PLATFORM_ID:Windows>>>:-fno-gnu-unique>)
-
+# The weave-library law — a loadable weave's statics must live and die with its own
+# library (KERN-05) — now comes from loom_weave_build_contract(), the same exported
+# function a stranger gets from find_package(loom). It was a local variable holding a
+# literal -fno-gnu-unique here until R2F-E; the house had the fix and the guest did not
+# (COLD-1 F-22). Calling the exported surface is what keeps the two honest: if the
+# contract ever stops applying on the stranger's path, these fixtures stop getting it
+# too, and the kernel suite's own unload/reload cases say so.
+#
 # One configurable source compiled into several variants, plus a bad-ABI lib.
 function(zen_add_test_weave target)
     add_library(${target} SHARED weavelib/test_weave.cpp)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
-    target_compile_options(${target} PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+    loom_weave_build_contract(${target})
     target_compile_definitions(${target} PRIVATE ${ARGN})
 endfunction()
 
@@ -167,7 +169,7 @@ zen_add_test_weave(zen_test_weave_senses ZEN_WEAVE_SENSES)
 function(zen_add_versioned_service target)
     add_library(${target} SHARED weavelib/versioned_service.cpp)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
-    target_compile_options(${target} PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+    loom_weave_build_contract(${target})
     target_compile_definitions(${target} PRIVATE ${ARGN})
 endfunction()
 
@@ -180,7 +182,7 @@ zen_add_versioned_service(zen_test_versioned_v2 ZEN_VERSIONED_CANDIDATE)
 function(zen_add_handoff_ledger target)
     add_library(${target} SHARED weavelib/handoff_ledger.cpp)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
-    target_compile_options(${target} PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+    loom_weave_build_contract(${target})
     target_compile_definitions(${target} PRIVATE ${ARGN})
 endfunction()
 
@@ -190,25 +192,37 @@ zen_add_handoff_ledger(zen_test_handoff_v2 ZEN_HANDOFF_V2)
 add_library(zen_test_handoff_migrator SHARED weavelib/handoff_migrator.cpp)
 target_link_libraries(zen_test_handoff_migrator
     PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
-target_compile_options(zen_test_handoff_migrator PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+loom_weave_build_contract(zen_test_handoff_migrator)
 
 # R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
 # under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
 # where the pipe's fail-closed law is the thing under test.
 add_library(zen_test_office_worker SHARED weavelib/office_worker.cpp)
 target_link_libraries(zen_test_office_worker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
-target_compile_options(zen_test_office_worker PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+loom_weave_build_contract(zen_test_office_worker)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
-target_compile_options(zen_test_badabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+loom_weave_build_contract(zen_test_badabi)
 
 # R2B-1: the artifact built against the PREVIOUS ABI. bad_abi declares a FUTURE
 # version (a host too old for it); this one declares version 1 — the real stale
 # artifact the provenance break creates — so "paid explicitly" has a witness.
 add_library(zen_test_staleabi SHARED weavelib/stale_abi.cpp)
 target_link_libraries(zen_test_staleabi PRIVATE loom zen-warnings zen-sanitize)
-target_compile_options(zen_test_staleabi PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+loom_weave_build_contract(zen_test_staleabi)
+
+# R2F-E: the build contract's own pair. ONE source, two artifacts — one through
+# loom_weave_build_contract(), one deliberately bypassing it. The bypass twin is not a
+# defect: it is the positive control that keeps the question askable, exactly the way
+# the stale-ABI fixture keeps "the previous ABI refuses" askable after every bump. It
+# is also the only artifact in this tree built to be reload-UNSAFE on purpose, so it
+# links nothing — its one symbol cannot alias anything else in the process.
+add_library(zen_test_contract_applied SHARED weavelib/contract_sentinel.cpp)
+loom_weave_build_contract(zen_test_contract_applied)
+
+add_library(zen_test_contract_bypass SHARED weavelib/contract_sentinel.cpp)
+# (no loom_weave_build_contract here — that absence IS the control)
 
 set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
@@ -218,7 +232,8 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_answers_twice zen_test_weave_seam_emit zen_test_weave_senses
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
-    zen_test_office_worker)
+    zen_test_office_worker
+    zen_test_contract_applied zen_test_contract_bypass)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -237,6 +252,8 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ACTIVATES_CONFLICT=\"$<TARGET_FILE:zen_test_weave_activates_conflict>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\""
+    "ZEN_SO_CONTRACT_APPLIED=\"$<TARGET_FILE:zen_test_contract_applied>\""
+    "ZEN_SO_CONTRACT_BYPASS=\"$<TARGET_FILE:zen_test_contract_bypass>\""
     "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\""
     "ZEN_SO_ANSWERS=\"$<TARGET_FILE:zen_test_weave_answers>\""
     "ZEN_SO_ANSWERS_TWICE=\"$<TARGET_FILE:zen_test_weave_answers_twice>\""
@@ -294,7 +311,7 @@ target_link_libraries(zen_test_forge_client PRIVATE loom zen-switchboard zen-war
 # The policy/forge mods are loadable weave libraries too — same linkage law.
 foreach(t IN ITEMS zen_test_mod_storage zen_test_storage_client zen_test_storage_broker
                    zen_test_net_client zen_test_net_broker zen_test_forge_client)
-    target_compile_options(${t} PRIVATE ${ZEN_WEAVE_LIB_FLAGS})
+    loom_weave_build_contract(${t})
 endforeach()
 
 set(ZEN_ISOLATION_WEAVE_LIBS zen_test_weave_crasher zen_test_weave_silent
@@ -452,3 +469,42 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/suite_population.txt
     -DZEN_GATES=${zen_population_gates_arg}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_population.cmake)
+
+# ---- The weave build contract (KERN-05) ----------------------------------------------
+#
+# What the `population` entry does for the test population, this does for the loadable
+# weave artifacts: it reads what was actually produced rather than what was intended.
+# The roll of contracted targets is DERIVED — loom_weave_build_contract() records every
+# target it touches on a global property, so this can never check a stale hand-kept list
+# (the drift POP-01 was written to end). The compile options come out of each target's
+# real COMPILE_OPTIONS, so the manifest is the build system's own answer, not a copy of
+# the function's verdict string.
+if(TARGET zen_test_contract_applied)
+    get_property(zen_contract_targets GLOBAL PROPERTY LOOM_WEAVE_CONTRACT_TARGETS)
+    set(zen_contract_rows "")
+    foreach(t IN LISTS zen_contract_targets)
+        get_target_property(zen_contract_verdict ${t} LOOM_WEAVE_BUILD_CONTRACT)
+        get_target_property(zen_contract_kind ${t} TYPE)
+        string(APPEND zen_contract_rows
+            "${t}|$<TARGET_FILE:${t}>|${zen_contract_kind}|${zen_contract_verdict}|"
+            "$<JOIN:$<TARGET_PROPERTY:${t},COMPILE_OPTIONS>,+>\n")
+    endforeach()
+    file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/weave_contract_manifest.txt
+         CONTENT "${zen_contract_rows}")
+
+    # binutils is the authority on a symbol's binding; llvm-nm answers identically.
+    # An absent tool is a FAILURE inside the script, never a silent skip here.
+    find_program(ZEN_NM NAMES nm llvm-nm)
+    if(NOT ZEN_NM)
+        set(ZEN_NM "")
+    endif()
+
+    add_test(NAME weave_contract COMMAND ${CMAKE_COMMAND}
+        -DZEN_MANIFEST=${CMAKE_CURRENT_BINARY_DIR}/weave_contract_manifest.txt
+        -DZEN_HOST_EXE=$<TARGET_FILE:zen-tests>
+        "-DZEN_HOST_OPTIONS=$<JOIN:$<TARGET_PROPERTY:zen-tests,COMPILE_OPTIONS>,+>"
+        -DZEN_BYPASS_LIB=$<TARGET_FILE:zen_test_contract_bypass>
+        -DZEN_PLATFORM=${CMAKE_SYSTEM_NAME}
+        -DZEN_NM=${ZEN_NM}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_contract.cmake)
+endif()

@@ -7,4 +7,15 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 
+# The weave-authoring surface: loom_weave_build_contract(<target>), which applies
+# whatever this platform and compiler require for a loadable weave's statics to live
+# and die with their own image (KERN-05).
+#
+# It ships in EVERY package, including one built without loom::kernel, for the same
+# reason the kernel's headers do: what a consumer can AUTHOR is not gated on what this
+# particular install can HOST. `if(TARGET loom::kernel)` remains the honest question
+# for hosting, and the function records what it actually imposed on each target in the
+# target's LOOM_WEAVE_BUILD_CONTRACT property.
+include("${CMAKE_CURRENT_LIST_DIR}/loom-weave.cmake")
+
 check_required_components(loom)
