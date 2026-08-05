@@ -53,6 +53,43 @@ and **positively re-confirms** from the kernel's own view:
 the runtime **fails safe** when it cannot confirm (dev-mode converts a
 known-gap refusal into a visibly-uncontained warning — never a false claim).
 
+### Fresh access, inherited descriptors, and the exec boundary
+
+Three different facts, and reading any one as the others is the mistake C-2
+was. A **capability namespace** decides what a *fresh* attempt can reach. It
+decides nothing about a descriptor that was **already open** and crossed
+`execve` — a connected socket, an open file, a pipe, a terminal is simply
+*there*, at `FsAccess::None`, in a netns with no interface. So the child gets
+a third, separate guarantee:
+
+**Exec-boundary descriptor hygiene.** Every spawn of `zen-weave-host` goes
+through one fork/`execve` path, and immediately before `execve` the child
+closes **every descriptor except an explicit allow-list**. The embedding host's
+own descriptors — which Loom never created and cannot annotate — do not cross.
+
+The intentional set is exactly:
+
+```text
+0, 1, 2    stdin/stdout/stderr — DELIBERATELY KEPT.
+           An intentional ambient capability, not an oversight: the child
+           shares the host's console, which is what carries its crash and
+           sanitizer output. It is the one ambient reach that survives.
+3          the weave-host protocol transport (the socketpair end).
+```
+
+Mechanism: `close_range(2)` where the kernel has it (called by syscall number,
+so no glibc floor moves), otherwise enumeration to the `RLIMIT_NOFILE` **hard**
+limit. `/proc/self/fd` is deliberately unused — the restricted view does not
+mount `/proc`. If **neither** can be applied the spawn **refuses**; a child
+that kept the host's descriptors is never allowed to run under a containment
+claim. Loom's own sockets additionally set `FD_CLOEXEC` at creation, which is
+defence in depth and explicitly *not* the boundary.
+
+What this does **not** say: nothing here constrains the child's **environment**
+(`execve` passes the host environment through), and the control fd is a real
+channel to the host, by design — *contained* has always meant no external
+reachability, not no-IPC.
+
 **The honest threat tier: abuse, not escape.** The sandbox stops buggy or
 greedy code. seccomp is the named, unbuilt escalation to escape-tier. Any
 prose implying "hostile-proof" is wrong; say abuse-tier.
