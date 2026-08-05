@@ -279,6 +279,10 @@ zen_add_test_weave(zen_test_weave_silent ZEN_WEAVE_SILENT)
 zen_add_test_weave(zen_test_weave_netprobe ZEN_WEAVE_NET_PROBE)
 # B4: a child that reaches for the filesystem directly, to prove the mount-ns view.
 zen_add_test_weave(zen_test_weave_fsprobe ZEN_WEAVE_FS_PROBE)
+# C-2: a child that inventories the descriptors it actually inherited, tries to USE the
+# one the host parked, and independently attempts a fresh socket — so "the namespace is
+# real" and "ambient host descriptors were removed" are two answers, not one.
+zen_add_test_weave(zen_test_weave_fdprobe ZEN_WEAVE_FD_PROBE)
 # B5: a child that bombs memory (OOM-kill under memory.max, with a small reload budget so
 # it quarantines) and one that fork-bombs (bounded by pids.max).
 zen_add_test_weave(zen_test_weave_membomb ZEN_WEAVE_MEM_BOMB ZEN_WEAVE_LOW_RELOADS)
@@ -315,7 +319,7 @@ foreach(t IN ITEMS zen_test_mod_storage zen_test_storage_client zen_test_storage
 endforeach()
 
 set(ZEN_ISOLATION_WEAVE_LIBS zen_test_weave_crasher zen_test_weave_silent
-    zen_test_weave_netprobe zen_test_weave_fsprobe zen_test_weave_membomb
+    zen_test_weave_netprobe zen_test_weave_fsprobe zen_test_weave_fdprobe zen_test_weave_membomb
     zen_test_weave_forkbomb zen_test_mod_storage zen_test_storage_client
     zen_test_storage_broker zen_test_net_client zen_test_net_broker zen_test_forge_client
     # R2B-2: the deferring steward is mounted out-of-process too, to pin that the
@@ -332,6 +336,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_SILENT=\"$<TARGET_FILE:zen_test_weave_silent>\""
     "ZEN_SO_NETPROBE=\"$<TARGET_FILE:zen_test_weave_netprobe>\""
     "ZEN_SO_FSPROBE=\"$<TARGET_FILE:zen_test_weave_fsprobe>\""
+    "ZEN_SO_FDPROBE=\"$<TARGET_FILE:zen_test_weave_fdprobe>\""
     "ZEN_SO_MEMBOMB=\"$<TARGET_FILE:zen_test_weave_membomb>\""
     "ZEN_SO_FORKBOMB=\"$<TARGET_FILE:zen_test_weave_forkbomb>\""
     "ZEN_SO_MOD_STORAGE=\"$<TARGET_FILE:zen_test_mod_storage>\""

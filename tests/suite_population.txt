@@ -76,6 +76,6 @@ kernel             kernel    132
 handoff            kernel    10
 manager            kernel    43
 capabilities       kernel    4
-isolation          posix     32
+isolation          posix     34
 policy             posix     23
 sdl                sdl       3

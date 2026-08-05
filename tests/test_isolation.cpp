@@ -31,7 +31,11 @@
 #include <string>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace loom {
@@ -85,6 +89,18 @@ std::shared_ptr<const Schema> fsresult_schema() {
 // Matches the fork-bomb weave's emitted shape (B5): how many forks succeeded.
 std::shared_ptr<const Schema> forkresult_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
+    return s;
+}
+// Matches the fd-probe weave's emitted shape (C-2): the descriptor inventory the child
+// actually holds, whether the parked one can still move bytes, and — kept separate on
+// purpose — whether the network namespace is still imposed.
+std::shared_ptr<const Schema> fdresult_schema() {
+    static const auto s = SchemaBuilder("FdResult", 1)
+                              .field("open_low", Kind::Int)
+                              .field("open_high", Kind::Int)
+                              .field("parked_write", Kind::Int)
+                              .field("fresh_connect", Kind::Int)
+                              .build();
     return s;
 }
 } // namespace
@@ -766,6 +782,256 @@ TEST_CASE("a contained mount is positively confirmed in a distinct network names
     CHECK(status.find("confirmed") != std::string::npos); // VERIFIED (distinct netns), not inferred
 }
 
+TEST_CASE("C-2: the descriptor sweep keeps exactly its allow-list, and refuses a malformed one") {
+    // The mechanism itself, asked directly — the end-to-end case above proves the
+    // BOUNDARY, this proves the TOOL. Two properties, and the second is the one that
+    // has no other witness: the sweep walks the gaps BETWEEN allow-list entries, so an
+    // unsorted list would leave a whole range unswept while returning success. That is
+    // a silent hole in a function whose entire value is having none, so a malformed
+    // list is refused up front — before a single descriptor is touched, which is why
+    // these three calls are safe to make in the test process itself.
+    const int unsorted[] = {3, 1};
+    CHECK(close_inherited_descriptors(unsorted, 2) == -1);
+    const int duplicated[] = {1, 1};
+    CHECK(close_inherited_descriptors(duplicated, 2) == -1);
+    const int negative[] = {-1, 3};
+    CHECK(close_inherited_descriptors(negative, 2) == -1);
+
+    // And the sweep itself, in a throwaway fork-child so the test process keeps its own
+    // descriptors. The child's ONLY surviving descriptor is its report pipe, which is
+    // also the allow-list — so the answer arrives over the very mechanism under test.
+    //
+    // BOTH implementations are run, not merely whichever one this kernel selects. A
+    // fallback that executes only on hosts nobody tests on is a claim with no witness;
+    // the enumeration path exists precisely for kernels older than close_range(2), which
+    // is exactly the population least likely to run this suite.
+    struct Sweep {
+        char rc = 0;     ///< the sweep returned 0
+        char before = 0; ///< the victim was open BEFORE (so `after` is a change, not a fact)
+        char after = 0;  ///< ...and is open after
+        char kept = 0;   ///< the allow-listed descriptor survived
+    };
+    const auto probe_sweep = [](int (*sweep)(const int*, std::size_t)) {
+        int report[2] = {-1, -1};
+        REQUIRE(::pipe(report) == 0);
+        const int victim = ::dup(report[0]); // an ordinary descriptor, deliberately unlisted
+        REQUIRE(victim >= 0);
+        REQUIRE(victim != report[1]);
+        const int keep[] = {report[1]};
+
+        const pid_t pid = ::fork();
+        REQUIRE(pid >= 0);
+        if (pid == 0) {
+            Sweep s;
+            s.before = ::fcntl(victim, F_GETFD) != -1 ? 1 : 0;
+            s.rc = sweep(keep, 1) == 0 ? 1 : 0;
+            s.after = ::fcntl(victim, F_GETFD) != -1 ? 1 : 0;
+            s.kept = ::fcntl(report[1], F_GETFD) != -1 ? 1 : 0;
+            (void)!::write(report[1], &s, sizeof(s));
+            ::_exit(0);
+        }
+        Sweep got;
+        const bool complete = ::read(report[0], &got, sizeof(got)) == sizeof(got);
+        int status = 0;
+        (void)::waitpid(pid, &status, 0);
+        ::close(victim);
+        ::close(report[0]);
+        ::close(report[1]);
+        REQUIRE(complete);
+        return got;
+    };
+
+    const Sweep policy = probe_sweep(&close_inherited_descriptors);
+    CHECK(policy.rc == 1);
+    CHECK(policy.before == 1);
+    CHECK(policy.after == 0);
+    CHECK(policy.kept == 1);
+
+    const Sweep enumerated = probe_sweep(&close_descriptors_by_enumeration);
+    CHECK(enumerated.rc == 1);
+    CHECK(enumerated.before == 1);
+    CHECK(enumerated.after == 0);
+    CHECK(enumerated.kept == 1);
+
+    // close_range(2) is an ENVIRONMENT FACT, so it is reported rather than demanded:
+    // absent, the policy above still passed, which is the whole point of having two.
+    const Sweep ranged = probe_sweep(&close_descriptors_by_close_range);
+    MESSAGE("close_range(2) on this kernel: "
+            << std::string(ranged.rc == 1 ? "present (the policy's preferred mechanism)"
+                                          : "ABSENT -- the policy fell back to enumeration"));
+    if (ranged.rc == 1) {
+        CHECK(ranged.before == 1);
+        CHECK(ranged.after == 0);
+        CHECK(ranged.kept == 1);
+    }
+}
+
+TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is still real") {
+    // COLD-2's attack, reconstructed here rather than quoted. The host builds a real
+    // connected loopback TCP pair through its own network stack, a real pipe and a real
+    // file, parks one end of each at a known descriptor number WITHOUT FD_CLOEXEC, and
+    // then mounts a weave with Network withheld. Before C2 the child received all three,
+    // could write to them, and the bytes arrived back on the host side — while
+    // containment() reported `network: contained (confirmed: child netns distinct from
+    // host)` over that same byte.
+    //
+    // THE TWO FACTS ARE ASSERTED SEPARATELY, and that separation is the point. A test
+    // that observes only ENETUNREACH proves the namespace and says nothing about
+    // inheritance; COLD-2's host produced ENETUNREACH and a working escape at the same
+    // time. So each result carries the namespace verdict AND the descriptor inventory,
+    // and this case fails if either half regresses.
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
+                            "C-2: ambient descriptors removed at exec while the netns holds");
+
+    // ---- the host's own ambient capabilities, built for real ----------------------
+    //
+    // Each is parked with F_DUPFD (never F_DUPFD_CLOEXEC), so the copy the child could
+    // inherit has FD_CLOEXEC CLEAR — deliberately the hostile case, exactly as COLD-2
+    // left it. The originals and the host-side ends are marked CLOEXEC so the ONE
+    // subject of each assertion is the parked number and nothing else.
+    const auto park = [](int fd) {
+        const int parked = ::fcntl(fd, F_DUPFD, 20); // lowest free >= 20, CLOEXEC clear
+        REQUIRE(parked >= 20);
+        REQUIRE(parked < 63); // must land inside the bitmap the probe reports
+        REQUIRE((::fcntl(parked, F_GETFD) & FD_CLOEXEC) == 0);
+        return parked;
+    };
+    const auto cloexec = [](int fd) { REQUIRE(::fcntl(fd, F_SETFD, FD_CLOEXEC) == 0); };
+
+    // A genuinely connected TCP pair over loopback: the host end stays here, the client
+    // end is what the child would inherit.
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(listener >= 0);
+    cloexec(listener);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0; // any free port
+    REQUIRE(::bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    REQUIRE(::listen(listener, 1) == 0);
+    socklen_t addr_len = sizeof(addr);
+    REQUIRE(::getsockname(listener, reinterpret_cast<sockaddr*>(&addr), &addr_len) == 0);
+    const int client = ::socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(client >= 0);
+    cloexec(client);
+    REQUIRE(::connect(client, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    const int host_end = ::accept(listener, nullptr, nullptr);
+    REQUIRE(host_end >= 0);
+    cloexec(host_end);
+
+    int pipe_fds[2] = {-1, -1};
+    REQUIRE(::pipe(pipe_fds) == 0);
+    cloexec(pipe_fds[0]);
+    cloexec(pipe_fds[1]);
+
+    const std::string file_path = "/tmp/zen_c2_ambient_file.txt";
+    const int file = ::open(file_path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    REQUIRE(file >= 0);
+
+    const int parked_socket = park(client);       // a CONNECTED socket, ready to move bytes
+    const int parked_pipe = park(pipe_fds[1]);    // a non-network descriptor: the write end
+    const int parked_file = park(file);           // a non-network descriptor: an ordinary file
+
+    // ---- the mount: Network withheld, filesystem None, resources contained --------
+    struct Reading {
+        std::int64_t open_low = -1;
+        std::int64_t open_high = -1;
+        std::int64_t parked_write = -1;
+        std::int64_t fresh_connect = -1;
+    };
+    std::vector<Reading> readings;
+    Registered rec = register_probe(bus, {fdresult_schema()});
+    rec.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        Reading r;
+        r.open_low = in.payload.get("open_low")->as_int();
+        r.open_high = in.payload.get("open_high")->as_int();
+        r.parked_write = in.payload.get("parked_write")->as_int();
+        r.fresh_connect = in.payload.get("fresh_connect")->as_int();
+        readings.push_back(r);
+    };
+    Grant grant;
+    grant.allow("FdResult", 1, rec.id); // it may REPORT freely: a sandbox is not a muzzle
+    OutOfProcessResult mounted = host.mount("c2", ZEN_SO_FDPROBE, std::move(grant));
+    REQUIRE_MESSAGE(mounted.ok, mounted.error);
+    CHECK(host.containment("c2").find("network: contained") != std::string::npos);
+
+    // One Ping per parked descriptor; `seq` names the fd the child must try to USE.
+    const int parked[] = {parked_socket, parked_pipe, parked_file};
+    for (int fd : parked) {
+        bus.send(mounted.id, Message(ping(fd), WeaveId{}, rec.id));
+    }
+    REQUIRE(host.run_until([&] { return readings.size() == 3; }, 4000));
+
+    // The intentional set, stated as a number rather than described: stdin, stdout,
+    // stderr (kept deliberately — the child shares the host's console) and fd 3, the
+    // weave-host protocol transport. Anything else in the child's table is inherited.
+    const std::int64_t kIntendedFds = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+    for (std::size_t i = 0; i < readings.size(); ++i) {
+        const Reading& r = readings[i];
+        const int fd = parked[i];
+        CAPTURE(i);
+        CAPTURE(fd);
+
+        // (a) THE NAMESPACE IS STILL REAL. Asserted every time, so descriptor hygiene
+        //     can never be mistaken for containment if the netns were ever lost.
+        CHECK(r.fresh_connect == ENETUNREACH);
+
+        // (b) THE INHERITED DESCRIPTOR IS GONE — not merely renumbered. Absent from the
+        //     low bitmap AND from the high range, so "it moved to fd 900" fails here.
+        CHECK((r.open_low & (static_cast<std::int64_t>(1) << fd)) == 0);
+        CHECK(r.open_high == 0);
+
+        // (c) AND IT CANNOT MOVE BYTES. Presence and usability are different questions;
+        //     COLD-2's payload write returned 20, this one must fail.
+        CHECK(r.parked_write == EBADF);
+
+        // (d) THE INSTRUMENT WORKS. If the probe simply could not see open descriptors,
+        //     (b) would pass vacuously — so the transport it is provably using right now
+        //     must be visible in the very same bitmap.
+        CHECK((r.open_low & (static_cast<std::int64_t>(1) << 3)) != 0);
+
+        // (e) AUTOMATIC FUTURE PROTECTION. Not "the three fds this test parked" but
+        //     "nothing beyond the intended set", so a descriptor some future host
+        //     composition happens to hold open before spawn fails here without anyone
+        //     remembering to extend this case.
+        CHECK((r.open_low & ~kIntendedFds) == 0);
+    }
+
+    // (f) THE HOST'S OWN SIDE HEARD NOTHING. The end-to-end half of COLD-2: its host
+    //     read "COLD2-ESCAPE-PAYLOAD" off this very socket. Both ends are checked, so a
+    //     leak that somehow wrote without the child noticing still fails.
+    // errno is captured on the SAME line as the syscall, never read from a later
+    // assertion: doctest's own reporting writes to stdout between assertions, and under
+    // `-s` that write resets errno — which showed up here as two failures that appeared
+    // only when successes were printed. An errno read one assertion late is a flake.
+    char sink[64];
+    errno = 0;
+    const ssize_t from_socket = ::recv(host_end, sink, sizeof(sink), MSG_DONTWAIT);
+    const int socket_errno = errno;
+    CHECK(from_socket < 0);
+    CHECK((socket_errno == EAGAIN || socket_errno == EWOULDBLOCK));
+    REQUIRE(::fcntl(pipe_fds[0], F_SETFL, O_NONBLOCK) == 0);
+    errno = 0;
+    const ssize_t from_pipe = ::read(pipe_fds[0], sink, sizeof(sink));
+    const int pipe_errno = errno;
+    CHECK(from_pipe < 0);
+    CHECK((pipe_errno == EAGAIN || pipe_errno == EWOULDBLOCK));
+
+    host.unmount("c2");
+    for (int fd : parked) {
+        ::close(fd);
+    }
+    ::close(host_end);
+    ::close(listener);
+    ::close(client);
+    ::close(pipe_fds[0]);
+    ::close(pipe_fds[1]);
+    ::close(file);
+    (void)::unlink(file_path.c_str());
+}
+
 TEST_CASE("a SURPRISE sandbox-entry failure fails safe: refuses in strict AND dev mode") {
     // The probe passes (Network IS enforceable here), but the *real* entry is forced
     // to fail at spawn — the catastrophic path to rule out. It must refuse in BOTH
@@ -1333,13 +1599,18 @@ TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
 // silently skipped." (Relies on doctest's default registration order; a --order-by=rand run would
 // instead assert the count in a reporter hook.)
 //
-// EXACTLY 15, from this suite's own witnesses only (POP-02). Twelve ZEN_REQUIRE_ENFORCEABLE guard
-// sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 15 executions,
-// not 12. The number is exact rather than a floor because `>= 12` had three executions of slack:
+// EXACTLY 16, from this suite's own witnesses only (POP-02). Thirteen ZEN_REQUIRE_ENFORCEABLE guard
+// sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 16 executions,
+// not 13. The number is exact rather than a floor because `>= 12` had three executions of slack:
 // a genuine enforcement witness could be deleted and this suite stayed 32/32 green with 230
 // assertions, nothing moved. When a new OS-enforcement proof is added, raise this deliberately.
+//
+// 15 -> 16 at C2: the exec-boundary descriptor case is a THIRTEENTH guard site. It is a genuine
+// OS-enforcement witness — it asserts ENETUNREACH from inside the namespace alongside the
+// descriptor inventory — so it belongs in this population, and raising the number on purpose is
+// exactly the price this contract charges for adding one.
 TEST_CASE("enforcement coverage: the OS-enforcement proofs actually executed, not silently skipped") {
-    ZEN_ENFORCEMENT_POPULATION(15);
+    ZEN_ENFORCEMENT_POPULATION(16);
 }
 
 } // TEST_SUITE
