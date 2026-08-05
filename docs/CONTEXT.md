@@ -31,6 +31,7 @@ the named laws → the reference page → tests when exactness matters.
 | authored handoff (continuity across an incompatible schema) | reference/handoff.md | HANDOFF-01..03, PR-09 | tests/test_handoff.cpp | decisions/migration-is-authored-not-inferred.md |
 | event-loop composition | reference/messaging.md#bounded-dispatch | MSG-09 | tests/test_switchboard.cpp, test_bridge.cpp (R2E-0 sections) | Codex Rule Garden finding 1 |
 | Timer continuity | Zengine/docs/reference/timer-continuity.md | TIMER-01..05 | Zengine/tests/test_timer.cpp | Zengine/docs/decisions/timer-continuity-carries-remaining-duration.md |
+| what a green run means (suite/case/enforcement populations, declared absence, the opt-out) | laws/population-laws.md, ../AGENTS.md | POP-01..04 | tests/suite_population.txt, tests/check_population.cmake, tests/verify.cmake, tests/enforcement_gate.hpp | — |
 | known limitations | reference/known-seams.md | MSG-04, ANS-02, PR-09 | — | evidence/night-lab.md |
 | bounds/capacities | reference/bounds.md | — | grep the constant name | — |
 

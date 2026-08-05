@@ -80,20 +80,32 @@ builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
-ctest --test-dir build
+cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake   # the official lane
 
 # AddressSanitizer + UBSan lane
 cmake -B build-san -DCMAKE_BUILD_TYPE=Debug -DZEN_SANITIZE=ON
-cmake --build build-san && ctest --test-dir build-san
+cmake --build build-san
+cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake
 ```
+
+`tests/verify.cmake` is the result worth quoting: a bare `ctest` accepts a
+selector that matched nothing as success, and the lane does not. A named suite
+that selects zero cases fails, the suite inventory and per-suite case floors in
+`tests/suite_population.txt` are checked every run, and the two OS-enforcement
+populations are exact and independent (`isolation` 15, `policy` 11). See
+[`docs/laws/population-laws.md`](docs/laws/population-laws.md).
 
 The `isolation`/`policy` suites need a delegated cgroup-v2 scope; ctest
 launches them through `tests/run-under-scope.sh`, and outside such a scope the
 OS-enforcement cases **fail hard by design** rather than pass having verified
-nothing (`ZEN_ALLOW_UNENFORCEABLE=1` converts to marked-degraded skips on a
-host that genuinely cannot enforce). The portable suites run everywhere,
-including Windows/MinGW; the Windows kernel backend is an explicit
-development-only opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`).
+nothing. `ZEN_ALLOW_UNENFORCEABLE=1` converts those into marked-degraded skips
+for a host that genuinely cannot enforce — such a run prints
+`*** NON-ENFORCEMENT MODE ***`, asserts no enforcement population, and is
+refused by the official lane; it is never evidence about containment. The
+portable suites run everywhere, including Windows/MinGW, where the `kernel` and
+`posix` gates are off and those suites are reported as *declared absent* rather
+than passing; the Windows kernel backend is an explicit development-only opt-in
+(`LOOM_ENABLE_WINDOWS_KERNEL`).
 
 ## Consuming loom
 
