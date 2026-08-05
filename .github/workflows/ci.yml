@@ -42,8 +42,22 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
 
-      - name: Verify the repository-owned population
-        run: cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake
+      - name: Verify the repository-owned population (verbose evidence lane)
+        run: |
+          set +e
+          cmake -DZEN_BUILD_DIR=build -DZEN_CTEST_ARGS=-V -P tests/verify.cmake 2>&1 | tee verify.log
+          verify_rc="${PIPESTATUS[0]}"
+          verify_outcome=failed
+          if (( verify_rc == 0 )); then verify_outcome=passed; fi
+          {
+            printf '## Loom / Linux / Debug\n\n'
+            printf '**Verification:** %s (exit %s)\n\n' "$verify_outcome" "$verify_rc"
+            printf 'Selected lines from the repository verifier and CTest output:\n\n'
+            printf '```text\n'
+            grep -E 'verify:|[0-9]+% tests passed|test cases:|assertions:|OS-enforcement cases executed|DECLARED ABSENT|Total Test time' verify.log || true
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$verify_rc"
 
   loom-linux-release:
     name: Loom / Linux / Release
@@ -74,7 +88,21 @@ jobs:
         run: cmake --build build-rel --parallel "$(nproc)"
 
       - name: Verify the repository-owned population
-        run: cmake -DZEN_BUILD_DIR=build-rel -P tests/verify.cmake
+        run: |
+          set +e
+          cmake -DZEN_BUILD_DIR=build-rel -P tests/verify.cmake 2>&1 | tee verify.log
+          verify_rc="${PIPESTATUS[0]}"
+          verify_outcome=failed
+          if (( verify_rc == 0 )); then verify_outcome=passed; fi
+          {
+            printf '## Loom / Linux / Release\n\n'
+            printf '**Verification:** %s (exit %s)\n\n' "$verify_outcome" "$verify_rc"
+            printf 'Selected lines from the repository verifier and CTest output:\n\n'
+            printf '```text\n'
+            grep -E 'verify:|[0-9]+% tests passed|test cases:|assertions:|OS-enforcement cases executed|DECLARED ABSENT|Total Test time' verify.log || true
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$verify_rc"
 
   loom-linux-asan-ubsan:
     name: Loom / Linux / ASan + UBSan
@@ -105,7 +133,21 @@ jobs:
         run: cmake --build build-san --parallel "$(nproc)"
 
       - name: Verify the repository-owned population
-        run: cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake
+        run: |
+          set +e
+          cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake 2>&1 | tee verify.log
+          verify_rc="${PIPESTATUS[0]}"
+          verify_outcome=failed
+          if (( verify_rc == 0 )); then verify_outcome=passed; fi
+          {
+            printf '## Loom / Linux / ASan + UBSan\n\n'
+            printf '**Verification:** %s (exit %s)\n\n' "$verify_outcome" "$verify_rc"
+            printf 'Selected lines from the repository verifier and CTest output:\n\n'
+            printf '```text\n'
+            grep -E 'verify:|[0-9]+% tests passed|test cases:|assertions:|OS-enforcement cases executed|DECLARED ABSENT|Total Test time' verify.log || true
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$verify_rc"
 
   loom-zengine-stranger:
     name: Loom -> canonical Zengine stranger
@@ -165,7 +207,21 @@ jobs:
         run: cmake --build "$RUNNER_TEMP/zengine-build" --parallel "$(nproc)"
 
       - name: Verify canonical Zengine
-        run: ctest --test-dir "$RUNNER_TEMP/zengine-build" --no-tests=error --output-on-failure
+        run: |
+          set +e
+          ctest --test-dir "$RUNNER_TEMP/zengine-build" --no-tests=error --output-on-failure 2>&1 | tee zengine-verify.log
+          verify_rc="${PIPESTATUS[0]}"
+          verify_outcome=failed
+          if (( verify_rc == 0 )); then verify_outcome=passed; fi
+          {
+            printf '## Loom -> canonical Zengine stranger\n\n'
+            printf '**Verification:** %s (exit %s)\n\n' "$verify_outcome" "$verify_rc"
+            printf 'Selected lines from the current Zengine CTest output:\n\n'
+            printf '```text\n'
+            grep -E '[0-9]+% tests passed|test cases:|assertions:|Total Test time' zengine-verify.log || true
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$verify_rc"
 
   loom-windows-kernel-full:
     name: Loom / Windows / kernel-full (advisory)
