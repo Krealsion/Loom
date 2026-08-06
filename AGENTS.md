@@ -18,13 +18,18 @@ cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
   (`cmake/loom-weave.cmake`, KERN-05) — including the fixtures in `tests/`, and
   including `loom`/`zen-switchboard` themselves, since their objects land inside
   the image. Never hand-write the compiler option; the `weave_contract` entry
-  reads the built artifacts and will say so.
+  reads the built artifacts and will say so. Nor is it on your memory: the
+  `weave_population` entry derives which artifacts *must* carry it from the build
+  graph — every `SHARED`/`MODULE` library in `tests/` plus the static libraries in
+  their link closures — and names any that left the roll (POP-05). A deliberate
+  exception is `zen_weave_contract_exempt(<target> <reason>)`, in writing, and it
+  fails if that target then turns up contracted.
 - The isolation/policy/all suites need a delegated cgroup scope: run the whole
   binary via `tests/run-under-scope.sh ./build/tests/zen-tests` — a bare run
   fails ~33 enforcement cases **by design** (fail-hard beats silent skip).
 - Windows/MinGW builds the portable subset only; kernel lanes are opt-in.
 
-## The population contract — what a green run means (POP-01..04)
+## The population contract — what a green run means (POP-01..05)
 
 `tests/verify.cmake` is the lane to quote. A bare `ctest` is fine while working,
 but it accepts `-R <matches nothing>` as success (exit 0, "No tests were
@@ -53,6 +58,11 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   Linux's 28 because the `kernel` and `posix` gates are off; the `population`
   check prints those as `DECLARED ABSENT`. Do not compare the two totals as
   though they should match, and do not read an absent suite as a passing one.
+- **The same doctrine covers built artifacts, not only tests** (POP-05). The
+  `weave_population` entry pins which artifacts must carry the reloadable-weave
+  build contract, derived from the build graph rather than from the roll of
+  targets that took it — so an artifact that stops taking it is named instead of
+  silently leaving. Exclusions are written on the target with a mandatory reason.
 - **Populations are not interchangeable**: cases, suites, OS-enforcement proofs,
   assertions. Assertion totals are reported, never an acceptance oracle.
 
