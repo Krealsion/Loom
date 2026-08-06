@@ -420,6 +420,31 @@ endif()
 # leans on an unexported target fails on the DEFAULT path, which is exactly where we want
 # that mistake to surface.
 #
+# THE UI TRIO'S TRIGGER HAS ALSO FIRED, AND THE ANSWER WAS STILL NO. W-1 sent a real hosting
+# consumer at it (Zengine's Workshop wanted an authored tree, a pixel resolution and a hit
+# test) and measured two independent blockers. Recording them here because the sentence above
+# reads like a promise that one packaging decision is all that stands in the way, and it is
+# not — see reportbacks/W-1-RB.md in the workspace for the full measurement.
+#
+#   1. THE CONSOLE IS A PRIOR HOSTING CONSUMER THAT NEVER LEFT. zen-ui is not waiting for its
+#      first host: zen-console emits its own interface as this tree (include/zen/console/
+#      ui.hpp), zen-tui renders it, zen-bridge reaches it through the console, and
+#      zen-ui-sdl executes zen-ui-pixel's commands. Live suites: console 27, component 15,
+#      pixel 9, bridge 19+8, sdl 3. The Loom cannot depend on Zengine, so relocating the tree
+#      means relocating the console, the TUI and the bridge with it. "Moves in its own port
+#      phase" is true; "moves when a hosting consumer appears" is not the trigger.
+#   2. IT IS A DIFFERENT MODEL FROM THE ONE AN APPLICATION CANVAS NEEDS, and would not have
+#      served the consumer even if it had moved. loom::Widget fences OUT the authored
+#      placement Workshop authors, `weight` is documented as a relative grow hint and never
+#      an absolute size (so neither "14 cells" nor "60% of the workspace" is expressible),
+#      stacks partition where authored elements overlap, and px_layout emits a PxTarget only
+#      for activatable rows, activatable Text and Fields — a Region would be unhittable.
+#      Zengine grew its own zengine::ui for the placement/extent model; this tree stays the
+#      relational one, and the two are not competitors.
+#
+# So nothing here changed in W-1: no target joined the export set, no PATTERN was dropped,
+# and the surface a stranger sees is byte-identical.
+#
 # EXPORT_NAME gives the installed targets the SAME spellings as the in-tree ALIASes
 # (loom::core, loom::switchboard). That identity is what makes a consumer's sibling-source
 # override a true drop-in: the same names resolve either way, so the two paths cannot silently
