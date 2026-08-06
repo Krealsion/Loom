@@ -101,6 +101,12 @@ if(NOT WIN32)
     target_link_libraries(zen-tests PRIVATE zen-isolation)
 endif()
 
+# The independent required-weave-contract population (POP-05, C3): the build-graph sweep
+# and the exemption declaration. It reads target types and link closures, never the
+# contract roll — which is exactly what lets the `weave_population` entry at the bottom of
+# this file notice an artifact that quietly stopped taking the contract.
+include(${CMAKE_CURRENT_SOURCE_DIR}/weave_population.cmake)
+
 # ---- Loadable test Weave libraries + the child host ----
 # The PORTABLE fixture set is loaded by the kernel/manager/capabilities suites and follows the
 # kernel target (Linux always; Windows under the opt-in backend, where they build as .dll).
@@ -109,12 +115,25 @@ endif()
 if(TARGET zen-kernel)
 
 # The weave-library law — a loadable weave's statics must live and die with its own
-# library (KERN-05) — now comes from loom_weave_build_contract(), the same exported
-# function a stranger gets from find_package(loom). It was a local variable holding a
-# literal -fno-gnu-unique here until R2F-E; the house had the fix and the guest did not
-# (COLD-1 F-22). Calling the exported surface is what keeps the two honest: if the
-# contract ever stops applying on the stranger's path, these fixtures stop getting it
-# too, and the kernel suite's own unload/reload cases say so.
+# library (KERN-05) — comes from loom_weave_build_contract(), the same exported function
+# a stranger gets from find_package(loom). It was a local variable holding a literal
+# -fno-gnu-unique here until R2F-E; the house had the fix and the guest did not (COLD-1
+# F-22). Calling the exported surface is what stops the two paths meaning different
+# things: if the contract ever stops applying on the stranger's path, these fixtures stop
+# getting it too.
+#
+# WHAT SAYS SO WHEN A FIXTURE LOSES IT — corrected by COLD-2 finding C-3. This comment
+# used to claim "the kernel suite's own unload/reload cases say so". They do not, and the
+# audit measured it: deleting the one contract line below dropped twenty-three loadable
+# weaves off the roll, thirteen STB_GNU_UNIQUE symbols came back into
+# libzen_test_weave.so, and every kernel unload/reload case still passed. Those cases
+# exercise the LOADER's bookkeeping — exact-once teardown, refused reload, the handle
+# chain — which is correct either way; whether the image's statics actually died is a
+# build-artifact fact no in-process case observes. The truthful statement is narrower and
+# is now a mechanism rather than a hope: the `weave_population` entry compares this
+# directory's loadable weaves against the contract roll and NAMES any that left it, and
+# `weave_contract` then re-reads the built artifacts' symbol tables. Neither is a test
+# case; both run in every lane.
 #
 # One configurable source compiled into several variants, plus a bad-ABI lib.
 function(zen_add_test_weave target)
@@ -223,6 +242,17 @@ loom_weave_build_contract(zen_test_contract_applied)
 
 add_library(zen_test_contract_bypass SHARED weavelib/contract_sentinel.cpp)
 # (no loom_weave_build_contract here — that absence IS the control)
+#
+# ...and the required-population sweep must be told so IN WRITING, because it classifies
+# every shared library in this directory as a loadable weave that owes the contract, and
+# it is right to. The exemption lives on the target rather than in a list elsewhere, so it
+# cannot outlive the artifact; the reason is mandatory; it is printed on every run; and
+# check_weave_population.cmake fails if an exempt target ever turns up ON the roll — which
+# is the one way this control could rot into a second contracted twin proving nothing.
+zen_weave_contract_exempt(zen_test_contract_bypass
+    "the F-22 negative control: same source as zen_test_contract_applied, contract "
+    "deliberately withheld, so the unique-symbol sentinel it still carries is what keeps "
+    "claim 1 of weave_contract falsifiable")
 
 set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
@@ -481,16 +511,54 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_GATES=${zen_population_gates_arg}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_population.cmake)
 
-# ---- The weave build contract (KERN-05) ----------------------------------------------
+# ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #
-# What the `population` entry does for the test population, this does for the loadable
-# weave artifacts: it reads what was actually produced rather than what was intended.
-# The roll of contracted targets is DERIVED — loom_weave_build_contract() records every
-# target it touches on a global property, so this can never check a stale hand-kept list
-# (the drift POP-01 was written to end). The compile options come out of each target's
-# real COMPILE_OPTIONS, so the manifest is the build system's own answer, not a copy of
-# the function's verdict string.
-if(TARGET zen_test_contract_applied)
+# What the `population` entry does for the test population, these do for the loadable
+# weave artifacts. TWO questions, deliberately not one:
+#
+#   weave_population   is every artifact that MUST carry the contract on the roll?
+#                      Expectation from the BUILD GRAPH (weave_population.cmake: target
+#                      types + link closures), evidence from the roll. C3/COLD-2 C-3.
+#   weave_contract     does every artifact on the roll actually have the properties?
+#                      Read out of the built files' symbol tables. R2F-E.
+#
+# Neither subsumes the other and neither derives from the other. The roll of contracted
+# targets is what loom_weave_build_contract() recorded about itself — the right thing to
+# check compile options and symbols against, and precisely the wrong thing to ask whether
+# somebody left. So the required side never touches it (POP-01: a derived list cannot
+# detect its own absences), and the compile options still come out of each target's real
+# COMPILE_OPTIONS rather than from the function's verdict string.
+#
+# THE GATE IS THE SWEEP'S OWN ANSWER, not a named fixture. `if(TARGET
+# zen_test_contract_applied)` would have deregistered both entries the day that fixture
+# was renamed — a check that silently stops existing is the failure mode one directory up
+# from the one C3 closes. Instead: if this configuration builds loadable weaves at all,
+# both entries register; if it builds none (the default Windows package, where the kernel
+# gate is off and tests/ has no shared libraries), there is no population and their
+# absence is declared, not disguised (POP-03).
+zen_required_weave_population(zen_weave_required_rows zen_weave_targets)
+
+if(zen_weave_targets)
+    # The R2F-E pair is load-bearing for the ARTIFACT check — claim 2 asks whether the
+    # bypass twin still reproduces F-22, and without the twin the contracted artifacts
+    # prove nothing. Losing it must therefore be loud rather than quiet.
+    foreach(zen_control IN ITEMS zen_test_contract_applied zen_test_contract_bypass)
+        if(NOT TARGET ${zen_control})
+            message(FATAL_ERROR
+                "zen tests: this configuration builds loadable weaves but not "
+                "'${zen_control}'. That target is half of the weave build contract's "
+                "positive/negative pair; without both, `weave_contract` can no longer tell "
+                "'the contract works' from 'the sentinel stopped expressing the hazard'.")
+        endif()
+    endforeach()
+
+    # The required population, written where the -P check can read it. Plain file(WRITE):
+    # it holds target NAMES and prose, no generator expressions, and it is settled the
+    # moment the sweep above ran.
+    string(REPLACE ";" "\n" zen_weave_required_text "${zen_weave_required_rows}")
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/weave_population_required.txt
+         "${zen_weave_required_text}\n")
+
     get_property(zen_contract_targets GLOBAL PROPERTY LOOM_WEAVE_CONTRACT_TARGETS)
     set(zen_contract_rows "")
     foreach(t IN LISTS zen_contract_targets)
@@ -518,4 +586,12 @@ if(TARGET zen_test_contract_applied)
         -DZEN_PLATFORM=${CMAKE_SYSTEM_NAME}
         -DZEN_NM=${ZEN_NM}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_contract.cmake)
+
+    # The required-vs-actual comparison. It reads the SAME roll manifest weave_contract
+    # reads — one measurement, two consumers — against an expectation computed without
+    # ever looking at it.
+    add_test(NAME weave_population COMMAND ${CMAKE_COMMAND}
+        -DZEN_REQUIRED=${CMAKE_CURRENT_BINARY_DIR}/weave_population_required.txt
+        -DZEN_CONTRACTED=${CMAKE_CURRENT_BINARY_DIR}/weave_contract_manifest.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_population.cmake)
 endif()
