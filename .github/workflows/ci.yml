@@ -206,19 +206,26 @@ jobs:
       - name: Build canonical Zengine
         run: cmake --build "$RUNNER_TEMP/zengine-build" --parallel "$(nproc)"
 
-      - name: Verify canonical Zengine
+      # Zengine's OWN official lane, run from the canonical checkout this job fetched.
+      # This job claims to verify Zengine, so it has to ask Zengine's question: a bare
+      # `ctest` here would report 10/10 over a tree that had lost a whole test case or
+      # a whole entry (COLD-2 C-4), and this lane's whole purpose is to be the thing a
+      # stranger's result is quoted from. The expected population lives in Zengine's
+      # tests/test_population.txt; no count belongs in this file.
+      - name: Verify canonical Zengine's repository-owned population
         run: |
           set +e
-          ctest --test-dir "$RUNNER_TEMP/zengine-build" --no-tests=error --output-on-failure 2>&1 | tee zengine-verify.log
+          cmake -DZEN_BUILD_DIR="$RUNNER_TEMP/zengine-build" \
+                -P "$RUNNER_TEMP/zengine-src/tests/verify.cmake" 2>&1 | tee zengine-verify.log
           verify_rc="${PIPESTATUS[0]}"
           verify_outcome=failed
           if (( verify_rc == 0 )); then verify_outcome=passed; fi
           {
             printf '## Loom -> canonical Zengine stranger\n\n'
             printf '**Verification:** %s (exit %s)\n\n' "$verify_outcome" "$verify_rc"
-            printf 'Selected lines from the current Zengine CTest output:\n\n'
+            printf 'Selected lines from the Zengine verifier and CTest output:\n\n'
             printf '```text\n'
-            grep -E '[0-9]+% tests passed|test cases:|assertions:|Total Test time' zengine-verify.log || true
+            grep -E 'verify:|population:|cases \(floor|judged on|[0-9]+% tests passed|test cases:|assertions:|DECLARED ABSENT|Total Test time' zengine-verify.log || true
             printf '```\n'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$verify_rc"
