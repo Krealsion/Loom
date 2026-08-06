@@ -178,7 +178,12 @@ bool ensure_host_dir(const std::string& path) {
 
 // The allow-list view for `level`: private-first, a tmpfs root, the loader closure
 // and the exe/.so dirs bound read-only, a scratch tmpfs for the write levels, then
-// pivot_root into it. Nothing of the host home is bound, so secrets are absent.
+// pivot_root into it. The view is built purely by ADDITION, so what a child can see is
+// exactly what this function binds -- nothing of the host home crosses, and neither
+// does any path outside the list below. Say that rather than "secrets are absent": the
+// loader closure includes the whole of /etc, and the exe/.so dirs are bound whole, so a
+// secret is absent from this view only if it is in neither. The enumeration lives in
+// docs/reference/capabilities.md and is written out there for the same reason.
 MountPlan build_view_plan(loom::FsAccess level, const std::string& scoped_path,
                           const std::string& exe_path, const std::string& so_path,
                           const std::string& root) {

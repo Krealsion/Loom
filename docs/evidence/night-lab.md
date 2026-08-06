@@ -99,7 +99,8 @@ Meaning: do not build these on the strength of old hypotheses.
   claim, the retired predecessor is the one the substrate silences completely.
 - **`TimedWeave` bindings are authored** — the scheduler priced the dynamic
   case and the raw protocol carried it
-  ([TIMER-05](../../../Zengine/docs/laws/timer-laws.md)).
+  (TIMER-05, in the separate Zengine repository:
+  `Zengine/docs/laws/timer-laws.md`).
 - **Minted identities need surviving namespaces** — three sightings, two
   defects → the [guideline](../reference/known-seams.md#minted-identity-needs-a-surviving-namespace).
 - `Mail::answer()` across the seam and `TimedWeave`-vs-activation, found by

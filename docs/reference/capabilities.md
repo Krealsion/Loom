@@ -24,6 +24,18 @@ Three tiers that never imply each other: public **shape** (anyone may
 represent it) · exact **grant** (permitted to emit it) · **authority**
 (lifecycle/answer standing, never grantable through the message system).
 
+**The grant bounds speech, not memory.** Everything above is *bus* authority,
+and in-process it is the only authority Zen mediates. A native weave —
+compiled in, or `dlopen`ed by [the kernel](kernel.md) — executes in the host
+process's own address space and can read and write host memory directly,
+without sending anything. Admission, grants and role routing do not create
+memory isolation and cannot: **an in-process weave is trusted at the
+process-memory level**, which `Kernel::containment_note()` states in one line
+(*"in-process; trusted; no OS sandbox"*). Projecting a capability onto a
+boundary the OS enforces is what the next sections are for, and that is a
+different mechanism with a different threat model — see
+[guides/dynamic-weaves](../guides/dynamic-weaves.md#what-loading-it-in-process-means).
+
 ## Where a grant comes from (the powerbox)
 
 The floor: unknown mods mount with the default grant plus a send-rule to the
@@ -41,17 +53,122 @@ indistinguishable on the bus, its output re-admitted through the one gate with
 the sender stamped from the connection. The sandbox imposes, per grant flag,
 and **positively re-confirms** from the kernel's own view:
 
-- **Network** — user+net namespace; a real `connect()` gets `ENETUNREACH`;
+- **Network** — user+net namespace; a real *fresh* `connect()` gets
+  `ENETUNREACH`. What that does and does not cover is
+  [three separate facts](#the-exec-boundary-three-independent-facts);
 - **Filesystem** — `FsAccess` graduated levels (None → ReadOnly → WriteScoped
-  → WriteNoExec → WriteAnywhere) via a private mount-namespace allow-list view
-  (secrets are *absent*, not hidden);
-- **Resources** — per-weave cgroup-v2 leaf; conservative computed defaults;
-  a fork bomb is bounded by `pids.max` even under `with_unlimited_memory()`
-  (**no grant can license a fork bomb** — structural).
+  → WriteNoExec → WriteAnywhere) via a private mount-namespace allow-list
+  view. The view is built by *addition*, so what it contains is enumerable —
+  [the inventory is below](#the-filesystem-view-what-is-in-it), and it is
+  written out rather than summarised because a slogan cannot be checked;
+- **Resources** — per-weave cgroup-v2 leaf; conservative computed defaults.
+  `with_unlimited_memory()` removes the memory cap **alone** — no grant
+  removes `pids.max`, so **no grant can license a fork bomb** (structural).
+  The fork-bomb stop is `pids.max`, which the host can only impose **where
+  the pids controller is actually delegated to it**; where it is not, the
+  attestation says `FORK-BOMB STOP NOT ENFORCEABLE` rather than claim a cap
+  nothing wrote ([below](#delegation-is-what-makes-a-resource-cap-real)).
 
 `containment()` reports only what was actually imposed *and confirmed*, and
 the runtime **fails safe** when it cannot confirm (dev-mode converts a
 known-gap refusal into a visibly-uncontained warning — never a false claim).
+
+### The filesystem view: what is in it
+
+`build_view_plan` (`src/isolation/host.cpp`) constructs the child's whole
+world by **addition**: a fresh `tmpfs` root, a fixed set of read-only binds, an
+optional writable submount, then `pivot_root` into it and detach the old root.
+Nothing carries over implicitly, so the view is exactly this list — which is
+why it is a list rather than a sentence about secrets.
+
+**Present at every level, including `FsAccess::None`:**
+
+| In the view | How | Why it is there |
+|---|---|---|
+| `/usr`, `/lib`, `/lib64`, `/bin`, `/etc` | recursive bind, **read-only** (each only if it exists on the host as a directory) | the dynamic loader's closure — `zen-weave-host` and the weave `.so` cannot start without it |
+| the directory holding `zen-weave-host` | recursive bind, read-only | so `execve(exe)` resolves *inside* the view |
+| the directory holding the weave's `.so` | recursive bind, read-only (skipped when it is the exe dir, or under it) | so `dlopen` resolves inside the view |
+| `/` itself | the `tmpfs` root, remounted **read-only** after its mountpoints exist | otherwise the read-only/noexec intent would leak through a writable root |
+
+**Added by level:**
+
+| Level | Extra | Writable? |
+|---|---|---|
+| `None` | — | nothing is writable |
+| `ReadOnly` + a granted path | that host tree, recursive bind | no |
+| `WriteScoped` + a granted path (today only the StorageBroker's grant carries one; a mod is `None` and never gets a path) | that host directory bound at `/scratch` | **yes**, and **persistent** (real host storage) |
+| `WriteScoped` with no path | a fresh `tmpfs` at `/scratch` | yes, ephemeral |
+| `WriteNoExec` | a fresh `tmpfs` at `/scratch`, `MS_NOEXEC` | yes, ephemeral, no native `execve` from it |
+| `WriteAnywhere` | **no view is built at all** — this level resolves to *granted*, not *contained*: the unrestricted host filesystem, by the grant | yes, everywhere |
+
+**What `FsAccess::None` removes.** Everything not in the first table — the
+host's home directories, `/root`, `/var`, `/tmp`, `/opt`, `/srv`, `/mnt`,
+`/media`, `/sys`, and any host path outside a bound tree — and there is no
+writable location anywhere in the view. Two removals worth naming because
+software assumes them:
+
+- **`/proc` is deliberately not mounted.** PIDs are not namespaced, so a
+  `/proc` in this view would be the *host's* process table. Its absence
+  removes a whole class of reach — and is also why the exec-boundary sweep
+  below cannot use `/proc/self/fd`;
+- **`/dev` is not mounted either** — no `/dev/null`, no `/dev/urandom`, no
+  `/dev/tty`. A weave must not assume a device node exists. This is a
+  *filesystem* absence and nothing more: `getrandom(2)` is a syscall and is
+  unaffected, since no seccomp filter is applied (see the threat tier below).
+
+The old root is unmounted (`MNT_DETACH`) rather than merely left
+unreferenced, so it cannot be walked back into.
+
+**What `FsAccess::None` does *not* remove**, stated exactly because this is
+the half a summary loses:
+
+- **`/etc` is present and readable at every level.** Whatever the host keeps
+  there is in the view — `passwd`, `group`, `hostname`, `resolv.conf`, the CA
+  bundle, and any application configuration or credential a deployment has put
+  under `/etc`. Nothing filters it; the whole tree is bound;
+- `/usr`, `/lib`, `/lib64`, `/bin` likewise — the full system software set,
+  read-only, including whatever a deployment installed there;
+- **the deployment directory.** The exe dir and the `.so` dir are bound whole,
+  so a weave can read its *siblings*: other weave artifacts, and any data file
+  a host placed beside them.
+
+So the honest sentence is: **the view contains the system software set, the
+system configuration tree, and the deployment directory — read-only — and
+nothing else unless a grant added it.** A secret is absent here only if it is
+not in `/etc` and not beside the artifact. That is a real and useful boundary;
+it is not "secrets are absent" as an unconditional claim, and this reference
+used to say the latter.
+
+Writable submounts are noexec **only** at `WriteNoExec`, and even there the
+block is native `execve` — not code an interpreter already inside the view
+chooses to run.
+
+### Delegation is what makes a resource cap real
+
+Every cgroup dimension is written **only where its controller is delegated to
+this host**, and each is reported per dimension:
+
+| Dimension | Where delegated | Where not delegated |
+|---|---|---|
+| memory | `memory<=NMiB` — or `memory unlimited-by-grant` where `with_unlimited_memory()` opted out, which is a grant fact and not a delegation one | `memory UNCAPPED (no memory controller delegated — not enforceable on this host)` |
+| pids (the fork-bomb stop) | `pids<=N`, and the honest scope reads *"pids.max bounds a fork-bomb (no grant licenses one) where the pids controller is delegated"* | the **headline** reads `resources: memory contained but FORK-BOMB STOP NOT ENFORCEABLE (no pids controller delegated — pids.max unset)`, and the scope clause says a fork bomb is bounded only by the host-wide pid limit, not per-weave |
+
+The headline carries it rather than a footnote: an absent fork-bomb stop is at
+least as load-bearing as a not-contained network cap, so it is surfaced as
+prominently. The confirmation clause is qualified the same way — where pids is
+not delegated there is no `pids.max` to read back, and the string says that
+instead of implying a readback that never happened.
+
+**So the guarantee is conditional, and the condition is nameable.** Where the
+pids controller is delegated and imposed, a fork bomb is bounded by `pids.max`
+even under `with_unlimited_memory()`, and no grant lifts it. Where it is not,
+the runtime does not claim it: `resource_note` / `resource_attestation` are
+pure functions with unit tests for **every** delegation posture, so each
+posture's exact wording is pinned rather than assumed. The lattice is the
+same everywhere — *detect · impose · positively reconfirm · report only what
+was imposed* — and a host that cannot enforce at all refuses the mount rather
+than downgrading it (dev-mode converts that refusal into a visible
+uncontained warning, never a false claim).
 
 ### The exec boundary: three independent facts
 

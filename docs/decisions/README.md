@@ -15,7 +15,7 @@ the full narrative lives in [history](../history/README.md).
 | [office-authorship-is-deliberate](office-authorship-is-deliberate.md) | speaking as an office is an explicit verified act, never inferred from holding |
 | [a-claim-is-not-a-message](a-claim-is-not-a-message.md) | Senses earn their category by carrying no causality, no history and no default reach |
 | [migration-is-authored-not-inferred](migration-is-authored-not-inferred.md) | supersedes automatic gate migration: an authored transformation before admission, never coercion inside it |
-| [Zengine: timer-continuity-carries-remaining-duration](../../../Zengine/docs/decisions/timer-continuity-carries-remaining-duration.md) | durations cross; due times cannot |
+| Zengine (separate repo): `docs/decisions/timer-continuity-carries-remaining-duration.md` | durations cross; due times cannot |
 
 Shape of each: context → decision → alternatives considered → why rejected →
 consequences → current laws supported → evidence.

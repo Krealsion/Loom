@@ -7,21 +7,32 @@ pages, no history required.
 **I am implementing something.**
 [Messaging](guides/messaging.md) ·
 [dynamic weaves](guides/dynamic-weaves.md) ·
-[replacing a service](guides/replacing-a-service.md) ·
-timers live in [Zengine's guides](../../Zengine/docs/README.md).
+[replacing a service](guides/replacing-a-service.md).
+Timers are not Loom's: they are the Timer *package*, owned by the separate
+**Zengine** repository, at `Zengine/docs/`. Zengine-owned pages are named that
+way throughout and never linked — no page under `docs/` reaches into a sibling
+checkout, so this tree is readable from a Loom clone alone.
 
 **I need exact semantics.** [reference/](reference/) — one page per subsystem:
 [values & admission](reference/values-and-admission.md),
 [messaging](reference/messaging.md), [lifecycle](reference/lifecycle.md),
 [capabilities](reference/capabilities.md), [kernel](reference/kernel.md),
 [prepared replacement](reference/prepared-replacement.md),
-[dynamic ABI](reference/dynamic-abi.md), [bounds](reference/bounds.md),
+[dynamic ABI](reference/dynamic-abi.md), [bridge](reference/bridge.md),
+[bounds](reference/bounds.md),
 [known seams](reference/known-seams.md). Words are defined once, in the
 [terminology index](terminology.md).
 
+**I am about to expose something.** Two pages carry the trust boundaries, and
+both say plainly what they do *not* claim:
+[capabilities](reference/capabilities.md) (in-process trust, the OS sandbox,
+the exec boundary) and [bridge](reference/bridge.md) (the remote-operator
+socket — **it does not authenticate**).
+
 **I am debugging behavior.** [guides/diagnostics.md](guides/diagnostics.md)
 first; the invariants themselves are the [laws](laws/README.md) — small, named
-(GATE/MSG/ANS/LIFE/PR/KERN), each stating what it does *not* mean.
+(GATE/MSG/ANS/LIFE/PR/SENSE/HANDOFF/KERN, and POP for what a green *test* run
+means), each stating what it does *not* mean.
 
 **I need to know why.** [decisions/](decisions/README.md) for the choices that
 would otherwise be re-litigated; [history/](history/README.md) for the frozen

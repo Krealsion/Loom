@@ -30,10 +30,10 @@ answers**: no application message type, no policy, is hard-coded anywhere.
 |---|---|
 | `loom` (core) | schema · value · the one gate · registry · canonical serialization |
 | `zen-switchboard` | the in-process bus: gated delivery, grants, lifecycle, prepared replacement |
-| `zen-kernel` | weaves from dynamic libraries across a true C ABI (v4); hot-reload; sealed candidates |
+| `zen-kernel` | weaves from dynamic libraries across a true C ABI (**v6**); hot-reload; sealed candidates. In-process: the library shares this address space, and is trusted at that level ([why](docs/guides/dynamic-weaves.md#what-loading-it-in-process-means)) |
 | `include/zen/weave/` | authoring sugar: `ZEN_SHAPE`, `WeaveBase`, `Mail`, `mount` |
 | `include/zen/host/` | host wiring: lifecycle authority, `loom::PreparedReplacement` |
-| isolation · console · bridge | OS sandboxing (Linux) · the operator console/TUI · the remote-operator crossing |
+| isolation · console · bridge | OS sandboxing (Linux) · the operator console/TUI · the remote-operator crossing. The bridge **does not authenticate** — reachability of its socket is operator authority ([bridge](docs/reference/bridge.md)) |
 
 ## Sixty seconds of weave
 
@@ -92,7 +92,9 @@ cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake
 selector that matched nothing as success, and the lane does not. A named suite
 that selects zero cases fails, the suite inventory and per-suite case floors in
 `tests/suite_population.txt` are checked every run, and the two OS-enforcement
-populations are exact and independent (`isolation` 15, `policy` 11). See
+populations are exact and independent (`isolation` 17, `policy` 11 — the
+expected numbers live in `tests/test_isolation.cpp` and `tests/test_policy.cpp`
+and move only by a deliberate edit). See
 [`docs/laws/population-laws.md`](docs/laws/population-laws.md).
 
 The `isolation`/`policy` suites need a delegated cgroup-v2 scope; ctest

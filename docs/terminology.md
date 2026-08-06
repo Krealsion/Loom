@@ -40,5 +40,5 @@ Bold marks the normative reference for each.
 | **migrator** | an ordinary, temporary weave that transforms one schema identity into another; inspectable, testable, versioned, refusable, attributable, and unloaded afterwards | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-01) |
 | **handoff boundary** | an ordinary domain message at an exact FIFO position, after which the domain's declared policy applies. Loom gives it no standing | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-02) |
 | **bounded pump** | `pump_pending()`: exactly the backlog present at entry, then control returns; work enqueued during the turn waits for the next. `pump()` is unchanged and still drains to empty | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-09) |
-| **handoff / remaining duration** | the Timer's letter: schedule progress as durations, never due times | [Zengine laws (TIMER-03)](../../Zengine/docs/laws/timer-laws.md) |
-| **`TimerReady`** | the Timer package's service announcement, after its continuity decision | [Zengine laws (TIMER-04)](../../Zengine/docs/laws/timer-laws.md) |
+| **handoff / remaining duration** | the Timer's letter: schedule progress as durations, never due times | TIMER-03 — Zengine repo, `docs/laws/timer-laws.md` |
+| **`TimerReady`** | the Timer package's service announcement, after its continuity decision | TIMER-04 — Zengine repo, `docs/laws/timer-laws.md` |

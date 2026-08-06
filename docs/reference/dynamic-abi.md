@@ -116,6 +116,8 @@ it protects **mixed** artifacts.
 ## Tests
 
 Suite `kernel` (descriptor gate, byte-sink ownership, dynamic answer parity,
-provenance across the seam, office-authorship parity + the v4 refusal); suite
+provenance across the seam, office-authorship parity + the previous-ABI
+refusal — the fixture always declares `ZEN_ABI_VERSION - 1`, so that case
+never names a frozen number); suite
 `isolation` (the fail-closed pipe, both directions); Night Lab
 `repro_answer_seam.cpp` as the application-shaped witness.

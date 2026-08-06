@@ -110,8 +110,9 @@ MEANS
   `ZEN_ENFORCEMENT_DOMAIN`, which each suite's translation unit must define before
   including the gate — there is no default, so a new enforcement suite is a compile
   error until it names its own population;
-- the expected populations are `isolation == 15` and `policy == 11`, identical in a
-  dedicated run and in the aggregate `all` lane;
+- the expected populations are `isolation == 17` and `policy == 11`, identical in a
+  dedicated run and in the aggregate `all` lane, and each is written at exactly one
+  place — the `ZEN_ENFORCEMENT_POPULATION(...)` call closing that suite;
 - exact, not `>=`: a missing witness fails, and a *new* witness is a deliberate edit
   to the expected number;
 - **in Zengine, the counting unit is the binary rather than the suite** (C4): its five

@@ -25,8 +25,9 @@ cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
   exception is `zen_weave_contract_exempt(<target> <reason>)`, in writing, and it
   fails if that target then turns up contracted.
 - The isolation/policy/all suites need a delegated cgroup scope: run the whole
-  binary via `tests/run-under-scope.sh ./build/tests/zen-tests` — a bare run
-  fails ~33 enforcement cases **by design** (fail-hard beats silent skip).
+  binary via `tests/run-under-scope.sh ./build/tests/zen-tests` — outside such a
+  scope every OS-enforcement case fails **by design** (fail-hard beats silent
+  skip), naming the capability it could not enforce.
 - Windows/MinGW builds the portable subset only; kernel lanes are opt-in.
 
 ## The population contract — what a green run means (POP-01..05)
@@ -45,10 +46,13 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   measured baseline. Adding cases is free; deleting one crosses its floor. Adding
   or renaming a *suite* needs a line here — deliberately. Enforced by the
   `population` CTest entry (query-mode only; it runs no cases).
-- **OS-enforcement tallies are per suite and EXACT**: `isolation == 15`,
-  `policy == 11`, the same in a dedicated run and in `all`. A new enforcement
-  proof means updating the expected number on purpose. A suite that includes
-  `tests/enforcement_gate.hpp` must `#define ZEN_ENFORCEMENT_DOMAIN` first.
+- **OS-enforcement tallies are per suite and EXACT**: `isolation == 17`,
+  `policy == 11`, the same in a dedicated run and in `all`. Those two numbers
+  are owned by the `ZEN_ENFORCEMENT_POPULATION(...)` call at the end of
+  `tests/test_isolation.cpp` and `tests/test_policy.cpp` — read them there
+  rather than from prose. A new enforcement proof means updating the expected
+  number on purpose. A suite that includes `tests/enforcement_gate.hpp` must
+  `#define ZEN_ENFORCEMENT_DOMAIN` first.
 - **`ZEN_ALLOW_UNENFORCEABLE=1` / `ZEN_REQUIRE_ENFORCEMENT=0` prove nothing about
   containment.** They convert missing enforcement into marked-degraded skips so a
   host that cannot enforce can still run the rest; the coverage case then prints
@@ -90,6 +94,11 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
   speech is its own explicit, verified act (`mail.as_role(...)`, MSG-07), and
   merely holding a role attaches nothing.
 - A committed activation is answerable (LIFE-05).
+- A reachable bridge socket is authenticated — it is not; every connection gets
+  a full operator grant (`docs/reference/bridge.md`).
+- A grant bounds what in-process native code can *touch* — it bounds speech
+  only; a `dlopen`ed weave shares this address space
+  (`docs/guides/dynamic-weaves.md`).
 - Green means correct — "proven" means a regression test asserts it; check
   case *counts*, not just pass/fail.
 - Docs claims over source: when they disagree, current source + tests win;
