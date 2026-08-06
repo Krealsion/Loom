@@ -132,8 +132,8 @@ The operational consequence, stated plainly:
 > tap, and send any admissible message to any target.
 >
 > **Do not bind a bridge listener on an interface an untrusted party can
-> reach.** Securing that reachability is a deployment responsibility, and it
-> is the only safety property this component has.
+> reach.** Securing that reachability is a deployment responsibility, and
+> reachability is this component's current access-control boundary.
 
 `zen-bridge-host` prints that sentence at startup rather than leaving it to
 documentation, and the header says it above the type. Two external reviews

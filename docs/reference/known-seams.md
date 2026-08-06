@@ -187,8 +187,8 @@ See [messaging](messaging.md#answers).
 
 ## The bridge does not authenticate
 
-**Status: KNOWN SEAM — current, deliberate, and the only safety property this
-component has is deployment.**
+**Status: KNOWN SEAM — current and deliberate. For authentication and access
+control, reachability is the boundary.**
 
 `authorize_connection()` is a real single chokepoint, consulted before a proxy
 is registered or a frame is read — and today it returns a full operator grant
@@ -210,8 +210,12 @@ Two smaller current facts at the same boundary. `bridge_listen_tcp` binds
 `INADDR_LOOPBACK` unconditionally, so the shipped helper cannot be aimed
 off-host — a real mitigation, and still a *reachability* property rather than an
 authentication one (`BridgeServer` accepts any socket an embedder hands it,
-and any forward re-exposes the port). `bridge_listen_unix` sets no socket-file
-permissions; the ambient umask decides. Full model: [bridge](bridge.md).
+and any forward re-exposes the port). `bridge_listen_unix` sets no explicit
+socket-file permissions, so the ambient `umask` decides who can open the node —
+which under this seam is an access-control decision rather than a hygiene one,
+since whoever reaches it holds operator authority. Nothing here adds permission
+handling or authentication; the point is that the umask is currently part of the
+boundary. Full model: [bridge](bridge.md).
 
 ## Deferred capacity is Loom-wide
 
