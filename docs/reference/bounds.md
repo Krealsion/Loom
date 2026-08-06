@@ -19,12 +19,47 @@ never a silent drop. Values are the source's; the constant names are grep-able.
 Also structural (not knobs): one active replacement transaction per incumbent
 *and* per candidate; one preparation conversation per transaction.
 
+## Console (operator history)
+
+Both windows are **history**: past observations kept for inspection, on which
+nothing is owed. That is what makes discarding the oldest legitimate here and
+illegitimate for a backlog. They are shared by the in-process `ConsoleEngine`
+and the client-side `RemoteConsole` -- the same two constants, the same window
+type, so the local and remote operator see the same horizon.
+
+| Bound | Value | Unit | What it bounds | Overflow behavior |
+|---|---|---|---|---|
+| `kConsoleTapCapacity` | 1024 | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
+| `kConsoleBufferCapacity` | 64 | received `Value`s | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+
+**Why those two numbers.** The tap matches `kJournalCapacity` deliberately: one
+tap entry is roughly one journal entry, so an operator who can still *see* an
+event on the tap can still *ask* the journal what became of it. The buffer is
+sixteen times smaller because the unit is far heavier -- a `TapEvent` is a few
+short strings, while a wire-arrived `Value` is bounded only by
+`kMaxDecodedCells` -- and it matches `kMaxPendingDelivered`, the *pending* half
+of the same client-side reply path.
+
+**Ownership / reset.** Host-owned and automatic: not a constructor parameter,
+not configurable, not widenable by a message. There is no clear operation --
+the reset is object lifetime, and a fresh console starts a fresh window with
+both counters at zero. `evicted()` is therefore a statistic about *this*
+window, never a lifetime total a later console inherits.
+
+**Labels are identities, not positions.** `buffer_at(N)` answers for the reply
+labelled `mN`; the retained range is `m(evicted+1) .. m(evicted+size)`. An
+evicted label refuses and says it was evicted -- it never re-binds to whatever
+reply now occupies that slot, so a reference an operator wrote down either
+still means what it meant or fails loudly. Eviction is visible without asking:
+the tap and buffer panes carry it in their headings.
+
 ## Bridge (remote operator)
 
 | Bound | Value | Behavior |
 |---|---|---|
 | `kMaxOperatorConnections` | 32 | accept-then-shed, `declined_count()` visible |
-| `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone` |
+| `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
+| `kMaxAbsentSchemas` (client) | 64 | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 
 ## Transport channels (framed byte channels)
 

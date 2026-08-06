@@ -20,16 +20,117 @@
 #include <zen/switchboard/switchboard.hpp>
 #include <zen/value.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
 namespace loom {
+
+// ---- Bounded console history (COLD-2 C-1) ------------------------------------------------------
+//
+// The console is the operator's window, which makes it exactly the component most likely to be
+// left running for weeks — so its retained state is bounded BY DESIGN, never by lifetime
+// throughput. That is the same argument kJournalCapacity already won for the bus, applied to the
+// surface COLD-2 caught growing: before this, every bus event and every delivered Value was kept
+// forever, and the console accepts from any registered participant, so ordinary traffic grew it.
+//
+// Both windows below are HISTORY — past observations kept for inspection. Nothing is OWED on
+// them (a delivered Value's obligation ends the moment it is recorded; nobody must drain either
+// one), which is precisely what makes discarding the oldest entry legitimate here and illegitimate
+// for a backlog. But never silently: Console::evicted() reports how much was dropped, and the
+// reply buffer's mN labels are STABLE IDENTITIES, so an evicted m3 refuses rather than quietly
+// re-binding to a newer reply.
+
+/// Bus events retained on the tap. Deliberately the same width as `Switchboard::kJournalCapacity`:
+/// one tap entry corresponds to roughly one journal entry, so an operator who can still SEE an
+/// event on the tap can still ASK the journal what became of it. A wider tap would show events
+/// whose outcome the bus has already forgotten; a narrower one would waste journal the operator
+/// can no longer name.
+inline constexpr std::size_t kConsoleTapCapacity = 1024;
+
+/// Received reply Values retained in the m1/m2/... buffer. Sixteen times smaller than the tap
+/// because the UNIT is far heavier: a TapEvent is a few short strings, while a wire-arrived Value
+/// is bounded only by the decode materialization budget (kMaxDecodedCells — megabytes, worst
+/// case). Same width as `RemoteConsole::kMaxPendingDelivered`, which bounds the *pending* half of
+/// the same client-side reply path: at most that many replies waiting for a schema, at most that
+/// many retained once admitted.
+inline constexpr std::size_t kConsoleBufferCapacity = 64;
+
+/// The console's bounded history window: the most recent `Capacity` observations in chronological
+/// order, the oldest discarded — and COUNTED — when a new one arrives at capacity.
+///
+/// A ring over one vector, the same shape as the Switchboard's journal (`journal_[seq % cap]`):
+/// the slots are claimed once at construction and never reallocated, an insert allocates nothing
+/// and is O(1) for the life of the window, and no front-erasure ever shifts a tail. Storage is a
+/// function of the capacity alone — never of how many observations have passed through it.
+///
+/// The slots are reserved UP FRONT rather than grown into deliberately. Leaving it to `push_back`
+/// would also be bounded, but only because the two capacities here happen to be powers of two;
+/// reserving makes "exactly `Capacity` slots, always" a property of this class instead of a
+/// property of the standard library's growth policy, and makes the storage assertion in the tests
+/// state that directly.
+///
+/// Deliberately not a general retention framework: no policies, no configuration, no persistence.
+/// It exists because four console history surfaces (the engine's tap, the console weave's reply
+/// buffer, and the remote console's copies of both) need exactly these semantics, and writing the
+/// ring index arithmetic and the eviction counter four times is how one of them ends up wrong.
+template <class T, std::size_t Capacity>
+class BoundedHistory {
+    static_assert(Capacity > 0, "a history window must retain at least one observation");
+
+public:
+    BoundedHistory() { ring_.reserve(Capacity); }
+
+    /// Record one observation. At capacity this discards the oldest, in place, and counts it.
+    void push(T v) {
+        if (ring_.size() < Capacity) {
+            ring_.push_back(std::move(v)); // still filling: chronological order is insertion order
+            return;
+        }
+        ring_[oldest_] = std::move(v);       // overwrite the oldest slot — no allocation, no shift
+        oldest_ = (oldest_ + 1) % Capacity;  // ... and its successor is the new oldest
+        ++evicted_;
+    }
+
+    /// How many are retained right now (<= Capacity).
+    std::size_t size() const noexcept { return ring_.size(); }
+
+    /// How many observations were discarded to keep the window bounded. Monotonic for the life of
+    /// this window; it is the operator's answer to "is this the complete history?".
+    std::uint64_t evicted() const noexcept { return evicted_; }
+
+    /// The i-th RETAINED entry, 0 = oldest retained. A position within the window, never a stable
+    /// identity — the caller owns whatever identity it publishes (see ConsoleEngine::buffer_at).
+    const T& at(std::size_t i) const { return ring_[(oldest_ + i) % Capacity]; }
+
+    /// A chronological snapshot, oldest retained first.
+    std::vector<T> snapshot() const {
+        std::vector<T> out;
+        out.reserve(ring_.size());
+        for (std::size_t i = 0; i < ring_.size(); ++i) {
+            out.push_back(at(i));
+        }
+        return out;
+    }
+
+private:
+    /// The R2F-C instrument, reused: "size() stays at the capacity" and "the backing storage stops
+    /// growing" are DIFFERENT claims, and only the second is what a process running for weeks needs.
+    /// Reading the window's own slot count states the second directly instead of inferring it from
+    /// process RSS, which is allocator- and OS-sensitive. Adds no member and no code path.
+    friend struct ConsoleHistoryProbe;
+
+    std::vector<T> ring_;
+    std::size_t oldest_ = 0;    ///< index of the oldest retained entry (0 until the ring wraps)
+    std::uint64_t evicted_ = 0;
+};
 
 /// A registered shape's identity.
 struct ShapeRef {
@@ -127,6 +228,23 @@ struct Dirty {
     bool any() const noexcept { return weaves || buffer || tap; }
 };
 
+/// How much bounded console history has been discarded — per region, mirroring Dirty (the weave
+/// list has no row because it is a REPLACED snapshot of who is registered now, not a history).
+/// This is the operator's line between "this is the complete history" and "older evidence was
+/// evicted": a bounded diagnostic surface that pretended to be complete would trade a memory lie
+/// for an observability lie.
+///
+/// `buffer` is also the reply buffer's LABEL BASE. Labels are stable identities, not positions, so
+/// the retained entries are always m(buffer + 1) ... m(buffer + buffer_size()): a reference that
+/// resolved to m7 yesterday either still resolves to that same reply or refuses — it never
+/// silently re-binds to a different one. A caller walking the buffer walks that range, not
+/// 1..buffer_size().
+struct Evicted {
+    std::uint64_t tap = 0;    ///< bus events dropped from the tap window (kConsoleTapCapacity)
+    std::uint64_t buffer = 0; ///< replies dropped from the m-buffer (kConsoleBufferCapacity)
+    bool any() const noexcept { return tap != 0 || buffer != 0; }
+};
+
 /// The frontend-facing console surface — what a renderer/controller (the TUI now, a GUI later, the
 /// remote client) drives, INDEPENDENT of where the bus lives. ConsoleEngine implements it in-process
 /// (direct bus calls); RemoteConsole implements it over the operator-protocol on a socket. This is
@@ -146,13 +264,22 @@ public:
     virtual Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                              const std::vector<Arg>& args) = 0;
 
-    // The reply buffer (m1, m2, ...).
+    // The reply buffer (m1, m2, ...) — bounded at kConsoleBufferCapacity retained entries.
+    /// How many replies are RETAINED (not how many arrived — see evicted()).
     virtual std::size_t buffer_size() const = 0;
-    virtual std::optional<BufferEntry> buffer_at(std::size_t one_based_index) const = 0;
+    /// The reply whose stable label is `mN`, or nullopt if N never arrived or was evicted. N is an
+    /// IDENTITY, not a position: the retained range is m(evicted().buffer + 1) .. m(evicted().buffer
+    /// + buffer_size()), and a label outside it refuses rather than answering with another reply.
+    virtual std::optional<BufferEntry> buffer_at(std::size_t label_number) const = 0;
 
     // The tap (operator's window on the live bus) + the message-driven dirty signal.
+    /// The retained tap window, oldest retained first (at most kConsoleTapCapacity entries).
     virtual std::vector<TapEvent> tap() const = 0;
     virtual Dirty take_dirty() = 0;
+
+    /// How much history each bounded window has discarded. Never resets while the console lives;
+    /// a fresh console starts a fresh window at zero.
+    virtual Evicted evicted() const = 0;
 
     // Drive the transport so sends are delivered and replies/tap arrive (in-process: pump the bus;
     // remote: flush + poll the socket and process the pushed frames).
@@ -241,10 +368,13 @@ public:
 
     // ---- Reply buffer (m1, m2, …) ----
     std::size_t buffer_size() const override;
-    std::optional<BufferEntry> buffer_at(std::size_t one_based_index) const override;
+    std::optional<BufferEntry> buffer_at(std::size_t label_number) const override;
 
     // ---- The tap (operator's window on the live bus) ----
-    std::vector<TapEvent> tap() const override { return tap_; }
+    std::vector<TapEvent> tap() const override { return tap_.snapshot(); }
+
+    /// What each bounded window has discarded (and the buffer's stable-label base).
+    Evicted evicted() const override;
 
     /// Read AND CLEAR the accumulated per-region dirty flags (consume-once, so a renderer pumps
     /// then repaints exactly the changed regions). Not const — it resets the flags.
@@ -254,17 +384,22 @@ public:
     void pump() override;
 
 private:
+    friend struct ConsoleHistoryProbe; ///< reads tap_ / the reply window's own storage (see above)
+
     loom::Ticket assemble_and_send(loom::WeaveId target,
                                       const std::shared_ptr<const loom::Schema>& schema,
                                       const std::map<std::string, loom::Cell>& cells) override;
     void record_tap(const loom::BusEvent& e);
+    /// The reply window the console's own Weave holds. Defined in the .cpp, where ConsoleWeave is
+    /// complete — the type is opaque here, which is exactly why buffer_at cannot reach it inline.
+    const BoundedHistory<loom::Value, kConsoleBufferCapacity>& reply_history() const;
 
     loom::Switchboard& bus_;
     ConsoleWeave* weave_ = nullptr; // owned by the bus; non-owning here
     loom::WeaveId console_id_{};
     loom::ObserverId tap_obs_ = 0;
     std::uint64_t correlation_ = 0;
-    std::vector<TapEvent> tap_;
+    BoundedHistory<TapEvent, kConsoleTapCapacity> tap_; // history: bounded window, oldest evicted
     Dirty dirty_; // accumulated by record_tap; drained by take_dirty
 };
 

@@ -84,6 +84,7 @@ Widget emit_ui_tree(const Console& engine, const UiState& ui) {
                          /*activatable=*/true, /*focused=*/ui.focus == Focus::Weaves);
 
     // Tap log.
+    const Evicted evicted = engine.evicted();
     std::vector<std::string> tap_items;
     for (const TapEvent& e : engine.tap()) {
         std::string line = e.kind + " " + e.schema + " " + std::to_string(e.sender.value) + "->" +
@@ -93,20 +94,31 @@ Widget emit_ui_tree(const Console& engine, const UiState& ui) {
         }
         tap_items.push_back(std::move(line));
     }
-    Widget taplog = log_widget("tap", "Tap", std::move(tap_items));
+    // The eviction evidence rides in the TITLE, not in an item: a Log renders its tail when it
+    // overflows, so a note pushed in as the oldest line would be the first thing to scroll away —
+    // the one place it must not be. A heading is always on screen, in every skin, and costs no new
+    // widget vocabulary. Absent when nothing was evicted, so "Tap" still means complete history.
+    Widget taplog = log_widget(
+        "tap", evicted.tap == 0 ? "Tap" : "Tap (" + std::to_string(evicted.tap) + " evicted)",
+        std::move(tap_items));
 
     Widget bus =
         region("bus", "Bus", hstack("bus-row", {std::move(weaves), std::move(taplog)}));
 
-    // Buffer list (m1, m2, ...).
+    // Buffer list (m1, m2, ...) — over the RETAINED label range, since labels are identities and
+    // the window's first label walks forward as older replies are evicted.
     std::vector<std::string> buf_items;
-    for (std::size_t i = 1; i <= engine.buffer_size(); ++i) {
-        std::optional<BufferEntry> b = engine.buffer_at(i);
+    for (std::size_t n = 1; n <= engine.buffer_size(); ++n) {
+        std::optional<BufferEntry> b = engine.buffer_at(static_cast<std::size_t>(evicted.buffer) + n);
         if (b) {
             buf_items.push_back(b->label + ": " + b->name + " v" + std::to_string(b->version));
         }
     }
-    Widget buffer = list("buffer", "Buffer", std::move(buf_items),
+    Widget buffer = list("buffer",
+                         evicted.buffer == 0
+                             ? "Buffer"
+                             : "Buffer (" + std::to_string(evicted.buffer) + " evicted)",
+                         std::move(buf_items),
                          ui.focus == Focus::Buffer ? ui.buffer_cursor : -1,
                          /*activatable=*/true, /*focused=*/ui.focus == Focus::Buffer);
 
@@ -263,8 +275,11 @@ void ConsoleUi::dispatch(const InputEvent& ev) {
         } else if (ui_.focus == Focus::Buffer) {
             if (ui_.buffer_cursor >= 0 &&
                 static_cast<std::size_t>(ui_.buffer_cursor) < engine_.buffer_size()) {
-                std::optional<BufferEntry> b =
-                    engine_.buffer_at(static_cast<std::size_t>(ui_.buffer_cursor) + 1);
+                // The cursor is a ROW of the retained window; the label it activates is that row's
+                // stable identity, which starts past everything already evicted.
+                std::optional<BufferEntry> b = engine_.buffer_at(
+                    static_cast<std::size_t>(engine_.evicted().buffer) +
+                    static_cast<std::size_t>(ui_.buffer_cursor) + 1);
                 if (b) {
                     ui_.partial_input += "$" + b->label + "."; // begin a reference wire
                     ui_.focus = Focus::Compose;

@@ -73,8 +73,28 @@ void RemoteConsole::push_bridge_refused(const std::string& reason) const {
     TapEvent t;
     t.kind = "BridgeRefused";
     t.refusal = reason;
-    tap_.push_back(std::move(t));
+    tap_.push(std::move(t));
     dirty_.tap = true;
+}
+
+bool RemoteConsole::known_absent(std::string_view name, std::uint32_t version) const {
+    for (const auto& [n, v] : schema_absent_) {
+        if (v == version && n == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RemoteConsole::remember_absent(std::string name, std::uint32_t version) const {
+    if (known_absent(name, version)) {
+        return;
+    }
+    if (schema_absent_.size() >= kMaxAbsentSchemas) {
+        schema_absent_.pop_front(); // FIFO: the entry just learned is never the one dropped, so a
+                                    // fetch waiting on THIS answer still terminates
+    }
+    schema_absent_.emplace_back(std::move(name), version);
 }
 
 void RemoteConsole::process(const BridgeIncoming& f) const {
@@ -152,7 +172,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
             }
             loom::Admission pa = loom::admit(pu, sc);
             if (pa.ok()) {
-                buffer_.push_back(std::move(pa).value());
+                buffer_.push(std::move(pa).value());
                 dirty_.buffer = true;
             }
         }
@@ -167,7 +187,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
             break;
         }
         const std::string sname(name);
-        schema_absent_.insert({sname, ver});
+        remember_absent(sname, ver);
         // Drain any pending Delivered now known-absent — its Value can never be built. Surface each.
         std::vector<std::string> keep;
         for (std::string& bytes : pending_delivered_) {
@@ -191,7 +211,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         if (schema) {
             loom::Admission a = loom::admit(u, schema);
             if (a.ok()) {
-                buffer_.push_back(std::move(a).value());
+                buffer_.push(std::move(a).value());
                 dirty_.buffer = true;
             }
         } else if (ch_) {
@@ -231,7 +251,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         t.sender = loom::WeaveId{sender};
         t.schema = std::string(schema);
         t.refusal = std::string(refusal);
-        tap_.push_back(std::move(t));
+        tap_.push(std::move(t));
         dirty_.tap = true;
         break;
     }
@@ -262,8 +282,7 @@ std::shared_ptr<const loom::Schema> RemoteConsole::fetch_schema(std::string_view
     if (std::shared_ptr<const loom::Schema> s = registry_.lookup(name, version)) {
         return s;
     }
-    const std::pair<std::string, std::uint32_t> key{std::string(name), version};
-    if (schema_absent_.count(key) != 0) {
+    if (known_absent(name, version)) {
         return nullptr;
     }
     if (!ch_ || ch_->done()) {
@@ -275,7 +294,7 @@ std::shared_ptr<const loom::Schema> RemoteConsole::fetch_schema(std::string_view
     ch_->queue(BridgeOp::Describe, body);
     ch_->flush();
     (void)await(
-        [&]() { return registry_.lookup(name, version) != nullptr || schema_absent_.count(key) != 0; },
+        [&]() { return registry_.lookup(name, version) != nullptr || known_absent(name, version); },
         5000);
     return registry_.lookup(name, version);
 }
@@ -336,16 +355,26 @@ loom::Ticket RemoteConsole::assemble_and_send(loom::WeaveId target,
 
 std::size_t RemoteConsole::buffer_size() const { return buffer_.size(); }
 
-std::optional<BufferEntry> RemoteConsole::buffer_at(std::size_t one_based_index) const {
-    if (one_based_index == 0 || one_based_index > buffer_.size()) {
+Evicted RemoteConsole::evicted() const {
+    Evicted e;
+    e.tap = tap_.evicted();
+    e.buffer = buffer_.evicted();
+    return e;
+}
+
+std::optional<BufferEntry> RemoteConsole::buffer_at(std::size_t label_number) const {
+    // Stable-identity labels, exactly as in-process (see ConsoleEngine::buffer_at): the retained
+    // range is m(evicted+1) .. m(evicted+size), and a label outside it refuses.
+    const std::uint64_t base = buffer_.evicted();
+    if (label_number <= base || label_number > base + buffer_.size()) {
         return std::nullopt;
     }
-    const loom::Value& v = buffer_[one_based_index - 1];
-    return BufferEntry{"m" + std::to_string(one_based_index), v.schema().name(), v.schema().version(),
+    const loom::Value& v = buffer_.at(static_cast<std::size_t>(label_number - base - 1));
+    return BufferEntry{"m" + std::to_string(label_number), v.schema().name(), v.schema().version(),
                        v};
 }
 
-std::vector<TapEvent> RemoteConsole::tap() const { return tap_; }
+std::vector<TapEvent> RemoteConsole::tap() const { return tap_.snapshot(); }
 
 Dirty RemoteConsole::take_dirty() {
     Dirty d = dirty_;

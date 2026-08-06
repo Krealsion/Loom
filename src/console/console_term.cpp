@@ -171,7 +171,9 @@ void cmd_send(loom::ConsoleEngine& engine, const std::vector<Token>& tok) {
         args.push_back(lex_arg(tok[i]));
     }
 
-    const std::size_t before = engine.buffer_size();
+    // Total OBSERVED, not retained: once the bounded buffer saturates the retained count stops
+    // moving, so "did a reply arrive?" has to be asked of the label that advances.
+    const std::uint64_t before = engine.evicted().buffer + engine.buffer_size();
     const loom::Composed c =
         engine.compose(loom::WeaveId{id}, tok[2].text, static_cast<std::uint32_t>(ver), args);
 
@@ -193,8 +195,9 @@ void cmd_send(loom::ConsoleEngine& engine, const std::vector<Token>& tok) {
     } else if (o.refused) {
         std::cout << "  refused: " << o.reason; // the gate's verdict — the backstop spoke
     }
-    if (engine.buffer_size() > before) {
-        std::cout << "  reply -> m" << engine.buffer_size();
+    const std::uint64_t after = engine.evicted().buffer + engine.buffer_size();
+    if (after > before) {
+        std::cout << "  reply -> m" << after; // the newest LABEL, past everything evicted
     }
     std::cout << '\n';
 }
@@ -247,6 +250,12 @@ void cmd_tap(const loom::ConsoleEngine& engine) {
         std::cout << "  (no bus events yet)\n";
         return;
     }
+    // A bounded window that claimed to be the complete history would trade a memory lie for an
+    // observability lie, so say so whenever it is not.
+    if (const std::uint64_t gone = engine.evicted().tap; gone != 0) {
+        std::cout << "  (" << gone << " older events evicted — the tap retains the most recent "
+                  << loom::kConsoleTapCapacity << ")\n";
+    }
     for (const auto& e : events) {
         std::cout << "  " << e.kind << " " << e.schema << "  " << e.sender.value << " -> "
                   << e.target.value;
@@ -289,12 +298,20 @@ int main() {
             cmd_send(engine, tok);
         } else if (cmd == "buffer") {
             const std::size_t n = engine.buffer_size();
+            const std::uint64_t gone = engine.evicted().buffer;
             if (n == 0) {
                 std::cout << "  (buffer empty)\n";
+            } else if (gone != 0) {
+                std::cout << "  (" << gone << " older replies evicted — the console retains the "
+                          << "most recent " << loom::kConsoleBufferCapacity << ")\n";
             }
-            for (std::size_t i = 1; i <= n; ++i) {
-                auto e = engine.buffer_at(i);
-                std::cout << "  " << e->label << " : " << e->name << " v" << e->version << '\n';
+            // Over the retained LABEL range: labels are identities, so the window starts past
+            // everything already evicted.
+            for (std::uint64_t label = gone + 1; label <= gone + n; ++label) {
+                auto e = engine.buffer_at(static_cast<std::size_t>(label));
+                if (e) {
+                    std::cout << "  " << e->label << " : " << e->name << " v" << e->version << '\n';
+                }
             }
         } else if (cmd == "show") {
             cmd_show(engine, tok);

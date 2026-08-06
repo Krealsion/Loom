@@ -208,11 +208,20 @@ public:
         return {}; // no listed shapes; AcceptMode::AnyRegistered widens this at delivery
     }
     void handle(const loom::Message& in, loom::Bus&) override {
-        received_.push_back(in.payload); // buffer EVERY received Value, generically
+        // Buffer EVERY received Value, generically — into a BOUNDED window. This weave is
+        // registered AcceptMode::AnyRegistered, so what lands here is traffic-controlled: the
+        // retention has to be the console's decision, not the senders'. Nothing is owed on the
+        // buffer (handle() discharges the delivery here and now), so evicting the oldest retained
+        // reply drops no obligation — only the operator's oldest referenceable value, whose label
+        // then refuses honestly instead of re-binding.
+        received_.push(in.payload);
     }
     loom::Value snapshot() const override {
         loom::Value v(console_state_schema());
-        v.set("received", loom::Cell::integer(static_cast<std::int64_t>(received_.size())));
+        // Total OBSERVED, not retained: the field is named for what was received, and after the
+        // window saturates the retained count would sit at the capacity forever and say nothing.
+        v.set("received", loom::Cell::integer(static_cast<std::int64_t>(
+                              received_.evicted() + received_.size())));
         return v;
     }
     loom::Value policy() const override {
@@ -222,10 +231,12 @@ public:
         return v;
     }
     void revive(const loom::Value&) override {}
-    const std::vector<loom::Value>& received() const noexcept { return received_; }
+    const BoundedHistory<loom::Value, kConsoleBufferCapacity>& received() const noexcept {
+        return received_;
+    }
 
 private:
-    std::vector<loom::Value> received_;
+    BoundedHistory<loom::Value, kConsoleBufferCapacity> received_;
 };
 
 ConsoleEngine::ConsoleEngine(loom::Switchboard& bus) : bus_(bus) {
@@ -252,7 +263,8 @@ void ConsoleEngine::record_tap(const loom::BusEvent& e) {
     t.sender = e.sender;
     t.schema = e.schema_name;
     t.refusal = e.kind == loom::EventKind::Refused ? loom::name_of(e.refusal.reason) : "";
-    tap_.push_back(std::move(t));
+    tap_.push(std::move(t)); // bounded window: the oldest event is evicted and counted, never lost
+                             // silently (Console::evicted().tap, surfaced in the tap pane's title)
 
     // Per-region dirty for message-driven redraw. Every event touches the tap pane. A reply is a
     // Delivered event addressed to the console (ConsoleWeave::handle has already grown received_
@@ -370,16 +382,33 @@ SendOutcome ConsoleEngine::outcome(loom::Ticket t) const {
     return s;
 }
 
-std::size_t ConsoleEngine::buffer_size() const { return weave_->received().size(); }
+const BoundedHistory<loom::Value, kConsoleBufferCapacity>& ConsoleEngine::reply_history() const {
+    return weave_->received();
+}
 
-std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t one_based_index) const {
-    const std::vector<loom::Value>& buf = weave_->received();
-    if (one_based_index == 0 || one_based_index > buf.size()) {
+std::size_t ConsoleEngine::buffer_size() const { return reply_history().size(); }
+
+Evicted ConsoleEngine::evicted() const {
+    Evicted e;
+    e.tap = tap_.evicted();
+    e.buffer = reply_history().evicted();
+    return e;
+}
+
+std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t label_number) const {
+    // `label_number` is the N of `mN` — a STABLE IDENTITY over every reply this console has ever
+    // received, not a position in the retained window. Before the window saturates the two
+    // coincide, which is why this used to be spelled as an index; once eviction begins they part,
+    // and the identity is the one worth keeping (an operator's `$m7.count` must never quietly
+    // become a different reply). Outside the retained range this refuses, exactly as it always did
+    // for a label that never arrived.
+    const BoundedHistory<loom::Value, kConsoleBufferCapacity>& buf = reply_history();
+    const std::uint64_t base = buf.evicted(); // labels m(base+1) .. m(base+size) are retained
+    if (label_number <= base || label_number > base + buf.size()) {
         return std::nullopt;
     }
-    const loom::Value& v = buf[one_based_index - 1];
-    BufferEntry e{"m" + std::to_string(one_based_index), v.schema().name(), v.schema().version(),
-                  v};
+    const loom::Value& v = buf.at(static_cast<std::size_t>(label_number - base - 1));
+    BufferEntry e{"m" + std::to_string(label_number), v.schema().name(), v.schema().version(), v};
     return e;
 }
 
@@ -418,6 +447,14 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
     }
     std::optional<BufferEntry> entry = console.buffer_at(n);
     if (!entry) {
+        // Two different absences, and the operator needs them apart: a label that never arrived is
+        // a typo, a label that was EVICTED is the bounded window telling the truth about its own
+        // horizon. A reference never silently resolves to whatever now occupies that slot.
+        if (n != 0 && n <= console.evicted().buffer) {
+            return fail("buffer entry " + ref.label + " was evicted (the console retains the most " +
+                        "recent " + std::to_string(kConsoleBufferCapacity) + " replies; " +
+                        std::to_string(console.evicted().buffer) + " older ones were discarded)");
+        }
         return fail("no such buffer entry: " + ref.label);
     }
     const loom::Cell* c = entry->value.get(ref.field);
