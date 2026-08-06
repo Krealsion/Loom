@@ -21,12 +21,13 @@
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -58,9 +59,10 @@ public:
     Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                      const std::vector<Arg>& args) override;
     std::size_t buffer_size() const override;
-    std::optional<BufferEntry> buffer_at(std::size_t one_based_index) const override;
+    std::optional<BufferEntry> buffer_at(std::size_t label_number) const override;
     std::vector<TapEvent> tap() const override;
     Dirty take_dirty() override;
+    Evicted evicted() const override;
     void pump() override; ///< flush + poll the socket and process every pushed frame (non-blocking)
 
     // ---- LadderHost (the ladder runs client-side) ----
@@ -74,25 +76,54 @@ public:
     /// The most Delivered frames whose schema is not yet known that the client will hold at once. Same
     /// principle as the transport's kMaxBacklog: bound what a peer can make you hold — even a
     /// more-trusted peer (a host). Past it, a Delivered is dropped and surfaced, never silently kept.
+    ///
+    /// This is an ACTIVE BACKLOG, not history: each entry is a reply still owed a schema, and it
+    /// leaves by being admitted (Schema) or refused aloud (SchemaNone / overflow). That is why it is
+    /// bounded by refusal rather than by eviction — dropping the oldest here would discard an
+    /// obligation, which the bounded history windows beside it never do.
     static constexpr std::size_t kMaxPendingDelivered = 64;
 
+    /// The most "the host has no such schema" answers the client remembers. A pure memo: its only
+    /// job is to spare a repeated Describe round-trip and to let a blocked fetch give up. A host
+    /// can drive it — every Delivered naming a novel unknown shape adds one — so it cannot be a
+    /// set that only ever grows. Evicting the oldest costs at most one extra Describe, and is the
+    /// only bound here that also fixes a staleness: a shape the host registers later is no longer
+    /// remembered as absent forever.
+    static constexpr std::size_t kMaxAbsentSchemas = 64;
+
 private:
+    /// The R2F-C observation instrument, applied to the client's own caches: the absent-schema memo
+    /// has no operator-visible surface (unlike the tap and the buffer, whose eviction the operator
+    /// must see), so its bound is stated as an assertion about client state rather than inferred
+    /// from process memory. Adds no member and no code path.
+    friend struct RemoteConsoleStorageProbe;
+
     void pump_once() const;                      // flush + poll + process (mutates the caches)
     void process(const BridgeIncoming& f) const; // one pushed frame -> a cache update
     void push_bridge_refused(const std::string& reason) const; // a "BridgeRefused" tap line
     bool await(const std::function<bool()>& done, int timeout_ms) const;
     std::shared_ptr<const loom::Schema> fetch_schema(std::string_view name,
                                                      std::uint32_t version) const;
+    bool known_absent(std::string_view name, std::uint32_t version) const;
+    void remember_absent(std::string name, std::uint32_t version) const;
 
     // The wire + caches are an implementation detail of the "console" abstraction (its observable
     // state is the weaves/buffer/tap), so they are mutable: a const Console read may fetch-on-demand.
     mutable std::unique_ptr<BridgeChannel> ch_;
     mutable loom::Registry registry_;     ///< decoded reply/compose schemas (filled by Schema frames)
-    mutable std::vector<WeaveInfo> weaves_; ///< the live weave set (pushed by Weaves frames)
-    mutable std::vector<loom::Value> buffer_; ///< m1, m2, ... (filled by Delivered frames)
-    mutable std::vector<TapEvent> tap_;     ///< the bus tap (filled by Tap frames)
+    mutable std::vector<WeaveInfo> weaves_; ///< the live weave set — REPLACED wholesale by each
+                                            ///< Weaves frame, so it is bounded by who is on the
+                                            ///< bus now, never by how many frames have arrived
+    /// m1, m2, ... (filled by Delivered frames) — a bounded HISTORY window, the client-side mirror
+    /// of ConsoleWeave::received_. Same capacity, same stable-label rule.
+    mutable BoundedHistory<loom::Value, kConsoleBufferCapacity> buffer_;
+    /// The bus tap (filled by Tap frames, plus this client's own BridgeRefused lines) — a bounded
+    /// HISTORY window, the client-side mirror of ConsoleEngine::tap_.
+    mutable BoundedHistory<TapEvent, kConsoleTapCapacity> tap_;
     mutable Dirty dirty_;
-    mutable std::set<std::pair<std::string, std::uint32_t>> schema_absent_; ///< Describe -> SchemaNone
+    /// Describe -> SchemaNone answers, oldest evicted past kMaxAbsentSchemas. A deque, not a set:
+    /// the bound needs insertion order, and at this size a linear probe is cheaper than a tree.
+    mutable std::deque<std::pair<std::string, std::uint32_t>> schema_absent_;
     mutable std::vector<std::string> pending_delivered_; ///< Delivered bytes awaiting their schema
     mutable loom::WeaveId operator_id_{}; ///< set by Welcome (processed in a const pump)
     mutable bool connected_ = false;      ///< set by Welcome (processed in a const pump)

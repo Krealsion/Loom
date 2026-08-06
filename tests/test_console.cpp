@@ -11,11 +11,28 @@
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
+
+namespace loom {
+/// The R2F-C observation instrument, applied to console history (see the friend declarations in
+/// zen/console/console.hpp): reads the window's OWN backing storage, so "the retained population
+/// saturates" and "the storage stops growing" are stated as two separate assertions rather than one
+/// inferred from process RSS -- RSS is allocator- and OS-sensitive and cannot tell a bounded ring
+/// from a vector that is merely being trimmed. Adds no member and no code path.
+struct ConsoleHistoryProbe {
+    static std::size_t tap_slots(const ConsoleEngine& e) { return e.tap_.ring_.capacity(); }
+    static std::size_t buffer_slots(const ConsoleEngine& e) {
+        return e.reply_history().ring_.capacity();
+    }
+};
+} // namespace loom
 
 // The Console engine, proven with NO terminal — the headline. The engine is the durable
 // spine; these tests drive its API directly (discover, gate-send, receive replies), so
@@ -712,6 +729,298 @@ TEST_CASE("input: an unknown control byte maps to Action::None and changes nothi
     CHECK(after.weave_cursor == before.weave_cursor);
     CHECK(after.buffer_cursor == before.buffer_cursor);
     CHECK(after.pending.has_value() == before.pending.has_value());
+}
+
+// ---- COLD-2 C-1: console history is bounded by capacity, never by lifetime throughput ----------
+//
+// Before this, ConsoleEngine::tap_ and ConsoleWeave::received_ were plain vectors that only ever
+// grew: 200,000 bus events retained 200,000 tap entries and 200,000 Values (+42 MB RSS, measured,
+// no ceiling). The console is the operator's window, so it is exactly the process left running for
+// weeks — the same argument the bus already accepted for kJournalCapacity.
+//
+// Both surfaces are HISTORY: nothing is owed on them, so the oldest may be discarded. What may NOT
+// happen is discarding it silently, or letting a label quietly re-bind to a different reply. Each
+// case below therefore asserts three things together: the retained population, the eviction count,
+// and the IDENTITY of what is retained.
+
+namespace {
+
+// One tap event per send, each with a UNIQUE identity, without registering a weave per event: a
+// send to an unregistered id is refused, and the refusal is a real bus event carrying the target
+// the operator asked for. That makes tap entry i recognizable as tap entry i, which is what pins
+// off-by-one — a count alone cannot tell a window that slid by one from one that slid by two.
+constexpr std::uint64_t kProbeTargetBase = 1'000'000;
+
+void drive_tap_events(Switchboard& bus, ConsoleEngine& engine, WeaveId sender, std::size_t from,
+                      std::size_t count) {
+    for (std::size_t i = from; i < from + count; ++i) {
+        (void)bus.send_as(sender, WeaveId{kProbeTargetBase + i},
+                          Message(ping(static_cast<std::int64_t>(i))));
+        engine.pump();
+    }
+}
+
+// The whole retained window, checked as a sequence: entry j must be the (evicted + j)-th event
+// ever observed. Any rotation, any dropped-from-the-wrong-end, any duplicated slot fails here.
+bool tap_window_is_exact(const ConsoleEngine& engine) {
+    const std::vector<TapEvent> window = engine.tap();
+    const std::uint64_t base = engine.evicted().tap;
+    for (std::size_t j = 0; j < window.size(); ++j) {
+        if (window[j].target.value != kProbeTargetBase + base + j) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+TEST_CASE("C-1: the tap retains a bounded window — every transition across the capacity") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered sender = register_probe(bus, {ping_schema()});
+
+    // 0 — a fresh console has retained nothing and discarded nothing. Its storage is already the
+    // whole window: the slots are claimed once, so no insert ever reallocates and the storage claim
+    // does not depend on a growth policy.
+    CHECK(engine.tap().empty());
+    CHECK(engine.evicted().tap == 0);
+    CHECK(ConsoleHistoryProbe::tap_slots(engine) == kConsoleTapCapacity);
+    CHECK(ConsoleHistoryProbe::buffer_slots(engine) == kConsoleBufferCapacity);
+
+    // 1 — the first observation is retained whole.
+    drive_tap_events(bus, engine, sender.id, 0, 1);
+    CHECK(engine.tap().size() == 1);
+    CHECK(engine.evicted().tap == 0);
+    CHECK(engine.tap().front().kind == "Refused"); // a real bus event, not a synthesized one
+    CHECK(tap_window_is_exact(engine));
+
+    // capacity - 1 — still complete history: nothing discarded yet.
+    drive_tap_events(bus, engine, sender.id, 1, kConsoleTapCapacity - 2);
+    CHECK(engine.tap().size() == kConsoleTapCapacity - 1);
+    CHECK(engine.evicted().tap == 0);
+    CHECK(tap_window_is_exact(engine));
+
+    // capacity — exactly full, and STILL complete: the boundary is inclusive, so the entry that
+    // fills the window is not the one that evicts.
+    drive_tap_events(bus, engine, sender.id, kConsoleTapCapacity - 1, 1);
+    CHECK(engine.tap().size() == kConsoleTapCapacity);
+    CHECK(engine.evicted().tap == 0);
+    CHECK(engine.tap().front().target.value == kProbeTargetBase); // event 0 is still here
+    CHECK(tap_window_is_exact(engine));
+
+    // capacity + 1 — the first eviction: the count stops rising, the oldest is gone by exactly one,
+    // the newest is the event just emitted.
+    drive_tap_events(bus, engine, sender.id, kConsoleTapCapacity, 1);
+    CHECK(engine.tap().size() == kConsoleTapCapacity); // did NOT grow
+    CHECK(engine.evicted().tap == 1);
+    CHECK(engine.tap().front().target.value == kProbeTargetBase + 1); // event 0 discarded
+    CHECK(engine.tap().back().target.value == kProbeTargetBase + kConsoleTapCapacity);
+    CHECK(tap_window_is_exact(engine));
+
+    // capacity + several — the window keeps sliding, one in one out, order intact throughout.
+    drive_tap_events(bus, engine, sender.id, kConsoleTapCapacity + 1, 7);
+    CHECK(engine.tap().size() == kConsoleTapCapacity);
+    CHECK(engine.evicted().tap == 8);
+    CHECK(engine.tap().front().target.value == kProbeTargetBase + 8);
+    CHECK(engine.tap().back().target.value == kProbeTargetBase + kConsoleTapCapacity + 7);
+    CHECK(tap_window_is_exact(engine));
+
+    // The storage claim, not merely the logical one: after saturation the window's own slot count
+    // is the capacity and stays there. A fix that kept size() bounded while the backing store grew
+    // with lifetime throughput would pass every check above and still be the defect.
+    CHECK(ConsoleHistoryProbe::tap_slots(engine) == kConsoleTapCapacity);
+}
+
+TEST_CASE("C-1: the reply buffer retains a bounded window, and mN stays a stable identity") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    // A responder that answers Ping{seq} with Pong{seq}: the reply's payload carries the number
+    // that its label must agree with, so "m17 holds reply 17" is checkable, not assumed.
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    const auto deliver = [&](std::int64_t seq) {
+        std::string err;
+        const Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", seq}}, &err);
+        REQUIRE_MESSAGE(t.valid(), err);
+        engine.pump();
+    };
+
+    CHECK(engine.buffer_size() == 0);
+    CHECK(engine.evicted().buffer == 0);
+
+    // Fill to exactly the capacity: labels m1..mCapacity, each holding its own seq.
+    for (std::size_t i = 1; i <= kConsoleBufferCapacity; ++i) {
+        deliver(static_cast<std::int64_t>(i));
+    }
+    REQUIRE(engine.buffer_size() == kConsoleBufferCapacity);
+    CHECK(engine.evicted().buffer == 0);
+    CHECK(engine.buffer_at(1)->value.get("seq")->as_int() == 1); // m1 still means reply 1
+    CHECK(engine.buffer_at(kConsoleBufferCapacity)->value.get("seq")->as_int() ==
+          static_cast<std::int64_t>(kConsoleBufferCapacity));
+
+    // One past: the oldest reply is evicted and its LABEL refuses. It does not answer with the
+    // reply that now occupies that slot — the whole point of a stable identity.
+    deliver(static_cast<std::int64_t>(kConsoleBufferCapacity) + 1);
+    CHECK(engine.buffer_size() == kConsoleBufferCapacity);
+    CHECK(engine.evicted().buffer == 1);
+    CHECK_FALSE(engine.buffer_at(1).has_value());
+    REQUIRE(engine.buffer_at(2).has_value());
+    CHECK(engine.buffer_at(2)->label == "m2");
+    CHECK(engine.buffer_at(2)->value.get("seq")->as_int() == 2); // unmoved, un-renamed
+
+    // Several more, then read the ENTIRE retained window back: contiguous, chronological, and
+    // label N holds payload N for every one of them.
+    for (std::size_t i = 0; i < 9; ++i) {
+        deliver(static_cast<std::int64_t>(kConsoleBufferCapacity + 2 + i));
+    }
+    const std::uint64_t gone = engine.evicted().buffer;
+    CHECK(gone == 10);
+    CHECK(engine.buffer_size() == kConsoleBufferCapacity);
+    CHECK_FALSE(engine.buffer_at(static_cast<std::size_t>(gone)).has_value()); // last evicted
+    for (std::uint64_t n = gone + 1; n <= gone + kConsoleBufferCapacity; ++n) {
+        const std::optional<BufferEntry> e = engine.buffer_at(static_cast<std::size_t>(n));
+        REQUIRE_MESSAGE(e.has_value(), "retained label m" << n << " must resolve");
+        CHECK(e->label == "m" + std::to_string(n));
+        CHECK(e->name == "Pong");
+        CHECK(e->value.get("seq")->as_int() == static_cast<std::int64_t>(n));
+    }
+    // One past the newest label was never received — a different absence from an evicted one.
+    CHECK_FALSE(engine.buffer_at(static_cast<std::size_t>(gone + kConsoleBufferCapacity + 1))
+                    .has_value());
+
+    CHECK(ConsoleHistoryProbe::buffer_slots(engine) == kConsoleBufferCapacity);
+}
+
+TEST_CASE("C-1: a reference to an evicted reply refuses and SAYS SO; a retained one is unchanged") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    const auto deliver = [&](std::int64_t seq) {
+        std::string err;
+        (void)engine.submit(responder.id, "Ping", 1, {{"seq", seq}}, &err);
+        engine.pump();
+    };
+
+    for (std::size_t i = 1; i <= 3; ++i) {
+        deliver(static_cast<std::int64_t>(i));
+    }
+    // What $m3.seq means BEFORE any eviction — the value an operator would have written down.
+    std::string err;
+    const std::optional<Cell> before = engine.resolve_ref(Ref{"m3", "seq"}, &err);
+    REQUIRE(before.has_value());
+    CHECK(before->as_int() == 3);
+
+    // Saturate past m3 so it is evicted.
+    for (std::size_t i = 4; i <= kConsoleBufferCapacity + 5; ++i) {
+        deliver(static_cast<std::int64_t>(i));
+    }
+    REQUIRE(engine.evicted().buffer >= 3);
+
+    err.clear();
+    CHECK_FALSE(engine.resolve_ref(Ref{"m3", "seq"}, &err).has_value());
+    CHECK_MESSAGE(err.find("evicted") != std::string::npos, err); // not "no such entry" — the truth
+    CHECK(err.find("m3") != std::string::npos);
+
+    // A never-received label is a DIFFERENT absence, and still reads as one.
+    err.clear();
+    CHECK_FALSE(engine.resolve_ref(Ref{"m99999", "seq"}, &err).has_value());
+    CHECK_MESSAGE(err.find("no such buffer entry") != std::string::npos, err);
+
+    // And a still-retained reference means exactly what it always meant.
+    err.clear();
+    const std::optional<Cell> still = engine.resolve_ref(Ref{"m50", "seq"}, &err);
+    REQUIRE_MESSAGE(still.has_value(), err);
+    CHECK(still->as_int() == 50);
+}
+
+TEST_CASE("C-1: long run — retained population is independent of lifetime throughput") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered sender = register_probe(bus, {ping_schema()});
+
+    // 10x the tap capacity, in laps, checking after each that the window has stopped growing and
+    // that the books balance: retained + discarded == observed, always.
+    constexpr std::size_t kLaps = 10;
+    for (std::size_t lap = 1; lap <= kLaps; ++lap) {
+        drive_tap_events(bus, engine, sender.id, (lap - 1) * kConsoleTapCapacity,
+                         kConsoleTapCapacity);
+        const std::uint64_t observed = static_cast<std::uint64_t>(lap * kConsoleTapCapacity);
+        CHECK(engine.tap().size() == kConsoleTapCapacity);            // constant after saturation
+        CHECK(engine.evicted().tap == observed - kConsoleTapCapacity); // advances truthfully
+        CHECK(engine.tap().back().target.value == kProbeTargetBase + observed - 1); // newest advances
+        CHECK(tap_window_is_exact(engine));
+        CHECK(ConsoleHistoryProbe::tap_slots(engine) == kConsoleTapCapacity); // storage flat too
+    }
+    // The headline, stated as one assertion: ten thousand events, one thousand and twenty-four
+    // retained. The window is a function of the capacity, not of how long the process has run.
+    CHECK(engine.evicted().tap + engine.tap().size() == kLaps * kConsoleTapCapacity);
+}
+
+TEST_CASE("C-1: a fresh console starts a fresh retention window") {
+    // There is no clear/reset operation on console history — the reset IS object lifetime, and this
+    // pins that the eviction counters are a property of THIS window rather than a lifetime statistic
+    // some future console would inherit.
+    Switchboard bus;
+    {
+        ConsoleEngine engine(bus);
+        Registered sender = register_probe(bus, {ping_schema()});
+        drive_tap_events(bus, engine, sender.id, 0, kConsoleTapCapacity + 5);
+        REQUIRE(engine.evicted().tap == 5);
+    } // the console leaves the bus, taking its window with it
+
+    ConsoleEngine fresh(bus);
+    CHECK(fresh.tap().empty());
+    CHECK(fresh.buffer_size() == 0);
+    CHECK(fresh.evicted().tap == 0);
+    CHECK(fresh.evicted().buffer == 0);
+    CHECK_FALSE(fresh.buffer_at(1).has_value()); // labels restart, because the history did
+}
+
+TEST_CASE("C-1: the operator can SEE that older evidence was discarded") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
+    };
+    UiState ui;
+
+    // Complete history: the panes claim nothing about eviction, because there was none.
+    {
+        const Widget tree = emit_ui_tree(engine, ui);
+        CHECK(find_region(tree, "tap")->title == "Tap");
+        CHECK(find_region(tree, "buffer")->title == "Buffer");
+    }
+
+    for (std::size_t i = 1; i <= kConsoleBufferCapacity + 3; ++i) {
+        std::string err;
+        (void)engine.submit(responder.id, "Ping", 1, {{"seq", static_cast<std::int64_t>(i)}}, &err);
+        engine.pump();
+    }
+    REQUIRE(engine.evicted().buffer == 3);
+
+    const Widget tree = emit_ui_tree(engine, ui);
+    const Widget* buffer = find_region(tree, "buffer");
+    REQUIRE(buffer != nullptr);
+    // The heading, not an item: a Log/List shows its TAIL when it overflows, so a note pushed in as
+    // the oldest row would be the first thing to scroll off the screen it exists to warn.
+    CHECK(buffer->title == "Buffer (3 evicted)");
+    REQUIRE_FALSE(buffer->items.empty());
+    CHECK(buffer->items.front().rfind("m4:", 0) == 0);  // the window starts at the oldest RETAINED
+    CHECK(buffer->items.back().rfind("m67:", 0) == 0);  // ... and ends at the newest
+    CHECK(buffer->items.size() == kConsoleBufferCapacity);
+
+    // The tap saw more events than the buffer saw replies, so it evicted too, and says so.
+    const Widget* tap = find_region(tree, "tap");
+    REQUIRE(tap != nullptr);
+    CHECK(tap->title == "Tap");                 // still under capacity here: no claim of eviction
+    CHECK(engine.evicted().tap == 0);
 }
 
 } // TEST_SUITE

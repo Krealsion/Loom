@@ -7,6 +7,8 @@
 #include <zen/bridge/remote_console.hpp>
 #include <zen/bridge/server.hpp>
 
+#include <zen/console/console.hpp>       // kConsoleTapCapacity / kConsoleBufferCapacity (C-1)
+#include <zen/kernel/schema_codec.hpp>   // encode_schema, for a fake host that publishes a shape
 #include <zen/schema.hpp>
 #include <zen/serialize.hpp>
 #include <zen/switchboard.hpp>
@@ -1863,6 +1865,195 @@ TEST_CASE("R2E-0: unbounded is the pre-existing contract — step() still drains
     }
     server.step();
     CHECK(bus.pending() == 0u); // drained, exactly as before R2E-0
+}
+
+// ---- COLD-2 C-1: the CLIENT's retained state is bounded too -------------------------------------
+//
+// RemoteConsole holds four things a peer can feed. COLD-2 named three of them and treated them as
+// one shape; they are not, and the classification is what decides the fix:
+//
+//   tap_               HISTORY        -> bounded window, oldest evicted and counted
+//   buffer_            HISTORY        -> bounded window, oldest evicted, labels stay identities
+//   pending_delivered_ ACTIVE BACKLOG -> already bounded by REFUSAL (kMaxPendingDelivered), not
+//                                        eviction: each entry is a reply still owed a schema, and
+//                                        dropping the oldest would discard an obligation. Proven
+//                                        above ("the client bounds pending replies..."); untouched.
+//   schema_absent_     CACHE          -> a memo COLD-2 did not name, and the only one a peer could
+//                                        still grow forever: every Delivered naming a novel unknown
+//                                        shape added one entry that was never removed.
+
+namespace loom {
+/// See the friend declaration in zen/bridge/remote_console.hpp. The absent-schema memo has no
+/// operator-visible surface (unlike the tap and the buffer, whose eviction the operator must SEE),
+/// so its bound is asserted about client state rather than inferred from process memory.
+struct RemoteConsoleStorageProbe {
+    static std::size_t absent(const RemoteConsole& rc) { return rc.schema_absent_.size(); }
+    static bool absent_holds(const RemoteConsole& rc, const std::string& name,
+                             std::uint32_t version) {
+        return rc.known_absent(name, version);
+    }
+    static std::size_t pending(const RemoteConsole& rc) { return rc.pending_delivered_.size(); }
+};
+} // namespace loom
+
+namespace {
+
+/// A Tap frame carrying `target` as its identity, so tap entry i is recognizable as tap entry i.
+std::string make_tap_frame(std::uint64_t target) {
+    std::string body;
+    put_u8(body, kTapDelivered);
+    put_u64(body, target);
+    put_u64(body, 1);
+    put_bytes(body, "Mark");
+    put_u32(body, 1);
+    put_bytes(body, "");
+    return body;
+}
+
+std::shared_ptr<const loom::Schema> mark_schema() {
+    static const auto s = loom::SchemaBuilder("Mark", 1).field("n", loom::Kind::Int).build();
+    return s;
+}
+
+/// Bring a RemoteConsole up against a hand-driven fake host (the only way to push an exact number
+/// of Tap/Delivered frames; a real BridgeServer emits what the bus happens to produce).
+void welcome(RemoteConsole& rc, BridgeChannel& host) {
+    std::string body;
+    put_u64(body, 7);
+    put_u32(body, kBridgeProtocolVersion);
+    host.queue(BridgeOp::Welcome, body);
+    host.flush();
+    REQUIRE(wait_until(
+        [&] {
+            host.flush();
+            rc.pump();
+            return rc.connected();
+        },
+        2000));
+}
+
+} // namespace
+
+TEST_CASE("C-1 (bridge): the remote tap and reply buffer are bounded windows, with stable labels") {
+    const std::pair<socket_t, socket_t> pair = two_sockets();
+    RemoteConsole rc(pair.first, /*handshake_timeout_ms=*/0);
+    BridgeChannel host(pair.second);
+    welcome(rc, host);
+
+    // Teach the client the reply shape first, so every Delivered admits straight into the buffer
+    // instead of parking in the pending backlog.
+    host.queue(BridgeOp::Schema, loom::serialize(loom::encode_schema(*mark_schema())));
+
+    // A reply per label, each carrying the number its label must agree with.
+    constexpr std::size_t kExtraReplies = 3;
+    for (std::size_t i = 1; i <= kConsoleBufferCapacity + kExtraReplies; ++i) {
+        loom::Value v(mark_schema());
+        v.set("n", loom::Cell::integer(static_cast<std::int64_t>(i)));
+        host.queue(BridgeOp::Delivered, loom::serialize(v));
+    }
+    // ... and more bus events than the tap can hold.
+    constexpr std::uint64_t kBase = 5000;
+    constexpr std::uint64_t kExtraTaps = 5;
+    for (std::uint64_t i = 0; i < kConsoleTapCapacity + kExtraTaps; ++i) {
+        host.queue(BridgeOp::Tap, make_tap_frame(kBase + i));
+    }
+    host.flush();
+
+    REQUIRE(wait_until(
+        [&] {
+            host.flush();
+            rc.pump();
+            return rc.evicted().tap == kExtraTaps && rc.evicted().buffer == kExtraReplies;
+        },
+        10000));
+
+    // The tap: saturated, sliding, and in order.
+    CHECK(rc.tap().size() == kConsoleTapCapacity);
+    CHECK(rc.tap().front().target.value == kBase + kExtraTaps);
+    CHECK(rc.tap().back().target.value == kBase + kConsoleTapCapacity + kExtraTaps - 1);
+
+    // The buffer: saturated, and mN still names reply N — the evicted labels refuse rather than
+    // handing back whatever now sits in that slot.
+    CHECK(rc.buffer_size() == kConsoleBufferCapacity);
+    CHECK_FALSE(rc.buffer_at(1).has_value());
+    CHECK_FALSE(rc.buffer_at(kExtraReplies).has_value()); // the last evicted label
+    for (std::size_t n = kExtraReplies + 1; n <= kExtraReplies + kConsoleBufferCapacity; ++n) {
+        const std::optional<BufferEntry> e = rc.buffer_at(n);
+        REQUIRE_MESSAGE(e.has_value(), "retained label m" << n << " must resolve");
+        CHECK(e->label == "m" + std::to_string(n));
+        CHECK(e->value.get("n")->as_int() == static_cast<std::int64_t>(n));
+    }
+    CHECK_FALSE(rc.buffer_at(kExtraReplies + kConsoleBufferCapacity + 1).has_value());
+
+    // The active backlog is a different question and it answered correctly: nothing is owed.
+    CHECK(RemoteConsoleStorageProbe::pending(rc) == 0);
+}
+
+TEST_CASE("C-1 (bridge): the absent-schema memo is bounded — a host cannot grow it forever") {
+    // Every Delivered naming an unknown shape makes the client ask Describe and remember the "no
+    // such schema" answer. A host that keeps naming NOVEL shapes therefore used to add one entry
+    // per distinct name, forever. It is a memo, so the bound is eviction: the cost is one repeated
+    // Describe, and it is the only bound here that also fixes a staleness (a shape registered later
+    // is no longer remembered as absent for the life of the process).
+    const std::pair<socket_t, socket_t> pair = two_sockets();
+    RemoteConsole rc(pair.first, /*handshake_timeout_ms=*/0);
+    BridgeChannel host(pair.second);
+    welcome(rc, host);
+
+    constexpr std::size_t kOverflow = 6;
+    const auto absent_name = [](std::size_t k) { return "Absent" + std::to_string(k); };
+
+    // One at a time, answering each Describe before the next: pushing them all at once would trip
+    // kMaxPendingDelivered instead, which is the OTHER bound and not what this case is about.
+    for (std::size_t k = 1; k <= RemoteConsole::kMaxAbsentSchemas + kOverflow; ++k) {
+        const auto schema =
+            loom::SchemaBuilder(absent_name(k), 1).field("x", loom::Kind::Int).build();
+        loom::Value v(schema);
+        v.set("x", loom::Cell::integer(static_cast<std::int64_t>(k)));
+        host.queue(BridgeOp::Delivered, loom::serialize(v));
+        host.flush();
+
+        // Wait for THIS name specifically: once the memo saturates its size stops moving, so a
+        // size-based wait would fall through without the client ever learning the new answer.
+        REQUIRE_MESSAGE(wait_until(
+                            [&] {
+                                host.flush();
+                                rc.pump();
+                                std::vector<BridgeIncoming> frames;
+                                host.poll(frames);
+                                for (const BridgeIncoming& f : frames) {
+                                    if (f.op != BridgeOp::Describe) {
+                                        continue;
+                                    }
+                                    Cursor c(f.payload);
+                                    std::string_view name;
+                                    std::uint32_t ver = 0;
+                                    if (c.bytes(name) && c.u32(ver)) {
+                                        std::string body;
+                                        put_bytes(body, name);
+                                        put_u32(body, ver);
+                                        host.queue(BridgeOp::SchemaNone, body);
+                                        host.flush();
+                                    }
+                                }
+                                rc.pump();
+                                return RemoteConsoleStorageProbe::absent_holds(rc, absent_name(k), 1);
+                            },
+                            5000),
+                        "the client never learned that " << absent_name(k) << " is absent");
+    }
+
+    // Saturated, not growing: the memo stopped at its capacity while six more distinct names went
+    // through it.
+    CHECK(RemoteConsoleStorageProbe::absent(rc) == RemoteConsole::kMaxAbsentSchemas);
+    // FIFO, and in the direction that matters: the entry just learned survives (so a fetch waiting
+    // on THIS answer still terminates) and the stalest one is the one that left.
+    CHECK(RemoteConsoleStorageProbe::absent_holds(
+        rc, absent_name(RemoteConsole::kMaxAbsentSchemas + kOverflow), 1));
+    CHECK_FALSE(RemoteConsoleStorageProbe::absent_holds(rc, absent_name(1), 1));
+    CHECK(RemoteConsoleStorageProbe::absent_holds(rc, absent_name(kOverflow + 1), 1));
+    // And nothing was owed at the end: the backlog drained as the answers arrived.
+    CHECK(RemoteConsoleStorageProbe::pending(rc) == 0);
 }
 
 TEST_SUITE_END();

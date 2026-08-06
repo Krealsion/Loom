@@ -35,9 +35,9 @@
 #
 # A suite may carry MORE THAN ONE row, and its floor is the SUM of the rows whose gate is
 # active. That is how a conditional subpopulation INSIDE a suite is stated exactly instead
-# of being papered over: `bridge` is 17 cases everywhere plus 8 more behind `#ifndef _WIN32`
-# (test_bridge.cpp:368-823 and :1645-1704 -- the unix-socket pair and its lifetime cases),
-# so its contract reads 25 on Linux and 17 on Windows and neither number has any give. The
+# of being papered over: `bridge` is 19 cases everywhere plus 8 more behind `#ifndef _WIN32`
+# (test_bridge.cpp:370-825 and :1647-1706 -- the unix-socket pair and its lifetime cases),
+# so its contract reads 27 on Linux and 19 on Windows and neither number has any give. The
 # native Windows lane is what found this: a single portable floor of 25 was wrong there, and
 # a slack floor would have hidden the fact rather than stated it.
 #
@@ -67,10 +67,10 @@ schema_codec       portable  7
 weave_shape        portable  4
 weave              portable  10
 poke               portable  20
-console            portable  21
+console            portable  27
 component          portable  15
 pixel              portable  9
-bridge             portable  17
+bridge             portable  19
 bridge             posix     8
 kernel             kernel    132
 handoff            kernel    10
