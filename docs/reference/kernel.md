@@ -71,6 +71,12 @@ packages too — what you can *author* is not gated on what an install can *host
 which stays `if(TARGET loom::kernel)`. See
 [guides/dynamic-weaves](../guides/dynamic-weaves.md) for the authoring shape.
 
+Inside **this repo** the call is not optional and not remembered: the
+`weave_population` entry derives which of Loom's own artifacts must carry it from
+the build graph and names any that left the roll
+([POP-05](../laws/population-laws.md)). That is a house rule about Loom's tree —
+a consumer's build system is neither enumerated nor required to adopt it.
+
 ## Tests
 
 Suite `kernel` (446+ assertions across load/unload/reload/candidate/admission

@@ -5,13 +5,15 @@ Every other namespace in this garden constrains the Loom; this one constrains th
 harness that claims to have checked it — the project's own ethos ("never claim an
 enforcement, or a proof, you did not impose") turned on its own test suite.
 
-They exist because four external-audit findings landed on the same sentence from
+They exist because external-audit findings kept landing on the same sentence from
 different directions: a named suite could pass having executed nothing (COLD-1 F-2),
 the counter designed to catch exactly that could be satisfied by a *different* suite
-(F-24), and a consumer repo could delete its whole test tree at configure time and
-still print "100% tests passed" (F-25).
+(F-24), a consumer repo could delete its whole test tree at configure time and
+still print "100% tests passed" (F-25), and — one layer down, over built artifacts
+rather than test cases — twenty-three loadable weaves could silently leave the
+reloadable-weave build contract with every lane green (COLD-2 C-3, POP-05).
 
-The one law under all three:
+The one law under all of them:
 
 > **A green Zen verification result names a population that actually ran. Missing
 > tests are absence of evidence, never successful evidence.**
@@ -21,7 +23,9 @@ Harness: [`tests/CMakeLists.txt`](../../tests/CMakeLists.txt) ·
 [`tests/suite_population.txt`](../../tests/suite_population.txt) ·
 [`tests/check_population.cmake`](../../tests/check_population.cmake) ·
 [`tests/verify.cmake`](../../tests/verify.cmake) ·
-[`tests/enforcement_gate.hpp`](../../tests/enforcement_gate.hpp).
+[`tests/enforcement_gate.hpp`](../../tests/enforcement_gate.hpp) ·
+[`tests/weave_population.cmake`](../../tests/weave_population.cmake) ·
+[`tests/check_weave_population.cmake`](../../tests/check_weave_population.cmake).
 Running them: [`AGENTS.md`](../../AGENTS.md).
 
 ## POP-01 — A named verification target may not pass on an empty population
@@ -148,3 +152,56 @@ DOES NOT MEAN
 
 PROVEN BY — `ZEN_ENFORCEMENT_POPULATION` in `tests/enforcement_gate.hpp`; the refusal in
 `tests/verify.cmake`; observable by running `ZEN_ALLOW_UNENFORCEABLE=1 ctest -V -R policy`.
+
+## POP-05 — A population that must carry a build contract is declared apart from what took it
+
+LAW — Where the project requires an artifact to be built under a contract, *which artifacts
+are required* is established independently of *which artifacts opted in*. A green result
+means the two agree; an artifact that quietly leaves the contract is named, not missed.
+
+This is POP-01's reasoning applied one layer down, to a population of **built artifacts**
+rather than of test cases. It is here because the same sentence failed again from a new
+direction: COLD-2 finding C-3 removed one line from the fixture factory, twenty-three
+loadable weaves left the reloadable-weave contract roll, thirteen `STB_GNU_UNIQUE` symbols
+returned to `libzen_test_weave.so`, and the whole official lane stayed green — because the
+only check over them iterated the roll, and a derived list cannot detect its own absences.
+
+MEANS
+- the requirement comes from the **build graph**: `tests/weave_population.cmake` classifies
+  every `SHARED`/`MODULE` library declared in `tests/` as a loadable weave that owes the
+  contract, and derives the `STATIC`/`OBJECT` libraries inside their link closures, because
+  the contract covers a compilation and not a file ([KERN-05](kernel-laws.md));
+- nothing on that side reads `LOOM_WEAVE_CONTRACT_TARGETS` or the verdict property, so the
+  edit that empties the roll leaves the expectation intact — which is the entire mechanism;
+- the `weave_population` CTest entry compares them and fails **both** ways, with the artifact
+  named: *required but not contracted* is a live reload-safety hazard, *contracted but not
+  declared required* is drift between two concepts that are supposed to describe one thing;
+- an exclusion is a **written** position: `zen_weave_contract_exempt(<target> <reason>)`
+  records it on the target itself (so it cannot outlive the artifact), the reason is
+  mandatory and printed on every run, and an exempt target appearing *on* the roll is itself
+  a failure. Today there is exactly one, the F-22 negative control;
+- zero is not a pass on either side, and the sweep cannot go blind quietly: the contract's
+  own applied/bypass pair is a fixed canary the gate checks in both directions, so a
+  classifier that stops recognising weaves is a configure-time refusal rather than two
+  silently deregistered CTest entries.
+
+DOES NOT MEAN
+- that a third-party build system is required to use Loom's contract, or is enumerated by
+  any of this. KERN-05 defines a correct path and is not a cage; Loom's required population
+  is Loom's own tree, and none of this metadata is installed with the package;
+- that the population check replaces the artifact check. `weave_contract` still reads the
+  built files' symbol tables, because a target can be required, present on the roll, and
+  still compiled wrong;
+- that "every shared library is a loadable weave" holds anywhere else. It is a measured
+  claim about `tests/`, and a future non-weave shared library there does not slip past — it
+  lands in the required set and forces a decision in writing;
+- that the kernel unload/reload cases catch this. They do not and never could: they exercise
+  the loader's bookkeeping, which is correct either way, while whether an image's statics
+  actually died is a build-artifact fact no in-process case observes.
+
+PROVEN BY — `tests/weave_population.cmake` (the sweep + the exemption declaration);
+`tests/check_weave_population.cmake` and the `weave_population` CTest entry; the gate and its
+canary in `tests/CMakeLists.txt`. Measured by re-running COLD-2's M6 against it: the roll
+drops 42 → 17, the requirement stays 42, thirteen unique symbols return, and the lane fails
+naming all twenty-five artifacts — while removing the contract from a *single* target names
+exactly that one.
