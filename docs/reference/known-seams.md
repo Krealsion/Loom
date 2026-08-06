@@ -185,6 +185,34 @@ transaction handle carried only what it always carried.
 six applications every response wanted an *answer* or a *role send* instead.
 See [messaging](messaging.md#answers).
 
+## The bridge does not authenticate
+
+**Status: KNOWN SEAM — current, deliberate, and the only safety property this
+component has is deployment.**
+
+`authorize_connection()` is a real single chokepoint, consulted before a proxy
+is registered or a frame is read — and today it returns a full operator grant
+for **every** connection (model A: *reachability is authority*). There is no
+token, no key, no challenge, no peer-credential check and no transport
+security anywhere in the bridge. A party that can reach the socket can
+enumerate the bus, read every event through the tap, and send any admissible
+message to any target. **Do not bind a bridge listener where an untrusted
+party can reach it.**
+
+What that buys is that the *whole* future lives in two lines — the function
+and the one `register_weave` call consuming its result. Model B (a bearer
+token) and model C (per-connection graduated grants, where the *weaver*
+concept is born because differential authority is the first place
+authorization needs authentication) change those and nothing downstream. The
+chokepoint is built; the token is not, and no trigger has fired for it.
+
+Two smaller current facts at the same boundary. `bridge_listen_tcp` binds
+`INADDR_LOOPBACK` unconditionally, so the shipped helper cannot be aimed
+off-host — a real mitigation, and still a *reachability* property rather than an
+authentication one (`BridgeServer` accepts any socket an embedder hands it,
+and any forward re-exposes the port). `bridge_listen_unix` sets no socket-file
+permissions; the ambient umask decides. Full model: [bridge](bridge.md).
+
 ## Deferred capacity is Loom-wide
 
 **Status: CURRENT (by design), commonly mis-assumed.** 64 outstanding

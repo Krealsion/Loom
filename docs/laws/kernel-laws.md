@@ -64,7 +64,9 @@ PROVEN BY — `role_of`/`query_role`/`unload_role` all derive; suite `kernel`
 ## KERN-04 — The ABI seam refuses loudly
 
 LAW — An artifact built against a different ABI version is refused at load,
-naming both versions. Current: **v4**.
+naming both versions. The current version is `ZEN_ABI_VERSION`
+(`include/zen/kernel/abi.h`) — **v6** today, and that header is the authority
+whenever prose disagrees with it.
 
 MEANS
 - the stale-artifact fixture always declares `ZEN_ABI_VERSION - 1`, so the pin

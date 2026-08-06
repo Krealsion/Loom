@@ -129,7 +129,8 @@ Semantics, exactly:
   is a second axis beside `answers_ask()`/`lifecycle_attested()`, so the type
   admits combined facts (no public V1 door produces them; an answer's
   provenance never inherits the ask's office).
-- **Dynamic parity** ([dynamic-abi](dynamic-abi.md), v5): the same authoring
+- **Dynamic parity** ([dynamic-abi](dynamic-abi.md); the office doors arrived
+  at ABI v5): the same authoring
   and reading surface works in a loaded weave, with the host verifying every
   request. Out-of-process weaves fail closed in both directions — the
   isolation pipe carries no attestation in V1.

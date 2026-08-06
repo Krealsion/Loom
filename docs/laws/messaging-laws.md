@@ -125,7 +125,7 @@ MEANS
 - publication can carry office provenance, to every recipient, with
   "authorship refused" and "authorized, zero recipients" kept distinct
   (`OfficePublication`);
-- the fact crosses the dynamic seam both ways (ABI v5), with the host
+- the fact crosses the dynamic seam both ways (since ABI v5), with the host
   verifying membership — a library requests, never attests.
 
 DOES NOT MEAN
@@ -143,7 +143,7 @@ DOES NOT MEAN
 PROVEN BY — `Switchboard::office_send_as` / `office_send_to_role_as` /
 `office_publish_as` (`holds_role_now` at enqueue); suite `role_authorship`
 (the hostile matrix, the replacement matrix, the definition-of-done program);
-suite `kernel` (dynamic parity, v4 refusal); suite `isolation` (fail-closed
+suite `kernel` (dynamic parity, the previous-ABI refusal); suite `isolation` (fail-closed
 across the pipe); Night Lab follow-up `followups/role-authorship`.
 
 ## MSG-08 — A Loom-owned rejection is observable where Loom owns it

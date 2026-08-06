@@ -55,6 +55,8 @@ the tap and buffer panes carry it in their headings.
 
 ## Bridge (remote operator)
 
+What the component *is*, and what it trusts: [bridge](bridge.md).
+
 | Bound | Value | Behavior |
 |---|---|---|
 | `kMaxOperatorConnections` | 32 | accept-then-shed, `declined_count()` visible |
@@ -143,11 +145,20 @@ may exceed it, but nothing will re-admit its bytes.
 ## Isolation resource defaults (computed, no knob)
 
 memory = RAM/8 (cap 1 GiB, floor 128 MiB) · pids = 512 · cpu_weight = 100.
-`with_unlimited_memory()` removes the memory cap **alone** — pids stays
-bounded; no grant can license a fork bomb.
+`with_unlimited_memory()` removes the memory cap **alone** — no grant removes
+`pids.max`, so no grant can license a fork bomb.
+
+**Each dimension is imposed only where its cgroup-v2 controller is delegated
+to this host**, and the attestation says so per dimension rather than implying
+a cap nothing wrote: where the pids controller is absent, `pids.max` is unset,
+the headline reads `FORK-BOMB STOP NOT ENFORCEABLE`, and a fork bomb is
+bounded only by the host-wide pid limit. These numbers are what a *delegated*
+leaf imposes — see
+[capabilities § delegation](capabilities.md#delegation-is-what-makes-a-resource-cap-real).
 
 ## Zengine Timer (owned there, listed for reach)
 
 `kMaxHandoffEntries = 32` · `kPreparedClaimBeats = 8` (derived + published) ·
-`kBeatCapMs = 10`. See
-[Zengine timer reference](../../../Zengine/docs/reference/timer-continuity.md).
+`kBeatCapMs = 10`. Owned by the **separate Zengine repository**, at
+`Zengine/docs/reference/timer-continuity.md` — quoted here for reach, not
+linked, because a Loom checkout does not contain it.

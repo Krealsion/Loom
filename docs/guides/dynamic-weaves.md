@@ -3,6 +3,49 @@
 The same weave class, loaded from a shared library at runtime — a stranger's
 code, indistinguishable on the bus once admitted.
 
+## What loading it in-process means
+
+`Kernel::load` is `dlopen`. **The library's native code runs inside the host
+process's own address space, and nothing on this page changes that.** It
+shares the heap, the stack, the loader's namespace and every mapping the host
+holds; it can read and write host memory directly, without sending a message.
+
+Admission, schema validation and capability routing do **not** create memory
+isolation for that code. They are the same mechanisms whether a weave is
+native or loaded, and they govern the *bus* — which is a different boundary
+from the *process*:
+
+```text
+bus authority             what a weave may SAY, to whom.
+                          Mediated by Zen: the grant is checked at delivery,
+                          the sender is stamped from the connection, and the
+                          gate admits the bytes. A loaded weave gets exactly
+                          what a native one gets, and no more.
+
+process-memory authority  what native code may TOUCH.
+                          Inherent in executing native code in-process. Zen
+                          imposes nothing here, and there is nothing it could
+                          impose: an in-process library that wants host memory
+                          simply reads it.
+```
+
+So: **an ordinary in-process dynamic weave is trusted at the process-memory
+level.** `Kernel::containment_note()` says so in one line —
+*"in-process; trusted; no OS sandbox"* — and `Kernel::load`'s default grant is
+`Grant{}.allow_any()`, a deliberately permissive *bus* default that is
+consistent with a participant already trusted with the address space. Load
+artifacts you would run as your own code.
+
+Running a stranger's artifact under an OS boundary instead is a **different
+mechanism with a different threat model**: the out-of-process host
+(`IsolationHost` → `zen-weave-host`), where the projection is the syscall
+boundary rather than the message boundary — namespaces, a cgroup leaf, an
+authored exec boundary, positively re-confirmed
+([capabilities](../reference/capabilities.md#os-containment-out-of-process-linuxwsl)).
+That tier is **abuse, not escape**: it stops buggy or greedy code, and it is
+not a claim that hostile code cannot break out. Neither tier is a place to run
+an artifact you actively distrust.
+
 ## Export it
 
 In the library source, after the class from
@@ -77,8 +120,8 @@ not talk.
 
 Answers work identically — a dynamic `mail.answer()` succeeds or is refused
 *with the weave told* ([ANS-06](../laws/answer-authority-laws.md)). Office
-authorship works identically too (v5): `mail.as_role(...)` requests, the host
-verifies the membership at that moment, and incoming
+authorship works identically too (since ABI v5): `mail.as_role(...)`
+requests, the host verifies the membership at that moment, and incoming
 `mail.authored_from_role(...)` reads the same stamped fact a native recipient
 reads ([MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit)).
 One structural difference: an ordinary dynamic `send` returns no bus ticket
@@ -94,5 +137,8 @@ development-only and says so ([reference/kernel](../reference/kernel.md)).
 ## Deeper
 
 Reference: [kernel](../reference/kernel.md) ·
-[dynamic-abi](../reference/dynamic-abi.md) (v5). Real artifacts to crib:
+[dynamic-abi](../reference/dynamic-abi.md) (current: **v6**) ·
+[capabilities](../reference/capabilities.md#the-grant-in-process) (the
+in-process trust statement above, in its own reference). Real artifacts to
+crib:
 `tests/weavelib/` (e.g. `versioned_service.cpp`, `office_worker.cpp`).

@@ -99,7 +99,8 @@ suite `kernel` (forged-readiness cases).
 
 LAW — A public delivery operation means the same thing for a dynamically loaded
 weave as for a native one, or fails loudly. Dynamic `answer`/`defer_answer`
-carry real success/failure across the C ABI (v4).
+carry real success/failure across the C ABI (the doors arrived at ABI v4; the
+current ABI is [v6](../reference/dynamic-abi.md)).
 
 MEANS
 - a refused dynamic answer is *told* to the weave (`ZEN_ERR_REFUSED`), never
@@ -111,7 +112,8 @@ DOES NOT MEAN
   (no seq crosses the seam); delivery fate is observed at the recipient, not
   the ticket.
 
-PROVEN BY — `abi.h` v4 answer doors; suite `kernel` (dynamic parity cases);
+PROVEN BY — `abi.h`'s answer doors (`answer` / `defer_answer` /
+`answer_deferred` / `release_deferred`); suite `kernel` (dynamic parity cases);
 Night Lab `repro_answer_seam.cpp`.
 
 ## ANS-07 — Raw replay strips provenance

@@ -30,7 +30,7 @@
 // population must be computed from that population's own witnesses, so the counter is keyed by
 // ZEN_ENFORCEMENT_DOMAIN, which each suite's translation unit declares for itself.
 //
-// And the count is `==`, not `>=`. A `>=` floor with slack hides a deletion: isolation ran 15
+// And the count is `==`, not `>=`. A `>=` floor with slack hides a deletion: isolation ran 15 then,
 // against a floor of 12, so a genuine enforcement witness could be removed and the suite stayed
 // fully green, 32/32, 230 assertions, nothing moved. An exact expected population makes a missing
 // witness fail — and makes a NEW witness an intentional edit here, which is the correct price for a
