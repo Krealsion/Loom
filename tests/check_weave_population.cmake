@@ -114,11 +114,15 @@ foreach(i RANGE ${last})
     list(GET required_why ${i} why)
     list(FIND contracted "${target}" found)
     if(found EQUAL -1)
-        list(APPEND missing
-             "required weave target '${target}' (${why}) did not register the Loom weave "
-             "build contract -- loom_weave_build_contract(${target}) was never called for "
-             "it, so it is built without whatever this platform needs for dlclose to end "
-             "its statics, and nothing else in this lane would have said so")
+        # string(CONCAT) rather than a multi-argument list(APPEND): every wrapped fragment
+        # would otherwise become its own list element, and the count reported below would
+        # be a count of SENTENCES rather than of artifacts.
+        string(CONCAT msg
+            "required weave target '${target}' (${why}) did not register the Loom weave "
+            "build contract -- loom_weave_build_contract(${target}) was never called for "
+            "it, so it is built without whatever this platform needs for dlclose to end "
+            "its statics, and nothing else in this lane would have said so")
+        list(APPEND missing "${msg}")
     endif()
 endforeach()
 
@@ -133,19 +137,21 @@ foreach(target IN LISTS contracted)
     list(FIND exempt "${target}" is_exempt)
     if(NOT is_exempt EQUAL -1)
         list(GET exempt_why ${is_exempt} why)
-        list(APPEND unexpected
-             "target '${target}' is EXEMPT from the weave build contract (\"${why}\") and "
-             "yet appears on the contract roll. Either the exemption is stale or the "
-             "artifact it protects has stopped being what it says it is -- and if this is "
-             "the bypass control, the negative control has just stopped being negative")
+        string(CONCAT msg
+            "target '${target}' is EXEMPT from the weave build contract (\"${why}\") and "
+            "yet appears on the contract roll. Either the exemption is stale or the "
+            "artifact it protects has stopped being what it says it is -- and if this is "
+            "the bypass control, the negative control has just stopped being negative")
+        list(APPEND unexpected "${msg}")
         continue()
     endif()
-    list(APPEND unexpected
-         "target '${target}' took the weave build contract but is not in the required "
-         "population and is not a declared exemption. That is not dangerous by itself, but "
-         "the two concepts have diverged: either it is a loadable weave the build-graph "
-         "sweep no longer recognises, or the contract is being applied somewhere it means "
-         "nothing. Declare it or stop contracting it")
+    string(CONCAT msg
+        "target '${target}' took the weave build contract but is not in the required "
+        "population and is not a declared exemption. That is not dangerous by itself, but "
+        "the two concepts have diverged: either it is a loadable weave the build-graph "
+        "sweep no longer recognises, or the contract is being applied somewhere it means "
+        "nothing. Declare it or stop contracting it")
+    list(APPEND unexpected "${msg}")
 endforeach()
 
 # ---- the report --------------------------------------------------------------------

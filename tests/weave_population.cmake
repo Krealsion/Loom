@@ -171,7 +171,8 @@ endfunction()
 #   out_rows    `<REQUIRED|EXEMPT>|<target>|<why>` lines for check_weave_population.cmake
 #   out_weaves  just the loadable weave targets found, so the caller can tell "this
 #               configuration builds none" from "this configuration lost them"
-function(zen_required_weave_population out_rows out_weaves)
+#   out_exempt  the targets that carried a written exemption, for the same reason
+function(zen_required_weave_population out_rows out_weaves out_exempt)
     get_property(dir_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 
     set(weaves "")
@@ -248,4 +249,5 @@ function(zen_required_weave_population out_rows out_weaves)
 
     set(${out_rows} "${rows}" PARENT_SCOPE)
     set(${out_weaves} "${weaves}" PARENT_SCOPE)
+    set(${out_exempt} "${exempt_targets}" PARENT_SCOPE)
 endfunction()
