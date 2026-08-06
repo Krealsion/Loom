@@ -85,7 +85,39 @@ function(zen_weave_contract_exempt target)
             "reloadable-weave build contract is a position this project takes on purpose; "
             "it is written down or it is not taken.")
     endif()
+    # The reason travels to the -P check as one field of a `|`-delimited row, and a
+    # semicolon in it would become a CMake list separator on the way -- splitting the row
+    # and desynchronising the reason from the target it belongs to. Refused at the source
+    # rather than repaired downstream. (Measured: a plain `a;b` argument never gets this
+    # far -- the unquoted ${ARGN} expansion above eats the separator and the join loses the
+    # character. An ESCAPED `a\;b` does survive into `reason`, which is the shape this
+    # refuses.)
+    if(reason MATCHES ";")
+        message(FATAL_ERROR
+            "zen_weave_contract_exempt: '${target}' has a reason containing a semicolon, "
+            "which CMake would read as a list separator and this exemption's reason would "
+            "stop belonging to this target. Rephrase it.")
+    endif()
     set_property(TARGET ${target} PROPERTY ZEN_WEAVE_CONTRACT_EXEMPT "${reason}")
+endfunction()
+
+# Is this target exempt? Asked as "was the property SET", never as "is its value truthy":
+# a reason that happened to read `0` or `NO` would otherwise silently stop being an
+# exemption. (Detect an authored marker by asking whether it was authored -- the value here
+# is prose for a human, not a flag.)
+function(_zen_wp_exemption target out)
+    get_target_property(value "${target}" TYPE)
+    if(value STREQUAL "INTERFACE_LIBRARY")
+        # An INTERFACE library has no compilation, so it is never in this population, and
+        # arbitrary properties are not readable on one before CMake 3.19 anyway.
+        set(${out} "" PARENT_SCOPE)
+        return()
+    endif()
+    get_target_property(value "${target}" ZEN_WEAVE_CONTRACT_EXEMPT)
+    if(value STREQUAL "value-NOTFOUND")
+        set(value "")
+    endif()
+    set(${out} "${value}" PARENT_SCOPE)
 endfunction()
 
 # Resolve an ALIAS target to the real one; leave everything else alone.
@@ -118,6 +150,27 @@ function(_zen_wp_link_name entry owner out)
             "Teach tests/weave_population.cmake to read this shape.")
     endif()
     set(${out} "${name}" PARENT_SCOPE)
+endfunction()
+
+# LINKING is not the only way another target's objects get into an image: a source list may
+# name them directly with $<TARGET_OBJECTS:x>, which the link walk below cannot see. Loom
+# does not do this today, and if it ever starts, the sweep must be taught rather than
+# quietly under-report -- the one thing this whole file exists to prevent.
+function(_zen_wp_refuse_unreadable_objects target)
+    get_target_property(sources "${target}" SOURCES)
+    if(NOT sources)
+        return()
+    endif()
+    foreach(source IN LISTS sources)
+        if(source MATCHES "\\$<TARGET_OBJECTS:")
+            message(FATAL_ERROR
+                "weave population: loadable weave '${target}' takes objects from another "
+                "target directly (`${source}`). Those compilations land inside its image "
+                "and owe the build contract just as a linked static library does, but they "
+                "arrive by a route the link-closure walk cannot see. Teach "
+                "tests/weave_population.cmake to read this shape before using it.")
+        endif()
+    endforeach()
 endfunction()
 
 # Every STATIC/OBJECT library whose objects end up inside `root`'s image, found by walking
@@ -180,19 +233,16 @@ function(zen_required_weave_population out_rows out_weaves out_exempt)
     set(exempt_reasons "")
     foreach(target IN LISTS dir_targets)
         get_target_property(kind "${target}" TYPE)
-        if(NOT kind STREQUAL "INTERFACE_LIBRARY")
-            get_target_property(exemption "${target}" ZEN_WEAVE_CONTRACT_EXEMPT)
-        else()
-            set(exemption "exemption-NOTFOUND")
-        endif()
+        _zen_wp_exemption("${target}" exemption)
         if(kind STREQUAL "SHARED_LIBRARY" OR kind STREQUAL "MODULE_LIBRARY")
-            if(exemption)
+            _zen_wp_refuse_unreadable_objects("${target}")
+            if(NOT exemption STREQUAL "")
                 list(APPEND exempt_targets "${target}")
                 list(APPEND exempt_reasons "${exemption}")
             else()
                 list(APPEND weaves "${target}")
             endif()
-        elseif(exemption)
+        elseif(NOT exemption STREQUAL "")
             message(FATAL_ERROR
                 "weave population: '${target}' is a ${kind} carrying a weave-contract "
                 "exemption (\"${exemption}\"), but it was never in the required population "
@@ -224,12 +274,12 @@ function(zen_required_weave_population out_rows out_weaves out_exempt)
     endforeach()
     foreach(lib IN LISTS statics)
         get_target_property(kind "${lib}" TYPE)
-        get_target_property(exemption "${lib}" ZEN_WEAVE_CONTRACT_EXEMPT)
+        _zen_wp_exemption("${lib}" exemption)
         set(why "${kind} inside loadable weave '${_zen_wp_linked_by_${lib}}'")
         if(_zen_wp_linkers_${lib} GREATER 1)
             string(APPEND why " (and ${_zen_wp_linkers_${lib}} weaves in total)")
         endif()
-        if(exemption)
+        if(NOT exemption STREQUAL "")
             list(APPEND exempt_targets "${lib}")
             list(APPEND exempt_reasons "${exemption}")
         else()
