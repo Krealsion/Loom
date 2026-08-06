@@ -532,13 +532,21 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
 # THE GATE IS THE SWEEP'S OWN ANSWER, not a named fixture. `if(TARGET
 # zen_test_contract_applied)` would have deregistered both entries the day that fixture
 # was renamed — a check that silently stops existing is the failure mode one directory up
-# from the one C3 closes. Instead: if this configuration builds loadable weaves at all,
-# both entries register; if it builds none (the default Windows package, where the kernel
-# gate is off and tests/ has no shared libraries), there is no population and their
-# absence is declared, not disguised (POP-03).
-zen_required_weave_population(zen_weave_required_rows zen_weave_targets)
+# from the one C3 closes. So: if this configuration builds loadable weaves at all, both
+# entries register; if it builds none (the default Windows package, where the kernel gate
+# is off and tests/ has no shared libraries), there is no population and their absence is
+# declared, not disguised (POP-03).
+#
+# ...WHICH MOVES THE SAME HAZARD ONTO THE SWEEP, so the gate is asked in BOTH directions
+# against a fixed canary. zen_test_contract_applied and zen_test_contract_bypass are the
+# contract's own fixtures: where they exist, this configuration builds loadable weaves by
+# construction, one required and one exempt. Asking only "weaves imply the pair" left a
+# blinded sweep — one that stops recognising SHARED libraries at all — quietly
+# deregistering BOTH entries and passing the lane at 32 of 32. Measured during C3: the
+# first version of this guard had exactly that hole.
+zen_required_weave_population(zen_weave_required_rows zen_weave_targets zen_weave_exempt)
 
-if(zen_weave_targets)
+if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_contract_bypass)
     # The R2F-E pair is load-bearing for the ARTIFACT check — claim 2 asks whether the
     # bypass twin still reproduces F-22, and without the twin the contracted artifacts
     # prove nothing. Losing it must therefore be loud rather than quiet.
@@ -551,6 +559,26 @@ if(zen_weave_targets)
                 "'the contract works' from 'the sentinel stopped expressing the hazard'.")
         endif()
     endforeach()
+
+    # ...and the canary in the other direction: the sweep must have SEEN them, each on the
+    # side it belongs to.
+    list(FIND zen_weave_targets zen_test_contract_applied zen_canary)
+    if(zen_canary EQUAL -1)
+        message(FATAL_ERROR
+            "zen tests: the build-graph sweep did not classify 'zen_test_contract_applied' "
+            "as a loadable weave, though it is a shared library in this directory and "
+            "exists for no other purpose. tests/weave_population.cmake has gone blind, and "
+            "a blind sweep declares an empty requirement that everything satisfies.")
+    endif()
+    list(FIND zen_weave_exempt zen_test_contract_bypass zen_canary)
+    if(zen_canary EQUAL -1)
+        message(FATAL_ERROR
+            "zen tests: 'zen_test_contract_bypass' is not among the declared weave-contract "
+            "exemptions. Either its zen_weave_contract_exempt() declaration is gone — in "
+            "which case the required population now demands the contract of the one "
+            "artifact whose whole job is to lack it — or the sweep stopped reading "
+            "exemptions at all.")
+    endif()
 
     # The required population, written where the -P check can read it. Plain file(WRITE):
     # it holds target NAMES and prose, no generator expressions, and it is settled the
