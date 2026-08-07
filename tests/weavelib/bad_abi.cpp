@@ -8,8 +8,19 @@
 #include <zen/kernel/abi.h>
 #include <zen/kernel/export.hpp> // for ZEN_KERNEL_EXPORT
 
+// Written out by hand rather than through ZEN_EXPORT_WEAVE, because the whole
+// point is a descriptor the macro would never produce. By name, in declaration
+// order (BL-4): a hand-written descriptor is exactly where a positional drift
+// would go unnoticed, and naming every door keeps this fixture's "the version is
+// the ONLY thing wrong here" claim checkable instead of asserted.
 extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
-    static const ZenWeaveAbi abi = {
-        ZEN_ABI_VERSION + 1000u, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    static const ZenWeaveAbi abi = {.abi_version = ZEN_ABI_VERSION + 1000u,
+                                    .create      = nullptr,
+                                    .destroy     = nullptr,
+                                    .describe    = nullptr,
+                                    .snapshot    = nullptr,
+                                    .policy      = nullptr,
+                                    .revive      = nullptr,
+                                    .handle      = nullptr};
     return &abi;
 }

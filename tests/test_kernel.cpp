@@ -159,6 +159,55 @@ TEST_CASE("a descriptor with an unsupported abi_version is rejected cleanly") {
     CHECK_FALSE(kernel.is_loaded("ba"));
 }
 
+TEST_CASE("BL-4: the descriptor's three same-signature doors each answer for themselves") {
+    // POSITIONAL DRIFT, NAMED DIRECTLY. `describe`, `snapshot` and `policy` are
+    // the only three fields of ZenWeaveAbi that share a type — every one is
+    // `ZenStatus (*)(void*, ZenByteSink)` — so they are the only slots a
+    // positional initializer can permute while still compiling without a single
+    // diagnostic under -Wall -Wextra -Wpedantic -Werror. ZEN_EXPORT_WEAVE names
+    // them with designators now, but a designator can still name the WRONG
+    // function; the compiler checks that a door exists, never that the thing put
+    // behind it belongs there. This case is what checks the second half.
+    //
+    // Each door is reached through its own public consequence, and each assertion
+    // names the SHAPE it expects, because the shape is precisely what a swap
+    // changes. The gate is what does the catching in every instance — three doors
+    // that emit three different schemas cannot be permuted without one of them
+    // presenting bytes to a door that refuses them.
+    //
+    // WHERE IT FIRES, measured rather than assumed: every miswire among the three
+    // is refused AT LOAD, so the REQUIRE below is what goes red, carrying the
+    // gate's reason in `lr.error`. `reconstruct()` admits describe's bytes against
+    // the manifest schema and the load path admits snapshot's against the state
+    // schema, so a permuted door never becomes a live participant at all. The
+    // per-door assertions after it are the positive statement of which door is
+    // which — they would be what catches a future miswire that survived load.
+    Switchboard bus;
+    Kernel kernel(bus);
+    LoadResult lr = kernel.load("doors", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+
+    // describe: the manifest decoded, so the published accept-set is this
+    // artifact's own. A describe wired to either of the others emits something
+    // that is not a manifest, and the load above never reaches here.
+    CHECK(kernel.accepts(lr.id, "Ping", 1u));
+
+    // snapshot: the state door, identified by what its bytes CLAIM to be rather
+    // than by whether they happen to admit — a policy in this slot claims
+    // LifecyclePolicy, and says so here instead of failing somewhere downstream.
+    Unverified snap = parse(bus.snapshot_bytes(lr.id));
+    CHECK(snap.claimed_name() == "Counter");
+    CHECK(snap.claimed_version() == 1u);
+
+    // policy: reload consults it and reports a malformed one as its own separate
+    // fact, so this distinguishes "the policy door is miswired" from "the state
+    // bytes were bad" — two failures that a single revived/not-revived flag would
+    // have collapsed into one.
+    const ReviveOutcome ro = bus.reload(lr.id, bus.snapshot_bytes(lr.id));
+    CHECK_FALSE(ro.policy_malformed);
+    CHECK(ro.revived);
+}
+
 TEST_CASE("hot-reload swaps the library and the state survives the swap") {
     Switchboard bus;
     Kernel kernel(bus);
