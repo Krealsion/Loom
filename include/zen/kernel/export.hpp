@@ -476,6 +476,28 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
 // Generate the C ABI for a Weave class. The thunks have C language linkage (to
 // match the descriptor's function-pointer types) and forward to the C++ helpers
 // above. Exactly one ZEN_EXPORT_WEAVE per library.
+//
+// THE DESCRIPTOR IS INITIALIZED BY NAME, AND THAT IS LOAD-BEARING (BL-4).
+// `describe`, `snapshot` and `policy` are three different doors that share one
+// type — `ZenStatus (*)(void*, ZenByteSink)` — so a positional initializer can
+// put any of them in either of the others' slots and compile without a single
+// diagnostic, under -Wall -Wextra -Wpedantic -Werror. A designator cannot: it
+// names the door, so the field-to-function mapping is stated in the source and
+// checked by the compiler rather than inferred from counting commas.
+//
+// This is the reviewability half only. The correctness half is separate and
+// already held before this: each of those three doors emits a DIFFERENT schema,
+// and the host re-admits every one through the one gate against the door it was
+// asked for, so a miswire is refused rather than believed. BL-4 measured that —
+// every miswire among the three is refused AT LOAD, before the artifact becomes
+// a participant — and `tests/test_kernel.cpp` names the property directly.
+// Neither half proves the other: a designator can still name the wrong function,
+// and the gate would still be what catches it.
+//
+// The form is deliberately the portable one: designators in DECLARATION ORDER,
+// which is standard C++20 and standard C99+. Out-of-order designators are legal
+// C and ill-formed C++, so declaration order is what lets one spelling serve
+// both sides of a seam whose header promises to be valid in each.
 #define ZEN_EXPORT_WEAVE(WeaveClass)                                                                \
     extern "C" {                                                                                    \
     static void* zen__abi_create(void) { return ::loom::detail::do_create<WeaveClass>(); }   \
@@ -500,9 +522,14 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
                                                             attested, authored_role, p, n, h);     \
     }                                                                                              \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
-        static const ZenWeaveAbi abi = {ZEN_ABI_VERSION, zen__abi_create,   zen__abi_destroy,      \
-                                        zen__abi_describe, zen__abi_snapshot, zen__abi_policy,       \
-                                        zen__abi_revive,   zen__abi_handle};                        \
+        static const ZenWeaveAbi abi = {.abi_version = ZEN_ABI_VERSION,                             \
+                                        .create      = zen__abi_create,                            \
+                                        .destroy     = zen__abi_destroy,                           \
+                                        .describe    = zen__abi_describe,                          \
+                                        .snapshot    = zen__abi_snapshot,                          \
+                                        .policy      = zen__abi_policy,                            \
+                                        .revive      = zen__abi_revive,                            \
+                                        .handle      = zen__abi_handle};                           \
         return &abi;                                                                               \
     }                                                                                              \
     }

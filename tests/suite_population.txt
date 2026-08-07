@@ -42,7 +42,7 @@
 # a slack floor would have hidden the fact rather than stated it.
 #
 # `kernel` carries the same split for the same reason, and the Windows lane found it the
-# same way (BL-0): 134 cases wherever zen-kernel exists, plus 2 behind `#ifndef _WIN32`
+# same way (BL-0): 135 cases wherever zen-kernel exists, plus 2 behind `#ifndef _WIN32`
 # (test_kernel.cpp:7094-7156 -- the RTLD_NOLOAD unload observations, which have no PE
 # equivalent to ask). The single floor it replaced was 132: two cases of slack that hid
 # exactly this, until raising it to the Linux count made Windows say so.
@@ -78,7 +78,7 @@ component          portable  15
 pixel              portable  9
 bridge             portable  19
 bridge             posix     8
-kernel             kernel    134
+kernel             kernel    135
 kernel             posix     2
 handoff            kernel    10
 manager            kernel    43

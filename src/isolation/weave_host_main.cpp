@@ -220,21 +220,27 @@ int main(int argc, char** argv) {
     // the library shim rather than silently doing nothing — the same
     // fail-closed direction, and for the same reason, as the answer and office
     // doors above.
-    ZenHostApi api{nullptr,
-                   &zen_child_send,
-                   &zen_child_publish,
-                   &zen_child_send_to_role,
-                   /*defer_answer=*/nullptr,
-                   /*answer_deferred=*/nullptr,
-                   /*release_deferred=*/nullptr,
-                   /*answer=*/nullptr,
-                   /*office_send=*/nullptr,
-                   /*office_send_to_role=*/nullptr,
-                   /*office_publish=*/nullptr,
-                   /*sense_claim=*/nullptr,
-                   /*sense_office_claim=*/nullptr,
-                   /*sense_observe=*/nullptr,
-                   /*sense_observe_office=*/nullptr};
+    // BY NAME, in declaration order (BL-4). These names were already written here
+    // as comments, which is the same statement with none of the checking: a
+    // `/*answer=*/nullptr` that drifts one slot away from `answer` stays a
+    // perfectly valid comment, and the fail-closed reasoning above would then be
+    // documenting a door other than the one being nulled. A designator is the
+    // comment the compiler reads.
+    ZenHostApi api{.ctx                  = nullptr,
+                   .send                 = &zen_child_send,
+                   .publish              = &zen_child_publish,
+                   .send_to_role         = &zen_child_send_to_role,
+                   .defer_answer         = nullptr,
+                   .answer_deferred      = nullptr,
+                   .release_deferred     = nullptr,
+                   .answer               = nullptr,
+                   .office_send          = nullptr,
+                   .office_send_to_role  = nullptr,
+                   .office_publish       = nullptr,
+                   .sense_claim          = nullptr,
+                   .sense_office_claim   = nullptr,
+                   .sense_observe        = nullptr,
+                   .sense_observe_office = nullptr};
 
     for (;;) {
         Op op = Op::Hello;

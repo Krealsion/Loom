@@ -72,6 +72,71 @@ the ABI directly ([guide](../guides/dynamic-weaves.md)).
 An artifact declaring any other version is refused at load, naming both
 versions ([KERN-04](../laws/kernel-laws.md)).
 
+## Constructing the tables (BL-4)
+
+**Every in-tree construction of `ZenWeaveAbi` and `ZenHostApi` names its fields**
+— designated initializers, in declaration order. That is `ZEN_EXPORT_WEAVE`, the
+in-process host (`src/kernel/kernel.cpp`), the isolation child
+(`src/isolation/weave_host_main.cpp`) and the two hand-written descriptor
+fixtures. The form is deliberate: designators in declaration order are standard
+C++20 *and* standard C99+, so one spelling serves both sides of a seam whose
+header promises to be valid in each. Out-of-order designators are legal C and
+ill-formed C++, so order is not a style preference here.
+
+**Why it is not merely tidiness.** `describe`, `snapshot` and `policy` are three
+different doors that share one type, `ZenStatus (*)(void*, ZenByteSink)`. They
+are the only three fields of `ZenWeaveAbi` that share a type with anything, and a
+positional initializer can permute them and compile without a single diagnostic
+under `-Wall -Wextra -Wpedantic -Werror`. A designator states which door each
+function is and makes the compiler check that the door exists.
+
+**What that does and does not buy.** Three separate protections, which do not
+imply one another:
+
+| protection | mechanism | scope |
+|---|---|---|
+| binary compatibility | `abi_version` refused at load (KERN-04) | a *stale artifact* against a newer host |
+| an appended field left uninitialized | `-Wmissing-field-initializers` (in `-Wextra`, with `-Werror`) | rebuilt in-tree sources; fires for positional **and** designated forms alike |
+| correct current wiring | designators + the one gate | *this* build's field-to-function mapping |
+
+A designator can still name the wrong function. What catches *that* is the gate,
+not the syntax: the three byte-emitting doors emit three different schemas, and
+the host re-admits each against the door it asked for, so a miswire is refused
+rather than believed. BL-4 measured this rather than assuming it — all three
+possible swaps build clean and turn seven CTest entries red — and
+`tests/test_kernel.cpp` now names the property directly, so the failure says
+"the doors are miswired" instead of surfacing as a downstream schema mismatch.
+
+`ZenHostApi` is a weaker case that reads stronger: **no two of its fifteen fields
+share a type**, so a positional drift there is a compile error today. That is a
+property of the current field set, not a rule the table obeys — the next appended
+callback can end it silently.
+
+### Before the next ABI revision
+
+`abi.h` claims to be valid C, and it is — verified under GCC at `-std=c99`,
+`c11` and `c17` with `-Wall -Wextra -Wpedantic -Werror`, including a C producer
+initializing the descriptor by name. **Nothing guards that claim**: the project is
+`LANGUAGES CXX` only, so no C compiler ever sees the header. When a C or
+non-C++ producer actually arrives, that check becomes worth standing up; until
+then the claim is true and unenforced, and this sentence is the honest statement
+of it.
+
+When a field is added to either table:
+
+1. Add it **at the end**, and say in the header what it is for — appending is
+   what keeps the two hand-written fixtures compiling for the right reason.
+2. Check whether it shares a type with its neighbours. If it does, it has joined
+   a permutable set, and the question below is now live for it too.
+3. Ask whether a semantic witness can tell the new door from the ones it matches.
+   For the three byte-emitting doors the answer is "yes, because they emit
+   different schemas" — **two doors emitting the same schema would silently
+   break that**, and would need their own witness.
+4. Update the two fixtures (`tests/weavelib/bad_abi.cpp`, `stale_abi.cpp`); they
+   name every field, so they fail loudly and specifically.
+5. Decide the version deliberately. A break is paid, not avoided — see the v2/v4/
+   v5/v6 notes in `abi.h` for why appending silently is the worse failure.
+
 ## Host services (what a loaded weave's `Bus` really is)
 
 The library-side `Bus` shim forwards through host callbacks: `send`,

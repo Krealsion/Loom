@@ -695,21 +695,27 @@ public:
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_, self_};
-        ZenHostApi api{&ctx,
-                       &zen_host_send,
-                       &zen_host_publish,
-                       &zen_host_send_to_role,
-                       &zen_host_defer_answer,
-                       &zen_host_answer_deferred,
-                       &zen_host_release_deferred,
-                       &zen_host_answer,
-                       &zen_host_office_send,
-                       &zen_host_office_send_to_role,
-                       &zen_host_office_publish,
-                       &zen_host_sense_claim,
-                       &zen_host_sense_office_claim,
-                       &zen_host_sense_observe,
-                       &zen_host_sense_observe_office};
+        // BY NAME, in declaration order (BL-4). No two fields of ZenHostApi share
+        // a type today, so a positional drift here would be a compile error rather
+        // than a silent miswire — but that is a property of the CURRENT field set,
+        // not a rule the table obeys, and the next appended callback could end that
+        // without anyone noticing. The designator states the mapping instead of
+        // depending on it.
+        ZenHostApi api{.ctx                  = &ctx,
+                       .send                 = &zen_host_send,
+                       .publish              = &zen_host_publish,
+                       .send_to_role         = &zen_host_send_to_role,
+                       .defer_answer         = &zen_host_defer_answer,
+                       .answer_deferred      = &zen_host_answer_deferred,
+                       .release_deferred     = &zen_host_release_deferred,
+                       .answer               = &zen_host_answer,
+                       .office_send          = &zen_host_office_send,
+                       .office_send_to_role  = &zen_host_office_send_to_role,
+                       .office_publish       = &zen_host_office_publish,
+                       .sense_claim          = &zen_host_sense_claim,
+                       .sense_office_claim   = &zen_host_sense_office_claim,
+                       .sense_observe        = &zen_host_sense_observe,
+                       .sense_observe_office = &zen_host_sense_observe_office};
         // Provenance crosses as host-computed facts beside the sender, and it
         // crosses ONE WAY ONLY: the office doors above carry REQUESTS the host
         // verifies, never attested facts, so the seam is a place a loaded weave
