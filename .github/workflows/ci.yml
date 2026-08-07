@@ -14,6 +14,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Cheap, first, and independent of any build: the repository refuses to record an AI
+  # assistant as a commit co-author, and after HIST-1 that is true of all of main. The
+  # check self-tests before it answers, because a clean history and a broken detector
+  # look identical from here. Full history is required -- it states the invariant over
+  # everything reachable, not just today's push.
+  loom-commit-attribution:
+    name: Loom / commit attribution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out Loom with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse AI co-authorship in reachable history
+        run: cmake -P tests/check_commit_attribution.cmake
+
   loom-linux-debug:
     name: Loom / Linux / Debug
     runs-on: ubuntu-24.04
