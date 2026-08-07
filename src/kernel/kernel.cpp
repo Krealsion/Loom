@@ -887,30 +887,42 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     const loom::Value& manifest = a.value();
 
     Manifest result;
+    // EVERYTHING THIS MANIFEST PUBLISHES IS CLAIMED BY `result`, AND ONLY BY IT
+    // (BL-0). `reconstruct` is a pure producer: it hands back both the schemas
+    // and the reason the registry still holds them, and it keeps nothing. A
+    // caller that accepts the candidate moves the claim into the record that
+    // owns the artifact; a caller that refuses it drops the Manifest, and the
+    // vocabulary the refused candidate introduced disappears with it.
+    //
     // Referenced (nested component) schemas first — the manifest is
     // self-contained, so a library whose doors or state nest a shape (a
     // List<Pos>, a Pos field) brings that shape with it. Same registry, same
-    // agreement wall: a component conflicting with what another library
-    // already registered refuses the load.
-    decode_referenced(manifest, registry_);
+    // agreement wall: a component conflicting with what another LIVE library
+    // claims refuses the load.
+    decode_referenced(manifest, registry_, result.schemas);
+    std::vector<std::shared_ptr<const Schema>> vocabulary;
     for (const loom::Cell& c : manifest.get("accepted")->as_list()) {
         auto s = decode_schema(*c.as_message(), registry_);
-        registry_.register_schema(s); // enforces cross-library schema agreement
+        vocabulary.push_back(s);
         result.accepted.push_back(std::move(s));
     }
     result.state = decode_schema(*manifest.get("state")->as_message(), registry_);
-    registry_.register_schema(result.state);
+    vocabulary.push_back(result.state);
     // The declared claim-set (v6). Optional: a weave that claims nothing emits no
-    // section, which is a declaration rather than an absence. Registered through
+    // section, which is a declaration rather than an absence. Claimed through
     // the same agreement wall, so a Sense shape two libraries disagree about
     // refuses the load exactly as a message shape does.
     if (const loom::Cell* claims = manifest.get("claims")) {
         for (const loom::Cell& c : claims->as_list()) {
             auto s = decode_schema(*c.as_message(), registry_);
-            registry_.register_schema(s);
+            vocabulary.push_back(s);
             result.claims.push_back(std::move(s));
         }
     }
+    // One transaction, one publication: a disagreement about the last door
+    // leaves none of the earlier ones claimed. (The `referenced` chain above is
+    // the exception it has to be — see the overload's note.)
+    registry_.claim(result.schemas, vocabulary);
     return result;
 }
 
@@ -963,7 +975,12 @@ LoadResult Kernel::load(const std::string& name, const std::string& path, const 
         // keeps its role and its life.
         loom::WeaveId id = bus_.register_weave(std::move(adapter), std::move(grant), role);
         raw->set_self(id);
-        libs_.emplace(name, Loaded{name, std::move(lib), abi, raw, id});
+        // The manifest's claim becomes the record's: from here the artifact being
+        // loaded is why its vocabulary resolves in this Kernel. Had anything above
+        // thrown — a bad manifest, a held role, a schema disagreement — `mf` would
+        // have died on the way out with the claim still in it.
+        libs_.emplace(name,
+                      Loaded{name, std::move(lib), abi, raw, id, std::move(mf.schemas)});
         // THE RECORD AND THE ADAPTER ARE NOW ONE THING. From here the adapter's
         // destructor releases this record, whoever destroys it — which is the
         // whole synchronization mechanism, and it is wired last so that a failed
@@ -1076,14 +1093,13 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // rebind: the incumbent's instance, library, state, WeaveId and role are all
     // still untouched at this point.
     //
-    // Scoped honestly: refused before INCUMBENT REPLACEMENT and before any
-    // change to its published routing contract — not "the Loom is unchanged".
-    // reconstruct() above is what produced these schemas, and it admitted them
-    // into registry_ on the way; a candidate rejected here has therefore already
-    // bound its (name, version) keys in this Kernel's dependency registry, which
-    // a later conflicting load will meet at the agreement wall. That is named,
-    // not endorsed: whether admission is intentionally monotonic or belongs to a
-    // future prepared-replacement transaction is R2B's decision (see the ledger).
+    // Refused before INCUMBENT REPLACEMENT and before any change to its
+    // published routing contract — and, since BL-0, refused without residue.
+    // reconstruct() produced these schemas and claimed them INTO `cand`; that
+    // claim is the only reason they resolve, so returning here destroys `cand`,
+    // releases it, and leaves a rejected candidate's unique (name, version) keys
+    // no more discoverable than before it was ever built. Shapes the incumbent
+    // also claims are untouched — the incumbent's own claim is still live.
     if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
         destroy_instance(new_abi, new_inst);
         return {true, false, false, "accepted schema contract mismatch; reload refused"};
@@ -1099,6 +1115,12 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     rec.adapter->rebind(new_abi, new_inst, new_lib);
     rec.abi = new_abi;
     rec.lib = new_lib;
+    // THE CLAIM CROSSES WITH THE CODE, AND IT CROSSES WITHOUT A GAP (BL-0). The
+    // candidate's claim was taken by `reconstruct` before any of this; assigning
+    // it here releases the incumbent's afterwards, so every shape the two share
+    // is doubly claimed for the length of the assignment and never falls to
+    // zero. Done BEFORE `swap_state`, which may destroy `rec`.
+    rec.schemas = std::move(cand.schemas);
 
     // Revive the new instance from the host-owned snapshot, through the gate.
     // This is an intentional code swap, not crash recovery, so it uses the

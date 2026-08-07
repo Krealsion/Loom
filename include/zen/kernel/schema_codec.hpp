@@ -344,6 +344,10 @@ inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Regi
 /// (name, version) references in the manifest's accepted/state descriptors
 /// resolve. A hand-built manifest with a mis-ordered list simply fails its own
 /// resolution and the load refuses cleanly.
+///
+/// This overload publishes for the Registry's whole lifetime. Prefer the
+/// claim-taking one below wherever the artifact that brought these components
+/// can go away again.
 inline void decode_referenced(const Value& manifest, Registry& deps) {
     const Cell* refs = manifest.get("referenced");
     if (refs == nullptr) {
@@ -351,6 +355,25 @@ inline void decode_referenced(const Value& manifest, Registry& deps) {
     }
     for (const Cell& c : refs->as_list()) {
         deps.register_schema(decode_schema(*c.as_message(), deps));
+    }
+}
+
+/// The same decode, taking a LIVE CLAIM instead of publishing forever (BL-0):
+/// the components resolve while `scope` lives and stop resolving when the last
+/// claim on them goes.
+///
+/// Necessarily one claim per entry rather than one for the batch, and that is
+/// the encoder's post-order guarantee showing through: entry N+1's type tokens
+/// are resolved against `deps`, so entry N has to be discoverable before N+1 can
+/// be decoded at all. Batching would mean decoding against something other than
+/// the registry, which is a different (and larger) change than this one.
+inline void decode_referenced(const Value& manifest, Registry& deps, SchemaClaimScope& scope) {
+    const Cell* refs = manifest.get("referenced");
+    if (refs == nullptr) {
+        return;
+    }
+    for (const Cell& c : refs->as_list()) {
+        deps.claim(scope, {decode_schema(*c.as_message(), deps)});
     }
 }
 

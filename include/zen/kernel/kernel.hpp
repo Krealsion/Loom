@@ -366,6 +366,12 @@ private:
         /// The reverse does not hold — see the ownership law on the class.
         HostAdapter* adapter = nullptr;
         loom::WeaveId id{};
+        /// THIS ARTIFACT'S CLAIM ON THE DEPENDENCY REGISTRY (BL-0). Its manifest's
+        /// referenced, accepted, state and claim shapes, claimed as one and held
+        /// for exactly as long as the artifact is loaded. Erasing this record is
+        /// what releases them, so `unload`, a reaped adapter and a throw on the
+        /// way in all clean up by the same mechanism.
+        loom::SchemaClaimScope schemas;
     };
 
     struct Manifest {
@@ -374,6 +380,13 @@ private:
         /// The declared claim-set (R2E-0/v6) — the Senses this artifact says it
         /// can claim. Empty when it declares none.
         std::vector<std::shared_ptr<const Schema>> claims;
+        /// WHAT KEEPS THE THREE ABOVE RESOLVABLE, AND FOR HOW LONG (BL-0).
+        /// `reconstruct` is the only thing that publishes a candidate's
+        /// vocabulary, and it publishes it into THIS — a claim the caller owns
+        /// from the moment it returns. A candidate the compatibility check then
+        /// refuses is a Manifest that goes out of scope, and its schemas go with
+        /// it. That is how a rejected reload stopped leaving vocabulary behind.
+        loom::SchemaClaimScope schemas;
     };
 
     Manifest reconstruct(const ZenWeaveAbi* abi, void* instance);

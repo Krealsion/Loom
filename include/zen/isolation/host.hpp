@@ -183,6 +183,18 @@ private:
         pid_t pid = -1;
         std::vector<std::shared_ptr<const Schema>> accept;
         std::shared_ptr<const Schema> state_schema;
+        /// THE MOUNT'S CLAIM on this host's dependency registry (BL-0), and the
+        /// mount is the honest scope — wider than the child process, narrower
+        /// than the host.
+        ///
+        /// A child that dies is respawned under this same Link and re-uses the
+        /// accept-set and state schema cached above without re-reconstructing
+        /// them, so tying the claim to a child process would drop vocabulary a
+        /// live mount still depends on. Everything that could still need these
+        /// shapes decoded — the channel's unread bytes, the cached snapshot,
+        /// the next respawn's handshake — is owned by this Link and dies with
+        /// it. `unmount` is therefore the whole release path.
+        SchemaClaimScope schemas;
         std::optional<Value> snapshot_value; // last good admitted snapshot (host-owned)
         std::string snapshot_bytes;          // its canonical bytes, for revival
         std::optional<Value> policy_value;

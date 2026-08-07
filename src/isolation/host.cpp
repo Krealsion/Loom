@@ -614,12 +614,16 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
 
     std::vector<std::shared_ptr<const Schema>> accept;
     for (const loom::Cell& c : mv.get("accepted")->as_list()) {
-        auto s = loom::decode_schema(*c.as_message(), registry_);
-        registry_.register_schema(s); // cross-mount agreement on (name, version)
-        accept.push_back(std::move(s));
+        accept.push_back(loom::decode_schema(*c.as_message(), registry_));
     }
     auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
-    registry_.register_schema(state);
+    // One transaction for the child's whole vocabulary (BL-0): cross-mount
+    // agreement on (name, version) as before, but a disagreement about the last
+    // door now leaves none of the earlier ones claimed — and the claim belongs to
+    // the mount, so a handshake refused below releases it on the way out.
+    std::vector<std::shared_ptr<const Schema>> vocabulary = accept;
+    vocabulary.push_back(state);
+    registry_.claim(link.schemas, vocabulary);
     link.accept = std::move(accept);
     link.state_schema = state;
 
