@@ -58,10 +58,39 @@ prior step and never folds into the gate
 ## Registry
 
 Immutable `(name, version) → schema` registrations; a conflicting
-re-registration of the same identity throws `SchemaConflict`. The bus
-registers every weave's accept-set and state schema at registration, so all
-parties agree on what a name means before anything routes. Reads are
-lock-free-immutable; there is no mutation after publish.
+re-registration of the same identity throws `SchemaConflict`. The bus takes
+every weave's accept-set, declared claim-set and state schema at registration,
+so all parties agree on what a name means before anything routes. Reads take an
+immutable snapshot and traverse it lock-free.
+
+**A schema is discoverable while something live requires it**
+([LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered)).
+Two doors say how long:
+
+| | what it means | released by |
+|---|---|---|
+| `register_schema(s)` | publish for this Registry's lifetime | nothing — it is a claim with no end |
+| `claim(schemas)` | publish while this claim lives | the returned `SchemaClaimScope` dying |
+| `claim_known(scope, keys)` | keep an *existing* shape resolvable; publish nothing | the same scope |
+
+`SchemaClaimScope` is move-only and RAII, so cleanup is structural rather than
+paired: there is no `unregister_schema` a failure exit can forget. Acquiring
+several schemas is one transaction and one publication — a conflict on the last
+leaves no claim on the first — and releasing a scope removes every shape whose
+last claim it held in one publication too.
+
+Who holds the claims: a `WeaveRecord` for what its weave hears, may say and
+persists; a Kernel's loaded-artifact record for its manifest; an isolation
+`Link` for its mount. The Registry itself knows nothing of weaves, artifacts or
+mounts.
+
+Reclamation is about **discoverability, not memory**. A `Value` owns its schema
+strongly and `lookup` returns a strong owner, so a schema that has left the
+Registry stays valid everywhere it is already held; what changes is only that a
+fresh lookup can no longer find it. The consequence to design against: when the
+last weave that accepts a shape leaves and no authorized producer claims it, an
+emission naming that shape meets the seam
+([MSG-08](../laws/messaging-laws.md)) instead of being routed to nobody.
 
 ## Serialization
 

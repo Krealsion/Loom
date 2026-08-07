@@ -17,6 +17,7 @@ the named laws → the reference page → tests when exactness matters.
 | Topic | Read | Laws | Tests | Why / evidence |
 |---|---|---|---|---|
 | values, schemas, the gate | reference/values-and-admission.md | GATE-01..04 | tests/test_gate.cpp, test_schema.cpp, test_registry.cpp, test_serialize.cpp | decisions/one-gate-at-every-boundary.md |
+| how long a schema stays resolvable (what a claim is, who holds one, what a rejected candidate leaves, why a remote console's mirror is different) | reference/values-and-admission.md#registry, reference/bounds.md#schema-registry-bounded-by-claims-not-by-a-number | LIFE-08 | tests/test_registry.cpp (BL-0 cases), test_switchboard.cpp, test_kernel.cpp | COLD-1/COLD-2 finding C-10 / F-9 |
 | message authority, dispatch, roles | reference/messaging.md | MSG-01..07 | tests/test_switchboard.cpp | history/pre-r2c/DESIGN.md §Switchboard |
 | native callback boundaries (a handler or observer that throws; mutating the tap list mid-notification) | reference/messaging.md#dispatch-model, reference/messaging.md#observation | MSG-10, MSG-11 | tests/test_switchboard.cpp (STF-1 sections) | — |
 | answers, deferral, provenance | reference/messaging.md#answers | ANS-01..07 | tests/test_provenance.cpp | decisions/readiness-is-authenticated-conversation.md |
@@ -67,7 +68,13 @@ may add or remove observers mid-notification: additions join the next event,
 removals take effect at once (MSG-11) · `unregister_weave` returns `nullptr`
 without mutating anything when the id names the weave whose callback is running,
 and the host may simply retry after it exits — while a **different** weave is
-still removable during that same callback (LIFE-06) · a value's serialized size does not bound
+still removable during that same callback (LIFE-06) · a registered schema is **not** kept forever — a
+Registry retains one while a live claim requires it and drops it from lookup
+after the last release, so a shape whose last acceptor left stops resolving
+(LIFE-08); "reclaimed" means undiscoverable, never destroyed, and a
+`RemoteConsole`'s learned mirror is deliberately outside that guarantee
+([known-seams](reference/known-seams.md#a-remote-consoles-learned-schema-mirror-is-still-append-only)) ·
+a value's serialized size does not bound
 what decoding it costs — a compact encoding may legitimately stand for many
 values, so decode carries its own shared, host-owned materialization budget
 (GATE-02, [reference/bounds.md](reference/bounds.md#the-decode-materialization-bound)) ·

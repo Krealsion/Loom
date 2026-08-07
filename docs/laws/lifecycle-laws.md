@@ -195,3 +195,84 @@ framer: a never-idle channel over a persistent backlog, frames queued behind a
 half-sent one, backlog-cap and failed-channel invariance, over-length refusal,
 EOF, and the receive-side parity case). Published values:
 [bounds](../reference/bounds.md#transport-channels-framed-byte-channels).
+
+## LIFE-08 — A schema is retained by a live claim, never by having been registered
+
+LAW — A Registry keeps a canonical schema discoverable while at least one live
+claim requires it, and removes it from lookup when the last one is released.
+Registration history retains nothing.
+
+MEANS
+- **there are two doors, and the difference between them is the whole model.**
+  `register_schema(s)` is a claim nobody ever releases — what an application
+  means when it publishes its own vocabulary — so "permanent" is ordinary
+  lifetime rather than an exceptional flag. `claim(schemas)` hands back a
+  `SchemaClaimScope`: move-only, RAII, released by the destruction of whatever
+  owns it. There is no `unregister_schema` for a failure exit to forget;
+- **claims are counted, definitions are not duplicated.** Any number of live
+  owners may require one canonical `(name, version)`; the Registry holds one
+  definition and one count. Releasing one claim changes nothing while another
+  stands. Conflict semantics are untouched: a claim on a same-key
+  different-content schema throws `SchemaConflict` and the incumbent definition
+  is not disturbed;
+- **acquisition is transactional.** A multi-schema claim validates the complete
+  set before publishing any of it, so a disagreement about the last schema
+  leaves no claim on the first. `register_weave` takes its accept-set, claim-set
+  and state shape as one such transaction, and a Kernel takes a whole manifest
+  as another;
+- **the owners are the objects whose lifetimes already mean it.** A
+  `WeaveRecord` holds the claim for what its weave hears, may say and persists;
+  a Kernel's loaded-artifact record holds its manifest's; an isolation `Link`
+  holds its mount's. The Registry is told nothing about weave identity, artifact
+  names or mounts — it counts claims, and the layer that owns a lifetime is the
+  layer that owns the claim;
+- **a producer claims what it may speak.** A weave's accept-set is what it will
+  hear; its grant's *named* send rules are what it may say, and those shapes are
+  claimed by key (`claim_known`) so an authorized sender keeps its vocabulary
+  after the weave that defined it is gone. A wildcard rule names no shape and
+  therefore claims none;
+- **a handoff has no gap.** A successor's claim is acquired before the
+  predecessor's is released, so a shape both require is doubly claimed for the
+  length of the swap and never falls to zero. A refused replacement releases the
+  candidate's claim instead — a rejected reload candidate leaves no vocabulary
+  behind;
+- **nothing removed means nothing released.** `unregister_weave` refusing under
+  [LIFE-06](#life-06--a-weave-outlives-its-own-callback) does not touch claims,
+  because it does not touch anything.
+
+DOES NOT MEAN
+- **that a value can lose its schema.** A `Value` owns its schema strongly, and
+  `lookup` hands back a strong owner. "Reclaimed" means *undiscoverable through
+  this Registry*, never *destroyed*: an admitted value, a reader mid-decode and
+  a caller holding an older snapshot all remain correct after the final release;
+- **immediate heap reclamation.** Live reader snapshots and existing values may
+  keep a removed schema alive for as long as they like. The guarantee is
+  reachability, not free();
+- **garbage collection.** Nothing traces, nothing runs periodically, nothing
+  decides on a host's behalf. A claim is released by an owner being destroyed,
+  at exactly that moment, on that thread;
+- **provenance.** A claim answers *why must this vocabulary still resolve?*, never
+  *who wrote this schema?*. Claimant, author, first registrar and current
+  producer remain unrelated;
+- **that every Registry-shaped store in the system is bounded this way.** The
+  authoritative host registries are: the Switchboard's (the vocabulary every raw
+  emission is gated against), the Kernel's manifest dependency registry, and an
+  isolation host's. `RemoteConsole::registry_` is a client-side **learned mirror**
+  with no claimant and is still append-only — see
+  [known-seams](../reference/known-seams.md#a-remote-consoles-learned-schema-mirror-is-still-append-only);
+- **that a shape stays speakable because it once was.** When the last acceptor of
+  a shape leaves and no authorized producer claims it, the shape stops resolving,
+  and a later emission of it meets the seam
+  ([MSG-08](messaging-laws.md)) rather than being routed to nobody.
+
+PROVEN BY — the claim/release pair in `detail::RegistryCore`
+(`src/registry.cpp`), the scope member on `Switchboard::WeaveRecord`,
+`Kernel::Loaded`/`Kernel::Manifest` and `IsolationHost::Link`. Suites `registry`
+(the lifetime, shared-claim, conflict, transactionality, permanence, producer,
+move/overlap, surviving-value, orphan-scope, boundedness and
+concurrent-churn cases), `switchboard` (arrival/departure, shared shapes,
+refused-removal, code swap, producer claim and its wildcard control, refused
+mid-accept-set registration, 300-weave churn), `kernel` (the agreement wall
+following live claims, no residue from a rejected candidate, 64 rejected
+candidates), `isolation` (mount-scoped claim, repeated mount/unmount) and
+`policy` (a broker unmounted under an authorized client).

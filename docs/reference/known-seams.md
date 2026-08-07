@@ -217,6 +217,46 @@ since whoever reaches it holds operator authority. Nothing here adds permission
 handling or authentication; the point is that the umask is currently part of the
 boundary. Full model: [bridge](bridge.md).
 
+## A remote console's learned schema mirror is still append-only
+
+**Status: KNOWN SEAM — narrowed by BL-0, deliberately not closed. The
+authoritative host registries are fixed; this one client-side mirror is not.**
+
+C-10/F-9 was one shape in four places, and BL-0 closed three of them. What a
+host retains is now bounded by live claims
+([LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered)):
+the Switchboard's registry (the vocabulary every raw emission is gated against),
+the Kernel's manifest dependency registry, and an isolation host's all shrink
+again when the weave, artifact or mount that needed a shape goes away.
+
+`RemoteConsole::registry_` does not, and the reason is structural rather than an
+oversight: it is a **learned mirror in the operator's process**, filled from
+`Schema` frames the host sends in reply to `Describe`. Nothing in that process
+has a lifetime that means "this shape is still needed" — the console's other
+windows (`kConsoleTapCapacity`, `kConsoleBufferCapacity`, `kMaxPendingDelivered`,
+`kMaxAbsentSchemas`) are each bounded on their own terms, and a schema outlives
+all of them because its whole point is to be reusable. So a console session
+attached to a host with genuinely churning shape diversity still learns one
+entry per distinct shape it ever sees, for as long as that session lasts.
+
+```text
+FIXED       host: Switchboard / Kernel / IsolationHost registries
+            bounded by live claims
+
+STILL GROWS RemoteConsole::registry_ (client process, one console session)
+            one entry per distinct shape observed
+
+BOUNDED TODAY BY  the session's own lifetime — a fresh console starts empty —
+                  and by how many distinct shapes a host actually publishes
+```
+
+Deliberately not solved here: the natural fixes are a bounded memo with
+re-`Describe` on a miss (the shape `kMaxAbsentSchemas` already has) or a
+snapshot-refresh opcode, and both are console/wire decisions rather than
+Registry lifetime ones. **Trigger:** an operator console held open across a host
+that turns over schema identities, or any claim that the *client* is bounded.
+Until then, do not read LIFE-08 as covering it.
+
 ## Deferred capacity is Loom-wide
 
 **Status: CURRENT (by design), commonly mis-assumed.** 64 outstanding
