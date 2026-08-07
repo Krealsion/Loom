@@ -12,6 +12,24 @@
 
 namespace loom {
 
+namespace {
+
+/// The (name, version) pairs a grant's send rules actually NAME (BL-0). A
+/// wildcard rule names nothing, so it contributes nothing: `allow_any` is
+/// permission without a declared vocabulary, and there is no shape it could
+/// sensibly keep alive.
+std::vector<detail::SchemaKey> named_send_shapes(const Grant& grant) {
+    std::vector<detail::SchemaKey> keys;
+    for (const SendRule& rule : grant.rules()) {
+        if (!rule.any_shape) {
+            keys.emplace_back(rule.shape_name, rule.shape_version);
+        }
+    }
+    return keys;
+}
+
+} // namespace
+
 // ---- Refusal --------------------------------------------------------------
 
 const char* name_of(RefusalReason r) noexcept {
@@ -264,8 +282,8 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                                     "' is already held (roles are singletons in this phase)");
     }
 
-    // Record the accept-set, registering each schema so all Weaves agree on what
-    // a given (name, version) means (a disagreement throws loom::SchemaConflict).
+    // Record the accept-set, so all Weaves agree on what a given (name, version)
+    // means (a disagreement throws loom::SchemaConflict).
     std::vector<std::shared_ptr<const Schema>> accept;
     auto declared = incoming->accepted_schemas();
     accept.reserve(declared.size());
@@ -273,11 +291,11 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
         if (!s) {
             throw std::invalid_argument("register_weave: a declared accept schema is null");
         }
-        accept.push_back(registry_.register_schema(s).schema);
+        accept.push_back(std::move(s));
     }
 
     // Record the declared claim-set the same way (R2E-0), and for the same
-    // reason plus one more: registering these here is what makes a Sense
+    // reason plus one more: claiming these here is what makes a Sense
     // DISCOVERABLE — its shape resolves, and a consumer can ask what this weave
     // can claim — before any runtime claim has ever happened.
     std::vector<std::shared_ptr<const Schema>> claims;
@@ -287,13 +305,62 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
         if (!s) {
             throw std::invalid_argument("register_weave: a declared claim schema is null");
         }
-        claims.push_back(registry_.register_schema(s).schema);
+        claims.push_back(std::move(s));
     }
 
     // Seed last-known-good from an initial snapshot, gated against its own schema.
     Value snap = incoming->snapshot();
     std::shared_ptr<const Schema> state_schema = snap.schema_ptr();
-    registry_.register_schema(state_schema);
+
+    // ONE TRANSACTION FOR THE WHOLE VOCABULARY (BL-0). Every shape this weave
+    // needs resolvable is claimed together, so a disagreement about the LAST of
+    // them leaves no trace of the first: before this line the registry knew
+    // nothing new, and if it throws it still knows nothing new. The previous
+    // shape registered each schema as it went, and a conflict partway down the
+    // accept-set left the earlier ones published under a weave that never came
+    // into existence.
+    //
+    // The claim also outlives nothing: it lives in the record built below, and
+    // dies when that record is erased.
+    std::vector<std::shared_ptr<const Schema>> vocabulary = accept;
+    vocabulary.insert(vocabulary.end(), claims.begin(), claims.end());
+    vocabulary.push_back(state_schema);
+    SchemaClaimScope schemas = registry_.claim(vocabulary);
+    // ...AND THE SHAPES THIS WEAVE MAY SPEAK BUT DOES NOT DEFINE (BL-0).
+    //
+    // A weave's accept-set is what it will HEAR. Its grant's named send rules are
+    // what it may SAY — and a producer's bytes need the shape resolvable at the
+    // seam just as much as a consumer's door does. A storage client authorized
+    // for `StoragePut v1` keeps needing `StoragePut v1` to mean something after
+    // the broker that defined it unmounts, or its next send stops being an
+    // honest "nobody holds that role" and becomes "I have never heard of that
+    // shape".
+    //
+    // Claimed BY KEY, because a producer has no definition to offer: it pins what
+    // the system already knows and skips what it does not. A shape nobody ever
+    // published stays unpublished, and the emission meets the seam exactly as it
+    // does today (MSG-08).
+    //
+    // A wildcard rule names nothing and therefore claims nothing — which is
+    // right: `allow_any` declares no vocabulary to depend on.
+    registry_.claim_known(schemas, named_send_shapes(grant));
+    // Adopt the canonical owners the registry settled on, so every weave that
+    // accepts a shape holds the SAME Schema object for it — exactly what
+    // `register_schema(...).schema` handed back before. `state_schema` keeps the
+    // weave's own object, also as before: it is the door its own snapshot is
+    // admitted against, and the gate compares content, never pointers.
+    auto canonicalize = [this](std::shared_ptr<const Schema>& s) {
+        if (auto canon = registry_.lookup(s->name(), s->version())) {
+            s = std::move(canon);
+        }
+    };
+    for (auto& s : accept) {
+        canonicalize(s);
+    }
+    for (auto& s : claims) {
+        canonicalize(s);
+    }
+
     Admission seeded = loom::admit(std::move(snap), *state_schema);
     if (!seeded.ok()) {
         throw std::invalid_argument("register_weave: initial snapshot does not conform to its "
@@ -307,6 +374,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     std::move(accept),
                     std::move(claims),
                     state_schema,
+                    std::move(schemas),
                     std::move(seeded).value(),
                     std::move(grant),
                     0,
@@ -474,30 +542,40 @@ const char* name_of(SenseRefusal r) noexcept {
     return "?";
 }
 
-bool Switchboard::declares_claim(const WeaveRecord& rec, std::string_view name,
-                                 std::uint32_t version) const {
+const std::shared_ptr<const Schema>* Switchboard::declared_claim(const WeaveRecord& rec,
+                                                                 std::string_view name,
+                                                                 std::uint32_t version) {
     for (const auto& s : rec.claims) {
         if (s && s->name() == name && s->version() == version) {
-            return true;
+            return &s;
         }
     }
-    return false;
+    return nullptr;
+}
+
+bool Switchboard::declares_claim(const WeaveRecord& rec, std::string_view name,
+                                 std::uint32_t version) const {
+    return declared_claim(rec, name, version) != nullptr;
 }
 
 Switchboard::MadeClaim Switchboard::make_claim(const WeaveRecord& rec, Value value,
                                                std::uint64_t previous_revision) {
     const std::string name = value.schema().name();
     const std::uint32_t version = value.schema().version();
-    if (!declares_claim(rec, name, version)) {
+    const std::shared_ptr<const Schema>* declared = declared_claim(rec, name, version);
+    if (declared == nullptr) {
         // A weave claims only what it declared. This is what makes the claim-set
         // a real contract rather than documentation, and what makes discovery
         // answerable before the first runtime claim.
         return MadeClaim{std::nullopt, SenseClaimResult{false, SenseRefusal::Undeclared, 0}};
     }
-    std::shared_ptr<const Schema> door = registry_.lookup(name, version);
-    if (!door) {
-        door = registry_.register_schema(value.schema_ptr()).schema;
-    }
+    // THE DOOR IS THE DECLARATION ITSELF (BL-0). It used to be a registry lookup
+    // with a register-if-missing fallback — a registration nothing owned, on a
+    // path where the answer was already in hand: the record's own claim-set holds
+    // the canonical schema, and the weave's live claim is what keeps it
+    // resolvable. Reading it from the record removes a way for the claim door to
+    // publish vocabulary, and it cannot drift from what `declares_claim` matched.
+    const std::shared_ptr<const Schema>& door = *declared;
     // The same one gate every value crosses. A malformed claim is refused, not
     // stored: a repository holding an unadmitted value would be the one place in
     // Loom where a value was trusted without passing the gate.
@@ -2559,14 +2637,34 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // of the claimant, and the reading already carries the incarnation the claim
     // was made under, so a consumer can see for itself that a claim predates the
     // current code rather than having it silently withdrawn.
+    //
+    // AND THE CLAIM MOVES WITHOUT A GAP (BL-0). The successor's whole vocabulary
+    // is claimed BEFORE the predecessor's claim is dropped, so a shape both
+    // declare is at two claims for the length of one assignment and never falls
+    // to zero. There is no instant in a code swap when a shape the weave still
+    // accepts stops resolving.
     {
         std::vector<std::shared_ptr<const Schema>> fresh;
         for (auto& s : rec->weave->claimed_schemas()) {
             if (s) {
-                fresh.push_back(registry_.register_schema(s).schema);
+                fresh.push_back(std::move(s));
+            }
+        }
+        std::vector<std::shared_ptr<const Schema>> vocabulary = rec->accept;
+        vocabulary.insert(vocabulary.end(), fresh.begin(), fresh.end());
+        vocabulary.push_back(rec->state_schema);
+        SchemaClaimScope next = registry_.claim(vocabulary);
+        // The grant did not change under the new code, so its producer claim is
+        // re-taken into the successor scope. Forgetting this would let a code
+        // swap quietly drop a shape the weave is still authorized to speak.
+        registry_.claim_known(next, named_send_shapes(rec->grant));
+        for (auto& s : fresh) {
+            if (auto canon = registry_.lookup(s->name(), s->version())) {
+                s = std::move(canon);
             }
         }
         rec->claims = std::move(fresh);
+        rec->schemas = std::move(next); // acquire-then-release: the overlap is the point
     }
     forget_deferred_for(id);
     // New code, or a revival, is a new participant as far as a transaction is

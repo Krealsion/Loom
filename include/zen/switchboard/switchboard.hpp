@@ -1083,6 +1083,16 @@ private:
         /// are discoverable, and checked by both claim doors.
         std::vector<std::shared_ptr<const Schema>> claims;
         std::shared_ptr<const Schema> state_schema;
+        /// WHY THE THREE LISTS ABOVE STILL RESOLVE (BL-0). One live claim on the
+        /// union of this weave's accept-set, claim-set and state shape. It is
+        /// acquired as a single transaction at registration, re-acquired on a
+        /// code swap, and released by the destruction of this record — which is
+        /// the whole of the cleanup, and why no removal path can forget it.
+        ///
+        /// The Registry is told nothing about WeaveId. It counts claims; the
+        /// Switchboard owns weave lifetime, and this member is where the two
+        /// facts meet.
+        SchemaClaimScope schemas;
         Value last_known_good;
         Grant grant;
         std::uint64_t reloads_used = 0;
@@ -1597,8 +1607,14 @@ private:
     std::map<PersonalKey, ClaimRecord> personal_claims_;
     std::map<OfficeKey, ClaimRecord> office_claims_;
 
-    /// Does this weave's declared claim-set contain the shape? The one place the
-    /// question is asked, so the claim door and discovery cannot drift.
+    /// The declared claim-set's entry for this shape, or nullptr. The one place
+    /// the question is asked, so the claim door and discovery cannot drift — and
+    /// it hands back the schema itself, so the claim door needs no second lookup
+    /// to find the door it already matched.
+    static const std::shared_ptr<const Schema>* declared_claim(const WeaveRecord& rec,
+                                                               std::string_view name,
+                                                               std::uint32_t version);
+    /// Does this weave's declared claim-set contain the shape?
     bool declares_claim(const WeaveRecord& rec, std::string_view name,
                         std::uint32_t version) const;
     /// A prepared claim and its verdict, so the two claim doors share every check
