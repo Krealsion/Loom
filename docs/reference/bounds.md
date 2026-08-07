@@ -86,6 +86,33 @@ Neither live-storage row is a capacity a caller can exhaust; both are statements
 about what the channel is allowed to keep. They are bounds on *history*, and
 that is the whole content of [LIFE-07](../laws/lifecycle-laws.md).
 
+## Schema registry (bounded by claims, not by a number)
+
+The one entry here with no constant, because the bound is a lifetime rather than
+a capacity. A `Registry`'s population is *the schemas something live still
+requires* — not every schema ever registered
+([LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered),
+[values-and-admission](values-and-admission.md#registry)).
+
+| What retains a schema | Until |
+|---|---|
+| `register_schema(s)` | the Registry is destroyed (a claim with no end) |
+| a weave's registration | its `WeaveRecord` is erased — accept-set, declared claim-set, state shape, and the shapes its grant *names* as sendable |
+| a loaded artifact | its Kernel record is erased (`unload`, a reaped adapter, a throw on the way in) |
+| a mounted child | its `Link` is erased (`unmount`) |
+| a reload candidate | its `Manifest` goes out of scope — a refused candidate leaves nothing |
+
+**Overflow behavior: none, because there is no cap.** A host that holds a
+million live weaves has a million weaves' vocabulary; what BL-0 removed is
+growth from *history*. A long-running host that repeatedly loads and unloads
+distinct shapes returns to its baseline.
+
+**Reclaimed ≠ freed.** Removal is from *current lookup*. A `Value` owns its
+schema strongly, `lookup` hands back a strong owner, and an older reader
+snapshot keeps its own entries alive — so a schema may legitimately outlive its
+Registry membership in memory. As with [LIFE-07](../laws/lifecycle-laws.md), the
+bound is on what is *live and reachable*, never an RSS guarantee.
+
 ## Gate / serialization
 
 Depth and size caps make hostile input total (see
