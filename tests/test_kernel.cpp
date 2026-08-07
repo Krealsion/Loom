@@ -321,34 +321,40 @@ TEST_CASE("reload refuses a drifted door contract before commit; the incumbent k
     CHECK(kernel.weave_id("t") == id);
 }
 
-TEST_CASE("a rejected candidate's schemas stay admitted — today's registry monotonicity, named") {
-    // THIS PINS CURRENT BEHAVIOUR; IT DOES NOT ENDORSE IT AS FINAL DOCTRINE.
-    //
-    // Reconstructing a candidate's manifest is what PRODUCES the schemas the
-    // compatibility check then compares, and reconstruct() admits them into this
-    // Kernel's dependency registry on the way — so a candidate refused for
-    // accepted-contract drift has already bound its (name, version) keys. That
-    // is why "refused before commit" is scoped to *incumbent replacement and its
-    // published routing contract* and not to "the Loom is unchanged".
-    //
-    // Whether that admission is intentionally monotonic, or should join a future
-    // prepared-replacement transaction, is an R2B decision. Nothing here answers
-    // it. (Note the Switchboard's own registry is a DIFFERENT registry and is
-    // untouched: only register_weave writes it, and a rejected candidate never
-    // registers — so nothing the bus routes or resolves by is affected.)
-    {
-        // THE NEGATIVE CONTROL, first, or the pin below proves nothing: in a
-        // fresh kernel the conflicting library loads perfectly well. Its refusal
-        // further down is therefore caused by the rejected candidate's
-        // admission, not by the fixture being intrinsically unloadable.
-        Switchboard bus;
-        Kernel kernel(bus);
-        REQUIRE(kernel.load("t", ZEN_SO_ACTIVATES).ok);
-        LoadResult clean = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
-        CHECK_MESSAGE(clean.ok, clean.error);
-        CHECK(kernel.is_loaded("u"));
-    }
+TEST_CASE("the agreement wall follows LIVE claims, not the history of registrations (BL-0)") {
+    // THE POSITIVE CONTROL, first, or the reclamation proofs below prove nothing:
+    // while something live claims Greet v1, a library that disagrees about it is
+    // still refused. Reclaiming vocabulary must not weaken the wall.
+    Switchboard bus;
+    Kernel kernel(bus);
+    REQUIRE_MESSAGE(kernel.load("t", ZEN_SO_ACTIVATES_DRIFT).ok, "drift must load on its own");
+    LoadResult blocked = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
+    CHECK_FALSE(blocked.ok);
+    CHECK(blocked.error.find("load refused") != std::string::npos);
+    CHECK(blocked.error.find("Greet") != std::string::npos);
+    CHECK_FALSE(kernel.is_loaded("u"));
 
+    // ...and when the claimant goes, so does the vocabulary. Same kernel, same
+    // fixture, one unload between: the ONLY thing that changed is that nothing
+    // live requires Greet v1 any more.
+    CHECK(kernel.unload("t"));
+    LoadResult now_free = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
+    CHECK_MESSAGE(now_free.ok, now_free.error);
+    CHECK(kernel.is_loaded("u"));
+}
+
+TEST_CASE("a rejected candidate leaves no schema residue (BL-0 closes the R2A-1a pin)") {
+    // THE INVERSE OF WHAT THIS FILE USED TO PIN. R2A-1a named the defect and
+    // deliberately did not fix it: reconstruct() PRODUCES the schemas the
+    // compatibility check compares, so a candidate refused for door drift had
+    // already bound its (name, version) keys in this Kernel's dependency
+    // registry, and a later library disagreeing about one met a wall put up by
+    // a weave that never existed. "Refused before commit" had to be scoped to
+    // *incumbent replacement and its published routing contract* rather than to
+    // "the Loom is unchanged".
+    //
+    // It is unchanged now. reconstruct() claims into the Manifest it returns, so
+    // the refusal below destroys the only claim those schemas ever had.
     Switchboard bus;
     Kernel kernel(bus);
     LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
@@ -365,18 +371,35 @@ TEST_CASE("a rejected candidate's schemas stay admitted — today's registry mon
     CHECK(kernel.weave_id("t") == lr.id);
     CHECK_FALSE(kernel.accepts(lr.id, "Greet", 1));
 
-    // AND YET the rejected candidate's Greet v1 is still bound in the kernel's
-    // dependency registry — observable because a later library declaring Greet
-    // v1 with DIFFERENT content now meets the agreement wall, exactly where the
-    // negative control above shows it would otherwise have loaded.
-    LoadResult conflicted = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
-    CHECK_FALSE(conflicted.ok);
-    CHECK(conflicted.error.find("load refused") != std::string::npos);
-    CHECK(conflicted.error.find("Greet") != std::string::npos);
-    CHECK_FALSE(kernel.is_loaded("u"));
-    // No half-loaded wreckage, and the incumbent is still serving.
+    // AND the rejected candidate's Greet v1 is gone with it — observable because
+    // a later library declaring Greet v1 with DIFFERENT content now loads, where
+    // before BL-0 it met a wall the refused candidate had left standing. The
+    // case above is what proves this is reclamation and not a dead wall.
+    LoadResult after = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
+    CHECK_MESSAGE(after.ok, after.error);
+    CHECK(kernel.is_loaded("u"));
+    // The incumbent is still serving, and still itself.
     CHECK(kernel.is_loaded("t"));
     CHECK(kernel.weave_id("t") == lr.id);
+}
+
+TEST_CASE("many rejected candidates leave no accumulation (BL-0 boundedness)") {
+    // The C-10 shape at the reload door: a host that keeps being offered
+    // candidates it refuses must not grow a vocabulary out of the refusals.
+    // Repeated because one refusal leaving nothing behind is also what a
+    // one-shot fluke looks like; the wall is asked again at the end.
+    Switchboard bus;
+    Kernel kernel(bus);
+    REQUIRE(kernel.load("t", ZEN_SO_ACTIVATES).ok);
+    for (int i = 0; i < 64; ++i) {
+        ReloadResult rr = kernel.reload_from("t", ZEN_SO_ACTIVATES_DRIFT);
+        REQUIRE(rr.ok);
+        REQUIRE_FALSE(rr.reloaded);
+    }
+    // 64 refusals later the kernel's dependency registry is exactly as ignorant
+    // of Greet v1 as it was before the first one.
+    LoadResult after = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
+    CHECK_MESSAGE(after.ok, after.error);
 }
 
 // ---- R2B-2: the deferring steward, proven where it has to be proven -----------

@@ -1231,6 +1231,49 @@ TEST_CASE("unmount tears the child down cleanly and the proxy leaves the bus") {
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
 
+TEST_CASE("BL-0: a child's vocabulary is claimed by the MOUNT, and released by unmount") {
+    // THE LIFETIME §13 ASKS FOR, PINNED. The narrowest object whose life
+    // truthfully means "these bytes may still need these schemas" is the mount,
+    // not the child process: a child that dies is respawned under the same Link
+    // and re-uses the accept-set cached at handshake without reconstructing it,
+    // and the channel's unread bytes belong to the Link too. So the mount claims,
+    // and unmount is the whole release path.
+    //
+    // Read through the BUS, because that is the registry the child's emissions
+    // are actually gated against.
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    CHECK(bus.resolve_schema("Ping", 1) == nullptr);
+
+    OutOfProcessResult a = host.mount("m1", ZEN_SO_WEAVE, Grant{});
+    REQUIRE_MESSAGE(a.ok, a.error);
+    CHECK(bus.resolve_schema("Ping", 1) != nullptr);
+
+    // A second mount of the same artifact: two mounts, one canonical definition.
+    OutOfProcessResult b = host.mount("m2", ZEN_SO_WEAVE, Grant{});
+    REQUIRE_MESSAGE(b.ok, b.error);
+    const Schema* canonical = bus.resolve_schema("Ping", 1).get();
+
+    host.unmount("m1");
+    REQUIRE(bus.resolve_schema("Ping", 1) != nullptr); // m2 still needs it
+    CHECK(bus.resolve_schema("Ping", 1).get() == canonical);
+
+    host.unmount("m2");
+    CHECK(bus.resolve_schema("Ping", 1) == nullptr);
+}
+
+TEST_CASE("BL-0: repeated mount/unmount does not accumulate vocabulary") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    for (int i = 0; i < 8; ++i) {
+        OutOfProcessResult r = host.mount("cycle", ZEN_SO_WEAVE, Grant{});
+        REQUIRE_MESSAGE(r.ok, r.error);
+        REQUIRE(bus.resolve_schema("Ping", 1) != nullptr);
+        host.unmount("cycle");
+        REQUIRE(bus.resolve_schema("Ping", 1) == nullptr);
+    }
+}
+
 // ---- R2B-2: deferred answers are in-process only, and FAIL CLOSED out of it ----
 
 TEST_CASE("R2B-2: an out-of-process weave gets no deferred-answer capability, and says so by "

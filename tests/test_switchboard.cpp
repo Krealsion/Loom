@@ -6,12 +6,14 @@
 #include "switchboard_fixtures.hpp"
 
 #include <zen/gate.hpp>
+#include <zen/serialize.hpp>
 
 #include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace loom;
@@ -21,8 +23,10 @@ using namespace sbfx;
 namespace {
 // Shorthand; the real helper lives in the fixtures.
 Registered reg(Switchboard& bus, std::vector<std::shared_ptr<const Schema>> accept,
-               std::int64_t max_reloads = 2, bool revive_from_last_good = true) {
-    return register_probe(bus, std::move(accept), max_reloads, revive_from_last_good);
+               std::int64_t max_reloads = 2, bool revive_from_last_good = true,
+               Grant grant = Grant{}.allow_any()) {
+    return register_probe(bus, std::move(accept), max_reloads, revive_from_last_good,
+                          std::move(grant));
 }
 } // namespace
 
@@ -1083,6 +1087,176 @@ TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave rem
     const Ticket t = bus.send(other.id, Message(pong(2)));
     bus.pump();
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
+}
+
+// ---- BL-0: the bus's vocabulary is bounded by who is live -------------------
+//
+// `resolve_schema` IS the observable here, and deliberately so: it is the door
+// every raw emission crosses (a loaded weave's send, an out-of-process child's
+// output, a bridge frame, a console compose), so "does this shape still resolve
+// on this bus?" is the same question as "can this Loom still speak it?". No test
+// seam and no claim count is needed to ask it.
+
+namespace {
+std::shared_ptr<const Schema> only_here(const char* name) {
+    return SchemaBuilder(name, 1).field("v", Kind::Int).build();
+}
+} // namespace
+
+TEST_CASE("BL-0: a weave's vocabulary arrives with it and leaves with it") {
+    Switchboard bus;
+    CHECK(bus.resolve_schema("Solo", 1) == nullptr);
+
+    Registered w = reg(bus, {only_here("Solo")});
+    CHECK(bus.resolve_schema("Solo", 1) != nullptr);
+    // The state shape came too — it is what a revival is admitted against.
+    CHECK(bus.resolve_schema("Counter", 1) != nullptr);
+
+    std::unique_ptr<Weave> owner = bus.unregister_weave(w.id);
+    REQUIRE(owner != nullptr);
+    CHECK(bus.resolve_schema("Solo", 1) == nullptr);
+    // The weave handed back still knows its own shapes: reclamation is about
+    // discoverability through the bus, never about the objects themselves.
+    CHECK(owner->accepted_schemas().at(0)->name() == "Solo");
+}
+
+TEST_CASE("BL-0: a shape two weaves accept survives the first of them leaving") {
+    Switchboard bus;
+    Registered a = reg(bus, {ping_schema(), only_here("Common")});
+    Registered b = reg(bus, {pong_schema(), only_here("Common")});
+    REQUIRE(bus.resolve_schema("Common", 1) != nullptr);
+    const Schema* canonical = bus.resolve_schema("Common", 1).get();
+
+    REQUIRE(bus.unregister_weave(a.id) != nullptr);
+    REQUIRE(bus.resolve_schema("Common", 1) != nullptr);
+    CHECK(bus.resolve_schema("Common", 1).get() == canonical); // one definition throughout
+    CHECK(bus.resolve_schema("Ping", 1) == nullptr);           // a's own shape did go
+
+    REQUIRE(bus.unregister_weave(b.id) != nullptr);
+    CHECK(bus.resolve_schema("Common", 1) == nullptr);
+}
+
+TEST_CASE("BL-0: a refused active-target removal releases nothing") {
+    // NOTHING REMOVED MEANS NOTHING RELEASED. The R2F-B refusal is defined by the
+    // fact that no part of unregistration happened; schema claims join that list.
+    Switchboard bus;
+    Registered w = reg(bus, {ping_schema(), only_here("Vocab")});
+
+    bool refused = false;
+    bool resolvable_during = false;
+    w.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        refused = (bus.unregister_weave(w.id) == nullptr);
+        resolvable_during = (bus.resolve_schema("Vocab", 1) != nullptr);
+    };
+    bus.send(w.id, Message(ping(1)));
+    bus.pump();
+
+    CHECK(refused);
+    CHECK(resolvable_during);
+    CHECK(bus.resolve_schema("Vocab", 1) != nullptr); // and after the turn
+
+    // The retry the law promises — and only THEN does the vocabulary go.
+    w.weave->on_handle = nullptr;
+    REQUIRE(bus.unregister_weave(w.id) != nullptr);
+    CHECK(bus.resolve_schema("Vocab", 1) == nullptr);
+}
+
+TEST_CASE("BL-0: a code swap moves the claim without a gap") {
+    Switchboard bus;
+    Registered w = reg(bus, {ping_schema()});
+    REQUIRE(bus.resolve_schema("Ping", 1) != nullptr);
+
+    // Watching from inside the swap is not possible from a test, so the property
+    // is stated the way it is implemented: the successor's claim is taken before
+    // the predecessor's is dropped, so a shape common to both never leaves.
+    Value snap(counter_schema());
+    snap.set("count", Cell::integer(3));
+    ReviveOutcome ro = bus.swap_state(w.id, loom::serialize(snap));
+    CHECK(ro.revived);
+    CHECK(bus.resolve_schema("Ping", 1) != nullptr);    // still accepted, still resolvable
+    CHECK(bus.resolve_schema("Counter", 1) != nullptr); // the state shape too
+
+    REQUIRE(bus.unregister_weave(w.id) != nullptr);
+    CHECK(bus.resolve_schema("Ping", 1) == nullptr);
+}
+
+TEST_CASE("BL-0: an authorized sender keeps the shape it may speak resolvable") {
+    // THE PRODUCER'S CLAIM. A weave's accept-set is what it will HEAR; its
+    // grant's named send rules are what it may SAY. A sender authorized for a
+    // shape must keep being able to say it after the weave that defined it goes,
+    // or "the recipient is gone" degrades into "I have never heard of that
+    // shape" — a strictly worse answer to a strictly ordinary situation.
+    Switchboard bus;
+    Registered listener = reg(bus, {only_here("Request")});
+    REQUIRE(bus.resolve_schema("Request", 1) != nullptr);
+
+    Registered talker = reg(bus, {pong_schema()}, /*max_reloads=*/2,
+                            /*revive_from_last_good=*/true,
+                            Grant{}.allow_to_any("Request", 1));
+
+    REQUIRE(bus.unregister_weave(listener.id) != nullptr);
+    // Nobody accepts it any more, and it is still speakable — which is what lets
+    // the send be refused for the true reason.
+    CHECK(bus.resolve_schema("Request", 1) != nullptr);
+
+    REQUIRE(bus.unregister_weave(talker.id) != nullptr);
+    CHECK(bus.resolve_schema("Request", 1) == nullptr);
+}
+
+TEST_CASE("BL-0: a wildcard grant claims no vocabulary") {
+    // The negative control for the case above: `allow_any` names no shape, so it
+    // pins none. Otherwise "the producer claims what it may say" would quietly
+    // mean "every permissive weave pins everything", which is the retention BL-0
+    // set out to remove.
+    Switchboard bus;
+    Registered listener = reg(bus, {only_here("Fleeting")});
+    Registered permissive = reg(bus, {pong_schema()}, 2, true, Grant{}.allow_any());
+    REQUIRE(bus.resolve_schema("Fleeting", 1) != nullptr);
+
+    REQUIRE(bus.unregister_weave(listener.id) != nullptr);
+    CHECK(bus.resolve_schema("Fleeting", 1) == nullptr);
+    CHECK(bus.weave(permissive.id) != nullptr); // still live, and still claiming nothing
+}
+
+TEST_CASE("BL-0: a registration refused mid-accept-set publishes nothing") {
+    // The transactional half, at the door consumers actually use. Before BL-0 the
+    // accept-set was registered one shape at a time, so a disagreement about the
+    // third left the first two published under a weave that never existed.
+    Switchboard bus;
+    Registered incumbent = reg(bus, {only_here("Agreed")});
+
+    auto disagreeing = SchemaBuilder("Agreed", 1).field("v", Kind::Text).build();
+    auto probe = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{only_here("First"), only_here("Second"),
+                                                   disagreeing});
+    CHECK_THROWS_AS(bus.register_weave(std::move(probe), Grant{}.allow_any()), SchemaConflict);
+
+    CHECK(bus.resolve_schema("First", 1) == nullptr);
+    CHECK(bus.resolve_schema("Second", 1) == nullptr);
+    // ...and the incumbent's definition is the one still standing.
+    REQUIRE(bus.resolve_schema("Agreed", 1) != nullptr);
+    CHECK(bus.resolve_schema("Agreed", 1)->content_id() == only_here("Agreed")->content_id());
+    CHECK(bus.weave(incumbent.id) != nullptr);
+}
+
+TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabulary") {
+    // The C-10 shape where it was first observed: load, unload, repeat. Before
+    // BL-0 all 300 shapes were still resolvable at the end.
+    Switchboard bus;
+    Registered resident = reg(bus, {only_here("Resident")});
+
+    for (int i = 0; i < 300; ++i) {
+        const std::string name = "Churn" + std::to_string(i);
+        Registered w = reg(bus, {only_here(name.c_str())});
+        REQUIRE(bus.resolve_schema(name, 1) != nullptr);
+        REQUIRE(bus.unregister_weave(w.id) != nullptr);
+        REQUIRE(bus.resolve_schema(name, 1) == nullptr);
+    }
+    // Spot-check the oldest as well as the newest: nothing accumulated behind us.
+    CHECK(bus.resolve_schema("Churn0", 1) == nullptr);
+    CHECK(bus.resolve_schema("Churn299", 1) == nullptr);
+    CHECK(bus.resolve_schema("Resident", 1) != nullptr);
+    CHECK(bus.weave(resident.id) != nullptr);
 }
 
 } // TEST_SUITE

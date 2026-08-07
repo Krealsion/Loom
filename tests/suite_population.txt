@@ -41,6 +41,12 @@
 # native Windows lane is what found this: a single portable floor of 25 was wrong there, and
 # a slack floor would have hidden the fact rather than stated it.
 #
+# `kernel` carries the same split for the same reason, and the Windows lane found it the
+# same way (BL-0): 134 cases wherever zen-kernel exists, plus 2 behind `#ifndef _WIN32`
+# (test_kernel.cpp:7094-7156 -- the RTLD_NOLOAD unload observations, which have no PE
+# equivalent to ask). The single floor it replaced was 132: two cases of slack that hid
+# exactly this, until raising it to the Linux count made Windows say so.
+#
 # Counts are `--test-suite=<name> --count`: test CASES, not assertions. Assertion
 # totals are not a population (COLD-1 section 8: ~90% of this tree's assertion headline
 # came from one fuzz branch), so they are reported but never an acceptance oracle.
@@ -52,12 +58,12 @@
 schema             portable  8
 value              portable  8
 gate               portable  11
-registry           portable  7
+registry           portable  23
 serialize          portable  31
 compat             portable  10
 integration        portable  4
 fuzz               portable  9
-switchboard        portable  35
+switchboard        portable  43
 provenance         portable  62
 role_authorship    portable  17
 sense              portable  19
@@ -72,10 +78,11 @@ component          portable  15
 pixel              portable  9
 bridge             portable  19
 bridge             posix     8
-kernel             kernel    132
+kernel             kernel    134
+kernel             posix     2
 handoff            kernel    10
 manager            kernel    43
 capabilities       kernel    4
-isolation          posix     36
+isolation          posix     38
 policy             posix     23
 sdl                sdl       3
