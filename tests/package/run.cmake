@@ -44,8 +44,23 @@ endfunction()
 # ZEN_CMAKE_ARGS carries only what selects a TOOLCHAIN (compiler, generator program) --
 # never a compile option. If a compile option is ever needed here, the package has
 # stopped carrying its own requirements and this witness is supposed to go red.
+#
+# The generator is CHOSEN, not assumed: -DZEN_GENERATOR=... wins, else Ninja when it is
+# actually on PATH, else CMake's platform default. Hard-coding Ninja would make this
+# witness unrunnable on an ordinary Makefiles host -- and a proof a consumer cannot run
+# is not much of a proof.
+set(gen_args "")
+if(DEFINED ZEN_GENERATOR AND NOT ZEN_GENERATOR STREQUAL "")
+    set(gen_args -G "${ZEN_GENERATOR}")
+else()
+    find_program(ZEN_NINJA ninja)
+    if(ZEN_NINJA)
+        set(gen_args -G Ninja)
+    endif()
+endif()
+
 zen_run("configure" ${CMAKE_COMMAND} -S "${here}" -B "${ZEN_WORK}"
-        -G Ninja
+        ${gen_args}
         "-DCMAKE_BUILD_TYPE=${ZEN_CONFIG}"
         "-DCMAKE_PREFIX_PATH=${ZEN_PREFIX}"
         ${ZEN_CMAKE_ARGS})
