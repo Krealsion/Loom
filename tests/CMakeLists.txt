@@ -141,6 +141,14 @@ function(zen_add_test_weave target)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
     loom_weave_build_contract(${target})
     target_compile_definitions(${target} PRIVATE ${ARGN})
+    # C4702 (unreachable code) is an MSVC /W4 warning with no GCC counterpart, and here it
+    # is CORRECT rather than wrong: this one source is compiled into ~25 variants selected
+    # by #if, and a variant whose branch ends in an unconditional `return` (ZEN_WEAVE_DEFERS)
+    # genuinely leaves the shared Ping tail below it unreachable. That is the fixture's
+    # construction, not a defect in it, and rearranging a lifecycle fixture to satisfy a
+    # reachability warning would change test code for a compiler's benefit. Scoped to these
+    # variant targets only -- Zen's warning policy is untouched everywhere else.
+    target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4702>)
 endfunction()
 
 zen_add_test_weave(zen_test_weave)
@@ -385,10 +393,27 @@ target_compile_definitions(zen-tests PRIVATE
 
 endif() # NOT WIN32 (isolation/policy fixtures + child host)
 
-# doctest's own header trips -Wsign-conversion etc.; it is third-party, so we do
-# not hold it to Zen's warning policy. Mark its include dir as system.
-target_include_directories(zen-tests SYSTEM PRIVATE
+# HOW THIS PROJECT CONSUMES DOCTEST, in one place because there are two test binaries
+# and two places that must agree is the drift this directory already refuses elsewhere.
+#
+#   * doctest's own header trips -Wsign-conversion etc.; it is third-party, so we do not
+#     hold it to Zen's warning policy. Mark its include dir as system.
+#   * DOCTEST_CONFIG_USE_STD_HEADERS makes doctest INCLUDE <ostream> and friends instead
+#     of forward-declaring them inside namespace std. Its forward declarations leave
+#     std::basic_ostream INCOMPLETE where doctest stringifies a value, so the class's
+#     MEMBER operator<<(const void*) is invisible and only free operators are candidates.
+#     With MSVC's STL that is fatal for any shared_ptr: std::operator<<(ostream&, const
+#     shared_ptr<T>&) is found by ADL, doctest's detector accepts it, and its body
+#     (`_Out << _Px.get()`) then hard-errors -- C2676 on eight ordinary
+#     `REQUIRE(some_schema_ptr != nullptr)` lines that libstdc++ compiles fine. doctest
+#     ships this macro for exactly this class of standard-library difference; it changes
+#     no assertion's meaning, only which declarations doctest relies on.
+add_library(zen-doctest INTERFACE)
+target_include_directories(zen-doctest SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+target_compile_definitions(zen-doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
+
+target_link_libraries(zen-tests PRIVATE zen-doctest)
 
 # ---- CTest registration, DERIVED from the suite declarations in the sources ----------
 #
@@ -462,11 +487,9 @@ set_tests_properties(empty_population_says_so PROPERTIES
 # SDL-free in the `pixel` suite above, which runs everywhere.
 if(TARGET zen-ui-sdl)
     add_executable(zen-sdl-tests doctest_main.cpp test_sdl.cpp)
-    target_include_directories(zen-sdl-tests SYSTEM PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
     target_include_directories(zen-sdl-tests PRIVATE ${CMAKE_SOURCE_DIR})
     target_link_libraries(zen-sdl-tests
-        PRIVATE zen-ui-sdl zen-ui-pixel zen-ui zen-warnings zen-sanitize)
+        PRIVATE zen-doctest zen-ui-sdl zen-ui-pixel zen-ui zen-warnings zen-sanitize)
     add_test(NAME sdl COMMAND zen-sdl-tests --no-skipped-summary)
     set_tests_properties(sdl PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 endif()
