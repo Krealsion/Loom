@@ -28,7 +28,15 @@ cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
   binary via `tests/run-under-scope.sh ./build/tests/zen-tests` — outside such a
   scope every OS-enforcement case fails **by design** (fail-hard beats silent
   skip), naming the capability it could not enforce.
-- Windows/MinGW builds the portable subset only; kernel lanes are opt-in.
+- Windows builds the portable subset only, on **MinGW-w64 and MSVC** alike;
+  kernel lanes are opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`). MSVC needs
+  `/Zc:preprocessor` for Loom's public `__VA_OPT__` macros — `loom::core`
+  carries it as an INTERFACE option, so say which compiler a Windows green was
+  proven on, never a bare "Windows".
+- The installed package has its own witness, outside the build tree:
+  `cmake -DZEN_PREFIX=<prefix> -DZEN_WORK=<dir> -P tests/package/run.cmake`.
+  It is the only lane that can catch a requirement the package fails to carry,
+  because it is the only one that reaches Loom solely through `find_package`.
 
 ## The population contract — what a green run means (POP-01..05)
 

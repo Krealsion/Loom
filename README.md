@@ -104,10 +104,16 @@ nothing. `ZEN_ALLOW_UNENFORCEABLE=1` converts those into marked-degraded skips
 for a host that genuinely cannot enforce — such a run prints
 `*** NON-ENFORCEMENT MODE ***`, asserts no enforcement population, and is
 refused by the official lane; it is never evidence about containment. The
-portable suites run everywhere, including Windows/MinGW, where the `kernel` and
-`posix` gates are off and those suites are reported as *declared absent* rather
-than passing; the Windows kernel backend is an explicit development-only opt-in
-(`LOOM_ENABLE_WINDOWS_KERNEL`).
+portable suites run everywhere, including Windows — under **both MinGW-w64 and
+MSVC** — where the `posix` gate is off and those suites are reported as
+*declared absent* rather than passing; the Windows kernel backend is an
+explicit development-only opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`), and with it on
+the `kernel` gate is taken on either compiler.
+
+MSVC support means the package and the weave ABI, not the security story: the
+OS sandbox, isolation and the honesty lattice remain Linux-only on every
+Windows compiler. Tested on MSVC 19.50 (Visual Studio 2026) x64; clang-cl and
+ARM64 are unverified.
 
 ## Consuming loom
 
@@ -127,6 +133,22 @@ The exported surface is deliberately smaller than the build tree —
 interface plumbing, carried so `-Werror` never reaches your sources). Exported
 names match the in-tree aliases exactly, so a sibling-source build swaps for
 the installed package without touching a link line.
+
+**MSVC consumers get the conforming preprocessor automatically.** `ZEN_SHAPE`'s
+access tags (`ZEN_EXPOSE`/`ZEN_HIDE`) dispatch on C++20 `__VA_OPT__`, which
+MSVC's default traditional preprocessor does not implement, so `loom::core`
+carries `/Zc:preprocessor` as an interface requirement — link the target and it
+arrives. Only a consumer compiling these headers **without** the CMake targets
+needs to pass it by hand; nothing else about the package is MSVC-specific.
+`tests/package/` is the witness that this stays true:
+
+```sh
+cmake -DZEN_PREFIX=/path/to/prefix -DZEN_WORK=/tmp/w -P tests/package/run.cmake
+```
+
+It builds an external project through `find_package(loom)` alone — no flags, no
+sibling include path — compiles every macro form, and then asks the produced
+weave what it exports and loads it through the real Kernel.
 
 ## Where this lives
 
