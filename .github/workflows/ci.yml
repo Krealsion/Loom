@@ -294,14 +294,16 @@ jobs:
   # weave actually exports, so it fails if the package ever stops carrying
   # /Zc:preprocessor or the ABI symbol loses its exact undecorated spelling.
   #
-  # KNOWN RED, DELIBERATELY NOT HIDDEN: the final `verify` step currently fails the
-  # `component` suite under MSVC *Debug*. That is a real zen-ui defect this lane found
-  # and not an MSVC quirk -- tree_of()'s recursive rebuild exhausts the stack at chain
-  # depth ~240 while kMaxUiDepth=256 still accepts 257, so the cap does not bound what
-  # it exists to bound when frames are fat. MinGW survives 4000 and MSVC Release is
-  # 31/31, which is why only this configuration shows it. Running Release here instead
-  # would have made the lane green by choosing the configuration that passes; it is left
-  # visible until the cap is fixed.
+  # WHAT THIS LANE ALREADY CAUGHT, and why it stays on Debug. On its first run the
+  # `verify` step failed the `component` suite here and nowhere else: tree_of()'s
+  # recursive rebuild exhausted the C++ stack at chain depth ~240 while kMaxUiDepth=256
+  # still accepted 257, so a deep component frame killed the process instead of being
+  # rebuilt or refused -- a real zen-ui defect (P-MSVC-1), not an MSVC quirk. Only fat
+  # Debug frames showed it; MinGW walked 4000 deep and MSVC Release was already 31/31,
+  # so switching this lane to Release would have bought a green by choosing the
+  # configuration that passes. It was left visibly red instead, and MSVC-1 made the walk
+  # iterative: the cap is now the first bound on every toolchain and this lane is green.
+  # Keep it on Debug -- the thickest frames are the point.
   loom-windows-msvc:
     name: Loom / Windows / MSVC + installed-package witness (advisory)
     runs-on: windows-2025

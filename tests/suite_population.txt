@@ -74,7 +74,7 @@ weave_shape        portable  4
 weave              portable  10
 poke               portable  20
 console            portable  27
-component          portable  15
+component          portable  18
 pixel              portable  9
 bridge             portable  19
 bridge             posix     8

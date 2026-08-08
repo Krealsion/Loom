@@ -192,6 +192,18 @@ struct TreeResult {
 /// Maximum tree depth tree_of() will rebuild. A UI deeper than this is pathological; the cap
 /// keeps hostile deep-chain components from exhausting the C++ stack (the decode-side analogue
 /// of the binary codec's own nesting cap).
+///
+/// THE CONVENTION, exactly: the root is at depth 0 and the refusal is `depth > kMaxUiDepth`, so
+/// the deepest legal node sits at depth kMaxUiDepth and the longest legal CHAIN is
+/// kMaxUiDepth + 1 nodes.
+///
+/// AND IT IS THE FIRST BOUND, which took a repair to make true (MSVC-1). tree_of() walks the
+/// nodes with an explicit work stack, never native recursion, so this cap is what stops a deep
+/// frame on every toolchain. While the walk was recursive the cap was only nominal: MSVC Debug
+/// ran out of C++ stack at chain depth 240 — inside the window the cap says it accepts — and
+/// killed the process rather than rebuilding or refusing, while GCC's thinner frames reached
+/// the cap and hid it. Changing this number changes which frames are ACCEPTED (a wire-admission
+/// decision); it is no longer a guess about anyone's frame size.
 inline constexpr int kMaxUiDepth = 256;
 
 /// Rebuild the Widget tree from a component's flat nodes — the vocabulary's own decode check,

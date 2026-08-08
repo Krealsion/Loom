@@ -77,6 +77,26 @@ UiNode stack_node() {
     return n;
 }
 
+// THE DEPTH CONVENTION, stated once and derived from everywhere (MSVC-1). The root enters at
+// depth 0 and the refusal is `depth > kMaxUiDepth`, so the deepest LEGAL node sits at depth
+// kMaxUiDepth and the longest legal CHAIN is kMaxUiDepth + 1 nodes. No test below types a
+// boundary number; they all derive it, so the cap can move without the tests quietly agreeing.
+constexpr int kLongestLegalChain = kMaxUiDepth + 1;
+
+// A flat chain of `count` VStack nodes: 0 -> 1 -> ... -> count-1. Built with a LOOP, so the
+// fixture contributes no native recursion of its own and a deep case measures only the decoder.
+UiComponent chain_component(int count) {
+    UiComponent c;
+    c.name = "chain";
+    for (int i = 0; i < count; ++i) {
+        c.nodes.push_back(stack_node());
+    }
+    for (int i = 0; i + 1 < count; ++i) {
+        c.nodes[static_cast<std::size_t>(i)].children.push_back(i + 1);
+    }
+    return c;
+}
+
 // The full wire path: struct -> Value -> canonical bytes -> Unverified -> the SAME gate as the
 // bus -> struct. REQUIREs each step so a failure names its stage.
 UiComponent gate_round_trip(const UiComponent& c) {
@@ -381,6 +401,161 @@ TEST_CASE("the lossless pair is BOUNDED and says so: flatten past the depth cap 
     const TreeResult r = tree_of(too_deep);
     CHECK_FALSE(r.root.has_value());
     CHECK(r.error.find("deeper than") != std::string::npos);
+}
+
+TEST_CASE("the depth cap is the FIRST bound: the exact boundary holds, and a chain thousands "
+          "deeper is refused the same way — not by the C++ stack") {
+    // MSVC-1. The cap only means something if it is what STOPS a deep frame. Before the walk
+    // was made iterative it was not: on MSVC Debug the recursion died of STATUS_STACK_OVERFLOW
+    // at chain depth 240 while the cap admits 257, so the whole 240..257 window killed the
+    // process instead of being rebuilt or refused. GCC's thinner frames reached the cap and hid
+    // it — which is the point. A bound enforced by whichever compiler runs out of stack first
+    // is not a bound.
+    //
+    // These call tree_of DIRECTLY rather than through the gate, on purpose: past roughly 2,900
+    // nodes the EARLIER decode-materialization budget (kMaxDecodedCells) refuses the frame
+    // before the decoder ever sees it. That is a different law bounding a different thing and
+    // both are kept — the last subcase pins exactly that ordering — but a chain that never
+    // reaches tree_of cannot witness anything about tree_of.
+
+    SUBCASE("the accepted edge: max-2, max-1 and the longest legal chain all rebuild") {
+        for (const int len : {kLongestLegalChain - 2, kLongestLegalChain - 1, kLongestLegalChain}) {
+            const TreeResult r = tree_of(chain_component(len));
+            REQUIRE_MESSAGE(r.root.has_value(), "chain of " << len << ": " << r.error);
+            // Rebuilt whole, not merely accepted: walk to the far end and count.
+            int seen = 1;
+            for (const Widget* w = &*r.root; !w->children.empty(); w = &w->children.front()) {
+                ++seen;
+            }
+            CHECK(seen == len);
+        }
+    }
+
+    SUBCASE("the refused edge: max+1 and max+2 are refused, naming the first over-deep node") {
+        for (const int len : {kLongestLegalChain + 1, kLongestLegalChain + 2}) {
+            const TreeResult r = tree_of(chain_component(len));
+            CHECK_FALSE(r.root.has_value());
+            // The refusal names the node one past the deepest legal one, whatever the cap is.
+            const std::string first_too_deep =
+                "nodes[" + std::to_string(kLongestLegalChain) + "]";
+            CHECK_MESSAGE(r.error.find(first_too_deep) != std::string::npos, r.error);
+            CHECK_MESSAGE(r.error.find("deeper than") != std::string::npos, r.error);
+        }
+    }
+
+    SUBCASE("thousands deeper is the SAME refusal, not a different fate") {
+        // The core of the repair: physically larger must not mean differently handled. If any
+        // native recursion crept back in, these are the lengths that would take the process
+        // down instead of returning a sentence.
+        const std::string expected = tree_of(chain_component(kLongestLegalChain + 1)).error;
+        REQUIRE_FALSE(expected.empty());
+        for (const int len : {4000, 20000, 100000}) {
+            const TreeResult r = tree_of(chain_component(len));
+            CHECK_FALSE(r.root.has_value());
+            CHECK_MESSAGE(r.error == expected, "chain of " << len << ": " << r.error);
+        }
+    }
+
+    SUBCASE("the two bounds stay two: past the materialization budget, the EARLIER law speaks") {
+        // Depth and materialization bound different things and are charged at different
+        // moments — the budget while the bytes are being decoded, the cap while the decoded
+        // nodes are being rebuilt. A chain far past the budget is refused by the budget, in the
+        // budget's own words, and never reaches the depth check at all.
+        const UiComponent huge = chain_component(4000);
+        const loom::Unverified u = loom::parse(loom::serialize(loom::to_value(huge)));
+        REQUIRE(u.well_formed());
+        loom::Admission a = loom::admit(u, loom::schema_of<UiComponent>());
+        REQUIRE_FALSE(a.ok());
+        CHECK_MESSAGE(a.first_error().message().find("materialization budget") != std::string::npos,
+                      a.first_error().message());
+    }
+}
+
+TEST_CASE("the iterative walk rebuilds the SAME tree: sibling order and shape survive") {
+    // MSVC-1's traversal keeps an explicit work stack, and the classic way to get that wrong is
+    // to push children forward and pop them LIFO — which yields a tree of the identical SHAPE
+    // with its siblings reversed. Identical children cannot see that, so every sibling here is
+    // deliberately distinguishable.
+
+    SUBCASE("a branching tree: several distinct children per node, several levels") {
+        std::vector<Widget> level1;
+        for (int i = 0; i < 4; ++i) {
+            std::vector<Widget> level2;
+            for (int j = 0; j < 3; ++j) {
+                level2.push_back(text_widget("leaf " + std::to_string(i) + "." +
+                                             std::to_string(j)));
+            }
+            level1.push_back(vstack("branch-" + std::to_string(i), std::move(level2)));
+        }
+        const Widget root = hstack("root", std::move(level1));
+
+        const UiComponent back = gate_round_trip(make_component("branching", "", 0, root));
+        const TreeResult r = tree_of(back);
+        REQUIRE_MESSAGE(r.root.has_value(), r.error);
+        CHECK(*r.root == root); // structural ==; a reversal at ANY level fails here
+
+        // Said again without leaning on == , so a change to Widget's comparison cannot quietly
+        // take this proof with it: read the labels back in the order they were authored.
+        REQUIRE(r.root->children.size() == 4);
+        for (std::size_t i = 0; i < r.root->children.size(); ++i) {
+            const Widget& branch = r.root->children[i];
+            CHECK(branch.region_id == "branch-" + std::to_string(i));
+            REQUIRE(branch.children.size() == 3);
+            for (std::size_t j = 0; j < branch.children.size(); ++j) {
+                CHECK(branch.children[j].content ==
+                      "leaf " + std::to_string(i) + "." + std::to_string(j));
+            }
+        }
+    }
+
+    SUBCASE("a deep branch with siblings at every level, just under the cap") {
+        // The stress ladder: alternating VStack/HStack, each level carrying a LABELLED sibling
+        // beside the descent, so depth and width are exercised at once all the way down. A
+        // chain alone cannot catch an ordering mistake — it has no siblings to disorder.
+        const Widget deep = stress_nested(kMaxUiDepth - 1);
+        const UiComponent back = gate_round_trip(make_component("ladder", "", 0, deep));
+        const TreeResult r = tree_of(back);
+        REQUIRE_MESSAGE(r.root.has_value(), r.error);
+        CHECK(*r.root == deep);
+    }
+
+    SUBCASE("the smallest shapes still hold: a single node, and one child") {
+        const Widget alone = text_widget("only");
+        const TreeResult r1 = tree_of(make_component("alone", "", 0, alone));
+        REQUIRE_MESSAGE(r1.root.has_value(), r1.error);
+        CHECK(*r1.root == alone);
+
+        const Widget pair = vstack("p", {text_widget("child")});
+        const TreeResult r2 = tree_of(make_component("pair", "", 0, pair));
+        REQUIRE_MESSAGE(r2.root.has_value(), r2.error);
+        CHECK(*r2.root == pair);
+    }
+}
+
+TEST_CASE("decoding carries nothing between calls: the same fixtures decode identically, "
+          "repeatedly") {
+    // The explicit work stack is per-call state. If it were ever hoisted — or if a depth
+    // counter outlived a call — the SECOND decode would differ from the first. Modest
+    // deterministic repetition, run under the sanitizer lane; not a stress benchmark.
+    const UiComponent legal = chain_component(kLongestLegalChain);
+    const UiComponent over = chain_component(kLongestLegalChain + 1);
+    const UiComponent hostile = chain_component(4000);
+
+    const TreeResult first_legal = tree_of(legal);
+    REQUIRE_MESSAGE(first_legal.root.has_value(), first_legal.error);
+    const std::string over_error = tree_of(over).error;
+    REQUIRE_FALSE(over_error.empty());
+
+    for (int i = 0; i < 8; ++i) {
+        const TreeResult a = tree_of(legal);
+        REQUIRE_MESSAGE(a.root.has_value(), a.error);
+        CHECK(*a.root == *first_legal.root);
+
+        // Interleaved on purpose: a refusal must not leave anything behind that changes the
+        // next acceptance, and vice versa.
+        CHECK(tree_of(over).error == over_error);
+        CHECK(tree_of(hostile).error == over_error);
+    }
 }
 
 TEST_CASE("every wire field crosses non-default: a maximal node pair round-trips bit-for-bit") {
