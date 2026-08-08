@@ -351,9 +351,43 @@ typedef struct ZenWeaveAbi {
                         const uint8_t* payload, size_t len, const ZenHostApi* host);
 } ZenWeaveAbi;
 
+/* THE EXPORT DECORATION BELONGS TO THE DECLARATION, NOT ONLY THE DEFINITION.
+ *
+ * On PE, __declspec(dllexport) is the precise spelling -- and marking the ONE ABI
+ * symbol for export also switches off MinGW's export-everything auto-export, so a
+ * weave's dynamic surface shrinks to exactly `zen_weave_abi`: the RTLD_LOCAL
+ * spirit, PE edition. The ELF visibility attribute is not meaningful on PE (and is
+ * warning-hostile under -Werror there), hence the platform split.
+ *
+ * IT LIVES HERE, BESIDE THE DECLARATION, BECAUSE MSVC COUNTS IT AS PART OF THE
+ * LINKAGE (MSVC-0). It used to live only at the definition site in
+ * kernel/export.hpp, so every weave declared this symbol undecorated (here) and
+ * then defined it decorated (there). GCC and MinGW merge that silently; MSVC
+ * refuses it outright -- `error C2375: 'zen_weave_abi': redefinition; different
+ * linkage` -- and refused every weave in this tree, which is the honest reading:
+ * the two spellings genuinely disagreed about what the symbol was, and only one
+ * compiler said so.
+ *
+ * So the entry point's COMPLETE signature is stated once, in the header that owns
+ * the ABI, and the definition macro reuses this very token rather than re-deriving
+ * an equivalent one. Declaration and definition now agree by construction rather
+ * than by two platform ladders happening to stay in step.
+ *
+ * On an image that merely INCLUDES this header without defining the entry point --
+ * every host, the Kernel included -- the decoration is inert: nothing is exported
+ * because nothing is defined, and the host still finds the symbol the only way it
+ * ever has, by name through the dynamic loader. */
+#if defined(_WIN32)
+#define ZEN_KERNEL_EXPORT __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+#define ZEN_KERNEL_EXPORT __attribute__((visibility("default")))
+#else
+#define ZEN_KERNEL_EXPORT
+#endif
+
 /* The one exported symbol every Zen Weave library provides. Returns a pointer to
  * a static descriptor (never freed by the host). */
-const ZenWeaveAbi* zen_weave_abi(void);
+ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

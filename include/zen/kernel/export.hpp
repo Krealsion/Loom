@@ -29,19 +29,12 @@
 #include <string_view>
 #include <vector>
 
-// On PE (the Windows development/demo backend), __declspec(dllexport) is the
-// precise spelling — and marking the ONE ABI symbol for export also switches
-// off MinGW's export-everything auto-export, so the library's dynamic surface
-// shrinks to exactly `zen_weave_abi`: the RTLD_LOCAL spirit, PE edition. The
-// ELF visibility attribute is not meaningful on PE (and is warning-hostile
-// under -Werror there), hence the platform split.
-#if defined(_WIN32)
-#define ZEN_KERNEL_EXPORT __declspec(dllexport)
-#elif defined(__GNUC__) || defined(__clang__)
-#define ZEN_KERNEL_EXPORT __attribute__((visibility("default")))
-#else
-#define ZEN_KERNEL_EXPORT
-#endif
+// ZEN_KERNEL_EXPORT — the entry point's export decoration — is NOT defined here.
+// It comes from <zen/kernel/abi.h> above, beside the declaration it must match,
+// because MSVC counts the decoration as part of the symbol's linkage: a plain
+// declaration followed by a decorated definition is C2375, not a merge. Reusing
+// that token rather than re-deriving an equivalent ladder is what makes the two
+// agree by construction. See abi.h for the full account.
 
 namespace loom::detail {
 
