@@ -72,6 +72,35 @@ target_include_directories(loom
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_compile_features(loom PUBLIC cxx_std_20)
+
+# THE PUBLIC MACRO SURFACE REQUIRES A CONFORMING PREPROCESSOR (MSVC-0).
+#
+# ZEN_EXPOSE / ZEN_HIDE dispatch on argument presence with C++20 `__VA_OPT__`
+# (include/zen/weave/shape.hpp). MSVC's TRADITIONAL preprocessor is still the
+# default in C++20 mode and does not implement it: `__VA_OPT__` survives as an
+# ordinary identifier and gets pasted, so `ZEN_EXPOSE(rate)` expands to a call to
+# `ZEN_DETAIL_EXPOSE___VA_OPT__(FIELD)(rate)` and the maker is told their own
+# field name is a syntax error. Measured on MSVC 19.50: without the flag the
+# probe fails with exactly that diagnostic family; with it, it compiles clean.
+# `/permissive-` (already on zen-warnings) does NOT imply it -- both arms of that
+# experiment had `/permissive-`.
+#
+# THIS IS PUBLIC, so it rides PUBLIC on `loom` -- the target whose public include
+# directory carries shape.hpp -- and therefore reaches a stranger through
+# find_package(loom) as INTERFACE_COMPILE_OPTIONS. A consumer must never have to
+# discover a Loom-private compiler requirement to use Loom's ordinary headers.
+# It deliberately does NOT go on zen-warnings (PRIVATE, and $<LINK_ONLY:> in the
+# export precisely so Loom's warning policy does not leak onto a consumer's
+# sources) nor in loom_weave_build_contract() (weave-only; this requirement binds
+# every consumer of the shape macros, whether or not they ever build a weave).
+#
+# `$<CXX_COMPILER_ID:MSVC>` is false for clang-cl, whose CMake compiler id is
+# Clang -- correct rather than incidental: clang-cl's preprocessor already
+# implements __VA_OPT__, so it needs nothing here. (The `MSVC` *variable* would
+# have been true for clang-cl; the generator expression is the precise one.)
+target_compile_options(loom PUBLIC
+    $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>)
+
 target_link_libraries(loom
     PUBLIC  zen-sanitize
     PRIVATE zen-warnings)
