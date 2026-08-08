@@ -283,6 +283,76 @@ jobs:
       - name: Verify the repository-owned population
         run: cmake -DZEN_BUILD_DIR=build-win-kernel -P tests/verify.cmake
 
+  # The MSVC lane (MSVC-0). It exists because "Windows" was never one toolchain: the
+  # MinGW lanes above were green for months while a normal MSVC consumer could not
+  # compile Loom's public shape macros at all, and could not link a weave.
+  #
+  # STEP ORDER IS DELIBERATE. The installed-package witness runs BEFORE the repository
+  # population, because it is the claim this lane exists to keep honest and it must be
+  # exercised on every run. `tests/package/run.cmake` reaches Loom only through
+  # find_package -- no flags, no sibling paths -- and asks dumpbin what the produced
+  # weave actually exports, so it fails if the package ever stops carrying
+  # /Zc:preprocessor or the ABI symbol loses its exact undecorated spelling.
+  #
+  # KNOWN RED, DELIBERATELY NOT HIDDEN: the final `verify` step currently fails the
+  # `component` suite under MSVC *Debug*. That is a real zen-ui defect this lane found
+  # and not an MSVC quirk -- tree_of()'s recursive rebuild exhausts the stack at chain
+  # depth ~240 while kMaxUiDepth=256 still accepts 257, so the cap does not bound what
+  # it exists to bound when frames are fat. MinGW survives 4000 and MSVC Release is
+  # 31/31, which is why only this configuration shows it. Running Release here instead
+  # would have made the lane green by choosing the configuration that passes; it is left
+  # visible until the cap is fixed.
+  loom-windows-msvc:
+    name: Loom / Windows / MSVC + installed-package witness (advisory)
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Compiler selection is part of the evidence: the toolset is chosen explicitly
+      # through vswhere rather than left to whatever CMake happens to find.
+      - name: Record selected MSVC toolset
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "No MSVC x64 toolset on this image" }
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
+          cl 2>&1 | Select-Object -First 2
+          cmake --version
+          ninja --version
+
+      - name: Configure and build with MSVC
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
+          cmake -S . -B build-msvc -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLOOM_ENABLE_WINDOWS_KERNEL=ON
+          cmake --build build-msvc
+
+      - name: Install to a fresh prefix and run the installed-package witness
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
+          $prefix = Join-Path $env:RUNNER_TEMP 'loom-msvc-prefix'
+          if (Test-Path -LiteralPath $prefix) { throw "Fresh Loom prefix already exists: $prefix" }
+          cmake --install build-msvc --prefix $prefix
+          cmake "-DZEN_PREFIX=$prefix" "-DZEN_WORK=$(Join-Path $env:RUNNER_TEMP 'pkg-witness')" -P tests/package/run.cmake
+
+      - name: Verify the repository-owned population
+        shell: pwsh
+        run: cmake -DZEN_BUILD_DIR=build-msvc -P tests/verify.cmake
+
   loom-windows-kernel-less:
     name: Loom / Windows / default kernel-less (advisory)
     runs-on: windows-2025

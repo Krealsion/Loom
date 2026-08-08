@@ -89,6 +89,17 @@ own that you link into a weave is yours to hand over too.
 **Building without CMake?** Reproduce the equivalent non-unique symbol semantics
 for your toolchain yourself, and then verify the artifact rather than trusting
 the flag: `nm -D --defined-only my-weave.so | grep ' u '` must print nothing.
+On **MSVC** you additionally have to pass `/Zc:preprocessor` yourself — Loom's
+public shape macros are C++20 `__VA_OPT__` and the default traditional
+preprocessor mis-expands them. The supported CMake targets apply it for you;
+this is the one thing the package cannot hand a consumer who never links it.
+
+These are two different laws and they do not travel together. The unique-symbol
+mitigation is about a **loadable image's static lifetime** and is ELF/GNU-only
+(`loom_weave_build_contract`, which you call). The preprocessor requirement is
+about **compiling Loom's public headers at all**, is MSVC-only, and binds every
+consumer of `ZEN_SHAPE` whether or not they ever build a weave — which is why it
+rides `loom::core` and arrives on its own.
 
 ## Load it
 
