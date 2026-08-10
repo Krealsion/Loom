@@ -107,6 +107,11 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
 - A grant bounds what in-process native code can *touch* — it bounds speech
   only; a `dlopen`ed weave shares this address space
   (`docs/guides/dynamic-weaves.md`).
+- That grants are mutable (GATE-05). A subject's *delegated* message authority
+  can be replaced live, by a holder of a host-minted `GrantAuthority`, within
+  that capability's ceiling; its admission **baseline** never changes, and its
+  OS/filesystem/resource containment was consumed into kernel state before the
+  child ran — `LiveAuthority` has no word for any of it.
 - Green means correct — "proven" means a regression test asserts it; check
   case *counts*, not just pass/fail.
 - Docs claims over source: when they disagree, current source + tests win;

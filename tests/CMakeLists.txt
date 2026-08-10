@@ -44,6 +44,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_provenance.cpp
     test_role_authorship.cpp
     test_sense.cpp
+    test_grant.cpp
     test_harness.cpp
     test_breathing.cpp
     test_schema_codec.cpp

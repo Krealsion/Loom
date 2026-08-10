@@ -349,6 +349,25 @@ public:
                                        sequence);
     }
 
+    /// REPLACE THE DELEGATED LIVE AUTHORITY of the subject this capability
+    /// governs (GRANT-0). Grant, revoke, widen and narrow are this one call.
+    ///
+    /// Available from inside an ordinary handler, on purpose: an administrator
+    /// decides policy the way every other weave decides anything — because a
+    /// message arrived — and this is what it does about it. Nothing is sent, and
+    /// the governed subject stays the sender of whatever it goes on to retry.
+    loom::GrantChange delegate_authority(const loom::GrantAuthority& authority,
+                                         loom::LiveAuthority requested) {
+        return bus_.delegate_authority(authority, std::move(requested));
+    }
+
+    /// What that subject's baseline, delegated and effective authority currently
+    /// are — as the bus itself will read them, so an administrator never needs a
+    /// second map that only believes it agrees with the Kernel.
+    loom::AuthorityView describe_authority(const loom::GrantAuthority& authority) {
+        return bus_.describe_authority(authority);
+    }
+
 private:
     loom::Bus& bus_;
     const loom::Message& in_;

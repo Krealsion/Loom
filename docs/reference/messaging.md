@@ -44,7 +44,9 @@ distinct observable reason:
 ```text
 1  sender life current?          SenderLifeEnded
 2  seal boundaries               SealedSpeech (outbound) / NoSuchTarget (inbound disguise)
-3  grant permits shape→target?   CapabilityDenied
+3  effective authority permits
+   shape→target?                CapabilityDenied   (baseline union delegated,
+                                                    read NOW — GATE-05)
 4  role resolves?                NoSuchTarget
 5  target alive?                 TargetUnavailable
 6  answer-target still exact?    AnswerTargetChanged

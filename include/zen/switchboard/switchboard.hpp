@@ -1135,6 +1135,53 @@ private:
         CandidateOwner sealed_by{};
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
+        /// AUTHORITY A HOST-MINTED ADMINISTRATOR HAS INSTALLED SINCE (GRANT-0).
+        ///
+        /// Empty for every weave that has never been administered, which is every
+        /// weave until a `GrantAuthority` names it — so "a weave gains nothing by
+        /// existing" survives delegation existing.
+        ///
+        /// AN OVERLAY BESIDE `grant`, NOT AN EDIT TO IT, and the three reasons are
+        /// each load-bearing:
+        ///
+        ///   TRUTH        `grant` still says exactly what the host said at
+        ///                admission, forever. "Authority entered at admission" did
+        ///                not become a lie; it became half a sentence, and the
+        ///                other half is here.
+        ///   SAFETY       `Grant` also carries containment policy already consumed
+        ///                into a child's namespace/cgroup. A mutable `grant` would
+        ///                be an API shaped like it could revisit those. This field
+        ///                is a `LiveAuthority`, which has no words for them.
+        ///   BASELINE     revocation replaces THIS and cannot reach `grant`, so a
+        ///                narrow administrator can never strip a subject of what
+        ///                the host gave it — structurally, not by remembering to
+        ///                check.
+        ///
+        /// Effective authority is the UNION of the two, computed at every delivery
+        /// by `effective_permits*` and by nothing else. It is scoped to the
+        /// WeaveId, exactly as `grant` is: it survives a code swap and a revival
+        /// for the same reason the baseline does — the same mounted subject — and
+        /// it is destroyed with this record, so a departed subject's delegated
+        /// rights cannot outlive it or land on anyone else.
+        ///
+        /// VALUE-INITIALIZED HERE rather than at the one registration site, so
+        /// "a newly mounted weave holds no delegated authority" is a property of
+        /// the type instead of a line somebody has to remember to write. A
+        /// future construction path starts at the floor without being told to.
+        LiveAuthority delegated{};
+        /// WHY THE SHAPES A DELEGATED RULE NAMES STILL RESOLVE (BL-0, LIFE-08).
+        ///
+        /// A grant's named send rules take a registry claim at registration, so a
+        /// producer authorized for a shape keeps that shape meaning something even
+        /// after whoever defined it unmounts. A delegated rule authorizes speech in
+        /// exactly the same way, so it earns exactly the same claim — otherwise
+        /// "granted at mount" and "granted live" would decay differently, and the
+        /// second one's failure would read as "I have never heard of that shape".
+        ///
+        /// Its own scope, separate from `schemas`, because it has its own lifetime:
+        /// replacement re-claims the new set BEFORE releasing this one, so a shape
+        /// present in both never falls to zero claims mid-swap.
+        SchemaClaimScope delegated_schemas{};
     };
 
     /// What an authenticated answer expects to find at its destination.
@@ -1330,6 +1377,13 @@ private:
         SenseReading observe_office(std::string_view role, std::shared_ptr<const Schema> shape) override {
             return sb_.observe_office_as(self_, role, shape->name(), shape->version());
         }
+        GrantChange delegate_authority(const GrantAuthority& authority,
+                                       LiveAuthority requested) override {
+            return sb_.delegate_authority_as(self_, authority, std::move(requested));
+        }
+        AuthorityView describe_authority(const GrantAuthority& authority) override {
+            return sb_.describe_authority_as(self_, authority);
+        }
 
     private:
         Switchboard& sb_;
@@ -1370,6 +1424,27 @@ private:
     /// The one write path for a lifecycle attestation.
     Ticket announce_as(WeaveId as_sender, const LifecycleAuthority& authority, WeaveId target,
                        Message msg, std::int64_t sequence);
+
+    // ---- live authority administration (GRANT-0) -----------------------------
+
+    /// THE ONE WRITE PATH for a subject's delegated live authority.
+    ///
+    /// `caller` is the weave that presented the capability. It is recorded in the
+    /// argument list because a Weaver's diagnostics deserve to know who acted —
+    /// and it is DELIBERATELY NOT CONSULTED for authorization. Power here comes
+    /// from possessing the capability, never from being anybody in particular;
+    /// checking a name as well would quietly invent a second, weaker rule that a
+    /// magic role could later satisfy.
+    ///
+    /// Order of refusal, and it is the informative order rather than the cheap
+    /// one: inert capability, then foreign/dead board, then missing subject, then
+    /// ceiling. A holder is entitled to know which of its own facts went stale;
+    /// none of these reveals anything about a weave it does not already govern.
+    GrantChange delegate_authority_as(WeaveId caller, const GrantAuthority& authority,
+                                      LiveAuthority requested);
+
+    /// The read half, through the same capability and with the same scope.
+    AuthorityView describe_authority_as(WeaveId caller, const GrantAuthority& authority) const;
 
     // ---- deferred answers (R2B-2) -------------------------------------------
 
@@ -1720,6 +1795,35 @@ private:
     /// weave-authoring header includes — so the name is not even visible to
     /// ordinary weave source, and the object it needs is one a weave never has.
     friend LifecycleAuthority host_lifecycle_authority(Switchboard& bus);
+
+    /// Mint the right to administer ONE subject's delegated live authority, up to
+    /// `ceiling` and no further (GRANT-0). Private, behind the one host-wiring
+    /// function below, for the reason lifecycle minting is: a weave holds a `Bus&`
+    /// and there is no `Switchboard&` in its hands to reach this with.
+    ///
+    /// The subject is NOT required to exist yet, and that is not laxity: a
+    /// capability must be checked against the live registry at every use anyway
+    /// (a subject can die at any time), so validating once at mint would add a
+    /// second, weaker check whose passing means nothing later. One check, at the
+    /// moment it decides something.
+    GrantAuthority grant_authority(WeaveId subject, LiveAuthority ceiling) {
+        return GrantAuthority{identity_, subject, std::move(ceiling)};
+    }
+
+    /// Was this administration capability issued by THIS Loom, and is that Loom
+    /// still alive? The same question `issued_here(const LifecycleAuthority&)`
+    /// asks, for the same reason and with the same answer for a dead issuer:
+    /// every Loom is its own authority domain, and an authority minted from a
+    /// decoy board is entirely real — somewhere else.
+    bool issued_here(const GrantAuthority& authority) const noexcept {
+        const std::shared_ptr<const LoomIdentity> issuer = authority.issuer_.lock();
+        return issuer != nullptr && issuer == identity_;
+    }
+
+    /// The ONE expression in the system that yields a GrantAuthority, defined in
+    /// `zen/host/grant_wiring.hpp` beside its lifecycle counterpart.
+    friend GrantAuthority host_grant_authority(Switchboard& bus, WeaveId subject,
+                                               LiveAuthority ceiling);
 
     /// This Loom's own identity — created with the board, destroyed with it, and
     /// shared with nothing except the authorities it issues (weakly). Two boards

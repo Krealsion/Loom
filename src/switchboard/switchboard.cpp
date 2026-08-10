@@ -14,21 +14,46 @@ namespace loom {
 
 namespace {
 
-/// The (name, version) pairs a grant's send rules actually NAME (BL-0). A
+/// The (name, version) pairs a set of send rules actually NAME (BL-0). A
 /// wildcard rule names nothing, so it contributes nothing: `allow_any` is
 /// permission without a declared vocabulary, and there is no shape it could
 /// sensibly keep alive.
-std::vector<detail::SchemaKey> named_send_shapes(const Grant& grant) {
+std::vector<detail::SchemaKey> named_send_shapes(const LiveAuthority& authority) {
     std::vector<detail::SchemaKey> keys;
-    for (const SendRule& rule : grant.rules()) {
+    for (const SendRule& rule : authority.rules()) {
         if (!rule.any_shape) {
             keys.emplace_back(rule.shape_name, rule.shape_version);
         }
     }
     return keys;
 }
+/// The baseline half of a grant, by the same rule — delegated authority earns
+/// the identical claim through the overload above (GRANT-0).
+std::vector<detail::SchemaKey> named_send_shapes(const Grant& grant) {
+    return named_send_shapes(grant.live());
+}
 
 } // namespace
+
+// ---- Grant administration --------------------------------------------------
+
+const char* name_of(GrantOutcome outcome) noexcept {
+    switch (outcome) {
+    case GrantOutcome::Installed:
+        return "Installed";
+    case GrantOutcome::NoAuthority:
+        return "NoAuthority";
+    case GrantOutcome::ForeignBoard:
+        return "ForeignBoard";
+    case GrantOutcome::NoSuchSubject:
+        return "NoSuchSubject";
+    case GrantOutcome::ExceedsCeiling:
+        return "ExceedsCeiling";
+    case GrantOutcome::NoLiveDelivery:
+        return "NoLiveDelivery";
+    }
+    return "?";
+}
 
 // ---- Refusal --------------------------------------------------------------
 
@@ -698,7 +723,12 @@ SenseReading Switchboard::observe_office(std::string_view role, std::string_view
 SenseReading Switchboard::observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
                                      std::uint32_t shape_version) const {
     auto it = weaves_.find(reader.value);
-    if (it == weaves_.end() || !it->second.grant.permits_observe(shape_name, shape_version)) {
+    // Effective observe authority, read at the moment of the read (GRANT-0) — the
+    // same live-value discipline the send path follows, and the reason observation
+    // is delegable at all: nothing here was decided earlier and cached.
+    if (it == weaves_.end() || !effective_permits_observe(it->second.grant.live(),
+                                                         it->second.delegated, shape_name,
+                                                         shape_version)) {
         // Refused BEFORE the lookup, so an unauthorized reader cannot learn
         // whether a claim exists — the same discipline role authorization
         // follows, where authorization happens before role resolution.
@@ -711,7 +741,9 @@ SenseReading Switchboard::observe_office_as(WeaveId reader, std::string_view rol
                                             std::string_view shape_name,
                                             std::uint32_t shape_version) const {
     auto it = weaves_.find(reader.value);
-    if (it == weaves_.end() || !it->second.grant.permits_observe(shape_name, shape_version)) {
+    if (it == weaves_.end() || !effective_permits_observe(it->second.grant.live(),
+                                                         it->second.delegated, shape_name,
+                                                         shape_version)) {
         return SenseReading{SenseRefusal::NotAuthorized, {}, std::nullopt};
     }
     return observe_office(role, shape_name, shape_version);
@@ -1033,6 +1065,96 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
     msg.sender = as_sender;
     return enqueue_directed(target, std::move(msg), /*gated=*/true,
                             Provenance::attested(Provenance::Kind::Activation, sequence));
+}
+
+// ---- live authority administration (GRANT-0) -------------------------------
+
+GrantChange Switchboard::delegate_authority_as(WeaveId caller, const GrantAuthority& authority,
+                                               LiveAuthority requested) {
+    GrantChange change;
+    change.subject = authority.subject();
+    // `caller` is who acted, for a Weaver's diagnostics. It is deliberately not
+    // consulted below: authority here is possession of the capability, and adding
+    // "...and you must also be somebody" would be a second rule that a magic name
+    // could one day satisfy.
+    (void)caller;
+
+    // INERT FIRST. A default-constructed capability names no subject at all, which
+    // is a different fact from naming one this board never had — and an
+    // administrator holding one as an uninitialized member deserves to be told
+    // which mistake it made.
+    if (!authority.valid()) {
+        change.outcome = GrantOutcome::NoAuthority;
+        return change;
+    }
+    // THEN THE BOARD. Every Loom is its own authority domain: a capability minted
+    // from a decoy Switchboard is entirely genuine and has no standing here, and
+    // one whose board has been destroyed has no standing anywhere. Checked before
+    // the registry is touched, so a foreign capability learns nothing about which
+    // ids this board has.
+    if (!issued_here(authority)) {
+        change.outcome = GrantOutcome::ForeignBoard;
+        return change;
+    }
+    WeaveRecord* subject = find(authority.subject());
+    if (subject == nullptr) {
+        // The subject is gone. A WeaveId is never reused, so this capability can
+        // never come to govern anything again — it fails safe permanently rather
+        // than waiting to be inherited by whoever mounts next.
+        change.outcome = GrantOutcome::NoSuchSubject;
+        return change;
+    }
+    change.previous = subject->delegated;
+    change.installed = subject->delegated;
+
+    // THE CEILING. The security-critical line of this file: a holder may install
+    // any semantic subset of what the host named, and nothing else — so a narrow
+    // Weaver cannot mint itself a root session, and an empty request (revocation)
+    // is always within any ceiling.
+    if (!authority.ceiling().contains(requested)) {
+        change.outcome = GrantOutcome::ExceedsCeiling;
+        return change;
+    }
+
+    // ONE STATE TRANSITION. Grant, revoke, widen and narrow are the same act — a
+    // replacement — so there is no window in which a subject holds the old rules
+    // and the new ones, or neither. Nothing between the two assignments below can
+    // observe an intermediate state: the board is single-threaded and neither line
+    // dispatches, pumps, or calls anything a weave wrote.
+    //
+    // The claim moves BEFORE the old one is released (BL-0's acquire-then-release),
+    // so a shape named by both the outgoing and incoming authority never falls to
+    // zero claims and stops resolving for the length of one assignment.
+    SchemaClaimScope next;
+    registry_.claim_known(next, named_send_shapes(requested));
+    subject->delegated = std::move(requested);
+    subject->delegated_schemas = std::move(next);
+
+    change.installed = subject->delegated;
+    change.outcome = GrantOutcome::Installed;
+    return change;
+}
+
+AuthorityView Switchboard::describe_authority_as(WeaveId caller,
+                                                 const GrantAuthority& authority) const {
+    (void)caller; // as above: the capability is the authority, not the caller
+    AuthorityView view;
+    if (!authority.valid() || !issued_here(authority)) {
+        return view; // unavailable, and saying nothing about this board's contents
+    }
+    const WeaveRecord* subject = find(authority.subject());
+    if (subject == nullptr) {
+        return view;
+    }
+    view.available = true;
+    view.subject = authority.subject();
+    // SNAPSHOTS OF THE VERY VALUES THE BUS WILL READ, not a summary derived
+    // alongside them. `AuthorityView::permits*` then calls the same
+    // `effective_*` predicates `deliver_one` calls, so an administrator's picture
+    // of what a subject may do cannot drift from what the subject may do.
+    view.base = subject->grant.live();
+    view.delegated = subject->delegated;
+    return view;
 }
 
 std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) {
@@ -1360,11 +1482,22 @@ void Switchboard::deliver_one(Envelope env) {
             emit(ev);
             return;
         }
+        // EFFECTIVE AUTHORITY, AT THE MOMENT OF DELIVERY (GRANT-0). Baseline union
+        // delegated, read off the record the router just found — never a value
+        // captured when this message was queued.
+        //
+        // That distinction is the whole of live revocation. A message authored
+        // while the sender held a delegated rule, queued, and delivered after an
+        // administrator took that rule back, is refused here: what was true at
+        // send time buys nothing, because nothing on the envelope remembers it.
+        // Approval changes authority, not history — and so does withdrawal.
         const bool permitted =
             sender != nullptr &&
             (env.role.empty()
-                 ? sender->grant.permits(ev.schema_name, ev.schema_version, env.target)
-                 : sender->grant.permits_role(ev.schema_name, ev.schema_version, env.role));
+                 ? effective_permits(sender->grant.live(), sender->delegated, ev.schema_name,
+                                     ev.schema_version, env.target)
+                 : effective_permits_role(sender->grant.live(), sender->delegated, ev.schema_name,
+                                          ev.schema_version, env.role));
         if (!permitted) {
             const Refusal r{RefusalReason::CapabilityDenied, {}};
             record(env.seq, Disposition::Refused, r);
