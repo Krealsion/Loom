@@ -61,6 +61,14 @@ This is **message authority only**. It is not "grants are now mutable": an
 isolated child's namespace, mount view and cgroup leaf were built before it
 ran, and no write in this process moves them.
 
+**The first holder of one is the [Weaver](weaver.md)** (WEAVER-1) — an ordinary
+weave that puts an authority request in front of a human being and installs the
+answer. Keep the four apart: the **Kernel** enforces, a **`GrantAuthority`** is
+the administration mechanism, the **Weaver** is one policy delegate, and the
+**operator seat** is a WeaveId a host chose to treat as the user. None of them
+implies the next, and the current console is a *bootstrap* operator rather than
+a permanent user identity.
+
 **The trust boundary is which bus you hold.** A weave holds only a `WeaveBus`
 (`Mail`): it stamps the weave's own identity on everything and routes through
 the gated path. The concrete `Switchboard` — `send`/`publish` ungated, grants

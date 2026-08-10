@@ -204,8 +204,22 @@ std::string render_narg(const NArg& a) {
 // ---- the console's own Weave: accepts anything (via AcceptMode), buffers it -----------
 class ConsoleWeave final : public loom::Weave {
 public:
+    explicit ConsoleWeave(std::vector<std::shared_ptr<const loom::Schema>> vocabulary)
+        : vocabulary_(std::move(vocabulary)) {}
+
     std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
-        return {}; // no listed shapes; AcceptMode::AnyRegistered widens this at delivery
+        // Usually EMPTY: AcceptMode::AnyRegistered widens the door set at delivery, so the
+        // console receives whatever the system already knows about.
+        //
+        // But "already knows about" is exactly the limit, and it is not a console policy — a
+        // shape enters the registry by being in some weave's accept-set, claim-set or state,
+        // and `AnyRegistered` still refuses a shape the registry cannot resolve. So a
+        // NOTIFICATION shape — one that only ever travels TO the operator, which no other
+        // participant has any reason to accept — was undeliverable to the operator's own
+        // window. Declaring it here is how a host says "this window expects to be told this",
+        // and it costs the rest of the console nothing: the wildcard still answers for
+        // everything else, and a listed door is gated exactly as the wildcard one is.
+        return vocabulary_;
     }
     void handle(const loom::Message& in, loom::Bus&) override {
         // Buffer EVERY received Value, generically — into a BOUNDED window. This weave is
@@ -237,10 +251,13 @@ public:
 
 private:
     BoundedHistory<loom::Value, kConsoleBufferCapacity> received_;
+    std::vector<std::shared_ptr<const loom::Schema>> vocabulary_;
 };
 
-ConsoleEngine::ConsoleEngine(loom::Switchboard& bus) : bus_(bus) {
-    auto weave = std::make_unique<ConsoleWeave>();
+ConsoleEngine::ConsoleEngine(loom::Switchboard& bus,
+                             std::vector<std::shared_ptr<const loom::Schema>> vocabulary)
+    : bus_(bus) {
+    auto weave = std::make_unique<ConsoleWeave>(std::move(vocabulary));
     weave_ = weave.get();
     // The most-granted participant — broad send (drive any Weave with any shape) — but a
     // GRANT, not host root authority. Reply-receipt is AcceptMode::AnyRegistered; the tap +

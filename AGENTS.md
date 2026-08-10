@@ -107,6 +107,10 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
 - A grant bounds what in-process native code can *touch* — it bounds speech
   only; a `dlopen`ed weave shares this address space
   (`docs/guides/dynamic-weaves.md`).
+- That the Weaver acts for the session it governs. It changes authority and
+  performs nothing: the session retries its own action, and the target sees the
+  **session** as `mail.sender()`. Nor does a Weaver's death revoke what it
+  installed — a grant is not a lease (`docs/reference/weaver.md`).
 - That grants are mutable (GATE-05). A subject's *delegated* message authority
   can be replaced live, by a holder of a host-minted `GrantAuthority`, within
   that capability's ceiling; its admission **baseline** never changes, and its

@@ -323,7 +323,15 @@ ShapeDesc describe_schema(const loom::Schema& schema);
 /// registers the console as an in-process Weave (broad grant + accept-any) and subscribes the tap.
 class ConsoleEngine : public Console, public LadderHost {
 public:
-    explicit ConsoleEngine(loom::Switchboard& bus);
+    /// `vocabulary` is the shapes this operator window declares it expects to be TOLD —
+    /// normally none. It exists because `AcceptMode::AnyRegistered` means "any shape the
+    /// registry can resolve", and the registry learns a shape from some weave's accept-set:
+    /// a notification shape that only ever travels to the operator has nobody else to
+    /// declare it, and was therefore refused at the console's own door. Declaring it here is
+    /// the host saying what this window is for. It is not a grant and not a bypass — a
+    /// listed door is gated exactly as the wildcard one is.
+    explicit ConsoleEngine(loom::Switchboard& bus,
+                           std::vector<std::shared_ptr<const loom::Schema>> vocabulary = {});
     ~ConsoleEngine() override;
     ConsoleEngine(const ConsoleEngine&) = delete;
     ConsoleEngine& operator=(const ConsoleEngine&) = delete;
