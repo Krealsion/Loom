@@ -279,6 +279,16 @@ target_link_libraries(zen-tui
     PUBLIC  zen-ui zen-sanitize
     PRIVATE zen-warnings)
 
+# The first user seat, running (WEAVER-1): a host that boots an operator console, a Weaver
+# holding one GrantAuthority, one governed session and one service — and then gets out of the
+# way. It is a HOST, not a library: the durable artifacts are the header-only Weaver
+# (include/zen/weaver/) and the console engine it drives, both of which this file only mounts.
+# Its REPL is deliberately shape-agnostic — there is no approve/grant/revoke command, because
+# the operator composes the ordinary registered policy shapes like any others.
+add_executable(zen-weaver-demo src/weaver/weaver_demo.cpp)
+target_link_libraries(zen-weaver-demo
+    PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
+
 # The full-screen TUI frontend (in-process): local wiring + a demo responder over the shared renderer.
 add_executable(zen-console-tui src/console/console_tui.cpp)
 target_link_libraries(zen-console-tui

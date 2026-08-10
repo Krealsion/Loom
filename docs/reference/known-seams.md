@@ -70,6 +70,16 @@ AN ADMINISTRATION ACT IS NOT ON THE TAP.  Delegation queues no message and emits
     log, and it meets the same wall the delivery tap does — whole-bus
     observation is host authority, not a grant.
 
+    STILL TRUE AFTER WEAVER-1, and worth stating precisely, because the Weaver
+    looks like it closed this and did not. An operator sees the workflow it is
+    ITSELF PART OF — its own prompts, its own acks, its own refusals — because
+    the Weaver deliberately sends it those messages. It does not see an
+    authority change made by any other holder of a capability over the same
+    subject, and there is no event it could subscribe to that would show one.
+    A Weaver reading `describe_authority` afterwards reports the truth (it keeps
+    no picture of its own to be stale), so the gap is NOTIFICATION, not
+    correctness.
+
 THE CAPABILITY IS NOT ATTENUABLE BY ITS HOLDER.  A `GrantAuthority` governs one
     subject with one ceiling, and there is no verb by which its holder mints a
     narrower one for somebody else. One administrator per governed subject, the
@@ -81,7 +91,32 @@ There is also no time-based expiry and no one-shot authority: a delegated rule
 is reusable until it is explicitly replaced or the subject dies. "Allow while
 this session lives" and "allow until revoked" are both real; **"allow once" is
 not claimed**, and a policy that needs it must broker the action rather than
-pretend a reusable grant is consumable.
+pretend a reusable grant is consumable. [WEAVER-1](weaver.md) says exactly that
+to the human, in the prompt's own words, rather than leaving them to assume.
+
+## A policy delegate's death does not revoke what it granted
+
+**Status: KNOWN SEAM** (WEAVER-1), and it follows from the line above rather
+than from anything the Weaver does: an installed grant is not a lease. If the
+[Weaver](weaver.md) dies after an approval, the governed session **keeps** the
+delegated authority, and there is now no message by which anyone can take it
+back — the seat that could revoke it is the seat that is gone. Only the host,
+holding a capability of its own, can.
+
+That is stated rather than solved. Session-death-on-Weaver-failure, leases,
+supervisor restart and a host emergency revoke are all real answers and all
+speculative today; adding RAII revocation would silently change GRANT-0's
+"a capability is not a lease" into its opposite for one caller.
+
+## The operator seat is a WeaveId, not a person
+
+**Status: KNOWN SEAM** (WEAVER-1). A Weaver treats one exact WeaveId's
+decisions as the user's. That check is real and enforced against the bus stamp
+— reachability is emphatically not identity — but it authenticates a *weave*,
+not a human. The current console is a **bootstrap** operator: it holds
+`allow_any()` and host-wired discovery and the tap, which a properly delegated
+user terminal would not. Remote/external authentication does not exist at all
+(see [bridge](bridge.md#authentication-posture)).
 
 ## Sender cannot observe send fate
 
