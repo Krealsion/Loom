@@ -43,6 +43,46 @@ verified control-protocol frame), and no public door yet produces a combined
 answer+office fact (the representation admits it; `answer_as_role` waits for a
 consumer).
 
+## Live authority administration — what GRANT-0 deliberately did not build
+
+**Status: KNOWN SEAM** (three of them, kept apart on purpose). The primitive
+itself is current and law-backed
+([GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides),
+[capabilities](capabilities.md#live-delegation-grant-0)); these are the edges
+around it, stated so shorthand cannot harden into a guarantee.
+
+```text
+CONTAINMENT IS STILL ADMISSION-TIME.  os_cap / FsAccess / ResourceLimits are
+    consumed once, at IsolationHost::mount, into a network namespace, a
+    pivot_root'ed mount view and a cgroup leaf. Nothing in this process can
+    revisit them, in EITHER direction: a live grant would not open a namespace,
+    and a live revocation would not claw back an already-open socket, an
+    inherited descriptor or a spawned child. `LiveAuthority` therefore has no
+    vocabulary for them, and that absence is the guarantee. Narrowing them live
+    would need the isolation backend to prove it, and it does not today.
+
+AN ADMINISTRATION ACT IS NOT ON THE TAP.  Delegation queues no message and emits
+    no BusEvent, so an operator watching traffic sees the CONSEQUENCES of an
+    authority change (a send that now lands, or now refuses `CapabilityDenied`)
+    and never the change itself. A `GrantChange` result is returned to the
+    caller and nowhere else. A future operator surface that must show "who
+    granted what, when" needs its own answer; this is deliberately not an audit
+    log, and it meets the same wall the delivery tap does — whole-bus
+    observation is host authority, not a grant.
+
+THE CAPABILITY IS NOT ATTENUABLE BY ITS HOLDER.  A `GrantAuthority` governs one
+    subject with one ceiling, and there is no verb by which its holder mints a
+    narrower one for somebody else. One administrator per governed subject, the
+    host minting each. Multi-administrator delegation is a real future rule; it
+    waits for a consumer, exactly as a per-claimant observe rule does.
+```
+
+There is also no time-based expiry and no one-shot authority: a delegated rule
+is reusable until it is explicitly replaced or the subject dies. "Allow while
+this session lives" and "allow until revoked" are both real; **"allow once" is
+not claimed**, and a policy that needs it must broker the action rather than
+pretend a reusable grant is consumable.
+
 ## Sender cannot observe send fate
 
 **Status: KNOWN SEAM.** (Narrowed at R2E-0, not closed — see below.)

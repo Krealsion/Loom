@@ -27,6 +27,7 @@ the named laws → the reference page → tests when exactness matters.
 | long-lived transport channels (a framed channel's retained send/receive buffers; a peer that keeps up but never lets the socket run dry) | reference/bounds.md#transport-channels-framed-byte-channels | LIFE-07 | tests/test_bridge.cpp, test_isolation.cpp (R2F-C cases) | — |
 | what a console retains (the tap window, the m1/m2/... reply buffer, why an `mN` label can refuse, how eviction is surfaced) | reference/bounds.md#console-operator-history | — | tests/test_console.cpp, test_bridge.cpp (C-1 cases) | COLD-2 finding C-1 |
 | grants, isolation, powerbox | reference/capabilities.md | GATE-03, MSG-02 | tests/test_capabilities.cpp, test_isolation.cpp, test_policy.cpp | history (B1–B5, P1–P2) |
+| changing a LIVE subject's message authority — what baseline/delegated/effective mean, who may administer one (a host-minted `GrantAuthority`), the ceiling and how attenuation is decided, and why OS/filesystem/resource reach is not in it | reference/capabilities.md#live-delegation-grant-0 | GATE-05, GATE-03 | tests/test_grant.cpp | GRANT-0 |
 | the sandbox exec boundary — what a child inherits vs. what Zen authors: ambient descriptors (a host socket, file, pipe or terminal already open at mount) and the child's environment (`LD_*`, tokens, session addresses) | reference/capabilities.md#the-exec-boundary-three-independent-facts | — | tests/test_isolation.cpp (C-2, C-2a cases) | COLD-2 finding C-2 |
 | the remote-operator bridge — what it trusts, whether a socket may be exposed, where connection identity comes from, what it validates and what it deliberately does not | reference/bridge.md | MSG-02, GATE-01, MSG-09, LIFE-07 | tests/test_bridge.cpp | COLD-1/COLD-2 finding F-4 |
 | dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..05 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
@@ -49,8 +50,12 @@ the authority, and a bridge listener must not be exposed to an untrusted
 network ([bridge](reference/bridge.md#authentication-posture)) · an
 in-process weave, native or `dlopen`ed, shares the host address space: the
 grant bounds what it may **say**, never what it may **touch**
-([capabilities](reference/capabilities.md#the-grant-in-process)) · a
-transaction id is never readiness authority (PR-04, ANS-05) · `Committed`
+([capabilities](reference/capabilities.md#the-grant-in-process)) · **grants are
+not mutable** — a subject's *delegated* message authority can be replaced live
+by a host-minted `GrantAuthority`, but its admission baseline never changes and
+its OS/filesystem/resource containment was consumed into a namespace, a mount
+view and a cgroup leaf before the child ran, where no later write reaches it
+(GATE-05) · a transaction id is never readiness authority (PR-04, ANS-05) · `Committed`
 becomes true only inside the admission dispatch (PR-07) · a candidate receives
 preparation conversation before activation, production never (PR-01, PR-08) ·
 activation is not answerable (LIFE-05) · a Sense is a **latest claim**, visible

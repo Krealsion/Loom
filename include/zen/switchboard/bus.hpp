@@ -5,6 +5,7 @@
 #define ZEN_SWITCHBOARD_BUS_HPP
 
 #include <zen/schema.hpp>
+#include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/sense.hpp>
 
@@ -243,6 +244,55 @@ public:
         (void)role;
         (void)shape;
         return SenseReading{};
+    }
+
+    // ---- administering another subject's live authority (GRANT-0) ------------
+    //
+    // THE LAW: *baseline authority enters at admission and never changes;
+    // delegated live authority may be replaced at any time by a holder of a
+    // host-minted capability scoped to one subject and one ceiling; and EFFECTIVE
+    // authority — baseline ∪ delegated — is what the bus checks at delivery.*
+    //
+    // These sit on the Bus, not on the Switchboard, because that is the whole
+    // point: an administrator must be an ORDINARY WEAVE. Holding a `Switchboard&`
+    // is being the host, and a Weaver that had to hold one to do its job would be
+    // host root wearing a weave's name. What it holds instead is a capability
+    // object, presented here, through the same handle every other weave has.
+    //
+    // NEITHER IS A SEND. No message is queued, no sender is stamped, and nothing
+    // about the administrator appears in what the governed subject later says: the
+    // subject retries its own action, under its own identity, and the target sees
+    // the subject. That separation is the reason the administrator shape was
+    // chosen over a broker in the first place, so it is protected here by there
+    // being no message at all to carry an administrator's name.
+    //
+    // The defaults refuse, truthfully, exactly as the answer and office doors do:
+    // a Bus that is not a live participating context has no board to check the
+    // capability against, and says so (`NoLiveDelivery`) rather than pretending.
+
+    /// Replace, atomically, the delegated live authority of the subject this
+    /// capability governs. Grant, revoke, widen and narrow are all this one call:
+    /// pass what the subject should hold from now on, or `LiveAuthority::nothing()`
+    /// to take it all back. The request must be a semantic subset of the
+    /// capability's ceiling; if it is not, NOTHING changes.
+    ///
+    /// It never touches the admission grant, so a revocation cannot cost a subject
+    /// authority the host gave it — and it never reaches the containment fields,
+    /// which `LiveAuthority` has no words for.
+    virtual GrantChange delegate_authority(const GrantAuthority& authority,
+                                           LiveAuthority requested) {
+        (void)authority;
+        (void)requested;
+        return GrantChange{};
+    }
+
+    /// Read the governed subject's baseline, delegated and effective message
+    /// authority — the same values, through the same predicates, that the bus
+    /// itself will use. Scoped to the one subject the capability names; there is
+    /// no argument by which to ask about another.
+    virtual AuthorityView describe_authority(const GrantAuthority& authority) {
+        (void)authority;
+        return AuthorityView{};
     }
 
 protected:

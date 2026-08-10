@@ -2,6 +2,7 @@
 
 Authority: who may say what, to whom — and what the OS is asked to contain.
 Laws: [GATE-03](../laws/admission-laws.md),
+[GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides),
 [MSG-02](../laws/messaging-laws.md).
 
 ## The grant (in-process)
@@ -9,9 +10,56 @@ Laws: [GATE-03](../laws/admission-laws.md),
 Every weave carries a `Grant`, default **empty** (minimal authority). Send
 rules select shape→target (`allow_to_any`, `allow_any_to`, `allow_to_role`,
 `allow_any`); the bus authorizes each weave-originated delivery against its
-sender's grant **at delivery**, before role resolution and before the gate
-(`CapabilityDenied`). The host is the only source of grants — there is no
-in-band widening.
+sender's **effective** authority **at delivery**, before role resolution and
+before the gate (`CapabilityDenied`). The host is the only origin of authority,
+and a weave still cannot widen itself — but a host may now appoint an
+administrator, so the sentence has three parts rather than one:
+
+```text
+BASELINE   attached by the host at admission (register_weave / Kernel::load /
+           IsolationHost::mount) and never changed thereafter
+DELEGATED  replaceable at any time by a holder of a host-minted GrantAuthority,
+           on the ONE subject that capability names, within its ceiling
+EFFECTIVE  baseline union delegated — what the bus checks, at delivery
+```
+
+`Grant` therefore has two halves, and the type says which is which: a
+`LiveAuthority` (send rules + observe rules), plus containment policy. Only the
+first is delegable, because only it is read at the moment of use.
+
+## Live delegation (GRANT-0)
+
+`host_grant_authority(bus, subject, ceiling)` — the one expression that mints
+one, in [`zen/host/grant_wiring.hpp`](../../include/zen/host/grant_wiring.hpp),
+needing a `Switchboard&` exactly as lifecycle minting does. The capability
+carries **which board** issued it (weakly — it expires with that Loom), **which
+subject** it governs, and the **ceiling** it may never exceed. The holder is an
+ordinary weave: from inside an ordinary handler it calls
+`mail.delegate_authority(cap, requested)` and `mail.describe_authority(cap)`.
+
+| | |
+|---|---|
+| what it can change | the subject's delegated send rules and observe rules — atomically, as one replacement (grant, revoke, widen, narrow are all this) |
+| what it can never change | the baseline (a union cannot subtract), any other subject (the subject is *in* the capability, so there is no argument to point elsewhere), and OS/filesystem/resource reach (`LiveAuthority` has no words for them) |
+| what it can read | that one subject's baseline, delegated and effective authority — through the same predicates the bus applies, so an administrator needs no second map that merely believes what the Kernel enforces |
+| how it fails | `NoAuthority` (inert), `ForeignBoard` (another Loom's, or a dead one), `NoSuchSubject`, `ExceedsCeiling` — and on every one of them, nothing changed |
+
+**The ceiling is not the holder's own grant.** "What a Weaver may say" and "what
+a Weaver may hand out" are different questions, and only the host answers the
+second. Containment is semantic: `any` contains each exact selector; a rule
+naming an **office** and a rule naming a **WeaveId** contain one another in
+neither direction, whoever holds that office right now — otherwise today's
+routing would become permanent authority.
+
+**Revocation is effective at delivery**, including for a message queued while
+the authority was still held: nothing on an envelope remembers what was true
+when it was authored. And the administrator never becomes the sender — no
+message is queued at all, so the governed subject retries its own action and
+the target sees the subject.
+
+This is **message authority only**. It is not "grants are now mutable": an
+isolated child's namespace, mount view and cgroup leaf were built before it
+ran, and no write in this process moves them.
 
 **The trust boundary is which bus you hold.** A weave holds only a `WeaveBus`
 (`Mail`): it stamps the weave's own identity on everything and routes through
