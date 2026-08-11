@@ -92,6 +92,68 @@ boundary the OS enforces is what the next sections are for, and that is a
 different mechanism with a different threat model — see
 [guides/dynamic-weaves](../guides/dynamic-weaves.md#what-loading-it-in-process-means).
 
+## Hosting and enforcement tiers (B1-B5)
+
+Source comments in [`grant.hpp`](../../include/zen/switchboard/grant.hpp),
+`include/zen/isolation/**`, `src/isolation/**` and the isolation suites use
+`B1`–`B5` as shorthand for **which boundary one `Grant` is being projected
+onto**. The grant is the single source of truth; a tier names the mechanism
+that enforces part of it, and the reach that mechanism has.
+
+| Tier | Boundary | Mechanism | What it projects |
+|---|---|---|---|
+| **B1** | message | the Switchboard, in-process | send rules and observe rules, read at every delivery and every observation |
+| **B2** | process | a child `zen-weave-host`, bridged by a proxy weave | crash containment and host-memory separation — and nothing else |
+| **B3** | OS capability | user + network namespace | `os_cap` — `Network` today |
+| **B4** | filesystem view | private mount namespace, `pivot_root` | `FsAccess`, all five graduated levels |
+| **B5** | quantitative resource | a per-weave cgroup-v2 leaf | `ResourceLimits` — memory, pids, cpu weight |
+
+**They are not a ladder.** A higher number does not contain a lower one, and
+nothing here is monotone:
+
+- **B1 is always on.** A child's output is re-admitted through the same gate and
+  authorized against the same grant, so out-of-process hosting *adds to* B1
+  rather than replacing it;
+- **B2 is the prerequisite for B3–B5** — each of them needs a child process —
+  but B3, B4 and B5 are independent of one another. `unshare_isolation(network,
+  filesystem)` takes two separate booleans, and each capability is resolved on
+  its own: a child may have an enforced network namespace and no private mount
+  namespace, or the reverse;
+- **each capability records its own outcome** — `Enforced`, `Granted`
+  (deliberately given, so real power rather than containment) or `Uncontained`
+  (requested, unenforceable on this host, dev-mode let it run visibly).
+  `containment()` iterates them and reports only what was imposed *and*
+  positively re-confirmed.
+
+**Authority and containment stay separate.** B1 is Loom authority — what a weave
+may *say*. B2–B5 are OS mechanisms — what a process may *do*. They meet only in
+that one `Grant` carries both halves, and even there the halves answer at
+different moments
+([GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides)):
+send and observe rules are read live off the stored value, while `os_cap`,
+`FsAccess` and `ResourceLimits` are consumed **once**, before the child runs,
+into namespace/mount/cgroup state this process cannot revisit. Widening a
+weave's message authority therefore weakens no OS boundary, and an OS sandbox
+authorizes no message.
+
+**What is enforced today.** `Network`, the five `FsAccess` levels
+([the view is enumerated below](#the-filesystem-view-what-is-in-it)) and the
+three resource dimensions ([subject to
+delegation](#delegation-is-what-makes-a-resource-cap-real)) are imposed and
+re-confirmed; `os_cap::SpawnProcess` is declared vocabulary with no enforcement
+behind it. **B2–B5 are Linux/WSL only** — the sandbox is native and
+platform-specific. A Windows build carries the portable subset, where a weave is
+in-process and B1 is the only tier that applies.
+
+**Scope, stated narrowly.** "B3, the syscall boundary" means a withheld
+capability makes the syscall itself fail — a fresh `connect()` returns
+`ENETUNREACH` — **not** that syscalls are filtered. Seccomp is not implemented,
+and `containment()` says so in as many words (*"syscalls: not enforced (seccomp
+is a separate, later decision)"*). No tier here is a claim of kernel-escape
+resistance, or of safety against arbitrary hostile native code; what each one
+covers and does not is [three separate
+facts](#the-exec-boundary-three-independent-facts).
+
 ## Where a grant comes from (the powerbox)
 
 The floor: unknown mods mount with the default grant plus a send-rule to the
