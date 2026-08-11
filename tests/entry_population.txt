@@ -1,0 +1,75 @@
+# The NON-SUITE CTest entry contract (POP-01, VOLATILE-2a).
+#
+# Loom's official lane registers two kinds of CTest entry. One kind is a doctest suite,
+# and tests/suite_population.txt has always owned those: which suites exist per gate, and
+# what each one's case floor is. The other kind is a check that is not a suite at all --
+# the population checks, the empty-population witnesses, the weave-artifact checks, the
+# documentation-link check, the aggregate runner. Nothing owned those.
+#
+# So they could be deleted. Removing one `add_test(...)` line from tests/CMakeLists.txt
+# left the official lane registering one fewer entry, running everything that remained,
+# and reporting green at a smaller number -- including for entries whose entire job is to
+# notice absences. That is the same sentence POP-01 already forbids one layer down:
+#
+#   Absence of evidence must not become successful evidence merely because the thing
+#   that would have complained was itself the thing deleted.
+#
+# THIS FILE IS HALF OF THE EXPECTED SET, NOT ALL OF IT. The complete expectation the
+# official lane checks is:
+#
+#   the suites declared in suite_population.txt, for the gates active here
+#     UNION
+#   the entries declared below, for the gates active here
+#
+# One fact, one owner. A suite's name and gate are stated once, in suite_population.txt,
+# beside the floor that belongs to it; this file never repeats a suite and never carries a
+# case floor. `tests/check_entry_population.cmake` reads both and compares the union
+# against `ctest -N`, in BOTH directions -- an entry declared and not registered fails, and
+# an entry registered and not declared fails, because an undeclared entry means this
+# contract has stopped being the complete one.
+#
+# WHERE THE CHECK LIVES, AND WHY IT IS NOT A CTEST ENTRY. It runs inside
+# tests/verify.cmake, the official lane. A CTest entry cannot be the thing that notices
+# CTest entries going missing: delete its registration and it never runs, so it never
+# complains -- the exact hole this file exists to close, reproduced inside the fix. The
+# lane is outside the population it inventories, which is the same reason the suite
+# population check's *lane* lives there too.
+#
+# ...WHICH MOVES THE HAZARD ONTO THE LANE, so the two guard each other. This inventory
+# keeps the `population` entry registered; the `population` entry, which is registered and
+# therefore runs, requires tests/verify.cmake to still call the inventory. Neither can be
+# removed alone without the other saying so. Two coordinated deletions still escape, and
+# that is stated rather than hidden: a file cannot defend itself against an edit to itself.
+#
+# `gate` uses the SAME vocabulary as suite_population.txt, deliberately -- one taxonomy,
+# and it is the one the build already computes:
+#
+#   portable  registered in every configuration; absence is always a defect.
+#   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
+#             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
+#   posix     rides `NOT WIN32`.
+#   sdl       rides `TARGET zen-ui-sdl`.
+#
+# The gates that are actually on are written into the build tree at configure time from
+# the one variable the `population` entry also reads, so the two cannot disagree about
+# which configuration this is.
+#
+# WHY `weave_contract` AND `weave_population` ARE DECLARED `kernel`. Their registration
+# condition is the build-graph sweep's own answer -- does this configuration build loadable
+# weaves at all -- and today that is exactly the kernel gate, because every loadable weave
+# fixture in this directory (including the contract's applied/bypass canary pair) is
+# declared inside `if(TARGET zen-kernel)`. Declaring the gate rather than re-deriving the
+# condition is the point: if those two ever come apart, this check names it instead of
+# quietly agreeing with whatever registered.
+#
+# Keep this file plain ASCII: it is read with file(STRINGS), which treats a non-ASCII byte
+# as a string terminator and would silently split the line around it.
+#
+# entry                      gate
+empty_population_refused     portable
+empty_population_says_so     portable
+population                   portable
+doc_links                    portable
+all                          posix
+weave_contract               kernel
+weave_population             kernel

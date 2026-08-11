@@ -530,6 +530,20 @@ endif()
 # Comma-separated: a ;-list would be split into separate arguments on the command line.
 string(REPLACE ";" "," zen_population_gates_arg "${ZEN_POPULATION_GATES}")
 
+# The same gate set, written where the OFFICIAL LANE can read it (VOLATILE-2a). The lane's
+# CTest-entry inventory needs to know which configuration this is, and it runs standalone
+# with nothing but a build directory. Written from the one variable the `population` entry
+# reads on the next line, so the two cannot come to disagree about which gates are on.
+#
+# It DESCRIBES the build; it never requires anything. suite_population.txt and
+# entry_population.txt are what require, and a description that got this wrong makes a
+# missing entry look declared-absent -- which is why the inventory refuses a gate set that
+# is empty or that has lost `portable`.
+file(WRITE ${CMAKE_BINARY_DIR}/zen-test-gates.cmake
+     "# Written by tests/CMakeLists.txt at configure time. A description of this build\n"
+     "# tree's active gates, read by tests/check_entry_population.cmake. Not an expectation.\n"
+     "set(ZEN_ACTIVE_GATES \"${ZEN_POPULATION_GATES}\")\n")
+
 add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_TESTS_EXE=$<TARGET_FILE:zen-tests>
     -DZEN_SDL_TESTS_EXE=${zen_sdl_tests_exe}
