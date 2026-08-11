@@ -28,15 +28,15 @@ cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
   binary via `tests/run-under-scope.sh ./build/tests/zen-tests` — outside such a
   scope every OS-enforcement case fails **by design** (fail-hard beats silent
   skip), naming the capability it could not enforce.
-- **One recurring red has a documented environment exception (BL-VER-07)**: on a
-  WSL2 host in mirrored networking mode, the `isolation` suite's *granted-network
-  positive control* fails because a loopback `connect()` to a closed port is
-  black-holed there (`ETIMEDOUT` after ~2 min) instead of refused. The lane stays
-  **RED** — it is not skipped, xfailed or excused, and the enforcement populations
-  still execute (17/17, 11/11). Before citing it, check every line of the
-  signature in
-  [capabilities: a known environment exception](docs/reference/capabilities.md#a-known-environment-exception-the-granted-network-positive-control);
-  if any differs, it is a new failure. An unexpected **green** there is a trigger too.
+- **BL-VER-07's environment exception is RETIRED (BL-VER-08)** — do not classify a
+  network-case failure as it. The `isolation` suite's *granted-network positive
+  control* used to connect to the closed port 1 and require `ECONNREFUSED`, which
+  made the result depend on host closed-port behaviour; on a WSL2 mirrored-networking
+  host that SYN is black-holed (`ETIMEDOUT` after ~2 min) and the lane was **RED**.
+  The case now establishes its own listener on `127.0.0.1:0` and requires a
+  successful connect plus a token byte, so no closed port is consulted anywhere. If
+  it fails now, it is a **new** failure — see
+  [capabilities: the granted-network positive control](docs/reference/capabilities.md#the-granted-network-positive-control-and-the-endpoint-it-uses).
 - Windows builds the portable subset only, on **MinGW-w64 and MSVC** alike;
   kernel lanes are opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`). MSVC needs
   `/Zc:preprocessor` for Loom's public `__VA_OPT__` macros — `loom::core`

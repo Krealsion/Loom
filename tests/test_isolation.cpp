@@ -34,6 +34,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -76,6 +77,87 @@ std::shared_ptr<const Schema> netresult_schema() {
     static const auto s = SchemaBuilder("NetResult", 1).field("code", Kind::Int).build();
     return s;
 }
+/// The byte the net probe pushes down a connection it opened. Mirrored from
+/// `weavelib/test_weave.cpp` rather than shared through a header, exactly as
+/// `kBombAllocRefused` above is: the fixture is a separate artifact in its own `.so`.
+constexpr char kNetProbeToken = 'Z';
+
+/// THE ENDPOINT THE NETWORK CASE OWNS (BL-VER-08).
+///
+/// The positive control used to prove "this child can reach the network" from the
+/// errno of a connect() to port 1 — ECONNREFUSED meaning *reachable, nothing
+/// listening*. That made the proof depend on how the HOST answers a closed port, and
+/// on a WSL2 mirrored-networking host it does not answer at all: the SYN is
+/// black-holed and connect() blocks for the kernel's whole retry budget (~124 s
+/// measured, BL-VER-07). The test was asking somebody else's closed door to prove
+/// that its own door opens.
+///
+/// So the test brings its own door. A listener on 127.0.0.1:0 — the kernel picks the
+/// port, so nothing is reserved, occupied, firewalled or guessed — is established
+/// BEFORE any child is mounted, and its port is handed to the probe. The positive
+/// witness becomes success rather than a particular kind of failure.
+///
+/// The child cannot reach this by inheritance: the exec boundary closes every
+/// descriptor but the control fd and the standard three (C-2), so a child that
+/// arrives here arrived over the network. It is marked close-on-exec anyway, to say
+/// so.
+class TestOwnedEndpoint {
+public:
+    TestOwnedEndpoint() {
+        listener_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        REQUIRE(listener_ >= 0);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0; // the kernel chooses: no fixed port, no reservation
+        REQUIRE(::bind(listener_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+        REQUIRE(::listen(listener_, 4) == 0);
+        socklen_t len = sizeof(addr);
+        REQUIRE(::getsockname(listener_, reinterpret_cast<sockaddr*>(&addr), &len) == 0);
+        port_ = ntohs(addr.sin_port);
+        REQUIRE(port_ != 0); // bound and listening before any child exists
+    }
+    ~TestOwnedEndpoint() {
+        if (accepted_ >= 0) {
+            ::close(accepted_);
+        }
+        if (listener_ >= 0) {
+            ::close(listener_);
+        }
+    }
+    TestOwnedEndpoint(const TestOwnedEndpoint&) = delete;
+    TestOwnedEndpoint& operator=(const TestOwnedEndpoint&) = delete;
+
+    /// The port to tell a probe. Live from construction, so readiness is a fact
+    /// established by listen()/getsockname() and never a sleep.
+    std::int64_t port() const { return port_; }
+
+    /// Take the one connection this endpoint expects and read the token off it.
+    /// Returns the byte received, or -1 if none arrived. Bounded by `budget_ms` —
+    /// poll() reports readiness the kernel already knows, so nothing here waits on a
+    /// guess: a connect() that returned 0 has already been queued here.
+    int accept_token(int budget_ms) {
+        pollfd pfd{listener_, POLLIN, 0};
+        if (::poll(&pfd, 1, budget_ms) != 1) {
+            return -1; // nobody connected
+        }
+        accepted_ = ::accept(listener_, nullptr, nullptr);
+        if (accepted_ < 0) {
+            return -1;
+        }
+        pollfd rfd{accepted_, POLLIN, 0};
+        if (::poll(&rfd, 1, budget_ms) != 1) {
+            return -1; // connected, but no byte ever came
+        }
+        char byte = 0;
+        return ::recv(accepted_, &byte, 1, 0) == 1 ? static_cast<unsigned char>(byte) : -1;
+    }
+
+private:
+    int listener_ = -1;
+    int accepted_ = -1;
+    std::int64_t port_ = 0;
+};
 // Matches the fs-probe weave's emitted shape (B4): the errno of each filesystem reach.
 std::shared_ptr<const Schema> fsresult_schema() {
     static const auto s = SchemaBuilder("FsResult", 1)
@@ -325,6 +407,12 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
                             "network is OS-enforced: a no-net child cannot reach the network");
 
+    // The endpoint belongs to this test, and exists before either child does. Both
+    // halves are aimed at THIS port, so the only meaningful difference between them is
+    // the grant (BL-VER-08). A live endpoint also makes the negative half say more than
+    // it used to: the contained child is now refused a destination that provably works.
+    TestOwnedEndpoint endpoint;
+
     // Sandboxed: the default grant withholds Network, but we DO allow it to send
     // NetResult — so any failure to reach the network is the OS sandbox, not the bus
     // grant (the gate/authorization let the result through).
@@ -339,13 +427,19 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     REQUIRE_MESSAGE(s.ok, s.error);
     CHECK(host.containment("contained").find("network: contained") != std::string::npos);
 
-    bus.send(s.id, Message(ping(1), WeaveId{}, rec1.id));
+    bus.send(s.id, Message(ping(endpoint.port()), WeaveId{}, rec1.id));
     REQUIRE(host.run_until([&] { return !rec1.weave->handled_names.empty(); }, 2000));
     CHECK(rec1.weave->handled_names.back() == "NetResult"); // it still emitted (sandbox != muzzle)
-    CHECK(contained_code == ENETUNREACH); // no interface → unreachable, enforced by the OS
+    // Its netns has no interface at all, so the kernel refuses before a SYN is ever
+    // sent — the same verdict whatever is listening on the far side, which is why this
+    // stays the exact errno and not "anything nonzero". A dead endpoint or a broken
+    // probe must not be able to impersonate containment.
+    CHECK(contained_code == ENETUNREACH);
 
-    // Granted Network: the same probe now reaches the stack (port closed → refused).
-    std::int64_t granted_code = 0;
+    // Granted Network: no netns is imposed, so the child is in this process's own
+    // network namespace and the endpoint above is genuinely its 127.0.0.1 too. The
+    // same probe, the same port, one grant apart.
+    std::int64_t granted_code = -1; // sentinel: never a value the probe can report
     Registered rec2 = register_probe(bus, {netresult_schema()});
     rec2.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         granted_code = in.payload.get("code")->as_int();
@@ -356,10 +450,15 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     REQUIRE_MESSAGE(g.ok, g.error);
     CHECK(host.containment("granted").find("network: granted") != std::string::npos);
 
-    bus.send(g.id, Message(ping(1), WeaveId{}, rec2.id));
+    bus.send(g.id, Message(ping(endpoint.port()), WeaveId{}, rec2.id));
     REQUIRE(host.run_until([&] { return !rec2.weave->handled_names.empty(); }, 2000));
-    CHECK(granted_code != ENETUNREACH);  // it CAN reach the network
-    CHECK(granted_code == ECONNREFUSED); // specifically: stack reachable, nothing listening
+    CHECK(granted_code != ENETUNREACH); // it CAN reach the network
+    CHECK(granted_code == 0);           // specifically: it connected and moved a byte
+
+    // BOTH ENDS, as in C-2: the child said it wrote, and this end says it arrived. One
+    // half alone would leave "the connection opened but carries nothing" unexamined,
+    // and a handshake is not a data path.
+    CHECK(endpoint.accept_token(2000) == kNetProbeToken);
 }
 
 TEST_CASE("filesystem is OS-enforced: secret absent, scratch writable, host root read-only") {
