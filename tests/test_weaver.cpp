@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// WEAVER-1 — one human being, sitting in one seat, deciding what one live session
+// The Weaver — one human being, sitting in one seat, deciding what one live session
 // is allowed to say. The Kernel enforces, the Weaver decides, the session acts.
 //
 // What this suite is watching for, stated as the failures it must catch:
@@ -42,8 +42,8 @@ namespace {
 
 // ---- the world the story happens in ----------------------------------------
 //
-// Test-local shapes: the WEAVER-1 vocabulary is permanent, but `Work` and the
-// host's nudge are this suite's own scenery, exactly as GRANT-0 kept its.
+// Test-local shapes: the Weaver vocabulary is permanent, but `Work` and the
+// host's nudge are this suite's own scenery, exactly as the grant suite keeps its.
 
 constexpr const char* kServiceRole = "some.service";
 constexpr const char* kWeaverRole = "loom.weaver";
@@ -91,7 +91,7 @@ public:
 /// THE GOVERNED SUBJECT — deliberately the most boring weave here.
 ///
 /// It is not called `TerminalSession`: it has no transcript, no composer and no
-/// command language, and claiming TERM-0's noun for something that has none of
+/// command language, and claiming the terminal's noun for something that has none of
 /// them would mislead the next reader far more than a plain name costs. What it
 /// does have is exactly what the security story needs — an identity, a baseline
 /// grant, an ordinary ask, an ordinary answer, and an ordinary retry it decides
@@ -385,7 +385,7 @@ TEST_CASE("the request language carries no identity and no subject to forge") {
 }
 
 // =========================================================================
-// The phase, in one test: the defining WEAVER-1 witness.
+// The whole design, in one test: the defining Weaver witness.
 // =========================================================================
 
 TEST_CASE("a human puts one session in reach of one service, and takes it back") {
@@ -867,7 +867,7 @@ TEST_CASE("the Weaver's death does not revoke what the operator already granted"
     REQUIRE(c.session->answers.size() == 1);
 
     // The user's policy delegate leaves. An installed grant is not a lease, and
-    // WEAVER-1 deliberately does not add RAII revocation.
+    // The Weaver deliberately does not add RAII revocation.
     (void)c.bus.unregister_weave(c.weaver_id);
 
     c.go(c.session_id, step::kWork);

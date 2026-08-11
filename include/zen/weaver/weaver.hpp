@@ -5,14 +5,15 @@
 #define ZEN_WEAVER_WEAVER_HPP
 
 // THE WEAVER — the first message-driven delegate of a human being's authority
-// decisions (WEAVER-1).
+// decisions.
+// docs/reference/weaver.md
 //
 //     USER          decides
 //     WEAVER        delegates / revokes
 //     SESSION       acts
 //     SWITCHBOARD   enforces and attributes
 //
-// Or: the Kernel enforces, the Weaver decides, the session acts. GRANT-0 built
+// Or: the Kernel enforces, the Weaver decides, the session acts. GATE-05 built
 // the mechanism by which a host may appoint an administrator for one live
 // subject's speech; this is the first real policy actor to hold one, and its
 // whole job is to put that mechanism in front of a person and then get out of
@@ -48,7 +49,7 @@
 // ONE OF EVERYTHING, DELIBERATELY: one operator seat, one governed subject, one
 // ceiling, at most one request in flight. Every one of those is a place a V2
 // could grow a map, a queue, an id space and an ordering policy — and every one
-// of those maps is a place a decision can land on the wrong request. TERM-0 and
+// of those maps is a place a decision can land on the wrong request. The terminal and
 // multiple sessions can earn concurrency when there is something to concur.
 //
 // WHAT IT IS NOT, said plainly because the surrounding words are grand: this

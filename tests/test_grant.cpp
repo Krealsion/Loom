@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// GRANT-0 — a live mounted subject's REAL Loom-enforced message authority can be
+// Live delegation (GATE-05) — a live mounted subject's REAL Loom-enforced message
+// authority can be
 // widened and narrowed, without remounting it, by an ordinary weave holding a
 // host-minted capability scoped to one subject and one ceiling.
 //
@@ -36,9 +37,9 @@ namespace {
 
 // ---- the three shapes this phase's story needs ----------------------------
 //
-// Test-local, deliberately: GRANT-0 builds an enforcement primitive, and giving
+// Test-local, deliberately: this builds an enforcement primitive, and giving
 // it a permanent `DriverCommand`/`RequestAuthority` vocabulary would be building
-// WEAVER-1's policy interface a phase early.
+// the Weaver's policy interface a layer early.
 
 std::shared_ptr<const Schema> work_schema() {
     static const auto s = SchemaBuilder("Work", 1).field("n", Kind::Int).build();
@@ -89,7 +90,7 @@ LiveAuthority work_to(WeaveId service) {
 
 // ---- compile-time proofs (prompt sections 7, 38, 39, 60) -------------------
 //
-// The strongest available result for "GRANT-0 cannot dynamically grant Network,
+// The strongest available result for "live delegation cannot dynamically grant Network,
 // SpawnProcess, filesystem reach or resource limits" is not a refusal that a
 // test observes — it is that the delegation door's argument type HAS NO WORD for
 // them. These detectors go red the day somebody adds one, which is the only way

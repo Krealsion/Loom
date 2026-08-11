@@ -40,7 +40,7 @@
 #include <unistd.h>
 
 namespace loom {
-/// The R2F-C observation instrument (see the friend declaration in zen/isolation/channel.hpp):
+/// The LIFE-07 observation instrument (see the friend declaration in zen/isolation/channel.hpp):
 /// reads the channel's OWN retained buffers, so the bounded-storage law is stated as an assertion
 /// about transport state rather than inferred from process memory -- RSS is allocator- and
 /// OS-sensitive and cannot tell "capacity remains reusable" from "sent bytes remain part of the
@@ -98,7 +98,7 @@ constexpr char kNetProbeToken = 'Z';
 /// witness becomes success rather than a particular kind of failure.
 ///
 /// The child cannot reach this by inheritance: the exec boundary closes every
-/// descriptor but the control fd and the standard three (C-2), so a child that
+/// descriptor but the control fd and the standard three, so a child that
 /// arrives here arrived over the network. It is marked close-on-exec anyway, to say
 /// so.
 class TestOwnedEndpoint {
@@ -173,7 +173,7 @@ std::shared_ptr<const Schema> forkresult_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
     return s;
 }
-// Matches the env-probe weave's emitted shape (C-2a): the child's COMPLETE environment.
+// Matches the env-probe weave's emitted shape: the child's COMPLETE environment.
 std::shared_ptr<const Schema> envresult_schema() {
     static const auto s = SchemaBuilder("EnvResult", 1)
                               .field("count", Kind::Int)
@@ -183,7 +183,7 @@ std::shared_ptr<const Schema> envresult_schema() {
                               .build();
     return s;
 }
-// Matches the fd-probe weave's emitted shape (C-2): the descriptor inventory the child
+// Matches the fd-probe weave's emitted shape: the descriptor inventory the child
 // actually holds, whether the parked one can still move bytes, and — kept separate on
 // purpose — whether the network namespace is still imposed.
 std::shared_ptr<const Schema> fdresult_schema() {
@@ -459,7 +459,7 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     CHECK(granted_code != ENETUNREACH); // it CAN reach the network
     CHECK(granted_code == 0);           // specifically: it connected and moved a byte
 
-    // BOTH ENDS, as in C-2: the child said it wrote, and this end says it arrived. One
+    // BOTH ENDS: the child said it wrote, and this end says it arrived. One
     // half alone would leave "the connection opened but carries nothing" unexamined,
     // and a handshake is not a data path.
     CHECK(endpoint.accept_token(2000) == kNetProbeToken);
@@ -983,7 +983,8 @@ TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is 
     // COLD-2's attack, reconstructed here rather than quoted. The host builds a real
     // connected loopback TCP pair through its own network stack, a real pipe and a real
     // file, parks one end of each at a known descriptor number WITHOUT FD_CLOEXEC, and
-    // then mounts a weave with Network withheld. Before C2 the child received all three,
+    // then mounts a weave with Network withheld. Without the descriptor sweep the child
+// receives all three,
     // could write to them, and the bytes arrived back on the host side — while
     // containment() reported `network: contained (confirmed: child netns distinct from
     // host)` over that same byte.
@@ -1146,7 +1147,7 @@ TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is 
 }
 
 TEST_CASE("C-2a: the child's environment is the one Zen authored, not the host's ambient one") {
-    // C2 closed the descriptor half of the exec boundary; this is the other half. The
+    // The descriptor sweep closes one half of the exec boundary; this is the other half. The
     // child used to receive `environ` wholesale, so a weave at FsAccess::None with no
     // network was still handed the host's HOME, PATH, session-bus and compositor
     // addresses, whatever tokens the embedding process held -- and any LD_*, which the
@@ -1377,7 +1378,7 @@ TEST_CASE("BL-0: repeated mount/unmount does not accumulate vocabulary") {
     }
 }
 
-// ---- R2B-2: deferred answers are in-process only, and FAIL CLOSED out of it ----
+// ---- deferred answers are in-process only, and FAIL CLOSED out of it (ANS-02) --
 
 TEST_CASE("R2B-2: an out-of-process weave gets no deferred-answer capability, and says so by "
           "having none rather than by holding one the pipe cannot honour") {
@@ -1444,7 +1445,7 @@ TEST_CASE("R2B-2: an out-of-process weave gets no deferred-answer capability, an
     CHECK(answers == 0);
 }
 
-// ---- R2D-0: office authorship is in-process only, and FAILS CLOSED out of it ----
+// ---- office authorship is in-process only, and FAILS CLOSED out of it (MSG-07) --
 
 TEST_CASE("R2D-0: an out-of-process weave really holding the role still cannot author office "
           "speech across the pipe — refused honestly, never downgraded, in both directions") {
@@ -1546,9 +1547,9 @@ TEST_CASE("harness honesty: an unprovable security proof FAILS by default, skips
     CHECK(none.empty());
 }
 
-// ---- R2F-C: consumed transport bytes are history, not live channel storage (LIFE-07) -----------
+// ---- consumed transport bytes are history, not live channel storage (LIFE-07) -----------------
 //
-// COLD-1 F-18 named BOTH framers. The isolation Channel is the parent side of every out-of-process
+// The finding that named this named BOTH framers. The isolation Channel is the parent side of every out-of-process
 // Weave link, so a long-lived host with a child that keeps up but never lets the socket run dry
 // retained the whole session's byte volume: flush() clear()ed the outbox only on an EXACT drain,
 // and kMaxBacklog measures the UNSENT residue, so nothing ever noticed. Measured pre-repair on this

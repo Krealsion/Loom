@@ -183,7 +183,7 @@ private:
         pid_t pid = -1;
         std::vector<std::shared_ptr<const Schema>> accept;
         std::shared_ptr<const Schema> state_schema;
-        /// THE MOUNT'S CLAIM on this host's dependency registry (BL-0), and the
+        /// THE MOUNT'S CLAIM on this host's dependency registry (LIFE-08), and the
         /// mount is the honest scope — wider than the child process, narrower
         /// than the host.
         ///

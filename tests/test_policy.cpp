@@ -740,7 +740,7 @@ TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and n
 //
 // EXACTLY 11, from this suite's own witnesses only (POP-02) — the eleven full-floor
 // ZEN_REQUIRE_ENFORCEABLE guard sites, including the forged-reply_to proof, none of them in a
-// subcase. This is the number COLD-1 F-24 was about: the tally used to be process-global, so in the
+// subcase. THIS NUMBER IS THE POINT: a process-global tally means that in the
 // aggregate `all` lane this case read 26 (isolation's 15 plus policy's 11) and would have passed
 // its `>= 11` floor with all eleven of policy's own proofs neutered.
 TEST_CASE("enforcement coverage: the floor proofs actually executed, not silently skipped") {

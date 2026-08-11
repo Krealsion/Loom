@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
     // the library shim rather than silently doing nothing — the same
     // fail-closed direction, and for the same reason, as the answer and office
     // doors above.
-    // BY NAME, in declaration order (BL-4). These names were already written here
+    // BY NAME, in declaration order (KERN-04). These names were already written here
     // as comments, which is the same statement with none of the checking: a
     // `/*answer=*/nullptr` that drifts one slot away from `answer` stays a
     // perfectly valid comment, and the fail-closed reasoning above would then be
