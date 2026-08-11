@@ -19,6 +19,7 @@ checkout, so this tree is readable from a Loom clone alone.
 [capabilities](reference/capabilities.md), [kernel](reference/kernel.md),
 [prepared replacement](reference/prepared-replacement.md),
 [dynamic ABI](reference/dynamic-abi.md), [bridge](reference/bridge.md),
+[weaver](reference/weaver.md), [terminal](reference/terminal.md),
 [bounds](reference/bounds.md),
 [known seams](reference/known-seams.md). Words are defined once, in the
 [terminology index](terminology.md).

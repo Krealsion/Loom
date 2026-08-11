@@ -18,18 +18,6 @@ namespace loom {
 
 namespace {
 
-std::string type_string(const loom::TypeRef& t) {
-    switch (t.kind) {
-    case loom::Kind::List:
-        return std::string("List<") + type_string(*t.element) + ">";
-    case loom::Kind::Message:
-        return std::string("Message(") + t.message->name() + " v" +
-               std::to_string(t.message->version()) + ")";
-    default:
-        return loom::name_of(t.kind);
-    }
-}
-
 // Build a Cell for a declared field from a typed input value, type-checked at compose
 // time. Returns nullopt + an error on a type mismatch or an unsupported (Message/List)
 // field — the gate is still the unconditional backstop at send.
@@ -90,113 +78,6 @@ std::shared_ptr<const loom::Schema> console_state_schema() {
     static const auto s =
         loom::SchemaBuilder("zen.ConsoleState", 1).field("received", loom::Kind::Int).build();
     return s;
-}
-
-// ---- Stage 2: the assumption-ladder helpers ----
-
-// A normalized argument: a literal (FieldValue) or a resolved reference (a scalar Cell),
-// carrying the arg's kind for type-directed matching.
-struct NArg {
-    std::optional<std::string> name;          // set iff named (`field=…`)
-    loom::Kind kind;                           // the arg's own type
-    std::variant<FieldValue, loom::Cell> payload; // literal, or resolved-reference cell
-};
-
-loom::Kind literal_kind(const FieldValue& v) {
-    return std::visit(
-        [](auto&& x) -> loom::Kind {
-            using T = std::decay_t<decltype(x)>;
-            if constexpr (std::is_same_v<T, std::int64_t>) {
-                return loom::Kind::Int;
-            } else if constexpr (std::is_same_v<T, double>) {
-                return loom::Kind::Float;
-            } else if constexpr (std::is_same_v<T, std::string>) {
-                return loom::Kind::Text;
-            } else if constexpr (std::is_same_v<T, bool>) {
-                return loom::Kind::Bool;
-            } else {
-                return loom::Kind::Bytes;
-            }
-        },
-        v);
-}
-
-// Place arg `a` into field `f`: a literal coerces among numerics (Int→Float ok), exact
-// otherwise; a reference matches its resolved kind EXACTLY (no coercion — predictable
-// wiring). Returns the cell to assign, or nullopt if the arg does not fit the field.
-std::optional<loom::Cell> place(const loom::Field& f, const NArg& a) {
-    if (const loom::Cell* refcell = std::get_if<loom::Cell>(&a.payload)) {
-        if (refcell->kind() == f.type.kind) {
-            return *refcell;
-        }
-        return std::nullopt;
-    }
-    const FieldValue& v = std::get<FieldValue>(a.payload);
-    switch (f.type.kind) {
-    case loom::Kind::Int:
-        if (const auto* p = std::get_if<std::int64_t>(&v)) {
-            return loom::Cell::integer(*p);
-        }
-        break;
-    case loom::Kind::Float:
-        if (const auto* pd = std::get_if<double>(&v)) {
-            return loom::Cell::real(*pd);
-        }
-        if (const auto* pi = std::get_if<std::int64_t>(&v)) {
-            return loom::Cell::real(static_cast<double>(*pi)); // numeric widening Int→Float
-        }
-        break;
-    case loom::Kind::Text:
-        if (const auto* p = std::get_if<std::string>(&v)) {
-            return loom::Cell::text(*p);
-        }
-        break;
-    case loom::Kind::Bool:
-        if (const auto* p = std::get_if<bool>(&v)) {
-            return loom::Cell::boolean(*p);
-        }
-        break;
-    case loom::Kind::Bytes:
-        if (const auto* p = std::get_if<loom::Bytes>(&v)) {
-            return loom::Cell::bytes(*p);
-        }
-        break;
-    default:
-        break; // Message/List not composable in Stage 2
-    }
-    return std::nullopt;
-}
-
-// Render an unplaced arg for the NeedsInput prompt (domain data; the frontend formats).
-std::string render_narg(const NArg& a) {
-    if (const loom::Cell* c = std::get_if<loom::Cell>(&a.payload)) {
-        switch (c->kind()) {
-        case loom::Kind::Int:
-            return std::to_string(c->as_int());
-        case loom::Kind::Float:
-            return std::to_string(c->as_float());
-        case loom::Kind::Text:
-            return c->as_text();
-        case loom::Kind::Bool:
-            return c->as_bool() ? "true" : "false";
-        default:
-            return std::string("(") + loom::name_of(c->kind()) + ")";
-        }
-    }
-    return std::visit(
-        [](auto&& x) -> std::string {
-            using T = std::decay_t<decltype(x)>;
-            if constexpr (std::is_same_v<T, std::int64_t> || std::is_same_v<T, double>) {
-                return std::to_string(x);
-            } else if constexpr (std::is_same_v<T, std::string>) {
-                return x;
-            } else if constexpr (std::is_same_v<T, bool>) {
-                return x ? "true" : "false";
-            } else {
-                return "(bytes)";
-            }
-        },
-        std::get<FieldValue>(a.payload));
 }
 
 } // namespace
@@ -315,16 +196,6 @@ std::vector<WeaveInfo> ConsoleEngine::weaves() const {
         out.push_back(std::move(info));
     }
     return out;
-}
-
-ShapeDesc describe_schema(const loom::Schema& schema) {
-    ShapeDesc d;
-    d.name = schema.name();
-    d.version = schema.version();
-    for (const loom::Field& f : schema.fields()) {
-        d.fields.push_back({f.name, type_string(f.type), f.required});
-    }
-    return d;
 }
 
 std::optional<ShapeDesc> ConsoleEngine::describe(std::string_view name,
@@ -495,169 +366,28 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
 
 Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,
                             std::uint32_t version, const std::vector<Arg>& args) {
+    // The ladder itself is `loom::compose_message` (TERM-0), which stops one step before anything
+    // is authored; this is the console's original one-shot form over it, so the placement rules,
+    // their order, and every refusal they produce are exactly the ones this suite has always
+    // pinned. The only thing that moved is where the sending happens.
+    const Composition composed = compose_message(host, name, version, args);
     Composed result;
-    const auto error = [&](const std::string& m) {
+    switch (composed.status) {
+    case Composition::Status::Error:
         result.status = Composed::Status::Error;
-        result.error = m;
+        result.error = composed.error;
         return result;
-    };
-    std::shared_ptr<const loom::Schema> schema = host.resolve_schema(name, version);
-    if (!schema) {
-        return error("no such registered shape: " + std::string(name) + " v" +
-                     std::to_string(version));
-    }
-
-    // Normalize: resolve references to scalar Cells up front (a bad reference is a hard error).
-    std::vector<NArg> nargs;
-    nargs.reserve(args.size());
-    for (const Arg& a : args) {
-        if (const Ref* ref = std::get_if<Ref>(&a.value)) {
-            std::string rerr;
-            std::optional<loom::Cell> cell = host.resolve_ref(*ref, &rerr);
-            if (!cell) {
-                return error(rerr);
-            }
-            const loom::Kind k = cell->kind();
-            nargs.push_back(NArg{a.name, k, std::move(*cell)});
-        } else {
-            const FieldValue& lit = std::get<FieldValue>(a.value);
-            nargs.push_back(NArg{a.name, literal_kind(lit), lit});
-        }
-    }
-
-    std::map<std::string, loom::Cell> assigned;
-
-    // Rung 1: named wins.
-    std::vector<const NArg*> bare;
-    for (const NArg& a : nargs) {
-        if (a.name) {
-            const loom::Field* f = schema->find(*a.name);
-            if (f == nullptr) {
-                return error("shape " + schema->name() + " has no field '" + *a.name + "'");
-            }
-            if (assigned.count(*a.name) != 0) {
-                return error("field '" + *a.name + "' assigned more than once");
-            }
-            std::optional<loom::Cell> cell = place(*f, a);
-            if (!cell) {
-                return error("field '" + *a.name + "' (" + loom::name_of(f->type.kind) +
-                             ") cannot take this value");
-            }
-            assigned.insert_or_assign(*a.name, std::move(*cell));
-        } else {
-            bare.push_back(&a);
-        }
-    }
-
-    // Open fields, in declaration order.
-    std::vector<const loom::Field*> open;
-    for (const loom::Field& f : schema->fields()) {
-        if (assigned.count(f.name) == 0) {
-            open.push_back(&f);
-        }
-    }
-
-    // Rungs 2/3: place the bare args — positional, else type-directed, else prompt.
-    if (!bare.empty()) {
-        bool placed = false;
-
-        // Rung 2: positional (bare[i] → open[i]); accept only if EVERY one fits, else fall.
-        if (bare.size() <= open.size()) {
-            std::vector<loom::Cell> cells;
-            bool all = true;
-            for (std::size_t i = 0; i < bare.size(); ++i) {
-                std::optional<loom::Cell> c = place(*open[i], *bare[i]);
-                if (!c) {
-                    all = false;
-                    break;
-                }
-                cells.push_back(std::move(*c));
-            }
-            if (all) {
-                for (std::size_t i = 0; i < bare.size(); ++i) {
-                    assigned.insert_or_assign(open[i]->name, std::move(cells[i]));
-                }
-                open.erase(open.begin(), open.begin() + static_cast<std::ptrdiff_t>(bare.size()));
-                placed = true;
-            }
-        }
-
-        // Rung 3: type-directed (each bare arg → its UNIQUE fitting open field, all distinct).
-        if (!placed) {
-            std::vector<std::size_t> chosen(bare.size(), 0);
-            bool ok = true;
-            for (std::size_t i = 0; i < bare.size() && ok; ++i) {
-                std::size_t match = 0;
-                int count = 0;
-                for (std::size_t j = 0; j < open.size(); ++j) {
-                    if (place(*open[j], *bare[i]).has_value()) {
-                        match = j;
-                        ++count;
-                    }
-                }
-                if (count != 1) {
-                    ok = false; // no match, or several → ambiguous
-                    break;
-                }
-                chosen[i] = match;
-            }
-            std::set<std::size_t> matched;
-            if (ok) {
-                for (std::size_t c : chosen) {
-                    if (!matched.insert(c).second) {
-                        ok = false; // two args claim the same field → ambiguous
-                        break;
-                    }
-                }
-            }
-            if (ok) {
-                for (std::size_t i = 0; i < bare.size(); ++i) {
-                    const loom::Field* f = open[chosen[i]];
-                    assigned.insert_or_assign(f->name, std::move(*place(*f, *bare[i])));
-                }
-                std::vector<const loom::Field*> remaining;
-                for (std::size_t j = 0; j < open.size(); ++j) {
-                    if (matched.count(j) == 0) {
-                        remaining.push_back(open[j]);
-                    }
-                }
-                open.swap(remaining);
-                placed = true;
-            }
-        }
-
-        if (!placed) {
-            // Rung 4: genuine ambiguity → prompt (never guess, never mis-send).
-            result.status = Composed::Status::NeedsInput;
-            for (const loom::Field* f : open) {
-                result.open_fields.push_back({f->name, type_string(f->type), f->required});
-            }
-            for (const NArg* a : bare) {
-                result.unplaced.push_back(render_narg(*a));
-            }
-            return result;
-        }
-    }
-
-    // A still-open REQUIRED field → prompt rather than knowingly send incomplete (the gate
-    // would refuse it anyway, but prompting is the friendlier floor).
-    bool any_required_open = false;
-    for (const loom::Field* f : open) {
-        if (f->required) {
-            any_required_open = true;
-        }
-    }
-    if (any_required_open) {
+    case Composition::Status::NeedsInput:
         result.status = Composed::Status::NeedsInput;
-        for (const loom::Field* f : open) {
-            result.open_fields.push_back({f->name, type_string(f->type), f->required});
-        }
-        return result; // unplaced empty: every arg was placed; only required fields remain
+        result.open_fields = composed.open_fields;
+        result.unplaced = composed.unplaced;
+        return result;
+    case Composition::Status::Ready:
+        break;
     }
-
     // Ready: assemble + gate-send (the gate is the unconditional backstop).
     result.status = Composed::Status::Ready;
-    result.ticket = host.assemble_and_send(target, schema, assigned);
+    result.ticket = host.assemble_and_send(target, composed.schema, composed.cells);
     return result;
 }
 

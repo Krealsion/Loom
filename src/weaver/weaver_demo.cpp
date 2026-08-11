@@ -36,7 +36,7 @@
 //     send <session> DoWork 1                 denied again (see: tap)
 
 #include <zen/console/console.hpp>
-#include <zen/console/input_lex.hpp>
+#include <zen/terminal/input_lex.hpp>
 #include <zen/host/grant_wiring.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/weave.hpp>

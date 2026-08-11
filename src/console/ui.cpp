@@ -9,7 +9,7 @@
 
 #include <zen/console/ui.hpp>
 
-#include <zen/console/input_lex.hpp>
+#include <zen/terminal/input_lex.hpp>
 
 #include <cstdint>
 #include <optional>
