@@ -32,7 +32,7 @@
 //
 // And the count is `==`, not `>=`. A `>=` floor with slack hides a deletion: isolation ran 15 then,
 // against a floor of 12, so a genuine enforcement witness could be removed and the suite stayed
-// fully green, 32/32, 230 assertions, nothing moved. An exact expected population makes a missing
+// fully green with nothing moving anywhere. An exact expected population makes a missing
 // witness fail — and makes a NEW witness an intentional edit here, which is the correct price for a
 // small, security-relevant, deliberately stable population. (The per-suite CASE floors in
 // suite_population.txt are minimums instead, for the opposite reason: that population grows every

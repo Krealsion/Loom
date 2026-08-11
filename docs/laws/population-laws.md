@@ -96,9 +96,11 @@ code, so one test could pin either but not both); the `population` entry; the de
 `Zengine/tests/doctest_main.cpp` and the canary in
 `Zengine/tests/check_population.cmake` (`zengine_assert_refuses_empty_population`, run
 against every doctest surface on every verification); measured by C4's controls — a filter
-matching nothing goes 0/exit-0 → exit 70, deleting one case from `test_input.cpp` goes 10/10
-green → `input selected 12 cases, below declared floor 13`, and deleting a whole CTest entry
-goes 9/9 green → a named `MISSING`.
+matching nothing goes from 0-cases-exit-0 to exit 70, deleting one case from
+`test_input.cpp` goes from a fully green run to `input selected N cases, below declared
+floor M`, and deleting a whole CTest entry goes from a fully green run to a named `MISSING`.
+The floors those controls crossed are in `Zengine/tests/test_population.txt`, which is where
+they can be current; a run's own numbers belong to the report that measured it.
 
 ## POP-02 — A coverage floor belongs to the population it counts
 
@@ -118,10 +120,11 @@ MEANS
 - **in Zengine, the counting unit is the binary rather than the suite** (C4): its five
   runtime surfaces are five separate executables with no `TEST_SUITE` declarations, so each
   floor is read out of that surface's own `--count` and no other surface's growth can cover
-  its loss. One aggregate `>= 134` was refused for exactly that reason — it would let a whole
-  domain disappear behind another domain's additions. The one conditional subpopulation, the
-  single case behind `#if defined(SURFACE_HAS_SDL)`, is its own manifest row: `surface` reads
-  17 where the SDL skin is built and 16 where it is not, and neither number carries slack.
+  its loss. One aggregate floor over all of them was refused for exactly that reason — it
+  would let a whole domain disappear behind another domain's additions. Its conditional
+  subpopulations — the cases behind `#if defined(SURFACE_HAS_SDL)` — are their own manifest
+  rows, so a surface reads one number where the SDL skin is built and a smaller one where it
+  is not, with no slack in either. Both are in `Zengine/tests/test_population.txt`.
 
 DOES NOT MEAN
 - that every population contract in the tree is exact. Suite CASE floors are minimums
@@ -134,8 +137,9 @@ DOES NOT MEAN
 - that a floor may be lowered to make a deletion green. A deliberate decrease in evidence is
   a reviewed edit to the manifest, and it should read like one;
 - that a case floor is a coverage number, or that assertion totals are a population at all.
-  Zengine's ~2,450 assertions are reported and are never an oracle — the same reason the
-  Loom's are not;
+  Neither repository's assertion total is an oracle, and neither is written into a contract
+  file: nothing enforces such a figure, so it travels dated and lane-named with the report
+  that measured it, or not at all;
 - that the tally proves containment. It proves the containment proofs *ran*; the
   proofs themselves are what prove containment.
 
@@ -144,8 +148,9 @@ PROVEN BY — `tests/enforcement_gate.hpp` (`ZEN_REQUIRE_ENFORCEABLE`,
 `policy`; observable in any verbose run as
 `OS-enforcement cases executed for '<domain>': N of N expected`. In Zengine, by
 `Zengine/tests/test_population.txt` and the per-entry floor report the official lane prints
-(`input: doctest, 13 cases (floor 13 = 13 always)`); measured by C4's control B, where
-deleting one case from `test_input.cpp` fails `input` alone and names it.
+(`<entry>: doctest, <n> cases (floor <m> = <the rows whose gates are active>)`); measured by
+C4's control B, where deleting one case from `test_input.cpp` fails `input` alone and names
+it.
 
 ## POP-03 — Unsupported testability is declared, never disguised
 
@@ -168,8 +173,10 @@ MEANS
 
 DOES NOT MEAN
 - that Linux-only suites should be compiled on Windows. The default Windows build
-  legitimately has 22 suites where Linux has 28 — that is a declared absence, not a
-  regression, and the two totals are never to be compared as though they should match;
+  legitimately carries fewer suites than Linux — that is a declared absence, not a
+  regression, and the two totals are never to be compared as though they should match. The
+  gate each suite rides is in `tests/suite_population.txt`; the totals are its consequence
+  and are not restated here, because a restated total is the thing that goes stale;
 - that every optional feature must be enabled everywhere;
 - that Zengine itself requires a kernel. Only its suites do.
 

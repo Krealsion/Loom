@@ -75,10 +75,12 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   host that cannot enforce can still run the rest; the coverage case then prints
   `*** NON-ENFORCEMENT MODE ***` and asserts no population, and the official lane
   refuses to start. Never quote such a run as enforcement evidence.
-- **Declared absence is not a pass.** The default Windows build has 22 suites to
-  Linux's 28 because the `kernel` and `posix` gates are off; the `population`
-  check prints those as `DECLARED ABSENT`. Do not compare the two totals as
-  though they should match, and do not read an absent suite as a passing one.
+- **Declared absence is not a pass.** The default Windows build carries fewer
+  suites than Linux because the `kernel` and `posix` gates are off; the
+  `population` check prints each of those as `DECLARED ABSENT`. Do not compare
+  the two totals as though they should match, and do not read an absent suite as
+  a passing one. Which suites ride which gate is in `tests/suite_population.txt`;
+  a *count* of them is a consequence of that file and is not written down twice.
 - **The same doctrine covers built artifacts, not only tests** (POP-05). The
   `weave_population` entry pins which artifacts must carry the reloadable-weave
   build contract, derived from the build graph rather than from the roll of

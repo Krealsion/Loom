@@ -1901,8 +1901,8 @@ TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
 // EXACTLY 17, from this suite's own witnesses only (POP-02). Fourteen ZEN_REQUIRE_ENFORCEABLE guard
 // sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 17 executions,
 // not 14. The number is exact rather than a floor because `>= 12` had three executions of slack:
-// a genuine enforcement witness could be deleted and this suite stayed 32/32 green with 230
-// assertions, nothing moved. When a new OS-enforcement proof is added, raise this deliberately.
+// a genuine enforcement witness could be deleted and this suite stayed fully green with nothing
+// moving anywhere. When a new OS-enforcement proof is added, raise this deliberately.
 //
 // 15 -> 16 at C2: the exec-boundary descriptor case is a THIRTEENTH guard site. It is a genuine
 // OS-enforcement witness — it asserts ENETUNREACH from inside the namespace alongside the
