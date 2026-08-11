@@ -339,3 +339,156 @@ cgroup and the harness **fails hard** rather than skipping green.
 Suites `capabilities`, `isolation`, `policy` (the enforcement halves execute
 under the scope, with executed-count assertions so a green can never mean
 "silently skipped").
+
+### A known environment exception: the granted-network positive control
+
+**Status: KNOWN ENVIRONMENT-SPECIFIC VERIFIER EXCEPTION (BL-VER-07). The suite is
+RED, and stays red.** This section exists so a future run can decide whether a red
+is *this already-measured one* without repeating the investigation — not to excuse
+one. Nothing in the test, the verifier, CI, or the isolation implementation was
+changed to accommodate it.
+
+#### What fails, semantically
+
+```text
+suite          isolation
+case           "network is OS-enforced: a child without the Network grant
+                cannot reach the network"
+half           the GRANTED-network positive control (the second half of that case)
+expected fact  a child mounted WITH os_cap::Network reaches the host stack, so its
+               connect() to a closed loopback port returns ECONNREFUSED, and the
+               NetResult carrying that errno arrives within the case's 2000 ms budget
+observed       the NetResult never arrives; the REQUIRE on the second probe's
+               `handled_names` times out
+```
+
+Identify it by that sentence, never by a line number — lines move. (At the time of
+writing it is `tests/test_isolation.cpp:360`, inside the case declared at `:321`;
+that is convenience, not identity.)
+
+#### Why it fails here, measured
+
+The child is not crashing and the sandbox is not misbehaving: **`connect()` is
+blocking.** On the measured host a loopback connect to a *closed* port is
+black-holed rather than refused — no RST comes back — so it burns the kernel's
+whole SYN retry budget and ends in `ETIMEDOUT (110)`, never `ECONNREFUSED (111)`.
+Measured here at **123.4 s / 124.1 s / 124.4 s over three runs**, consistent with
+`/proc/sys/net/ipv4/tcp_syn_retries = 6`. The case's budget is 2000 ms, so nothing
+has arrived by the time the `REQUIRE` gives up.
+
+The same call from a twenty-line C program — no Loom, no namespace, no cgroup
+anywhere near it — behaves identically, which is what makes this an environment
+fact rather than an implementation defect:
+
+```c
+int fd = socket(AF_INET, SOCK_STREAM, 0);
+struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(1),
+                        .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+connect(fd, (struct sockaddr *)&a, sizeof a);  /* here: blocks ~124 s, ETIMEDOUT */
+```
+
+That two-minute check is the cheapest way to confirm an environment is the one this
+exception describes: **`ECONNREFUSED` immediately means it is not.**
+
+It also explains the asymmetry inside the case. The *contained* child has no
+interface at all, so it never emits a SYN — the kernel answers `ENETUNREACH`
+instantly and that half passes. Only the granted child gets far enough to wait.
+
+#### The environment class it applies to, and no wider
+
+```text
+WSL2, mirrored networking mode  (a `loopback0` device present alongside the
+                                 mirrored host adapters)
+measured on                     WSL 2.6.2.0, kernel 6.6.87.2-microsoft-standard-WSL2,
+                                 Ubuntu-22.04, Windows 10.0.26200
+```
+
+It is **not** a statement about Linux, about Ubuntu, about WSL in general, about
+containers, or about systemd scopes. Hosted CI has demonstrated genuine enforcement
+under its own environment and inherits nothing from here.
+
+#### What is still true while this is red
+
+The distinction matters more than the exception, so it is spelled out:
+
+```text
+CASE PASS/FAIL          one assertion's result.  The positive control FAILS.
+POPULATION EXECUTED     whether the intended enforcement cases actually ran.
+                        They do: 17 of 17 for `isolation`, 11 of 11 for `policy`.
+ENVIRONMENT CAPABILITY  whether this host can supply the condition an assertion
+                        needs.  For the positive control, it cannot.
+```
+
+**"Coverage executed" is never "behavior passed"** (the same wall POP-04 puts
+between an opt-out run and enforcement evidence). And the *negative* direction —
+the half that actually proves containment — passes here in full: the contained
+child mounts, reports `network: contained`, emits, and returns `ENETUNREACH (101)`.
+Seven of the case's eight assertions pass; the eighth is the one above.
+
+#### The recognition signature, in full
+
+A red may be called BL-VER-07 only when **every** line matches:
+
+```text
+failing suites          isolation, and `all` (which contains it) — and nothing else
+failing cases           exactly one, the granted-network positive control
+isolation population    38 cases, 37 passed, 1 failed
+isolation assertions    378, 377 passed, 1 failed
+enforcement coverage    isolation 17 of 17 executed, policy 11 of 11 executed
+policy suite            23 of 23 passed
+negative direction      passes (contained child → ENETUNREACH)
+verifier                Debug and sanitizer lanes: 35 of 37 entries
+environment             the class named above
+```
+
+#### Re-investigate as NEW if any of these differ
+
+- a *different* isolation case fails, or more than the one established case fails;
+- the diagnostic changes materially — in particular, a failure at the *contained*
+  probe, at the mount (`g.ok`), or at `containment("granted")` is a different
+  defect, because none of those is what this exception explains;
+- the enforcement population stops executing at 17 of 17 (`isolation`) or 11 of 11
+  (`policy`), or the policy suite stops passing 23 of 23;
+- the negative isolation direction fails;
+- the failure appears outside the documented environment class — hosted CI, a
+  native Linux host, a different WSL networking mode, or a machine where the C
+  probe above returns `ECONNREFUSED`;
+- anything changes in the isolation or network implementation
+  (`src/isolation/`, `zen-weave-host`, the namespace or cgroup setup);
+- the delegated-scope setup changes (`tests/run-under-scope.sh`, systemd-user
+  availability, cgroup-v2 delegation), or the verification environment changes;
+- the case's own timing budget or its expected errno changes;
+- **the signature can no longer be reproduced at all.**
+
+Under any of those, BL-VER-07 does not explain the failure. Investigate it as new.
+
+#### An unexpected GREEN is also a trigger
+
+If the positive control starts passing, **do not conclude that BL-VER-07 fixed
+itself.** Find out which of these happened: the environment changed (a WSL
+networking-mode change is the likeliest), the kernel or systemd behaviour changed,
+the implementation changed, or **the case stopped exercising the intended path**.
+Green can invalidate an environment assumption exactly as red can, and a permanent
+failure is not a thing to canonize.
+
+#### How a phase reports a run that hits this
+
+```text
+if the run reproduces EVERY line of the signature above:
+    report the verifier as RED
+    name BL-VER-07 and state that the signature still matches
+    state that the enforcement populations still executed (17/17, 11/11)
+    do NOT spend a fresh pristine-baseline reproduction — TERM-0 already did
+otherwise:
+    BL-VER-07 does not explain it; investigate as new
+```
+
+Never report such a run as green, and never quote it as evidence that network
+containment was proven end to end — the half that proves containment did pass, and
+saying which half is the whole discipline here.
+
+PROVEN BY — `tests/test_isolation.cpp` (the case named above) and
+`tests/enforcement_gate.hpp` (the executed-count assertions). Evidence trail:
+`Zen/reportbacks/TERM-0-RB.md` §66 (first measurement, including at the pristine
+baseline before that phase's edits) and `Zen/reportbacks/BL-VER-07-RB.md` (the
+`connect()`/`ETIMEDOUT` root cause and this signature).
