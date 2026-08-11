@@ -22,7 +22,7 @@ struct Ticket {
     bool valid() const noexcept { return seq != 0; }
 };
 
-/// The result of an office-authored publication (R2D-0) — two facts that a bare
+/// The result of an office-authored publication (MSG-07) — two facts that a bare
 /// count would collapse and that are different problems:
 ///
 ///   authorship refused          the sender does not hold the office it asked
@@ -93,7 +93,7 @@ public:
         return Ticket{};
     }
 
-    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (R2B-2). Converts this delivery's
+    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (ANS-02). Converts this delivery's
     /// immediate answer opportunity into one that survives the handler's return.
     ///
     /// It CONSUMES the immediate opportunity rather than sitting beside it: after
@@ -140,7 +140,7 @@ public:
         return Ticket{};
     }
 
-    // ---- deliberate office authorship (R2D-0) -------------------------------
+    // ---- deliberate office authorship (MSG-07) ------------------------------
     //
     // THE LAW: *a weave may deliberately author one statement in the capacity of
     // a role it currently holds; Loom verifies that membership at the authorship
@@ -189,7 +189,7 @@ public:
         return OfficePublication{};
     }
 
-    // ---- Senses (R2E-0) ------------------------------------------------------
+    // ---- Senses (SENSE-01..05) -----------------------------------------------
     //
     // THE LAW: *a Sense is a deliberate immutable claim of the latest observation
     // a participant has made available; reading one is synchronous, authorized,
@@ -246,7 +246,7 @@ public:
         return SenseReading{};
     }
 
-    // ---- administering another subject's live authority (GRANT-0) ------------
+    // ---- administering another subject's live authority (GATE-05) ------------
     //
     // THE LAW: *baseline authority enters at admission and never changes;
     // delegated live authority may be replaced at any time by a holder of a

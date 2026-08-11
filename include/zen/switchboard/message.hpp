@@ -58,11 +58,11 @@ private:
 /// The three are related and NOT interchangeable, and conflating them is the
 /// exact mistake this type exists to end. A perfectly-shaped `zen.Bequest` from
 /// a weave that merely holds the grant for that shape passes the first two and
-/// fails the third; before R2B-1 nothing could tell the difference, so a heir
-/// claiming its inheritance by role had no way to know whether the answer came
-/// from the steward it actually reached.
+/// fails the third. Without provenance nothing can tell the difference, so an
+/// heir claiming its inheritance by role has no way to know whether the answer
+/// came from the steward it actually reached.
 ///
-/// TWO AXES, DELIBERATELY, NOT ONE ENUM (R2D-0). The conversation/lifecycle
+/// TWO AXES, DELIBERATELY, NOT ONE ENUM. The conversation/lifecycle
 /// fact (`Kind`) and the AUTHORED OFFICE are different questions about one
 /// delivery:
 ///
@@ -76,6 +76,7 @@ private:
 /// both — an authenticated answer that is also office speech — without this
 /// type being redesigned. The public V1 authoring surface does not produce the
 /// combination; the representation refuses to make it unrepresentable.
+/// MSG-07, ANS-01; docs/laws/messaging-laws.md
 ///
 /// IT IS NOT A PAYLOAD FIELD, AND IT CANNOT BECOME ONE. There is no wire
 /// representation: it is never serialized, never part of any schema, and every
@@ -166,8 +167,8 @@ private:
 ///
 /// THE BOUNDARY, STATED WHOLE. "The constructor is private" is not the
 /// protection and never was — a private constructor behind a reachable factory
-/// protects nothing, which is exactly the hole R2B-1 shipped and R2B-1a closes.
-/// The durable statement is:
+/// protects nothing, and shipping one is a hole this codebase has already paid
+/// to close once. The durable statement is:
 ///
 ///   Lifecycle provenance can be attached only by trusted host/kernel
 ///   infrastructure holding an authority that is unavailable through the
@@ -201,36 +202,35 @@ private:
 /// answers "may this message carry Loom's word?" and never "may this weave send
 /// it?". `announce_lifecycle` is a send, and stays one.
 ///
-/// ONE THING IS NOT A SEND, AND IT IS THE EXCEPTION THAT KEEPS THE RULE HONEST
-/// (R2B-3d). The activation Loom delivers as part of an admission is not a
-/// weave's speech being decorated — it is Loom's own act, authorized by this
-/// authority at the moment the admission is scheduled and performed by the
-/// Switchboard itself. No ordinary grant is consulted for it, because there is
-/// no sender exercising one: the coordinator's id is stamped so the consumer's
-/// per-operator lineage rule has something to key on, and that stamp describes
-/// WHO ADMITTED rather than claiming who spoke.
+/// ONE THING IS NOT A SEND, AND IT IS THE EXCEPTION THAT KEEPS THE RULE HONEST.
+/// The activation Loom delivers as part of an admission is not a weave's speech
+/// being decorated — it is Loom's own act, authorized by this authority when the
+/// admission is scheduled and performed by the Switchboard itself. No ordinary
+/// grant is consulted, because no sender is exercising one: the coordinator's id
+/// is stamped so a consumer's per-operator lineage rule has something to key on,
+/// and that stamp describes WHO ADMITTED rather than claiming who spoke.
 ///
-/// The distinction is load-bearing rather than a carve-out. Before R2B-3d the
-/// committed activation travelled the ordinary gated path, so a coordinator
-/// without an `Emit<zen.Activated>` grant committed a replacement successfully
-/// and its successor was refused its own first breath — publicly the service,
-/// never told it was alive. An act the Loom performs cannot be un-performed by
-/// re-asking a question about somebody's permission to speak.
+/// Load-bearing rather than a carve-out: routing the committed activation down
+/// the ordinary gated path means a coordinator without an `Emit<zen.Activated>`
+/// grant commits a replacement successfully while its successor is refused its
+/// own first breath — publicly the service, never told it was alive. An act the
+/// Loom performs cannot be un-performed by re-asking a question about somebody's
+/// permission to speak.
+/// PR-08, LIFE-05; docs/laws/replacement-laws.md
 ///
-/// AND IT IS RELATIVE TO THE LOOM THAT ISSUED IT (R2B-1a left this open;
-/// R2B-1b closes it). R2B-1a required a `Switchboard&` to mint — but the result
-/// was an EMPTY MARKER, so every board accepted every board's authority. An
-/// ordinary weave could stand up a second Switchboard of its own, mint a
-/// perfectly real authority from that decoy, and spend it through the running
-/// system:
+/// AND IT IS RELATIVE TO THE LOOM THAT ISSUED IT. Requiring a `Switchboard&` to
+/// mint is not enough on its own: if the result were an empty marker every board
+/// would accept every board's authority, and an ordinary weave could stand up a
+/// second Switchboard, mint a perfectly real authority from that decoy, and spend
+/// it through the running system:
 ///
 ///     loom::Switchboard decoy;
 ///     auto forged = loom::host_lifecycle_authority(decoy);
 ///     mail.announce_lifecycle(forged, victim, loom::Activated{1}, 1);
 ///
 /// Constructing that decoy is legal and stays legal — a Switchboard is an
-/// ordinary object and anyone may own one. What changed is that an authority now
-/// carries WHICH board issued it, and the issuing board checks. So:
+/// ordinary object and anyone may own one. What stops the forgery is that an
+/// authority carries WHICH board issued it, and the issuing board checks. So:
 ///
 ///     Holding a Switchboard grants host authority only within that
 ///     Switchboard's Loom.
@@ -254,14 +254,14 @@ private:
     std::weak_ptr<const LoomIdentity> issuer_;
 };
 
-/// THE RIGHT TO ANSWER LATER — the same one answer, retained (R2B-2).
+/// THE RIGHT TO ANSWER LATER — the same one answer, retained.
 ///
-/// R2B-1's immediate authority lives and dies with the handler, which is right
-/// for a responder that already knows the answer and is the whole reason that
-/// path stays the smallest and strongest one. It is not enough for a responder
-/// whose answer depends on messages it has not received yet: a dynamically
-/// loaded steward, a preparation that needs queue turns, a Manager that is
-/// itself a weave.
+/// The immediate authority lives and dies with the handler, which is right for a
+/// responder that already knows the answer and is why that path stays the
+/// smallest and strongest one. It is not enough for a responder whose answer
+/// depends on messages it has not received yet: a dynamically loaded steward, a
+/// preparation that needs queue turns, a Manager that is itself a weave.
+/// ANS-02; docs/laws/answer-authority-laws.md
 ///
 /// THE LAW: *an answer may outlive the handler, but never the conversation or
 /// the incarnation that earned it.*

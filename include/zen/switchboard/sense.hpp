@@ -4,7 +4,8 @@
 #ifndef ZEN_SWITCHBOARD_SENSE_HPP
 #define ZEN_SWITCHBOARD_SENSE_HPP
 
-// SENSES (R2E-0) — the second thing a participant can say.
+// SENSES — the second thing a participant can say.
+// SENSE-01..05; docs/laws/sense-laws.md · docs/reference/senses.md
 //
 //   MESSAGES   what happened / what I want done      causal, FIFO, queued
 //   SENSES     what I currently claim is so          acausal, latest-only, pulled

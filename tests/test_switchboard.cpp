@@ -217,7 +217,7 @@ TEST_CASE("two weaves declaring the same (name,version) with different shapes co
     CHECK_THROWS_AS(bus.register_weave(std::move(bad)), loom::SchemaConflict);
 }
 
-// ---- R2E-0: event-loop composition ----------------------------------------
+// ---- event-loop composition (MSG-09) --------------------------------------
 //
 // The Rule Garden's sharpest seam: a perpetual service (Zengine's Timer paces
 // itself inside Drive and enqueues its next Drive before returning) means the
@@ -261,12 +261,12 @@ TEST_CASE("R2E-0: a perpetual service starves the outer loop — pump() returns 
     CHECK(raw->count == 500);
 }
 
-// The six cases that pinned `pump_bounded(n)` were REMOVED WITH THE SURFACE
-// (R2E-0a), not because they failed but because the thing they proved correct
-// turned out to be the wrong question to ask a host. The number they exercised
-// so carefully is the number the Rule Garden could not pick: 64 made its live
-// round-trip 17x slower, and a budget large enough not to throttle was
-// drain-to-empty again. Every property they pinned that still has a public
+// The six cases that pinned `pump_bounded(n)` were REMOVED WITH THE SURFACE,
+// not because they failed but because the thing they proved correct turned out to
+// be the wrong question to ask a host. The number they exercised so carefully is
+// the number the Rule Garden could not pick: 64 made its live round-trip 17x
+// slower, and a budget large enough not to throttle was drain-to-empty again.
+// Every property they pinned that still has a public
 // surface — FIFO exactness across a turn boundary, honouring `stop()`, the
 // empty-queue no-op, non-reentrancy — is pinned below against `pump_pending()`,
 // which is the only bounded turn Loom now offers. The experiment itself is kept
@@ -280,7 +280,7 @@ TEST_CASE("R2E-0: pump() itself is unchanged — still drain-to-empty for every 
     }
     CHECK(bus.pending() == 5);
 
-    bus.pump(); // the pre-R2E-0 contract, untouched by either bounded turn
+    bus.pump(); // the original drain-to-empty contract, untouched by either bounded turn
     CHECK(r.weave->count == 5);
     CHECK(bus.pending() == 0);
 }
@@ -367,7 +367,7 @@ TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as pump() is") {
 }
 
 // ---------------------------------------------------------------------------
-// STF-1 — the native callback boundary (MSG-10).
+// The native callback boundary (MSG-10).
 //
 // Loom calls two kinds of code it did not write: a native `Weave::handle`, and a
 // host observer. Both may throw. These cases pin what Loom owes the host when
@@ -399,7 +399,7 @@ TEST_CASE("STF-1: a native handler that throws through pump() leaves no poisoned
     CHECK(bus.pending() == 2);
 
     // 3. THE FAILED DELIVERY GETS NO OUTCOME. Its ticket reads Pending — not
-    //    Delivered, not Refused — because STF-1 restores state rather than
+    //    Delivered, not Refused — because Loom restores state rather than
     //    inventing a disposition for a delivery that neither finished nor was
     //    refused. The QUEUE is what says the message was consumed.
     CHECK(bus.outcome(doomed).disposition == Disposition::Pending);
@@ -530,8 +530,8 @@ TEST_CASE("STF-1: an already-minted deferred answer survives a handler that late
     CHECK_THROWS_AS(bus.pump(), std::runtime_error);
 
     // AMBIENT authority is delivery-scoped and gone. A capability the handler
-    // deliberately minted is neither, and STF-1 does not revoke it: the answer is
-    // still spendable from a later delivery, exactly as R2B-2 defines it.
+    // deliberately minted is neither, and the throw does not revoke it: the answer is
+    // still spendable from a later delivery, exactly as ANS-02 defines it.
     REQUIRE(responder.weave->pending.valid());
     responder.weave->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
         (void)b.spend_deferred(self.pending, Message(pong(9)));
@@ -757,7 +757,7 @@ TEST_CASE("STF-1: a nested event takes its own observer view") {
     CHECK(nested_only == 1); // the newcomer saw the nested event, not the outer one
 }
 
-// ---- R2F-B: a weave outlives its own callback -------------------------------
+// ---- a weave outlives its own callback (LIFE-06) ----------------------------
 //
 //     A Weave cannot be permanently removed, handed back, or destroyed while
 //     Loom is executing that same Weave's callback.
@@ -865,7 +865,7 @@ TEST_CASE("R2F-B: the host retries once the callback is over, and receives the w
     REQUIRE(ledger.destroyed == 0);
 
     // Immediately after the delivery returns to the host: the ordinary contract,
-    // unchanged. R2F-B moves WHEN the active target may be removed, never what a
+    // unchanged. LIFE-06 bounds WHEN the active target may be removed, never what a
     // successful removal means.
     std::unique_ptr<Weave> owner = bus.unregister_weave(w.id);
     REQUIRE(owner != nullptr);
@@ -1022,7 +1022,7 @@ TEST_CASE("R2F-B: a refused active-target removal performs no part of unregistra
 TEST_CASE("R2F-B: an ordinary removal outside a callback still does all of it") {
     // The complement of the case above, and the reason it means anything: the
     // exact same six facts, all of them changed, because a successful removal
-    // still means everything it meant before R2F-B.
+    // still means everything it always meant.
     RemovalSurface s;
 
     std::unique_ptr<Weave> owner = s.bus.unregister_weave(s.svc.id);
@@ -1066,7 +1066,7 @@ TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave rem
     };
 
     bus.send(w.id, Message(ping(1)));
-    // The exception is the host's, exactly as MSG-10 already says. R2F-B neither
+    // The exception is the host's, exactly as MSG-10 already says. LIFE-06 neither
     // catches it, translates it, nor suppresses it.
     CHECK_THROWS_AS(bus.pump(), std::runtime_error);
     CHECK(returned_null);
@@ -1082,14 +1082,14 @@ TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave rem
     owner.reset();
     CHECK(ledger.destroyed == 1); // destroyed exactly once
 
-    // ...and dispatch itself is unpoisoned, as STF-1 established.
+    // ...and dispatch itself is unpoisoned (MSG-10).
     Registered other = reg(bus, {pong_schema()});
     const Ticket t = bus.send(other.id, Message(pong(2)));
     bus.pump();
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
 }
 
-// ---- BL-0: the bus's vocabulary is bounded by who is live -------------------
+// ---- the bus's vocabulary is bounded by who is live (LIFE-08) ---------------
 //
 // `resolve_schema` IS the observable here, and deliberately so: it is the door
 // every raw emission crosses (a loaded weave's send, an out-of-process child's
@@ -1137,7 +1137,7 @@ TEST_CASE("BL-0: a shape two weaves accept survives the first of them leaving") 
 }
 
 TEST_CASE("BL-0: a refused active-target removal releases nothing") {
-    // NOTHING REMOVED MEANS NOTHING RELEASED. The R2F-B refusal is defined by the
+    // NOTHING REMOVED MEANS NOTHING RELEASED. The LIFE-06 refusal is defined by the
     // fact that no part of unregistration happened; schema claims join that list.
     Switchboard bus;
     Registered w = reg(bus, {ping_schema(), only_here("Vocab")});
@@ -1206,7 +1206,7 @@ TEST_CASE("BL-0: an authorized sender keeps the shape it may speak resolvable") 
 TEST_CASE("BL-0: a wildcard grant claims no vocabulary") {
     // The negative control for the case above: `allow_any` names no shape, so it
     // pins none. Otherwise "the producer claims what it may say" would quietly
-    // mean "every permissive weave pins everything", which is the retention BL-0
+    // mean "every permissive weave pins everything", which is the retention LIFE-08
     // set out to remove.
     Switchboard bus;
     Registered listener = reg(bus, {only_here("Fleeting")});
@@ -1219,9 +1219,10 @@ TEST_CASE("BL-0: a wildcard grant claims no vocabulary") {
 }
 
 TEST_CASE("BL-0: a registration refused mid-accept-set publishes nothing") {
-    // The transactional half, at the door consumers actually use. Before BL-0 the
-    // accept-set was registered one shape at a time, so a disagreement about the
-    // third left the first two published under a weave that never existed.
+    // The transactional half, at the door consumers actually use. Registering an
+    // accept-set one shape at a time is the weaker implementation this falsifies:
+    // a disagreement about the third shape would leave the first two published
+    // under a weave that never existed.
     Switchboard bus;
     Registered incumbent = reg(bus, {only_here("Agreed")});
 
@@ -1240,8 +1241,8 @@ TEST_CASE("BL-0: a registration refused mid-accept-set publishes nothing") {
 }
 
 TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabulary") {
-    // The C-10 shape where it was first observed: load, unload, repeat. Before
-    // BL-0 all 300 shapes were still resolvable at the end.
+    // Load, unload, repeat — the shape in which unbounded retention was first
+    // observed, where all 300 shapes stayed resolvable to the end.
     Switchboard bus;
     Registered resident = reg(bus, {only_here("Resident")});
 

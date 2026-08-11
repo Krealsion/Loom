@@ -14,7 +14,7 @@ namespace loom {
 
 namespace {
 
-/// The (name, version) pairs a set of send rules actually NAME (BL-0). A
+/// The (name, version) pairs a set of send rules actually NAME (LIFE-08). A
 /// wildcard rule names nothing, so it contributes nothing: `allow_any` is
 /// permission without a declared vocabulary, and there is no shape it could
 /// sensibly keep alive.
@@ -28,7 +28,7 @@ std::vector<detail::SchemaKey> named_send_shapes(const LiveAuthority& authority)
     return keys;
 }
 /// The baseline half of a grant, by the same rule — delegated authority earns
-/// the identical claim through the overload above (GRANT-0).
+/// the identical claim through the overload above (GATE-05).
 std::vector<detail::SchemaKey> named_send_shapes(const Grant& grant) {
     return named_send_shapes(grant.live());
 }
@@ -245,7 +245,7 @@ std::shared_ptr<const Schema> lifecycle_policy_schema() {
 
 namespace {
 /// Is `speaker` the exact participant that owns this seal — same id, same life,
-/// same code? A successor at the same address is not (R2B-3b).
+/// same code? A successor at the same address is not (PR-03).
 bool owns_seal(const CandidateOwner& owner, WeaveId speaker,
                std::uint64_t speaker_life, std::uint64_t speaker_incarnation) {
     return owner.valid() && owner.who == speaker && owner.life == speaker_life &&
@@ -319,7 +319,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
         accept.push_back(std::move(s));
     }
 
-    // Record the declared claim-set the same way (R2E-0), and for the same
+    // Record the declared claim-set the same way, and for the same
     // reason plus one more: claiming these here is what makes a Sense
     // DISCOVERABLE — its shape resolves, and a consumer can ask what this weave
     // can claim — before any runtime claim has ever happened.
@@ -337,7 +337,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     Value snap = incoming->snapshot();
     std::shared_ptr<const Schema> state_schema = snap.schema_ptr();
 
-    // ONE TRANSACTION FOR THE WHOLE VOCABULARY (BL-0). Every shape this weave
+    // ONE TRANSACTION FOR THE WHOLE VOCABULARY (LIFE-08). Every shape this weave
     // needs resolvable is claimed together, so a disagreement about the LAST of
     // them leaves no trace of the first: before this line the registry knew
     // nothing new, and if it throws it still knows nothing new. The previous
@@ -351,23 +351,21 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     vocabulary.insert(vocabulary.end(), claims.begin(), claims.end());
     vocabulary.push_back(state_schema);
     SchemaClaimScope schemas = registry_.claim(vocabulary);
-    // ...AND THE SHAPES THIS WEAVE MAY SPEAK BUT DOES NOT DEFINE (BL-0).
+    // ...AND THE SHAPES THIS WEAVE MAY SPEAK BUT DOES NOT DEFINE (LIFE-08).
     //
-    // A weave's accept-set is what it will HEAR. Its grant's named send rules are
+    // A weave's accept-set is what it will HEAR; its grant's named send rules are
     // what it may SAY — and a producer's bytes need the shape resolvable at the
-    // seam just as much as a consumer's door does. A storage client authorized
-    // for `StoragePut v1` keeps needing `StoragePut v1` to mean something after
-    // the broker that defined it unmounts, or its next send stops being an
-    // honest "nobody holds that role" and becomes "I have never heard of that
-    // shape".
+    // seam just as much as a consumer's door does. A storage client authorized for
+    // `StoragePut v1` keeps needing that shape to mean something after the broker
+    // that defined it unmounts, or its next send stops being an honest "nobody
+    // holds that role" and becomes "I have never heard of that shape".
     //
     // Claimed BY KEY, because a producer has no definition to offer: it pins what
-    // the system already knows and skips what it does not. A shape nobody ever
-    // published stays unpublished, and the emission meets the seam exactly as it
-    // does today (MSG-08).
-    //
-    // A wildcard rule names nothing and therefore claims nothing — which is
-    // right: `allow_any` declares no vocabulary to depend on.
+    // the system already knows and skips what it does not, so a shape nobody ever
+    // published stays unpublished and the emission meets the seam (MSG-08). A
+    // wildcard rule names nothing and claims nothing — `allow_any` declares no
+    // vocabulary to depend on.
+    // docs/laws/lifecycle-laws.md
     registry_.claim_known(schemas, named_send_shapes(grant));
     // Adopt the canonical owners the registry settled on, so every weave that
     // accepts a shape holds the SAME Schema object for it — exactly what
@@ -428,35 +426,28 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 }
 
 std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
-    // A WEAVE OUTLIVES ITS OWN CALLBACK (R2F-B).
+    // A WEAVE OUTLIVES ITS OWN CALLBACK (LIFE-06).
     //
-    // FIRST, before the lookup and before any mutation whatever, because the
-    // entire content of this refusal is that NOTHING happened: no role
-    // released, no office or personal claim forgotten, no conversation
-    // abandoned, no transaction invalidated, no registry entry erased and no
-    // ownership transferred. A check placed one line later would be a check
-    // that undoes things.
+    // FIRST — before the lookup and before any mutation whatever — because the
+    // entire content of this refusal is that NOTHING happened: no role released,
+    // no office or personal claim forgotten, no conversation abandoned, no
+    // transaction invalidated, no registry entry erased, no ownership transferred.
+    // A check placed one line later would be a check that undoes things.
     //
-    // WHY IT MUST REFUSE RATHER THAN DEFER. This function's contract is that a
-    // successful removal hands the caller a `unique_ptr` — a unique owner it may
-    // reset on the next line. So "erase now, destroy later" is not an
-    // implementation this signature can have: Loom cannot both transfer unique
-    // ownership and secretly retain the same object. Refusing is the only answer
-    // that keeps the returned owner honest.
+    // IT MUST REFUSE RATHER THAN DEFER: a successful removal hands back a
+    // `unique_ptr` the caller may reset on the next line, so "erase now, destroy
+    // later" is not an implementation this signature can have. Loom cannot both
+    // transfer unique ownership and secretly retain the object.
     //
     // `current_target_` IS THE EXACT OBJECT WHOSE MEMBER FUNCTION IS RUNNING —
-    // assigned immediately around each of the two `Weave::handle` calls
-    // (`deliver_one` and `deliver_admission`) and cleared by `DeliveryScope` on
-    // every exit path including a throw, so removability returns the moment the
-    // callback does. Deliberately NOT `in_dispatch_`, which names a much wider
+    // assigned around each of the two `Weave::handle` calls (`deliver_one` and
+    // `deliver_admission`) and cleared by `DeliveryScope` on every exit path
+    // including a throw. Deliberately NOT `in_dispatch_`, which names a much wider
     // interval: a dispatch turn may legitimately remove a DIFFERENT weave — the
     // transaction layer does exactly that when a candidate refuses preparation —
-    // and freezing the whole registry for the length of a turn would make one
-    // participant's delivery everybody's problem.
-    //
-    // `nullptr` therefore now carries two meanings, both of them "nothing was
-    // removed": the id is unknown, or the id is the weave whose callback is
-    // active. A host that cares retries once the callback has returned.
+    // and freezing the registry for a whole turn would make one participant's
+    // delivery everybody's problem.
+    // docs/reference/lifecycle.md#permanent-removal-and-the-active-callback
     if (current_target_.valid() && current_target_ == id) {
         return nullptr;
     }
@@ -467,7 +458,7 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     if (!it->second.role.empty()) {
         roles_.erase(it->second.role); // a role has no holder once its Weave is removed
         // ...and an office with no officeholder has no current claimant, so its
-        // latest claims go with it (R2E-0). This is the ONLY way office claims
+        // latest claims go with it. This is the ONLY way office claims
         // are dropped: an admission moves the role holder IN PLACE and never
         // passes through unheld, so a replacement leaves the predecessor's claim
         // standing — stamped stale, never deleted and never relabelled.
@@ -479,7 +470,7 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     std::unique_ptr<Weave> released = std::move(it->second.weave);
     weaves_.erase(it);
     // Its unfinished conversations end with it, in both directions: it can no
-    // longer answer, and nothing can be answered TO it. Unconditional (R2B-2a):
+    // longer answer, and nothing can be answered TO it. Unconditional (ANS-04):
     // this used to rely on the staleness sweep happening to see incarnation 0
     // because the record was already erased above — true, but true only by call
     // order. Permanent removal is the end of a life, so it asks the death question.
@@ -502,7 +493,7 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = std::move(provenance);
-    // AND EVERY ENQUEUE PATH ALSO DECIDES WHOSE LIFE IS SPEAKING (R2B-2b). The
+    // AND EVERY ENQUEUE PATH ALSO DECIDES WHOSE LIFE IS SPEAKING (MSG-03). The
     // stamp is read from the bus's own record of the sender, never from anything
     // the caller supplied, for exactly the reason provenance is: a weave hands the
     // bus a Message, and the bus decides the facts about it.
@@ -547,7 +538,7 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
     return Ticket{seq};
 }
 
-// ---- Senses (R2E-0) --------------------------------------------------------
+// ---- Senses ----------------------------------------------------------------
 
 const char* name_of(SenseRefusal r) noexcept {
     switch (r) {
@@ -594,12 +585,12 @@ Switchboard::MadeClaim Switchboard::make_claim(const WeaveRecord& rec, Value val
         // answerable before the first runtime claim.
         return MadeClaim{std::nullopt, SenseClaimResult{false, SenseRefusal::Undeclared, 0}};
     }
-    // THE DOOR IS THE DECLARATION ITSELF (BL-0). It used to be a registry lookup
-    // with a register-if-missing fallback — a registration nothing owned, on a
-    // path where the answer was already in hand: the record's own claim-set holds
-    // the canonical schema, and the weave's live claim is what keeps it
-    // resolvable. Reading it from the record removes a way for the claim door to
-    // publish vocabulary, and it cannot drift from what `declares_claim` matched.
+    // THE DOOR IS THE DECLARATION ITSELF, never a registry lookup with a
+    // register-if-missing fallback. The record's own claim-set already holds the
+    // canonical schema and the weave's live claim is what keeps it resolvable, so
+    // reading it from the record denies the claim door any way to publish
+    // vocabulary — and it cannot drift from what `declares_claim` just matched.
+    // SENSE-04; docs/laws/sense-laws.md
     const std::shared_ptr<const Schema>& door = *declared;
     // The same one gate every value crosses. A malformed claim is refused, not
     // stored: a repository holding an unadmitted value would be the one place in
@@ -723,7 +714,7 @@ SenseReading Switchboard::observe_office(std::string_view role, std::string_view
 SenseReading Switchboard::observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
                                      std::uint32_t shape_version) const {
     auto it = weaves_.find(reader.value);
-    // Effective observe authority, read at the moment of the read (GRANT-0) — the
+    // Effective observe authority, read at the moment of the read (GATE-05) — the
     // same live-value discipline the send path follows, and the reason observation
     // is delegable at all: nothing here was decided earlier and cached.
     if (it == weaves_.end() || !effective_permits_observe(it->second.grant.live(),
@@ -836,7 +827,7 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
                           authority_.requester_incarnation, authority_.preparation);
 }
 
-// ---- deferred answers (R2B-2) ----------------------------------------------
+// ---- deferred answers (ANS-02) ---------------------------------------------
 //
 // THE LAW: an answer may outlive the handler, but never the conversation or the
 // incarnation that earned it.
@@ -879,12 +870,12 @@ void Switchboard::begin_new_life(WeaveRecord& rec) {
 void Switchboard::abandon_deferred_for(WeaveId id) {
     // A HANDLER MAY END WITHOUT ENDING THE CONVERSATION. A LIFE MAY NOT.
     //
-    // This is the death half of R2B-2's law, and it needs its own function because
-    // the staleness sweep below CANNOT express it: `kill` leaves the id and the
-    // incarnation exactly as they were, so every record still looks perfectly
-    // current. Without this, a crashed weave revived from its own snapshot — the
-    // isolation supervisor's ordinary recovery path — would come back holding its
-    // predecessor's answer rights.
+    // This needs its own function because the staleness sweep below CANNOT
+    // express it: `kill` leaves the id and the incarnation exactly as they were,
+    // so every record still looks perfectly current. Without this, a crashed weave
+    // revived from its own snapshot — the isolation supervisor's ordinary recovery
+    // path — would come back holding its predecessor's answer rights.
+    // ANS-04; docs/laws/answer-authority-laws.md
     //
     // Unconditional, and in BOTH directions: it does not matter whether the dead
     // participant was the one who asked or the one who was going to answer. Nor
@@ -1041,17 +1032,17 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
                                 WeaveId target, Message msg, std::int64_t sequence) {
     // AUTHORITY IS RELATIVE TO THE LOOM THAT ISSUED IT.
     //
-    // R2B-1a made minting require a Switchboard; it did not make the result mean
-    // anything about WHICH Switchboard. The authority was an empty marker, so
-    // this function took one and ignored it — and an ordinary weave could stand
-    // up a decoy board of its own, mint a genuine authority from it, and spend it
-    // here. Constructing that decoy is legal and stays legal: a Switchboard is an
-    // ordinary object. What it cannot be is THIS Loom.
+    // Requiring a Switchboard to MINT one says nothing about WHICH Switchboard, so
+    // the check has to be the issuer. An ordinary weave may legally stand up a
+    // decoy board of its own and mint a genuine authority from it — a Switchboard
+    // is an ordinary object — and the only thing that decoy cannot be is THIS
+    // Loom. Accepting an unchecked authority here would spend it anyway.
     //
-    // So the check is the issuer, and it lives here rather than in any consumer:
-    // holding an authority gives you no way to ask the question, and no standing
-    // to answer it. `issued_here` also fails for an authority whose board has
-    // been destroyed — the lifetime rule, not a special case.
+    // The check lives here rather than in any consumer: holding an authority gives
+    // you no way to ask the question and no standing to answer it. `issued_here`
+    // also fails for an authority whose board has been destroyed — the lifetime
+    // rule, not a special case.
+    // LIFE-04; docs/laws/lifecycle-laws.md
     if (!issued_here(authority)) {
         (void)refuse_now(target, as_sender, msg, RefusalReason::ForeignAuthority);
         return Ticket{};
@@ -1067,7 +1058,7 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
                             Provenance::attested(Provenance::Kind::Activation, sequence));
 }
 
-// ---- live authority administration (GRANT-0) -------------------------------
+// ---- live authority administration (GATE-05) -------------------------------
 
 GrantChange Switchboard::delegate_authority_as(WeaveId caller, const GrantAuthority& authority,
                                                LiveAuthority requested) {
@@ -1122,7 +1113,7 @@ GrantChange Switchboard::delegate_authority_as(WeaveId caller, const GrantAuthor
     // observe an intermediate state: the board is single-threaded and neither line
     // dispatches, pumps, or calls anything a weave wrote.
     //
-    // The claim moves BEFORE the old one is released (BL-0's acquire-then-release),
+    // The claim moves BEFORE the old one is released (acquire, then release),
     // so a shape named by both the outgoing and incoming authority never falls to
     // zero claims and stops resolving for the length of one assignment.
     SchemaClaimScope next;
@@ -1233,7 +1224,7 @@ Ticket Switchboard::send_as_to_role(WeaveId as_sender, std::string_view role, Me
     return enqueue_role(std::string(role), std::move(msg), /*gated=*/true);
 }
 
-// ---- deliberate office authorship (R2D-0) -----------------------------------
+// ---- deliberate office authorship (MSG-07) ----------------------------------
 //
 // THE AUTHORIZATION MOMENT IS HERE — authorship/enqueue, never delivery. Each
 // door asks the one question ("does this exact sender hold that role NOW, as it
@@ -1346,7 +1337,7 @@ bool Switchboard::observer_registered(ObserverId id) const noexcept {
 }
 
 void Switchboard::emit(const BusEvent& event) {
-    // EACH EVENT HAS ITS OWN VIEW OF THE TAP LIST (STF-1).
+    // EACH EVENT HAS ITS OWN VIEW OF THE TAP LIST (MSG-11).
     //
     // An observer may subscribe or unsubscribe from inside a notification — the
     // console and the bridge already do the second, from destructors — and the
@@ -1380,7 +1371,7 @@ void Switchboard::emit(const BusEvent& event) {
 }
 
 void Switchboard::deliver_one(Envelope env) {
-    // AN ADMISSION IS ITS OWN DELIVERY (R2B-3d). It takes the whole turn: it
+    // AN ADMISSION IS ITS OWN DELIVERY (PR-08). It takes the whole turn: it
     // moves production topology and hands the candidate its activation, and it
     // does not travel the ordinary authorization path below — a committed
     // activation is Loom's act, not the coordinator's speech, and re-deriving its
@@ -1400,7 +1391,7 @@ void Switchboard::deliver_one(Envelope env) {
     ev.schema_version = env.msg.payload.schema().version();
     // The STAMPED authorship fact, read from the envelope — never a role_of()
     // lookup, which would report current membership instead of historical
-    // authorship (R2D-0). Set before any refusal branch, so a refused
+    // authorship (MSG-07). Set before any refusal branch, so a refused
     // office-authored delivery still shows which office it was authored as.
     ev.authored_role = std::string(env.msg.provenance.authored_role());
 
@@ -1414,13 +1405,13 @@ void Switchboard::deliver_one(Envelope env) {
     // whether the role is currently held.
     if (env.gated) {
         const WeaveRecord* sender = find(env.msg.sender);
-        // A WEAVE-ORIGINATED MESSAGE BELONGS TO THE LIFE THAT AUTHORED IT (R2B-2b).
+        // A WEAVE-ORIGINATED MESSAGE BELONGS TO THE LIFE THAT AUTHORED IT (MSG-03).
         //
-        // Queueing is the gap this closes. R2B-2a ends every conversation a dying
-        // participant was already in — but a message it had merely QUEUED names no
-        // conversation yet, so there was nothing for that cleanup to find. Delivered
-        // later, it would have become speech from whatever now answers to the same
-        // id: the same weave revived, mid-sentence from a life that ended.
+        // QUEUEING IS THE GAP THIS CLOSES. Ending a dying participant's
+        // conversations (ANS-04) cannot reach a message it had merely QUEUED, which
+        // names no conversation yet. Delivered later, that message would become
+        // speech from whatever now answers to the same id — the same weave revived,
+        // mid-sentence from a life that ended.
         //
         // Checked FIRST, before the grant and before role resolution, so a stale
         // message reaches nothing at all — not a handler, not an answer authority,
@@ -1443,7 +1434,7 @@ void Switchboard::deliver_one(Envelope env) {
             emit(ev);
             return;
         }
-        // ---- the candidate boundary (R2B-3) --------------------------------
+        // ---- the candidate boundary (PR-01) --------------------------------
         //
         // A prepared candidate may converse INSIDE the preparation before it may
         // speak INSIDE the world, and both halves of that are decided here, before
@@ -1482,7 +1473,7 @@ void Switchboard::deliver_one(Envelope env) {
             emit(ev);
             return;
         }
-        // EFFECTIVE AUTHORITY, AT THE MOMENT OF DELIVERY (GRANT-0). Baseline union
+        // EFFECTIVE AUTHORITY, AT THE MOMENT OF DELIVERY (GATE-05). Baseline union
         // delegated, read off the record the router just found — never a value
         // captured when this message was queued.
         //
@@ -1544,9 +1535,9 @@ void Switchboard::deliver_one(Envelope env) {
     }
 
     // AN AUTHENTICATED ANSWER BELONGS TO THE LIFE AND INCARNATION THAT ASKED
-    // (R2B-2c). R2B-2b bound a message to the life that AUTHORED it, which
-    // protects the answerer's side; this is the other half — the participant the
-    // answer was earned FOR.
+    // (ANS-03). MSG-03 binds a message to the life that AUTHORED it, protecting
+    // the answerer's side; this is the other half — the participant the answer was
+    // earned FOR.
     //
     // Ordinary messages deliberately do NOT get this treatment: a direct or
     // role-addressed send is aimed at a logical destination and should reach
@@ -1610,7 +1601,7 @@ void Switchboard::deliver_one(Envelope env) {
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
     {
-        // THE AMBIENT DELIVERY CONTEXT LIVES IN THIS BLOCK AND NOWHERE ELSE (STF-1).
+        // THE AMBIENT DELIVERY CONTEXT LIVES IN THIS BLOCK AND NOWHERE ELSE (MSG-10).
         // The guard is what makes "this stack frame" true on the path where the
         // handler does not return one — a throw leaving an answerable delivery behind
         // is a standing right to speak into a conversation that is over.
@@ -1621,7 +1612,7 @@ void Switchboard::deliver_one(Envelope env) {
         // and it dies when the handler returns. A role changing hands after this
         // point hands the new holder nothing: it never received this request.
         current_target_ = env.target;
-        // ...AND IT REMEMBERS WHO ASKED, not merely where to send (R2B-2c). Captured
+        // ...AND IT REMEMBERS WHO ASKED, not merely where to send (ANS-03). Captured
         // HERE, at the delivery that earns the authority, so that an answer produced
         // later — this handler's, or a deferred one spent minutes from now — is bound
         // to the requester that actually asked rather than to whatever occupies that
@@ -1651,7 +1642,7 @@ void Switchboard::deliver_one(Envelope env) {
                                     asker == nullptr ? 0 : asker->incarnation,
                                     answerable};
         // ...AND WHAT THIS DELIVERY IS, for a handler that must prove to the bus what
-        // it just heard (R2B-3b-3). Every field comes from the envelope Loom built:
+        // it just heard (PR-04). Every field comes from the envelope Loom built:
         // the provenance no ordinary enqueue can write, the sender stamp no weave can
         // choose, and the correlation an answer door copied from the ask. A handler
         // holding a Switchboard& can therefore say "this delivery is my readiness
@@ -1679,7 +1670,7 @@ void Switchboard::pump() {
     }
     // Scoped, because a native handler that throws unwinds straight past this
     // line — and a dispatch flag left standing makes every later pump believe
-    // itself reentrant and return without delivering anything (STF-1).
+    // itself reentrant and return without delivering anything (MSG-10).
     const DispatchGuard dispatching(*this);
     stop_requested_ = false;
     while (!queue_.empty() && !stop_requested_) {
@@ -1824,7 +1815,7 @@ AdmitRefusal Switchboard::admission_blocked(const ParticipantRef& candidate,
                                             const ParticipantRef& incumbent,
                                             const CandidateOwner& owner,
                                             const std::string& role) const {
-    // ONE FUNCTION, ASKED TWICE (R2B-3d). Scheduling an admission and dispatching
+    // ONE FUNCTION, ASKED TWICE (PR-03). Scheduling an admission and dispatching
     // it must require exactly the same world, and the cheapest guarantee of that
     // is that there is only one place the question is written down. Every
     // participant is checked as an exact life and incarnation, so a queued
@@ -1840,18 +1831,18 @@ AdmitRefusal Switchboard::admission_blocked(const ParticipantRef& candidate,
         return AdmitRefusal::IncumbentUnfit;
     }
 
-    // THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a).
+    // THE OWNER MUST STILL BE THE OWNER (PR-03).
     //
-    // The candidate's private conversation already checks this on every message;
-    // admission did not, which left the strongest act in the system — moving
-    // production topology — resting on a stale fact. A trusted host caller holding
-    // a perfectly good lifecycle authority could admit a candidate whose
-    // coordinator had died and revived, been reloaded into new code, or been
-    // removed entirely. The preparation belonged to a LIFE, and that life is over.
+    // Without this, the strongest act in the system — moving production topology —
+    // would rest on a stale fact: a trusted host caller holding a perfectly good
+    // lifecycle authority could admit a candidate whose coordinator had died and
+    // revived, been reloaded into new code, or been removed entirely. A preparation
+    // belongs to a LIFE, and that life is over.
     //
     // Two halves, and both matter: the seal on the record must still name this
     // exact owner (it could have been discarded and resealed to somebody else),
     // and that owner must still be the participant standing at that address.
+    // docs/laws/replacement-laws.md
     if (!owns_seal(cand->sealed_by, owner.who, owner.life, owner.incarnation)) {
         return AdmitRefusal::OwnerChanged;
     }
@@ -1958,11 +1949,12 @@ AdmitResult Switchboard::schedule_admission(WeaveId candidate, WeaveId incumbent
     // and nothing is dropped — the alternative (discarding the older traffic) would
     // buy ordering with silence.
     //
-    // R2B-3d moves the TOPOLOGY CHANGE to that same point, and the ordering law
-    // comes out of it unchanged: everything ahead of the envelope was queued while
-    // the incumbent was the service and still resolves to the incumbent, and
-    // everything behind it — including anything this call's caller enqueues next —
-    // arrives after the candidate has been told.
+    // THE TOPOLOGY CHANGE HAPPENS AT THAT SAME POINT, which is what keeps the
+    // ordering law true: everything ahead of the envelope was queued while the
+    // incumbent was the service and still resolves to the incumbent, and everything
+    // behind it — including anything this call's caller enqueues next — arrives
+    // after the candidate has been told.
+    // PR-05; docs/laws/replacement-laws.md
     const std::uint64_t seq = next_seq_++;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     activation.sender = owner.who;
@@ -2055,11 +2047,10 @@ void Switchboard::deliver_admission(Envelope env) {
 
     // ---- 4. THE TOPOLOGY CHANGE, with no delivery in between -----------------
     //
-    // Unchanged from R2B-3b in what it does; changed only in WHEN. There is no
-    // lock and none is needed: `pump()` is non-reentrant and dispatches one
-    // envelope at a time, so an observer's next delivery either precedes all of
-    // this or follows all of it — and what follows it is this candidate's own
-    // activation, below, with nothing whatever between them.
+    // There is no lock and none is needed: `pump()` is non-reentrant and
+    // dispatches one envelope at a time, so an observer's next delivery either
+    // precedes all of this or follows all of it — and what follows it is this
+    // candidate's own activation, below, with nothing whatever between them.
     WeaveRecord* inc = find(env.admission.incumbent.who);
     const CandidateOwner owner = env.admission.owner;
     cand->sealed_by = CandidateOwner{};
@@ -2088,17 +2079,15 @@ void Switchboard::deliver_admission(Envelope env) {
 
     // ---- 6. the candidate's first breath -------------------------------------
     //
-    // AND IT IS NOT A QUESTION (R2B-3d-1). The delivery context below is set by
+    // AND IT IS NOT A QUESTION (LIFE-05). The delivery context below is set by
     // hand rather than by copying `deliver_one`'s, and the difference is the one
     // field that is deliberately absent: THERE IS NO REPLY AUTHORITY.
     //
-    // R2B-3d built this in the ordinary path's image, which fabricated a
-    // requester: the stamped sender is the OPERATOR that admitted this
-    // candidate, not a weave that asked it anything, so an authority naming it
-    // would have let a candidate answer a request nobody made — and `answer()`
-    // would have queued a real, provenance-carrying answer to a coordinator that
-    // never spoke. The same contradiction the phase closed for the activation's
-    // authority, one level down.
+    // Building this in the ordinary path's image would fabricate a requester: the
+    // stamped sender is the OPERATOR that admitted this candidate, not a weave that
+    // asked it anything, so an authority naming it would let a candidate answer a
+    // request nobody made — queueing a real, provenance-carrying answer to a
+    // coordinator that never spoke.
     //
     // It needs no new machinery, because the model already has this category:
     // `answer_as` and `defer_answer_as` both refuse when there is no valid
@@ -2117,7 +2106,7 @@ void Switchboard::deliver_admission(Envelope env) {
     Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
     {
-        // Scoped exactly as the ordinary path is (STF-1): a candidate's very
+        // Scoped exactly as the ordinary path is (MSG-10): a candidate's very
         // first breath is still native code, and it may still throw. The topology
         // has already moved and the transaction has already committed, both
         // deliberately — what must not also happen is the bus being left inside a
@@ -2136,7 +2125,7 @@ void Switchboard::deliver_admission(Envelope env) {
     emit(ev);
 }
 
-// ---- Prepared replacement (R2B-3b-2) ---------------------------------------
+// ---- Prepared replacement (PR-02) ------------------------------------------
 
 ParticipantRef Switchboard::participant(WeaveId id) const {
     const WeaveRecord* rec = find(id);
@@ -2177,19 +2166,20 @@ const Switchboard::PreparedReplacement* Switchboard::find_txn(TxnId id) const {
 }
 
 void Switchboard::finish_txn(PreparedReplacement& txn, TxnState state, TxnReason reason) {
-    // ORDERING IS THE WHOLE CORRECTION (R2B-3b-2a).
+    // ORDERING IS THE WHOLE CORRECTNESS ARGUMENT (PR-06).
     //
-    // Cleanup discards the candidate, discarding a candidate is a lifecycle
-    // change, and a lifecycle change re-enters `invalidate_transactions_for`. If
-    // this transaction were still in the active registry at that moment the hook
-    // would rediscover it and end it a SECOND time — two terminal truths for one
-    // promise, and two slots consumed in a bounded store that then evicts somebody
-    // else's result early.
+    // Cleanup discards the candidate, discarding a candidate is a lifecycle change,
+    // and a lifecycle change re-enters `invalidate_transactions_for`. If this
+    // transaction were still in the active registry at that moment the hook would
+    // rediscover it and end it a SECOND time — two terminal truths for one promise,
+    // and two slots consumed in a bounded store that then evicts somebody else's
+    // result early.
     //
     // So the record leaves the active registry FIRST, and the re-entrant hook has
     // nothing to find. That is structural non-reentrancy rather than a "currently
     // finishing" flag, which would have to be honoured at every future call site
     // instead of being true at one.
+    // docs/laws/replacement-laws.md
     //
     // `txn` is deliberately a caller-owned COPY (every call site passes one), so
     // erasing the registry entry below leaves these facts valid to use afterwards.
@@ -2217,7 +2207,7 @@ void Switchboard::finish_txn(PreparedReplacement& txn, TxnState state, TxnReason
 
     // 3. and only now the cleanup that may re-enter. A candidate that never
     //    entered the world is discarded, which also ends any speech it had queued
-    //    (R2B-2b). Only ever a SEALED weave: an admitted candidate is a live
+    //    (MSG-03). Only ever a SEALED weave: an admitted candidate is a live
     //    service and is nobody's to discard. If this fails, it leaves sealed
     //    wreckage — which is nonpublic by construction, cannot be admitted through
     //    a transaction that no longer exists, and does not produce a second result.
@@ -2351,7 +2341,7 @@ TxnResult Switchboard::tick_preparation(TxnId id) {
     return {true, id, TxnReason::None};
 }
 
-// ---- the preparation conversation (R2B-3b-3) --------------------------------
+// ---- the preparation conversation (PR-04) -----------------------------------
 //
 //     A transaction becomes ready only when the exact sealed candidate
 //     authentically answers the exact preparation request that belongs to that
@@ -2543,7 +2533,7 @@ TxnResult Switchboard::commit_prepared_replacement(TxnId id,
         return {false, id, TxnReason::AdmissionRefused};
     }
 
-    // SCHEDULED, NOT COMMITTED (R2B-3d). The envelope now in the queue will do the
+    // SCHEDULED, NOT COMMITTED (PR-07). The envelope now in the queue will do the
     // whole admission and terminalize this transaction when it lands. Until then
     // the incumbent is the service, the candidate is sealed, the slot is held and
     // the candidate is still exclusively promised here — and this transaction can
@@ -2631,8 +2621,8 @@ void Switchboard::kill(WeaveId id) {
     ev.schema_name = rec->state_schema->name();
     ev.schema_version = rec->state_schema->version();
 
-    // Committing the death includes ending its unfinished conversations (R2B-2a)
-    // and its unfinished transactions (R2B-3b-2), both BEFORE the announcement so
+    // Committing the death includes ending its unfinished conversations (ANS-04)
+    // and its unfinished transactions (PR-02), both BEFORE the announcement so
     // that anything observing `Died` sees a world in which they are already over.
     abandon_deferred_for(id);
     invalidate_transactions_for(id); // a life that ended owns no preparation
@@ -2681,7 +2671,7 @@ ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) 
         rec->weave->revive(state);
         rec->last_known_good = state;
         ++rec->reloads_used;
-        begin_new_life(*rec); // a revival is a NEW LIFE behind the same id (R2B-2b)
+        begin_new_life(*rec); // a revival is a NEW LIFE behind the same id (MSG-03)
         rec->alive = true;
         out.revived = true;
         announce(/*from_lkg=*/false, Refusal{});
@@ -2750,17 +2740,17 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // A SWAP CAN ALSO BE A REVIVAL: this path marks the weave alive whatever it was
     // before, so if it was dead, this is a new life as well as new code. If it was
     // alive, the life continues — a live code reload is not a death, and speech
-    // already in the queue is still that same living weave's (R2B-2b).
+    // already in the queue is still that same living weave's (MSG-03).
     begin_new_life(*rec);
     rec->alive = true;
-    // NEW CODE BEHIND A STABLE ID IS A NEW INCARNATION (R2B-2). The WeaveId is
+    // NEW CODE BEHIND A STABLE ID IS A NEW INCARNATION (ANS-02). The WeaveId is
     // deliberately unchanged — that is what reload means — so this counter is the
     // only thing that distinguishes the successor from the incarnation that may
     // have earned a deferred answer. Bumping it here, then forgetting that
     // weave's unfinished conversations, is what keeps handler-surviving authority
     // from quietly becoming reload-surviving authority.
     ++rec->incarnation;
-    // THE CLAIM-SET BELONGS TO THE CODE (R2E-0), so new code re-declares it. A
+    // THE CLAIM-SET BELONGS TO THE CODE (SENSE-04), so new code re-declares it. A
     // native swap changes nothing here (the same object answers the same way); a
     // dynamic reload has rebound its library underneath, and the successor's
     // contract is its own. Re-reading is the only way this record cannot end up
@@ -2771,7 +2761,7 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // was made under, so a consumer can see for itself that a claim predates the
     // current code rather than having it silently withdrawn.
     //
-    // AND THE CLAIM MOVES WITHOUT A GAP (BL-0). The successor's whole vocabulary
+    // AND THE CLAIM MOVES WITHOUT A GAP (LIFE-08). The successor's whole vocabulary
     // is claimed BEFORE the predecessor's claim is dropped, so a shape both
     // declare is at two claims for the length of one assignment and never falls
     // to zero. There is no instant in a code swap when a shape the weave still
