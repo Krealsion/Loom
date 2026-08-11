@@ -61,11 +61,33 @@ if(NOT optout STREQUAL "")
         "`ctest` directly and read its NON-ENFORCEMENT MODE banner.")
 endif()
 
-# ---- guard 1: the selector must actually select something ------------------------
+# ---- guard 1: the selection must be the one this repository declared -------------
+#
+# WHY THIS LIVES IN THE LANE AND NOT IN A CTEST ENTRY (VOLATILE-2a). The suite manifest has
+# always pinned which doctest suites exist. Nothing pinned the CTest entries that are NOT
+# suites -- the population checks, the empty-population witnesses, the weave-artifact
+# checks, the documentation-link check, the aggregate runner -- so deleting one `add_test`
+# left the lane registering one fewer entry, running everything that remained, and
+# reporting green at a smaller number. Including for entries whose entire job is to notice
+# absences.
+#
+# A CTest entry could not have closed that: an entry that has been deleted cannot complain
+# about its own deletion. So the inventory runs here, outside the population it counts, for
+# the same reason the population check's lane does.
+#
+# ...AND IT IS ON THIS LANE'S CRITICAL PATH ON PURPOSE. zen_check_entry_population() owns
+# the count and the zero-refusal that everything below depends on, so removing the call
+# does not leave a lane that still runs -- it leaves a lane with no answer, and the guard
+# under it says so. The other half of the lock is in check_population.cmake: the
+# `population` entry (which this inventory keeps registered) requires this file to still
+# call the function. Neither can be deleted alone without the other saying so.
 
 set(select_args "")
 set(selection "everything registered")
-if(DEFINED ZEN_SELECT AND NOT ZEN_SELECT STREQUAL "")
+if(NOT DEFINED ZEN_SELECT)
+    set(ZEN_SELECT "")
+endif()
+if(NOT ZEN_SELECT STREQUAL "")
     set(select_args -R "${ZEN_SELECT}")
     set(selection "-R ${ZEN_SELECT}")
 endif()
@@ -76,16 +98,17 @@ execute_process(
 if(NOT list_rc EQUAL 0)
     message(FATAL_ERROR "verify: could not list the selected tests (exit ${list_rc}).\n${listing}")
 endif()
-if(NOT listing MATCHES "Total Tests: ([0-9]+)")
-    message(FATAL_ERROR "verify: could not read a test count out of `ctest -N`.\n${listing}")
-endif()
-set(selected "${CMAKE_MATCH_1}")
-if(selected EQUAL 0)
+
+include("${CMAKE_CURRENT_LIST_DIR}/check_entry_population.cmake")
+zen_check_entry_population("${listing}" "${ZEN_SELECT}" "${ZEN_BUILD_DIR}" selected)
+
+if(NOT DEFINED selected OR selected STREQUAL "")
     message(FATAL_ERROR
-        "verify: the selector (${selection}) matched ZERO registered tests. CTest would "
-        "have printed \"No tests were found!!!\" and exited 0; this lane calls that what it "
-        "is -- a question that was never asked, not an answer. Check the selector, or check "
-        "whether the entries it names still exist.")
+        "verify: the CTest-entry inventory did not answer. This lane does not count its own "
+        "tests -- zen_check_entry_population() in tests/check_entry_population.cmake does, "
+        "because the count and the declared-versus-registered comparison are one question. "
+        "A lane that proceeded without it would be the lane VOLATILE-2a closed: one that "
+        "runs whatever is left and calls the smaller number green.")
 endif()
 message(STATUS "verify: ${selected} CTest entries selected (${selection})")
 

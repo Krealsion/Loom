@@ -88,6 +88,41 @@ if(NOT EXISTS "${ZEN_MANIFEST}")
     message(FATAL_ERROR "population: the suite manifest is missing: ${ZEN_MANIFEST}")
 endif()
 
+# ---- reverse custody: this entry keeps the entry inventory invoked (VOLATILE-2a) --
+#
+# tests/verify.cmake carries the CTest-ENTRY inventory -- the check that notices when an
+# add_test() disappears, THIS registration included. It cannot be a CTest entry itself,
+# because an entry that has been deleted cannot complain about its own deletion, so nothing
+# in a build would notice if the line that runs it were removed from the lane.
+#
+# So the two guard each other. That inventory keeps this entry registered; this entry, which
+# is registered and therefore runs, requires the lane to still call it. Neither can be
+# removed alone without the other saying so.
+#
+# It is a source-text tripwire, and that is the honest shape here rather than a weakness:
+# no behaviour of a build can observe whether the LANE still asks a question, so the claim
+# can only be checked by reading the file that makes it. Defense in depth, with its limit
+# stated -- two coordinated deletions still escape, because a file cannot be defended
+# against an edit to itself.
+get_filename_component(zen_tests_dir "${ZEN_MANIFEST}" DIRECTORY)
+set(zen_lane "${zen_tests_dir}/verify.cmake")
+if(NOT EXISTS "${zen_lane}")
+    message(FATAL_ERROR
+        "population: the official lane ${zen_lane} is missing. It is what runs the "
+        "CTest-entry inventory that keeps this very entry from being deleted silently, and "
+        "AGENTS.md names it as the lane a result is quoted from.")
+endif()
+file(READ "${zen_lane}" zen_lane_text)
+if(NOT zen_lane_text MATCHES "zen_check_entry_population\\(")
+    message(FATAL_ERROR
+        "population: ${zen_lane} no longer calls zen_check_entry_population(), so the "
+        "official lane has stopped checking WHICH CTest entries it registered -- it would "
+        "run whatever is left and report green at a smaller number. That is exactly the "
+        "hole VOLATILE-2a closed, and this entry exists partly to keep it closed. Restore "
+        "the call in the lane, or -- if the inventory has genuinely moved -- move this "
+        "tripwire with it rather than deleting it.")
+endif()
+
 file(STRINGS "${ZEN_MANIFEST}" manifest_lines)
 
 set(expected_main "")     # suites this configuration must have in zen-tests
