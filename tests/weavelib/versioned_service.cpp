@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The `versioned.service` fixture pair (R2B-3b-3): two REAL loadable artifacts,
+// The `versioned.service` fixture pair (PR-04): two REAL loadable artifacts,
 // v1 and v2, that implement one production role and one domain query.
 //
 //   v1  the incumbent. It answers "v1" and it answers it throughout — during the
@@ -62,7 +62,7 @@ std::shared_ptr<const Schema> state_schema() {
                               .field("escapes", Kind::Int)
                               .field("retired", Kind::Int)
                               .field("token", Kind::Int)
-                              // R2B-3d-1: what the activation handler tried, and
+                              // LIFE-05: what the activation handler tried, and
                               // what it got. Recorded rather than asserted here —
                               // the fixture attempts, the suite judges.
                               .field("act_answer", Kind::Int)
@@ -95,7 +95,7 @@ public:
         const std::string_view shape = in.payload.schema().name();
 
         if (shape == std::string_view(loom::Activated::zen_name)) {
-            // R2A-1's law, unchanged and re-proven here across the seam: the fact
+            // LIFE-01, re-proven here across the seam: the fact
             // is trusted because Loom attests it, not because the shape arrived.
             // An ordinary `zen.Activated` — including one from the coordinator
             // during preparation — is a costume, and is ignored entirely.
@@ -107,7 +107,7 @@ public:
             ++activations_;
             last_activation_ = claimed;
 
-            // ---- R2B-3d-1: FIRST BREATH IS NOT A QUESTION --------------------
+            // ---- FIRST BREATH IS NOT A QUESTION (LIFE-05) --------------------
             //
             // The fixture is the hostile witness again, and this is the whole
             // attack surface in three lines. It TRIES, from inside an accepted
@@ -132,7 +132,7 @@ public:
             // the seam's rather than this phase's: the library side of an
             // ordinary `send` returns `Ticket{}` ALWAYS — the C ABI carries no
             // bus seq back — so `.valid()` here would be false even on a perfect
-            // delivery. (`answer` and `defer_answer` are different: R2B-3b-1a
+            // delivery. (`answer` and `defer_answer` are different: ANS-06
             // gave them real success/failure across the seam, which is exactly
             // why the two fields above ARE verdicts.) Whether this arrived is
             // the SUITE's to judge, from what the coordinator was handed.
@@ -157,7 +157,7 @@ public:
             // the dynamic seam (ABI v4). A sealed candidate never reaches this
             // line, because no `QueryVersion` can reach a sealed candidate.
             //
-            // R2B-3d-1: before answering the REAL question, try once more to
+            // LIFE-05: before answering the REAL question, try once more to
             // spend whatever the activation handed back. Nothing it kept may
             // become valid later — an invalid capability is invalid forever, not
             // merely at the moment it was refused.
@@ -338,7 +338,7 @@ private:
     bool deferred_ = false;
     bool answered_ = false;
     bool retired_ = false;
-    /// R2B-3d-1: what the activation handler's three attempts returned.
+    /// LIFE-05: what the activation handler's three attempts returned.
     bool act_answer_ = false;
     bool act_defer_ = false;
     bool act_send_ = false;

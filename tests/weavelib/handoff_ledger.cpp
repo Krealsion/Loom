@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE HANDOFF GARDEN'S LEDGER (R2E-0): one source, two REAL artifacts whose
+// THE HANDOFF GARDEN'S LEDGER: one source, two REAL artifacts whose
 // state schemas are genuinely incompatible.
 //
 //   v1  (default)              LedgerV1{next_id, total, mode}

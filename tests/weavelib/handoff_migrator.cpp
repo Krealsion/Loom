@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE MIGRATOR (R2E-0): an ordinary, temporary weave that says
+// THE MIGRATOR (HANDOFF-01): an ordinary, temporary weave that says
 //
 //     "I know how to transform v1 meaning into v2 meaning."
 //

@@ -34,7 +34,7 @@ namespace detail {
 /// cheap. Two weaves that both accept `Greet v1` produce two claims and ONE
 /// population — and the second claim copies nothing, because the snapshot did
 /// not change. If the count lived in the snapshot, every claim and every release
-/// would be a whole-map copy, which is the cost BL-0 set out to narrow.
+/// would be a whole-map copy, which is the cost claim-scoped retention narrows.
 ///
 /// Invariant: the key sets of `current` and `claims` are equal, and every count
 /// is >= 1. An entry reaching zero leaves both, together, in one publication.
@@ -53,7 +53,7 @@ struct RegistryCore {
 
     /// Validate the whole request, then commit it. Nothing is mutated until
     /// every entry has been checked, so a conflict anywhere leaves the Registry
-    /// exactly as it was (the transactional half of BL-0).
+    /// exactly as it was (the transactional half of LIFE-08).
     void acquire(const std::vector<std::shared_ptr<const Schema>>& schemas,
                  std::vector<Key>& out_keys) {
         // ---- validate; no mutation below this point until the commit ----
@@ -196,7 +196,7 @@ SchemaClaimScope& SchemaClaimScope::operator=(SchemaClaimScope&& other) noexcept
     if (this == &other) {
         return *this;
     }
-    // ORDER MATTERS AND IS THE POINT (BL-0 replacement overlap). The incoming
+    // ORDER MATTERS AND IS THE POINT (LIFE-08, replacement overlap). The incoming
     // claims were acquired BEFORE this assignment ran, so a schema both scopes
     // claim is at count two here and drops to one below — it never leaves the
     // Registry, and there is no instant during a handoff when the vocabulary a

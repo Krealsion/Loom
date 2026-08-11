@@ -82,7 +82,8 @@ std::string type_label(const TypeRef& t) {
 }
 
 // ===========================================================================
-//  The decode budget: bounded host-side materialization (R2F-A)
+//  The decode budget: bounded host-side materialization
+//  docs/reference/bounds.md#the-decode-materialization-bound
 // ===========================================================================
 
 // ONE budget per top-level decode, shared by every nested message, list, field
@@ -210,7 +211,7 @@ void bin_encode_value(const Cell& c, const TypeRef& t, std::string& out) {
 // absent fields are reported there, not here.
 struct BinaryDecoder {
     detail::BinReader& r;
-    DecodeBudget& budget; ///< shared by the whole top-level decode (R2F-A)
+    DecodeBudget& budget; ///< shared by the whole top-level decode
     std::vector<Error> errs;
     bool fatal = false;
 
@@ -569,7 +570,7 @@ void json_encode_cell(const Cell& c, std::string& out) {
 struct JsonDecoder {
     std::vector<Error>& errs;
     bool collect_all;
-    DecodeBudget& budget;  ///< the SAME budget domain as native (R2F-A)
+    DecodeBudget& budget;  ///< the SAME budget domain as native
     bool exhausted = false; ///< budget exhaustion halts collection: no coherent candidate
 
     bool stop() const { return exhausted || (!collect_all && !errs.empty()); }
@@ -800,7 +801,7 @@ Admission admit_against(const Unverified::Impl& impl, const std::shared_ptr<cons
             "the bytes were written against a different shape of this name and version"});
     }
 
-    // R2F-A: ONE budget for this whole decode, created here — the single place
+    // ONE budget for this whole decode, created here — the single place
     // every untrusted seam funnels through (bus delivery, kernel re-admission,
     // isolation manifests/snapshots/emissions, Bridge frames, persistence loads),
     // in both encodings. No transport carries its own copy of this law.

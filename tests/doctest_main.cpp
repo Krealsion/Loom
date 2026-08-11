@@ -4,7 +4,8 @@
 // The one translation unit that compiles the doctest framework and provides
 // main(). Every other test file includes <doctest.h> without this macro.
 //
-// POP-01 (R2F-D): a run that executed ZERO test cases is a FAILURE, not a pass.
+// POP-01: a run that executed ZERO test cases is a FAILURE, not a pass.
+// docs/laws/population-laws.md
 //
 // doctest exits 0 when a filter selects nothing -- `--test-suite=switchboard`
 // against a binary where that suite was renamed, #if'd out, or deleted prints

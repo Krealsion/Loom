@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// TERM-0 — an ordinary Loom weave that a person can drive, and the exact list of
+// The terminal — an ordinary Loom weave that a person can drive, and the exact list of
+// docs/reference/terminal.md
 // things it must never quietly become.
 //
 // What this suite is watching for, stated as the failures it must catch:

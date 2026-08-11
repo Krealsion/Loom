@@ -5,7 +5,7 @@
 //
 // Deliberately in a NAMED namespace. Most of Loom's own weave fixtures hide their
 // shapes in an anonymous one, where internal linkage means schema_of<T>()'s statics
-// can never take the vague-linkage binding that R2F-E's build contract exists to
+// can never take the vague-linkage binding that KERN-05's build contract exists to
 // mitigate -- so those fixtures cannot exercise it. A stranger writes ordinary
 // namespaced code, which is exactly the shape that found F-22 in the first place.
 

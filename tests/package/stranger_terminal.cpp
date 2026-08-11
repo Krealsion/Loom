@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE STRANGER'S TERMINAL (TERM-0) — a second presentation, built outside Loom's
+// THE STRANGER'S TERMINAL — a second presentation, built outside Loom's
 // build tree, reaching the terminal core only through `find_package(loom)`.
 //
-// TERM-0's Workshop-readiness claim is that a presentation which is not in this
+// The Workshop-readiness claim is that a presentation which is not in this
 // repository can own a terminal participant, drive it, and render its transcript
 // without parsing console strings or acquiring host authority. This file is that
 // claim, made falsifiable: it is what a Workshop pane would do, minus the pane.

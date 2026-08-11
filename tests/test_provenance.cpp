@@ -262,17 +262,17 @@ WeaveId mount_into_role(Switchboard& bus, std::string role, Args&&... args) {
 /// inferred from an absence.
 struct RefusalTap {
     std::int64_t capability_denied = 0;
-    std::int64_t foreign_authority = 0; ///< a capability-object failure (R2B-2)
-    std::int64_t exhausted = 0;         ///< a published bound was reached (R2B-2)
-    std::int64_t sender_life_ended = 0; ///< the author's life is over (R2B-2b)
-    std::int64_t answer_target_changed = 0; ///< the requester is not who asked (R2B-2c)
+    std::int64_t foreign_authority = 0; ///< a capability-object failure
+    std::int64_t exhausted = 0;         ///< a published bound was reached
+    std::int64_t sender_life_ended = 0; ///< the author's life is over
+    std::int64_t answer_target_changed = 0; ///< the requester is not who asked
     std::int64_t other_refusals = 0;
     std::int64_t delivered_answers = 0;
     /// The (authored, current) life pair off the last event for this shape, so the
     /// generation arithmetic can be pinned rather than inferred.
     std::uint64_t last_authored_life = 0;
     std::uint64_t last_current_life = 0;
-    /// The four numbers an authenticated answer's refusal reports (R2B-2c).
+    /// The four numbers an authenticated answer's refusal reports (ANS-03).
     std::uint64_t expected_life = 0;
     std::uint64_t expected_incarnation = 0;
     std::uint64_t found_life = 0;
@@ -313,7 +313,7 @@ struct RefusalTap {
 constexpr const char* kProvRole = "prov.steward";
 constexpr std::uint64_t kPublicCorrelation = 0xC1A1; // as public as a constant gets
 
-// ---- the compile-surface half of the authority proof (R2B-1a) -----------------
+// ---- the compile-surface half of the authority proof (LIFE-04) ---------------
 //
 // The runtime cases below can only ever show that the strongest attack a weave
 // can COMPILE achieves nothing. They cannot show that a stronger one is
@@ -969,8 +969,8 @@ public:
 /// inferred from an absence.
 struct ActivationTap {
     std::int64_t delivered = 0;
-    std::int64_t foreign_authority = 0; ///< the accurate reason (R2B-2)
-    std::int64_t exhausted = 0;         ///< a published bound was reached (R2B-2)
+    std::int64_t foreign_authority = 0; ///< the accurate reason
+    std::int64_t exhausted = 0;         ///< a published bound was reached
     std::int64_t capability_denied = 0;
     std::int64_t other_refusals = 0;
 
@@ -1207,7 +1207,7 @@ public:
         AnswerAfter,   ///< mail.answer() after deferring must provide nothing
         SpendTwice,    ///< a second spend must fail
         ReleaseThenSpend, ///< release, then try to spend
-        HoardAll,      ///< keep EVERY capability, then try to spend them all (R2B-2a)
+        HoardAll,      ///< keep EVERY capability, then try to spend them all
     };
 
     explicit Deferrer(Mode mode) : mode_(mode) {}

@@ -21,7 +21,7 @@
 #include <vector>
 
 namespace loom {
-/// The R2F-C observation instrument, applied to console history (see the friend declarations in
+/// The LIFE-07 observation instrument, applied to console history (see the friend declarations in
 /// zen/console/console.hpp): reads the window's OWN backing storage, so "the retained population
 /// saturates" and "the storage stops growing" are stated as two separate assertions rather than one
 /// inferred from process RSS -- RSS is allocator- and OS-sensitive and cannot tell a bounded ring
@@ -731,7 +731,7 @@ TEST_CASE("input: an unknown control byte maps to Action::None and changes nothi
     CHECK(after.pending.has_value() == before.pending.has_value());
 }
 
-// ---- COLD-2 C-1: console history is bounded by capacity, never by lifetime throughput ----------
+// ---- console history is bounded by capacity, never by lifetime throughput ---------------------
 //
 // Before this, ConsoleEngine::tap_ and ConsoleWeave::received_ were plain vectors that only ever
 // grew: 200,000 bus events retained 200,000 tap entries and 200,000 Values (+42 MB RSS, measured,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The office worker — the R2D-0 dynamic-parity fixture.
+// The office worker — the office-authorship dynamic-parity fixture (MSG-07).
 //
 // A loadable weave that exercises every half of role authorship from the FAR
 // side of the C ABI seam, through the exact same C++ surface a native weave

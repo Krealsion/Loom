@@ -35,7 +35,7 @@ namespace {
 // hardening, not built.)
 bool allowed(const std::string& host) { return host == "127.0.0.1"; }
 
-// Raw TCP connect/send/recv (native POSIX — the same calls the B3 net-probe uses). On
+// Raw TCP connect/send/recv (native POSIX — the same calls the net-probe uses). On
 // success, `out` holds what the peer returned. No DNS: host must be a dotted-quad IPv4.
 bool tcp_exchange(const std::string& host, std::int64_t port, const loom::Bytes& payload,
                   loom::Bytes& out) {

@@ -4,7 +4,7 @@
 #ifndef ZEN_TESTS_WEAVELIB_OFFICE_PROTOCOL_HPP
 #define ZEN_TESTS_WEAVELIB_OFFICE_PROTOCOL_HPP
 
-// The office-authorship parity vocabulary (R2D-0), shared by the loadable
+// The office-authorship parity vocabulary (MSG-07), shared by the loadable
 // office-worker fixture and the native kernel suite — the same header on both
 // sides of the .so seam, so the shapes cannot drift apart.
 

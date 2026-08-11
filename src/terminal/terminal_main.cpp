@@ -8,7 +8,7 @@
 // and render what came back. It holds no transcript of its own, decides nothing
 // about authority, and has no privileged path to anything: delete it and the
 // terminal is still there, in `zen-terminal`, waiting for another presentation.
-// That is the claim TERM-0 is making, and this file is where it is either true or
+// That is the claim this package makes, and this file is where it is either true or
 // obviously false.
 //
 // THREE LENSES, VISIBLY DIFFERENT, AND NEVER SILENTLY CROSSED:
@@ -31,7 +31,7 @@
 // IT HOSTS ITS OWN LOOM. This executable boots a Switchboard, a service, a
 // Weaver, a governed session and an operator seat, all in this process. It does
 // NOT attach to another program's Loom — there is no socket here, no token, no
-// authentication, and no remote anything. A "terminal" in TERM-0 means a
+// authentication, and no remote anything. A "terminal" here means a
 // presentation of participants that live in the same process.
 
 #include <zen/host/grant_wiring.hpp>
@@ -318,7 +318,7 @@ int main() {
     // ---- the operator seat: a DIFFERENT weave -------------------------------
     //
     // Four rules, all of them "say one contentless decision to the policy office". No allow_any,
-    // no tap, no discovery, no host root — WEAVER-1's bootstrap console held all four, and none
+    // no tap, no discovery, no host root — the Weaver's bootstrap console held all four, and none
     // of them turned out to be necessary to be the user.
     loom::Grant operator_grant;
     operator_grant.allow_to_role("zen.ApproveAuthority", 1, kWeaverRole);

@@ -10,7 +10,7 @@
 
 // Written out by hand rather than through ZEN_EXPORT_WEAVE, because the whole
 // point is a descriptor the macro would never produce. By name, in declaration
-// order (BL-4): a hand-written descriptor is exactly where a positional drift
+// order (KERN-04): a hand-written descriptor is exactly where a positional drift
 // would go unnoticed, and naming every door keeps this fixture's "the version is
 // the ONLY thing wrong here" claim checkable instead of asserted.
 extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {

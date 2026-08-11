@@ -118,7 +118,7 @@ TEST_CASE("reads are safe under concurrent registration") {
     CHECK(reg.contains("Churn", 2099));
 }
 
-// ---- BL-0: a schema is discoverable while a live claim requires it ----------
+// ---- a schema is discoverable while a live claim requires it (LIFE-08) -----
 //
 // The append-only registry was the demonstrated C-10/F-9 shape: a host meeting a
 // stream of distinct schemas retained every one of them forever, because
@@ -342,7 +342,7 @@ TEST_CASE("BL-0: a scope belongs to one Registry, and outliving it is harmless")
 TEST_CASE("BL-0: a long run of distinct claimants does not grow the population") {
     // THE C-10 BOUNDEDNESS PROOF, in the narrowest form that still means it: a
     // host that meets 500 distinct vocabularies one after another, keeping none,
-    // ends where it started. Before BL-0 this ended at 500.
+    // ends where it started. Without claim-scoped retention it would end at 500.
     Registry reg;
     reg.register_schema(shape("HostVocabulary")); // the permanent baseline
     const std::size_t baseline = reg.size();

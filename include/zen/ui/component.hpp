@@ -197,7 +197,7 @@ struct TreeResult {
 /// the deepest legal node sits at depth kMaxUiDepth and the longest legal CHAIN is
 /// kMaxUiDepth + 1 nodes.
 ///
-/// AND IT IS THE FIRST BOUND, which took a repair to make true (MSVC-1). tree_of() walks the
+/// AND IT IS THE FIRST BOUND, which the traversal has to be written to keep true. tree_of() walks the
 /// nodes with an explicit work stack, never native recursion, so this cap is what stops a deep
 /// frame on every toolchain. While the walk was recursive the cap was only nominal: MSVC Debug
 /// ran out of C++ stack at chain depth 240 — inside the window the cap says it accepts — and

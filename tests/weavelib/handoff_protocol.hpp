@@ -4,7 +4,7 @@
 #ifndef ZEN_TESTS_HANDOFF_PROTOCOL_HPP
 #define ZEN_TESTS_HANDOFF_PROTOCOL_HPP
 
-// THE HANDOFF GARDEN'S VOCABULARY (R2E-0).
+// THE HANDOFF GARDEN'S VOCABULARY (HANDOFF-01..03).
 //
 // Two ledger implementations with GENUINELY INCOMPATIBLE state, one temporary
 // migrator that knows how to turn the first meaning into the second, and the

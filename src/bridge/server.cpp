@@ -369,7 +369,7 @@ void BridgeServer::step() {
     // Proxies fire-and-continue (ship Delivered); the tap observer streams Tap.
     // Unbounded by default — the contract every existing caller has. A host
     // composing with a perpetual in-process service asks for a bounded turn so
-    // this returns (R2E-0); FIFO is identical either way.
+    // this returns (MSG-09); FIFO is identical either way.
     if (bounded_dispatch_) {
         // Exactly the backlog that existed when this turn began. A perpetual
         // in-process service cannot extend it, and a busy bus is not throttled.

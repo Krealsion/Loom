@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE REAL KERNEL PATH, DRIVEN BY A STRANGER (MSVC-0).
+// THE REAL KERNEL PATH, DRIVEN BY A STRANGER.
 //
 // Not a custom test loader: loom::Kernel is the actual mechanism, so what is proven
 // here is the mechanism a host really uses -- LoadLibrary/dlopen, the "zen_weave_abi"

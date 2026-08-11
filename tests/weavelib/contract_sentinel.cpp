@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The reloadable-weave build contract's sentinel (KERN-05, R2F-E).
+// The reloadable-weave build contract's sentinel (KERN-05).
 //
 // Two artifacts are built from this one source: one through
 // loom_weave_build_contract(), one DELIBERATELY without it. The pair is the whole

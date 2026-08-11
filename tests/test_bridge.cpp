@@ -7,7 +7,7 @@
 #include <zen/bridge/remote_console.hpp>
 #include <zen/bridge/server.hpp>
 
-#include <zen/console/console.hpp>       // kConsoleTapCapacity / kConsoleBufferCapacity (C-1)
+#include <zen/console/console.hpp>       // kConsoleTapCapacity / kConsoleBufferCapacity
 #include <zen/kernel/schema_codec.hpp>   // encode_schema, for a fake host that publishes a shape
 #include <zen/schema.hpp>
 #include <zen/serialize.hpp>
@@ -46,7 +46,7 @@
 using namespace loom;
 
 namespace loom {
-/// The R2F-C observation instrument (see the friend declaration in zen/bridge/channel.hpp): reads
+/// The LIFE-07 observation instrument (see the friend declaration in zen/bridge/channel.hpp): reads
 /// the channel's OWN retained buffers, so the bounded-storage law is stated as an assertion about
 /// transport state rather than inferred from process memory -- RSS is allocator- and OS-sensitive
 /// and cannot tell "capacity remains reusable" from "sent bytes remain part of the live buffer".
@@ -105,7 +105,7 @@ private:
     }
 };
 
-// ---- R2F-A: a weave whose door is the amplification carrier -----------------------------------
+// ---- a weave whose door is the amplification carrier ------------------------------------------
 //
 // A zero-field Message costs ZERO wire bytes, so `Bulk`'s list is the shape whose decoded
 // population is unrelated to its serialized size. Registering this weave is what puts that door in
@@ -183,7 +183,7 @@ bool wait_until(const std::function<bool()>& predicate, int timeout_ms) {
 struct Host {
     loom::Switchboard bus;
     RecordingGreeter* greeter = nullptr;
-    BulkSink* bulk = nullptr; ///< non-null only under Host(WithBulk) — see R2F-A below
+    BulkSink* bulk = nullptr; ///< non-null only under Host(WithBulk) — see the amplification cases below
     loom::WeaveId gid{};
     loom::WeaveId bulk_id{};
     socket_t listener = kInvalidSocket;
@@ -402,9 +402,9 @@ TEST_CASE("transport: framed messages round-trip over AF_UNIX (decision #4's loc
     ::unlink(path.c_str());
 }
 
-// ---- R2F-C: consumed transport bytes are history, not live channel storage (LIFE-07) -----------
+// ---- consumed transport bytes are history, not live channel storage (LIFE-07) -----------------
 //
-// COLD-1 F-18: flush() clear()ed the outbox ONLY on an exact drain, so a peer that keeps up but
+// THE FAILURE THIS FALSIFIES: flush() clear()ing the outbox ONLY on an exact drain, so a peer that keeps up but
 // never lets the socket run dry left a standing residue at every flush, the reset never fired, and
 // the buffer grew by the session's whole byte volume. kMaxBacklog measures the UNSENT residue, so
 // it never noticed. Measured pre-repair on exactly this shape: +261 B per round, strictly linear,
@@ -1705,7 +1705,7 @@ TEST_CASE("operator-protocol: a SIGKILLed operator PROCESS is reaped as an event
 }
 #endif // _WIN32
 
-// ---- R2E-0: composing with a perpetual in-process service --------------------
+// ---- composing with a perpetual in-process service (MSG-09) ------------------
 //
 // The Rule Garden's sharpest seam, at the altitude it was found: a repeating
 // Zengine Timer paces itself inside Drive and enqueues its next Drive before
@@ -1864,13 +1864,13 @@ TEST_CASE("R2E-0: unbounded is the pre-existing contract — step() still drains
         bus.send(gid, loom::Message(std::move(v)));
     }
     server.step();
-    CHECK(bus.pending() == 0u); // drained, exactly as before R2E-0
+    CHECK(bus.pending() == 0u); // drained, exactly as the unbounded pump does
 }
 
-// ---- COLD-2 C-1: the CLIENT's retained state is bounded too -------------------------------------
+// ---- the CLIENT's retained state is bounded too -------------------------------------------------
 //
-// RemoteConsole holds four things a peer can feed. COLD-2 named three of them and treated them as
-// one shape; they are not, and the classification is what decides the fix:
+// RemoteConsole holds four things a peer can feed. TREATING THEM AS ONE SHAPE IS THE MISTAKE — the
+// classification is what decides the fix, and each row wants a different one:
 //
 //   tap_               HISTORY        -> bounded window, oldest evicted and counted
 //   buffer_            HISTORY        -> bounded window, oldest evicted, labels stay identities
@@ -1878,9 +1878,9 @@ TEST_CASE("R2E-0: unbounded is the pre-existing contract — step() still drains
 //                                        eviction: each entry is a reply still owed a schema, and
 //                                        dropping the oldest would discard an obligation. Proven
 //                                        above ("the client bounds pending replies..."); untouched.
-//   schema_absent_     CACHE          -> a memo COLD-2 did not name, and the only one a peer could
+//   schema_absent_     CACHE          -> the easiest one to miss, and the only one a peer could
 //                                        still grow forever: every Delivered naming a novel unknown
-//                                        shape added one entry that was never removed.
+//                                        shape adds an entry that is never removed.
 
 namespace loom {
 /// See the friend declaration in zen/bridge/remote_console.hpp. The absent-schema memo has no

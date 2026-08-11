@@ -11,7 +11,7 @@
 // It is the console's assumption ladder, moved down a layer and stopped one step
 // earlier. The ladder itself (named wins -> positional -> type-directed ->
 // prompt) is unchanged in behaviour, unchanged in ordering, and unchanged in
-// what it refuses; what TERM-0 changed is that COMPOSING and SENDING are now two
+// what it refuses. COMPOSING and SENDING are deliberately two
 // operations instead of one. `compose_message` assembles and stops. Whoever
 // wants the message sent sends it — the console engine through its
 // `LadderHost`, a terminal participant through its own identity-bound channel, a

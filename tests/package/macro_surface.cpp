@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE PUBLIC MACRO SURFACE, COMPILED AS A STRANGER (MSVC-0).
+// THE PUBLIC MACRO SURFACE, COMPILED AS A STRANGER.
 //
 // Every form of ZEN_SHAPE / ZEN_EXPOSE / ZEN_HIDE, including BOTH zero-argument
 // spellings -- which is the exact dispatch that MSVC's traditional preprocessor
