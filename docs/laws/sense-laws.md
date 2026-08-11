@@ -49,7 +49,8 @@ Loom never applies queued work speculatively to make a claim look current.
 MEANS
 - a reader delivered **after** a state-changing message observes the new claim;
   one delivered **before** it observes the previous claim;
-- the repository reorders nothing, because it participates in causality at all;
+- the repository reorders nothing, because it never participates in causality at
+  all;
 - pending FIFO work may already make a claim stale with respect to what happens
   next, and Loom says so rather than hiding it;
 - the settlement rule is the smallest one available: because dispatch is
