@@ -107,7 +107,8 @@ bool write_isolation_id_maps(pid_t child) noexcept;
 /// AFTER enter_isolation_namespaces (which grants CAP_SYS_ADMIN in the userns).
 int run_mount_plan(const MountPlan& plan) noexcept;
 
-/// Child-side, async-signal-safe: THE EXEC-BOUNDARY DESCRIPTOR POLICY (C-2).
+/// Child-side, async-signal-safe: THE EXEC-BOUNDARY DESCRIPTOR POLICY.
+/// docs/reference/capabilities.md#the-exec-boundary-three-independent-facts
 ///
 /// Close every descriptor this process holds EXCEPT the ones named in `keep`, which
 /// must be strictly ascending and non-negative (the caller writes it as a literal, so
@@ -119,7 +120,7 @@ int run_mount_plan(const MountPlan& plan) noexcept;
 ///
 /// This is a *boundary*, not a hardening pass. A network namespace makes a FRESH
 /// socket fail; it says nothing about an ALREADY-CONNECTED descriptor that crossed
-/// `execve`, and COLD-2 demonstrated exactly that gap: a host socket parked without
+/// `execve`, and that gap is real: a host socket parked without
 /// `FD_CLOEXEC` arrived usable inside a network-denied child and moved bytes back.
 /// `FD_CLOEXEC` at each creation site is worth having (and Loom's own sockets now set
 /// it), but it can never be the boundary: the embedding host owns descriptors Loom
@@ -153,7 +154,7 @@ int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcep
 int close_descriptors_by_close_range(const int* keep, std::size_t keep_count) noexcept;
 int close_descriptors_by_enumeration(const int* keep, std::size_t keep_count) noexcept;
 
-/// THE EXEC-BOUNDARY ENVIRONMENT POLICY (C-2a), and the second of the boundary's two
+/// THE EXEC-BOUNDARY ENVIRONMENT POLICY, and the second of the boundary's two
 /// authority surfaces — the first being the descriptor allow-list above.
 ///
 /// The environment a child receives is AUTHORED, never inherited. `execve(exe, argv,

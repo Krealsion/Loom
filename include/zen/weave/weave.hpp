@@ -42,7 +42,7 @@ struct Accept {};
 template <class... S>
 struct Emit {};
 
-/// THE SENSES A WEAVE DECLARES IT CAN CLAIM (R2E-0) — its claim-set.
+/// THE SENSES A WEAVE DECLARES IT CAN CLAIM (SENSE-04) — its claim-set.
 ///
 /// A third list, because a claim is neither of the other two: `Accept<...>` is
 /// what may be DELIVERED here, `Emit<...>` is what may be SENT from here, and
@@ -115,7 +115,7 @@ public:
             role, loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
     }
 
-    // ---- deliberate office authorship (R2D-0) -------------------------------
+    // ---- deliberate office authorship (MSG-07) ------------------------------
     //
     // THE LAW: a weave may hold an office and still speak personally. Holding is
     // never speaking-for: `mail.send(...)` from a role holder arrives as
@@ -192,7 +192,7 @@ public:
                 role_, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{}, correlation));
         }
 
-        /// CLAIM `observation` DELIBERATELY AS THIS OFFICE (R2E-0) — the same
+        /// CLAIM `observation` DELIBERATELY AS THIS OFFICE (SENSE-04) — the same
         /// law as office speech, in the same grammar, because it IS the same
         /// law: holding the office is not claiming as the office.
         ///
@@ -218,7 +218,7 @@ public:
     /// itself checks nothing and grants nothing.
     Office as_role(std::string_view role) { return Office(*this, role); }
 
-    // ---- Senses (R2E-0) -----------------------------------------------------
+    // ---- Senses (SENSE-01..05) ----------------------------------------------
 
     /// CLAIM `observation` PERSONALLY — "this is what I most recently claim is
     /// so". The shape must be declared in this weave's `Claims<...>`.
@@ -284,7 +284,7 @@ public:
     /// empty can never name a real office (an empty role is not bindable).
     std::string_view authored_role() const { return in_.provenance.authored_role(); }
 
-    // ---- authenticated lifecycle conversation (R2B-1) -----------------------
+    // ---- authenticated lifecycle conversation (ANS-01, LIFE-04) -------------
     //
     // THE LAW: a role tells Loom WHERE to deliver an ask; an authenticated
     // conversation tells the asker WHO actually received it and who may answer.
@@ -302,7 +302,7 @@ public:
         return bus_.answer(loom::Message(to_value(msg), self_));
     }
 
-    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (R2B-2) — for the responder whose
+    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (ANS-02) — for the responder whose
     /// answer depends on messages it has not received yet.
     ///
     /// This CONVERTS the immediate opportunity rather than adding to it: after a
@@ -350,7 +350,7 @@ public:
     }
 
     /// REPLACE THE DELEGATED LIVE AUTHORITY of the subject this capability
-    /// governs (GRANT-0). Grant, revoke, widen and narrow are this one call.
+    /// governs (GATE-05). Grant, revoke, widen and narrow are this one call.
     ///
     /// Available from inside an ordinary handler, on purpose: an administrator
     /// decides policy the way every other weave decides anything — because a
@@ -447,7 +447,7 @@ public:
         return {schema_of<E>()...};
     }
 
-    /// The Senses this Weave declares it can claim (R2E-0). Unlike the emit-set
+    /// The Senses this Weave declares it can claim (SENSE-04). Unlike the emit-set
     /// this one is real: registered at mount, answerable as discovery, and
     /// checked by the claim doors. `final` for the same reason the accept-set is
     /// — a woven weave must not be able to advertise one claim-set and claim from

@@ -5,7 +5,8 @@
 #define ZEN_WEAVER_VOCABULARY_HPP
 
 // THE AUTHORITY-POLICY VOCABULARY — the shapes a governed session, a human
-// operator and a Weaver say to one another (WEAVER-1).
+// operator and a Weaver say to one another.
+// docs/reference/weaver.md
 //
 // It is a HEADER OF ITS OWN, apart from the Weaver that implements the policy,
 // and that separation is the architecture rather than tidiness: a governed

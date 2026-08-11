@@ -159,7 +159,7 @@ bool EnforcementReport::enforceable(Capability c) const noexcept {
     return s != nullptr && s->enforceable;
 }
 
-// ---- The exec-boundary descriptor policy (C-2) -----------------------------------
+// ---- The exec-boundary descriptor policy ------------------------------------------
 //
 // ONE definition, deliberately outside the platform split: the boundary is not a
 // Linux capability the way a namespace is, and a host that cannot impose a namespace
@@ -266,7 +266,7 @@ int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcep
     return close_descriptors_by_enumeration(keep, keep_count);
 }
 
-// ---- The exec-boundary environment policy (C-2a) ---------------------------------
+// ---- The exec-boundary environment policy -----------------------------------------
 
 void ChildEnvironment::set(std::string_view name, std::string_view value) {
     // A refusal poisons the whole environment rather than skipping one entry: an

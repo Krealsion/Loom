@@ -123,7 +123,7 @@ struct ClaimBequest {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role)); }
 };
 
-// ---- activation (R2A-1) -----------------------------------------------------
+// ---- activation (LIFE-01) ---------------------------------------------------
 //
 // THE WHOLE FACT, and nothing beside it. `zen.Activated` means exactly:
 //
@@ -167,7 +167,7 @@ struct ClaimBequest {
 // the kernel operation, reachable by the default Manager and by any explicitly
 // authorized alternate operator alike. Host-native mount<T>() weaves are NOT
 // covered. What a participant should DO on activation is its own business and no
-// part of this shape (Zengine's Timer is the first intended consumer — R2A-2).
+// part of this shape (Zengine's Timer is the first intended consumer).
 struct Activated {
     /// Positive, and newer than the previous activation from the same revived
     /// lineage, and never reused by that lineage — *because the sender refuses

@@ -35,7 +35,7 @@ namespace {
 constexpr int kChildFd = 3;            // the child reads its socket from this fd
 constexpr int kHandshakeTimeoutMs = 5000;
 
-// THE INTENTIONAL CHILD DESCRIPTOR SET (C-2). Derived from what the child actually
+// THE INTENTIONAL CHILD DESCRIPTOR SET. Derived from what the child actually
 // needs across execve, not guessed:
 //
 //   0,1,2      stdin/stdout/stderr — DELIBERATELY PRESERVED, and therefore an
@@ -242,13 +242,13 @@ std::string describe_resolution(const CapabilityResolution& r) {
     if (r.capability == Capability::Network) {
         switch (r.outcome) {
             case Outcome::Enforced:
-                // THREE different facts, kept apart on purpose (C-2, C-2a). The namespace
-                // decides what a FRESH socket can do; the descriptor sweep decides which
-                // ALREADY-OPEN descriptors exist at all; the authored environment decides
-                // what the child is TOLD. COLD-2 found the first true while the second was
-                // false, and this sentence used to describe only the first — so a reader
-                // had no way to learn that an inherited, connected host socket walked
-                // straight through the containment being claimed.
+                // THREE different facts, kept apart on purpose. The namespace decides what
+                // a FRESH socket can do; the descriptor sweep decides which ALREADY-OPEN
+                // descriptors exist at all; the authored environment decides what the child
+                // is TOLD. DESCRIBING ONLY THE FIRST IS THE TRAP: it has been true here
+                // while the second was false, and an inherited connected host socket then
+                // walks straight through the containment being claimed.
+                // docs/reference/capabilities.md#the-exec-boundary-three-independent-facts
                 return std::string(
                            "network: contained — private user+net namespace, no external "
                            "interface, so new outbound connections fail at the syscall level") +
@@ -369,7 +369,7 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     // where socketpair already handed back kChildFd itself the child clears the flag
     // by hand. Loom's own descriptors being CLOEXEC is defence in depth, never the
     // boundary — the boundary is the sweep below, because the embedding host owns
-    // descriptors Loom never created (C-2).
+    // descriptors Loom never created.
     (void)::fcntl(sv[0], F_SETFD, FD_CLOEXEC);
     (void)::fcntl(sv[1], F_SETFD, FD_CLOEXEC);
 
@@ -377,7 +377,7 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     char* argv[] = {const_cast<char*>(exe_.c_str()), const_cast<char*>(fd_arg.c_str()),
                     const_cast<char*>(link.so_path.c_str()), nullptr};
 
-    // The exec boundary's SECOND authority surface (C-2a). Built here, in the parent,
+    // The exec boundary's SECOND authority surface. Built here, in the parent,
     // where allocation is fine — exactly as the mount plan is — so the fork-child does
     // nothing but hand the finished array to execve. `environ` is never consulted: a
     // variable reaches the child because Zen authored it, not because this process
@@ -409,14 +409,14 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         return false;
     }
 
-    // ONE spawn path, and therefore ONE exec boundary (C-2). It used to be two: a
+    // ONE spawn path, and therefore ONE exec boundary. DO NOT SPLIT IT. Two paths — a
     // fork/execve for the sandboxed case (posix_spawn cannot unshare) and a posix_spawn
-    // for the granted/dev-mode case. Two boundaries meant two descriptor policies, and
-    // posix_spawn's file actions cannot express "close everything except these" without
-    // enumerating — so the second path could only ever have had the weaker one. The
-    // guarantee this phase makes is unconditional (a network-GRANTED weave has no more
-    // business inheriting the host's open database handle than a contained one does),
-    // so the guarantee gets a single place to live.
+    // for the granted/dev-mode case — mean two descriptor policies, and posix_spawn's
+    // file actions cannot express "close everything except these" without enumerating,
+    // so the second path can only ever carry the weaker one. The guarantee is
+    // unconditional: a network-GRANTED weave has no more business inheriting the host's
+    // open database handle than a contained one does, so it gets a single place to live.
+    // docs/reference/capabilities.md#the-exec-boundary-three-independent-facts
     //
     // B3/B4: the child unshares into a network and/or mount namespace. This host refuses
     // a child's self-map (EPERM), so the PARENT writes the child's uid/gid maps over a
@@ -617,7 +617,7 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
         accept.push_back(loom::decode_schema(*c.as_message(), registry_));
     }
     auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
-    // One transaction for the child's whole vocabulary (BL-0): cross-mount
+    // One transaction for the child's whole vocabulary (LIFE-08): cross-mount
     // agreement on (name, version) as before, but a disagreement about the last
     // door now leaves none of the earlier ones claimed — and the claim belongs to
     // the mount, so a handshake refused below releases it on the way out.

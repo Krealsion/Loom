@@ -13,7 +13,7 @@
 // here); in B2 the *process* boundary (crash containment); in B3 the *syscall*
 // boundary (the OS-capability flags, enforced by an out-of-process sandbox).
 //
-// AND THE PROJECTIONS DO NOT ALL ANSWER AT THE SAME MOMENT (GRANT-0). That was
+// AND THE PROJECTIONS DO NOT ALL ANSWER AT THE SAME MOMENT (GATE-05). That was
 // always true and used not to matter, because nothing could change a grant after
 // admission. It matters now:
 //
@@ -100,7 +100,7 @@ struct SendRule {
 };
 
 /// One observe rule: may read the latest claim of shapes matching the selector
-/// (R2E-0). Deliberately NOT a `SendRule`: a send rule answers "may you emit this
+/// (SENSE-05). Deliberately NOT a `SendRule`: a send rule answers "may you emit this
 /// shape *there*", an observe rule answers "may you pull this shape". Reusing one
 /// for the other would be convenient and misleading, and an operator reading a
 /// refusal would go edit the wrong thing.
@@ -128,7 +128,8 @@ struct ResourceLimits {
     bool unlimited_memory = false;  ///< opt out of the MEMORY cap only; pids stays bounded
 };
 
-/// THE HALF OF AN AUTHORITY THAT ANSWERS AT THE MOMENT OF USE (GRANT-0).
+/// THE HALF OF AN AUTHORITY THAT ANSWERS AT THE MOMENT OF USE (GATE-05).
+/// docs/reference/capabilities.md#live-delegation-grant-0
 ///
 /// Send rules and observe rules, and deliberately NOTHING ELSE. Every rule here
 /// is consulted off the live record each time it is needed — a send rule in
@@ -386,7 +387,7 @@ public:
         return *this;
     }
     /// MAY READ THE LATEST CLAIM of shape (name, version), from any claimant and
-    /// from any office (R2E-0). Default-absent, like every other authority here:
+    /// from any office (SENSE-05). Default-absent, like every other authority here:
     /// no existing weave gains any reach from Senses existing, and a Sense
     /// repository is therefore not a universal data-exfiltration rail — reading
     /// it takes a deliberate host decision, out of band, exactly as sending does.
@@ -444,12 +445,12 @@ public:
     }
 
     /// True iff some rule permits observing the latest claim of this shape
-    /// (R2E-0). Send rules are never consulted: they answer a different question.
+    /// (SENSE-05). Send rules are never consulted: they answer a different question.
     bool permits_observe(std::string_view shape_name, std::uint32_t shape_version) const {
         return live_.permits_observe(shape_name, shape_version);
     }
 
-    /// THE BASELINE LIVE AUTHORITY this admission established (GRANT-0).
+    /// THE BASELINE LIVE AUTHORITY this admission established (GATE-05).
     ///
     /// The half of this grant that is read at the moment of use, and therefore
     /// the half a delegated overlay is measured against and added to. It is
@@ -512,7 +513,7 @@ inline bool effective_permits_observe(const LiveAuthority& base, const LiveAutho
            delegated.permits_observe(shape_name, shape_version);
 }
 
-/// THE RIGHT TO ADMINISTER ONE SUBJECT'S DELEGATED LIVE AUTHORITY (GRANT-0).
+/// THE RIGHT TO ADMINISTER ONE SUBJECT'S DELEGATED LIVE AUTHORITY (GATE-05).
 ///
 /// The capability that makes an administrator-shaped Weaver possible without
 /// making it a host. It carries three facts and no code path can supply them
@@ -575,7 +576,7 @@ private:
     LiveAuthority ceiling_;
 };
 
-/// Why an administration attempt did or did not take effect (GRANT-0).
+/// Why an administration attempt did or did not take effect (GATE-05).
 ///
 /// Not a bool, because a Weaver that must tell a user "no" owes them which no it
 /// was — and because "your capability is from another Loom" and "the subject you
@@ -604,12 +605,12 @@ struct GrantChange {
     explicit operator bool() const noexcept { return outcome == GrantOutcome::Installed; }
 };
 
-/// WHAT A SUBJECT MAY DO, AS THE BUS WILL ACTUALLY DECIDE IT (GRANT-0).
+/// WHAT A SUBJECT MAY DO, AS THE BUS WILL ACTUALLY DECIDE IT (GATE-05).
 ///
 /// Capability-scoped inspection: only of the one subject the capability governs,
 /// and only of the message authority it can administer. Never the whole registry,
 /// never another subject, never the containment policy or anything else about the
-/// host — those are not this capability's business and TERM-0's broad observation
+/// host — those are not this capability's business and the terminal's broad observation
 /// question is separate work.
 ///
 /// It exists so an administrator never has to keep a second map that merely
