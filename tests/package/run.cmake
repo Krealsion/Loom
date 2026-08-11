@@ -74,6 +74,17 @@ if(NOT ZEN_WITNESS_MACROS)
 endif()
 zen_run("public macro surface" "${ZEN_WITNESS_MACROS}")
 
+# ---- 1b. the terminal core, as a second presentation sees it ------------------------
+find_program(ZEN_WITNESS_TERMINAL witness-terminal PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
+             NO_DEFAULT_PATH)
+if(NOT ZEN_WITNESS_TERMINAL)
+    message(FATAL_ERROR
+        "package witness: witness-terminal was not produced in ${ZEN_WORK}. The terminal core "
+        "is exported precisely so a presentation outside this tree can build one; if it no "
+        "longer configures or compiles from the installed package, that claim is false.")
+endif()
+zen_run("terminal core as a stranger sees it" "${ZEN_WITNESS_TERMINAL}")
+
 # ---- the dynamic-weave half, only where the install has a kernel ---------------------
 file(GLOB weave_artifact
      "${ZEN_WORK}/*witness-weave*.dll" "${ZEN_WORK}/*witness-weave*.so"

@@ -30,6 +30,15 @@ find_package(loom REQUIRED)
 add_executable(witness-macros macro_surface.cpp)
 target_link_libraries(witness-macros PRIVATE loom::core)
 
+# ---- 2. the terminal core, reached the way a second presentation reaches it -------
+#
+# TERM-0 exported `loom::terminal` on the strength of a second PRESENTATION rather than a
+# second host, so the claim that a stranger can build one has to be measured here rather
+# than asserted in a report. Links loom::terminal + loom::switchboard and nothing else --
+# no console, no UI vocabulary, no renderer, none of which is exported.
+add_executable(witness-terminal stranger_terminal.cpp)
+target_link_libraries(witness-terminal PRIVATE loom::terminal loom::switchboard loom::core)
+
 if(NOT TARGET loom::kernel)
     # Honest, and not a skip-in-disguise: on a build of Loom with no kernel there is no
     # dynamic-weave path to witness, and saying so beats silently proving half of this.
