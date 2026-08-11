@@ -7,7 +7,7 @@
 #include <zen/serialize.hpp>
 #include <zen/zen.hpp>
 
-// kMaxDecodedCells: the F-19 ceiling case now meets R2F-A's decode-materialization
+// kMaxDecodedCells: the F-19 ceiling case meets the decode-materialization
 // bound, and the two are pinned as ADJACENT below, so this reads the real constant.
 #include "../src/detail/binary.hpp"
 
@@ -228,8 +228,9 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
         CHECK_THROWS_AS(decode_schema(a.value(), deps), std::runtime_error);
     }
 
-    // R2F-A put a SECOND bound in front of this one, and the two must be shown to meet
-    // with no gap between them. A descriptor of n nested List tokens materialises
+    // THE DECODE-MATERIALIZATION BUDGET IS A SECOND BOUND IN FRONT OF THIS ONE, and
+    // the two must be shown to meet with no gap between them.
+    // docs/reference/bounds.md#the-decode-materialization-bound A descriptor of n nested List tokens materialises
     //     3 (SchemaDesc slots) + 1 (fields element) + 3 (Field slots)
     //       + (n+1) (type-token elements) + 3(n+1) (each TypeToken's slots)  =  11 + 4n
     // decoded cells, so the gate now admits a stream only while 11 + 4n fits the
@@ -237,7 +238,7 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
     const int deepest_admissible = static_cast<int>((detail::kMaxDecodedCells - 11) / 4);
 
     SUBCASE("the deepest descriptor the budget still admits is still refused by kMaxTypeDepth") {
-        // The F-19 spine, unchanged, at the largest size R2F-A leaves reachable: the gate
+        // The F-19 spine, unchanged, at the largest size the budget leaves reachable: the gate
         // admits (the depth stays invisible to the meta-schema) and decode_type refuses.
         std::string bytes = deep_list_descriptor_bytes(deepest_admissible);
         Unverified u = parse(bytes);
@@ -259,7 +260,7 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
     SUBCASE("the auditor's ceiling case N=100000 no longer even reaches decode_schema") {
         // The F-19 era's record: ~200 KB of descriptor, well under the frame cap, which the
         // gate ADMITTED — leaving kMaxTypeDepth as the only thing between it and the host's
-        // stack. R2F-A refuses it a layer earlier (400,011 cells, far past the budget), so a
+        // stack. The budget refuses it a layer earlier (400,011 cells, far past it), so a
         // descriptor big enough to have threatened the stack is no longer an admitted value.
         // kMaxTypeDepth is not thereby redundant: it still owns every in-budget case above.
         std::string bytes = deep_list_descriptor_bytes(100000);

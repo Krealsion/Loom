@@ -386,7 +386,7 @@ public:
     /// The heir's question. Honored ONLY from the weave recorded as this role's
     /// successor, and answered exactly once — through the AUTHENTICATED path.
     ///
-    /// Why `mail.answer` and not `mail.send` (R2B-1). An heir wakes knowing
+    /// Why `mail.answer` and not `mail.send` (ANS-01). An heir wakes knowing
     /// nothing and reaches the steward BY ROLE, precisely because it cannot know
     /// the steward's id — which means it cannot pre-bind the answer's sender, and
     /// a correlation plus a shape were the only things it had to go on. Any weave

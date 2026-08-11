@@ -116,7 +116,7 @@ std::size_t refused_count(const std::vector<TapRecord>& tap, const std::string& 
     return n;
 }
 
-// ---- R2A-1 helpers ----------------------------------------------------------
+// ---- activation-fact helpers ------------------------------------------------
 
 // Counter v3 — the activation participant's persisted bookkeeping. Reading it
 // through the ordinary snapshot path is deliberate: the fixture invents no
@@ -423,13 +423,12 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     // OUTBOUND, and this is the honest half: the incumbent replied to both, but
     // only the FIRST Pong was delivered before the unload. The second was still
     // queued when the incumbent was unregistered — and a queued message belongs to
-    // the LIFE that authored it (R2B-2b), so the bus refuses it as
+    // the LIFE that authored it (MSG-03), so the bus refuses it as
     // `SenderLifeEnded`. An unloaded weave's in-flight answers die with it.
     //
-    // R2B-2b SHARPENED THIS PIN rather than changing the behaviour: the refusal was
-    // previously `CapabilityDenied`, which arrived at the right answer by the wrong
-    // road (a vanished sender has no grant to check, so the authorization term
-    // failed). Same outcome, but an operator reading that reason would have gone
+    // THE REASON IS THE POINT, not just the outcome. `CapabilityDenied` reaches the
+    // same refusal by the wrong road — a vanished sender has no grant to check, so
+    // the authorization term fails on its own — and an operator reading it would go
     // looking for a grant that was never the problem. The author is what ended.
     //
     // This is a property of unregistering ANY weave mid-queue, not something the
@@ -993,7 +992,7 @@ TEST_CASE("a wedged graceful swap is escaped by a plain force-swap, with no time
     CHECK(r.kernel.is_loaded("next"));
 }
 
-// ---- R2A-1: the activation fact ---------------------------------------------
+// ---- the activation fact (LIFE-01) ------------------------------------------
 // zen.Activated says exactly one thing: a new code incarnation committed at this
 // address. Every case here pins that fact and its edges — never a larger claim.
 
@@ -1239,7 +1238,7 @@ TEST_CASE("R2A-1 F: a failed operation activates nobody, and spends no sequence"
 
     // Both refusals are PRE-COMMIT, so the incumbent is untouched and still
     // serving. (A post-rebind revive failure is a different, still-open story —
-    // R2B — and nothing here claims otherwise.)
+    // attestation — and nothing here claims otherwise.)
     CHECK(acts.size() == 1);
     CHECK(r.kernel.is_loaded("live"));
     CHECK(r.kernel.weave_id("live") == id);
@@ -1309,7 +1308,7 @@ TEST_CASE("R2A-1 H: the activation sequence lives in the control state and survi
     CHECK_FALSE(acts[2].sender == lineage);
 }
 
-// ---- R2A-1a: the finite boundary --------------------------------------------
+// ---- the finite boundary (LIFE-03) ------------------------------------------
 // `last_activation` is a finite signed integer. The contract says every emitted
 // sequence is positive, newer, and never reused — so at the boundary the door
 // must REFUSE rather than wrap, and must refuse before it starts an operation
@@ -1322,7 +1321,7 @@ TEST_CASE("R2A-1a A: an exhausted lineage refuses a load before the Kernel is ca
 
     set_control_state(r.bus, r.control, /*ops=*/0, kSeqMax);
 
-    // A load target whose success path is already known-good (case A of R2A-1
+    // A load target whose success path is already known-good (case A of the
     // loads exactly this), so the refusal is attributable to sequence
     // exhaustion and to nothing else.
     Answer a = drive(r.engine, r.manager, "zen.LoadWeave",
@@ -1396,7 +1395,7 @@ TEST_CASE("R2A-1a B: an exhausted lineage refuses a reload without touching the 
     REQUIRE(activation_log(r.bus, id).count == 3);
 
     // Exhaust the lineage, then ask for a reload that would CERTAINLY have
-    // succeeded — the identical-contract rebuild R2A-1's case D reloads happily.
+    // succeeded — the identical-contract rebuild case D reloads happily.
     set_control_state(r.bus, r.control, /*ops=*/7, kSeqMax);
     Answer a = drive(r.engine, r.manager, "zen.ReloadWeave",
                      {lit("live"), lit(ZEN_SO_ACTIVATES_B)});
@@ -1513,15 +1512,14 @@ TEST_CASE("the Manager is poke-inspectable like any weave: its bookkeeping is no
 }
 
 
-// ---- R2B-1: the activation is trusted because Loom ATTESTS it ----------------
+// ---- the activation is trusted because Loom ATTESTS it (LIFE-04) -------------
 //
-// R2A-1 made the activation fact narrow and gave it a stamped sender. It could
-// not answer the next question: was that sender authorized to announce a
-// lifecycle commit at all? Any weave granted the public shape could manufacture
-// a first breath for somebody else's incarnation, and a consumer had no way to
-// tell. These cases pin the answer — and, because the fixture weave now ignores
-// an unattested activation entirely, every R2A-1 case above is silently pinning
-// it too.
+// A narrow activation fact with a stamped sender still cannot answer the next
+// question: was that sender authorized to announce a lifecycle commit at all?
+// Without attestation, any weave granted the public shape can manufacture a first
+// breath for somebody else's incarnation and a consumer cannot tell. These cases
+// pin the answer — and because the fixture weave ignores an unattested activation
+// entirely, every activation-fact case above is silently pinning it too.
 
 namespace {
 
@@ -1656,7 +1654,7 @@ TEST_CASE("R2B-1 C: an attestation is bound to the incarnation it names — anno
 }
 
 TEST_CASE("R2B-1 D: an artifact built against the previous ABI is refused at load, and named") {
-    // The break R2B-1 pays for carrying provenance across the library seam. The
+    // The break Loom pays for carrying provenance across the library seam. The
     // failure is a clean refusal that says which version — not a weave that
     // loads, runs, and is silently unable to accept a lifecycle fact for the
     // rest of its life.

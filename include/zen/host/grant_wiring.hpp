@@ -12,7 +12,7 @@
 // subject's authority come from?" gets a one-file answer a reviewer can read in
 // a minute and an auditor can grep for in one line.
 //
-// WHAT CHANGED, SAID EXACTLY (GRANT-0). Before this, a mounted subject's
+// WHAT THIS ADDS, SAID EXACTLY (GATE-05). Without it, a mounted subject's
 // authority was fixed for its whole life: the host attached a `Grant` at
 // admission and nothing in the system could rewrite one. The honest replacement
 // for that sentence is three sentences, and losing any of them loses the model:

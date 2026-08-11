@@ -34,7 +34,7 @@
 // primitives into a different policy.
 //
 // ---------------------------------------------------------------------------
-// R2A-1 — THE ACTIVATION FACT. The door also tells a freshly committed weave, in
+// THE ACTIVATION FACT. The door also tells a freshly committed weave, in
 // one ordinary message, that it is live: zen.Activated (weave/lifecycle.hpp,
 // which states the fact's exact meaning and its long list of non-meanings).
 //
@@ -62,7 +62,7 @@
 // not "activated silently", not "activated later". Nothing here claims them.
 //
 // The immediate downstream consumer is Zengine's Timer, which will author its
-// beat chain from an activation instead of a one-shot host wind — that is R2A-2
+// beat chain from an activation instead of a one-shot host wind — is deferred
 // and no line of it exists yet.
 
 #include <zen/host/lifecycle_wiring.hpp> // host wiring: the one mint, not weave-facing
@@ -360,7 +360,7 @@ private:
             // recoverable; a lie about which incarnation this is, is not.
             return;
         }
-        // ATTESTED, not merely sent (R2B-1). The shape stays an ordinary declared
+        // ATTESTED, not merely sent (LIFE-04). The shape stays an ordinary declared
         // message and the send stays gated by this door's ordinary grant; what
         // the authority adds is Loom's word that this activation is a real
         // lifecycle commit for THIS incarnation and THIS sequence. Before it, a

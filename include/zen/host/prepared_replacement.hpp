@@ -4,7 +4,8 @@
 #ifndef ZEN_HOST_PREPARED_REPLACEMENT_HPP
 #define ZEN_HOST_PREPARED_REPLACEMENT_HPP
 
-// HOST WIRING — one good handle, attached to the real machine (R2B-4a).
+// HOST WIRING — one good handle, attached to the real machine.
+// PR-02; docs/reference/prepared-replacement.md#the-authoring-handle
 //
 // The prepared-replacement substrate is complete and its laws are accepted:
 // a sealed candidate, one bounded transaction, one authenticated preparation

@@ -221,7 +221,7 @@ typedef struct ZenHostApi {
      * connection, so a mod cannot impersonate another. `role` is NUL-terminated. */
     ZenStatus (*send_to_role)(void* ctx, const char* role, uint64_t reply_to,
                               uint64_t correlation, const uint8_t* payload, size_t len);
-    /* Deferred answers (R2B-2). The capability crosses as an OPAQUE token: it has
+    /* Deferred answers (ANS-02). The capability crosses as an OPAQUE token: it has
      * no wire form, is not a message field, is not reconstructible from sender,
      * correlation, role or schema, and is validated host-side against the bound
      * requester, respondent, both incarnations and correlation. A number on its
@@ -360,13 +360,12 @@ typedef struct ZenWeaveAbi {
  * warning-hostile under -Werror there), hence the platform split.
  *
  * IT LIVES HERE, BESIDE THE DECLARATION, BECAUSE MSVC COUNTS IT AS PART OF THE
- * LINKAGE (MSVC-0). It used to live only at the definition site in
- * kernel/export.hpp, so every weave declared this symbol undecorated (here) and
- * then defined it decorated (there). GCC and MinGW merge that silently; MSVC
- * refuses it outright -- `error C2375: 'zen_weave_abi': redefinition; different
- * linkage` -- and refused every weave in this tree, which is the honest reading:
- * the two spellings genuinely disagreed about what the symbol was, and only one
- * compiler said so.
+ * LINKAGE. Keeping the decoration only at the definition site (kernel/export.hpp)
+ * makes every weave declare this symbol undecorated here and define it decorated
+ * there. GCC and MinGW merge that silently; MSVC refuses it outright -- `error
+ * C2375: 'zen_weave_abi': redefinition; different linkage` -- and would refuse
+ * every weave in this tree. MSVC is right: the two spellings genuinely disagree
+ * about what the symbol is, and only one compiler says so.
  *
  * So the entry point's COMPLETE signature is stated once, in the header that owns
  * the ABI, and the definition macro reuses this very token rather than re-deriving

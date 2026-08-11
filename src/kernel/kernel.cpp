@@ -187,7 +187,7 @@ const ZenWeaveAbi* fetch_abi(void* lib, std::string& error) {
 struct HostCtx {
     loom::Bus* gated;
     loom::Switchboard* sb;
-    /// WHO IS SPEAKING (R2E-0). The gated Bus stamps this on everything it
+    /// WHO IS SPEAKING (MSG-02). The gated Bus stamps this on everything it
     /// routes, but a seam rejection never reaches the routing path — so the
     /// diagnostic needs the id here to name the artifact that attempted the
     /// emission. It is the host's own record, never anything the library says.
@@ -343,7 +343,7 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
     return ZEN_OK;
 }
 
-// Deferred answers (R2B-2). Each of these is a thin pass-through to the gated
+// Deferred answers (ANS-02, ANS-06). Each of these is a thin pass-through to the gated
 // WeaveBus of the delivery in progress — which is what makes the token safe: the
 // bus checks it against the bound participants and their exact incarnations, and
 // the ctx a library can reach is only ever the one for its own live delivery.
@@ -540,7 +540,7 @@ static ZenStatus zen_host_sense_claim(void* ctx, const std::uint8_t* payload, st
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
         // A claim of a shape this Loom never heard of is a seam rejection like
-        // any other, and is observable for the same reason (R2E-0 / P-011).
+        // any other, and is observable for the same reason (MSG-08).
         return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
     }
     loom::Admission a = loom::admit(u, door);
@@ -582,7 +582,7 @@ static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const c
     auto* h = static_cast<HostCtx*>(ctx);
     // The host resolves the shape it was NAMED. A library asking for a shape this
     // Loom never registered is the same seam rejection as an emission of one, and
-    // is observable for the same reason (R2E-0 / P-011).
+    // is observable for the same reason (MSG-08).
     std::shared_ptr<const loom::Schema> shape =
         h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
     if (!shape) {
@@ -695,7 +695,7 @@ public:
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_, self_};
-        // BY NAME, in declaration order (BL-4). No two fields of ZenHostApi share
+        // BY NAME, in declaration order (KERN-04). No two fields of ZenHostApi share
         // a type today, so a positional drift here would be a compile error rather
         // than a silent miswire — but that is a property of the CURRENT field set,
         // not a rule the table obeys, and the next appended callback could end that
@@ -894,7 +894,7 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
 
     Manifest result;
     // EVERYTHING THIS MANIFEST PUBLISHES IS CLAIMED BY `result`, AND ONLY BY IT
-    // (BL-0). `reconstruct` is a pure producer: it hands back both the schemas
+    // (LIFE-08). `reconstruct` is a pure producer: it hands back both the schemas
     // and the reason the registry still holds them, and it keeps nothing. A
     // caller that accepts the candidate moves the claim into the record that
     // owns the artifact; a caller that refuses it drops the Manifest, and the
@@ -935,7 +935,7 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::string& role) {
     // The kernel's default: permissive bus sends, and no Sense read authority.
-    // Grant's floor is empty and R2E-0 did not move it — observing another
+    // Grant's floor is empty and stays empty — observing another
     // participant's claims is a decision, not a consequence of being loadable.
     return load(name, path, role, loom::Grant{}.allow_any());
 }
@@ -970,11 +970,15 @@ LoadResult Kernel::load(const std::string& name, const std::string& path, const 
                                                 std::move(mf.state), &bus_, std::move(mf.claims));
         adapter_built = true;
         HostAdapter* raw = adapter.get();
-        // A loaded .so can bypass the bus and reach syscalls directly, so a
-        // restrictive *bus* grant on it is not real containment in B1 — that is
-        // B2's OS sandbox (which the grant's reserved OS-capability flags drive).
-        // B1 grants loaded Weaves permissive bus sends; the kernel *door* (the load
-        // capability) is fully gated against native Weaves.
+        // A loaded .so shares this address space and can reach syscalls directly,
+        // so a restrictive *bus* grant on it is not containment: the grant bounds
+        // what it may SAY, never what it may TOUCH. Real containment is the
+        // out-of-process OS sandbox, which the grant's OS-capability fields drive.
+        // In-process loading therefore grants permissive bus sends and puts the
+        // gate on the *door* — the load capability — which is fully checked
+        // against native Weaves.
+        // docs/reference/capabilities.md#the-grant-in-process
+        // docs/guides/dynamic-weaves.md#what-loading-it-in-process-means
         // A non-empty role binds the slot here, at the only moment it can be
         // bound. register_weave throws if the role is already held; that throw is
         // caught below and becomes a clean LoadResult failure — the incumbent
@@ -1036,7 +1040,7 @@ bool Kernel::commit_candidate(const std::string& incumbent_name,
     if (inc == libs_.end() || cand == libs_.end()) {
         return false;
     }
-    // The bus is the authority on who holds the role, and since R2B-3b-3a it is
+    // The bus is the authority on who holds the role (KERN-03), and it is
     // the ONLY one: there is no kernel-side role to catch up afterwards, so this
     // is the whole operation. A commit through any other door — a prepared
     // replacement, or a direct `admit_candidate` this Kernel never hears about —
@@ -1100,7 +1104,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // still untouched at this point.
     //
     // Refused before INCUMBENT REPLACEMENT and before any change to its
-    // published routing contract — and, since BL-0, refused without residue.
+    // published routing contract — and refused without residue (LIFE-08).
     // reconstruct() produced these schemas and claimed them INTO `cand`; that
     // claim is the only reason they resolve, so returning here destroys `cand`,
     // releases it, and leaves a rejected candidate's unique (name, version) keys
@@ -1121,7 +1125,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     rec.adapter->rebind(new_abi, new_inst, new_lib);
     rec.abi = new_abi;
     rec.lib = new_lib;
-    // THE CLAIM CROSSES WITH THE CODE, AND IT CROSSES WITHOUT A GAP (BL-0). The
+    // THE CLAIM CROSSES WITH THE CODE, AND IT CROSSES WITHOUT A GAP (LIFE-08). The
     // candidate's claim was taken by `reconstruct` before any of this; assigning
     // it here releases the incumbent's afterwards, so every shape the two share
     // is doubly claimed for the length of the assignment and never falls to

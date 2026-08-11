@@ -11,14 +11,13 @@
 // that "where can lifecycle authority come from?" has a one-file answer that a
 // reviewer can read in a minute and an auditor can grep for in one line.
 //
-// WHY IT IS A SEPARATE HEADER, and why that is not merely a rename. R2B-1 put
-// the mint on `Switchboard` as a PUBLIC STATIC, reachable from every weave that
-// includes `zen/switchboard.hpp` — which is every native weave. Moving it here
+// WHY IT IS A SEPARATE HEADER, and why that is not merely a rename. On
+// `Switchboard` as a public static the mint is reachable from every weave that
+// includes `zen/switchboard.hpp` — which is every native weave. Living here
 // removes it from the authoring surface.
 //
-// BUT DO NOT OVERSTATE THE SECOND WALL (corrected in R2B-2). An earlier version
-// of this comment said a weave "has nothing to pass it", as though a weave could
-// not obtain a Switchboard at all. That is false, and the falsehood mattered:
+// DO NOT OVERSTATE THAT WALL. It is NOT true that a weave "has nothing to pass
+// it", and the falsehood would matter:
 //
 //     An ordinary weave MAY construct another Switchboard and mint genuine
 //     authority there. That authority has no standing in the running Loom.
@@ -26,23 +25,23 @@
 // Constructing a board is ordinary — a Switchboard is an ordinary object. What a
 // weave cannot do is make its own board be THIS one. The protection is not
 // scarcity of boards; it is that an authority names its issuer and the issuer
-// checks (R2B-1b, `Switchboard::issued_here`). Every Loom is its own authority
-// domain, and an authority minted elsewhere is real — elsewhere.
+// checks (`Switchboard::issued_here`). An authority minted elsewhere is real —
+// elsewhere.
 //
-// That is the same line this codebase has always drawn. `Switchboard::send` is
-// root authority and `send_as` is a weave speaking as itself. Lifecycle minting
-// now sits on the correct side of a boundary that already existed.
-//
-// BUT SAY IT PRECISELY (R2B-1b). The earlier wording here — "holding the
-// Switchboard IS being the host" — was too broad, and the gap was real:
+// SAY IT PRECISELY. "Holding the Switchboard IS being the host" is too broad,
+// and the gap is real:
 //
 //     Holding a Switchboard grants host authority only within THAT
 //     Switchboard's Loom.
 //
-// Constructing a separate board creates a separate authority domain, and an
-// authority minted from it has no standing anywhere else. Anyone may own a
-// Switchboard; nobody thereby owns yours. Every Loom is its own authority
+// Constructing a separate board creates a separate authority domain. Anyone may
+// own a Switchboard; nobody thereby owns yours. Every Loom is its own authority
 // domain, and an authority carries which one issued it.
+//
+// That is the same line this codebase has always drawn: `Switchboard::send` is
+// root authority and `send_as` is a weave speaking as itself, and lifecycle
+// minting sits on the same side of it.
+// LIFE-04; docs/laws/lifecycle-laws.md
 //
 // THE TIERS THIS KEEPS APART, none of which implies the next:
 //

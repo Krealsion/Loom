@@ -87,7 +87,7 @@ public:
         return loom::Ticket{};
     }
 
-    /// THE IMMEDIATE ANSWER, across the seam (R2B-3b-1a).
+    /// THE IMMEDIATE ANSWER, across the seam (ANS-06).
     ///
     /// Without this override a loaded weave inherited `Bus::answer`'s truthful-
     /// for-a-mailbox default — invalid ticket, nothing enqueued — which for a LIVE
@@ -106,7 +106,7 @@ public:
         return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
     }
 
-    // ---- deferred answers across the seam (R2B-2) ---------------------------
+    // ---- deferred answers across the seam (ANS-02, ANS-06) ------------------
     //
     // The capability crosses as an OPAQUE TOKEN and nothing else. It carries no
     // issuer here, and does not need one: a loaded weave can only present a token
@@ -140,7 +140,7 @@ public:
         }
     }
 
-    // ---- deliberate office authorship across the seam (R2D-0 / v5) ----------
+    // ---- deliberate office authorship across the seam (MSG-07; ABI v5) ------
     //
     // The library REQUESTS the public operation; the host verifies membership
     // and stamps. A missing door (an older or narrower host) refuses HONESTLY —
@@ -470,7 +470,7 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
 // match the descriptor's function-pointer types) and forward to the C++ helpers
 // above. Exactly one ZEN_EXPORT_WEAVE per library.
 //
-// THE DESCRIPTOR IS INITIALIZED BY NAME, AND THAT IS LOAD-BEARING (BL-4).
+// THE DESCRIPTOR IS INITIALIZED BY NAME, AND THAT IS LOAD-BEARING (KERN-04).
 // `describe`, `snapshot` and `policy` are three different doors that share one
 // type — `ZenStatus (*)(void*, ZenByteSink)` — so a positional initializer can
 // put any of them in either of the others' slots and compile without a single

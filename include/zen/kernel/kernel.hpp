@@ -27,7 +27,7 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-/// WHAT THIS KERNEL CAN HONESTLY SAY ABOUT ONE ARTIFACT NAME (R2B-3b-3a).
+/// WHAT THIS KERNEL CAN HONESTLY SAY ABOUT ONE ARTIFACT NAME (KERN-03).
 ///
 /// `is_loaded()` answers one bit — *do I hold this artifact* — and that bit is
 /// true of things an operator must not confuse: a live service, a prepared
@@ -93,7 +93,7 @@ struct ReloadResult {
 /// everything a library hands back crosses as bytes and is re-admitted through
 /// the same gate. The Switchboard must outlive the Kernel.
 ///
-/// ---- THE OWNERSHIP LAW OF ONE DYNAMIC ARTIFACT (R2B-3b-3a) -----------------
+/// ---- THE OWNERSHIP LAW OF ONE DYNAMIC ARTIFACT (KERN-02) -------------------
 ///
 /// Two layers own different truths about the same artifact, and until this phase
 /// they could disagree: the Switchboard owns live participation and destroys a
@@ -179,7 +179,7 @@ public:
     LoadResult load(const std::string& name, const std::string& path,
                     const std::string& role = "");
 
-    /// As `load`, with the host naming the artifact's grant explicitly (R2E-0).
+    /// As `load`, with the host naming the artifact's grant explicitly.
     ///
     /// The default `load` gives a loaded weave permissive bus SENDS and no
     /// Sense read authority, because Grant's floor is empty and Senses did not
@@ -224,15 +224,15 @@ public:
     /// (The Switchboard's own registry is untouched: only register_weave writes
     /// it, and a rejected candidate never registers.) Whether schema admission
     /// should participate in a future replacement transaction, or is
-    /// intentionally monotonic, is an R2B design decision this does not make.
+    /// intentionally monotonic, is a design decision this does not make.
     ///
     /// HONEST REMAINING EDGE, not fixed here: this is validate-then-commit, not
     /// transactional. The incumbent's instance is destroyed and the adapter
     /// rebound BEFORE revival is known to have succeeded, so a candidate with an
     /// identical manifest whose revive() fails still leaves the incumbent
-    /// unavailable. The prepared-candidate / rollback work is R2B's.
+    /// unavailable. Prepared replacement is the mechanism for that (PR-01..09).
     ///
-    /// A SECOND HONEST EDGE, named in R2B-3b-3a: reloading a weave that some
+    /// A SECOND HONEST EDGE: reloading a weave that some
     /// prepared replacement has bound as its CANDIDATE ends that transaction —
     /// new code is a new participant — and ending it discards the candidate,
     /// which is this very artifact. The swap really did happen and is then
@@ -241,7 +241,7 @@ public:
     /// left behind: the record is released and the library closed on the way out.
     ReloadResult reload_from(const std::string& name, const std::string& new_path);
 
-    /// Load an artifact as a PREPARED CANDIDATE (R2B-3): opened, constructed,
+    /// Load an artifact as a PREPARED CANDIDATE (PR-01): opened, constructed,
     /// contract-validated and revivable — everything an ordinary load does — but
     /// SEALED, so it is not a participant in the live world. It receives no
     /// publications, no ordinary sends and no role traffic, and may speak only to
@@ -257,7 +257,7 @@ public:
     LoadResult load_candidate(const std::string& name, const std::string& path,
                               loom::WeaveId coordinator);
 
-    /// THE COMMIT (R2B-3): unseal `candidate_name` and move `role` to it from
+    /// THE COMMIT (PR-07): unseal `candidate_name` and move `role` to it from
     /// whoever holds it now, as one indivisible change to what ordinary delivery
     /// can see. Returns false — changing nothing — unless the candidate is a live
     /// sealed weave and the role is held by `incumbent_name`.
@@ -310,7 +310,7 @@ public:
     /// THE LIVE ROLE, ASKED OF THE AUTHORITY — not the role it was loaded under.
     /// The kernel's own map used to answer this, on the reasoning that load was
     /// the thing that bound the role. That stopped being true when admission
-    /// learned to move a role (R2B-3b): a prepared replacement committing, or a
+    /// learned to move a role: a prepared replacement committing, or a
     /// host admitting a candidate directly, changes the holder with no Kernel
     /// call at all, and a cache with two mutators and one updater is a cache that
     /// lies. There is no load-time role kept beside this, deliberately: two
@@ -366,7 +366,7 @@ private:
         /// The reverse does not hold — see the ownership law on the class.
         HostAdapter* adapter = nullptr;
         loom::WeaveId id{};
-        /// THIS ARTIFACT'S CLAIM ON THE DEPENDENCY REGISTRY (BL-0). Its manifest's
+        /// THIS ARTIFACT'S CLAIM ON THE DEPENDENCY REGISTRY (LIFE-08). Its manifest's
         /// referenced, accepted, state and claim shapes, claimed as one and held
         /// for exactly as long as the artifact is loaded. Erasing this record is
         /// what releases them, so `unload`, a reaped adapter and a throw on the
@@ -377,10 +377,11 @@ private:
     struct Manifest {
         std::vector<std::shared_ptr<const Schema>> accepted;
         std::shared_ptr<const Schema> state;
-        /// The declared claim-set (R2E-0/v6) — the Senses this artifact says it
+        /// The declared claim-set (SENSE-04; ABI v6) — the Senses this artifact says it
         /// can claim. Empty when it declares none.
         std::vector<std::shared_ptr<const Schema>> claims;
-        /// WHAT KEEPS THE THREE ABOVE RESOLVABLE, AND FOR HOW LONG (BL-0).
+        /// WHAT KEEPS THE THREE ABOVE RESOLVABLE, AND FOR HOW LONG (LIFE-08).
+    /// docs/laws/lifecycle-laws.md
         /// `reconstruct` is the only thing that publishes a candidate's
         /// vocabulary, and it publishes it into THIS — a claim the caller owns
         /// from the moment it returns. A candidate the compatibility check then
