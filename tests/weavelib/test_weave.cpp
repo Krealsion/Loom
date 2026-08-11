@@ -12,8 +12,13 @@
 //   ZEN_WEAVE_CRASH_ON_REVIVE     — abort on revive (drives reload-then-quarantine)
 //   ZEN_WEAVE_LOW_RELOADS         — max_reloads = 3 (fast crash-budget exhaustion)
 //   ZEN_WEAVE_SILENT              — handle never replies (liveness: cannot stall host)
-//   ZEN_WEAVE_NET_PROBE           — on handle, attempt a TCP connect and report the
-//                                   errno (B3: proves the sandbox blocks the network)
+//   ZEN_WEAVE_NET_PROBE           — on handle, attempt a TCP connect to the loopback
+//                                   port named by the Ping's seq — an endpoint the TEST
+//                                   owns — push one byte down it, and report 0 or the
+//                                   errno (B3: proves the sandbox blocks the network;
+//                                   BL-VER-08: against a live endpoint the test
+//                                   established, never a closed port whose behaviour
+//                                   belongs to the host)
 //   ZEN_WEAVE_FS_PROBE            — on handle, probe filesystem reach (read a secret,
 //                                   write in/out of scratch, exec from scratch) and
 //                                   report each errno (B4: proves the mount-ns view)
@@ -201,6 +206,12 @@ std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("NetResult", 1).field("code", Kind::Int).build();
     return s;
 }
+/// The one byte the net probe pushes down a connection it managed to open, so the
+/// test's own listener can confirm a DATA PATH rather than a completed handshake.
+/// Mirrored in `tests/test_isolation.cpp` rather than shared through a header,
+/// exactly as `kBombAllocRefused` is: this fixture is a separate artifact built
+/// into its own `.so`, and the two ends asserting the same literal is the point.
+[[maybe_unused]] constexpr char kNetProbeToken = 'Z';
 [[maybe_unused]] std::shared_ptr<const Schema> fsresult_schema() { // only the fs-probe variant
     static const auto s = SchemaBuilder("FsResult", 1)
                               .field("secret_read", Kind::Int)
@@ -583,10 +594,22 @@ public:
         (void)seq;
         bus.send(in.reply_to, Message(Value(pong_schema()))); // 'seq' deliberately absent
 #elif defined(ZEN_WEAVE_NET_PROBE)
-        (void)seq;
-        // Instruction-level reach: open a TCP socket directly — the exact move a bus
-        // grant cannot stop and only an OS sandbox can. Report the errno class so the
-        // test distinguishes ENETUNREACH (no interface) from ECONNREFUSED (reachable).
+        // Instruction-level reach: open a TCP socket directly and USE it — the exact
+        // move a bus grant cannot stop and only an OS sandbox can.
+        //
+        // The Ping's `seq` names the TCP port of an endpoint THE TEST OWNS on loopback
+        // (bound to :0, so the kernel chose it). It used to be the literal port 1, on
+        // the reasoning that "nothing listens there, so a reachable stack answers
+        // ECONNREFUSED" — which made the positive control depend on how the HOST treats
+        // a closed port. Where a closed port is black-holed instead of refused (WSL2
+        // mirrored networking), that connect() burns the whole SYN retry budget and the
+        // probe answers minutes late. So the endpoint is now a live listener the test
+        // established, and the positive witness is success rather than a particular
+        // failure (BL-VER-08; the measurement is in BL-VER-07-RB).
+        //
+        // `code` is 0 only if the connection opened AND one byte went down it, so a
+        // handshake that cannot carry data is not reported as reach. Otherwise it is
+        // the errno the OS gave — ENETUNREACH when the sandbox removed the interface.
         std::int64_t code = 0;
         const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
@@ -594,10 +617,17 @@ public:
         } else {
             sockaddr_in addr{};
             addr.sin_family = AF_INET;
-            addr.sin_port = htons(1); // a port nothing listens on → ECONNREFUSED when reachable
+            addr.sin_port = htons(static_cast<std::uint16_t>(seq));
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            errno = 0;
             const int rc = ::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-            code = rc == 0 ? 0 : errno;
+            if (rc != 0) {
+                code = errno != 0 ? errno : -1;
+            } else {
+                errno = 0;
+                const ssize_t wrote = ::write(fd, &kNetProbeToken, 1);
+                code = (wrote == 1) ? 0 : (errno != 0 ? errno : -1);
+            }
             ::close(fd);
         }
         Value result(netresult_schema());
