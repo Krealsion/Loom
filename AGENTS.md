@@ -88,6 +88,17 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   silently leaving. Exclusions are written on the target with a mandatory reason.
 - **Populations are not interchangeable**: cases, suites, OS-enforcement proofs,
   assertions. Assertion totals are reported, never an acceptance oracle.
+- **Documentation references are checked too** (`doc_links`). Every relative link
+  in a current-facing `*.md` and its `#anchor`, plus every repository-relative
+  `docs/...md` path written in a first-party C/C++ comment under `include/`,
+  `src/`, `tests/` or `examples/`, must resolve — a broken one is a RED in the
+  official lane, not something an executor has to remember to look for. A
+  comment's reference is resolved against the **repository root** (`see
+  docs/reference/capabilities.md`), because a comment moves with its code.
+  Excluded by written rule: `docs/history/` and `docs/audits/` (frozen, and they
+  describe the tree they were written against), `archive/`, vendored trees, build
+  trees. A reference above the repository root is counted and declined — a
+  standalone clone has no sibling to look at. `tests/check_doc_links.cmake`.
 
 ## Testing Zengine against this Loom
 

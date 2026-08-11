@@ -43,7 +43,7 @@ constexpr int kHandshakeTimeoutMs = 5000;
 //              shares the host's console. It is what carries a crashing child's
 //              sanitizer report and its libc/loader diagnostics, and closing it would
 //              also arm the classic trap where the child's next open() silently
-//              becomes fd 0. containment() and reference/capabilities.md both say so
+//              becomes fd 0. containment() and docs/reference/capabilities.md both say so
 //              in words, because a reader must not infer "the child gets nothing".
 //   kChildFd   the weave-host protocol transport (the socketpair end dup2'd here and
 //              named to the child as argv[1]).

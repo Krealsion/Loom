@@ -194,7 +194,7 @@ private:
 };
 
 /// The authored environment for `zen-weave-host`. Every entry it contains exists
-/// because Zen put it there for a measured reason; see reference/capabilities.md for
+/// because Zen put it there for a measured reason; see docs/reference/capabilities.md for
 /// the current set and why it is what it is.
 ChildEnvironment build_child_environment();
 

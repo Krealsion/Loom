@@ -537,6 +537,23 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_GATES=${zen_population_gates_arg}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_population.cmake)
 
+# ---- The documentation-link contract (VOLATILE-2) -------------------------------------
+#
+# The only entry that interrogates the SOURCE TREE rather than a build: every repo-local
+# documentation reference this repository makes must still resolve -- markdown links and
+# their #anchors, and the repository-relative `docs/...md` paths written in first-party
+# C/C++ comments. It reads no build output, so it registers in every configuration and on
+# every platform, which is the point: the lanes most likely to notice a path that stopped
+# resolving are the ones a hand-run script never reaches.
+#
+# Pure CMake, like every other repository-owned check here, because a verifier may not
+# depend on a tool that merely happens to be installed. Its predecessor
+# `tools/check-doc-links.py` could not run at all on the native Windows host this
+# repository supports.
+add_test(NAME doc_links COMMAND ${CMAKE_COMMAND}
+    -DZEN_REPO=${CMAKE_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_links.cmake)
+
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #
 # What the `population` entry does for the test population, these do for the loadable
