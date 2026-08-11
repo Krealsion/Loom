@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-#ifndef ZEN_CONSOLE_INPUT_LEX_HPP
-#define ZEN_CONSOLE_INPUT_LEX_HPP
+#ifndef ZEN_TERMINAL_INPUT_LEX_HPP
+#define ZEN_TERMINAL_INPUT_LEX_HPP
 
-// Text -> structured-Arg lexing for the console's text frontends. This is the ONLY job of a
-// text skin: turn a typed line into the engine's structured Arg/Ref/FieldValue types, which
-// the engine then resolves and gate-sends. The lexers live here (header-only, in the engine
-// library's namespace) so EVERY frontend — the plain terminal, the full-screen TUI, and the
-// tests — shares ONE copy; a divergent lexer would mean the smoke test proves the wrong
-// parser. No terminal/rendering dependency: pure string -> data.
+// Text -> structured-Arg lexing for the TEXT frontends. This is the ONLY job of a text skin:
+// turn a typed line into the structured Arg/Ref/FieldValue types the composer resolves. The
+// lexers live here (header-only) so EVERY text frontend — the plain console, the full-screen
+// TUI, the terminal, and the tests — shares ONE copy; a divergent lexer would mean the smoke
+// test proves the wrong parser. No terminal/rendering dependency: pure string -> data.
+//
+// It depends on the COMPOSER, not on the console: since TERM-0 the Arg/Ref/FieldValue
+// vocabulary belongs to <zen/terminal/composer.hpp>, and a terminal frontend needs this
+// lexing without needing a console engine, a tap, or a Switchboard.
 
-#include <zen/console/console.hpp>
+#include <zen/terminal/composer.hpp>
 
 #include <cstdint>
 #include <string>
@@ -145,4 +148,4 @@ inline Arg lex_arg(const Token& t) {
 
 } // namespace loom
 
-#endif // ZEN_CONSOLE_INPUT_LEX_HPP
+#endif // ZEN_TERMINAL_INPUT_LEX_HPP

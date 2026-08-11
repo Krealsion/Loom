@@ -237,6 +237,40 @@ target_link_libraries(zen-ui-pixel
     PRIVATE zen-warnings)
 add_library(loom::ui-pixel ALIAS zen-ui-pixel)
 
+# ---- The terminal core (TERM-0): an ordinary participant a presentation can drive --------
+#
+# The durable half of "a terminal". It holds NO Switchboard, NO tap, NO renderer and no
+# frontend: a TerminalSession is an ordinary weave with one identity, one grant, one supplied
+# vocabulary and its own transcript, and the typed composer underneath it is the console's
+# assumption ladder stopped one step before anything is sent. Two presentations already want
+# it (the zen-terminal REPL below, and a future Workshop pane), which is exactly why it is a
+# library rather than a frontend's private machinery.
+#
+# It links the bus for ONE reason and in ONE translation unit: the host-wiring channel
+# (src/terminal/host_channel.cpp) is where `Switchboard::send_as` lives, and keeping that in
+# a file no participant-side header includes is the same discipline grant_wiring.hpp keeps.
+add_library(zen-terminal
+    src/terminal/composer.cpp
+    src/terminal/session.cpp
+    src/terminal/host_channel.cpp)
+target_include_directories(zen-terminal
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_compile_features(zen-terminal PUBLIC cxx_std_20)
+target_link_libraries(zen-terminal
+    PUBLIC  loom zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+add_library(loom::terminal ALIAS zen-terminal)
+
+# DELIBERATELY NOT loom_weave_build_contract(). This target took it in TERM-0's first draft, by
+# analogy with `loom` and `zen-switchboard` above, and the `weave_population` check refused it
+# (POP-05): those two are contracted because loadable weaves in tests/ statically link them, so
+# their objects land inside a reloadable image; nothing loadable links the terminal core today.
+# Contracting an artifact the required-population sweep does not require makes the roll and the
+# requirement diverge, which is precisely the drift that check exists to name. When a loadable
+# weave first links this target, the sweep will derive the requirement from the build graph and
+# say so — which is a better mechanism than a line here somebody has to remember.
+
 # ---- Console (the first doing-layer component: the engine, then a terminal) ------------
 #
 # A message-native bus participant — discover, compose, gate-send, receive replies into an
@@ -250,8 +284,10 @@ add_library(zen-console
 target_include_directories(zen-console
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(zen-console PUBLIC cxx_std_20)
+# ...and zen-terminal, for the ONE typed composer both use (TERM-0). The dependency runs this
+# way and never the other: the terminal core knows nothing about a console, a tap or a UI tree.
 target_link_libraries(zen-console
-    PUBLIC  loom zen-switchboard zen-ui zen-sanitize
+    PUBLIC  loom zen-switchboard zen-terminal zen-ui zen-sanitize
     PRIVATE zen-warnings)
 add_library(loom::console ALIAS zen-console)
 
@@ -288,6 +324,17 @@ target_link_libraries(zen-tui
 add_executable(zen-weaver-demo src/weaver/weaver_demo.cpp)
 target_link_libraries(zen-weaver-demo
     PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
+
+# TERM-0's console frontend: a REPL that is a PRESENTATION of the terminal core rather than the
+# owner of any terminal semantics. It boots its own Loom — it does not attach to another process —
+# mounts a governed session, a separate operator seat, a Weaver and a service, and lets a person
+# drive whichever participant they name. The host lens (`debug:`) is the host's own tap and
+# registry read, labelled as such, and deliberately NOT wired into either participant.
+# It links the terminal core and the bus, and NOTHING ELSE from this tree — no console engine,
+# no TUI renderer, no UI vocabulary. That absence is a claim being made in the build graph.
+add_executable(zen-terminal-repl src/terminal/terminal_main.cpp)
+target_link_libraries(zen-terminal-repl
+    PRIVATE zen-terminal zen-switchboard loom zen-warnings zen-sanitize)
 
 # The full-screen TUI frontend (in-process): local wiring + a demo responder over the shared renderer.
 add_executable(zen-console-tui src/console/console_tui.cpp)
@@ -502,6 +549,7 @@ if(LOOM_INSTALL)
 
     set_target_properties(loom            PROPERTIES EXPORT_NAME core)
     set_target_properties(zen-switchboard PROPERTIES EXPORT_NAME switchboard)
+    set_target_properties(zen-terminal    PROPERTIES EXPORT_NAME terminal)
     set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
     set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
 
@@ -510,7 +558,18 @@ if(LOOM_INSTALL)
     # export set or the export fails to generate. They are INTERFACE targets, so nothing is
     # installed for them beyond the target definition — and LINK_ONLY is what keeps Loom's
     # -Werror/-Wconversion from leaking onto a consumer's own sources.
-    install(TARGETS loom zen-switchboard zen-sanitize zen-warnings
+    # zen-terminal JOINS THE EXPORT, and it is the first target to do so on the strength of a
+    # SECOND PRESENTATION rather than a second host (TERM-0). The rule this export set follows is
+    # "only the substrate that is Loom's forever", and the terminal core qualifies on its
+    # contents: it is participant semantics — identity, vocabulary, typed composition, ask/answer
+    # correlation, a truthful transcript — with no renderer, no UI vocabulary and no frontend
+    # anywhere in it. Its whole purpose is to be presented by something that is not in this
+    # repository, and a core a stranger cannot reach is a core with exactly one presentation.
+    #
+    # The UI trio, the console, the TUI, the bridge and the SDL skin still stay home for the
+    # reasons written at the top of this section; nothing about that changed, and the terminal
+    # core deliberately depends on NONE of them.
+    install(TARGETS loom zen-switchboard zen-terminal zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

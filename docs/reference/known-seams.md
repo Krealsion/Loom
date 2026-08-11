@@ -108,15 +108,80 @@ supervisor restart and a host emergency revoke are all real answers and all
 speculative today; adding RAII revocation would silently change GRANT-0's
 "a capability is not a lease" into its opposite for one caller.
 
+## What an ordinary participant may observe
+
+**Status: KNOWN SEAM — narrowed and classified by TERM-0.** Whole-bus
+observation remains host authority, not a grant.
+
+TERM-0 asked the question this note existed to hold open — *what does an ordinary
+terminal actually need to observe?* — and the answer turned out to be: **less
+than the old console had, and nothing that needs a new primitive.** The nine
+categories, measured against the landed source:
+
+```text
+A own inbound messages              ORDINARY   the weave's own doors
+B own authored/submitted messages   ORDINARY   it authored them
+C authenticated answers             ORDINARY   provenance + Loom's correlation
+D policy notifications to a seat    ORDINARY   an ordinary message to that weave
+E authority descriptions asked for  ORDINARY   zen.DescribeAuthority, capability-scoped
+F send fate for its own messages    NOT AVAILABLE  the standing sender-fate seam
+G traffic involving a named role    NOT AVAILABLE  needs a scoped observation law
+H whole-bus traffic                 HOST ONLY  Switchboard::add_observer
+I authority changes by another
+  administrator                     NOT AVAILABLE  delegation queues no message and
+                                                emits no BusEvent (see above)
+```
+
+So a terminal needs **no global tap** for send, receive, ask, await, the whole
+Weaver approval workflow, or authority self-inspection: all six run on A–E, and
+`tests/test_terminal.cpp` pins that a participant's transcript contains none of
+two other weaves' traffic while the host's tap sees all of it.
+
+What is **not** closed, and is the seam: `watch` — following traffic that
+involves some named role or subject — is a separate feature with no ordinary
+answer. It is not implemented, and deliberately not faked by polling a registry
+or a tap through hidden privileges: an honest terminal says *watching traffic is
+not available to an ordinary participant*, because power includes saying no
+truthfully. Closing this needs a real scoped observation law (what may be
+observed, by whom, authorized how) — the same shape `ObserveRule` gave Senses,
+and it has no consumer yet. F and I are separate entries above and below.
+
+## Service discovery is not a participant's power
+
+**Status: CURRENT (by design), recorded by TERM-0.**
+
+`ConsoleEngine::weaves()` enumerates the bus's registry and needs a
+`Switchboard&`. A [terminal session](terminal.md) therefore does **not** have it,
+and TERM-0 declined to build a message-driven directory to replace it: a terminal
+that can speak to an office the user names is a useful terminal, and none of the
+phase's workflows needed a list of who is running.
+
+Do not read the absence as a defect. Enumerating live weaves is a fact about the
+running world rather than about the participant, and handing it to every terminal
+would give an ordinary weave a power nothing granted it. A future directory
+should be an ordinary service holding an office, answering ordinary asks under an
+ordinary grant — at which point it is not a terminal feature at all.
+
 ## The operator seat is a WeaveId, not a person
 
-**Status: KNOWN SEAM** (WEAVER-1). A Weaver treats one exact WeaveId's
-decisions as the user's. That check is real and enforced against the bus stamp
-— reachability is emphatically not identity — but it authenticates a *weave*,
-not a human. The current console is a **bootstrap** operator: it holds
-`allow_any()` and host-wired discovery and the tap, which a properly delegated
-user terminal would not. Remote/external authentication does not exist at all
-(see [bridge](bridge.md#authentication-posture)).
+**Status: KNOWN SEAM** (WEAVER-1), **narrowed in one half by TERM-0.** A Weaver
+treats one exact WeaveId's decisions as the user's. That check is real and
+enforced against the bus stamp — reachability is emphatically not identity — but
+it authenticates a *weave*, not a human.
+
+WEAVER-1 recorded two things in one sentence, and only one of them has moved.
+The **bootstrap operator** half is closed: that console held `allow_any()`,
+host-wired discovery and the tap, and TERM-0 measured that none of the three was
+necessary to be the user. The [terminal](terminal.md)'s operator seat is an
+ordinary participant holding four rules — approve / refuse / revoke / describe,
+each to one office — with no wildcard, no registry read and no tap, and it drives
+the whole WEAVER-1 workflow unchanged.
+
+The **human** half is untouched and is the seam. A host still designates a
+WeaveId; there is no account, no login, no credential and no authenticated person
+anywhere in this, and remote/external authentication does not exist at all (see
+[bridge](bridge.md#authentication-posture)). A terminal presentation must
+therefore label that identity as a seat and never as a person.
 
 ## Sender cannot observe send fate
 
@@ -132,6 +197,17 @@ observer, not the sender.
 
 What R2E-0 changed is only the **observer's** side, and only where a refusal was
 observable *nowhere*: see the next entry. Nothing about the sender's view moved.
+
+**TERM-0 priced it in a user interface**, which is where it stops being abstract.
+A [terminal session](terminal.md)'s transcript says `SUBMITTED` and carries no
+outcome field, so two sends with opposite fates leave identical records; and
+three UX consequences follow directly, each of which the phase declined to fake:
+a denied send may not trigger an automatic authority request (the participant
+cannot know it was denied); "awaiting an answer" may not be rendered as
+"delivered", "being worked on" or "a person saw it"; and an authority request to
+an unreachable seat simply stays pending, with nobody told. The only surface
+that can honestly say "delivered" is a host lens, and TERM-0 keeps that lens
+visibly separate rather than merging its facts into a participant's record.
 
 ## The silent dynamic seam
 

@@ -53,6 +53,43 @@ reply now occupies that slot, so a reference an operator wrote down either
 still means what it meant or fails loudly. Eviction is visible without asking:
 the tap and buffer panes carry it in their headings.
 
+## Terminal session (one participant's own record)
+
+The same two-window split, and the same reasoning, one tier down: a
+[terminal session](terminal.md) keeps a wide window of cheap ENTRIES and a
+narrower one of the heavy VALUES they refer to. Both are history; nothing is
+owed on either. Both use `loom::BoundedHistory`, the primitive the console's
+windows always used and which moved to
+[`zen/bounded_history.hpp`](../../include/zen/bounded_history.hpp) at TERM-0 so
+there is one ring rather than six.
+
+| Bound | Value | Unit | What it bounds | Overflow behavior |
+|---|---|---|---|---|
+| `kTranscriptCapacity` | 256 | transcript entries | `Transcript::entries_` -- a participant's own record | ring: oldest evicted, counted in `Transcript::evicted()` |
+| `kReceivedCapacity` | 64 | received `Value`s | `Transcript::received_` -- the `rN` store the `$rN.field` syntax reads | ring: oldest evicted, counted in `Transcript::received_evicted()`; its **id** then refuses |
+| `kMaxOutstandingAsks` | 8 | conversations | how many asks one participant will track at once | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
+
+**An entry is metadata; a received value is not.** An entry is a few short
+strings and an id, so a session's worth of scrollback is cheap; a received
+`Value` is bounded only by `kMaxDecodedCells`, which is why the store that keeps
+them is four times smaller -- the same argument that made the console's reply
+buffer sixteen times smaller than its tap.
+
+**Eviction cannot cost a conversation.** Outstanding asks live in the session,
+never in the transcript, so evicting the visible `SUBMITTED` line for an ask does
+not lose the fact that this participant is still waiting on it. Pinned in suite
+`terminal`; it is the one place where "history may be forgotten" and "an
+obligation may not" meet.
+
+**Ids are identities, not positions**, exactly as the console's `mN` labels are:
+`received(N)` answers for the message with that id, the retained range is
+`(evicted, evicted+size]`, and an evicted id refuses *and says it was evicted*
+rather than re-binding to a newer message.
+
+**The vocabulary is deliberately unbounded**, and that is not an omission: every
+entry is placed by the HOST at mount, so there is no traffic that can grow it and
+nothing to evict. Everything untrusted traffic can grow is in the table above.
+
 ## Bridge (remote operator)
 
 What the component *is*, and what it trusts: [bridge](bridge.md).

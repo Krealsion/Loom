@@ -16,8 +16,10 @@
 // send + wildcard-accept + the tap + discovery), but each capability is a deliberate
 // grant, never a bypass. It knows no shape's meaning — it drives shapes it has never seen.
 
+#include <zen/bounded_history.hpp>
 #include <zen/schema.hpp>
 #include <zen/switchboard/switchboard.hpp>
+#include <zen/terminal/composer.hpp>
 #include <zen/value.hpp>
 
 #include <cstddef>
@@ -47,6 +49,11 @@ namespace loom {
 // for a backlog. But never silently: Console::evicted() reports how much was dropped, and the
 // reply buffer's mN labels are STABLE IDENTITIES, so an evicted m3 refuses rather than quietly
 // re-binding to a newer reply.
+//
+// The window TYPE itself (`loom::BoundedHistory`) moved down to <zen/bounded_history.hpp> at
+// TERM-0, when a terminal participant's transcript became the fifth and sixth surface needing
+// exactly these semantics. Its own comment always said it should be written once; the constants
+// below stay here, because a capacity is a policy about ONE surface and this is the console's.
 
 /// Bus events retained on the tap. Deliberately the same width as `Switchboard::kJournalCapacity`:
 /// one tap entry corresponds to roughly one journal entry, so an operator who can still SEE an
@@ -63,75 +70,6 @@ inline constexpr std::size_t kConsoleTapCapacity = 1024;
 /// many retained once admitted.
 inline constexpr std::size_t kConsoleBufferCapacity = 64;
 
-/// The console's bounded history window: the most recent `Capacity` observations in chronological
-/// order, the oldest discarded — and COUNTED — when a new one arrives at capacity.
-///
-/// A ring over one vector, the same shape as the Switchboard's journal (`journal_[seq % cap]`):
-/// the slots are claimed once at construction and never reallocated, an insert allocates nothing
-/// and is O(1) for the life of the window, and no front-erasure ever shifts a tail. Storage is a
-/// function of the capacity alone — never of how many observations have passed through it.
-///
-/// The slots are reserved UP FRONT rather than grown into deliberately. Leaving it to `push_back`
-/// would also be bounded, but only because the two capacities here happen to be powers of two;
-/// reserving makes "exactly `Capacity` slots, always" a property of this class instead of a
-/// property of the standard library's growth policy, and makes the storage assertion in the tests
-/// state that directly.
-///
-/// Deliberately not a general retention framework: no policies, no configuration, no persistence.
-/// It exists because four console history surfaces (the engine's tap, the console weave's reply
-/// buffer, and the remote console's copies of both) need exactly these semantics, and writing the
-/// ring index arithmetic and the eviction counter four times is how one of them ends up wrong.
-template <class T, std::size_t Capacity>
-class BoundedHistory {
-    static_assert(Capacity > 0, "a history window must retain at least one observation");
-
-public:
-    BoundedHistory() { ring_.reserve(Capacity); }
-
-    /// Record one observation. At capacity this discards the oldest, in place, and counts it.
-    void push(T v) {
-        if (ring_.size() < Capacity) {
-            ring_.push_back(std::move(v)); // still filling: chronological order is insertion order
-            return;
-        }
-        ring_[oldest_] = std::move(v);       // overwrite the oldest slot — no allocation, no shift
-        oldest_ = (oldest_ + 1) % Capacity;  // ... and its successor is the new oldest
-        ++evicted_;
-    }
-
-    /// How many are retained right now (<= Capacity).
-    std::size_t size() const noexcept { return ring_.size(); }
-
-    /// How many observations were discarded to keep the window bounded. Monotonic for the life of
-    /// this window; it is the operator's answer to "is this the complete history?".
-    std::uint64_t evicted() const noexcept { return evicted_; }
-
-    /// The i-th RETAINED entry, 0 = oldest retained. A position within the window, never a stable
-    /// identity — the caller owns whatever identity it publishes (see ConsoleEngine::buffer_at).
-    const T& at(std::size_t i) const { return ring_[(oldest_ + i) % Capacity]; }
-
-    /// A chronological snapshot, oldest retained first.
-    std::vector<T> snapshot() const {
-        std::vector<T> out;
-        out.reserve(ring_.size());
-        for (std::size_t i = 0; i < ring_.size(); ++i) {
-            out.push_back(at(i));
-        }
-        return out;
-    }
-
-private:
-    /// The R2F-C instrument, reused: "size() stays at the capacity" and "the backing storage stops
-    /// growing" are DIFFERENT claims, and only the second is what a process running for weeks needs.
-    /// Reading the window's own slot count states the second directly instead of inferring it from
-    /// process RSS, which is allocator- and OS-sensitive. Adds no member and no code path.
-    friend struct ConsoleHistoryProbe;
-
-    std::vector<T> ring_;
-    std::size_t oldest_ = 0;    ///< index of the oldest retained entry (0 until the ring wraps)
-    std::uint64_t evicted_ = 0;
-};
-
 /// A registered shape's identity.
 struct ShapeRef {
     std::string name;
@@ -144,23 +82,13 @@ struct WeaveInfo {
     std::vector<ShapeRef> accepts;
 };
 
-/// One field of a shape, read from the registry (compose-time guidance).
-struct FieldDesc {
-    std::string name;
-    std::string type; ///< the kind's spelling ("Int", "Text", "List<Int>", "Message(Foo v1)")
-    bool required;
-};
-
-/// A shape's full description (its fields), for the operator to fill.
-struct ShapeDesc {
-    std::string name;
-    std::uint32_t version;
-    std::vector<FieldDesc> fields;
-};
-
-/// A typed field value for compose-by-name. Stage 1 carries the scalar kinds; Message/
-/// List fields are not composable yet (a required one left unset is caught at the gate).
-using FieldValue = std::variant<std::int64_t, double, std::string, bool, loom::Bytes>;
+// The compose-time vocabulary — FieldDesc, ShapeDesc, FieldValue, Ref, Arg, describe_schema and
+// the assumption ladder itself — moved down to <zen/terminal/composer.hpp> at TERM-0, so a second
+// participant (a terminal session with its own identity and its own vocabulary) could reuse the
+// ONE ladder rather than grow a second one. Every name is unchanged, in this same namespace; what
+// changed is only which file declares it, and that the ladder can now stop one step before
+// sending. `Composed` and `LadderHost` below are the console's original one-shot form, kept
+// exactly as they were.
 
 /// The fate of a submitted message, surfaced from the gate (never a silent mis-send).
 struct SendOutcome {
@@ -178,23 +106,7 @@ struct BufferEntry {
     loom::Value value;
 };
 
-/// A reference to a field of a buffered reply — `$m1.count` → {label "m1", field "count"}.
-/// A reference is a *wire*: one message's output read into another's input. The engine
-/// owns resolution (the terminal only lexes the `$label.field` token).
-struct Ref {
-    std::string label; ///< the buffer label, e.g. "m1"
-    std::string field; ///< a field of that entry's Value
-};
-
-/// One argument to the assumption ladder: a literal or a reference, optionally named
-/// (`field=…`). A named arg is assigned to that field; a bare (unnamed) arg is a
-/// positional/type-directed candidate.
-struct Arg {
-    std::optional<std::string> name;       ///< set iff `field=…` (the named rung)
-    std::variant<FieldValue, Ref> value;   ///< a literal value or a reference
-};
-
-/// The result of running the assumption ladder.
+/// The result of running the assumption ladder AND gate-sending.
 struct Composed {
     enum class Status { Ready, NeedsInput, Error };
     Status status = Status::Error;
@@ -286,25 +198,21 @@ public:
     virtual void pump() = 0;
 };
 
-/// The assumption ladder's host surface — segregated from the frontend Console so the ONE ladder
-/// implementation (run_compose_ladder) is shared by the in-process engine and the client-side remote
-/// console instead of duplicating ~150 lines of intricate placement logic. The three operations the
-/// ladder needs: resolve a schema, resolve a `$mN.field` reference off the buffer, and assemble +
-/// gate-send the composed Value (the gate stays the unconditional backstop in both).
-class LadderHost {
+/// The assumption ladder's host surface — the two lookups `ComposeSource` already names, plus the
+/// one send. Segregated from the frontend Console so the ONE ladder implementation is shared by
+/// the in-process engine and the client-side remote console instead of duplicating the placement
+/// logic; since TERM-0 the ladder itself is `loom::compose_message` and this is the console's
+/// one-shot form over it (the gate stays the unconditional backstop in both transports).
+class LadderHost : public ComposeSource {
 public:
-    virtual ~LadderHost() = default;
-    virtual std::shared_ptr<const loom::Schema> resolve_schema(std::string_view name,
-                                                               std::uint32_t version) const = 0;
-    virtual std::optional<loom::Cell> resolve_ref(const Ref& ref, std::string* error) const = 0;
     virtual loom::Ticket assemble_and_send(loom::WeaveId target,
                                            const std::shared_ptr<const loom::Schema>& schema,
                                            const std::map<std::string, loom::Cell>& cells) = 0;
 };
 
-/// The assumption ladder, extracted as a free function over LadderHost so local + remote share it.
+/// Compose by the assumption ladder and, on Ready, assemble + gate-send through the host.
 /// named wins -> positional (declaration order, all-or-falls) -> type-directed (unique fit) -> prompt
-/// (NeedsInput; never guess on ambiguity, never mis-send). On Ready it assembles + gate-sends.
+/// (NeedsInput; never guess on ambiguity, never mis-send).
 Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,
                             std::uint32_t version, const std::vector<Arg>& args);
 
@@ -313,11 +221,6 @@ Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_
 /// nullopt + *error on a missing entry, missing field, or non-scalar field (Stage 2 is scalar-only).
 std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& ref,
                                            std::string* error);
-
-/// Build a ShapeDesc (name/version + each field's type spelling and required-ness) from a resolved
-/// Schema — shared by the in-process describe() (over the bus registry) and the remote describe()
-/// (over a schema reconstructed from a Schema reply).
-ShapeDesc describe_schema(const loom::Schema& schema);
 
 /// The frontend-agnostic console engine — the in-process Console. Construct it over a Switchboard; it
 /// registers the console as an in-process Weave (broad grant + accept-any) and subscribes the tap.

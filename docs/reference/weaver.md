@@ -202,8 +202,14 @@ anything outside Loom, network authentication, or OS login identity.
 There is **no persistence**: restarting anything forgets every approval. There is
 **no allow-once** — Loom has no consumable grant, and the prompt says so in
 words. There is **no time expiry**. There is no remote authentication: the
-operator seat is a WeaveId a host chose, and the current console is a *bootstrap*
-operator, not the permanent user identity.
+operator seat is a WeaveId a host chose, not a person.
+
+WEAVER-1's *bootstrap* operator — a `ConsoleEngine` holding `allow_any()`,
+host-wired discovery and the tap — is no longer the only option.
+[TERM-0](terminal.md) drives this whole workflow from an operator seat that is an
+ordinary participant with four rules and none of those three powers, which
+measured that none of them was necessary to be the user. The **human** half of
+the seam is untouched: a WeaveId is still not a person.
 
 ## Running it
 

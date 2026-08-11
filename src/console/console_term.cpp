@@ -20,7 +20,7 @@
 #include "zen/weave/poke_weave.hpp"
 
 #include <zen/console/console.hpp>
-#include <zen/console/input_lex.hpp>
+#include <zen/terminal/input_lex.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>
 
@@ -33,7 +33,7 @@
 namespace {
 
 // The text lexers (tokenize / lex_arg / parse_u64) are shared with the TUI and the tests; they
-// live in <zen/console/input_lex.hpp>. Bring the ones this REPL uses into scope.
+// live in <zen/terminal/input_lex.hpp>. Bring the ones this REPL uses into scope.
 using loom::parse_u64;
 using loom::Token;
 using loom::tokenize;
