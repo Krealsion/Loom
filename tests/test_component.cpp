@@ -77,7 +77,7 @@ UiNode stack_node() {
     return n;
 }
 
-// THE DEPTH CONVENTION, stated once and derived from everywhere (MSVC-1). The root enters at
+// THE DEPTH CONVENTION, stated once and derived from everywhere. The root enters at
 // depth 0 and the refusal is `depth > kMaxUiDepth`, so the deepest LEGAL node sits at depth
 // kMaxUiDepth and the longest legal CHAIN is kMaxUiDepth + 1 nodes. No test below types a
 // boundary number; they all derive it, so the cap can move without the tests quietly agreeing.
@@ -405,7 +405,7 @@ TEST_CASE("the lossless pair is BOUNDED and says so: flatten past the depth cap 
 
 TEST_CASE("the depth cap is the FIRST bound: the exact boundary holds, and a chain thousands "
           "deeper is refused the same way — not by the C++ stack") {
-    // MSVC-1. The cap only means something if it is what STOPS a deep frame. Before the walk
+    // The cap only means something if it is what STOPS a deep frame. If the walk
     // was made iterative it was not: on MSVC Debug the recursion died of STATUS_STACK_OVERFLOW
     // at chain depth 240 while the cap admits 257, so the whole 240..257 window killed the
     // process instead of being rebuilt or refused. GCC's thinner frames reached the cap and hid
@@ -472,7 +472,7 @@ TEST_CASE("the depth cap is the FIRST bound: the exact boundary holds, and a cha
 }
 
 TEST_CASE("the iterative walk rebuilds the SAME tree: sibling order and shape survive") {
-    // MSVC-1's traversal keeps an explicit work stack, and the classic way to get that wrong is
+    // The traversal keeps an explicit work stack, and the classic way to get that wrong is
     // to push children forward and pop them LIFO — which yields a tree of the identical SHAPE
     // with its siblings reversed. Identical children cannot see that, so every sibling here is
     // deliberately distinguishable.

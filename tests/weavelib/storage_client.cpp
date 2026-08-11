@@ -41,7 +41,7 @@ public:
     // A direct file open at the syscall level — FsAccess::None must make it fail. The
     // errno is carried back THROUGH the broker (the only reach the floor grants),
     // proving both "no disk of my own" (errno != 0) and "I persist via messages
-    // alone". The B4 fs-probe discipline, expressed within the floor's authority.
+    // alone". The fs-probe discipline, expressed within the floor's authority.
     void on(const Probe&, Mail& mail) {
         std::int64_t code = 0;
         const int fd = ::open("/zen_mod_direct_write.txt", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);

@@ -9,7 +9,7 @@
 //
 //     the Kernel enforces.  the Weaver decides.  the session acts.
 //
-// This is the third line, made into something you can hold. WEAVER-1 withheld the
+// This is the third line, made into something you can hold. The Weaver withheld the
 // name from its demo because a thirty-line weave with no transcript, no composer
 // and no command language had not earned it; what follows is the attempt to earn
 // it, and the test of whether it did is that everything below is either an

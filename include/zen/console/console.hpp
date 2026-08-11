@@ -35,12 +35,12 @@
 
 namespace loom {
 
-// ---- Bounded console history (COLD-2 C-1) ------------------------------------------------------
+// ---- Bounded console history ------------------------------------------------------------------
 //
 // The console is the operator's window, which makes it exactly the component most likely to be
 // left running for weeks — so its retained state is bounded BY DESIGN, never by lifetime
 // throughput. That is the same argument kJournalCapacity already won for the bus, applied to the
-// surface COLD-2 caught growing: before this, every bus event and every delivered Value was kept
+// surface that grows without a bound: unbounded, every bus event and every delivered Value is kept
 // forever, and the console accepts from any registered participant, so ordinary traffic grew it.
 //
 // Both windows below are HISTORY — past observations kept for inspection. Nothing is OWED on
@@ -51,7 +51,7 @@ namespace loom {
 // re-binding to a newer reply.
 //
 // The window TYPE itself (`loom::BoundedHistory`) moved down to <zen/bounded_history.hpp> at
-// TERM-0, when a terminal participant's transcript became the fifth and sixth surface needing
+// later, when a terminal participant's transcript became the fifth and sixth surface needing
 // exactly these semantics. Its own comment always said it should be written once; the constants
 // below stay here, because a capacity is a policy about ONE surface and this is the console's.
 
@@ -83,7 +83,7 @@ struct WeaveInfo {
 };
 
 // The compose-time vocabulary — FieldDesc, ShapeDesc, FieldValue, Ref, Arg, describe_schema and
-// the assumption ladder itself — moved down to <zen/terminal/composer.hpp> at TERM-0, so a second
+// the assumption ladder itself — lives in <zen/terminal/composer.hpp>, so a second
 // participant (a terminal session with its own identity and its own vocabulary) could reuse the
 // ONE ladder rather than grow a second one. Every name is unchanged, in this same namespace; what
 // changed is only which file declares it, and that the ladder can now stop one step before
@@ -201,7 +201,7 @@ public:
 /// The assumption ladder's host surface — the two lookups `ComposeSource` already names, plus the
 /// one send. Segregated from the frontend Console so the ONE ladder implementation is shared by
 /// the in-process engine and the client-side remote console instead of duplicating the placement
-/// logic; since TERM-0 the ladder itself is `loom::compose_message` and this is the console's
+/// logic; the ladder itself is `loom::compose_message` and this is the console's
 /// one-shot form over it (the gate stays the unconditional backstop in both transports).
 class LadderHost : public ComposeSource {
 public:

@@ -28,7 +28,7 @@
 //                                   three (C-2: proves ambient host descriptors do not
 //                                   cross execve, WITHOUT letting the network-namespace
 //                                   denial stand in for that — they are different facts
-//                                   and COLD-2 found the second true while the first
+//                                   and the second has been true here while the first
 //                                   was false)
 //   ZEN_WEAVE_ENV_PROBE           — on handle, report the child's COMPLETE environment:
 //                                   how many entries exist, how many are LD_*, whether
@@ -50,25 +50,25 @@
 //                                   inherits into its own count (1b: the heir)
 //   ZEN_WEAVE_ACTIVATES           — accepts zen.Activated and records, IN ITS OWN
 //                                   PERSISTED STATE (Counter v3), how many it has
-//                                   handled and the newest sequence (R2A-1: the
+//                                   handled and the newest sequence (LIFE-01: the
 //                                   activation participant, observed through the
 //                                   ordinary snapshot path)
 //   ZEN_WEAVE_ACTIVATES_DRIFT     — the same weave with the SAME state schema and one
 //                                   EXTRA accepted shape, so a reload between the two
-//                                   differs in nothing but the door contract (R2A-1:
+//                                   differs in nothing but the door contract (LIFE-01:
 //                                   the accepted-schema-drift negative)
 //   ZEN_WEAVE_ANSWERS             — answers its ask IMMEDIATELY through the public
 //                                   answer surface, so the dynamic seam's meaning of
 //                                   mail.answer() can be compared with the native one
-//                                   (R2B-3b-1a)
+//                                   (ANS-06)
 //   ZEN_WEAVE_DEFERS              — takes an ask's answer right AWAY WITH IT, returns
 //                                   without answering, and answers from a LATER
 //                                   handler using only the retained capability
-//                                   (R2B-2: the deferring steward, proven as a real
+//                                   (ANS-02: the deferring steward, proven as a real
 //                                   .so because that is the whole question)
 //   ZEN_WEAVE_ACTIVATES_CONFLICT  — the drift twin whose extra door carries the SAME
 //                                   (name, version) with DIFFERENT content, so loading
-//                                   it meets the registry's agreement wall (R2A-1a:
+//                                   it meets the registry's agreement wall (LIFE-08:
 //                                   makes a rejected candidate's schema admission
 //                                   observable from outside the kernel)
 //   ZEN_WEAVE_SEAM_EMIT           — on Ping, reaches for a role with a shape THIS
@@ -160,8 +160,7 @@ constexpr std::int64_t kBombSurvived = -102;
 /// failed. What was silent was the CAUSE, not the lane: the failure surfaced
 /// several steps downstream at the quarantine assertion, and nothing in it said
 /// the allocation had been deleted. A witness that stops applying its pressure
-/// still fails, just not where or why you would look (found by R2E-0a, repaired
-/// in STF-0).
+/// still fails, just not where or why you would look.
 ///
 /// Two properties make this version survive optimization, and both are needed:
 ///   - the pointer is `volatile`, so every store is an observable side effect
@@ -194,6 +193,12 @@ std::int64_t detonate() {
 }
 #endif
 
+/// `seq` IS FIXTURE-LOCAL PLUMBING, AND WHAT IT MEANS DEPENDS ON WHICH VARIANT
+/// OF THIS FILE WAS COMPILED — this is one source built many times under the
+/// `ZEN_WEAVE_*` macros above, not one probe. Across the variants it carries a
+/// logical sequence, a TCP port on loopback, a parked descriptor number, the
+/// magic crash value, or a sentinel outcome. It is never a Loom delivery seq.
+/// Read the variant's own handler before assuming which one you are looking at.
 std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("Ping", 1).field("seq", Kind::Int).build();
     return s;
@@ -228,7 +233,8 @@ std::shared_ptr<const Schema> ping_schema() {
 [[maybe_unused]] std::shared_ptr<const Schema> envresult_schema() { // only the env-probe variant
     // The COMPLETE environment, not a lookup of the names a test thought to ask about.
     // `count` is what makes an unknown future variable fail this on its own; the other
-    // three are the named questions C-2a asks, kept separate so a failure says which.
+    // three are the named questions the environment policy asks, kept separate so a
+// failure says which.
     // `names` carries NAMES ONLY: a value could be a real credential from the host
     // shell, and putting one in test output (or a CI log) to prove it should not be
     // there would be its own leak.
@@ -241,7 +247,7 @@ std::shared_ptr<const Schema> ping_schema() {
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> fdresult_schema() { // only the fd-probe variant
-    // FOUR SEPARATE FACTS, deliberately not collapsed (C-2). COLD-2's whole finding was
+    // FOUR SEPARATE FACTS, deliberately not collapsed. The whole finding here was
     // that `fresh_connect == ENETUNREACH` was true while an inherited connected socket
     // was simultaneously usable — so a witness that reported only the namespace verdict
     // would have called that host contained. Each field answers its own question:
@@ -417,7 +423,7 @@ public:
         return;
 #endif
 #if defined(ZEN_WEAVE_DEFERS)
-        // THE DYNAMIC STEWARD (R2B-2). An ask arrives; the answer is not known
+        // THE DYNAMIC STEWARD (ANS-02, ANS-06). An ask arrives; the answer is not known
         // yet; so it takes the answer right away with it and RETURNS WITHOUT
         // ANSWERING. Nothing here retains a Bus or a Message — only the opaque
         // capability, which is the whole point: a stored `Bus&` would be a
@@ -495,7 +501,7 @@ public:
 #elif defined(ZEN_WEAVE_ACTIVATES)
         if (in.payload.schema().name() == loom::Activated::zen_name) {
             (void)bus;
-            // R2B-1: THE FACT IS TRUSTED BECAUSE LOOM ATTESTS IT, not because the
+            // LIFE-04: THE FACT IS TRUSTED BECAUSE LOOM ATTESTS IT, not because the
             // shape arrived. Two questions, and both must answer yes:
             //   - did Loom authorize a lifecycle commit for THIS incarnation?
             //     (bound to the target by the bus; an ordinary weave sending the
@@ -517,7 +523,7 @@ public:
             return; // never falls through to the Ping path below ('seq' is absent)
         }
 #elif defined(ZEN_WEAVE_SENSES)
-        // THE EXACT-OFFICE PROBE (R2E-0a). Observe the office this message names
+        // THE EXACT-OFFICE PROBE (SENSE-03). Observe the office this message names
         // and record the identity VERBATIM. Nothing here shortens, hashes or
         // normalises it: the test compares what came back against what it
         // authored, so a seam that truncates is caught by the comparison rather
@@ -547,7 +553,7 @@ public:
 #endif
         ++count_;
 #if defined(ZEN_WEAVE_SENSES)
-        // THE DYNAMIC-PARITY FIXTURE (R2E-0/v6). The same four public verbs a
+        // THE DYNAMIC-PARITY FIXTURE (SENSE-01; ABI v6). The same four public verbs a
         // native weave writes, from the far side of the seam — and the whole
         // question is whether they mean here what they mean natively.
         Value obs(sensehealth_schema());
@@ -577,7 +583,7 @@ public:
         }
         return;
 #elif defined(ZEN_WEAVE_SEAM_EMIT)
-        // THE SILENT-SEAM FIXTURE (R2E-0, from Night Lab III P-011). Reach for a
+        // THE SILENT-SEAM FIXTURE (MSG-08). Reach for a
         // service by role, carrying a shape no registry in this process knows.
         // Both halves matter: the role may well be unheld, but the emission never
         // gets far enough for that to be the reason — it is rejected at the
@@ -685,12 +691,12 @@ public:
         result.set("noexec_exec", Cell::integer(noexec));
         bus.send(in.reply_to, Message(std::move(result)));
 #elif defined(ZEN_WEAVE_FD_PROBE)
-        // THE C-2 WITNESS, from inside the sandbox. Instruction-level descriptor reach:
+        // THE DESCRIPTOR WITNESS, from inside the sandbox. Instruction-level reach:
         // no bus grant can stop any of this, and no namespace covers it either — an
         // already-open descriptor that crossed execve is simply THERE, or it is not.
         //
         // The Ping's `seq` names the fd the host parked before spawning. Writing the
-        // COLD-2 payload to it is the exact escape COLD-2 demonstrated; the host holds
+        // payload to it is the exact escape this witness exists to catch; the host holds
         // the other end and asserts that nothing arrives.
         {
             // (1) What do we actually hold? A bitmap of the low numbers, plus a count of
@@ -744,7 +750,7 @@ public:
         }
 #elif defined(ZEN_WEAVE_ENV_PROBE)
         (void)seq;
-        // THE C-2a WITNESS, from inside the sandbox. It reads its OWN `environ` — the
+        // THE ENVIRONMENT WITNESS, from inside the sandbox. It reads its OWN `environ` — the
         // thing execve actually installed — rather than asking about names a test
         // remembered to name. `count` is therefore the load-bearing field: a variable
         // some future embedding host introduces raises it without anyone editing this.

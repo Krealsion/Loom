@@ -694,7 +694,7 @@ TEST_CASE("mediation + negative control: a net-denied mod reaches the allowed ho
     CHECK(ok); // reached the allowed loopback listener THROUGH the broker
     // The echoed bytes are the mod's OWN direct-connect errno (carried via the broker's
     // echo): nonzero proves the mod's direct connect failed at the syscall level
-    // (ENETUNREACH — the B3 netns denial). Useful via the broker, powerless directly.
+    // (ENETUNREACH — the netns denial). Useful via the broker, powerless directly.
     REQUIRE_FALSE(echoed.empty());
     CHECK(std::stol(echoed) != 0);
     std::remove(rec.c_str());

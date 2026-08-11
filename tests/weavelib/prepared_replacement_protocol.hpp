@@ -5,7 +5,7 @@
 #define ZEN_TESTS_PREPARED_REPLACEMENT_PROTOCOL_HPP
 
 // The preparation conversation and the production query of the `versioned.service`
-// fixture pair (R2B-3b-3). Shared by the v1/v2 .so artifacts and by the kernel
+// fixture pair (PR-04). Shared by the v1/v2 .so artifacts and by the kernel
 // suite, so every party derives the same content-id from the same ZEN_SHAPE and
 // agrees across the .so boundary exactly as the gate requires.
 //
@@ -88,7 +88,7 @@ struct CandidateRefused {
     ZEN_SHAPE(CandidateRefused, 1, ZEN_FIELD(transaction), ZEN_FIELD(reason));
 };
 
-/// ORDINARY DOMAIN SPEECH FROM INSIDE AN ACTIVATION (R2B-3d-1). The positive
+/// ORDINARY DOMAIN SPEECH FROM INSIDE AN ACTIVATION (LIFE-05). The positive
 /// control that keeps "activation is not answerable" from quietly meaning
 /// "activation is mute": a freshly admitted candidate has no answer authority
 /// and still has every ordinary right its grant gives it, so it says something

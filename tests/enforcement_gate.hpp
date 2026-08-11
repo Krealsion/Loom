@@ -19,7 +19,8 @@
 // silently skipped." The runtime's own fail-safe behavior is unchanged; this is purely the harness no
 // longer reporting a pass it did not earn.
 //
-// POP-02 (R2F-D): THE TALLY IS PER DOMAIN, AND THE EXPECTED COUNT IS EXACT.
+// POP-02: THE TALLY IS PER DOMAIN, AND THE EXPECTED COUNT IS EXACT.
+// docs/laws/population-laws.md
 //
 // It used to be one process-global `static int n` that both suites incremented and both floors read
 // as `>= N`. In a dedicated run each suite saw only its own contribution and the numbers looked

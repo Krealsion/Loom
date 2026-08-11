@@ -10,7 +10,7 @@
 // TUI, the terminal, and the tests — shares ONE copy; a divergent lexer would mean the smoke
 // test proves the wrong parser. No terminal/rendering dependency: pure string -> data.
 //
-// It depends on the COMPOSER, not on the console: since TERM-0 the Arg/Ref/FieldValue
+// It depends on the COMPOSER, not on the console: the Arg/Ref/FieldValue
 // vocabulary belongs to <zen/terminal/composer.hpp>, and a terminal frontend needs this
 // lexing without needing a console engine, a tap, or a Switchboard.
 

@@ -68,7 +68,7 @@ public:
     /// in-process system's own pump(); the bridge never blocks the bus on a slow/hung operator.
     void step();
 
-    /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN (R2E-0). Off by
+    /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN (MSG-09). Off by
     /// default, which keeps the existing contract exactly: `step()` calls `pump()`
     /// and drains to empty.
     ///
@@ -78,7 +78,7 @@ public:
     /// `step()` dispatches the backlog present at entry and then goes on to flush
     /// and reap, so operators stay responsive while the service runs.
     ///
-    /// It takes NO NUMBER, and that is the correction R2E-0 paid for. The first
+    /// It takes NO NUMBER, and that is deliberate. The first
     /// version of this was `set_dispatch_budget(n)`, which made the host pick `n`
     /// — and picking it well means knowing the producer's rate: too small
     /// throttles the bus to `n` per turn, too large is drain-to-empty and the
@@ -135,7 +135,7 @@ private:
     std::size_t declined_ = 0;   ///< connections shed for the cap
     bool weaves_dirty_ = false;  ///< a Died/Revived seen in the tap; push a fresh Weaves after pump (E)
     bool stop_ = false;
-    bool bounded_dispatch_ = false; ///< false = drain to empty, the pre-R2E-0 contract
+    bool bounded_dispatch_ = false; ///< false = drain to empty, the original contract
 };
 
 } // namespace loom

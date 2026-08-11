@@ -7,10 +7,10 @@
 // A BOUNDED WINDOW ON THE PAST — the retention primitive every long-running
 // observer surface in this tree needs, written once.
 //
-// It arrived with the console (COLD-2 C-1), whose own comment already named the
+// It arrived with the console, whose own comment already named the
 // reason it should live somewhere shared: "four console history surfaces need
 // exactly these semantics, and writing the ring index arithmetic and the
-// eviction counter four times is how one of them ends up wrong." TERM-0 made
+// eviction counter four times is how one of them ends up wrong." The terminal made
 // that a fifth and a sixth (a terminal participant's transcript and its received
 // messages), so the class moved down here rather than being copied — this header
 // is a RELOCATION, not a new design: the code, the invariants and the friend
@@ -93,7 +93,7 @@ public:
     }
 
 private:
-    /// The R2F-C instrument, reused: "size() stays at the capacity" and "the backing storage stops
+    /// The LIFE-07 instrument, reused: "size() stays at the capacity" and "the backing storage stops
     /// growing" are DIFFERENT claims, and only the second is what a process running for weeks needs.
     /// Reading the window's own slot count states the second directly instead of inferring it from
     /// process RSS, which is allocator- and OS-sensitive. Adds no member and no code path.

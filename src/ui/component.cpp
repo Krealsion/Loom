@@ -196,7 +196,7 @@ struct Frame {
     Frame(std::size_t i, int d) : index(i), depth(d) {}
 };
 
-// Rebuild the tree rooted at node 0, or refuse. ITERATIVE ON PURPOSE (MSVC-1).
+// Rebuild the tree rooted at node 0, or refuse. ITERATIVE ON PURPOSE.
 //
 // WHY THE WALK IS EXPLICIT. kMaxUiDepth is a bound this decoder claims over UNTRUSTED input,
 // and the recursive form it replaces could not keep that promise: a deliberate semantic bound

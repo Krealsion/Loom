@@ -481,7 +481,7 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
 // This is the reviewability half only. The correctness half is separate and
 // already held before this: each of those three doors emits a DIFFERENT schema,
 // and the host re-admits every one through the one gate against the door it was
-// asked for, so a miswire is refused rather than believed. BL-4 measured that —
+// asked for, so a miswire is refused rather than believed. Measured —
 // every miswire among the three is refused AT LOAD, before the artifact becomes
 // a participant — and `tests/test_kernel.cpp` names the property directly.
 // Neither half proves the other: a designator can still name the wrong function,

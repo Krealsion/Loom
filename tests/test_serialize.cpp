@@ -8,7 +8,7 @@
 #include <zen/serialize.hpp>
 
 // The decoder's caps live with the wire primitives, internal to loom (the same
-// reach test_sdl.cpp already takes into src/). The R2F-A cases pin the exact
+// reach test_sdl.cpp already takes into src/). The decode-budget cases pin the exact
 // boundary, so they must read the real constant rather than a copy of it.
 #include "../src/detail/binary.hpp"
 
@@ -44,7 +44,7 @@ Value round_trip(const Value& v, std::shared_ptr<const Schema> door) {
 // NaNs as equal, since encode normalizes them).
 bool same_value(const Value& a, const Value& b) { return serialize(a) == serialize(b); }
 
-// ---- R2F-A wire forgery helpers -------------------------------------------
+// ---- wire forgery helpers -------------------------------------------------
 //
 // The honest API cannot express the attack these cases pin: `serialize()` writes
 // a count that matches an array it actually holds, so a value commanding a
@@ -469,13 +469,14 @@ TEST_CASE("a payload missing a required field is refused via the gate") {
     CHECK(a.first_error().path == "name");
 }
 
-// ---- R2F-A: bounded decode materialization ---------------------------------
+// ---- bounded decode materialization ----------------------------------------
+// docs/reference/bounds.md#the-decode-materialization-bound
 
 TEST_CASE("R2F-A: a compact value cannot command an unbounded decoded population") {
-    // The COLD-1 amplification, verbatim in shape: a few dozen wire bytes claim
-    // 1,048,576 zero-body elements — exactly kMaxListCount, so the per-list cap
-    // has nothing to say — and the pre-R2F-A decoder MATERIALISED all of them and
-    // ADMITTED the value (measured: 37 B -> 1,048,576 cells -> +102,336 kB RSS).
+    // The amplification, verbatim in shape: a few dozen wire bytes claim 1,048,576
+    // zero-body elements — exactly kMaxListCount, so the per-list cap has nothing to
+    // say — and an UNBUDGETED decoder materialises all of them and ADMITS the value
+    // (measured on this exact input: 37 B -> 1,048,576 cells -> +102,336 kB RSS).
     const std::string bytes = nothing_list_bytes(detail::kMaxListCount);
     CHECK(bytes.size() < 64); // a compact value by any measure
 

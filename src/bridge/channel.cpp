@@ -78,7 +78,7 @@ void set_nonblocking(socket_t s) {
         (void)::fcntl(s, F_SETFL, flags | O_NONBLOCK);
     }
 }
-/// DEFENCE IN DEPTH, not the boundary (C-2). Loom's own sockets should not walk into
+/// DEFENCE IN DEPTH, not the boundary. Loom's own sockets should not walk into
 /// any child anyone spawns — including a child spawned by an embedding host that has
 /// never heard of the isolation sandbox. What this can NEVER do is make the sandbox
 /// safe, because the embedding host's own descriptors are not Loom's to annotate;

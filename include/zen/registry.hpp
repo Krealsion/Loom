@@ -102,7 +102,8 @@ private:
 /// canonical shared owners that values reference, so a value's schema can never
 /// dangle. Supports registering schemas discovered at runtime (the DLL case).
 ///
-/// Lifetime: a schema is discoverable while something live claims it (BL-0).
+/// Lifetime: a schema is discoverable while something live claims it (LIFE-08).
+    /// docs/laws/lifecycle-laws.md
 /// There are two doors, and the difference between them is the whole model.
 ///
 /// ```text

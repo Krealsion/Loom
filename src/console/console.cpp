@@ -366,7 +366,7 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
 
 Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,
                             std::uint32_t version, const std::vector<Arg>& args) {
-    // The ladder itself is `loom::compose_message` (TERM-0), which stops one step before anything
+    // The ladder itself is `loom::compose_message`, which stops one step before anything
     // is authored; this is the console's original one-shot form over it, so the placement rules,
     // their order, and every refusal they produce are exactly the ones this suite has always
     // pinned. The only thing that moved is where the sending happens.

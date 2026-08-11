@@ -92,7 +92,7 @@ public:
     static constexpr std::size_t kMaxAbsentSchemas = 64;
 
 private:
-    /// The R2F-C observation instrument, applied to the client's own caches: the absent-schema memo
+    /// The LIFE-07 observation instrument, applied to the client's own caches: the absent-schema memo
     /// has no operator-visible surface (unlike the tap and the buffer, whose eviction the operator
     /// must see), so its bound is stated as an assertion about client state rather than inferred
     /// from process memory. Adds no member and no code path.
