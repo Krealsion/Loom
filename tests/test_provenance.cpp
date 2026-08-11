@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The authenticated lifecycle conversation — Loom's side (R2B-1).
+// The authenticated lifecycle conversation — Loom's side.
+// ANS-01..07; docs/laws/answer-authority-laws.md
 //
 // THE LAW UNDER TEST:
 //
@@ -12,9 +13,9 @@
 // The gap this closes is specific and was load-bearing. A weave that must
 // survive its provider being replaced addresses that provider BY ROLE — which
 // is exactly the case where it cannot know the provider's WeaveId, and so cannot
-// pre-bind the answer's sender. Before R2B-1 all such a weave had was a shape
-// and a correlation, both of which any weave holding the same grant can produce.
-// The Loom now records which incarnation the routing decision actually chose,
+// pre-bind the answer's sender. WITHOUT PROVENANCE all such a weave has is a
+// shape and a correlation, both of which any weave holding the same grant can
+// produce. Loom records which incarnation the routing decision actually chose,
 // and lets only that incarnation, once, speak with Loom's word behind it.
 //
 // WHAT THESE CASES DELIBERATELY DO NOT DO: reach around the bus. Every forgery
@@ -326,10 +327,10 @@ constexpr std::uint64_t kPublicCorrelation = 0xC1A1; // as public as a constant 
 // file stops compiling. A source-text grep would not catch a new spelling; this
 // does, because it asks the compiler the question directly.
 //
-// R2B-1 shipped `Switchboard::lifecycle_authority()` as a PUBLIC STATIC, so the
-// third assertion below was false — no instance needed, no host involved, and a
-// weave with an exact `zen.Activated` grant could manufacture a lifecycle fact
-// for someone else's incarnation. These are the pins that keep it closed.
+// THE THIRD ASSERTION IS THE ONE THAT HAS BEEN FALSE IN SHIPPED CODE. As a
+// public static, `Switchboard::lifecycle_authority()` needs no instance and no
+// host, so a weave with an exact `zen.Activated` grant can manufacture a
+// lifecycle fact for someone else's incarnation. These are the pins on that.
 
 /// The questions have to be asked THROUGH A TEMPLATE. A `requires` expression
 /// only swallows an invalid expression inside an immediate context, so asking it
@@ -353,7 +354,7 @@ static_assert(!MintsByMemberCall<loom::Mail>,
 static_assert(!MintsByAnyName<loom::Mail>,
               "R2B-1a: Mail must never expose lifecycle minting under another name");
 
-/// The static factory R2B-1 actually shipped: no instance, no host, no wall.
+/// The static factory that once shipped: no instance, no host, no wall.
 static_assert(!MintsByStaticCall<loom::Switchboard>,
               "R2B-1a: the lifecycle mint must not be a reachable static factory");
 
@@ -677,7 +678,7 @@ TEST_CASE("ordinary messaging is untouched: send, publish and role-send carry no
 
 
 // ============================================================================
-// R2B-1a — authority is handed, not minted
+// Authority is handed, not minted
 // ============================================================================
 
 namespace {
@@ -692,7 +693,7 @@ namespace {
 /// <zen/switchboard.hpp> and <zen/weave.hpp>).
 ///
 /// What it cannot write is the line that would matter. Every route that existed
-/// before R2B-1a is asserted unwriteable at compile time above; what remains,
+/// is asserted unwriteable at compile time above; what remains,
 /// and what this class actually does, is the strongest thing that still
 /// COMPILES: an ordinary, legal, correctly-stamped `zen.Activated`.
 class ActivationImpostor : public WeaveBase<ActivationImpostor, ProvState, Accept<ProvNudge>,
@@ -904,14 +905,13 @@ TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnatio
 
 
 // ============================================================================
-// R2B-1b — every Loom is its own authority domain
+// Every Loom is its own authority domain
 // ============================================================================
 //
-// R2B-1a required a `Switchboard&` to mint an authority. It did not make the
-// result mean anything about WHICH Switchboard — the authority was an empty
-// marker, so every board honoured every board's. The attack below is therefore
-// not a compile-surface question at all: it is entirely legal to write, it
-// compiles, and it must fail at RUNTIME.
+// Requiring a `Switchboard&` to MINT an authority says nothing about WHICH
+// Switchboard: were the authority an empty marker, every board would honour every
+// board's. The attack below is therefore not a compile-surface question at all —
+// it is entirely legal to write, it compiles, and it must fail at RUNTIME.
 
 namespace {
 
@@ -1018,7 +1018,7 @@ TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy b
     // Nothing was delivered at all: the attestation was refused where it was
     // asked for, not swallowed quietly at the far end.
     CHECK(tap.delivered == 0);
-    // THE DIAGNOSTIC IS ACCURATE, not merely present (R2B-2). The grant here is
+    // THE DIAGNOSTIC IS ACCURATE, not merely present. The grant here is
     // perfectly correct; what is wrong is the authority DOMAIN, and saying
     // "CapabilityDenied" would send an operator looking at grants.
     CHECK(tap.foreign_authority == 1);
@@ -1182,7 +1182,7 @@ TEST_CASE("R2B-1b: a Switchboard is an authority domain, and is deliberately nei
 
 
 // ============================================================================
-// R2B-2 — the answer may wait
+// The answer may wait (ANS-02)
 // ============================================================================
 //
 // THE LAW: an answer may outlive the handler, but never the conversation or the
@@ -1839,15 +1839,15 @@ TEST_CASE("R2B-2: a leaked capability costs one slot only until its owner DIES")
     CHECK(world.tap.exhausted == 0);
 }
 
-// ---- R2B-2a: death ends the answer -------------------------------------------
+// ---- death ends the answer (ANS-04) ------------------------------------------
 //
-// R2B-2 said "an answer may outlive the handler, but never the conversation or the
-// incarnation that earned it" — and proved the CODE-replacement and permanent-
-// removal halves. It did not prove the RECOVERABLE DEATH half, and the real code
-// did not implement it: `kill()` leaves both the WeaveId and the incarnation
-// untouched, so a crashed weave revived from its own snapshot — the isolation
-// supervisor's ordinary recovery path — came back holding its predecessor's answer
-// rights. These cases pin the law at the transition that actually says so:
+// "An answer may outlive the handler, but never the conversation or the
+// incarnation that earned it." The code-replacement and permanent-removal halves
+// are the easy ones; RECOVERABLE DEATH is the half that escapes a weaker oracle,
+// because `kill()` leaves both the WeaveId and the incarnation untouched. Nothing
+// about the record looks stale, so a crashed weave revived from its own snapshot
+// — the isolation supervisor's ordinary recovery path — would come back holding
+// its predecessor's answer rights. These cases pin the law at that transition:
 //
 //     A handler may end without ending the conversation. A life may not.
 
@@ -2027,7 +2027,7 @@ TEST_CASE("R2B-2a: the REQUESTER dying and reviving does not inherit the answer 
 }
 
 TEST_CASE("R2B-2a: death reclaims registry capacity AT THE DEATH, in both ownership directions") {
-    // The bound is 64 and a leaked capability costs a slot. R2B-2 proved code
+    // The bound is 64 and a leaked capability costs a slot. ANS-02 proves code
     // replacement and permanent removal give the slots back; this proves DEATH does
     // — immediately, and before any revival, because a quarantined weave is never
     // revived at all and its slots must not be hostage to an event that never comes.
@@ -2169,12 +2169,11 @@ TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICA
     CHECK(heard.answers.empty());
 }
 
-// ---- R2B-2b: the message belongs to a life ------------------------------------
+// ---- the message belongs to a life (MSG-03) -----------------------------------
 //
-// R2B-2a ends every conversation a dying participant was already IN. A message it
-// had merely QUEUED names no conversation yet, so there was nothing for that
-// cleanup to find — and delivered later it would have become speech from whatever
-// now answers to the same id:
+// Ending every conversation a dying participant was already IN (ANS-04) cannot
+// reach a message it had merely QUEUED, which names no conversation yet. Delivered
+// later, that message becomes speech from whatever now answers to the same id:
 //
 //     life A queues an ask -> A dies -> A is revived under the same WeaveId
 //     -> the ask is delivered -> the responder answers -> the NEW life is answered
@@ -2517,7 +2516,7 @@ TEST_CASE("R2B-2b: killing one speaker leaves another living speaker's queued me
 TEST_CASE("R2B-2b: a queued message from a PERMANENTLY REMOVED sender is refused as a life that "
           "ended, not as a missing grant") {
     // The same fact the swap window has always had (an unloaded weave's in-flight
-    // replies die with it) — now reported by its real cause. Before R2B-2b this
+    // replies die with it) — reported by its real cause. Without the life stamp this
     // arrived at the right answer down the wrong road: a vanished sender has no
     // grant to check, so the AUTHORIZATION term failed and the tap said
     // CapabilityDenied, sending an operator to edit a grant that was never wrong.
@@ -2604,7 +2603,7 @@ TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold �
     bus.kill(holder);
 
     // And the magpie replays it anyway. Delivered, because the speaker is the
-    // magpie and the magpie is alive; stripped of provenance, exactly as R2B-2
+    // magpie and the magpie is alive; stripped of provenance, exactly as ANS-07
     // pinned. The dead author's life was never the question, because the dead
     // author is not who is speaking.
     bus.send(magpie, Message(to_value(ProvNudge{})));
@@ -2615,11 +2614,10 @@ TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold �
     CHECK(tap.sender_life_ended == 0);
 }
 
-// ---- R2B-2c: the answer belongs to the life that asked -------------------------
+// ---- the answer belongs to the life that asked (ANS-03) ------------------------
 //
-// R2B-2b bound a message to the life that AUTHORED it, which protects the
-// answering side. This is the other half — the participant an answer was earned
-// FOR:
+// MSG-03 binds a message to the life that AUTHORED it, protecting the answering
+// side. This is the other half — the participant an answer was earned FOR:
 //
 //     requester A asks -> responder queues an authentic answer -> A dies
 //     -> A is revived under the same WeaveId -> the answer lands on the revival
@@ -2805,8 +2803,8 @@ TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and th
           "refused at the spend, before any answer is queued") {
     // THE OTHER WINDOW. A deferred conversation can be invalidated in two places:
     // before the answer is written (here) and after it is queued (the live-reload
-    // case above). This one is the older guard — R2B-2's spend-time incarnation
-    // check — and it is pinned here because it is what makes the R2B-2c capture
+    // case above). This one is the separate spend-time incarnation check
+    // (ANS-02), and it is pinned here because it is what makes the requester-capture
     // rule LOOK redundant: with it in place, a spend that recomputed the
     // requester's identity instead of using the record's could never observe a
     // difference. Cutting both together is the only way to see the pair.
@@ -2868,7 +2866,7 @@ TEST_CASE("R2B-2c: an UNCHANGED requester still gets its answer, whatever else t
 
     // Unrelated lifecycle churn everywhere EXCEPT the requester: a third weave
     // dies and revives, and the RESPONDER's own code is replaced in place. The
-    // answerer's life is what R2B-2b binds, and a code reload is not a death — so
+    // answerer's life is what MSG-03 binds, and a code reload is not a death — so
     // neither of these is this conversation's business.
     const std::string bystander_state = bus.snapshot_bytes(bystander);
     bus.kill(bystander);

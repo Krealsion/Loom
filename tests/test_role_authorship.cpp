@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// Deliberate office authorship — role-authored provenance (R2D-0).
+// Deliberate office authorship — role-authored provenance.
+// MSG-07, MSG-04; docs/laws/messaging-laws.md
 //
 // THE LAW UNDER TEST:
 //

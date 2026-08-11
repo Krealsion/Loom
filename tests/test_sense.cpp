@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// SENSES (R2E-0) — the S1..S6 witnesses.
+// SENSES — the S1..S6 witnesses.
+// SENSE-01..05; docs/laws/sense-laws.md
 //
 // The category under test:
 //
@@ -290,7 +291,7 @@ TEST_CASE("S3: role movement never relabels a predecessor's office claim, and th
 // predecessor's claim must survive stamped stale rather than being deleted or
 // relabelled — needs the real prepared-replacement ceremony (the only thing that
 // moves a role holder in place). It lives in the kernel suite beside that
-// ceremony: `test_kernel.cpp`, the R2E-0 Senses-across-replacement section.
+// ceremony: `test_kernel.cpp`, the Senses-across-replacement section.
 
 // ---- S3b: the two generation facts are independent --------------------------
 //

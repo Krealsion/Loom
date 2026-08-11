@@ -30,6 +30,15 @@ namespace loom {
 /// Why a delivery (or revival) was refused. Conformance refusals carry a
 /// loom Error (the gate's verdict); the rest are bus-level routing reasons
 /// the gate never sees.
+///
+/// THE REASONS ARE NARROW ON PURPOSE AND MUST STAY THAT WAY. Each one sends an
+/// operator to a different fix, so widening an existing reason to cover a new
+/// failure is how a refusal starts lying — report a capacity limit as
+/// `CapabilityDenied` and an operator edits a grant that was never the problem.
+/// Add a reason rather than stretch one. Each member below therefore names only
+/// what makes it *not* its nearest neighbour.
+/// MSG-05; docs/laws/messaging-laws.md
+/// The order these are decided in: docs/reference/messaging.md#dispatch-model
 enum class RefusalReason : std::uint8_t {
     None = 0,
     NoSuchTarget,      ///< directed at a WeaveId that is not registered
@@ -38,92 +47,72 @@ enum class RefusalReason : std::uint8_t {
     GateRefused,       ///< routing passed, but admit() refused — see `error`
     CapabilityDenied,  ///< the sender's grant does not permit (shape -> target); the gate is
                        ///< never reached. Authorization, not conformance.
-    /// A lifecycle/answer authority was presented that this Loom did not issue —
-    /// or that is expired, already spent, or bound to a different conversation or
-    /// incarnation. DISTINCT FROM CapabilityDenied on purpose (R2B-2): the
-    /// sender's grant may be perfectly correct while the AUTHORITY DOMAIN is
-    /// wrong, and reporting that as "you lack the grant" sends an operator
-    /// looking in exactly the wrong place. The grant answers "may you send this
-    /// shape?"; this answers "is this yours to say here?".
+    /// A lifecycle/answer authority this Loom did not issue — or one expired,
+    /// already spent, or bound to a different conversation or incarnation. NOT
+    /// `CapabilityDenied`: the sender's grant may be perfectly correct while the
+    /// AUTHORITY DOMAIN is wrong. The grant answers "may you send this shape?";
+    /// this answers "is this yours to say here?".
     ForeignAuthority,
-    /// A published bound was reached, and nothing about authority or conformance
-    /// was wrong. Kept distinct from ForeignAuthority for the same reason that one
-    /// is distinct from CapabilityDenied: reporting a capacity limit as a foreign
-    /// capability would send an operator hunting a forgery that never happened.
+    /// A published bound was reached; nothing about authority or conformance was
+    /// wrong. NOT `ForeignAuthority`: no forgery happened, the room is just full.
     Exhausted,
-    /// The message was authored by a life that has since ended (R2B-2b): the
-    /// sender is dead, has been permanently removed, or has been revived — which
-    /// makes the speaker a different life behind the same `WeaveId`.
-    ///
-    /// Its own reason for the same reason the two above have theirs. "No such
-    /// target" would be a lie (the target is fine), a gate error would blame the
-    /// payload, and `CapabilityDenied` would send an operator to edit a grant that
-    /// was never the problem. What ended was the utterance's author.
+    /// The message was authored by a life that has since ended: the sender is
+    /// dead, permanently removed, or revived — which makes the speaker a
+    /// different life behind the same `WeaveId`. What ended is the utterance's
+    /// AUTHOR; the target is fine and the payload is fine.
+    /// MSG-03; docs/laws/messaging-laws.md
     SenderLifeEnded,
     /// An authenticated answer arrived for a requester that is no longer the one
-    /// that asked (R2B-2c): the weave at that `WeaveId` has since died and been
-    /// revived, or its code has been replaced. The address is right and the
-    /// occupant is wrong.
-    ///
-    /// Distinct from `SenderLifeEnded`, which is about the AUTHOR of a message,
-    /// and from `NoSuchTarget`/`TargetUnavailable`, which are about an address
-    /// that resolves to nobody or to somebody dead. Here the target exists, is
-    /// alive, and is simply not who the conversation was with.
+    /// that asked: the weave at that `WeaveId` has died and been revived, or its
+    /// code has been replaced. The address is right and the occupant is wrong —
+    /// which is what separates it from `SenderLifeEnded` (about the AUTHOR) and
+    /// from `NoSuchTarget`/`TargetUnavailable` (nobody there, or somebody dead).
+    /// ANS-03; docs/laws/answer-authority-laws.md
     AnswerTargetChanged,
-    /// A SEALED weave tried to speak into the world (R2B-3). A prepared candidate
-    /// exists outside the live world: it may converse with the coordinator that is
-    /// preparing it, and with nobody else. This is what it hears when it tries.
+    /// A SEALED weave tried to speak into the world. A prepared candidate lives
+    /// outside the live world: it may converse with the coordinator preparing it
+    /// and with nobody else, and this is what it hears when it tries.
     ///
-    /// Deliberately visible, unlike the mirror case: a message aimed AT a sealed
-    /// weave by anyone other than its coordinator is refused as `NoSuchTarget`, so
-    /// the world cannot learn that a candidate exists. The candidate's own attempts
-    /// are the operator's business and are named.
+    /// Deliberately visible, unlike its mirror: a message aimed AT a sealed weave
+    /// by anyone but its coordinator is refused as `NoSuchTarget`, so the world
+    /// cannot learn that a candidate exists. Do not make the two symmetrical.
+    /// PR-01; docs/laws/replacement-laws.md
     SealedSpeech,
     /// A SCHEDULED ADMISSION NO LONGER DESCRIBED THE WORLD when it reached the
-    /// head of the queue (R2B-3d): a participant died, was reloaded or was
-    /// removed, the role moved, the seal changed hands, or the transaction it
-    /// belonged to had already ended.
+    /// head of the queue: a participant died, was reloaded or was removed, the
+    /// role moved, the seal changed hands, or its transaction had already ended.
     ///
-    /// NOTHING CHANGED. This is the refusal of an ADMISSION, never of an
-    /// activation — the incumbent is still the service, the candidate is still
-    /// outside the world, and no topology was touched. It has its own reason
-    /// because every other name in this list is about one message failing to
-    /// arrive; this one says the change that message was carrying did not
-    /// happen. An operator reading it looks at the participants, not at a
-    /// grant, a payload, or an address.
+    /// NOTHING CHANGED — this refuses an ADMISSION, never an activation. Every
+    /// other name here says one message failed to arrive; this one says the
+    /// change that message was carrying did not happen, so an operator reading it
+    /// looks at the participants rather than at a grant, payload or address.
+    /// PR-03 (the drift check), PR-07 (the window it can drift in);
+    /// docs/laws/replacement-laws.md
     AdmissionRevoked,
-    /// A weave deliberately asked to speak as an office it does not hold
-    /// (R2D-0): the role is unbound, held by somebody else, or the speaker has
-    /// no identity to hold one. Refused at the AUTHORSHIP moment — nothing was
-    /// queued, and the statement was NOT downgraded to personal speech.
-    ///
-    /// Its own reason for the family's usual reason: `CapabilityDenied` would
-    /// send an operator to edit a grant that may be perfectly correct, and
-    /// `ForeignAuthority` would imply a forged capability object where none was
-    /// presented. What failed is narrower than either — the sender is not the
-    /// current holder of the office it asked to represent.
+    /// A weave deliberately asked to speak as an office it does not hold: the
+    /// role is unbound, held by somebody else, or the speaker has no identity to
+    /// hold one. Refused at the AUTHORSHIP moment — nothing was queued, and the
+    /// statement was NOT downgraded to personal speech. Narrower than
+    /// `CapabilityDenied` (the grant may be perfect) and than `ForeignAuthority`
+    /// (no capability object was presented).
+    /// MSG-07; docs/laws/messaging-laws.md
     RoleAuthorshipDenied,
-    /// A LOADED WEAVE CLAIMED A SHAPE THIS LOOM HAS NEVER HEARD OF (R2E-0). The
-    /// emission crossed the library/host seam carrying a (name, version) that
-    /// `resolve_schema` cannot resolve, so there is no door to admit it against
-    /// and it is rejected before anything is queued and before any target is
-    /// resolved.
+    /// A LOADED WEAVE CLAIMED A SHAPE THIS LOOM HAS NEVER HEARD OF. The emission
+    /// crossed the library/host seam carrying a (name, version) `resolve_schema`
+    /// cannot resolve, so there is no door to admit it against; rejected before
+    /// anything is queued and before any target is resolved.
     ///
-    /// Its own reason, by the same test every neighbour passed. `NotAccepted`
-    /// would blame a target's accept-set, when routing never ran and there may be
-    /// no target at all. `GateRefused` would blame the payload, when no schema
-    /// existed to judge it against — the value may be perfectly well-formed for
-    /// the shape its author meant. `NoSuchTarget` would blame an address that was
-    /// never consulted. What failed is the SEAM: the shape's registrar was never
-    /// loaded (or was denied), so the vocabulary does not exist on this side.
+    /// Every neighbour would misdirect: `NotAccepted` blames a target's
+    /// accept-set when routing never ran, `GateRefused` blames a payload that may
+    /// be perfectly well-formed for the shape its author meant, `NoSuchTarget`
+    /// blames an address never consulted. What failed is the SEAM.
     ///
     /// It carries the CLAIMED name and version, the sending artifact, and a
-    /// target only where one was actually named — a publication names none, and
-    /// inventing one would replace silence with a fiction. It is a diagnostic
-    /// fact, not an answer and not a delivery: nothing is returned to the sender
-    /// that was not already returned (the shim's status), and no ticket crosses
-    /// the seam. See known-seams § sender cannot observe send fate — still true,
-    /// still separate.
+    /// target ONLY where one was actually named — inventing one would replace
+    /// silence with a fiction. A diagnostic, not an answer and not a delivery:
+    /// send fate remains unobservable to senders.
+    /// MSG-08; docs/laws/messaging-laws.md
+    /// docs/reference/known-seams.md#sender-cannot-observe-send-fate
     SeamUnresolved,
 };
 
@@ -160,27 +149,27 @@ struct BusEvent {
     Refusal refusal{};             ///< for Refused, and for a failed/fallback Revived
     bool from_last_known_good = false; ///< for Revived
     const Value* payload = nullptr; ///< for Delivered; valid only during the callback
-    /// DIAGNOSTICS ONLY, and only for a weave-originated delivery (R2B-2b): the
-    /// sender life this envelope was stamped with at enqueue, and the sender's life
-    /// right now. When they differ, the message was authored by a life that has
-    /// since ended — and a journal reader can see exactly that rather than having
-    /// to infer it. Both are 0 for host/root sends, which belong to no weave life.
+    /// DIAGNOSTICS ONLY, and only for a weave-originated delivery: the sender
+    /// life stamped on this envelope at enqueue, and the sender's life right now.
+    /// When they differ, the author's life ended while the message waited — so a
+    /// journal reader sees the cause rather than inferring it. Both 0 for
+    /// host/root sends, which belong to no weave life (MSG-03).
     std::uint64_t sender_life = 0;
     std::uint64_t sender_life_now = 0;
-    /// DIAGNOSTICS ONLY, and only for an authenticated answer (R2B-2c): what the
-    /// conversation expected of its requester, and what that requester is now. A
-    /// journal reader can therefore see the causal event — "expected life 1 /
-    /// incarnation 1, found life 2 / incarnation 1" — instead of inferring it.
-    /// Zero on every other kind of delivery.
+    /// DIAGNOSTICS ONLY, and only for an authenticated answer: what the
+    /// conversation expected of its requester, and what that requester is now —
+    /// so the journal shows "expected life 1 / incarnation 1, found life 2"
+    /// instead of leaving it to be deduced. Zero on every other delivery (ANS-03).
     std::uint64_t expected_requester_life = 0;
     std::uint64_t expected_requester_incarnation = 0;
     std::uint64_t requester_life_now = 0;
     std::uint64_t requester_incarnation_now = 0;
-    /// The office this delivery was DELIBERATELY authored as (R2D-0) — the
-    /// envelope's STAMPED fact, never a lookup of the sender's current role.
-    /// Empty for personal speech, which is almost everything. A tap reading it
-    /// sees historical authorship: `role_of(sender)` at observation time answers
-    /// a different question and may already disagree.
+    /// The office this delivery was DELIBERATELY authored as — the envelope's
+    /// STAMPED fact, never a lookup of the sender's current role. Empty for
+    /// personal speech, which is almost everything. A tap reads historical
+    /// authorship here; `role_of(sender)` asks a different question at a
+    /// different time and may already disagree.
+    /// MSG-07; docs/laws/messaging-laws.md
     std::string authored_role{};
 };
 
@@ -202,15 +191,14 @@ struct ReviveOutcome {
 /// only these two fields are read.
 std::shared_ptr<const Schema> lifecycle_policy_schema();
 
-/// WHO OWNS A SEALED CANDIDATE (R2B-3b).
+/// WHO OWNS A SEALED CANDIDATE — as three facts, never as a `WeaveId` alone.
 ///
-/// R2B-3a bound a seal to a coordinator's `WeaveId` alone, which was enough to
-/// prove isolation and is NOT enough to own a transaction: a coordinator that
-/// dies and revives, or whose code is replaced, is a different participant at
-/// the same address — and R2B-2b/2c already established that such a successor
-/// inherits neither speech nor conversations. A preparation is a conversation.
-/// So ownership carries the same three facts every other authority in this
-/// codebase carries, and the issuing Loom is implicit in living on its record.
+/// A coordinator that dies and revives, or whose code is replaced, is a
+/// DIFFERENT participant at the same address, and it inherits neither speech
+/// nor conversations. A preparation is a conversation, so the seal must name the
+/// exact life and incarnation that made it. The issuing Loom is implicit in the
+/// record living on that Loom.
+/// PR-03; docs/laws/replacement-laws.md
 struct CandidateOwner {
     WeaveId who{};
     std::uint64_t life = 0;
@@ -222,11 +210,11 @@ struct CandidateOwner {
     }
 };
 
-/// Why an admission was refused, for the host that asked (R2B-3b-1a).
+/// Why an admission was refused, for the host that asked.
 ///
-/// Admission is a host call, not a delivery, so there is no message to refuse and
-/// no tap event to carry a `RefusalReason`. The reason belongs in the answer the
-/// caller already receives — and it is named rather than a bare false, because
+/// Admission is a host call, not a delivery, so there is no message to refuse
+/// and no tap event to carry a `RefusalReason`. The reason therefore rides the
+/// answer the caller already receives — named rather than a bare false, because
 /// "the coordinator that sealed this is not the one standing here now" and "the
 /// role moved under you" send an operator to entirely different places.
 enum class AdmitRefusal : std::uint8_t {
@@ -236,31 +224,31 @@ enum class AdmitRefusal : std::uint8_t {
     OwnerChanged,     ///< the exact coordinator life/incarnation that sealed it is gone
     IncumbentUnfit,   ///< missing, dead, or already sealed
     RoleNotHeld,      ///< the role is empty, or held by somebody other than the incumbent
-    /// THE CANDIDATE CANNOT RECEIVE THE COMMITTED ACTIVATION (R2B-3d): it does
-    /// not accept `zen.Activated` at all, or the exact activation this admission
-    /// would deliver does not pass its own gate. A weave without the activation
-    /// contract is not admissible, and finding that out at delivery — after the
-    /// role has moved — is precisely the split-brain this phase closes.
+    /// THE CANDIDATE CANNOT RECEIVE THE COMMITTED ACTIVATION: it does not accept
+    /// `zen.Activated` at all, or the exact activation this admission would
+    /// deliver does not pass its own gate. Asked HERE, before anything moves,
+    /// because discovering it at delivery means discovering it after the role has
+    /// already moved — publicly admitted and never told.
+    /// PR-08; docs/laws/replacement-laws.md
     CandidateContract,
 };
 
 const char* name_of(AdmitRefusal r) noexcept;
 
-/// The result of SCHEDULING an admission (R2B-3d). Convertible to bool so the
-/// common `REQUIRE(bus.admit_candidate(...))` reads as it should, with `why` for
-/// the cases that care.
+/// The result of SCHEDULING an admission. Convertible to bool so the common
+/// `REQUIRE(bus.admit_candidate(...))` reads as it should, with `why` for the
+/// cases that care.
 ///
-/// `scheduled`, NOT `ok`, and the rename is the phase. Admission is no longer
-/// something this call performs: it validates everything it can, proves the
-/// candidate can receive its activation, and places ONE envelope in the queue
-/// that will do the whole thing at once. What this call reports is that the
-/// envelope is there and every precondition held when it was written — never
-/// that the role has moved.
+/// `scheduled`, NOT `ok` — the field name is the contract. This call performs no
+/// admission: it validates, proves the candidate can receive its activation, and
+/// places ONE envelope that will do the whole thing at once. It reports that the
+/// envelope is there, never that the role has moved.
 ///
-/// `ticket` is that envelope's delivery ticket, and it is how a direct caller
-/// learns the real outcome: `Delivered` means the candidate was admitted AND
-/// told; `Refused` with `AdmissionRevoked` means the world drifted and nothing
-/// changed. A transaction caller reads the same fact from its terminal outcome.
+/// `ticket` is that envelope's, and it is how a direct caller learns the real
+/// outcome: `Delivered` = admitted AND told; `Refused` with `AdmissionRevoked` =
+/// the world drifted and nothing changed. A transaction caller reads the same
+/// fact from its terminal outcome.
+/// PR-07; docs/laws/replacement-laws.md
 struct AdmitResult {
     bool scheduled = false;
     AdmitRefusal why = AdmitRefusal::None;
@@ -271,13 +259,12 @@ struct AdmitResult {
     explicit operator bool() const noexcept { return scheduled; }
 };
 
-/// WHO A TRANSACTION IS BOUND TO (R2B-3b-2).
-///
-/// The same three facts every authority in this codebase carries, for the same
-/// reason: a participant that dies and revives, or whose code is replaced, is a
-/// different participant at the same address, and a prepared replacement belongs
-/// to the exact lives that began it. `CandidateOwner` is this shape for the seal;
-/// this is it for the other three roles a transaction names.
+/// WHO A TRANSACTION IS BOUND TO — the same three facts, for the same reason as
+/// `CandidateOwner` above: a participant that dies and revives, or whose code is
+/// replaced, is a different participant at the same address, and a prepared
+/// replacement belongs to the exact lives that began it. `CandidateOwner` is
+/// this shape for the seal; this is it for the other three roles.
+/// PR-02; docs/laws/replacement-laws.md
 struct ParticipantRef {
     WeaveId who{};
     std::uint64_t life = 0;
@@ -303,13 +290,12 @@ struct TxnId {
 
 /// The whole state machine. Five states, and the two terminals are terminal.
 ///
-/// `AdmissionPending` is R2B-3d's one addition and it is not decoration: the
-/// commit request no longer performs the admission, it SCHEDULES it, and the
-/// interval between those two facts is real. While a transaction is in this
-/// state the incumbent is still the public service, the candidate is still
-/// sealed, and nothing has been promised — so the state has to exist, be
-/// abortable, and hold its slot and its candidate exclusivity exactly as
-/// `Preparing` and `Ready` do.
+/// `AdmissionPending` is not decoration: commit SCHEDULES the admission, and the
+/// interval before it dispatches is real and observable. Throughout it the
+/// incumbent is still the public service and the candidate is still sealed, so
+/// the state must exist, must be abortable, and must hold its slot and its
+/// candidate exclusivity exactly as `Preparing` and `Ready` do.
+/// PR-07; docs/laws/replacement-laws.md
 enum class TxnState : std::uint8_t { Preparing, Ready, AdmissionPending, Committed, Aborted };
 
 /// Why a transaction ended, or why a command was refused. One vocabulary for
@@ -331,41 +317,39 @@ enum class TxnReason : std::uint8_t {
     WrongState,
     NotTheOwner,
     PreconditionFailed,
-    /// Another active transaction already names this incumbent, or this candidate
-    /// (R2B-3b-2a). Two distinct facts, named separately, because "somebody is
-    /// already replacing that service" and "that successor is already promised
-    /// elsewhere" are different problems with different fixes.
+    /// Another active transaction already names this incumbent, or this
+    /// candidate. Two facts, named separately: "somebody is already replacing
+    /// that service" and "that successor is already promised elsewhere" are
+    /// different problems with different fixes (PR-02).
     IncumbentBusy,
     CandidateBusy,
-    /// THE CANDIDATE ITSELF SAID NO (R2B-3b-3) — authentically, spending the one
-    /// answer authority the preparation ask earned it. Its own reason, because it
-    /// is the only ending in the vocabulary that is neither a failure of the
-    /// mechanism nor a participant vanishing: preparation ran, and its verdict was
-    /// no. An operator reading `CandidateRefused` looks at the successor's own
-    /// judgement; every other reason sends them to the topology.
+    /// THE CANDIDATE ITSELF SAID NO — authentically, spending the one answer
+    /// authority the preparation ask earned it. The only ending here that is
+    /// neither a mechanism failure nor a participant vanishing: preparation ran
+    /// and its verdict was no, so an operator looks at the successor's own
+    /// judgement rather than at the topology.
     CandidateRefused,
-    /// Something arrived claiming to be the readiness answer and was not
-    /// (R2B-3b-3): not an authenticated answer at all, from the wrong speaker,
-    /// carrying another conversation's correlation, or offered when this
-    /// transaction's one preparation conversation was never opened or is already
-    /// consumed. Deliberately ONE reason for all of those: telling a forger
-    /// *which* term it failed is telling it what to fix next.
+    /// Something arrived claiming to be the readiness answer and was not: not an
+    /// authenticated answer, from the wrong speaker, carrying another
+    /// conversation's correlation, or offered when this transaction's one
+    /// preparation conversation was never opened or is already consumed.
+    /// DELIBERATELY ONE REASON for all of those — telling a forger *which* term
+    /// it failed is telling it what to fix next.
     ///
-    /// It is a refusal of the COMMAND, never a terminal result — hostile traffic
-    /// does not get to end a legitimate transaction.
+    /// A refusal of the COMMAND, never a terminal result: hostile traffic does
+    /// not get to end a legitimate transaction.
     InvalidReadiness,
-    /// The answer is authentic and the transaction it names is over (R2B-3b-3):
-    /// it aborted, exhausted its budget, or committed while the answer sat in the
-    /// queue. Distinct from `NoSuchTransaction`, which means this Loom never
-    /// issued that id at all — "you are too late" and "that never existed" send an
-    /// operator to entirely different places, and a terminal record is never
-    /// resurrected to say either.
+    /// The answer is authentic and the transaction it names is over: aborted,
+    /// out of budget, or committed while the answer sat in the queue. NOT
+    /// `NoSuchTransaction`, which means this Loom never issued that id — "you are
+    /// too late" and "that never existed" send an operator to different places,
+    /// and a terminal record is never resurrected to say either.
     LateReadiness,
-    /// This transaction's one preparation conversation has already been opened
-    /// (R2B-3b-3). There is exactly one, deliberately: a second ask would leave a
-    /// candidate holding an authority for a correlation the transaction no longer
-    /// expects, and "which of my two asks is this answering?" is a question the
-    /// design refuses to have.
+    /// This transaction's one preparation conversation has already been opened.
+    /// There is exactly one, deliberately: a second ask would leave a candidate
+    /// holding an authority for a correlation the transaction no longer expects,
+    /// and "which of my two asks is this answering?" is a question the design
+    /// refuses to have.
     PreparationAlreadyAsked,
 };
 
@@ -436,31 +420,14 @@ public:
     /// a successor.
     ///
     /// `nullptr` MEANS NOTHING WAS REMOVED, and there are two ways to earn it:
-    ///
-    ///   the id is unknown
-    ///   the id names the weave whose callback is running right now (R2F-B)
-    ///
-    /// The second is the lifetime law: *a Weave cannot be permanently removed,
-    /// handed back, or destroyed while Loom is executing that same Weave's
-    /// callback.* Success transfers a unique owner the caller may reset
-    /// immediately, so there is no honest "erase now, destroy later" — Loom
-    /// cannot both hand over unique ownership and keep it. The call therefore
-    /// refuses, changing nothing at all: no role released, no claim forgotten,
-    /// no conversation abandoned, no transaction invalidated, no registry entry
-    /// erased. A host may simply retry once the callback has returned — by
-    /// normal return OR by exception unwind — and receives the weave then.
-    ///
-    /// It is exact to the ACTIVE TARGET and nothing wider: removing a *different*
-    /// weave from inside a callback keeps working exactly as it did, which the
-    /// transaction layer relies on when a candidate refuses its preparation. The
-    /// protection covers both paths that invoke `Weave::handle` — ordinary
-    /// delivery and the committed-activation delivery.
-    ///
-    /// AUTHORITY, HONESTLY: ordinary weave code is handed a `WeaveBus`, which has
-    /// no such member, so this is not ambient weave authority. The active-removal
-    /// case exists only where host wiring deliberately supplies a weave with
-    /// concrete `Switchboard&` access — a supported pattern, and the one this law
-    /// is about.
+    /// the id is unknown, or the id names the weave whose callback is running
+    /// right now. The second refuses TOTALLY — the check precedes every mutation
+    /// — because success hands back a unique owner the caller may destroy at
+    /// once, and Loom cannot both transfer unique ownership and keep the object.
+    /// Retry after the callback exits (by return or by unwind) and it succeeds.
+    /// Exact to the ACTIVE TARGET, not to `in_dispatch_`: removing a *different*
+    /// weave mid-callback still works, which the transaction layer relies on.
+    /// LIFE-06; docs/reference/lifecycle.md#permanent-removal-and-the-active-callback
     ///
     /// Symmetrically, and less obviously: pending deliveries *from* a removed
     /// Weave are refused too, as CapabilityDenied. A gated message is authorized
@@ -526,29 +493,28 @@ public:
     Ticket send_to_role(std::string_view role, Message msg) override;
     Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
 
-    // ---- deliberate office authorship (R2D-0) ------------------------------
+    // ---- deliberate office authorship ---------------------------------------
     //
     //     A weave may deliberately author one statement in the capacity of a
     //     role it currently holds. Loom verifies that membership at the
     //     authorship moment and carries the office fact as immutable delivery
     //     provenance. Merely holding the role attaches nothing.
     //
-    // THE AUTHORIZATION MOMENT IS AUTHORSHIP/ENQUEUE, deliberately: "does this
-    // exact sender hold `as_role` NOW, as it deliberately asks to speak as it?"
-    // Deciding at delivery instead would let a statement's meaning change
-    // because the role moved while it waited in the queue. Once stamped, the
-    // fact is HISTORICAL — delivery never recomputes it, and later role
-    // movement never rewrites it. Every independent delivery law (sender life,
-    // the seal, the ordinary grant, routing) still applies unchanged: office
-    // authorship changes why a recipient may trust who spoke, never where the
-    // sender may speak or what it may emit.
+    // THE AUTHORIZATION MOMENT IS AUTHORSHIP/ENQUEUE, deliberately: deciding at
+    // delivery instead would let a statement's meaning change because the role
+    // moved while it waited in the queue. Once stamped the fact is HISTORICAL —
+    // delivery never recomputes it. Office authorship changes why a recipient may
+    // trust who spoke, never where the sender may speak or what it may emit: every
+    // other delivery law (sender life, the seal, the ordinary grant, routing)
+    // still applies unchanged.
     //
-    // The `*_as` forms are the verified doors (the WeaveBus and a trusted
-    // host bridging a connection use them; the sender is stamped from the
-    // caller's authority, never from a payload). A refusal queues NOTHING and
-    // is visible on the tap as `RoleAuthorshipDenied` — never downgraded to
-    // personal speech. The Bus-inherited root forms below them refuse always:
-    // a root has no identity and holds no office.
+    // The `*_as` forms are the verified doors (the sender is stamped from the
+    // caller's authority, never from a payload). A refusal queues NOTHING and is
+    // visible on the tap as `RoleAuthorshipDenied` — never downgraded to personal
+    // speech. The Bus-inherited root forms below them refuse always: a root has no
+    // identity and holds no office.
+    // MSG-07, MSG-04; docs/laws/messaging-laws.md
+    // docs/reference/messaging.md#office-authorship-role-authored-provenance
 
     /// Verified office-authored direct send. Invalid Ticket = authorship
     /// refused, nothing queued (the refusal is on the tap and in the journal).
@@ -582,65 +548,44 @@ public:
     void stop() noexcept { stop_requested_ = true; }
 
     /// DISPATCH EXACTLY WHAT WAS ALREADY QUEUED, THEN GIVE THE CALLER BACK
-    /// CONTROL (R2E-0). Returns how many were dispatched.
+    /// CONTROL. Returns how many were dispatched.
     ///
-    /// THE bounded turn, and the one an event-loop host wants. `pump()` drains to
-    /// empty, which is the right contract for a host that owns its turn — and the
-    /// wrong one for a host composing Loom with another event loop. A perpetual
-    /// service (a repeating Timer re-arms itself inside its own handler) means the
-    /// queue never becomes empty, so a drain-to-empty pump never returns and the
-    /// outer loop never polls its sockets again. `pump()` is untouched; every
-    /// existing caller keeps exactly the semantics it had.
+    /// THE bounded turn, and the one an event-loop host wants: `pump()` drains to
+    /// empty, so a perpetual service (a repeating Timer re-arms inside its own
+    /// handler) means it never returns and the outer loop never polls again.
     ///
-    /// A NUMERIC BUDGET WAS TRIED FIRST AND WITHDRAWN. `pump_bounded(n)` needed
-    /// the host to pick `n` — and picking it well means knowing the producer's
-    /// rate: too small throttles a busy bus to `n` per turn, too large is
-    /// drain-to-empty again and the starvation returns. The Codex Rule Garden
-    /// demonstrated both halves of that trap with a real Zengine Timer —
-    /// `pump_bounded(64)` made its live round-trip 17x slower — and no consumer
-    /// ever wanted the number. It is not public API; the count survives only as
-    /// this function's private implementation detail.
+    /// THE BOUND IS `pending()` AT ENTRY, and it deliberately takes no number.
+    /// Work a handler enqueues DURING this call lands behind that snapshot and
+    /// waits for the next turn — which is exactly what a self-re-arming producer
+    /// cannot get around. A count from the queue rather than a clock, so it stays
+    /// deterministic; the boundary lands between two envelopes, so FIFO is exact;
+    /// and a busy bus still clears its whole backlog in one turn.
     ///
-    /// This one needs no number. The bound is `pending()` **at entry** — a fact
-    /// about the queue, not a guess about the producer:
-    /// - **work a handler enqueues during this call is NOT dispatched now.** It
-    ///   lands behind the snapshot and waits for the next turn, which is exactly
-    ///   what makes a self-re-arming producer (a repeating Timer enqueues its
-    ///   next Drive before returning) unable to hold the turn open;
-    /// - **still deterministic.** A count taken from the queue, never a clock;
-    ///   two runs of the same program dispatch the same deliveries in the same
-    ///   turns;
-    /// - **still FIFO-exact.** The boundary lands between two envelopes, where
-    ///   `pump()` would already have been;
-    /// - **adaptive without being unbounded.** A busy bus drains its backlog in
-    ///   one turn instead of `size/n` turns, and the turn is still finite.
+    /// DO NOT ADD A NUMERIC BUDGET. `pump_bounded(n)` shipped and was withdrawn:
+    /// sizing `n` means knowing the producer's rate, and with a real Zengine Timer
+    /// 64 throttled a live round-trip 17x while a value large enough not to
+    /// throttle was drain-to-empty with the starvation back. The count survives
+    /// only as this function's private implementation.
+    /// MSG-09; docs/laws/messaging-laws.md
     ///
     /// `stop()` ends the turn early here too, and the return value reports what
     /// actually happened. Non-reentrant, like every pump. An empty queue is a
     /// no-op returning 0.
     std::size_t pump_pending();
 
-    // ---- Senses (R2E-0) -----------------------------------------------------
+    // ---- Senses --------------------------------------------------------------
     //
-    // THE LAW: *a Sense is a deliberate immutable claim of the latest observation
-    // a participant has made available. It is read synchronously, carries
-    // truthful authorship, predicts nothing about queued work, and shares no
-    // memory with the claimant.*
+    // A Sense is a deliberate immutable claim of the latest observation a
+    // participant has made available: read synchronously, truthfully authored,
+    // predicting nothing about queued work, sharing no memory with the claimant.
     //
-    // VISIBILITY / SETTLEMENT, exactly: **a claim becomes visible at the
-    // successful claim call.** Nothing defers it to handler completion and there
-    // is no settlement step to forget. That rule is chosen because it is the
-    // smallest one that is also indistinguishable from the alternative: dispatch
-    // is single-threaded and non-reentrant (MSG-01), so no other participant can
-    // run between a claim call and the end of the handler that made it. The only
-    // observer that can tell "at the call" from "at handler completion" is the
-    // claimant observing its own claim.
-    //
-    // WHAT THAT BUYS THE ORDERING WITNESS: a reader delivered BEFORE the
-    // state-changing message observes the previous claim; a reader delivered
-    // AFTER it observes the new one. The repository never reorders causality
-    // because it never participates in it, and Loom never applies queued work
-    // speculatively to make a claim look current.
+    // VISIBILITY IS AT THE SUCCESSFUL CLAIM CALL. Nothing defers it to handler
+    // completion, so there is no settlement step to forget — and the simpler rule
+    // costs nothing, because dispatch is single-threaded and non-reentrant
+    // (MSG-01): no other participant can run between a claim call and the end of
+    // the handler that made it, so only the claimant observing itself could ever
+    // tell the two rules apart.
+    // SENSE-01, SENSE-02; docs/laws/sense-laws.md
 
     /// CLAIM `value` AS `claimant`, PERSONALLY (host/root door; the gated weave
     /// path is `claim_as`). The key is (claimant, shape) — a personal claim is
@@ -666,15 +611,14 @@ public:
 
     /// THE LATEST CLAIM MADE AS THE OFFICE `role`, gated by `reader`'s grant.
     ///
-    /// ROLE MOVEMENT NEVER REWRITES HISTORY. After a replacement moves the role,
-    /// this still returns the predecessor's claim — stamped `author=predecessor`,
-    /// `office=role`, `office_holder_is_current=false`. It is NOT relabelled as
-    /// the successor's, and the successor is NOT considered to have claimed
-    /// anything until it deliberately does. Returning nothing instead was the
-    /// rejected alternative: it would collapse "this office has never claimed"
-    /// and "this office's claim is the previous holder's" into one empty answer,
-    /// and those are different facts. A reader wanting the stricter reading
-    /// writes `if (r && r.by.office_holder_is_current)`.
+    /// ROLE MOVEMENT NEVER REWRITES HISTORY: after a replacement moves the role
+    /// this still returns the PREDECESSOR's claim, stamped
+    /// `office_holder_is_current=false` rather than relabelled or withheld.
+    /// Returning nothing was the rejected alternative — it collapses "this office
+    /// has never claimed" and "this office's claim is the previous holder's" into
+    /// one empty answer. A reader wanting the strict view writes
+    /// `if (r && r.by.office_holder_is_current)`.
+    /// SENSE-03; docs/laws/sense-laws.md
     SenseReading observe_office_as(WeaveId reader, std::string_view role,
                                    std::string_view shape_name,
                                    std::uint32_t shape_version) const;
@@ -712,22 +656,21 @@ public:
     }
 
     /// RECORD A REJECTION THAT HAPPENED AT A BOUNDARY THIS LOOM OWNS BUT THE BUS
-    /// NEVER SAW (R2E-0). The dynamic seam admits a loaded weave's bytes
-    /// host-side *before* routing; when that fails, nothing is queued, so no
-    /// delivery-time refusal can report it and the sender's shim is
-    /// fire-and-forget. Without this, the rejection was observable nowhere at all
-    /// — while the comparable native failure refused loudly.
+    /// NEVER SAW. The dynamic seam admits a loaded weave's bytes host-side
+    /// *before* routing, so when that fails nothing is queued and no
+    /// delivery-time refusal can report it.
     ///
-    /// It is a DIAGNOSTIC, and deliberately nothing else:
-    /// - it gets a seq, a journal slot and a tap event, exactly like `refuse_now`,
-    ///   so a seam rejection reads at the same altitude as a capability refusal;
-    /// - it carries the CLAIMED (name, version) — the shape could not be
-    ///   resolved, so there is no schema object to name;
-    /// - `target` is the invalid id wherever the emission named no target. Nothing
-    ///   is manufactured: a publication has no target, and a role is a slot that
-    ///   is resolved at a delivery which never happened;
-    /// - it creates no answer provenance, no delivery, and no sender-visible
-    ///   future. Send fate remains the separate seam it was.
+    /// A DIAGNOSTIC, and deliberately nothing else: a seq, a journal slot and a
+    /// tap event, exactly like `refuse_now`, so a seam rejection reads at the same
+    /// altitude as a capability refusal — but no answer provenance, no delivery,
+    /// and no sender-visible future.
+    ///
+    /// It carries the CLAIMED (name, version), since the shape could not be
+    /// resolved and there is no schema object to name; and `target` stays the
+    /// invalid id wherever the emission named none. MANUFACTURE NOTHING HERE — a
+    /// publication has no target, and a role is a slot resolved at a delivery that
+    /// never happened; inventing one would replace silence with a fiction.
+    /// MSG-08; docs/laws/messaging-laws.md
     ///
     /// Callable by the host (holding a `Switchboard&` is already root authority)
     /// because the Kernel's seam callbacks are the only intended caller and they
@@ -756,7 +699,7 @@ public:
     /// never touches a live read today; published and pinned, like kMaxRelayPending.
     static constexpr std::size_t kJournalCapacity = 1024;
 
-    /// How many unfinished conversations one Loom will hold at once (R2B-2).
+    /// How many unfinished conversations one Loom will hold at once.
     ///
     /// BOUNDED AND PUBLISHED, like the journal above and for the same reason: a
     /// deferred answer is host-side state a WEAVE asks for, so an unbounded one
@@ -779,7 +722,7 @@ public:
     std::string snapshot_bytes(WeaveId id) const;
 
     /// SEAL a weave: it becomes a prepared candidate outside the live world,
-    /// able to converse only with `coordinator` (R2B-3).
+    /// able to converse only with `coordinator` (PR-01; docs/laws/replacement-laws.md).
     ///
     /// Host/root authority, like `kill` and `unregister_weave`. Refuses if the
     /// weave holds a role — a candidate with a public role is a contradiction, and
@@ -808,48 +751,35 @@ public:
     /// Which role this weave holds right now — empty if none, or if there is no
     /// such weave. The same fact as `role_holder` read from the other end.
     ///
-    /// IT EXISTS SO NOBODY HAS TO CACHE IT (R2B-3b-3a). A host that binds a role
-    /// at registration used to be the only thing that could move one, so hosts
-    /// remembered what they bound. Admission changed that: a prepared replacement
-    /// committing — or a direct `admit_candidate` — moves a role with no host call
-    /// at all, and a remembered answer becomes a lie the moment it does. Read-only
-    /// and derived from the same table routing binds, so it cannot drift from it.
+    /// IT EXISTS SO NOBODY HAS TO CACHE IT. A prepared replacement committing —
+    /// or a direct `admit_candidate` — moves a role with NO host call at all, so a
+    /// host that remembers what it bound at registration is holding an answer that
+    /// becomes a lie the moment an admission lands. Read-only and derived from the
+    /// same table routing binds, so it cannot drift from it.
     std::string role_of(WeaveId id) const;
 
-    /// THE COMMIT. One operation, one visible change (R2B-3).
+    /// THE COMMIT. One operation, one visible change.
     ///
     /// Unseals `candidate` and moves `role` from `incumbent` to it. Everything an
     /// ordinary observer could notice — the candidate becoming reachable, the role
-    /// changing hands, the incumbent ceasing to hold it — happens here, between two
-    /// deliveries, so no pump can run in the middle of it. That is the atomic
-    /// visibility boundary this phase needed, and it is a property of the
-    /// single-threaded queue rather than a lock: `pump()` dispatches one envelope
-    /// at a time and is non-reentrant, so a commit performed outside `deliver_one`
-    /// (or wholly within one handler) cannot be observed half-done.
+    /// changing hands, the incumbent ceasing to hold it — happens between two
+    /// deliveries, so no pump can run in the middle of it. That atomicity is a
+    /// property of the single-threaded queue rather than a lock (MSG-01): `pump()`
+    /// dispatches one envelope at a time and is non-reentrant, so a commit
+    /// performed outside `deliver_one` (or wholly within one handler) cannot be
+    /// observed half-done.
     ///
     /// Refuses — changing NOTHING — if the candidate is not sealed, if either
     /// weave is missing or dead, or if the role is held by anyone other than the
     /// incumbent. A refused commit is observationally identical to no commit.
     bool commit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role);
 
-    /// THE ADMISSION (R2B-3b, completed in R2B-3d): the commit above, extended to
-    /// account for the incumbent and for activation — and SCHEDULED, not
-    /// performed.
+    /// THE ADMISSION: the commit above, extended to account for the incumbent and
+    /// for activation — and SCHEDULED, not performed.
     ///
     ///     Entering the world and being told that you entered it are one event.
     ///
-    /// R2B-3b made the activation the candidate's first live delivery. It could
-    /// not make it a CERTAIN one: the activation was queued as an ordinary gated
-    /// send stamped as the coordinator, so the topology moved here and the
-    /// message was authorized later — against a grant, a sender life and a seal
-    /// that the commit had already stopped being able to guarantee. A coordinator
-    /// without an ordinary `zen.Activated` grant therefore committed perfectly
-    /// successfully and its candidate was refused its own first breath: publicly
-    /// the service, never told it was alive.
-    ///
-    /// So the two halves stopped being two things. This call now writes ONE
-    /// envelope which IS the admission and IS the activation, and there is no
-    /// representable state in which one of them happened:
+    /// ONE ENVELOPE IS BOTH, so no state exists in which only one happened:
     ///
     ///   at this call      validate everything; prove the candidate can receive
     ///                     this exact activation; place the envelope. Topology
@@ -860,58 +790,51 @@ public:
     ///                     its activation, in the same dispatch, with nothing
     ///                     whatever in between.
     ///
-    /// PLACEMENT IS UNCHANGED, and it is why the ordering law survives. Role
-    /// resolution happens at delivery, so a role-addressed message queued before
-    /// this call would otherwise reach the candidate before its activation. The
-    /// envelope goes immediately ahead of the first queued envelope that could
-    /// reach this candidate (one addressed to the committed role, or to the
-    /// candidate directly) — the narrowest placement that makes activation the
-    /// candidate's first live delivery while leaving every other message's order
-    /// untouched. Nothing is dropped. And because the topology now moves at that
-    /// same point rather than here, traffic queued AHEAD of it still resolves to
-    /// the incumbent, which is the truthful answer for a message enqueued while
-    /// the incumbent was the service.
+    /// PLACEMENT: immediately ahead of the first queued envelope that could reach
+    /// this candidate (addressed to the committed role, or to the candidate
+    /// directly). Role resolution is a DELIVERY-time decision, so a tail append
+    /// would let production reach a weave not yet told it is alive. This is the
+    /// narrowest placement that prevents that; nothing is dropped, and traffic
+    /// queued ahead still resolves to the incumbent, which is the truthful answer
+    /// for a message enqueued while the incumbent was the service.
+    /// PR-05; docs/laws/replacement-laws.md
     ///
     /// THE ORDINARY GRANT IS NOT CONSULTED, and that is a law rather than an
     /// omission: a committed activation is not the coordinator's speech. It is
-    /// Loom's own act, authorized by the `LifecycleAuthority` presented here and
-    /// performed by Loom as part of the admission. The coordinator's id is
-    /// stamped as the OPERATOR IDENTITY the consumer's lineage rule needs — a
-    /// description of who admitted, not a claim about who is speaking. Nothing
-    /// widens for ordinary messages: `announce_lifecycle` is still a send, still
-    /// gated, still grant-checked, and an ordinary `zen.Activated` from a weave
-    /// still needs the grant and still carries no attestation.
+    /// Loom's own act, authorized by the `LifecycleAuthority` presented here. The
+    /// coordinator's id is stamped as the OPERATOR IDENTITY a consumer's lineage
+    /// rule needs — who admitted, not who is speaking. Nothing widens for
+    /// ordinary messages: `announce_lifecycle` is still a send, still gated,
+    /// still grant-checked, and an ordinary `zen.Activated` from a weave still
+    /// needs the grant and still carries no attestation.
+    /// PR-08, LIFE-05; docs/reference/prepared-replacement.md#admission
     ///
     /// Refuses — queueing nothing and changing NOTHING — on any failed
     /// precondition, including a candidate that cannot receive the activation.
-    /// THE OWNER MUST STILL BE THE OWNER (R2B-3b-1a), here and again at dispatch.
-    /// The seal records an exact coordinator life and incarnation; admission
-    /// verifies that the participant standing at that address today IS that one.
-    /// A trusted host caller holding a perfectly good lifecycle authority still
-    /// cannot admit a candidate whose coordinator died and revived, was reloaded
-    /// into new code, or was removed — because the preparation belonged to a
-    /// life, and that life is over.
-    ///
-    /// The activation's own sender-life stamp is taken from the VERIFIED owner
-    /// record rather than from a fresh lookup of the coordinator id, so it can
-    /// never describe a successor.
+    /// THE OWNER MUST STILL BE THE OWNER, here and again at dispatch: a trusted
+    /// host caller holding a perfectly good lifecycle authority still cannot admit
+    /// a candidate whose coordinator died and revived, was reloaded, or was
+    /// removed, because the preparation belonged to a LIFE and that life is over.
+    /// The activation's sender-life stamp is taken from the VERIFIED owner record
+    /// rather than a fresh lookup, so it can never describe a successor (PR-03).
     AdmitResult admit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role,
                                 const LifecycleAuthority& authority, Message activation,
                                 std::int64_t sequence);
 
-    // ---- Prepared replacement (R2B-3b-2) -----------------------------------
-    //
-    // THE TRANSACTION LIVES HERE, and the reason is question 4 of the phase's own
-    // investigation: this is the only place that sees every transition that can
-    // invalidate a participant. `kill` announces Died and `swap_state` announces
-    // Revived — but `unregister_weave` announces NOTHING, so a registry living
-    // anywhere else and watching events would silently miss permanent removal.
-    // Inline notification from the transitions themselves needs no observer
-    // framework and exposes no transaction policy to any weave.
+    // ---- Prepared replacement ------------------------------------------------
     //
     //     A replacement transaction belongs to exact lives, advances through one
     //     finite state machine, and either commits once or disappears without
     //     disturbing the incumbent.
+    //
+    // THE TRANSACTION LIVES HERE because this is the only place that sees EVERY
+    // transition that can invalidate a participant. `kill` announces Died and
+    // `swap_state` announces Revived, but `unregister_weave` announces NOTHING —
+    // so a registry living anywhere else and watching events would silently miss
+    // permanent removal. Do not move it to an observer: inline notification from
+    // the transitions themselves needs no framework and exposes no transaction
+    // policy to any weave.
+    // PR-02; docs/laws/replacement-laws.md
 
     /// How many prepared replacements may be in flight at once. Small on purpose:
     /// this is an operator-driven lifecycle act, not a workload.
@@ -936,24 +859,22 @@ public:
     /// with PreparationExhausted.
     TxnResult tick_preparation(TxnId id);
 
-    // ---- the preparation conversation (R2B-3b-3) ---------------------------
+    // ---- the preparation conversation ----------------------------------------
     //
     //     A transaction becomes ready only when the exact sealed candidate
     //     authentically answers the exact preparation request that belongs to
     //     that transaction.
     //
-    // R2B-3b-2 shipped `mark_candidate_ready` as named trusted scaffolding: a
-    // host call that ASSERTED readiness so the state machine could be proven
-    // before the conversation existed. It is gone. What replaces it is not a
-    // second door onto the same transition but the only one — the transition is
-    // now private, and the only expression that reaches it is the acceptance of a
-    // real answer.
+    // There is NO host door that simply asserts readiness. `mark_candidate_ready`
+    // was withdrawn: the transition into `Ready` is private, and the acceptance of
+    // a real answer is the only expression that reaches it. Do not add a second.
     //
     // The two halves below are deliberately asymmetric. Opening the conversation
     // is HOST authority (the transaction layer already is: begin, tick, commit and
     // abort all live here). Closing it is not authority at all — it is the
     // consumption of the candidate's own attested speech, and every fact it rests
     // on is one the bus stamped rather than one a caller supplied.
+    // PR-04; docs/laws/replacement-laws.md
 
     /// Open this transaction's ONE readiness conversation: deliver `ask` to the
     /// bound candidate AS the bound coordinator, through the sealed
@@ -993,18 +914,16 @@ public:
     /// `admit_candidate` — which remains the SOLE admission mutation. The
     /// transaction layer never moves a role itself.
     ///
-    /// IT NO LONGER RETURNS `Committed` (R2B-3d). `admit_candidate` schedules,
-    /// so on success this transaction becomes `AdmissionPending` and the caller
-    /// is told the admission is scheduled — never that it happened. The
-    /// transaction terminalizes `Committed` inside the admission dispatch, after
-    /// the topology has actually moved and the candidate's activation is
-    /// guaranteed; if the world drifts first it terminalizes `Aborted` with
-    /// `AdmissionRefused` and the incumbent is still the service.
-    ///
-    /// Reporting `Committed` here would be the exact over-report this phase
-    /// exists to remove: the old code returned ok and left an ordinary delivery
-    /// check to decide, afterwards, whether the successor was ever told it was
-    /// alive.
+    /// IT DOES NOT RETURN `Committed`, and must not be made to. `admit_candidate`
+    /// schedules, so on success this transaction becomes `AdmissionPending` and
+    /// the caller is told the admission is scheduled — never that it happened.
+    /// `Committed` is terminalized inside the admission dispatch, after topology
+    /// has actually moved and the activation is guaranteed; if the world drifts
+    /// first it terminalizes `Aborted` with `AdmissionRefused` and the incumbent
+    /// is still the service. Reporting success here would be an over-report: it
+    /// would leave a later delivery check to decide whether the successor was ever
+    /// told it was alive.
+    /// PR-07; docs/laws/replacement-laws.md
     TxnResult commit_prepared_replacement(TxnId id, const LifecycleAuthority& authority,
                                           Message activation, std::int64_t sequence);
 
@@ -1021,7 +940,7 @@ public:
     /// a successor inherits no result, exactly as it inherits no conversation.
     bool take_outcome(WeaveId op, TxnOutcome& out);
 
-    /// The same law, narrowed to EXACTLY one transaction (R2B-4a). The store is
+    /// The same law, narrowed to EXACTLY one transaction. The store is
     /// per-operator and may hold several results at once; a caller bound to one
     /// transaction — the host authoring handle — must not consume a sibling's.
     /// Same exact-operator binding, same consume-once; only the question narrows.
@@ -1030,10 +949,11 @@ public:
     /// Mark a Weave dead; it stops receiving deliveries until revived. Emits Died.
     ///
     /// THIS IS THE DEATH TRANSITION, and committing it ends every unfinished
-    /// deferred conversation that weave was a party to (R2B-2a) — before `Died` is
+    /// deferred conversation that weave was a party to — before `Died` is
     /// announced, so an observer of the death sees those conversations already
     /// over. Revival, last-known-good fallback and quarantine therefore all begin
     /// from the same place: no inherited answer rights.
+    /// ANS-04; docs/laws/answer-authority-laws.md
     void kill(WeaveId id);
 
     /// Revive a Weave from candidate bytes: parse -> admit(Unverified, state
@@ -1077,13 +997,13 @@ private:
         WeaveId id{};
         std::unique_ptr<Weave> weave;
         std::vector<std::shared_ptr<const Schema>> accept;
-        /// THE DECLARED CLAIM-SET (R2E-0) — the Senses this weave says it can
+        /// THE DECLARED CLAIM-SET — the Senses this weave says it can
         /// claim. Recorded at registration (and re-read on a code swap, since the
         /// successor's contract is its own), registered so the shapes resolve and
         /// are discoverable, and checked by both claim doors.
         std::vector<std::shared_ptr<const Schema>> claims;
         std::shared_ptr<const Schema> state_schema;
-        /// WHY THE THREE LISTS ABOVE STILL RESOLVE (BL-0). One live claim on the
+        /// WHY THE THREE LISTS ABOVE STILL RESOLVE (LIFE-08). One live claim on the
         /// union of this weave's accept-set, claim-set and state shape. It is
         /// acquired as a single transaction at registration, re-acquired on a
         /// code swap, and released by the destruction of this record — which is
@@ -1102,14 +1022,12 @@ private:
         /// code behind a STABLE id, so only this distinguishes that successor from
         /// the incarnation that earned a deferred answer.
         ///
-        /// Bumped in `swap_state` — and ONLY there. Corrected in R2B-2a, where the
-        /// original claim ("wherever the bus commits new code") was read as covering
-        /// `reload()` too: it does not, and never did. `reload()` is crash REVIVAL
-        /// of the same code, so it advances nothing here; what ends the
-        /// conversations of a life that ended is `abandon_deferred_for` at `kill`.
+        /// BUMPED IN `swap_state`, AND ONLY THERE. `reload()` is crash REVIVAL of
+        /// the same code, so it advances nothing here; what ends the conversations
+        /// of a life that ended is `abandon_deferred_for` at `kill`.
         std::uint64_t incarnation = 1;
-        /// WHICH LIFE this id currently is — one continuous period of being alive
-        /// (R2B-2b). Advanced on every dead -> alive transition, and NOWHERE else.
+        /// WHICH LIFE this id currently is — one continuous period of being alive.
+        /// Advanced on every dead -> alive transition, and NOWHERE else.
         ///
         /// A SECOND FIELD, DELIBERATELY, because one cannot carry both concepts:
         ///
@@ -1119,11 +1037,12 @@ private:
         ///                      the same id, whatever the code
         ///
         /// Collapsing them would make a live code reload invalidate speech already
-        /// in the queue — the same weave, still alive, mid-sentence — which is a
-        /// semantic change nobody asked for. They are used where each belongs:
-        /// deferred answers bind to the incarnation, queued envelopes to the life.
+        /// in the queue — the same weave, still alive, mid-sentence. They are used
+        /// where each belongs: deferred answers bind to the incarnation, queued
+        /// envelopes to the life.
+        /// MSG-03, ANS-02; docs/laws/messaging-laws.md
         std::uint64_t life = 1;
-        /// OUTSIDE THE WORLD, AND WHOSE CONVERSATION IT IS (R2B-3). Invalid (0) for
+        /// OUTSIDE THE WORLD, AND WHOSE CONVERSATION IT IS (PR-01). Invalid (0) for
         /// every ordinary weave. When valid, this record is a prepared CANDIDATE:
         /// it is loaded, constructed and real, but it is not a participant. It
         /// receives no publications, no ordinary sends and no role traffic, and it
@@ -1135,19 +1054,14 @@ private:
         CandidateOwner sealed_by{};
         std::string role{}; ///< the role this Weave holds (empty if none); see roles_
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
-        /// AUTHORITY A HOST-MINTED ADMINISTRATOR HAS INSTALLED SINCE (GRANT-0).
+        /// AUTHORITY A HOST-MINTED ADMINISTRATOR HAS INSTALLED SINCE. Empty for
+        /// every weave until a `GrantAuthority` names it, so "a weave gains
+        /// nothing by existing" survives delegation existing.
         ///
-        /// Empty for every weave that has never been administered, which is every
-        /// weave until a `GrantAuthority` names it — so "a weave gains nothing by
-        /// existing" survives delegation existing.
-        ///
-        /// AN OVERLAY BESIDE `grant`, NOT AN EDIT TO IT, and the three reasons are
-        /// each load-bearing:
+        /// AN OVERLAY BESIDE `grant`, NOT AN EDIT TO IT. Do not collapse the two:
         ///
         ///   TRUTH        `grant` still says exactly what the host said at
-        ///                admission, forever. "Authority entered at admission" did
-        ///                not become a lie; it became half a sentence, and the
-        ///                other half is here.
+        ///                admission, forever.
         ///   SAFETY       `Grant` also carries containment policy already consumed
         ///                into a child's namespace/cgroup. A mutable `grant` would
         ///                be an API shaped like it could revisit those. This field
@@ -1158,18 +1072,15 @@ private:
         ///                check.
         ///
         /// Effective authority is the UNION of the two, computed at every delivery
-        /// by `effective_permits*` and by nothing else. It is scoped to the
-        /// WeaveId, exactly as `grant` is: it survives a code swap and a revival
-        /// for the same reason the baseline does — the same mounted subject — and
-        /// it is destroyed with this record, so a departed subject's delegated
-        /// rights cannot outlive it or land on anyone else.
-        ///
-        /// VALUE-INITIALIZED HERE rather than at the one registration site, so
-        /// "a newly mounted weave holds no delegated authority" is a property of
-        /// the type instead of a line somebody has to remember to write. A
-        /// future construction path starts at the floor without being told to.
+        /// by `effective_permits*` and by nothing else. Scoped to the WeaveId
+        /// exactly as `grant` is, so it survives a code swap and a revival and is
+        /// destroyed with this record. VALUE-INITIALIZED here rather than at the
+        /// registration site, so the empty floor is a property of the type instead
+        /// of a line somebody has to remember to write.
+        /// GATE-05; docs/reference/capabilities.md#live-delegation-grant-0
         LiveAuthority delegated{};
-        /// WHY THE SHAPES A DELEGATED RULE NAMES STILL RESOLVE (BL-0, LIFE-08).
+        /// WHY THE SHAPES A DELEGATED RULE NAMES STILL RESOLVE (LIFE-08).
+        /// docs/laws/lifecycle-laws.md
         ///
         /// A grant's named send rules take a registry claim at registration, so a
         /// producer authorized for a shape keeps that shape meaning something even
@@ -1196,21 +1107,20 @@ private:
         std::uint64_t incarnation = 0;
     };
 
-    /// THE ADMISSION AN ENVELOPE *IS* (R2B-3d) — present on exactly one envelope
-    /// per admission, and on nothing else in the system.
+    /// THE ADMISSION AN ENVELOPE *IS* — present on exactly one envelope per
+    /// admission, and on nothing else in the system.
     ///
-    /// This is the narrow private primitive the phase needed, and it is a FIELD
-    /// rather than a second queue or a scheduler because the thing being
+    /// A FIELD rather than a second queue or a scheduler, because what is being
     /// scheduled is not "an action, and then a message": it is one delivery whose
-    /// dispatch happens to move production topology first. Making them one object
-    /// is what makes "publicly admitted but never activated" unrepresentable —
-    /// there is nothing to drop, nothing to reorder, and no second step that
-    /// could be refused on its own.
+    /// dispatch happens to move production topology first. One object is what
+    /// makes "publicly admitted but never activated" unrepresentable — nothing to
+    /// drop, nothing to reorder, no second step that could be refused alone.
     ///
     /// Every participant is a full `ParticipantRef`/`CandidateOwner`, so a queued
     /// admission that outlives its world cannot land on a successor: an id is
     /// never reused, and a life or an incarnation that moved is a different
     /// participant at the same address.
+    /// PR-08; docs/laws/replacement-laws.md
     struct PendingAdmission {
         bool present = false;
         ParticipantRef candidate{};
@@ -1231,68 +1141,63 @@ private:
         std::uint64_t seq = 0;
         bool gated = false;  ///< true => Weave-originated; authorize against the sender's grant
         std::string role{};  ///< non-empty => role-targeted; resolved to a holder at delivery
-        /// WHICH LIFE AUTHORED THIS (R2B-2b). Stamped by the bus at enqueue from
-        /// the sender's current life, compared against the sender's life at
-        /// delivery. Meaningful only when `gated` — a host/root send belongs to no
-        /// weave life, and 0 there means "not weave speech", not a magic life.
+        /// WHICH LIFE AUTHORED THIS. Stamped by the bus at enqueue from the
+        /// sender's current life, compared against the sender's life at delivery.
+        /// Meaningful only when `gated` — a host/root send belongs to no weave
+        /// life, and 0 there means "not weave speech", not a magic life.
         ///
-        /// IT LIVES ON THE ENVELOPE AND NOT ON `Message`, which is the whole point:
-        /// `Envelope` is private to the Switchboard and has no wire form, no
-        /// schema, and no constructor a weave can reach. So there is nothing for a
-        /// weave to read, copy, forge or replay — a hoarded `Message` re-sent later
-        /// is stamped afresh with its *re-sender's* life, because the stamp was
-        /// never part of what it hoarded.
+        /// IT LIVES ON THE ENVELOPE AND NOT ON `Message`, which is the whole
+        /// point: `Envelope` is private to the Switchboard, with no wire form, no
+        /// schema and no constructor a weave can reach — so a hoarded `Message`
+        /// re-sent later is stamped afresh with its *re-sender's* life, because the
+        /// stamp was never part of what it hoarded (MSG-03).
         std::uint64_t sender_life = 0;
-        /// WHICH REQUESTER THIS ANSWER IS FOR (R2B-2c). Present only on envelopes
-        /// queued through an answer door — `answer_as` and `spend_deferred_as` —
-        /// and absent on every ordinary send, because ordinary messages are
-        /// deliberately addressed to a logical destination and should reach
-        /// whoever legitimately occupies it at delivery. An authenticated answer
-        /// is not that: its meaning already names one exact conversation between
-        /// exact participants, so it names them here too.
+        /// WHICH REQUESTER THIS ANSWER IS FOR. Present only on envelopes queued
+        /// through an answer door — `answer_as` and `spend_deferred_as` — and
+        /// absent on every ordinary send, because an ordinary message is addressed
+        /// to a logical destination and should reach whoever legitimately occupies
+        /// it at delivery. An authenticated answer already names one exact
+        /// conversation between exact participants, so it names them here (ANS-03).
         ///
         /// LAST, and deliberately: every ordinary enqueue brace-initializes this
         /// struct up to `sender_life` and stops, so an ordinary send cannot carry a
         /// target expectation even by accident. Only `enqueue_answer` sets it.
         AnswerTarget answer_target{};
-        /// WHICH PREPARATION ASK THIS IS — or, on an answer, which one it answers
-        /// (R2B-3b-3). Invalid on every other envelope in the system.
+        /// WHICH PREPARATION ASK THIS IS — or, on an answer, which one it answers.
+        /// Invalid on every other envelope in the system.
         ///
-        /// THE REASON THIS EXISTS RATHER THAN A CORRELATION COMPARISON. A
-        /// correlation is a number a sender chooses; Loom minting one for the
-        /// preparation ask makes it unique but not unforgeable, because any sender
-        /// may put any number on any message. So a transaction that believed a
-        /// matching correlation would be believing that the candidate answered
-        /// *some* question numbered N — not that it answered THE ask. Today the
-        /// gap is only a coordinator's capacity to confuse itself; the moment a
+        /// IT EXISTS RATHER THAN A CORRELATION COMPARISON because a correlation is
+        /// a number a sender chooses. Loom minting one makes it unique, not
+        /// unforgeable: any sender may put any number on any message, so believing
+        /// a matching correlation would be believing the candidate answered *some*
+        /// question numbered N, not that it answered THE ask. Today that gap is
+        /// only a coordinator's capacity to confuse itself; the moment a
         /// coordinator is an untrusted loaded weave it becomes the ability to
         /// declare readiness by asking the candidate anything at all.
         ///
-        /// It rides the same rails `answer_target` does, for the same reason: it
-        /// lives on the bus-private envelope, has no wire form, no schema and no
-        /// constructor a weave can reach, so there is nothing to read, copy or
-        /// replay. It is carried from the ask into the delivery's reply authority
-        /// (and a deferred record), and back out through the one answer door.
+        /// It rides `answer_target`'s rails for `answer_target`'s reason: bus-
+        /// private, no wire form, nothing to read, copy or replay. Carried from the
+        /// ask into the delivery's reply authority (and a deferred record), and
+        /// back out through the one answer door.
+        /// PR-04, ANS-05; docs/laws/replacement-laws.md
         TxnId preparation{};
-        /// WHAT THIS DELIVERY *DOES* BEFORE IT IS DELIVERED (R2B-3d). Set by
-        /// exactly one caller — `admit_candidate` — and absent on every other
-        /// envelope in the system, so no ordinary enqueue path can move
-        /// production topology even by accident. LAST, like `answer_target` and
-        /// for the same reason: every ordinary enqueue brace-initializes this
-        /// struct and stops before it.
+        /// WHAT THIS DELIVERY *DOES* BEFORE IT IS DELIVERED. Set by exactly one
+        /// caller — `admit_candidate` — and absent on every other envelope, so no
+        /// ordinary enqueue path can move production topology even by accident.
+        /// LAST, like `answer_target` and for the same reason: every ordinary
+        /// enqueue brace-initializes this struct and stops before it.
         PendingAdmission admission{};
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
     /// a time, and gone the moment that delivery returns.
     ///
-    /// This is the narrowest V1 the law allows, and the narrowness is the design
-    /// rather than a corner cut: *a reply authority belongs to one delivered
-    /// request between two exact incarnations and authorizes at most one matching
-    /// response.* Because it lives and dies with the handler, every question a
-    /// longer-lived token would owe an answer to is answered by construction —
-    /// it cannot be stored, named, passed, replayed, reused for another request,
-    /// or survive either participant's death, reload, or the role changing hands,
+    /// The narrowness IS the design, not a corner cut: *a reply authority belongs
+    /// to one delivered request between two exact incarnations and authorizes at
+    /// most one matching response.* Because it lives and dies with the handler,
+    /// every question a longer-lived token would owe an answer to is answered by
+    /// construction — it cannot be stored, named, passed, replayed, reused, or
+    /// survive either participant's death, reload, or the role changing hands,
     /// because there is nothing to survive. A weave that wants to answer later
     /// answers ordinarily, and its answer is ordinary — which is the truth.
     ///
@@ -1300,9 +1205,10 @@ private:
     /// is single-threaded and non-reentrant, so "the current delivery" is a real
     /// singular thing the bus can name. Holding it here means the authority is
     /// checked against WHO IS BEING DISPATCHED, not merely against who is asking
-    /// — so a WeaveBus that outlived its delivery (already undefined behaviour,
-    /// and outside this phase's threat altitude) finds the authority of a
-    /// different delivery and is refused, instead of quietly borrowing it.
+    /// — so a WeaveBus that outlived its delivery (already undefined behaviour)
+    /// finds a different delivery's authority and is refused, instead of quietly
+    /// borrowing it.
+    /// ANS-01; docs/laws/answer-authority-laws.md
     struct ReplyAuthority {
         WeaveId requester{};           ///< the request's stamped sender: the only legal recipient
         std::uint64_t correlation = 0; ///< the request's own: the answer may not choose it
@@ -1312,14 +1218,14 @@ private:
         /// WHICH conversation it refused instead of naming an unrelated schema.
         std::shared_ptr<const Schema> shape{};
         /// WHO ASKED, captured AT DELIVERY of the request rather than recomputed
-        /// when an answer is eventually produced (R2B-2c). Recomputing later would
-        /// mean an answer silently retargets itself onto whatever the requester
-        /// has become — which is the entire failure this phase exists to prevent.
+        /// when an answer is eventually produced. Recomputing later would mean an
+        /// answer silently retargets itself onto whatever the requester has since
+        /// become, which is exactly the failure this expectation exists to prevent.
         /// Both answer doors read the requester's identity from here, so there is
         /// one capture point and no drift between the immediate and deferred paths.
         std::uint64_t requester_life = 0;
         std::uint64_t requester_incarnation = 0;
-        /// The preparation ask this delivery IS, if it is one (R2B-3b-3) — so the
+        /// The preparation ask this delivery IS, if it is one — so the
         /// answer it authorizes can carry the same fact back out. Invalid for
         /// every ordinary delivery, which is every delivery but one per
         /// transaction.
@@ -1404,7 +1310,7 @@ private:
                         Provenance provenance = Provenance{});
     std::size_t fanout(Message msg, bool gated, Provenance provenance = Provenance{});
 
-    /// THE ONE MEMBERSHIP QUESTION every office-authorship door asks (R2D-0):
+    /// THE ONE MEMBERSHIP QUESTION every office-authorship door asks (MSG-07):
     /// does `as_sender` hold `as_role` right now, at the moment it deliberately
     /// asks to speak as it? True iff the role is bound and its holder is exactly
     /// this sender. It reads the same table routing binds — no cache, no copy.
@@ -1425,7 +1331,7 @@ private:
     Ticket announce_as(WeaveId as_sender, const LifecycleAuthority& authority, WeaveId target,
                        Message msg, std::int64_t sequence);
 
-    // ---- live authority administration (GRANT-0) -----------------------------
+    // ---- live authority administration (GATE-05) -----------------------------
 
     /// THE ONE WRITE PATH for a subject's delegated live authority.
     ///
@@ -1446,7 +1352,7 @@ private:
     /// The read half, through the same capability and with the same scope.
     AuthorityView describe_authority_as(WeaveId caller, const GrantAuthority& authority) const;
 
-    // ---- deferred answers (R2B-2) -------------------------------------------
+    // ---- deferred answers (ANS-02) -------------------------------------------
 
     /// ONE UNFINISHED CONVERSATION, held by the bus.
     ///
@@ -1461,20 +1367,20 @@ private:
         std::uint64_t token = 0; ///< 0 = a free slot
         WeaveId requester{};
         std::uint64_t requester_incarnation = 0;
-        /// The requester's LIFE at the moment it asked (R2B-2c). The incarnation
+        /// The requester's LIFE at the moment it asked. The incarnation
         /// above distinguishes replaced code behind a stable id; this
         /// distinguishes a different life behind it.
         std::uint64_t requester_life = 0;
         WeaveId respondent{};
         std::uint64_t respondent_incarnation = 0;
         std::uint64_t correlation = 0;
-        /// The preparation ask this retained right answers, if any (R2B-3b-3).
+        /// The preparation ask this retained right answers, if any.
         /// Carried so a DEFERRED readiness proves exactly what an immediate one
         /// proves — one definition of readiness, not two.
         TxnId preparation{};
     };
 
-    /// The ONE door every authenticated answer leaves by (R2B-2c).
+    /// The ONE door every authenticated answer leaves by (ANS-03).
     ///
     /// Both `answer_as` and `spend_deferred_as` funnel through here, so the
     /// target expectation, the provenance and the recipient are decided in a
@@ -1507,7 +1413,7 @@ private:
     /// Drop every unfinished conversation `id` is a party to, in either direction
     /// and at ANY incarnation, unconditionally.
     ///
-    /// THE QUESTION HERE IS THE END OF A LIFE (R2B-2a), and staleness cannot ask
+    /// THE QUESTION HERE IS THE END OF A LIFE (ANS-04), and staleness cannot ask
     /// it: a killed weave keeps its id AND its incarnation, so nothing about the
     /// record looks stale — yet the participant that earned the right is gone.
     /// Called at `kill` (death, which the isolation supervisor drives on a crashed
@@ -1517,7 +1423,7 @@ private:
     /// the record has already been erased from `weaves_`.
     void abandon_deferred_for(WeaveId id);
 
-    /// The life of this transaction's ONE readiness conversation (R2B-3b-3).
+    /// The life of this transaction's ONE readiness conversation.
     /// Three named states rather than two flags or an inference from a zero
     /// correlation: "nobody has asked yet" and "the answer has been spent" are
     /// different facts, and a transaction that confuses them would accept a
@@ -1528,7 +1434,7 @@ private:
     /// from the absence of a field: the state is a state, and the reason is a
     /// reason.
     ///
-    /// DISTINCT from the public `loom::PreparedReplacement` (R2B-4a) — that is a
+    /// DISTINCT from the public `loom::PreparedReplacement` — that is a
     /// host-side authoring HANDLE that composes this class's public primitives;
     /// this is the bus-private RECORD those primitives act on. Same concept,
     /// deliberately two scopes: a weave can never see this one.
@@ -1542,7 +1448,7 @@ private:
         TxnState state = TxnState::Preparing;
         std::uint32_t budget = 0;
         TxnReason reason = TxnReason::None;
-        /// WHAT A LATER ANSWER MUST PROVE IT IS (R2B-3b-3), kept privately here
+        /// WHAT A LATER ANSWER MUST PROVE IT IS, kept privately here
         /// and nowhere a weave can read it. It is not a secret — a correlation
         /// travels on the wire and the candidate necessarily learns it — which is
         /// exactly why knowing it authorizes nothing. What makes it useful is that
@@ -1559,15 +1465,14 @@ private:
     PreparedReplacement* find_txn(TxnId id);
     const PreparedReplacement* find_txn(TxnId id) const;
 
-    /// THE ONE STATE TRANSITION INTO `Ready`, and it is private (R2B-3b-3).
+    /// THE ONE STATE TRANSITION INTO `Ready`, and it is private — reachable from
+    /// exactly one expression in the system: the acceptance of an authenticated
+    /// answer that has already proven whose it is. Keep it that way.
     ///
-    /// This is what `mark_candidate_ready` became. It was public trusted
-    /// scaffolding — a host could simply declare a transaction ready — and it is
-    /// now reachable from exactly one expression in the system: the acceptance of
-    /// an authenticated answer that has already proven whose it is. The checks it
-    /// still makes are the ones about the WORLD (is the candidate still sealed to
-    /// this coordinator, is the incumbent still the role holder); the checks about
-    /// the SPEAKER live in the caller, where the delivery is.
+    /// The checks it still makes are the ones about the WORLD (is the candidate
+    /// still sealed to this coordinator, is the incumbent still the role holder);
+    /// the checks about the SPEAKER live in the caller, where the delivery is.
+    /// PR-04; docs/laws/replacement-laws.md
     TxnResult accept_authenticated_readiness(PreparedReplacement& txn);
 
     /// Did the transaction this id names simply end, rather than never exist?
@@ -1587,7 +1492,7 @@ private:
 
     /// Advance `rec`'s life generation iff it is currently dead — i.e. iff the
     /// caller is about to bring it back. Called by every revival path before it
-    /// marks the record alive (R2B-2b).
+    /// marks the record alive.
     void begin_new_life(WeaveRecord& rec);
 
     DeferredRecord* find_deferred(std::uint64_t token);
@@ -1610,7 +1515,7 @@ private:
     /// bounded turn Loom offers; this is just how it counts.
     std::size_t dispatch_at_most(std::size_t budget);
 
-    /// DISPATCH AN ADMISSION (R2B-3d) — the whole of it, in one queue turn.
+    /// DISPATCH AN ADMISSION — the whole of it, in one queue turn.
     ///
     /// Revalidate; prove the activation deliverable by admitting it through the
     /// candidate's own gate; move the topology; terminalize the transaction; hand
@@ -1624,6 +1529,7 @@ private:
     ///
     /// A refusal is recorded and emitted like any other refused delivery, with
     /// `AdmissionRevoked`, and changes nothing at all.
+    /// PR-08; docs/laws/replacement-laws.md
     void deliver_admission(Envelope env);
 
     /// Can `candidate` receive exactly this activation? Answers the recipient's
@@ -1641,14 +1547,13 @@ private:
                                    const ParticipantRef& incumbent, const CandidateOwner& owner,
                                    const std::string& role) const;
 
-    /// THE ONE ADMISSION PRIMITIVE (R2B-3d), plus the one fact the public door has
-    /// no business knowing: which transaction, if any, this admission is ending.
+    /// THE ONE ADMISSION PRIMITIVE, plus the one fact the public door has no
+    /// business knowing: which transaction, if any, this admission is ending.
     ///
     /// `admit_candidate` is this with no transaction; `commit_prepared_replacement`
-    /// is this with one. There is no second path and no second set of checks, which
-    /// is what keeps direct and transaction admission from ever diverging — the
-    /// question the phase had to answer, since fixing only the transaction would
-    /// have left the direct primitive able to reach the old split-brain state.
+    /// is this with one. THERE IS NO SECOND PATH AND NO SECOND SET OF CHECKS —
+    /// which is the only thing keeping direct and transaction admission from
+    /// diverging. A fix applied to one of them alone leaves the other reachable.
     AdmitResult schedule_admission(WeaveId candidate, WeaveId incumbent, const std::string& role,
                                    const LifecycleAuthority& authority, Message activation,
                                    std::int64_t sequence, TxnId txn);
@@ -1656,7 +1561,7 @@ private:
     void emit(const BusEvent& event);
     void record(std::uint64_t seq, Disposition disposition, const Refusal& refusal);
 
-    // ---- the latest-claim repository (R2E-0) --------------------------------
+    // ---- the latest-claim repository ----------------------------------------
     //
     // TWO KEY SPACES, DELIBERATELY. A personal claim is keyed by the claimant's
     // WeaveId; an office claim is keyed by the role name. They are separate maps
@@ -1740,16 +1645,14 @@ private:
     std::vector<JournalSlot> journal_; ///< ring of the last kJournalCapacity outcomes, by seq % cap
     std::uint64_t next_seq_ = 1;
 
-    /// THE TAP LIST, HELD BY SHARED POINTER (STF-1).
-    ///
-    /// The indirection buys exactly one thing, and it is a lifetime: an observer
-    /// is allowed to remove itself while it is being notified, and erasing the
-    /// vector element would destroy the `std::function` whose body is still
-    /// running. `emit()` holds a strong reference for the length of each call,
-    /// so the callable outlives the registration that named it.
-    ///
-    /// One allocation per `add_observer` — a registration, not a hot path — in
+    /// THE TAP LIST, HELD BY SHARED POINTER — and the indirection buys exactly one
+    /// thing, a lifetime. An observer may remove itself while it is being
+    /// notified, and erasing the vector element would destroy the `std::function`
+    /// whose body is still running. `emit()` holds a strong reference for the
+    /// length of each call, so the callable outlives the registration that named
+    /// it. One allocation per `add_observer` — a registration, not a hot path — in
     /// exchange for none per notification.
+    /// MSG-11; docs/laws/messaging-laws.md
     std::vector<std::pair<ObserverId, std::shared_ptr<Observer>>> observers_;
     ObserverId next_observer_id_ = 1;
 
@@ -1760,22 +1663,20 @@ private:
     /// Mint the capability that lets trusted infrastructure attach Loom's
     /// lifecycle attestation.
     ///
-    /// PRIVATE AND NON-STATIC, and both halves are load-bearing. Non-static
-    /// means minting requires the Switchboard ITSELF — the host's own object —
-    /// and a weave never holds one; it is handed a `Bus&`, which has no such
-    /// member. That is the boundary this codebase already draws between `send`
-    /// (root) and `send_as`, and lifecycle minting belongs on the same side of
-    /// it. Private means even code holding a Switchboard must come through the
-    /// one named host-wiring function below rather than helping itself.
+    /// PRIVATE AND NON-STATIC, and both halves are load-bearing — DO NOT RELAX
+    /// EITHER. Non-static means minting requires the Switchboard ITSELF, the
+    /// host's own object, which a weave never holds (it is handed a `Bus&`, with
+    /// no such member). Private means even code holding a Switchboard must come
+    /// through the one named host-wiring function below rather than helping
+    /// itself. As a public static — which it once was — any weave could write
+    /// `Switchboard::lifecycle_authority()` from anywhere, with no instance and no
+    /// host involvement, and manufacture a lifecycle fact for another incarnation;
+    /// a private constructor behind a reachable factory protects nothing.
     ///
-    /// R2B-1 shipped this as a PUBLIC STATIC, which was no boundary at all: any
-    /// weave could write `Switchboard::lifecycle_authority()` from anywhere,
-    /// with no instance and no host involvement, and — given an exact grant for
-    /// `zen.Activated` — manufacture a lifecycle fact for another incarnation.
-    /// A private constructor behind a reachable factory protects nothing.
-    /// R2B-1b: the authority carries WHICH board issued it. Minting from any
-    /// board is still legal — anyone may own a Switchboard — but the result is
-    /// only spendable through the board it names.
+    /// The authority also carries WHICH board issued it. Minting from any board
+    /// stays legal — anyone may own a Switchboard — but the result is spendable
+    /// only through the board it names.
+    /// LIFE-04; docs/laws/lifecycle-laws.md
     LifecycleAuthority lifecycle_authority() noexcept { return LifecycleAuthority{identity_}; }
 
     /// Was this authority issued by THIS Loom, and is that Loom still alive?
@@ -1797,7 +1698,7 @@ private:
     friend LifecycleAuthority host_lifecycle_authority(Switchboard& bus);
 
     /// Mint the right to administer ONE subject's delegated live authority, up to
-    /// `ceiling` and no further (GRANT-0). Private, behind the one host-wiring
+    /// `ceiling` and no further (GATE-05). Private, behind the one host-wiring
     /// function below, for the reason lifecycle minting is: a weave holds a `Bus&`
     /// and there is no `Switchboard&` in its hands to reach this with.
     ///
@@ -1833,16 +1734,15 @@ private:
     std::shared_ptr<const LoomIdentity> identity_;
 
     /// WHAT THE DELIVERY BEING DISPATCHED *IS* — the facts Loom stamped on it,
-    /// held for the length of the handler and gone when it returns (R2B-3b-3).
+    /// held for the length of the handler and gone when it returns.
     ///
     /// A SECOND STRUCT ALONGSIDE `ReplyAuthority`, deliberately, even though two
-    /// of its three fields are today assigned from the same expressions. They
-    /// answer opposite questions: `ReplyAuthority` is *the right to speak next*
-    /// and is SPENT by exercising it; this is *what was just heard* and is spent
-    /// by nothing. Reading readiness out of a half-consumed reply authority would
-    /// be the "two nearly-identical things either side of a registry" shape this
-    /// file already warns about — and it would silently stop working the day a
-    /// coordinator answers the answer.
+    /// of its three fields are today assigned from the same expressions. DO NOT
+    /// MERGE THEM: they answer opposite questions. `ReplyAuthority` is *the right
+    /// to speak next* and is SPENT by exercising it; this is *what was just heard*
+    /// and is spent by nothing. Reading readiness out of a half-consumed reply
+    /// authority would silently stop working the day a coordinator answers the
+    /// answer.
     struct DeliveryFacts {
         /// Loom's own word that this is THE authorized answer to a request the
         /// recipient sent. Read from the envelope's provenance, which no enqueue
@@ -1869,7 +1769,7 @@ private:
     ReplyAuthority authority_{};
     DeliveryFacts delivery_{};
 
-    // ---- scoped bookkeeping across a callback Loom did not write (STF-1) -----
+    // ---- scoped bookkeeping across a callback Loom did not write --------------
     //
     // Loom calls two kinds of foreign code: a native `Weave::handle`, and a host
     // observer. Either may throw, and the exception is the HOST'S to handle —
@@ -1878,10 +1778,11 @@ private:
     // exception leaves, so an escaped throw costs the host that one delivery and
     // not the bus.
     //
-    // Guards rather than an assignment after the call, because "after the call"
-    // is only one of the exit paths. `stop_requested_` deliberately has no guard:
-    // it is re-initialised at the top of every dispatch turn, so it cannot carry
+    // GUARDS RATHER THAN AN ASSIGNMENT AFTER THE CALL, because "after the call" is
+    // only one of the exit paths. `stop_requested_` deliberately has no guard: it
+    // is re-initialised at the top of every dispatch turn, so it cannot carry
     // anything across one.
+    // MSG-10; docs/laws/messaging-laws.md
 
     /// Hold `in_dispatch_` for the length of a dispatch turn. Restores the value
     /// it found rather than a constant, so the guard states the invariant it
@@ -1908,7 +1809,7 @@ private:
     /// alone, and dispatch is non-reentrant, so there is never an outer delivery
     /// to hand them back to. Each site still ASSIGNS the fields itself — the
     /// ordinary path mints a reply authority, an admission deliberately mints
-    /// none (R2B-3d-1) — and the guard is only responsible for the end.
+    /// none — and the guard is only responsible for the end.
     class DeliveryScope {
     public:
         explicit DeliveryScope(Switchboard& sb) noexcept : sb_(sb) {}
@@ -1924,13 +1825,6 @@ private:
         Switchboard& sb_;
     };
     std::vector<DeferredRecord> deferred_;      ///< bounded; see kMaxDeferredAnswers
-    /// Monotonic; a token is never reused. DELIBERATELY UNGUARDED against
-    /// exhaustion, unlike the activation sequence, and the difference is the
-    /// reason: that one is PERSISTED and revived from state bytes, so a caller can
-    /// hand it a large value and it must refuse rather than wrap. This one is
-    /// process-local, never serialized, never revived, and advances by exactly one
-    /// per deferral — so 2^64 is not a number an adversary can approach, only one a
-    /// process can outlive by any measure.
     /// Bounded, and small. Slots are reclaimed the moment a transaction ends.
     std::vector<PreparedReplacement> txns_;
     std::vector<TxnOutcome> outcomes_;      ///< bounded; oldest dropped
@@ -1943,6 +1837,13 @@ private:
     /// from the delivery seq so a correlation never doubles as a queue position.
     std::uint64_t next_preparation_correlation_ = 1;
 
+    /// Monotonic; a token is never reused. DELIBERATELY UNGUARDED against
+    /// exhaustion, unlike the activation sequence, and the difference is the
+    /// reason: that one is PERSISTED and revived from state bytes, so a caller can
+    /// hand it a large value and it must refuse rather than wrap. This one is
+    /// process-local, never serialized, never revived, and advances by exactly one
+    /// per deferral — so 2^64 is not a number an adversary can approach, only one a
+    /// process can outlive by any measure.
     std::uint64_t next_deferred_token_ = 1;
 };
 

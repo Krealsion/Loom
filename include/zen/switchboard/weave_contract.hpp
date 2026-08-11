@@ -60,7 +60,7 @@ public:
     /// that passed the gate).
     virtual void revive(const Value& state) = 0;
 
-    /// THE SENSES THIS WEAVE DECLARES IT CAN CLAIM (R2E-0) — its claim-set.
+    /// THE SENSES THIS WEAVE DECLARES IT CAN CLAIM (SENSE-04) — its claim-set.
     /// Consulted at registration: each schema is registered (so the shape
     /// resolves and is discoverable BEFORE any runtime claim), and the set is
     /// what `claim` is checked against, so a weave cannot claim a shape it never
