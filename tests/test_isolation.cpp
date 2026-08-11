@@ -439,7 +439,11 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     // Granted Network: no netns is imposed, so the child is in this process's own
     // network namespace and the endpoint above is genuinely its 127.0.0.1 too. The
     // same probe, the same port, one grant apart.
-    std::int64_t granted_code = -1; // sentinel: never a value the probe can report
+    // The sentinel must not be 0, because 0 is now the PASS value — a sentinel that
+    // equals the expected answer would let "no result arrived" read as success. The
+    // probe reports 0, a positive errno, or -1 (its errno-less fallback), so -2 is
+    // outside its whole range.
+    std::int64_t granted_code = -2;
     Registered rec2 = register_probe(bus, {netresult_schema()});
     rec2.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
         granted_code = in.payload.get("code")->as_int();
