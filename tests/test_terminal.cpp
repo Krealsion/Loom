@@ -1069,6 +1069,38 @@ TEST_CASE("receiving authors nothing: the terminal's handler has no send in it")
     CHECK(c.tap.size() == events); // pumping a settled bus produces nothing new
 }
 
+TEST_CASE("a presentation's snapshots outlive the participant they came from") {
+    Cast c;
+    REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1,
+                                      {bare(std::string("hi"))})));
+    c.bus.pump();
+    c.bus.send(c.session.id, Message(notice("kept")));
+    c.bus.pump();
+
+    // BY VALUE, deliberately: a pane must be able to render what it read without holding a
+    // reference into a ring buffer that eviction — or the participant's death — will move.
+    TerminalDesk desk(c.acting(), c.op());
+    const std::vector<DeskEntry> chronology = desk.chronology();
+    const std::vector<TranscriptEntry> entries = c.acting().transcript().entries();
+    const std::optional<ReceivedMessage> kept =
+        c.acting().received(c.acting().transcript().last_received_id());
+    REQUIRE(kept);
+
+    // The host ends the participant. Its delegated authority dies with it, and a WeaveId is
+    // never reused, so nothing can inherit either.
+    std::unique_ptr<Weave> gone = c.bus.unregister_weave(c.session.id);
+    REQUIRE(gone != nullptr);
+    gone.reset();
+    c.bus.pump();
+
+    CHECK_FALSE(chronology.empty());
+    CHECK_FALSE(entries.empty());
+    CHECK(kept->value.get("text")->as_text() == "kept");
+    CHECK(std::any_of(entries.begin(), entries.end(), [](const TranscriptEntry& e) {
+        return e.kind == TranscriptKind::AnswerReceived;
+    }));
+}
+
 TEST_CASE("an unattached participant authors nothing and says why") {
     TerminalSession lonely("nobody", session_vocabulary());
     CHECK_FALSE(lonely.attached());
