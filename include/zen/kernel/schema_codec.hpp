@@ -93,7 +93,7 @@ inline std::shared_ptr<const Schema> manifest_schema() {
     // List<Pos> + a Pos field) and the gap refused its load. Optional, so a
     // flat manifest stays lean. Each bump — never mutation — keeps the
     // invariant that a published (name, version) is a frozen shape.
-    // v4 (R2E-0) adds the optional `claims` list: the SENSES this weave declares
+    // v4 adds the optional `claims` list: the SENSES this weave declares
     // it can claim. It rides the manifest rather than a second descriptor entry
     // because it is the same kind of fact as the accept-set — part of what this
     // weave's contract IS — so one manifest still means one decode and one gate
@@ -358,7 +358,7 @@ inline void decode_referenced(const Value& manifest, Registry& deps) {
     }
 }
 
-/// The same decode, taking a LIVE CLAIM instead of publishing forever (BL-0):
+/// The same decode, taking a LIVE CLAIM instead of publishing forever (LIFE-08):
 /// the components resolve while `scope` lives and stop resolving when the last
 /// claim on them goes.
 ///

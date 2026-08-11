@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE HANDOFF GARDEN (R2E-0) — how one incarnation deliberately becomes another.
+// THE HANDOFF GARDEN — how one incarnation deliberately becomes another.
+// HANDOFF-01..03; docs/laws/handoff-laws.md · docs/reference/handoff.md
 //
 // THE CLAIM UNDER TEST, and it is a claim about what Loom does NOT need:
 //
@@ -12,7 +13,7 @@
 //     versioned, refusable, attributable migrator.
 //
 // Every case below is written to break that claim if it is false. Nothing in
-// this file calls an API that R2E-0 added for continuity, because R2E-0 added
+// this file calls an API added for continuity, because nothing was added
 // none: the substrate calls are all PR-era, and what is new is the PATTERN.
 //
 // The standing law is unchanged and is re-proven here rather than assumed:
