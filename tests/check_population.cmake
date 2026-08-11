@@ -113,7 +113,13 @@ if(NOT EXISTS "${zen_lane}")
         "AGENTS.md names it as the lane a result is quoted from.")
 endif()
 file(READ "${zen_lane}" zen_lane_text)
-if(NOT zen_lane_text MATCHES "zen_check_entry_population\\(")
+# COMMENTS ARE STRIPPED FIRST, and that is the difference between a tripwire and a
+# decoration. The lane's own prose explains the call by name several times over; matching
+# the raw text would have been satisfied by commenting the call out, which is the cheapest
+# way to remove it and the one a regression is most likely to take. Only whole-line comments
+# are removed, so no string literal can be truncated.
+string(REGEX REPLACE "\n[ \t]*#[^\n]*" "\n" zen_lane_code "\n${zen_lane_text}")
+if(NOT zen_lane_code MATCHES "zen_check_entry_population\\(")
     message(FATAL_ERROR
         "population: ${zen_lane} no longer calls zen_check_entry_population(), so the "
         "official lane has stopped checking WHICH CTest entries it registered -- it would "
