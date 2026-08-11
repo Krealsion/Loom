@@ -98,9 +98,11 @@ set(manifest_suites "")   # every suite named, in file order
 
 # A suite may carry MORE THAN ONE row, and its floor is the sum of the rows whose gate is
 # active. That is how a conditional subpopulation INSIDE a suite gets modelled explicitly
-# rather than hidden under a slack floor: `bridge` is 17 cases everywhere plus 8 more where
-# the posix gate is on, so the contract reads 17 on Windows and 25 on Linux and neither
-# number has any give in it. A suite is present if any of its rows' gates are active.
+# rather than hidden under a slack floor: a suite that is smaller on Windows says so with a
+# second row instead of buying portability with a floor that has downward slack on Linux.
+# The worked examples, with their values, are in suite_population.txt beside the rows they
+# describe -- one place, so the numbers cannot drift apart from the contract they explain.
+# A suite is present if any of its rows' gates are active.
 foreach(line IN LISTS manifest_lines)
     string(REGEX REPLACE "#.*$" "" line "${line}")
     string(REPLACE "\t" " " line "${line}")

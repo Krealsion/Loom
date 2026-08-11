@@ -432,6 +432,31 @@ domain meaning, rather than one that needs any monotonic integer.
 Notably, Senses did **not** add a third: a claim's `revision` is minted by Loom
 per key and never passed in by a caller, so it created no synthetic counter.
 
+## Leak checking stops at the sandbox boundary
+
+**Status: KNOWN SEAM — current, and easy to over-read in the other direction.**
+
+The sanitizer lane (`-DZEN_SANITIZE=ON`) instruments the host process, and its
+leak checking covers the host process. It does **not** cover the sandboxed
+children: LeakSanitizer cannot introspect a process inside the restricted view,
+because the view mounts no `/proc` for it to read. The isolation suite's runs
+print `LeakSanitizer has encountered a fatal error` and
+`Can't open /proc/<pid>/task for reading` for exactly that reason — LSan failing
+to run, not a leak it found (BL-VER-08 measured this against an untouched case,
+so it is a property of the boundary and not of any one change).
+
+The distinction that matters: **child-side leak checking is ABSENT, not clean.**
+A run with no leak report says nothing about the children, so "the sanitizer
+lane is green" must never be quoted as leak coverage for weave-host code. ASan's
+*memory-error* checking is unaffected — it is compiled in and reports from
+inside the child — and so is every UBSan check.
+
+Deliberately not solved. Mounting `/proc` into the view to satisfy LSan would
+widen the containment the suite exists to prove, which is a worse trade than
+the missing coverage ([capabilities](capabilities.md)); the sanitizer lane is
+not weakened to hide the messages either. What would earn a fix is a leak
+question about child-side code that the host-side lane genuinely cannot reach.
+
 ## Deferred-with-intent (the standing trigger map)
 
 Certain triggers (hooks left deliberately): **weaver identity** (first
