@@ -22,6 +22,8 @@ Harness: [`tests/CMakeLists.txt`](../../tests/CMakeLists.txt) ·
 [`tests/doctest_main.cpp`](../../tests/doctest_main.cpp) ·
 [`tests/suite_population.txt`](../../tests/suite_population.txt) ·
 [`tests/check_population.cmake`](../../tests/check_population.cmake) ·
+[`tests/entry_population.txt`](../../tests/entry_population.txt) ·
+[`tests/check_entry_population.cmake`](../../tests/check_entry_population.cmake) ·
 [`tests/verify.cmake`](../../tests/verify.cmake) ·
 [`tests/enforcement_gate.hpp`](../../tests/enforcement_gate.hpp) ·
 [`tests/weave_population.cmake`](../../tests/weave_population.cmake) ·
@@ -62,6 +64,14 @@ MEANS
   vanished (and therefore registers nothing that could fail) is still caught;
 - the official lane `tests/verify.cmake` refuses a selector that matched zero CTest
   entries, and passes `--no-tests=error` so CTest refuses it too;
+- **the entries themselves are a declared population, not only the suites** (VOLATILE-2a).
+  `tests/entry_population.txt` names the CTest entries that are not suites — the population
+  checks, the empty-population witnesses, the weave-artifact checks, the documentation-link
+  check, the aggregate runner — with the gate each rides; the expected set is that union
+  with the gate-resolved suites, and the lane compares it to `ctest -N` **by name, both
+  directions**. Until it existed, deleting one `add_test` left the lane registering one
+  fewer entry, running everything that remained, and reporting green at the smaller number
+  — including for the entries whose whole job is to notice absences;
 - **in Zengine, the same four sentences with its own nouns** (C4): every runtime suite links
   `Zengine/tests/doctest_main.cpp`, so a filter matching nothing exits **70** saying `EMPTY
   TEST POPULATION`; `Zengine/tests/test_population.txt` pins the exact CTest-entry inventory
@@ -80,7 +90,15 @@ DOES NOT MEAN
   other's evidence;
 - that the population check may live inside the population. Both repositories' official
   lanes are scripts run *outside* CTest for exactly that reason: a check registered as a
-  CTest entry stops asking its question the moment that entry is the thing deleted;
+  CTest entry stops asking its question the moment that entry is the thing deleted. The
+  Loom's entry inventory is the sharpest case — it is what notices a deleted entry, so it
+  could not be one — and it is placed on the lane's critical path, owning the count and the
+  zero-refusal, so deleting the call leaves a lane with no answer rather than a smaller
+  green;
+- that a lane can defend itself against an edit to itself. It cannot, and the arrangement
+  says so rather than implying otherwise: the entry inventory keeps the `population` entry
+  registered, and the `population` entry requires the lane to still call the inventory, so
+  neither goes alone — but two coordinated deletions still escape;
 - that every platform runs identical suites. Gates are real (see POP-03);
 - that CTest's own global semantics changed. `ctest -R <nothing>` still exits 0 for
   anyone who runs it bare; the project-owned lane is what refuses it;
@@ -112,11 +130,16 @@ MEANS
   `ZEN_ENFORCEMENT_DOMAIN`, which each suite's translation unit must define before
   including the gate — there is no default, so a new enforcement suite is a compile
   error until it names its own population;
-- the expected populations are `isolation == 17` and `policy == 11`, identical in a
-  dedicated run and in the aggregate `all` lane, and each is written at exactly one
-  place — the `ZEN_ENFORCEMENT_POPULATION(...)` call closing that suite;
-- exact, not `>=`: a missing witness fails, and a *new* witness is a deliberate edit
-  to the expected number;
+- the `isolation` and `policy` suites each expect an exact number of executed
+  OS-enforcement proofs, identical in a dedicated run and in the aggregate `all` lane, and
+  each number is written at exactly one place — the `ZEN_ENFORCEMENT_POPULATION(...)` call
+  closing that suite. Read the value there; no document holds a second copy of it, because
+  a second copy is what goes stale while the enforced one moves;
+- exact, not `>=`: **both directions cost something on purpose.** A missing witness fails,
+  and so does an unannounced extra one — adding an OS-enforcement proof means editing the
+  owning declaration, which is the correct price for a population that is small,
+  security-relevant and intentionally stable. That is the opposite of the suite case floors
+  below, and the difference is the point rather than an inconsistency;
 - **in Zengine, the counting unit is the binary rather than the suite** (C4): its five
   runtime surfaces are five separate executables with no `TEST_SUITE` declarations, so each
   floor is read out of that surface's own `--count` and no other surface's growth can cover

@@ -63,13 +63,31 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   measured baseline. Adding cases is free; deleting one crosses its floor. Adding
   or renaming a *suite* needs a line here — deliberately. Enforced by the
   `population` CTest entry (query-mode only; it runs no cases).
-- **OS-enforcement tallies are per suite and EXACT**: `isolation == 17`,
-  `policy == 11`, the same in a dedicated run and in `all`. Those two numbers
-  are owned by the `ZEN_ENFORCEMENT_POPULATION(...)` call at the end of
-  `tests/test_isolation.cpp` and `tests/test_policy.cpp` — read them there
-  rather than from prose. A new enforcement proof means updating the expected
-  number on purpose. A suite that includes `tests/enforcement_gate.hpp` must
-  `#define ZEN_ENFORCEMENT_DOMAIN` first.
+- **`tests/entry_population.txt`** is the same idea one layer out, for the CTest
+  entries that are **not** suites — `population`, the two empty-population
+  witnesses, `weave_contract`, `weave_population`, `doc_links`, `all`. Expected
+  set = the suites declared for the active gates **∪** these; compared to
+  `ctest -N` by name, both directions (declared-and-missing is a red, and so is
+  registered-and-undeclared). Same four gates, one taxonomy. Adding a CTest entry
+  of any kind is a line in one of the two files, and which file says what kind of
+  thing it is.
+- **The entry inventory runs in `tests/verify.cmake`, not as a CTest entry**, and
+  it cannot be: an entry that has been deleted cannot complain about its own
+  deletion. It sits on the lane's critical path — it owns the count and the
+  zero-refusal — so removing the call leaves a lane with no answer rather than a
+  lane that quietly runs less. The other half of the lock is that the
+  `population` entry reads the lane and fails if it has stopped calling the
+  inventory. Neither can be deleted alone. Two coordinated deletions still
+  escape; a file cannot be defended against an edit to itself.
+- **OS-enforcement tallies are per suite and EXACT, not floors.** `isolation`
+  and `policy` each expect an exact count of executed enforcement proofs, the
+  same in a dedicated run and in `all`. Exact cuts both ways deliberately: a
+  missing witness fails, and so does an unannounced extra one, so adding an
+  enforcement proof means editing the expected number on purpose. Each number is
+  owned by the `ZEN_ENFORCEMENT_POPULATION(...)` call at the end of
+  `tests/test_isolation.cpp` and `tests/test_policy.cpp` — read the value there;
+  it is deliberately not written down anywhere else. A suite that includes
+  `tests/enforcement_gate.hpp` must `#define ZEN_ENFORCEMENT_DOMAIN` first.
 - **`ZEN_ALLOW_UNENFORCEABLE=1` / `ZEN_REQUIRE_ENFORCEMENT=0` prove nothing about
   containment.** They convert missing enforcement into marked-degraded skips so a
   host that cannot enforce can still run the rest; the coverage case then prints
