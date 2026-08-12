@@ -10,11 +10,15 @@
 // TUI, the terminal, and the tests — shares ONE copy; a divergent lexer would mean the smoke
 // test proves the wrong parser. No terminal/rendering dependency: pure string -> data.
 //
-// It depends on the COMPOSER, not on the console: the Arg/Ref/FieldValue
-// vocabulary belongs to <zen/terminal/composer.hpp>, and a terminal frontend needs this
-// lexing without needing a console engine, a tap, or a Switchboard.
+// It depends on the COMPOSER and on the PARTICIPANT SURFACE, not on the console: the
+// Arg/Ref/FieldValue vocabulary belongs to <zen/terminal/composer.hpp> and `Address` to
+// <zen/terminal/session.hpp>, and a terminal frontend needs this lexing without needing a
+// console engine, a tap, or a Switchboard. Neither include brings one: `Address` is a plain
+// value type with three named constructors, and the session header holds no Switchboard
+// either (that is host wiring, in <zen/host/terminal_wiring.hpp>).
 
 #include <zen/terminal/composer.hpp>
+#include <zen/terminal/session.hpp>
 
 #include <cstdint>
 #include <string>
@@ -62,7 +66,21 @@ inline std::vector<Token> tokenize(const std::string& line) {
     return out;
 }
 
+/// A WHOLE UNSIGNED DECIMAL NUMBER, or a refusal.
+///
+/// IT REFUSES A SIGN, and that is a repair rather than a nicety (WT-1). `std::stoull` accepts
+/// a leading `-` and returns the WRAPPED value, so `-1` parsed as 18446744073709551615 and
+/// every caller believed it: `#-1` addressed a weave that cannot exist, and `await -1` was
+/// eighteen quintillion turns of the host loop. A `std::uint64_t` has no way to SAY negative,
+/// so the only honest answer to one is no -- and refusing is the safe direction to move a
+/// parser every frontend already tests the bool of.
+///
+/// `is_int` / `is_float` below deliberately keep their signs. A VALUE may be negative; a
+/// count, a version and a weave id may not, and that is the whole difference.
 inline bool parse_u64(const std::string& s, std::uint64_t& out) {
+    if (s.empty() || s[0] < '0' || s[0] > '9') {
+        return false; // a sign, a space, or anything else that is not a digit
+    }
     try {
         std::size_t pos = 0;
         const unsigned long long v = std::stoull(s, &pos);
@@ -126,6 +144,37 @@ inline std::variant<FieldValue, Ref> lex_value(const std::string& s, bool quoted
         }
     }
     return FieldValue{s}; // quoted, or a non-numeric bareword -> Text
+}
+
+/// WHERE A TYPED LINE IS ADDRESSED — `#12` one weave, `@office` whichever weave holds it at
+/// delivery, `*` publish. There is deliberately no fourth form and no default: an unaddressed
+/// send is not a mode, it is a mistake, and `Address` itself has no way to spell one.
+///
+/// IT LIVES HERE, BESIDE `lex_arg`, BECAUSE IT IS THE OTHER HALF OF ONE GRAMMAR. A terminal
+/// command line is an address and then values; the value half has been shared by every text
+/// frontend in this tree since TERM-0, while the address half sat in one REPL's anonymous
+/// namespace. A second presentation of the same core -- Zengine's Workshop overlay is the
+/// first -- would then have had to re-author the syntax, and two authors of one grammar is
+/// two grammars: the day `#12` grew a second form, only one of them would learn it.
+///
+/// Returns false for anything else, INCLUDING a bare number: `12` is not an address, because
+/// the sigil is what says which of the three kinds this is, and guessing "probably a weave
+/// id" is exactly the default this vocabulary refuses to have.
+inline bool parse_address(const std::string& text, Address& out) {
+    if (text == "*") {
+        out = Address::to_all();
+        return true;
+    }
+    if (text.size() > 1 && text[0] == '@') {
+        out = Address::to_role(text.substr(1));
+        return true;
+    }
+    std::uint64_t id = 0;
+    if (text.size() > 1 && text[0] == '#' && parse_u64(text.substr(1), id)) {
+        out = Address::to_weave(WeaveId{id});
+        return true;
+    }
+    return false;
 }
 
 /// Lex one token into an Arg: `field=value` is a named arg (the name is a bareword before the

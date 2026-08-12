@@ -27,6 +27,7 @@
 
 #include <zen/host/grant_wiring.hpp>
 #include <zen/host/terminal_wiring.hpp>
+#include <zen/terminal/input_lex.hpp>
 #include <zen/terminal/session.hpp>
 #include <zen/weave.hpp>
 #include <zen/weaver/weaver.hpp>
@@ -474,6 +475,101 @@ TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
               TerminalOutcome::BadAddress);
         CHECK_FALSE(c.acting().awaiting());
     }
+}
+
+// ---- the address GRAMMAR, now shared -----------------------------------------
+
+// One parser, reachable by every presentation of this core (WT-1). It used to live in the
+// REPL's anonymous namespace, where the only way for a second presentation to address a
+// message was to re-author the syntax -- and two authors of one grammar is two grammars.
+// These cases pin the grammar itself, which is what makes the sharing safe to rely on:
+// nothing else in this repository asserts what `#12` means.
+
+TEST_CASE("the address grammar is three sigils, and a bareword is not a fourth") {
+    Address a;
+    SUBCASE("`#N` is one exact weave") {
+        REQUIRE(parse_address("#12", a));
+        CHECK(a.mode == Addressing::Weave);
+        CHECK(a.target.value == 12u);
+        CHECK(a.well_formed());
+    }
+    SUBCASE("`@office` is whoever holds it AT DELIVERY") {
+        REQUIRE(parse_address("@some.service", a));
+        CHECK(a.mode == Addressing::Role);
+        CHECK(a.role == "some.service");
+        CHECK(a.well_formed());
+    }
+    SUBCASE("`*` is every accepter of the shape") {
+        REQUIRE(parse_address("*", a));
+        CHECK(a.mode == Addressing::Publish);
+        CHECK(a.well_formed());
+    }
+    SUBCASE("a bareword is refused rather than guessed at") {
+        // The sigil is what says WHICH KIND this is. `12` could only be an address by this
+        // parser inventing a default, and an unaddressed send is not a mode.
+        CHECK_FALSE(parse_address("12", a));
+        CHECK_FALSE(parse_address("some.service", a));
+        CHECK_FALSE(parse_address("", a));
+    }
+    SUBCASE("a sigil with nothing after it is refused, and so is a non-numeric id") {
+        CHECK_FALSE(parse_address("#", a));
+        CHECK_FALSE(parse_address("@", a));
+        CHECK_FALSE(parse_address("#12x", a));
+        CHECK_FALSE(parse_address("#-1", a));
+        CHECK_FALSE(parse_address("##3", a));
+    }
+    SUBCASE("a refused parse leaves the caller's address exactly as it was") {
+        // The REPL and the Workshop overlay both declare one `Address` and test the bool, so a
+        // parser that half-wrote its out-param on the way to `false` would address the send
+        // somewhere nobody chose.
+        REQUIRE(parse_address("@keepme", a));
+        CHECK_FALSE(parse_address("nonsense", a));
+        CHECK(a.mode == Addressing::Role);
+        CHECK(a.role == "keepme");
+    }
+}
+
+TEST_CASE("a count, a version and a weave id cannot be negative, so the parser says so") {
+    // The repair WT-1's `#-1` case forced. `std::stoull` accepts a leading `-` and WRAPS, so
+    // this parser used to answer `true` with 18446744073709551615 in the out-param -- and every
+    // frontend in this tree believed it: an address to a weave that cannot exist, and `await -1`
+    // as eighteen quintillion turns of the host loop. Refusing is the safe direction, because
+    // each of those call sites already tests the bool.
+    std::uint64_t n = 7;
+    CHECK(parse_u64("0", n));
+    CHECK(n == 0u);
+    CHECK(parse_u64("18446744073709551615", n));
+    CHECK(n == 18446744073709551615ull);
+
+    n = 7;
+    CHECK_FALSE(parse_u64("-1", n));
+    CHECK_FALSE(parse_u64("+1", n));
+    CHECK_FALSE(parse_u64(" 1", n));
+    CHECK_FALSE(parse_u64("", n));
+    CHECK_FALSE(parse_u64("1x", n));
+    CHECK_FALSE(parse_u64("18446744073709551616", n)); // one past what a u64 can hold
+    CHECK(n == 7u);                                    // ...and not one of them wrote anything
+
+    // A VALUE may still be negative -- that is a different question, asked of a different
+    // lexer, and this repair deliberately did not touch it.
+    const std::variant<FieldValue, Ref> v = lex_value("-1", false);
+    REQUIRE(std::holds_alternative<FieldValue>(v));
+    CHECK(std::get<std::int64_t>(std::get<FieldValue>(v)) == -1);
+}
+
+TEST_CASE("the shared address grammar addresses a real send, exactly as a typed line would") {
+    // The grammar and the participant surface, joined: what `parse_address` produced is what
+    // the transcript says the message was addressed to. A parser that agreed with itself and
+    // with nothing else would pass every case above.
+    Cast c;
+    Address to;
+    REQUIRE(parse_address(std::string("@") + kServiceRole, to));
+    REQUIRE(submitted(c.acting().send(to, "Query", 1, {bare(std::string("hi"))})));
+    c.bus.pump();
+    CHECK(c.service->handled_names.size() == 1);
+    const TranscriptEntry e = c.of_kind(c.acting(), TranscriptKind::Submitted).front();
+    CHECK(e.addressing == Addressing::Role);
+    CHECK(e.role == kServiceRole);
 }
 
 // ---- submitted is not delivered ---------------------------------------------
