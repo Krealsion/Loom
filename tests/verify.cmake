@@ -141,6 +141,49 @@ elseif(NOT ZEN_BUILD_CONFIG STREQUAL "")
     set(config_note " in configuration ${cache_build_type}")
 endif()
 
+# ---- ONE configuration authority (QR-1) ------------------------------------------
+#
+# ZEN_CTEST_ARGS is appended to the ctest command below, after the configuration this lane
+# validated. CTest takes the LAST configuration argument it is given -- measured on CTest
+# 4.1.0: `-C Debug -C Release` runs Release, `-C Release -C Debug` runs Debug -- so a
+# configuration smuggled in here would silently replace the validated one. Measured before
+# this guard existed: `-DZEN_BUILD_CONFIG=Debug -DZEN_CTEST_ARGS=-C;Release` reported
+# `PASSED ... in configuration Debug` at exit 0 while every one of the 29 entries ran out of
+# tests/Release/. The lane named one configuration and proved another.
+#
+# Argument ORDER is not the fix. Putting ours last would work only until somebody appended
+# something after it, and it would leave two things able to choose while only one of them is
+# checked. The rule is that there is one authority, so a second one is refused rather than
+# out-ranked -- including when the two agree, because a lane that happens to be right is not
+# the same as a lane that cannot be wrong.
+#
+# The spellings are CTest's own, read out of `ctest --help` rather than guessed:
+#
+#   -C <cfg>              -C is the ONLY option in ctest's -C namespace, so anything
+#                         starting with -C is a configuration argument (the joined -CDebug
+#                         is rejected by ctest itself today; refusing it costs nothing and
+#                         does not depend on that staying true)
+#   --build-config <cfg>
+#   --build-config=<cfg>
+#
+# `--build-config-sample` is a DIFFERENT flag (it belongs to --build-and-test) and is
+# deliberately not caught: this refuses configuration selection, not a flag namespace.
+
+foreach(passthrough IN LISTS ZEN_CTEST_ARGS)
+    if(passthrough MATCHES "^-C"
+       OR passthrough STREQUAL "--build-config"
+       OR passthrough MATCHES "^--build-config=")
+        message(FATAL_ERROR
+            "verify: ZEN_CTEST_ARGS carries '${passthrough}', which selects the CTest "
+            "configuration. ZEN_BUILD_CONFIG owns that choice: this lane validates it "
+            "against the build tree and reports it with every result, and CTest would take "
+            "whichever configuration came last. ZEN_CTEST_ARGS is for arguments that do not "
+            "change WHICH configured artifact is being verified -- parallelism, timeouts, "
+            "output verbosity. Pass the configuration as -DZEN_BUILD_CONFIG=<name> instead. "
+            "This is refused even when the two agree: one authority, not two that happen to.")
+    endif()
+endforeach()
+
 # ---- an opt-out run is not an acceptance run -------------------------------------
 
 set(optout "")
