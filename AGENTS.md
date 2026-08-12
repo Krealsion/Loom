@@ -71,14 +71,20 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   registered-and-undeclared). Same four gates, one taxonomy. Adding a CTest entry
   of any kind is a line in one of the two files, and which file says what kind of
   thing it is.
-- **The entry inventory runs in `tests/verify.cmake`, not as a CTest entry**, and
-  it cannot be: an entry that has been deleted cannot complain about its own
-  deletion. It sits on the lane's critical path — it owns the count and the
-  zero-refusal — so removing the call leaves a lane with no answer rather than a
-  lane that quietly runs less. The other half of the lock is that the
-  `population` entry reads the lane and fails if it has stopped calling the
-  inventory. Neither can be deleted alone. Two coordinated deletions still
-  escape; a file cannot be defended against an edit to itself.
+- **The entry inventory is taken TWICE, by two doors that do not lean on each
+  other** — in `tests/verify.cmake` before the lane runs anything, and inside the
+  `population` entry as part of its own work. One implementation
+  (`tests/check_entry_population.cmake`), one authored expectation, two
+  executions. It cannot be only an entry (a deleted entry cannot complain about
+  its own deletion, so the lane's door is what notices a missing `population`),
+  and it cannot be only the lane (a lane cannot check itself). So that neither
+  door can go missing quietly, the lane's inventory leaves a **receipt** naming
+  the run, the build, the gates and the two identity sets it compared, and the
+  entry — which measures all of that independently — refuses a run that carries
+  the lane's token and shows no matching receipt. One ordinary deletion on either
+  side is red. Removing the lane's call *and* its announcement of itself escapes
+  the doors' notice of each other, and still does not escape the entry's own
+  inventory.
 - **OS-enforcement tallies are per suite and EXACT, not floors.** `isolation`
   and `policy` each expect an exact count of executed enforcement proofs, the
   same in a dedicated run and in `all`. Exact cuts both ways deliberately: a

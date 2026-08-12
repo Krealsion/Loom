@@ -61,26 +61,23 @@ if(NOT optout STREQUAL "")
         "`ctest` directly and read its NON-ENFORCEMENT MODE banner.")
 endif()
 
-# ---- guard 1: the selection must be the one this repository declared -------------
+# ---- which run is this, and what does it owe? ------------------------------------
 #
-# WHY THIS LIVES IN THE LANE AND NOT IN A CTEST ENTRY (VOLATILE-2a). The suite manifest has
-# always pinned which doctest suites exist. Nothing pinned the CTest entries that are NOT
-# suites -- the population checks, the empty-population witnesses, the weave-artifact
-# checks, the documentation-link check, the aggregate runner -- so deleting one `add_test`
-# left the lane registering one fewer entry, running everything that remained, and
-# reporting green at a smaller number. Including for entries whose entire job is to notice
-# absences.
+# A FULL run stamps itself with a token, exports it to the ctest invocation at the bottom of
+# this file, and clears any earlier inventory receipt out of the build tree. The CTest-entry
+# inventory below writes a receipt for this token once it has actually taken the inventory;
+# the `population` entry, running inside that ctest invocation, refuses to pass a run that
+# carries the token and has no matching receipt (VOLATILE-B1).
 #
-# A CTest entry could not have closed that: an entry that has been deleted cannot complain
-# about its own deletion. So the inventory runs here, outside the population it counts, for
-# the same reason the population check's lane does.
+# That is deliberately not beside the call it watches. A lane cannot check itself -- the
+# first attempt tried, by having the `population` entry grep this file for the inventory's
+# NAME, and the sentence you are reading would have satisfied it. What the entry can check is
+# what this lane actually DID, and a run that stopped taking the inventory does no work to
+# leave behind.
 #
-# ...AND IT IS ON THIS LANE'S CRITICAL PATH ON PURPOSE. zen_check_entry_population() owns
-# the count and the zero-refusal that everything below depends on, so removing the call
-# does not leave a lane that still runs -- it leaves a lane with no answer, and the guard
-# under it says so. The other half of the lock is in check_population.cmake: the
-# `population` entry (which this inventory keeps registered) requires this file to still
-# call the function. Neither can be deleted alone without the other saying so.
+# A SUBSET RUN OWES NO RECEIPT: it deliberately does not assert the whole-lane identity
+# contract (see below), so it stamps no token and the entry, if the subset includes it, says
+# the lane's half was not asked rather than failing for a receipt this run never owed.
 
 set(select_args "")
 set(selection "everything registered")
@@ -92,15 +89,41 @@ if(NOT ZEN_SELECT STREQUAL "")
     set(selection "-R ${ZEN_SELECT}")
 endif()
 
-execute_process(
-    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${ZEN_BUILD_DIR}" -N ${select_args}
-    OUTPUT_VARIABLE listing RESULT_VARIABLE list_rc)
-if(NOT list_rc EQUAL 0)
-    message(FATAL_ERROR "verify: could not list the selected tests (exit ${list_rc}).\n${listing}")
+include("${CMAKE_CURRENT_LIST_DIR}/check_entry_population.cmake")
+
+set(run_token "")
+if(ZEN_SELECT STREQUAL "")
+    string(TIMESTAMP run_stamp "%Y%m%dT%H%M%S" UTC)
+    string(RANDOM LENGTH 16 ALPHABET "0123456789abcdef" run_suffix)
+    set(run_token "${run_stamp}-${run_suffix}")
+    # A leftover receipt from an earlier run must not be able to answer for this one. The
+    # token already makes that so; removing the file as well means freshness does not rest on
+    # the uniqueness of a random string alone.
+    zen_entry_witness_file("${ZEN_BUILD_DIR}" stale_witness)
+    file(REMOVE "${stale_witness}")
 endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/check_entry_population.cmake")
-zen_check_entry_population("${listing}" "${ZEN_SELECT}" "${ZEN_BUILD_DIR}" selected)
+# ---- guard 1: the selection must be the one this repository declared -------------
+#
+# WHY THIS RUNS HERE AS WELL AS IN AN ENTRY (VOLATILE-2a, VOLATILE-B1). The suite manifest
+# has always pinned which doctest suites exist. Nothing pinned the CTest entries that are NOT
+# suites -- the population checks, the empty-population witnesses, the weave-artifact checks,
+# the documentation-link check, the aggregate runner -- so deleting one `add_test` left the
+# lane registering one fewer entry, running everything that remained, and reporting green at
+# a smaller number. Including for entries whose entire job is to notice absences.
+#
+# An entry alone could not close that: an entry that has been deleted cannot complain about
+# its own deletion, so this door -- outside the population it inventories -- is what notices
+# a `population` that is gone. And a lane alone could not close it either, which is why the
+# `population` entry now asks the same question independently rather than reading this file.
+# Two doors, one implementation, one authored expectation.
+#
+# It is also on this lane's critical path on purpose: zen_check_entry_population() owns the
+# count and the zero-refusal everything below depends on, so removing the call leaves a lane
+# with no answer rather than a lane that quietly runs less.
+
+zen_ctest_entry_listing("${ZEN_BUILD_DIR}" "" "${ZEN_SELECT}" listing)
+zen_check_entry_population("${listing}" "${ZEN_SELECT}" "${ZEN_BUILD_DIR}" "${run_token}" selected)
 
 if(NOT DEFINED selected OR selected STREQUAL "")
     message(FATAL_ERROR
@@ -113,9 +136,14 @@ endif()
 message(STATUS "verify: ${selected} CTest entries selected (${selection})")
 
 # ---- guard 2: run them, and let CTest refuse a zero too --------------------------
+#
+# ZEN_ENTRY_INVENTORY_RUN is this run announcing itself to the entries inside it. CTest hands
+# its own environment to every test, so the `population` entry sees it and knows to demand
+# the receipt guard 1 leaves.
 
 execute_process(
-    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${ZEN_BUILD_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E env "ZEN_ENTRY_INVENTORY_RUN=${run_token}"
+            ${CMAKE_CTEST_COMMAND} --test-dir "${ZEN_BUILD_DIR}"
             --no-tests=error --output-on-failure ${select_args} ${ZEN_CTEST_ARGS}
     RESULT_VARIABLE run_rc)
 if(NOT run_rc EQUAL 0)
