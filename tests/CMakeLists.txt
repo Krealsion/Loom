@@ -544,11 +544,19 @@ file(WRITE ${CMAKE_BINARY_DIR}/zen-test-gates.cmake
      "# tree's active gates, read by tests/check_entry_population.cmake. Not an expectation.\n"
      "set(ZEN_ACTIVE_GATES \"${ZEN_POPULATION_GATES}\")\n")
 
+# ZEN_BUILD_DIR and ZEN_BUILD_CONFIG are what let this entry take the CTest-ENTRY inventory
+# for itself (VOLATILE-B1) rather than reading the lane's source text for the name of a
+# function. It asks `ctest -N` which entries this configured build registered, which is a
+# question about the build and not about this run's selection -- so it answers the same under
+# `ctest`, under the official lane, and under a subset run that happens to include it.
+# $<CONFIG> is empty under a single-configuration generator and is handled as such.
 add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_TESTS_EXE=$<TARGET_FILE:zen-tests>
     -DZEN_SDL_TESTS_EXE=${zen_sdl_tests_exe}
     -DZEN_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/suite_population.txt
     -DZEN_GATES=${zen_population_gates_arg}
+    -DZEN_BUILD_DIR=${CMAKE_BINARY_DIR}
+    -DZEN_BUILD_CONFIG=$<CONFIG>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_population.cmake)
 
 # ---- The documentation-link contract (VOLATILE-2) -------------------------------------

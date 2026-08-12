@@ -9,9 +9,15 @@
 # test cases -- it takes an inventory. `--list-test-suites` and `--count` are doctest
 # QUERY modes, so nothing runs and the whole check costs a fraction of a second.
 #
-# Usage (all arguments required except ZEN_SDL_TESTS_EXE):
+# It carries a SECOND, independent question since VOLATILE-B1 -- the CTest-ENTRY inventory,
+# below -- because the suite population is not the only population a green run can silently
+# shrink. That half is implemented once, in tests/check_entry_population.cmake, and executed
+# from two places that do not depend on each other.
+#
+# Usage (all arguments required except ZEN_SDL_TESTS_EXE and ZEN_BUILD_CONFIG):
 #   cmake -DZEN_TESTS_EXE=<path> -DZEN_SDL_TESTS_EXE=<path-or-empty>
 #         -DZEN_MANIFEST=<path> -DZEN_GATES=portable,kernel,posix
+#         -DZEN_BUILD_DIR=<build dir> -DZEN_BUILD_CONFIG=<config-or-empty>
 #         -P check_population.cmake
 #
 # ZEN_GATES is COMMA-separated on purpose: a semicolon list would be split into separate
@@ -19,13 +25,18 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-foreach(required IN ITEMS ZEN_TESTS_EXE ZEN_MANIFEST ZEN_GATES)
+foreach(required IN ITEMS ZEN_TESTS_EXE ZEN_MANIFEST ZEN_GATES ZEN_BUILD_DIR)
     if(NOT DEFINED ${required})
         message(FATAL_ERROR "check_population.cmake: -D${required}=... is required")
     endif()
 endforeach()
 if(NOT DEFINED ZEN_SDL_TESTS_EXE)
     set(ZEN_SDL_TESTS_EXE "")
+endif()
+# Empty under a single-configuration generator, and passing `-C ""` to ctest would be a
+# different question from passing nothing.
+if(NOT DEFINED ZEN_BUILD_CONFIG)
+    set(ZEN_BUILD_CONFIG "")
 endif()
 
 string(REPLACE "," ";" active_gates "${ZEN_GATES}")
@@ -88,46 +99,27 @@ if(NOT EXISTS "${ZEN_MANIFEST}")
     message(FATAL_ERROR "population: the suite manifest is missing: ${ZEN_MANIFEST}")
 endif()
 
-# ---- reverse custody: this entry keeps the entry inventory invoked (VOLATILE-2a) --
+# ---- the CTest-ENTRY inventory, taken here too (VOLATILE-2a, VOLATILE-B1) ---------
 #
-# tests/verify.cmake carries the CTest-ENTRY inventory -- the check that notices when an
-# add_test() disappears, THIS registration included. It cannot be a CTest entry itself,
-# because an entry that has been deleted cannot complain about its own deletion, so nothing
-# in a build would notice if the line that runs it were removed from the lane.
+# tests/verify.cmake takes this same inventory before it runs anything -- the check that
+# notices when an add_test() disappears, THIS registration included. That door cannot be an
+# entry: an entry that has been deleted cannot complain about its own deletion. This door
+# cannot replace it for the same reason. So there are two, and they do not lean on each
+# other: each asks the build what it registered and compares it against the two manifests,
+# through one implementation in tests/check_entry_population.cmake.
 #
-# So the two guard each other. That inventory keeps this entry registered; this entry, which
-# is registered and therefore runs, requires the lane to still call it. Neither can be
-# removed alone without the other saying so.
-#
-# It is a source-text tripwire, and that is the honest shape here rather than a weakness:
-# no behaviour of a build can observe whether the LANE still asks a question, so the claim
-# can only be checked by reading the file that makes it. Defense in depth, with its limit
-# stated -- two coordinated deletions still escape, because a file cannot be defended
-# against an edit to itself.
+# WHAT THIS REPLACED, and why it had to be replaced. Until VOLATILE-B1 this entry did not ask
+# the question at all. It READ tests/verify.cmake and required the text
+# `zen_check_entry_population(` to appear in it, comments stripped. VOLATILE-COLD removed the
+# call in one ordinary edit; the surviving match was a string literal inside the lane's own
+# explanatory error message, so the tripwire passed, the lane reported PASSED, and deleting
+# the `doc_links` registration on top of that reported PASSED at a smaller number. Prose
+# about a check satisfied the guard on the check. This entry no longer asks what the lane
+# SAYS; it asks what the build IS, and then whether the lane's own inventory left a receipt
+# for this run.
 get_filename_component(zen_tests_dir "${ZEN_MANIFEST}" DIRECTORY)
-set(zen_lane "${zen_tests_dir}/verify.cmake")
-if(NOT EXISTS "${zen_lane}")
-    message(FATAL_ERROR
-        "population: the official lane ${zen_lane} is missing. It is what runs the "
-        "CTest-entry inventory that keeps this very entry from being deleted silently, and "
-        "AGENTS.md names it as the lane a result is quoted from.")
-endif()
-file(READ "${zen_lane}" zen_lane_text)
-# COMMENTS ARE STRIPPED FIRST, and that is the difference between a tripwire and a
-# decoration. The lane's own prose explains the call by name several times over; matching
-# the raw text would have been satisfied by commenting the call out, which is the cheapest
-# way to remove it and the one a regression is most likely to take. Only whole-line comments
-# are removed, so no string literal can be truncated.
-string(REGEX REPLACE "\n[ \t]*#[^\n]*" "\n" zen_lane_code "\n${zen_lane_text}")
-if(NOT zen_lane_code MATCHES "zen_check_entry_population\\(")
-    message(FATAL_ERROR
-        "population: ${zen_lane} no longer calls zen_check_entry_population(), so the "
-        "official lane has stopped checking WHICH CTest entries it registered -- it would "
-        "run whatever is left and report green at a smaller number. That is exactly the "
-        "hole VOLATILE-2a closed, and this entry exists partly to keep it closed. Restore "
-        "the call in the lane, or -- if the inventory has genuinely moved -- move this "
-        "tripwire with it rather than deleting it.")
-endif()
+include("${zen_tests_dir}/check_entry_population.cmake")
+zen_entry_population_custody("${ZEN_BUILD_DIR}" "${ZEN_BUILD_CONFIG}")
 
 file(STRINGS "${ZEN_MANIFEST}" manifest_lines)
 

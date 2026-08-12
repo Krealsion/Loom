@@ -68,8 +68,9 @@ MEANS
   `tests/entry_population.txt` names the CTest entries that are not suites — the population
   checks, the empty-population witnesses, the weave-artifact checks, the documentation-link
   check, the aggregate runner — with the gate each rides; the expected set is that union
-  with the gate-resolved suites, and the lane compares it to `ctest -N` **by name, both
-  directions**. Until it existed, deleting one `add_test` left the lane registering one
+  with the gate-resolved suites, compared to `ctest -N` **by name, both directions**, by
+  two independently executed doors (the lane, and the `population` entry). Until it
+  existed, deleting one `add_test` left the lane registering one
   fewer entry, running everything that remained, and reporting green at the smaller number
   — including for the entries whose whole job is to notice absences;
 - **in Zengine, the same four sentences with its own nouns** (C4): every runtime suite links
@@ -88,17 +89,24 @@ DOES NOT MEAN
   deliberately independent implementations of the same law, in repositories that verify each
   other at arm's length. Neither repository's population contract may be satisfied by the
   other's evidence;
-- that the population check may live inside the population. Both repositories' official
-  lanes are scripts run *outside* CTest for exactly that reason: a check registered as a
-  CTest entry stops asking its question the moment that entry is the thing deleted. The
-  Loom's entry inventory is the sharpest case — it is what notices a deleted entry, so it
-  could not be one — and it is placed on the lane's critical path, owning the count and the
-  zero-refusal, so deleting the call leaves a lane with no answer rather than a smaller
-  green;
+- that the population check may live *only* inside the population. Both repositories'
+  official lanes are scripts run *outside* CTest for exactly that reason: a check
+  registered as a CTest entry stops asking its question the moment that entry is the thing
+  deleted. The Loom's entry inventory is the sharpest case — it is what notices a deleted
+  entry, so it cannot be only one — and the lane's door is what names a missing
+  `population`;
 - that a lane can defend itself against an edit to itself. It cannot, and the arrangement
-  says so rather than implying otherwise: the entry inventory keeps the `population` entry
-  registered, and the `population` entry requires the lane to still call the inventory, so
-  neither goes alone — but two coordinated deletions still escape;
+  no longer pretends a source-text tripwire is a substitute (VOLATILE-B1). The inventory is
+  taken by **two independently executed doors** over one implementation and one authored
+  expectation: the lane before it runs anything, and the `population` entry as part of its
+  own work, each asking `ctest -N` what this build registered. What neither door can see on
+  its own is the other going missing, so the lane's inventory leaves a receipt naming the
+  run, the build directory, the active gates and the two identity sets it compared; the
+  entry measures all of that independently and refuses a run that carries the lane's token
+  and shows no matching receipt. Removing either door with one ordinary edit is red.
+  Removing the lane's call *and* the lane's announcement of itself escapes the doors'
+  notice of each other — and still leaves the entry's own inventory standing, which is the
+  door that catches the deleted registration;
 - that every platform runs identical suites. Gates are real (see POP-03);
 - that CTest's own global semantics changed. `ctest -R <nothing>` still exits 0 for
   anyone who runs it bare; the project-owned lane is what refuses it;

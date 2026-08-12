@@ -28,18 +28,27 @@
 # an entry registered and not declared fails, because an undeclared entry means this
 # contract has stopped being the complete one.
 #
-# WHERE THE CHECK LIVES, AND WHY IT IS NOT A CTEST ENTRY. It runs inside
-# tests/verify.cmake, the official lane. A CTest entry cannot be the thing that notices
-# CTest entries going missing: delete its registration and it never runs, so it never
-# complains -- the exact hole this file exists to close, reproduced inside the fix. The
-# lane is outside the population it inventories, which is the same reason the suite
-# population check's *lane* lives there too.
+# WHERE THE CHECK LIVES: TWO DOORS THAT DO NOT LEAN ON EACH OTHER (VOLATILE-B1). It runs
+# inside tests/verify.cmake, the official lane, before the lane runs anything -- and again
+# inside the `population` CTest entry, as part of that entry's own work. One implementation
+# (tests/check_entry_population.cmake), one authored expectation (this file and
+# suite_population.txt), two independent executions.
 #
-# ...WHICH MOVES THE HAZARD ONTO THE LANE, so the two guard each other. This inventory
-# keeps the `population` entry registered; the `population` entry, which is registered and
-# therefore runs, requires tests/verify.cmake to still call the inventory. Neither can be
-# removed alone without the other saying so. Two coordinated deletions still escape, and
-# that is stated rather than hidden: a file cannot defend itself against an edit to itself.
+# Neither door alone was enough. An entry cannot be the ONLY thing that notices entries going
+# missing: delete its registration and it never runs, so it never complains -- the hole this
+# file exists to close, reproduced inside the fix. That is what the lane's door covers. And a
+# lane cannot check itself: the first attempt had the `population` entry read verify.cmake and
+# require the inventory's NAME to appear in it, and VOLATILE-COLD removed the call in one
+# ordinary edit while the lane's own prose ABOUT the call kept the guard satisfied. So the
+# entry's door asks the build what it registered instead of asking the lane what it says.
+#
+# WHAT NEITHER DOOR CAN SEE ON ITS OWN is the other one going missing. So the lane's inventory
+# leaves a RECEIPT -- this run's token, the build, the gates, and the two identity sets it
+# compared -- and the entry, having measured all of that for itself, refuses a run that
+# carries the lane's token and shows no matching receipt. One ordinary deletion on either side
+# is red. The ceiling, stated rather than hidden: removing the lane's call AND the lane's
+# announcement of itself escapes the two doors' notice of each other -- and still does not
+# escape the entry's own inventory, which is the door that catches the deleted registration.
 #
 # `gate` uses the SAME vocabulary as suite_population.txt, deliberately -- one taxonomy,
 # and it is the one the build already computes:

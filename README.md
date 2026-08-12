@@ -92,8 +92,9 @@ cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake
 selector that matched nothing as success, and the lane does not. A named suite
 that selects zero cases fails; the suite inventory and per-suite case floors in
 `tests/suite_population.txt` are checked every run; the CTest entries that are
-*not* suites are declared in `tests/entry_population.txt` and checked by name, so
-the lane cannot quietly get smaller; and the two OS-enforcement populations are
+*not* suites are declared in `tests/entry_population.txt` and checked by name —
+by the lane, and independently by the `population` entry inside it — so the lane
+cannot quietly get smaller; and the two OS-enforcement populations are
 exact and independent — a missing witness and an unannounced extra one both fail,
 and the expected counts live only in the `ZEN_ENFORCEMENT_POPULATION(...)` calls
 closing `tests/test_isolation.cpp` and `tests/test_policy.cpp`, moving only by a
