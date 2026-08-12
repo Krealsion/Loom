@@ -2,7 +2,12 @@
 
 Every deliberate capacity in the current system, in one place. A bound
 refusing is visible (`Exhausted`, a named `TxnReason`, or a stated shed) —
-never a silent drop. Values are the source's; the constant names are grep-able.
+never a silent drop.
+
+**The named constants own the values; this table mirrors them.** Nothing
+mechanically holds the two in step — the tests use the symbols, never the
+literals — so read a number here as a pointer to the constant beside it rather
+than as the contract. The names are grep-able for exactly that reason.
 
 ## Switchboard
 
