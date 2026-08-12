@@ -54,6 +54,10 @@
 namespace {
 
 using loom::lex_arg;
+// The address half of the command grammar is shared with every other presentation of this
+// core since WT-1, exactly as the value half already was -- one parser, in
+// <zen/terminal/input_lex.hpp>, so `#12` / `@office` / `*` cannot come to mean two things.
+using loom::parse_address;
 using loom::parse_u64;
 using loom::Token;
 using loom::tokenize;
@@ -240,28 +244,6 @@ void print_message(const loom::ReceivedMessage& m) {
         }
         std::cout << '\n';
     }
-}
-
-// ---- addressing syntax -------------------------------------------------------
-
-/// `#12` one weave, `@office` whichever weave holds it at delivery, `*` publish.
-/// There is deliberately no fourth form and no default: an unaddressed send is not
-/// a mode, it is a mistake.
-bool parse_address(const std::string& text, loom::Address& out) {
-    if (text == "*") {
-        out = loom::Address::to_all();
-        return true;
-    }
-    if (text.size() > 1 && text[0] == '@') {
-        out = loom::Address::to_role(text.substr(1));
-        return true;
-    }
-    std::uint64_t id = 0;
-    if (text.size() > 1 && text[0] == '#' && parse_u64(text.substr(1), id)) {
-        out = loom::Address::to_weave(loom::WeaveId{id});
-        return true;
-    }
-    return false;
 }
 
 } // namespace

@@ -17,6 +17,7 @@
 
 #include <zen/host/terminal_wiring.hpp>
 #include <zen/switchboard.hpp>
+#include <zen/terminal/input_lex.hpp>
 #include <zen/terminal/session.hpp>
 #include <zen/weave.hpp>
 
@@ -89,22 +90,35 @@ int main() {
         bus.register_weave(std::move(oracle), std::move(oracle_grant), "oracle");
     oracle_raw->zen_set_self(oracle_id);
 
-    // 3. Drive it WITHOUT stdin: structured commands, not parsed text.
+    // 3. THE COMMAND GRAMMAR IS LOOM'S, and a stranger gets it through the package (WT-1).
+    //
+    // A presentation that had to re-author `#N` / `@office` / `*` would be a second grammar
+    // pretending to be the first, and this witness is the only lane that can tell whether the
+    // shared one is actually REACHABLE from outside the build tree -- a header left out of the
+    // install fails right here rather than in a downstream repository.
+    loom::Address to;
+    ok(loom::parse_address("@oracle", to) && to.mode == loom::Addressing::Role &&
+           to.role == "oracle",
+       "the installed package carries the shared address grammar");
+    ok(!loom::parse_address("oracle", to), "...including its refusal to guess at a bareword");
+    (void)loom::parse_address("@oracle", to);
+
+    // 4. Drive it WITHOUT stdin: structured arguments, and an address the core's own parser
+    // produced -- never a console string this file taught itself to read.
     std::vector<loom::Arg> args;
     args.push_back(loom::Arg{std::nullopt, loom::FieldValue{std::string("is anybody there")}});
-    const loom::TerminalResult asked =
-        session.session->ask(loom::Address::to_role("oracle"), "Question", 1, args);
+    const loom::TerminalResult asked = session.session->ask(to, "Question", 1, args);
     ok(asked.outcome == loom::TerminalOutcome::Submitted, "a pane can ask without a terminal");
     ok(session.session->awaiting(), "...and the core, not the pane, owns the pending state");
 
-    // 4. The pane owns the LOOP; the core never pumps.
+    // 5. The pane owns the LOOP; the core never pumps.
     for (int turn = 0; turn < 4 && session.session->awaiting(); ++turn) {
         bus.pump();
     }
     ok(!session.session->awaiting(), "the answer settled the ask");
     ok(oracle_raw->heard_from == session.id, "the service heard the PARTICIPANT, not the host");
 
-    // 5. Render the transcript from STRUCTURE, never from console strings.
+    // 6. Render the transcript from STRUCTURE, never from console strings.
     bool saw_answer = false;
     for (const loom::TranscriptEntry& e : session.session->transcript().entries()) {
         if (e.kind == loom::TranscriptKind::AnswerReceived) {
@@ -119,7 +133,7 @@ int main() {
            got->value.get("a")->as_text() == "you asked: is anybody there",
        "the exact Value is readable, verbatim, by id");
 
-    // 6. Two identities, and the refusal to merge them, reach a stranger too.
+    // 7. Two identities, and the refusal to merge them, reach a stranger too.
     const loom::MountedTerminal seat = loom::host_mount_terminal(
         bus, std::make_unique<loom::TerminalSession>("seat", loom::TerminalVocabulary{},
                                                      session.session->order()),
