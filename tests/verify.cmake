@@ -8,6 +8,11 @@
 #   cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake
 #   cmake -DZEN_BUILD_DIR=build -DZEN_SELECT="^policy$" -P tests/verify.cmake
 #
+# On a MULTI-CONFIGURATION build tree (Ninja Multi-Config, Visual Studio, Xcode) the
+# configuration has to be named, because the tree holds several of them:
+#
+#   cmake -DZEN_BUILD_DIR=build-mc -DZEN_BUILD_CONFIG=Debug -P tests/verify.cmake
+#
 # It exists because CTest's own default is to treat "I selected zero tests" as success:
 #
 #   $ ctest -R "^no_such_suite$"
@@ -42,6 +47,98 @@ if(NOT EXISTS "${ZEN_BUILD_DIR}/CTestTestfile.cmake")
     message(FATAL_ERROR
         "verify: '${ZEN_BUILD_DIR}' is not a configured CTest build directory "
         "(no CTestTestfile.cmake). Configure and build first.")
+endif()
+if(NOT EXISTS "${ZEN_BUILD_DIR}/CMakeCache.txt")
+    message(FATAL_ERROR
+        "verify: '${ZEN_BUILD_DIR}' has a CTestTestfile.cmake but no CMakeCache.txt, so it is "
+        "a subdirectory of a build tree rather than the top of one. The lane needs the top: "
+        "the cache is where the build records how many configurations it has, and a "
+        "subdirectory of a multi-configuration tree would look single-configuration from "
+        "here. Point ZEN_BUILD_DIR at the directory you configured.")
+endif()
+
+# ---- which configuration is being verified? (QR-0) -------------------------------
+#
+# A MULTI-CONFIGURATION build tree holds Debug, Release and RelWithDebInfo side by side, and
+# CTest has to be told which one: without `-C` it reports every test `Not Run` -- 29 of 29 on
+# the tree this was measured against, while `ctest -C Debug` on the same tree passed 29 of 29.
+# A SINGLE-CONFIGURATION tree has exactly one, and asking a caller to name it would be asking
+# them to repeat what the tree already says.
+#
+# The build tree answers which kind it is. CMAKE_CONFIGURATION_TYPES is written into the cache
+# by multi-config generators and by no others; CMAKE_BUILD_TYPE is the single-config record.
+# This lane reads that and NEVER picks a configuration on a caller's behalf -- not Debug, not
+# the most recently built, not the first in the list. A verifier that chose would be minting
+# evidence about a configuration nobody asked about, which is the same class of lie as
+# answering a question that was never asked.
+
+file(READ "${ZEN_BUILD_DIR}/CMakeCache.txt" cache_text)
+string(REPLACE "\r" "" cache_text "${cache_text}")
+set(cache_config_types "")
+if("\n${cache_text}" MATCHES "\nCMAKE_CONFIGURATION_TYPES:[A-Za-z]+=([^\n]*)")
+    set(cache_config_types "${CMAKE_MATCH_1}")
+endif()
+set(cache_build_type "")
+if("\n${cache_text}" MATCHES "\nCMAKE_BUILD_TYPE:[A-Za-z]+=([^\n]*)")
+    set(cache_build_type "${CMAKE_MATCH_1}")
+endif()
+if(NOT DEFINED ZEN_BUILD_CONFIG)
+    set(ZEN_BUILD_CONFIG "")
+endif()
+
+set(config_args "")      # -C <config>, or nothing at all on a single-config tree
+set(config_note "")      # what every result line says it is about
+set(config_selected "")  # what the entry inventory is asked about
+
+if(NOT cache_config_types STREQUAL "")
+    string(REPLACE ";" ", " config_list "${cache_config_types}")
+    if(ZEN_BUILD_CONFIG STREQUAL "")
+        message(FATAL_ERROR
+            "verify: '${ZEN_BUILD_DIR}' is a MULTI-CONFIGURATION build tree -- it holds "
+            "${config_list} side by side -- so the configuration to verify has to be named. "
+            "CTest given no configuration reports every test `Not Run`, and this lane will "
+            "not choose one for you: a result has to say which configuration it is about.\n"
+            "  cmake -DZEN_BUILD_DIR=${ZEN_BUILD_DIR} -DZEN_BUILD_CONFIG=<name> "
+            "-P tests/verify.cmake\n"
+            "Build that configuration first (`cmake --build ${ZEN_BUILD_DIR} --config "
+            "<name>`) -- a configuration that was configured and never built is not evidence "
+            "either.")
+    endif()
+    # Case-insensitively, because CTest's own generated configuration guards are, and then
+    # forward the spelling the build tree uses rather than the caller's -- so every line
+    # below names the configuration the way the tree does.
+    string(TOUPPER "${ZEN_BUILD_CONFIG}" wanted)
+    foreach(candidate IN LISTS cache_config_types)
+        string(TOUPPER "${candidate}" candidate_upper)
+        if(candidate_upper STREQUAL wanted)
+            set(config_selected "${candidate}")
+        endif()
+    endforeach()
+    if(config_selected STREQUAL "")
+        message(FATAL_ERROR
+            "verify: '${ZEN_BUILD_CONFIG}' is not a configuration of '${ZEN_BUILD_DIR}'. That "
+            "tree was configured with exactly these: ${config_list} "
+            "(CMAKE_CONFIGURATION_TYPES). Running it anyway would select nothing and report "
+            "every test `Not Run`, which reads like a broken build rather than a mistyped "
+            "argument.")
+    endif()
+    set(config_args -C "${config_selected}")
+    set(config_note " in configuration ${config_selected}")
+elseif(NOT ZEN_BUILD_CONFIG STREQUAL "")
+    # Single-config tree, and a configuration was named anyway. If it is the one the tree was
+    # configured as, that is merely redundant. If it is a different one, the caller believes
+    # they are selecting something, and running Debug while they asked for Release is exactly
+    # the misreported evidence this lane exists to refuse.
+    if(NOT ZEN_BUILD_CONFIG STREQUAL "${cache_build_type}")
+        message(FATAL_ERROR
+            "verify: -DZEN_BUILD_CONFIG=${ZEN_BUILD_CONFIG} was given, but '${ZEN_BUILD_DIR}' "
+            "is a SINGLE-CONFIGURATION build tree configured as '${cache_build_type}' "
+            "(CMAKE_BUILD_TYPE). There is nothing here to select, and verifying "
+            "'${cache_build_type}' while the caller asked for '${ZEN_BUILD_CONFIG}' would "
+            "misname the evidence. Configure a '${ZEN_BUILD_CONFIG}' tree, or drop "
+            "ZEN_BUILD_CONFIG -- a single-configuration tree does not need it.")
+    endif()
+    set(config_note " in configuration ${cache_build_type}")
 endif()
 
 # ---- an opt-out run is not an acceptance run -------------------------------------
@@ -122,7 +219,7 @@ endif()
 # count and the zero-refusal everything below depends on, so removing the call leaves a lane
 # with no answer rather than a lane that quietly runs less.
 
-zen_ctest_entry_listing("${ZEN_BUILD_DIR}" "" "${ZEN_SELECT}" listing)
+zen_ctest_entry_listing("${ZEN_BUILD_DIR}" "${config_selected}" "${ZEN_SELECT}" listing)
 zen_check_entry_population("${listing}" "${ZEN_SELECT}" "${ZEN_BUILD_DIR}" "${run_token}" selected)
 
 if(NOT DEFINED selected OR selected STREQUAL "")
@@ -133,7 +230,7 @@ if(NOT DEFINED selected OR selected STREQUAL "")
         "A lane that proceeded without it would be the lane VOLATILE-2a closed: one that "
         "runs whatever is left and calls the smaller number green.")
 endif()
-message(STATUS "verify: ${selected} CTest entries selected (${selection})")
+message(STATUS "verify: ${selected} CTest entries selected (${selection})${config_note}")
 
 # ---- guard 2: run them, and let CTest refuse a zero too --------------------------
 #
@@ -143,11 +240,14 @@ message(STATUS "verify: ${selected} CTest entries selected (${selection})")
 
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env "ZEN_ENTRY_INVENTORY_RUN=${run_token}"
-            ${CMAKE_CTEST_COMMAND} --test-dir "${ZEN_BUILD_DIR}"
+            ${CMAKE_CTEST_COMMAND} --test-dir "${ZEN_BUILD_DIR}" ${config_args}
             --no-tests=error --output-on-failure ${select_args} ${ZEN_CTEST_ARGS}
     RESULT_VARIABLE run_rc)
 if(NOT run_rc EQUAL 0)
-    message(FATAL_ERROR "verify: FAILED (ctest exit ${run_rc}) over ${selected} selected entries")
+    message(FATAL_ERROR
+        "verify: FAILED (ctest exit ${run_rc}) over ${selected} selected entries${config_note}")
 endif()
 
-message(STATUS "verify: PASSED -- ${selected} CTest entries selected and executed (${selection})")
+message(STATUS
+    "verify: PASSED -- ${selected} CTest entries selected and executed "
+    "(${selection})${config_note}")
