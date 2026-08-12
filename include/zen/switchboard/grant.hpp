@@ -11,7 +11,11 @@
 // One grant is the single source of truth, projected onto whatever boundary the
 // hosting mode provides: in B1 the *message* boundary (send-permissions, enforced
 // here); in B2 the *process* boundary (crash containment); in B3 the *syscall*
-// boundary (the OS-capability flags, enforced by an out-of-process sandbox).
+// boundary (the OS-capability flags, enforced by an out-of-process sandbox); in B4
+// the *filesystem view*; in B5 the *quantitative* one. Which mechanism enforces
+// each, why they are not a ladder, and what they do not claim (B2–B5 are Linux/WSL
+// only, and none of them is a claim of kernel-escape resistance) is owned by
+// docs/reference/capabilities.md#hosting-and-enforcement-tiers-b1-b5.
 //
 // AND THE PROJECTIONS DO NOT ALL ANSWER AT THE SAME MOMENT (GATE-05). That was
 // always true and used not to matter, because nothing could change a grant after
@@ -60,10 +64,13 @@ inline constexpr std::uint32_t SpawnProcess = 1u << 1;
 /// A *graduated* capability carries a level along a safe→dangerous axis, and its
 /// default is the safe end — a forgotten grant fails to the floor, never to the
 /// dangerous reach. Network and SpawnProcess are *hard* (binary: enforce-or-refuse,
-/// above). Filesystem is graduated: enforcement (B4+) is none → read-only →
-/// write-to-a-scoped-dir → write-with-no-exec-bit → write-anywhere, each step a
-/// more deliberate, louder choice. B3 builds the *vocabulary* only — no filesystem
-/// enforcement exists yet; this gives that phase a home rather than a retrofit.
+/// above). Filesystem is graduated: none → read-only → write-to-a-scoped-dir →
+/// write-with-no-exec-bit → write-anywhere, each step a more deliberate, louder
+/// choice. B3 introduced this *vocabulary*; B4 enforces it — all five levels — out
+/// of process, by building the child's filesystem view as a private mount namespace
+/// and pivot_root'ing into it (`build_view_plan`, `src/isolation/host.cpp`). The
+/// levels below are what that projection is built from, not a description of a
+/// future phase.
 enum class FsAccess : std::uint8_t {
     None = 0,      ///< safe default: no filesystem reach
     ReadOnly,      ///< read within a scoped tree
