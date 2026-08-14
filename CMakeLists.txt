@@ -271,27 +271,34 @@ add_library(loom::terminal ALIAS zen-terminal)
 # weave first links this target, the sweep will derive the requirement from the build graph and
 # say so — which is a better mechanism than a line here somebody has to remember.
 
-# ---- The recorder (RTH-1): the host's memory of what this bus did ----------------------
+# ---- History (RTH-1, split by RTH-1a): what the host knows, and what it keeps -----------
 #
-# A tap consumer, bounded and structured, beside the console rather than inside the
-# Switchboard. It links the bus (for the tap) and the core (to serialize a payload and to
-# write its log as canonical values) and NOTHING ELSE from this tree -- no console, no UI
-# vocabulary, no terminal. That absence is a claim being made in the build graph: a history
-# lens that could reach a presentation would eventually be one.
+# TWO OWNERS, ONE LIBRARY, AND NEITHER READS THE OTHER. `loom::Recorder` is volatile
+# working memory; `loom::Logger` is the durable selected record. Both are tap consumers
+# beside the console rather than inside the Switchboard, and `logger.hpp` deliberately does
+# not include `recorder.hpp` -- a durable fact that had to ask a volatile window for its
+# contents would be durable only as long as that window.
+#
+# It links the bus (for the tap) and the core (to serialize a payload and to write a stream
+# of canonical values) and NOTHING ELSE from this tree -- no console, no UI vocabulary, no
+# terminal. That absence is a claim being made in the build graph: a history lens that could
+# reach a presentation would eventually be one.
 #
 # It is EXPORTED and INSTALLED, unlike the console, because the first consumer is a Zengine
 # application that reaches this repository solely through find_package(loom).
-add_library(zen-recorder
-    src/recorder/recorder.cpp
-    src/recorder/dump.cpp)
-target_include_directories(zen-recorder
+add_library(zen-history
+    src/history/record.cpp
+    src/history/recorder.cpp
+    src/history/logger.cpp
+    src/history/dump.cpp)
+target_include_directories(zen-history
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_compile_features(zen-recorder PUBLIC cxx_std_20)
-target_link_libraries(zen-recorder
+target_compile_features(zen-history PUBLIC cxx_std_20)
+target_link_libraries(zen-history
     PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings)
-add_library(loom::recorder ALIAS zen-recorder)
+add_library(loom::history ALIAS zen-history)
 
 # DELIBERATELY NOT loom_weave_build_contract(), for zen-terminal's reason (POP-05): nothing
 # loadable links this target, so contracting it would put an artifact on the roll that the
@@ -576,7 +583,7 @@ if(LOOM_INSTALL)
     set_target_properties(loom            PROPERTIES EXPORT_NAME core)
     set_target_properties(zen-switchboard PROPERTIES EXPORT_NAME switchboard)
     set_target_properties(zen-terminal    PROPERTIES EXPORT_NAME terminal)
-    set_target_properties(zen-recorder    PROPERTIES EXPORT_NAME recorder)
+    set_target_properties(zen-history     PROPERTIES EXPORT_NAME history)
     set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
     set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
 
@@ -596,7 +603,7 @@ if(LOOM_INSTALL)
     # The UI trio, the console, the TUI, the bridge and the SDL skin still stay home for the
     # reasons written at the top of this section; nothing about that changed, and the terminal
     # core deliberately depends on NONE of them.
-    install(TARGETS loom zen-switchboard zen-terminal zen-recorder zen-sanitize zen-warnings
+    install(TARGETS loom zen-switchboard zen-terminal zen-history zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

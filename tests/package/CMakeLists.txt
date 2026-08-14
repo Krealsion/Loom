@@ -39,6 +39,17 @@ target_link_libraries(witness-macros PRIVATE loom::core)
 add_executable(witness-terminal stranger_terminal.cpp)
 target_link_libraries(witness-terminal PRIVATE loom::terminal loom::switchboard loom::core)
 
+# ---- 2b. the history pair, reached the way a Zengine application reaches it ------
+#
+# RTH-1 exported `loom::recorder` on the strength of a Zengine application that consumes
+# this repository solely through find_package -- and shipped with no witness that the
+# claim held. RTH-1a renamed the target to `loom::history` and put a SECOND owner behind
+# it, so the surface is measured here at the moment it changed. Links loom::history +
+# loom::switchboard + loom::core and nothing else; none of the console, UI or terminal is
+# reachable and none is wanted.
+add_executable(witness-history stranger_history.cpp)
+target_link_libraries(witness-history PRIVATE loom::history loom::switchboard loom::core)
+
 if(NOT TARGET loom::kernel)
     # Honest, and not a skip-in-disguise: on a build of Loom with no kernel there is no
     # dynamic-weave path to witness, and saying so beats silently proving half of this.

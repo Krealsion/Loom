@@ -196,7 +196,7 @@ carried out to an observer):
 It carries no reason, and the journal records no outcome for it.
 
 A bounded, structured, host-side consumer of all of this ships with the Loom —
-see [recorder](recorder.md).
+see [history](history.md).
 
 An observer may **subscribe or unsubscribe from inside a notification**
 ([MSG-11](../laws/messaging-laws.md#msg-11--every-event-has-its-own-view-of-the-tap-list)).

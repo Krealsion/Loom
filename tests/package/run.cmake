@@ -85,6 +85,17 @@ if(NOT ZEN_WITNESS_TERMINAL)
 endif()
 zen_run("terminal core as a stranger sees it" "${ZEN_WITNESS_TERMINAL}")
 
+# ---- 1c. the history pair, as a Zengine application reaches it ----------------------
+find_program(ZEN_WITNESS_HISTORY witness-history PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
+             NO_DEFAULT_PATH)
+if(NOT ZEN_WITNESS_HISTORY)
+    message(FATAL_ERROR
+        "package witness: witness-history was not produced in ${ZEN_WORK}. The recorder and the "
+        "logger are exported precisely so an application outside this tree can hold both; if "
+        "they no longer configure or compile from the installed package, that claim is false.")
+endif()
+zen_run("history pair as a stranger sees it" "${ZEN_WITNESS_HISTORY}")
+
 # ---- the dynamic-weave half, only where the install has a kernel ---------------------
 file(GLOB weave_artifact
      "${ZEN_WORK}/*witness-weave*.dll" "${ZEN_WORK}/*witness-weave*.so"

@@ -118,7 +118,10 @@ struct Composed {
 
 /// A copied bus event for the operator's window on the live bus (the tap).
 struct TapEvent {
-    std::string kind;    ///< "Delivered" / "Refused" / "Died" / "Revived"
+    /// "Delivered" / "Refused" / "Died" / "Revived" / "HandlerFailed" (RTH-1). The
+    /// remote client adds one more, "BridgeRefused", which is honestly NOT a bus
+    /// event -- see bridge/protocol.hpp.
+    std::string kind;
     loom::WeaveId target;
     loom::WeaveId sender;
     std::string schema;  ///< the payload/state shape name
