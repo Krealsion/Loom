@@ -734,12 +734,27 @@ public:
         // The authored office (v5): the delivery's STAMPED fact, NUL-terminated
         // for the seam; NULL means personal speech.
         const std::string authored(in.provenance.authored_role());
-        // The DLL handler's status is contained: the message was validly
-        // delivered; any internal library error is the library's own concern.
-        abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation, prov,
-                     in.provenance.attested_sequence(),
-                     authored.empty() ? nullptr : authored.c_str(),
-                     reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
+        // The DLL handler's status is CONTAINED, and that is not the same as
+        // discarded (RTH-1). The message was validly delivered and the library's
+        // internal error stays the library's own concern: nothing is refused,
+        // nothing is retried, nothing is translated into a RefusalReason, and the
+        // status is not carried anywhere a weave could read it.
+        //
+        // But it is the ONE PLACE that knows a loaded weave's handler did not
+        // complete - `do_handle` catches every exception at the seam and returns
+        // ZEN_ERR, so the throw the native path re-raises never happens here - and
+        // dropping it meant the bus recorded and announced a plain `Delivered`.
+        // That is a silence wearing a success's clothes, and it is the one thing
+        // an observer most needs not to be told. So the fact crosses back, as a
+        // fact and nothing else, and the Switchboard says `HandlerFailed` instead.
+        const ZenStatus st =
+            abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation, prov,
+                         in.provenance.attested_sequence(),
+                         authored.empty() ? nullptr : authored.c_str(),
+                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
+        if (st != ZEN_OK && bus_ != nullptr) {
+            bus_->note_handler_failure();
+        }
     }
 
     loom::Value snapshot() const override {

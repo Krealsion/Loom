@@ -271,6 +271,32 @@ add_library(loom::terminal ALIAS zen-terminal)
 # weave first links this target, the sweep will derive the requirement from the build graph and
 # say so — which is a better mechanism than a line here somebody has to remember.
 
+# ---- The recorder (RTH-1): the host's memory of what this bus did ----------------------
+#
+# A tap consumer, bounded and structured, beside the console rather than inside the
+# Switchboard. It links the bus (for the tap) and the core (to serialize a payload and to
+# write its log as canonical values) and NOTHING ELSE from this tree -- no console, no UI
+# vocabulary, no terminal. That absence is a claim being made in the build graph: a history
+# lens that could reach a presentation would eventually be one.
+#
+# It is EXPORTED and INSTALLED, unlike the console, because the first consumer is a Zengine
+# application that reaches this repository solely through find_package(loom).
+add_library(zen-recorder
+    src/recorder/recorder.cpp
+    src/recorder/dump.cpp)
+target_include_directories(zen-recorder
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_compile_features(zen-recorder PUBLIC cxx_std_20)
+target_link_libraries(zen-recorder
+    PUBLIC  loom zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+add_library(loom::recorder ALIAS zen-recorder)
+
+# DELIBERATELY NOT loom_weave_build_contract(), for zen-terminal's reason (POP-05): nothing
+# loadable links this target, so contracting it would put an artifact on the roll that the
+# build-graph sweep does not require, which is exactly the drift `weave_population` names.
+
 # ---- Console (the first doing-layer component: the engine, then a terminal) ------------
 #
 # A message-native bus participant — discover, compose, gate-send, receive replies into an
@@ -550,6 +576,7 @@ if(LOOM_INSTALL)
     set_target_properties(loom            PROPERTIES EXPORT_NAME core)
     set_target_properties(zen-switchboard PROPERTIES EXPORT_NAME switchboard)
     set_target_properties(zen-terminal    PROPERTIES EXPORT_NAME terminal)
+    set_target_properties(zen-recorder    PROPERTIES EXPORT_NAME recorder)
     set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
     set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
 
@@ -569,7 +596,7 @@ if(LOOM_INSTALL)
     # The UI trio, the console, the TUI, the bridge and the SDL skin still stay home for the
     # reasons written at the top of this section; nothing about that changed, and the terminal
     # core deliberately depends on NONE of them.
-    install(TARGETS loom zen-switchboard zen-terminal zen-sanitize zen-warnings
+    install(TARGETS loom zen-switchboard zen-terminal zen-recorder zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

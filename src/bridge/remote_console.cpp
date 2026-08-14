@@ -243,10 +243,11 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
             break;
         }
         TapEvent t;
-        t.kind = kind == kTapDelivered  ? "Delivered"
-                 : kind == kTapRefused  ? "Refused"
-                 : kind == kTapDied      ? "Died"
-                                         : "Revived";
+        t.kind = kind == kTapDelivered       ? "Delivered"
+                 : kind == kTapRefused       ? "Refused"
+                 : kind == kTapHandlerFailed ? "HandlerFailed"
+                 : kind == kTapDied          ? "Died"
+                                             : "Revived";
         t.target = loom::WeaveId{target};
         t.sender = loom::WeaveId{sender};
         t.schema = std::string(schema);

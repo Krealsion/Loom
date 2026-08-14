@@ -135,9 +135,21 @@ struct DeliveryOutcome {
     Refusal refusal{}; ///< populated iff disposition == Refused
 };
 
-/// What an observer/tap is told about. Deliveries (Delivered/Refused) and
-/// lifecycle transitions (Died/Revived) flow through the same hook.
-enum class EventKind : std::uint8_t { Delivered, Refused, Died, Revived };
+/// What an observer/tap is told about. Deliveries (Delivered/Refused/
+/// HandlerFailed) and lifecycle transitions (Died/Revived) flow through the same
+/// hook.
+///
+/// `HandlerFailed` says ONE thing and deliberately not a second: the handler was
+/// entered and did not complete normally. Loom does not say what it did - its
+/// journal slot stays `Pending`, "no outcome was recorded" (MSG-10) - and the
+/// event carries no reason, because Loom has none: a native handler's exception
+/// is rethrown to the host unexamined, and a loaded weave's is already caught at
+/// the ABI boundary, where only a status crosses. It exists because the
+/// alternative was worse in two different ways at once: a native throw produced
+/// NO event at all, so an observer's record read as though the delivery never
+/// happened, and a loaded weave's failure produced a `Delivered` event, which is
+/// the same silence wearing a success's clothes.
+enum class EventKind : std::uint8_t { Delivered, Refused, Died, Revived, HandlerFailed };
 
 struct BusEvent {
     EventKind kind = EventKind::Delivered;
@@ -171,6 +183,46 @@ struct BusEvent {
     /// different time and may already disagree.
     /// MSG-07; docs/laws/messaging-laws.md
     std::string authored_role{};
+    /// WHICH CONVERSATION, AS THE SENDER NAMED IT - the envelope's correlation,
+    /// copied verbatim. A number the sender chooses (ANS-05): it identifies and
+    /// it authenticates NOTHING, and 0 is both "none stated" and a legal choice.
+    /// It is here because an observer that cannot see which ask an answer belongs
+    /// to cannot show a conversation at all; the fact was already on the envelope
+    /// and was simply not carried out.
+    std::uint64_t correlation = 0;
+    /// THE ROLE THIS DELIVERY WAS ADDRESSED TO - the office the SENDER named,
+    /// resolved to `target` at dispatch. Empty for a directed send and for a
+    /// publication, which name no role at all.
+    ///
+    /// A DIFFERENT QUESTION FROM `authored_role`, and the two are not
+    /// interchangeable: this is whose door was knocked on, that is which office
+    /// the speaker spoke as. Without it the resolution is unrecoverable - an
+    /// observer sees the WeaveId that answered and cannot tell whether it was
+    /// addressed personally or as the holder of a slot.
+    std::string addressed_role{};
+    /// WHICH DELIVERY WAS BEING DISPATCHED WHEN THIS ONE WAS ENQUEUED. 0 when
+    /// nothing was - a host send between turns, or the first message of a turn.
+    ///
+    /// SYNCHRONOUS DISPATCH ANCESTRY, AND NOTHING WIDER. It answers "this message
+    /// was authored from inside the handling of that one", which is exactly what
+    /// the single-minded FIFO already knows and never wrote down. It is NOT
+    /// causality: a message an external operation produces is enqueued from
+    /// inside whatever delivery happened to be draining it (a timer beat, say),
+    /// so its dispatch parent is that beat and not the request the operation
+    /// belongs to. Long-lived semantic relation is what a correlation or an
+    /// application's own operation identifier is for, and this field must never
+    /// be read as one.
+    std::uint64_t dispatch_parent = 0;
+    /// HOW LONG THE HANDLER HELD THE ONE MIND, in nanoseconds, measured on the
+    /// steady clock around the `handle` call alone. 0 on every event that ran no
+    /// handler (a refusal, a lifecycle transition).
+    ///
+    /// A DURATION, NEVER A TIME. Loom stamps no message with a clock reading and
+    /// this does not begin doing so: it is the elapsed measure of one call, which
+    /// is meaningful without any shared notion of when. It is wall/monotonic
+    /// rather than CPU time deliberately - in an organism with a single mind,
+    /// blocking IS the defect worth seeing, whoever the blocking is spent on.
+    std::uint64_t handler_elapsed_ns = 0;
 };
 
 using Observer = std::function<void(const BusEvent&)>;
@@ -677,6 +729,24 @@ public:
     /// hold exactly that.
     void note_seam_refusal(WeaveId sender, WeaveId target, std::string_view claimed_name,
                            std::uint32_t claimed_version, const Refusal& refusal);
+
+    /// THE DELIVERY BEING DISPATCHED RIGHT NOW DID NOT COMPLETE NORMALLY - said
+    /// by the only caller in a position to know, the Kernel's `HostAdapter`,
+    /// whose loaded weave reports failure as an ABI status rather than as an
+    /// exception (`docs/reference/dynamic-abi.md`: a library's exceptions are
+    /// caught at the seam and never reach this bus).
+    ///
+    /// It records nothing and refuses nothing. It sets one bit for the length of
+    /// this delivery, so `deliver_one` emits `HandlerFailed` instead of
+    /// `Delivered` and writes no journal outcome - which is exactly what the
+    /// native throwing path already does. Both seams, one fact, one word for it.
+    ///
+    /// Outside a dispatch it does nothing at all: there is no delivery to be
+    /// speaking about, and inventing one would be worse than saying nothing.
+    /// Callable by the host because holding a `Switchboard&` is already root
+    /// authority - the same reason `note_seam_refusal` is.
+    /// MSG-10; docs/laws/messaging-laws.md
+    void note_handler_failure() noexcept;
 
     /// The fate of a previously-issued Ticket (Pending until pumped). The journal retains
     /// only the most recent `kJournalCapacity` outcomes (see below), so a Ticket older than
@@ -1187,6 +1257,12 @@ private:
         /// LAST, like `answer_target` and for the same reason: every ordinary
         /// enqueue brace-initializes this struct and stops before it.
         PendingAdmission admission{};
+        /// WHICH DELIVERY WAS BEING DISPATCHED WHEN THIS ENVELOPE WAS ENQUEUED.
+        /// Stamped by the bus from `current_dispatch_seq_`, never by a caller -
+        /// the same discipline `sender_life` and `provenance` keep, and for the
+        /// same reason: a fact ABOUT a message must not be one the message can
+        /// carry in. 0 when nothing was being dispatched.
+        std::uint64_t dispatch_parent = 0;
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
@@ -1766,6 +1842,16 @@ private:
     /// Meaningful only inside deliver_one's call to handle(); `current_target_`
     /// invalid means no delivery is live, so nobody may answer.
     WeaveId current_target_{};
+    /// THE SEQ OF THE DELIVERY BEING DISPATCHED - the number `current_target_`
+    /// is the recipient of. Set at the same statement, cleared by the same
+    /// guard, and read by every enqueue path so a message authored inside a
+    /// handler carries the delivery it was authored from. 0 outside a dispatch.
+    std::uint64_t current_dispatch_seq_ = 0;
+    /// ...AND WHETHER THAT DELIVERY'S HANDLER REPORTED FAILURE ACROSS THE ABI
+    /// SEAM. Only `note_handler_failure()` sets it; `deliver_one` clears it
+    /// before every handler call and reads it after. A native handler needs no
+    /// such bit - it throws, and the catch is the report.
+    bool handler_reported_failure_ = false;
     ReplyAuthority authority_{};
     DeliveryFacts delivery_{};
 
@@ -1815,6 +1901,7 @@ private:
         explicit DeliveryScope(Switchboard& sb) noexcept : sb_(sb) {}
         ~DeliveryScope() {
             sb_.current_target_ = WeaveId{};
+            sb_.current_dispatch_seq_ = 0;
             sb_.authority_ = ReplyAuthority{};
             sb_.delivery_ = DeliveryFacts{};
         }

@@ -305,6 +305,9 @@ void BridgeServer::on_tap(const loom::BusEvent& e) {
     case loom::EventKind::Revived:
         kind = kTapRevived;
         break;
+    case loom::EventKind::HandlerFailed:
+        kind = kTapHandlerFailed;
+        break;
     }
     std::string body;
     put_u8(body, kind);

@@ -9,6 +9,11 @@
 //   ZEN_WEAVE_MALFORMED_MESSAGE   — emit a message missing a required field
 //   ZEN_WEAVE_STATE_V2            — bump the state schema version (reload mismatch)
 //   ZEN_WEAVE_CRASH_ON_MAGIC      — abort mid-handle on the magic seq 0xDEAD
+//   ZEN_WEAVE_THROW_ON_MAGIC      — THROW mid-handle on the magic seq 0xDEAD. Not a
+//                                   crash: the exception is caught at the library's own
+//                                   ABI boundary (do_handle) and crosses back as a
+//                                   status, which is the ONE path on which the host can
+//                                   learn a loaded handler did not finish (RTH-1)
 //   ZEN_WEAVE_CRASH_ON_REVIVE     — abort on revive (drives reload-then-quarantine)
 //   ZEN_WEAVE_LOW_RELOADS         — max_reloads = 3 (fast crash-budget exhaustion)
 //   ZEN_WEAVE_SILENT              — handle never replies (liveness: cannot stall host)
@@ -89,6 +94,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #ifdef ZEN_WEAVE_NET_PROBE
@@ -549,6 +555,14 @@ public:
 #ifdef ZEN_WEAVE_CRASH_ON_MAGIC
         if (seq == 0xDEAD) {
             std::abort(); // crash mid-handle; the isolation host must contain this
+        }
+#endif
+#ifdef ZEN_WEAVE_THROW_ON_MAGIC
+        if (seq == 0xDEAD) {
+            // Deliberately an exception and not an abort: it never leaves this
+            // library (the seam catches everything), so the only way the host can
+            // know is the status the seam returns.
+            throw std::runtime_error("loaded handler failure");
         }
 #endif
         ++count_;

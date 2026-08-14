@@ -125,6 +125,41 @@ TEST_CASE("a loaded DLL Weave mounts and is indistinguishable; both directions a
     CHECK(recorder.weave->handled_values[0] == 7);
 }
 
+TEST_CASE("RTH-1: a loaded handler that throws is reported, not announced as delivered") {
+    // THE ONE ASYMMETRY THIS PHASE HAD TO CLOSE. A native handler's exception
+    // reaches the Switchboard, which now emits `HandlerFailed` and rethrows. A
+    // LOADED weave's exception never gets that far -- `do_handle` catches
+    // everything at the ABI boundary and returns a status -- so the host used to
+    // see a handler that returned, record `Delivered`, and tell every observer
+    // the delivery succeeded. Same fact, two seams, and only one of them said so.
+    Switchboard bus;
+    Kernel kernel(bus);
+    std::vector<std::pair<EventKind, std::uint64_t>> seen;
+    bus.add_observer([&seen](const BusEvent& e) { seen.emplace_back(e.kind, e.seq); });
+
+    LoadResult lr = kernel.load("throws", ZEN_SO_THROWS);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+
+    const Ticket ok = bus.send(lr.id, Message(ping(1)));
+    const Ticket bad = bus.send(lr.id, Message(ping(0xDEAD)));
+    bus.pump(); // the exception NEVER crosses the seam, so this does not throw
+
+    const auto kind_of = [&seen](std::uint64_t seq) {
+        for (const auto& e : seen) {
+            if (e.second == seq) {
+                return e.first;
+            }
+        }
+        return EventKind::Died; // not a delivery kind: "no event for that seq"
+    };
+    CHECK(kind_of(ok.seq) == EventKind::Delivered);
+    CHECK(kind_of(bad.seq) == EventKind::HandlerFailed);
+    // ...and Loom still says nothing about what the failed delivery DID: the
+    // journal slot stays Pending, exactly as it does on the native path (MSG-10).
+    CHECK(bus.outcome(ok).disposition == Disposition::Delivered);
+    CHECK(bus.outcome(bad).disposition == Disposition::Pending);
+}
+
 TEST_CASE("a DLL that emits a malformed message is refused by the host gate, never routed") {
     Switchboard bus;
     Kernel kernel(bus);

@@ -176,6 +176,28 @@ retains the last `kJournalCapacity = 1024` delivery outcomes by ticket
 seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
 inspect/manipulate *by message* where a weave opts in.
 
+**What a `BusEvent` carries, and what each field is NOT** (RTH-1 added the last
+four; every one of them was already on the private `Envelope` and was simply not
+carried out to an observer):
+
+| Field | Is | Is not |
+|---|---|---|
+| `seq` | the delivery's identity on this bus | 0 on a lifecycle event, which is not a delivery |
+| `sender` / `target` | the bus's own stamp, and the RESOLVED recipient | anything the sender chose |
+| `addressed_role` | the office the sender NAMED, resolved to `target` at dispatch | the office the sender spoke as — that is `authored_role` |
+| `correlation` | the number the sender put on the conversation | authority of any kind ([ANS-05](../laws/answer-authority-laws.md)); 0 is both "none stated" and a legal choice |
+| `dispatch_parent` | which delivery was being dispatched when this one was ENQUEUED | causality. An async observation names the delivery that *drained* it — a timer beat, say — not the request its operation belongs to |
+| `handler_elapsed_ns` | how long the handler held the one mind, on the steady clock | a time. Loom stamps no message with a clock reading; this is one call's elapsed measure and is 0 wherever no handler ran |
+| `payload` | the complete admitted `Value`, **valid only during the callback** | durable. It points into a `Message` that dies when the delivery returns; a retainer must copy or serialize inside the callback |
+
+`EventKind::HandlerFailed` is a fourth delivery kind beside `Delivered` and
+`Refused`: the handler was entered and did not complete
+([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
+It carries no reason, and the journal records no outcome for it.
+
+A bounded, structured, host-side consumer of all of this ships with the Loom —
+see [recorder](recorder.md).
+
 An observer may **subscribe or unsubscribe from inside a notification**
 ([MSG-11](../laws/messaging-laws.md#msg-11--every-event-has-its-own-view-of-the-tap-list)).
 Each event fixes its recipients at entry, so one added during an event joins at

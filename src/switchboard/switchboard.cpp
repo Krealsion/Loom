@@ -6,6 +6,8 @@
 #include <zen/gate.hpp>
 #include <zen/serialize.hpp>
 
+#include <chrono>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -13,6 +15,23 @@
 namespace loom {
 
 namespace {
+
+/// HOW LONG THE HANDLER HELD THE ONE MIND. Two `steady_clock::now()` reads per
+/// delivery, and nothing else: no counters, no accumulation, no second message.
+/// The measure is a DURATION and never a time - Loom still stamps no message
+/// with a clock reading, and this does not begin to (RTH-1).
+///
+/// Measured cost on the canonical lane (WSL/GCC 11.4, x86-64): a pair of reads
+/// is ~35 ns, which at the ~300 deliveries/s an idle Zengine application
+/// produces is ~10 us per second of runtime - about one part in 100,000. That
+/// is why it is unconditional rather than an option: an instrument nobody can
+/// switch on is one nobody uses, and the price here is below the noise of the
+/// dispatch it measures.
+std::uint64_t elapsed_ns_since(std::chrono::steady_clock::time_point t0) noexcept {
+    const auto d = std::chrono::steady_clock::now() - t0;
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(d).count();
+    return ns < 0 ? 0 : static_cast<std::uint64_t>(ns);
+}
 
 /// The (name, version) pairs a set of send rules actually NAME (LIFE-08). A
 /// wildcard rule names nothing, so it contributes nothing: `allow_any` is
@@ -500,6 +519,11 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
     Envelope env{std::move(msg), target, seq, gated, std::string{}, life};
     env.preparation = preparation; // invalid for every caller but one
+    // ...AND WHICH DELIVERY THIS WAS AUTHORED FROM (RTH-1). Read from the bus's
+    // own dispatch state for the same reason the life stamp is read from the
+    // bus's own record: it is a fact about the message, so the message never
+    // gets to say it. 0 when nothing was being dispatched.
+    env.dispatch_parent = current_dispatch_seq_;
     queue_.push_back(std::move(env));
     return Ticket{seq};
 }
@@ -514,7 +538,9 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     // verified fact.
     msg.provenance = std::move(provenance);
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
-    queue_.push_back(Envelope{std::move(msg), WeaveId{}, seq, gated, std::move(role), life});
+    Envelope env{std::move(msg), WeaveId{}, seq, gated, std::move(role), life};
+    env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from (RTH-1)
+    queue_.push_back(std::move(env));
     return Ticket{seq};
 }
 
@@ -533,6 +559,8 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
     ev.sender = sender;
     ev.schema_name = msg.payload.schema().name();
     ev.schema_version = msg.payload.schema().version();
+    ev.correlation = msg.correlation;
+    ev.dispatch_parent = current_dispatch_seq_;
     ev.refusal = r;
     emit(ev);
     return Ticket{seq};
@@ -772,8 +800,21 @@ void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_
     ev.sender = sender;
     ev.schema_name = std::string(claimed_name);
     ev.schema_version = claimed_version;
+    // No correlation: the emission never became a Message, so there is no
+    // envelope to read one off, and manufacturing a 0 that LOOKED chosen would
+    // be the fiction this function's own comment refuses everywhere else.
+    ev.dispatch_parent = current_dispatch_seq_;
     ev.refusal = refusal;
     emit(ev);
+}
+
+void Switchboard::note_handler_failure() noexcept {
+    // Guarded by the dispatch state rather than trusted: called outside a
+    // delivery there is nothing this could be about, and a bit set then would
+    // attach to whatever delivery came next.
+    if (current_target_.valid()) {
+        handler_reported_failure_ = true;
+    }
 }
 
 Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
@@ -791,6 +832,7 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     msg.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
     Envelope env{std::move(msg), to, seq, /*gated=*/true, std::string{}, life_of(as_sender)};
     env.answer_target = AnswerTarget{true, requester_life, requester_incarnation};
+    env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from (RTH-1)
     // ...and WHICH ASK is being answered, carried out of the conversation the same
     // way it was carried in. Both answer doors reach this line, so an immediate
     // answer and one deferred across a dozen deliveries prove exactly the same
@@ -1177,6 +1219,9 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         Envelope env{Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id,
                      seq, gated, std::string{}, sender_life};
         env.msg.provenance = provenance;
+        // Every recipient's envelope carries the same dispatch parent, because
+        // one authorship moment is what produced them all (RTH-1).
+        env.dispatch_parent = current_dispatch_seq_;
         queue_.push_back(std::move(env));
         ++recipients;
     }
@@ -1389,6 +1434,13 @@ void Switchboard::deliver_one(Envelope env) {
     ev.sender = env.msg.sender;
     ev.schema_name = env.msg.payload.schema().name();
     ev.schema_version = env.msg.payload.schema().version();
+    // THREE FACTS THE ENVELOPE ALREADY HELD AND THE TAP USED TO DROP (RTH-1).
+    // Set before any refusal branch, exactly as the authorship fact below is, so
+    // a refused delivery is as legible as a delivered one: which conversation,
+    // which office was addressed, and which delivery this was authored from.
+    ev.correlation = env.msg.correlation;
+    ev.addressed_role = env.role;
+    ev.dispatch_parent = env.dispatch_parent;
     // The STAMPED authorship fact, read from the envelope — never a role_of()
     // lookup, which would report current membership instead of historical
     // authorship (MSG-07). Set before any refusal branch, so a refused
@@ -1600,6 +1652,10 @@ void Switchboard::deliver_one(Envelope env) {
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    // WHETHER THE HANDLER COMPLETES IS A FACT ABOUT THIS DELIVERY, so the bit is
+    // cleared here rather than trusted to have been cleared by the last one.
+    handler_reported_failure_ = false;
+    std::exception_ptr failure;
     {
         // THE AMBIENT DELIVERY CONTEXT LIVES IN THIS BLOCK AND NOWHERE ELSE (MSG-10).
         // The guard is what makes "this stack frame" true on the path where the
@@ -1612,6 +1668,11 @@ void Switchboard::deliver_one(Envelope env) {
         // and it dies when the handler returns. A role changing hands after this
         // point hands the new holder nothing: it never received this request.
         current_target_ = env.target;
+        // ...AND WHICH DELIVERY THAT IS, so a message this handler authors can be
+        // stamped with the delivery it was authored from. One statement, one
+        // guard, one lifetime — the dispatch seq is exactly as scoped as the
+        // target it belongs to (RTH-1).
+        current_dispatch_seq_ = env.seq;
         // ...AND IT REMEMBERS WHO ASKED, not merely where to send (ANS-03). Captured
         // HERE, at the delivery that earns the authority, so that an answer produced
         // later — this handler's, or a deferred one spent minutes from now — is bound
@@ -1653,11 +1714,41 @@ void Switchboard::deliver_one(Envelope env) {
         // Switchboard — so anything it sends is stamped with its identity and gated
         // against its grant.
         WeaveBus weave_bus(*this, env.target);
-        rec->weave->handle(trusted, weave_bus); // may enqueue further deliveries
+        // THE EXCEPTION IS CAUGHT AND NOT SWALLOWED (MSG-10). It is held, so that
+        // this delivery's abnormal exit becomes an observable FACT before the
+        // stack keeps unwinding, and it is rethrown below unexamined and
+        // untranslated. What is bought is the difference between a history that
+        // says "the handler did not finish" and one that says nothing at all.
+        const std::chrono::steady_clock::time_point started =
+            std::chrono::steady_clock::now();
+        try {
+            rec->weave->handle(trusted, weave_bus); // may enqueue further deliveries
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ev.handler_elapsed_ns = elapsed_ns_since(started);
     } // ...and the authority does not outlive the handler, by ANY exit path.
     // Cleared BEFORE the journal and the tap, exactly as it was when the three
     // assignments sat here: an observer of a Delivered event is not inside the
     // delivery and must not find one live.
+    if (failure || handler_reported_failure_) {
+        // NO JOURNAL OUTCOME, on either seam. "Delivered" would claim the handler
+        // ran to completion and "Refused" would claim Loom declined it; both are
+        // false and the slot's `Pending` already means the true thing — no
+        // outcome was recorded (MSG-10). The tap gets the fact instead, because
+        // an observer is the only thing that can carry it anywhere.
+        ev.kind = EventKind::HandlerFailed;
+        ev.payload = &trusted.payload;
+        emit(ev);
+        if (failure) {
+            // ...and out to the host, exactly as before. An observer that throws
+            // from the emission above replaces this exception with its own —
+            // ordinary C++ propagation, and the same trade MSG-10 already makes
+            // for an observer that throws on any other event.
+            std::rethrow_exception(failure);
+        }
+        return;
+    }
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
     ev.payload = &trusted.payload;
@@ -1970,6 +2061,7 @@ AdmitResult Switchboard::schedule_admission(WeaveId candidate, WeaveId incumbent
     Envelope act{std::move(activation), candidate, seq, /*gated=*/false, std::string{},
                  /*sender_life=*/0};
     act.admission = PendingAdmission{true, cand_ref, inc_ref, owner, role, txn};
+    act.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from (RTH-1)
     auto at = queue_.begin();
     for (; at != queue_.end(); ++at) {
         if (at->target == candidate || (!at->role.empty() && at->role == role)) {
@@ -2105,6 +2197,8 @@ void Switchboard::deliver_admission(Envelope env) {
     // Ordinary sends are unaffected — they never consulted this.
     Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    handler_reported_failure_ = false;
+    std::exception_ptr failure;
     {
         // Scoped exactly as the ordinary path is (MSG-10): a candidate's very
         // first breath is still native code, and it may still throw. The topology
@@ -2113,11 +2207,31 @@ void Switchboard::deliver_admission(Envelope env) {
         // delivery that ended.
         const DeliveryScope delivering(*this);
         current_target_ = env.target;
+        current_dispatch_seq_ = env.seq;
         authority_ = ReplyAuthority{};
         delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
                                   env.msg.correlation, TxnId{}};
         WeaveBus weave_bus(*this, env.target);
-        cand->weave->handle(trusted, weave_bus);
+        const std::chrono::steady_clock::time_point started =
+            std::chrono::steady_clock::now();
+        try {
+            cand->weave->handle(trusted, weave_bus);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ev.handler_elapsed_ns = elapsed_ns_since(started);
+    }
+    if (failure || handler_reported_failure_) {
+        // A first breath that did not finish is still a first breath that
+        // happened: the topology has moved and the transaction has committed,
+        // both already, and none of that is unmade by saying so (MSG-10).
+        ev.kind = EventKind::HandlerFailed;
+        ev.payload = &trusted.payload;
+        emit(ev);
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        return;
     }
     record(env.seq, Disposition::Delivered, Refusal{});
     ev.kind = EventKind::Delivered;
