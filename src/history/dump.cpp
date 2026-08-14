@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-#include <zen/recorder/dump.hpp>
+#include <zen/history/dump.hpp>
 
 #include <ostream>
 
@@ -31,13 +31,19 @@ std::string hex(const std::string& bytes, std::size_t limit) {
 } // namespace
 
 std::string render_record(const HistoryRecord& rec) {
-    std::string line = "#" + std::to_string(rec.record_seq);
-    line += " [" + std::string(name_of(rec.retention)) + "]";
+    // A RECORD NOBODY NUMBERED IS NOT WEARING A RECORDER'S IDENTITY. A Logger's
+    // copy of a fact carries `record_seq == 0` and an empty `held` mask, both
+    // honestly — so printing `#0 [none]` in front of it would dress a durable
+    // record as a live one that had been forgotten by every window.
+    std::string line;
+    if (rec.record_seq != 0) {
+        line = "#" + std::to_string(rec.record_seq) + " [" + describe_held(rec.held) + "] ";
+    }
     if (rec.kind == RecordKind::RecorderPolicy) {
-        line += " policy: " + rec.note;
+        line += "policy: " + rec.note;
         return line;
     }
-    line += rec.seq != 0 ? " seq=" + std::to_string(rec.seq) : std::string(" seq=-");
+    line += rec.seq != 0 ? "seq=" + std::to_string(rec.seq) : std::string("seq=-");
     if (rec.kind == RecordKind::Lifecycle) {
         line += " lifecycle weave#" + std::to_string(rec.target.value);
         line += rec.from_last_known_good ? " (from last known good)" : "";
@@ -125,10 +131,13 @@ void dump_history(const Recorder& rec, std::ostream& out, const DumpOptions& opt
         << "\n";
     out << "  payloads: " << b.payloads_retained << " held (" << b.payload_bytes << " bytes), "
         << b.payloads_forgotten << " forgotten\n";
-    if (!rec.log_path().empty()) {
-        out << "  log: " << rec.log_path() << " — " << c.log_records << " records, "
-            << c.log_bytes << " bytes" << (rec.logging() ? "" : " (closed or stopped)") << "\n";
-    }
+    // THE THREE WINDOWS, SEPARATELY. A single "retained" number would hide the one
+    // thing RTH-1a exists to make visible: that a shape kept out of recent context
+    // is still kept.
+    out << "  windows: recent " << b.recent_held << "/" << rec.policy().recent_capacity
+        << ", protected " << b.protected_held << "/" << rec.policy().protected_capacity
+        << ", last-call " << b.last_call_held << " over " << b.shapes_observed
+        << " observed shapes\n";
     dump_body(rec.snapshot(), out, opts, &rec);
     if (!opts.tallies) {
         return;
@@ -136,7 +145,7 @@ void dump_history(const Recorder& rec, std::ostream& out, const DumpOptions& opt
     out << "  by shape:\n";
     for (const ShapeTally& t : rec.tallies()) {
         out << "    " << t.shape << ": observed " << t.observed << ", recorded " << t.recorded
-            << ", declined " << t.declined << "\n";
+            << ", declined " << t.declined << ", last-call " << t.last_call_held << "\n";
     }
 }
 
@@ -144,6 +153,39 @@ void dump_records(const std::vector<HistoryRecord>& records, std::ostream& out,
                   const DumpOptions& opts) {
     out << "records: " << records.size() << "\n";
     dump_body(records, out, opts, nullptr);
+}
+
+std::string render_log_record(const LogRecord& rec) {
+    // THE ORIGIN FIRST, ALWAYS. A durable stream mixes what the bus said with what
+    // the host said, and a line that led with the fact would let a reader take a
+    // diagnostic for a message. Nothing here can be read without meeting the
+    // discriminant first.
+    std::string line = "L" + std::to_string(rec.log_seq) + " " + name_of(rec.origin) + " ";
+    switch (rec.origin) {
+    case LogOrigin::BusObservation:
+        line += render_record(rec.observation);
+        break;
+    case LogOrigin::Diagnostic:
+        line += std::string(name_of(rec.severity)) + " [" + rec.source + "] " + rec.text;
+        break;
+    case LogOrigin::PolicyChange:
+        line += rec.text;
+        break;
+    }
+    return line;
+}
+
+void dump_log(const std::vector<LogRecord>& records, std::ostream& out,
+              const DumpOptions& opts) {
+    out << "log: " << records.size() << " durable records\n";
+    std::size_t first = 0;
+    if (opts.limit != 0 && records.size() > opts.limit) {
+        first = records.size() - opts.limit;
+        out << "  (" << first << " older records not shown)\n";
+    }
+    for (std::size_t i = first; i < records.size(); ++i) {
+        out << "  " << render_log_record(records[i]) << "\n";
+    }
 }
 
 } // namespace loom

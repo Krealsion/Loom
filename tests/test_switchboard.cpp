@@ -576,6 +576,39 @@ TEST_CASE("STF-1: an observer that throws propagates, and later observation stil
     CHECK(behind == 1);
 }
 
+TEST_CASE("RTH-1a: an observer that throws on HandlerFailed REPLACES the handler's exception") {
+    // A KNOWN, ASSERTED TRADE, pinned rather than repaired. RTH-1 noted it in
+    // prose; this makes it a fact a test states, so that a later phase which wants
+    // to change it changes a red test rather than discovering the behaviour.
+    //
+    // `deliver_one` holds the handler's exception, emits `HandlerFailed` so the
+    // abnormal exit is observable, and only then rethrows. An observer that throws
+    // from that emission unwinds first — ordinary C++ propagation, and the same
+    // trade MSG-10 already makes on every other event. It is NOT special to this
+    // event and there is no error channel on which the loss could be reported.
+    Switchboard bus;
+    Registered r = reg(bus, {ping_schema()});
+    r.weave->on_handle = [](const Message&, Bus&, ProbeWeave&) {
+        throw std::runtime_error("the ORIGINAL failure, from the handler");
+    };
+    bool saw_failure_event = false;
+    bus.add_observer([&saw_failure_event](const BusEvent& e) {
+        if (e.kind == EventKind::HandlerFailed) {
+            saw_failure_event = true;
+            throw std::logic_error("the OBSERVER's failure");
+        }
+    });
+
+    const Ticket t = bus.send(r.id, Message(ping(1)));
+    // The observer's, not the handler's. That is the cost, stated.
+    CHECK_THROWS_AS(bus.pump(), std::logic_error);
+    CHECK(saw_failure_event);
+    // ...and every other truth is unchanged: Loom recorded no outcome (MSG-10),
+    // and the bus is usable afterwards.
+    CHECK(bus.outcome(t).disposition == Disposition::Pending);
+    bus.pump();
+}
+
 // ---------------------------------------------------------------------------
 // Observer notification under subscription mutation.
 // ---------------------------------------------------------------------------

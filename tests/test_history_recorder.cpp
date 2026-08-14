@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// RTH-1 — the host-side recorder, and the substrate facts it is built on.
+// RTH-1 (corrected by RTH-1a) — the host-side recorder as VOLATILE WORKING MEMORY.
 //
-// The cases below are grouped the way the phase argued: first that the bus now
-// carries the facts a history needs, then that the recorder keeps them
-// truthfully, then that it is honest about what it has forgotten.
+// The cases below are grouped the way the phases argued: first that the bus
+// carries the facts a history needs, then that the recorder keeps them truthfully
+// in its three windows, then that it is honest about what it has forgotten. What
+// it PERSISTS is no longer a question about this component at all — see the
+// `logger` suite, which owns durability and never reads a Recorder.
 
 #include <doctest.h>
 
 #include "switchboard_fixtures.hpp"
 
-#include <zen/recorder/dump.hpp>
-#include <zen/recorder/recorder.hpp>
+#include <zen/history/dump.hpp>
+#include <zen/history/recorder.hpp>
 
 #include <chrono>
-#include <cstdio>
-#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -51,21 +51,6 @@ std::size_t count_of(const std::vector<HistoryRecord>& all, const std::string& s
     }
     return n;
 }
-
-/// A scratch path that does not collide between cases in one run.
-std::string scratch_log(const char* stem) {
-    static int counter = 0;
-    ++counter;
-    return std::string("zen-rth1-") + stem + "-" + std::to_string(counter) + ".log";
-}
-
-struct ScratchFile {
-    explicit ScratchFile(const char* stem) : path(scratch_log(stem)) {}
-    ~ScratchFile() { std::remove(path.c_str()); }
-    ScratchFile(const ScratchFile&) = delete;
-    ScratchFile& operator=(const ScratchFile&) = delete;
-    std::string path;
-};
 
 /// An operation's shape, for the async-ancestry case: the payload carries the
 /// operation identity, exactly as the Builder's four observations do.
@@ -305,7 +290,7 @@ TEST_CASE("RTH-1: a handler that throws is a recorded fact, not a silence") {
 TEST_CASE("RTH-1: a failed handler is a rare fact and is protected from ordinary traffic") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
-    policy.shared_capacity = 4;
+    policy.recent_capacity = 4;
     Recorder rec(bus, policy);
     Registered thrower = reg(bus, {greet_schema()});
     Registered quiet = reg(bus, {ping_schema()});
@@ -322,7 +307,7 @@ TEST_CASE("RTH-1: a failed handler is a rare fact and is protected from ordinary
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* p = only_of(all, "Greet");
     REQUIRE(p != nullptr); // forty later messages did not evict it
-    CHECK(p->retention == RetentionClass::Protected);
+    CHECK(held_in(p->held, Held::Protected));
     CHECK(p->outcome == RecordedOutcome::HandlerFailed);
     CHECK(rec.bounds().forgotten > 0); // ...and the shared window did lose things
 }
@@ -411,7 +396,7 @@ TEST_CASE("RTH-1: a payload over the ceiling leaves its metadata standing") {
 TEST_CASE("RTH-1: a shape declared not-retained is counted, never silently dropped") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
-    policy.rules.push_back(RetentionRule{"Tick", RetentionClass::NotRetained, 0, false});
+    policy.rules.push_back(RetentionRule{"Tick", 0, false, false});
     Recorder rec(bus, policy);
     Registered r = reg(bus, {ping_schema(), tick_schema()});
     for (int i = 0; i < 5; ++i) {
@@ -438,8 +423,8 @@ TEST_CASE("RTH-1: a shape declared not-retained is counted, never silently dropp
 TEST_CASE("RTH-1: a dedicated window keeps a shape out of the shared budget") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
-    policy.shared_capacity = 8;
-    policy.rules.push_back(RetentionRule{"Tick", RetentionClass::Dedicated, 32, true});
+    policy.recent_capacity = 8;
+    policy.rules.push_back(RetentionRule{"Tick", 32, false, true});
     Recorder rec(bus, policy);
     Registered r = reg(bus, {ping_schema(), tick_schema()});
     for (int i = 0; i < 20; ++i) {
@@ -458,7 +443,7 @@ TEST_CASE("RTH-1: a dedicated window keeps a shape out of the shared budget") {
 TEST_CASE("RTH-1: a shape's payloads can be declined while its metadata is kept") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
-    policy.rules.push_back(RetentionRule{"Tick", RetentionClass::Shared, 0, false});
+    policy.rules.push_back(RetentionRule{"Tick", 1, true, false});
     Recorder rec(bus, policy);
     Registered r = reg(bus, {tick_schema()});
     bus.send(r.id, Message(tick(1)));
@@ -478,8 +463,8 @@ TEST_CASE("RTH-1: a shape's payloads can be declined while its metadata is kept"
 TEST_CASE("RTH-1: forgotten, never-recorded and never-observed are three different answers") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
-    policy.shared_capacity = 4;
-    policy.rules.push_back(RetentionRule{"Tick", RetentionClass::NotRetained, 0, false});
+    policy.recent_capacity = 4;
+    policy.rules.push_back(RetentionRule{"Tick", 0, false, false});
     Recorder rec(bus, policy);
     Registered r = reg(bus, {ping_schema(), tick_schema()});
 
@@ -572,18 +557,18 @@ TEST_CASE("RTH-1: a policy change is remembered once, and nothing is published t
     const std::uint64_t deliveries_before = rec.counters().observed;
 
     RecorderPolicy next = rec.policy();
-    next.rules.push_back(RetentionRule{"Tick", RetentionClass::NotRetained, 0, false});
-    next.shared_capacity = 64;
+    next.rules.push_back(RetentionRule{"Tick", 0, false, false});
+    next.recent_capacity = 64;
     rec.apply_policy(next);
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     CHECK(all.size() == before + 1);
     const HistoryRecord& note = all.back();
     CHECK(note.kind == RecordKind::RecorderPolicy);
-    CHECK(note.retention == RetentionClass::Protected);
+    CHECK(held_in(note.held, Held::Protected));
     CHECK(note.note.find("Tick") != std::string::npos);
-    CHECK(note.note.find("NotRetained") != std::string::npos);
-    CHECK(note.note.find("shared") != std::string::npos);
+    CHECK(note.note.find("last_n=0") != std::string::npos);
+    CHECK(note.note.find("recent") != std::string::npos);
 
     // NO BUS RECURSION. Nothing was sent, so nothing was observed, so the change
     // did not manufacture the traffic a recorder exists to watch.
@@ -604,7 +589,7 @@ TEST_CASE("RTH-1: shrinking a window destroys nothing, and says how much is over
     REQUIRE(count_of(rec.snapshot(), "Ping") == 20);
 
     RecorderPolicy smaller = rec.policy();
-    smaller.shared_capacity = 5;
+    smaller.recent_capacity = 5;
     rec.apply_policy(smaller);
 
     // PROSPECTIVE: the act of changing the policy released nothing.
@@ -635,102 +620,10 @@ TEST_CASE("RTH-1: a participant's death is a protected record, not a delivery") 
     REQUIRE(all.size() >= 1);
     const HistoryRecord& died = all.back();
     CHECK(died.kind == RecordKind::Lifecycle);
-    CHECK(died.retention == RetentionClass::Protected);
+    CHECK(held_in(died.held, Held::Protected));
     CHECK(died.target == r.id);
     CHECK(died.seq == 0); // a lifecycle transition is not a delivery and has no seq
     CHECK(died.outcome == RecordedOutcome::None);
-}
-
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
-TEST_CASE("RTH-1: the persistent log carries the records the recorder promised") {
-    ScratchFile file("log");
-    Switchboard bus;
-    {
-        Recorder rec(bus);
-        std::string error;
-        REQUIRE(rec.open_log(file.path, &error));
-        Registered r = reg(bus, {ping_schema()});
-        bus.send(r.id, Message(ping(1)));
-        bus.send(r.id, Message(greet("refused")));
-        bus.pump();
-        CHECK(rec.counters().log_records == 2);
-        // ...and a normal final shutdown flushes and closes what it owns.
-    }
-
-    std::vector<HistoryRecord> back;
-    std::string error;
-    REQUIRE(Recorder::read_log(file.path, &back, &error));
-    REQUIRE(back.size() == 2);
-    CHECK(back[0].shape == "Ping");
-    CHECK(back[0].outcome == RecordedOutcome::Delivered);
-    CHECK(back[0].payload == PayloadDisposition::Retained);
-    CHECK(back[1].shape == "Greet");
-    CHECK(back[1].outcome == RecordedOutcome::Refused);
-    CHECK(back[1].refusal == RefusalReason::NotAccepted);
-}
-
-TEST_CASE("RTH-1: a log survives the records the memory window has released") {
-    ScratchFile file("outlives");
-    Switchboard bus;
-    RecorderPolicy policy = default_policy();
-    policy.shared_capacity = 4;
-    {
-        Recorder rec(bus, policy);
-        REQUIRE(rec.open_log(file.path));
-        Registered r = reg(bus, {ping_schema()});
-        for (int i = 0; i < 12; ++i) {
-            bus.send(r.id, Message(ping(i)));
-        }
-        bus.pump();
-        CHECK(rec.bounds().forgotten > 0);
-    }
-    std::vector<HistoryRecord> back;
-    REQUIRE(Recorder::read_log(file.path, &back));
-    // THE LOG IS APPEND-ONLY AND THE WINDOW IS NOT. Twelve were written; the
-    // recorder was holding four when it closed.
-    CHECK(back.size() == 12);
-}
-
-TEST_CASE("RTH-1: a corrupt log is refused by the gate, not believed") {
-    ScratchFile file("corrupt");
-    {
-        std::ofstream out(file.path, std::ios::binary);
-        const char header[4] = {8, 0, 0, 0};
-        out.write(header, 4);
-        out.write("notavalue", 8);
-    }
-    std::vector<HistoryRecord> back;
-    std::string error;
-    CHECK(!Recorder::read_log(file.path, &back, &error));
-    CHECK(!error.empty());
-}
-
-TEST_CASE("RTH-1: the log is bounded, and it says so in the log") {
-    ScratchFile file("budget");
-    Switchboard bus;
-    RecorderPolicy policy = default_policy();
-    policy.log_byte_budget = 600; // a handful of records
-    {
-        Recorder rec(bus, policy);
-        REQUIRE(rec.open_log(file.path));
-        Registered r = reg(bus, {ping_schema()});
-        for (int i = 0; i < 40; ++i) {
-            bus.send(r.id, Message(ping(i)));
-        }
-        bus.pump();
-        CHECK(!rec.logging());              // it stopped
-        CHECK(rec.counters().log_refused > 0);
-        CHECK(rec.snapshot().size() == 41); // ...and the memory window did not
-    }
-    std::vector<HistoryRecord> back;
-    REQUIRE(Recorder::read_log(file.path, &back));
-    REQUIRE(!back.empty());
-    const HistoryRecord& last = back.back();
-    CHECK(last.kind == RecordKind::RecorderPolicy);
-    CHECK(last.note.find("persistence stopped") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +652,267 @@ TEST_CASE("RTH-1: the dump renders what the reader returns, and is not the reade
     CHECK(rec.snapshot().size() == 2);
     const std::vector<HistoryRecord> records = rec.snapshot();
     CHECK(render_record(records.front()).find("Ping") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// RTH-1a — the last-call store, the recent FIFO, and the correction between them
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RTH-1a: every observed shape keeps its most recent observation, by default") {
+    Switchboard bus;
+    Recorder rec(bus);
+    REQUIRE(rec.policy().default_last_n == 1);
+    Registered r = reg(bus, {ping_schema(), tick_schema()});
+    bus.send(r.id, Message(ping(1)));
+    bus.send(r.id, Message(tick(7)));
+    bus.send(r.id, Message(tick(8)));
+    bus.pump();
+
+    const Lookup last_tick = rec.last_of("Tick");
+    REQUIRE(last_tick.horizon == Horizon::Retained);
+    REQUIRE(last_tick.record != nullptr);
+    CHECK(last_tick.record->shape == "Tick");
+    // The LAST one, not the first: a one-deep slot answers "what was the last of
+    // these", which is a different question from "was there ever one".
+    CHECK(rec.last_calls_of("Tick").size() == 1);
+    CHECK(rec.last_of("Ping").horizon == Horizon::Retained);
+    // A shape nobody has mentioned is Unobserved, and that is not the same word.
+    CHECK(rec.last_of("Greet").horizon == Horizon::Unobserved);
+    CHECK(!rec.observed("Greet"));
+    CHECK(rec.observed("Tick"));
+}
+
+TEST_CASE("RTH-1a: a heartbeat can leave the recent FIFO and stay fully discoverable") {
+    // THE CORRECTION, IN ONE CASE. RTH-1 muted a heartbeat by making it
+    // NotRetained, which also made it unfindable. The policy that replaces it says
+    // only that four thousand beats are not four thousand pieces of CONTEXT.
+    Switchboard bus;
+    RecorderPolicy policy = default_policy();
+    policy.recent_capacity = 8;
+    policy.rules.push_back(RetentionRule{"Tick", /*last_n=*/1, /*in_recent=*/false,
+                                         /*retain_payload=*/false});
+    Recorder rec(bus, policy);
+    Registered r = reg(bus, {ping_schema(), tick_schema()});
+
+    for (int i = 0; i < 500; ++i) {
+        bus.send(r.id, Message(tick(i)));
+    }
+    bus.pump();
+    for (int i = 0; i < 6; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+    bus.pump();
+
+    // 1. FIVE HUNDRED BEATS DID NOT FLOOD RECENT CONTEXT.
+    const std::vector<HistoryRecord> ctx = rec.recent();
+    CHECK(ctx.size() <= 8);
+    for (const HistoryRecord& h : ctx) {
+        CHECK(h.shape != "Tick");
+    }
+    // 2. ...AND THE BEAT IS STILL THERE TO BE FOUND.
+    const Lookup last = rec.last_of("Tick");
+    REQUIRE(last.horizon == Horizon::Retained);
+    REQUIRE(last.record != nullptr);
+    CHECK(last.record->shape == "Tick");
+    CHECK(held_in(last.record->held, Held::LastCall));
+    CHECK(!held_in(last.record->held, Held::Recent));
+    // 3. AND THE TRAFFIC IS COUNTED, never silent.
+    bool saw = false;
+    for (const ShapeTally& t : rec.tallies()) {
+        if (t.shape == "Tick") {
+            saw = true;
+            CHECK(t.observed == 500);
+            CHECK(t.recorded == 500);
+            CHECK(t.last_call_held == 1);
+        }
+    }
+    CHECK(saw);
+    // 4. ...and the payload rule is independent of both: metadata kept, bytes not.
+    CHECK(last.record->payload == PayloadDisposition::NotRetained);
+    CHECK(rec.bounds().payload_bytes < 4096);
+}
+
+TEST_CASE("RTH-1a: a rare shape stays discoverable long after it leaves recent context") {
+    Switchboard bus;
+    RecorderPolicy policy = default_policy();
+    policy.recent_capacity = 4;
+    Recorder rec(bus, policy);
+    Registered r = reg(bus, {ping_schema(), tick_schema()});
+
+    bus.send(r.id, Message(tick(1))); // the one-off, first and never again
+    bus.pump();
+    const Lookup while_recent = rec.last_of("Tick");
+    REQUIRE(while_recent.horizon == Horizon::Retained);
+    CHECK(held_in(while_recent.record->held, Held::Recent));
+
+    for (int i = 0; i < 200; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+    bus.pump();
+
+    for (const HistoryRecord& h : rec.recent()) {
+        CHECK(h.shape != "Tick"); // long gone from context
+    }
+    const Lookup after = rec.last_of("Tick");
+    REQUIRE(after.horizon == Horizon::Retained); // ...and still answerable
+    CHECK(!held_in(after.record->held, Held::Recent));
+    CHECK(held_in(after.record->held, Held::LastCall));
+}
+
+TEST_CASE("RTH-1a: removing a shape from the FIFO does not make it unrecordable") {
+    // The stop condition, stated as an assertion rather than as prose. Two shapes,
+    // one muted from context and one silenced outright, and the recorder tells
+    // them apart.
+    Switchboard bus;
+    RecorderPolicy policy = default_policy();
+    policy.rules.push_back(RetentionRule{"Tick", 1, false, true});   // muted
+    policy.rules.push_back(RetentionRule{"Greet", 0, false, false}); // silenced
+    Recorder rec(bus, policy);
+    Registered r = reg(bus, {tick_schema(), greet_schema()});
+    bus.send(r.id, Message(tick(1)));
+    bus.send(r.id, Message(greet("hi")));
+    bus.pump();
+
+    CHECK(rec.last_of("Tick").horizon == Horizon::Retained);
+    // Observed, and deliberately given no slot. NOT `Unobserved` — the recorder saw
+    // it and chose, and those are different facts.
+    CHECK(rec.observed("Greet"));
+    CHECK(rec.last_of("Greet").horizon == Horizon::NotRecorded);
+    CHECK(rec.counters().declined_by_policy == 1);
+}
+
+TEST_CASE("RTH-1a: the counters add up, and a policy note is on neither side of it") {
+    // `observed == recorded + declined_by_policy + declined_internal`, checkable by
+    // hand. A recorder-local note counted as `recorded` would make the history
+    // appear to hold more than it was ever shown — which is the arithmetic a
+    // reader uses to decide whether to trust the rest.
+    Switchboard bus;
+    RecorderPolicy policy = default_policy();
+    policy.rules.push_back(RetentionRule{"Tick", 0, false, false}); // silenced
+    Recorder rec(bus, policy);
+    Registered store = reg(bus, {greet_schema()});
+    rec.blacklist().declare_participant(store.id);
+    Registered r = reg(bus, {ping_schema(), tick_schema()});
+
+    bus.send(store.id, Message(greet("recorder machinery")));
+    bus.send(r.id, Message(ping(1)));
+    for (int i = 0; i < 3; ++i) {
+        bus.send(r.id, Message(tick(i)));
+    }
+    bus.pump();
+    RecorderPolicy next = rec.policy();
+    next.recent_capacity = 100;
+    rec.apply_policy(next); // writes a note, and it is NOT an event
+
+    const RecorderCounters c = rec.counters();
+    CHECK(c.observed == 5);
+    CHECK(c.recorded == 1);
+    CHECK(c.declined_by_policy == 3);
+    CHECK(c.declined_internal == 1);
+    CHECK(c.observed == c.recorded + c.declined_by_policy + c.declined_internal);
+    // ...and the note IS retained, so `retained()` is legitimately one more than
+    // `recorded`. Two different questions, and both answers are honest.
+    CHECK(rec.retained() == 2);
+}
+
+TEST_CASE("RTH-1a: the per-shape last-call depth is a number, and it is honoured") {
+    Switchboard bus;
+    RecorderPolicy policy = default_policy();
+    policy.recent_capacity = 2;
+    policy.rules.push_back(RetentionRule{"Tick", 3, false, true});
+    Recorder rec(bus, policy);
+    Registered r = reg(bus, {tick_schema()});
+    for (int i = 0; i < 10; ++i) {
+        bus.send(r.id, Message(tick(i)));
+    }
+    bus.pump();
+
+    const std::vector<HistoryRecord> kept = rec.last_calls_of("Tick");
+    REQUIRE(kept.size() == 3); // the last three, oldest first
+    CHECK(kept[0].record_seq < kept[1].record_seq);
+    CHECK(kept[1].record_seq < kept[2].record_seq);
+    CHECK(rec.last_of("Tick").record->record_seq == kept[2].record_seq);
+    CHECK(rec.bounds().last_call_held == 3);
+    CHECK(rec.bounds().recent_held == 0); // it competes for no context at all
+}
+
+TEST_CASE("RTH-1a: one fact, several windows, and the mask says which") {
+    Switchboard bus;
+    Recorder rec(bus);
+    Registered r = reg(bus, {ping_schema()});
+    bus.send(r.id, Message(greet("refused"))); // a refusal: structurally protected
+    bus.pump();
+
+    const std::vector<HistoryRecord> all = rec.snapshot();
+    const HistoryRecord* p = only_of(all, "Greet");
+    REQUIRE(p != nullptr); // ONCE, though three windows hold it — there is one of it
+    CHECK(held_in(p->held, Held::Protected));
+    CHECK(held_in(p->held, Held::Recent));
+    CHECK(held_in(p->held, Held::LastCall));
+    CHECK(describe_held(p->held) == "LastCall|Recent|Protected");
+    const RecorderBounds b = rec.bounds();
+    CHECK(b.retained == 1);
+    CHECK(b.recent_held == 1);
+    CHECK(b.protected_held == 1);
+    CHECK(b.last_call_held == 1);
+}
+
+TEST_CASE("RTH-1a: protection decides what is KEPT; the shape decides what takes context") {
+    // RTH-1 trap 3, restated for two windows instead of one. A muted shape's
+    // REFUSALS are still kept — and a storm of them still cannot drown the context
+    // a maker came for.
+    Switchboard bus;
+    RecorderPolicy policy = default_policy();
+    policy.recent_capacity = 4;
+    policy.rules.push_back(RetentionRule{"Greet", 0, false, false}); // silenced outright
+    Recorder rec(bus, policy);
+    Registered r = reg(bus, {ping_schema()});
+
+    for (int i = 0; i < 20; ++i) {
+        bus.send(r.id, Message(greet("nobody accepts this"))); // refusals of a muted shape
+    }
+    bus.pump();
+    for (int i = 0; i < 4; ++i) {
+        bus.send(r.id, Message(ping(i)));
+    }
+    bus.pump();
+
+    // KEPT: the refusals are structural and the shape rule did not swallow them.
+    CHECK(count_of(rec.snapshot(), "Greet") > 0);
+    for (const HistoryRecord& h : rec.snapshot_of("Greet")) {
+        CHECK(h.outcome == RecordedOutcome::Refused);
+        CHECK(held_in(h.held, Held::Protected));
+        CHECK(!held_in(h.held, Held::Recent)); // ...and none of them took context
+    }
+    // ...so recent context is the four Pings, undrowned.
+    const std::vector<HistoryRecord> ctx = rec.recent();
+    REQUIRE(ctx.size() == 4);
+    for (const HistoryRecord& h : ctx) {
+        CHECK(h.shape == "Ping");
+    }
+}
+
+TEST_CASE("RTH-1a: a policy change reseats every shape already being watched") {
+    // The hot path caches each shape's resolved rule on first sight, so a policy
+    // change has to invalidate what it cached. This is the case that goes red if it
+    // does not.
+    Switchboard bus;
+    Recorder rec(bus);
+    Registered r = reg(bus, {tick_schema()});
+    bus.send(r.id, Message(tick(1)));
+    bus.pump();
+    REQUIRE(held_in(rec.last_of("Tick").record->held, Held::Recent));
+
+    RecorderPolicy next = rec.policy();
+    next.rules.push_back(RetentionRule{"Tick", 2, false, true});
+    rec.apply_policy(next);
+
+    for (int i = 0; i < 5; ++i) {
+        bus.send(r.id, Message(tick(i)));
+    }
+    bus.pump();
+    CHECK(rec.last_calls_of("Tick").size() == 2);
+    CHECK(!held_in(rec.last_of("Tick").record->held, Held::Recent));
 }
 
 } // TEST_SUITE("recorder")

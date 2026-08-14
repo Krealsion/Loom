@@ -63,7 +63,7 @@ serialize          portable  31
 compat             portable  10
 integration        portable  4
 fuzz               portable  9
-switchboard        portable  43
+switchboard        portable  44
 provenance         portable  62
 role_authorship    portable  17
 sense              portable  19
@@ -77,10 +77,11 @@ weave_shape        portable  4
 weave              portable  10
 poke               portable  20
 console            portable  27
-recorder           portable  26
+recorder           portable  31
+logger             portable  15
 component          portable  18
 pixel              portable  9
-bridge             portable  19
+bridge             portable  20
 bridge             posix     8
 kernel             kernel    136
 kernel             posix     2

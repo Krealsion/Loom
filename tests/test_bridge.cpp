@@ -889,6 +889,101 @@ TEST_CASE("operator-protocol: discovery, a gate-sent message, and the reply buff
     CHECK(h.greeter->last_sender() == rc.operator_id().value);
 }
 
+TEST_CASE("RTH-1a: a handler that fails reaches a REMOTE operator as HandlerFailed, not Delivered") {
+    // THE BRIDGE HALF OF RTH-1's REPAIR, exercised over a real socket. RTH-1 added
+    // `EventKind::HandlerFailed` and a wire kind for it (protocol v3); this is the
+    // witness that the kind survives the whole path — Switchboard tap, server
+    // encode, wire, client decode — rather than arriving as the `Delivered` a
+    // remote operator would have believed.
+    class Thrower final : public loom::Weave {
+    public:
+        std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
+            return {greet_schema()};
+        }
+        void handle(const loom::Message&, loom::Bus&) override {
+            throw std::runtime_error("the handler did not complete");
+        }
+        loom::Value snapshot() const override {
+            loom::Value v(loom::SchemaBuilder("ThrowerState", 1).build());
+            return v;
+        }
+        loom::Value policy() const override {
+            loom::Value v(loom::lifecycle_policy_schema());
+            v.set("max_reloads", loom::Cell::integer(0));
+            v.set("revive_from_last_good", loom::Cell::boolean(true));
+            return v;
+        }
+        void revive(const loom::Value&) override {}
+    };
+
+    loom::Switchboard bus;
+    const loom::WeaveId tid = bus.register_weave(std::make_unique<Thrower>(),
+                                                 loom::Grant{}.allow_any());
+    std::string err;
+    socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    loom::BridgeServer server(bus, listener);
+    std::atomic<bool> stop{false};
+    std::atomic<int> escaped{0};
+    // The host thread CATCHES. A native handler's exception is rethrown to whoever
+    // pumped (MSG-10), and here that is this loop — so the loop is the "host" that
+    // decides what to do about it, exactly as a real bridge host must.
+    std::thread th([&] {
+        while (!stop.load()) {
+            try {
+                server.wait_and_step(20);
+            } catch (const std::exception&) {
+                escaped.fetch_add(1);
+            }
+        }
+    });
+
+    socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, err);
+    RemoteConsole rc(cs);
+    REQUIRE(rc.connected());
+    REQUIRE(wait_until(
+        [&] {
+            rc.pump();
+            return !rc.weaves().empty();
+        },
+        2000));
+    Arg arg;
+    arg.name = "msg";
+    arg.value = FieldValue{std::string("boom")};
+    const Composed c = rc.compose(tid, "Greet", 1, {arg});
+    CHECK(c.status == Composed::Status::Ready);
+
+    bool saw_failed = false;
+    bool saw_delivered_to_thrower = false;
+    REQUIRE(wait_until(
+        [&] {
+            rc.pump();
+            for (const TapEvent& e : rc.tap()) {
+                if (e.kind == "HandlerFailed") {
+                    saw_failed = true;
+                }
+                if (e.kind == "Delivered" && e.schema == "Greet") {
+                    saw_delivered_to_thrower = true;
+                }
+            }
+            return saw_failed;
+        },
+        3000));
+    CHECK(saw_failed);
+    // ...and the SAME delivery did not also announce itself a success. That is the
+    // silence-wearing-a-success's-clothes RTH-1 found, stated on the wire.
+    CHECK(!saw_delivered_to_thrower);
+    CHECK(escaped.load() > 0); // the exception still reached the host, unswallowed
+    CHECK(kBridgeProtocolVersion >= 3);
+
+    stop.store(true);
+    if (th.joinable()) {
+        th.join();
+    }
+}
+
 TEST_CASE("operator-protocol: the sender is stamped from the connection — a FORGED wire sender loses") {
     Host h;
     socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
