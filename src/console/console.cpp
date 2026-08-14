@@ -68,6 +68,8 @@ const char* event_kind_name(loom::EventKind k) {
         return "Died";
     case loom::EventKind::Revived:
         return "Revived";
+    case loom::EventKind::HandlerFailed:
+        return "HandlerFailed";
     }
     return "?";
 }

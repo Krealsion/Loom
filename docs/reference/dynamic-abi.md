@@ -72,6 +72,26 @@ the ABI directly ([guide](../guides/dynamic-weaves.md)).
 An artifact declaring any other version is refused at load, naming both
 versions ([KERN-04](../laws/kernel-laws.md)).
 
+## A handler that does not finish
+
+The library catches everything at its own boundary: `do_handle` wraps the whole
+call and returns `ZEN_ERR` where an exception escaped, so a loaded weave'''s
+exception never reaches the Switchboard and a pump over one still returns
+normally. What the host does with that status is the part RTH-1 changed. It used
+to be discarded entirely — the message was validly delivered, and the library'''s
+internal error was the library'''s own concern — which is still true and was still
+not the whole truth: the bus then recorded and announced a plain `Delivered` for
+a handler that never completed, which is the one thing an observer most needs not
+to be told.
+
+So the status crosses back as a fact and nothing else. `HostAdapter::handle`
+reports a non-OK status through `Switchboard::note_handler_failure()`, the bus
+emits `EventKind::HandlerFailed` instead of `Delivered`, and it records no
+journal outcome — exactly what the native throwing path already did
+([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
+Nothing is refused, nothing is retried, nothing is translated into a
+`RefusalReason`, and the status reaches no weave.
+
 ## Constructing the tables (BL-4)
 
 **Every in-tree construction of `ZenWeaveAbi` and `ZenHostApi` names its fields**

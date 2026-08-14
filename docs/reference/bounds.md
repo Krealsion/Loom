@@ -24,6 +24,34 @@ than as the contract. The names are grep-able for exactly that reason.
 Also structural (not knobs): one active replacement transaction per incumbent
 *and* per candidate; one preparation conversation per transaction.
 
+## Recorder (host history)
+
+The one bounded surface here whose capacities are **not** fixed constants: a
+recorder's retention is policy a host sets and may change at runtime, so the
+values below are the published defaults rather than the contract. Everything
+else about them follows the same doctrine as the console's windows — history, on
+which nothing is owed, discarded oldest-first, and counted. See
+[recorder](recorder.md).
+
+| Bound | Default | Unit | What it bounds | Overflow behavior |
+|---|---|---|---|---|
+| `kDefaultSharedCapacity` | 4096 | records | the ordinary window | ring: oldest released, counted in `bounds().forgotten` |
+| `kDefaultProtectedCapacity` | 512 | records | facts that must not compete with ordinary traffic (a refusal, a failed handler, a lifecycle transition, a policy change) | ring, its own budget |
+| `kDefaultDedicatedCapacity` | 512 | records | one shape's own window, where a rule asks for one | ring, its own budget |
+| `kDefaultPayloadByteBudget` | 1 MiB | **bytes** | retained payloads, across all windows | oldest payload released; its METADATA is untouched |
+| `kDefaultMaxPayloadBytes` | 64 KiB | bytes | one payload | recorded as `TooLarge`; the metadata still stands |
+| `kDefaultLogByteBudget` | 8 MiB | bytes | the appended persistent log | writing stops, and the log's last record says so |
+
+**Why the payload budget is in bytes and the windows are in records.** RTH-0
+measured the two halves of Zen's traffic ranking differently: an idle
+application's noise is 300 messages a second at 31–47 bytes each, while one
+interactive `SurfaceCanvas` is up to 2.75 KiB and is ~90% of interactive bytes.
+A single budget in entries bounds the wrong thing at one end or the other.
+
+**"Protected" means it does not compete, not that it ispermanent.** Its window is
+bounded like every other and its releases are counted; a recorder that promised
+indefinite memory in RAM would be promising a leak.
+
 ## Console (operator history)
 
 Both windows are **history**: past observations kept for inspection, on which

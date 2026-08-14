@@ -64,11 +64,14 @@ inline constexpr std::uint8_t kTapDelivered = 0;
 inline constexpr std::uint8_t kTapRefused = 1;
 inline constexpr std::uint8_t kTapDied = 2;
 inline constexpr std::uint8_t kTapRevived = 3;
+/// The handler was entered and did not complete normally (RTH-1). NOT a refusal:
+/// Loom declined nothing, and carries no reason to send - see loom::EventKind.
+inline constexpr std::uint8_t kTapHandlerFailed = 4;
 
 /// The operator-protocol version (bumped on any wire change — shape OR vocabulary; Hello/Welcome
-/// carry it). v2 added SendRefused; the addition is compatible in both directions, but the bump is
-/// policy literalism while nothing is deployed.
-inline constexpr std::uint32_t kBridgeProtocolVersion = 2;
+/// carry it). v2 added SendRefused; v3 added the HandlerFailed tap kind. Both additions are
+/// compatible in both directions, but the bump is policy literalism while nothing is deployed.
+inline constexpr std::uint32_t kBridgeProtocolVersion = 3;
 
 } // namespace loom
 

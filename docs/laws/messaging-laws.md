@@ -252,11 +252,24 @@ with the fake.
 LAW — Loom calls two kinds of code it did not write: a native `Weave::handle`,
 and a host observer. An exception escaping either **propagates to the host
 caller** — and Loom restores its own temporary dispatch and delivery state
-before it leaves.
+before it leaves. That a handler did not finish is **announced once, as a fact**,
+and the exception then continues on its way.
 
 MEANS
 - the exception is not swallowed, not translated into a `RefusalReason`, and not
   answered by terminating the process; no weave is quarantined for having thrown;
+- **the tap is told, exactly once, that the handler did not complete**
+  (`EventKind::HandlerFailed`, RTH-1). The event carries the delivery's ordinary
+  facts and the payload, and NO reason — Loom has none to give. It is emitted
+  after the delivery scope is torn down, exactly where a `Delivered` event would
+  have been, and the exception is rethrown immediately afterwards. Before this
+  the throwing path emitted nothing at all, so an observer's record of the bus
+  read as though the delivery had never happened;
+- **the loaded-weave seam says the same word.** A `dlopen`ed weave's exception is
+  caught at the ABI boundary and crosses back as a status; the Kernel's
+  `HostAdapter` reports a non-OK status through `Switchboard::note_handler_failure()`
+  and the bus emits `HandlerFailed` rather than `Delivered`. The exception still
+  never reaches the Switchboard — only the fact does;
 - the dispatch flag is restored, so the bus does not spend the rest of its life
   believing itself reentrant. A later `pump()` or `pump_pending()` dispatches
   normally, and the escaped exception is not a permanent poisoning;
@@ -274,9 +287,14 @@ MEANS
 
 DOES NOT MEAN
 - that Loom says what the failed delivery *did*. Its journal slot stays
-  `Pending` — "no outcome was recorded", neither delivered nor refused. The
-  queue is what says the message was consumed, and STF-1 restores state rather
-  than inventing an outcome;
+  `Pending` — "no outcome was recorded", neither delivered nor refused, **on both
+  seams** — and `HandlerFailed` says only that the handler was entered and did
+  not complete. The queue is what says the message was consumed, and STF-1
+  restores state rather than inventing an outcome;
+- that an observer is safe from the exception. The `HandlerFailed` emission runs
+  before the rethrow, so an observer that throws from it **replaces** the
+  handler's exception with its own — ordinary C++ propagation, and the same trade
+  this law already makes for an observer that throws on any other event;
 - that a handler's effects are rolled back. There is no transaction: sends it
   already enqueued stay enqueued and are delivered by the next turn. (A claim it
   already made likewise stands — [SENSE-02](sense-laws.md) says so, and says it
@@ -285,10 +303,11 @@ DOES NOT MEAN
   before the throw is durable state the handler asked Loom for, not ambient
   authority, and stays spendable ([ANS-02](answer-authority-laws.md)). Only the
   ambient right dies with the frame;
-- that the dynamic seam works this way. A loaded weave's exceptions are caught
-  at the ABI boundary and never reach the Switchboard at all
-  ([dynamic-abi](../reference/dynamic-abi.md)); this law is about the **native**
-  boundary, and STF-1 did not touch the other one;
+- that the dynamic seam propagates. A loaded weave's exceptions are still caught
+  at the ABI boundary and never reach the Switchboard
+  ([dynamic-abi](../reference/dynamic-abi.md)); what crosses is a status, and what
+  the bus does with it is announce `HandlerFailed`. Nothing is rethrown there, so
+  a pump over a throwing loaded weave still returns normally;
 - that Loom is exception-safe in any wider sense, or thread-safe in any sense.
   Dispatch is still single-threaded
   ([MSG-01](#msg-01--single-threaded-fifo-non-reentrant)).
@@ -297,7 +316,11 @@ PROVEN BY — `Switchboard::DispatchGuard` and `Switchboard::DeliveryScope`
 (held across `pump`, `dispatch_at_most`, `deliver_one`, `deliver_admission`);
 suite `switchboard` (a handler throwing through `pump()` and through
 `pump_pending()`; the stale-readiness witness in both its handler and its
-observer form; the deferred answer that survives; the throwing observer).
+observer form; the deferred answer that survives; the throwing observer); suite
+`recorder` (the native throw becomes a `HandlerFailed` record while the journal
+stays `Pending`); suite `kernel` (a loaded weave whose handler throws — the
+`ZEN_WEAVE_THROW_ON_MAGIC` fixture — is `HandlerFailed` on the tap and `Pending`
+in the journal, and the pump does not throw).
 
 ## MSG-11 — Every event has its own view of the tap list
 

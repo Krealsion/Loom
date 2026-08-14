@@ -371,6 +371,9 @@ int main() {
         case loom::EventKind::Revived:
             kind = "Revived";
             break;
+        case loom::EventKind::HandlerFailed:
+            kind = "HandlerFailed";
+            break;
         }
         tap.push_back(Seen{kind, e.schema_name,
                            e.kind == loom::EventKind::Refused ? loom::name_of(e.refusal.reason)

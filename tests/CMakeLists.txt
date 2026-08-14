@@ -54,6 +54,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_weave.cpp
     test_poke.cpp
     test_console.cpp
+    test_recorder.cpp
     test_component.cpp
     test_pixel.cpp
     test_bridge.cpp)
@@ -95,7 +96,7 @@ target_include_directories(zen-tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/console) # tui_render.hpp / terminal.hpp for the tui_map_key pin
 
 target_link_libraries(zen-tests
-    PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-bridge zen-tui
+    PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-recorder zen-bridge zen-tui
             zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(zen-tests PRIVATE zen-kernel)
@@ -159,6 +160,10 @@ zen_add_test_weave(zen_test_weave_b) # an identical "rebuild", for hot-reload
 zen_add_test_weave(zen_test_weave_badsnap ZEN_WEAVE_MALFORMED_SNAPSHOT)
 zen_add_test_weave(zen_test_weave_badmsg ZEN_WEAVE_MALFORMED_MESSAGE)
 zen_add_test_weave(zen_test_weave_v2 ZEN_WEAVE_STATE_V2)
+# RTH-1: a loaded handler that THROWS. Its exception is caught at the ABI seam and
+# returns as a status, which used to be discarded -- so the bus recorded and announced a
+# plain Delivered for a handler that never finished.
+zen_add_test_weave(zen_test_weave_throws ZEN_WEAVE_THROW_ON_MAGIC)
 # 1b (the letter): a predecessor that declares zen.PrepareShutdown and writes a
 # Bequest, and a DIFFERENTLY-SHAPED heir (Counter v2) that claims by role on wake.
 zen_add_test_weave(zen_test_weave_bequeaths ZEN_WEAVE_BEQUEATHS)
@@ -284,6 +289,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_BADSNAP=\"$<TARGET_FILE:zen_test_weave_badsnap>\""
     "ZEN_SO_BADMSG=\"$<TARGET_FILE:zen_test_weave_badmsg>\""
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_weave_v2>\""
+    "ZEN_SO_THROWS=\"$<TARGET_FILE:zen_test_weave_throws>\""
     "ZEN_SO_BEQUEATHS=\"$<TARGET_FILE:zen_test_weave_bequeaths>\""
     "ZEN_SO_HEIR=\"$<TARGET_FILE:zen_test_weave_heir>\""
     "ZEN_SO_WEDGED=\"$<TARGET_FILE:zen_test_weave_wedged>\""
