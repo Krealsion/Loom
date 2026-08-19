@@ -467,9 +467,15 @@ public:
     /// Remove a Weave and hand its ownership back to the caller. Used by hosts
     /// that must destroy a Weave — and any resources it holds, such as a loaded
     /// library instance — in a controlled order. Pending deliveries to a removed
-    /// Weave are refused (NoSuchTarget) at delivery. Its registered schemas
-    /// remain published, and any role it held is released — the slot is free for
-    /// a successor.
+    /// Weave are refused (NoSuchTarget) at delivery, and any role it held is
+    /// released — the slot is free for a successor.
+    ///
+    /// ITS SCHEMA CLAIMS GO WITH IT (LIFE-08). Erasing the record destroys the
+    /// `SchemaClaimScope` built at registration, so this weave's accept-set,
+    /// claim-set, state shape and grant-named send shapes each stop resolving
+    /// UNLESS something else still claims them. A shape two weaves accept
+    /// survives the first one's removal; a shape only this weave named does not.
+    /// docs/laws/lifecycle-laws.md
     ///
     /// `nullptr` MEANS NOTHING WAS REMOVED, and there are two ways to earn it:
     /// the id is unknown, or the id names the weave whose callback is running
