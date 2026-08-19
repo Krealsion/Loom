@@ -76,6 +76,7 @@ schema_codec       portable  7
 weave_shape        portable  4
 weave              portable  10
 poke               portable  20
+describe           portable  24
 console            portable  27
 recorder           portable  31
 logger             portable  15

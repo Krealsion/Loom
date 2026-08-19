@@ -17,7 +17,7 @@
 namespace witness {
 
 class Witness
-    : public loom::WeaveBase<Witness, Tally, loom::Accept<Ping>, loom::Emit<Pong>> {
+    : public loom::WeaveBase<Witness, Tally, loom::Accept<Ping, Nested>, loom::Emit<Pong>> {
 public:
     void on(const Ping& p, loom::Mail& mail) {
         ++state_.handled;
@@ -26,6 +26,14 @@ public:
         // Crossing back out through the C ABI's host callback table: this is the
         // half of the seam a load-only proof would never touch.
         mail.reply(Pong{p.seq});
+    }
+    // Accepted so that this artifact's vocabulary genuinely NESTS. Nothing here
+    // needs to run for the closure witness -- what is under test is whether a
+    // stranger can learn this shape's structure without ever having compiled
+    // against Inner.
+    void on(const Nested& n, loom::Mail&) {
+        ++state_.handled;
+        state_.raw_total += n.one.k;
     }
 };
 

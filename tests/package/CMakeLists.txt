@@ -73,7 +73,12 @@ loom_weave_build_contract(witness-weave)
 
 # ---- 3. the host that loads it through the REAL kernel ----------------------------
 add_executable(witness-host stranger_host.cpp)
-target_link_libraries(witness-host PRIVATE loom::kernel loom::switchboard loom::core)
+# loom::terminal joins the link line for the SELF-DESCRIPTION half of this witness: a
+# stranger that learns a vocabulary by message, then generates a form and composes a
+# message from it, reaches for the composer -- and the composer has to be reachable
+# through find_package exactly as the kernel is. Nothing here adds a compile OPTION.
+target_link_libraries(witness-host
+    PRIVATE loom::kernel loom::switchboard loom::terminal loom::core)
 target_compile_definitions(witness-host PRIVATE
     "ZEN_WITNESS_WEAVE=\"$<TARGET_FILE:witness-weave>\"")
 add_dependencies(witness-host witness-weave)

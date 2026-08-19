@@ -434,6 +434,28 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 
 WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant,
                                     AcceptMode accept_mode) {
+    // A SELF-DESCRIBING WEAVE CANNOT ALSO BE WILDCARD-ACCEPTING.
+    //
+    // The self-description door promises "these are the shapes I accept",
+    // answered from the weave's own declared accept-set. `AnyRegistered` widens
+    // the door set HERE, at delivery, from a registry the weave cannot read — so
+    // the promise would be an understatement that reads exactly like a complete
+    // answer. Refused rather than shipped, so a described vocabulary is always
+    // the enforced one. Checked before the flag is set, and by NAME, so it holds
+    // for a raw loom::Weave that declares the door by hand as well as for the
+    // WeaveBase that gets it automatically.
+    if (accept_mode == AcceptMode::AnyRegistered && incoming) {
+        for (const auto& s : incoming->accepted_schemas()) {
+            if (s && s->name() == kDescribeAcceptedShapeName) {
+                throw std::invalid_argument(
+                    "register_weave: a weave accepting '" +
+                    std::string(kDescribeAcceptedShapeName) +
+                    "' describes its own accept-set, so it cannot also be registered "
+                    "AcceptMode::AnyRegistered — the wildcard accepts shapes the "
+                    "description could never name");
+            }
+        }
+    }
     WeaveId id = register_weave(std::move(incoming), std::move(grant), std::string{});
     if (accept_mode == AcceptMode::AnyRegistered) {
         auto it = weaves_.find(id.value);

@@ -14,6 +14,33 @@
 
 namespace loom {
 
+/// THE SELF-DESCRIPTION DOOR, NAMED HERE BECAUSE THE SWITCHBOARD HAS TO KNOW IT.
+///
+/// The shape itself lives a layer up (zen/weave/describe.hpp), where it is
+/// declared and answered. Its NAME lives here because `register_weave`'s
+/// accept-mode rule is stated in terms of it: a weave whose accept-set declares
+/// this door is promising to answer "these are the shapes I accept" from that
+/// declared set, and `AcceptMode::AnyRegistered` would make the promise false —
+/// the wildcard widens the door set at delivery, on the Switchboard's side,
+/// where the weave cannot see it and so cannot describe it.
+///
+/// So the two are refused together rather than left to produce a truthful-
+/// looking understatement. This is the same rule WeaveBase already keeps at
+/// compile time for the zen.Poke* shapes, one layer down and at runtime: a
+/// weave must not be able to advertise one vocabulary and enforce another.
+/// Nothing in Loom or Zengine registers both today — every AnyRegistered weave
+/// (the console, the bridge's operator proxy) is a raw loom::Weave that carries
+/// no substrate doors at all — so this pins a property rather than changing one.
+///
+/// A string rather than a schema pointer deliberately: this header is the
+/// bottom of the weave layering and must not reach up into it, and matching by
+/// (name, version) is exactly how every other door is keyed.
+inline constexpr const char* kDescribeAcceptedShapeName = "zen.DescribeAccepted";
+
+/// The answer to `kDescribeAcceptedShapeName`. Declared beside it so the pair
+/// has one spelling; used only by the layer above.
+inline constexpr const char* kAcceptedShapesShapeName = "zen.AcceptedShapes";
+
 /// The Weave contract — the unit that lives behind a boundary on the bus.
 ///
 /// (The three weave-layer headers, at a glance: THIS file is the raw contract

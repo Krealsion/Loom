@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace witness {
 
@@ -25,6 +26,25 @@ struct Ping {
 struct Pong {
     std::int64_t seq;
     ZEN_SHAPE(Pong, 1, ZEN_FIELD(seq));
+};
+
+// A NESTED accepted shape, and the component it nests.
+//
+// The weave below Accepts `Nested` and does NOT accept `Inner`. That asymmetry is
+// the whole point: a consumer told only "you may send me Nested" cannot decode
+// Nested at all, because zen.SchemaDesc names a nested message by (name, version)
+// and there is nothing to resolve it against. So this pair is what proves the
+// self-description answer carries its DEPENDENCY CLOSURE and not merely its roots
+// -- across the installed package, and across the real C ABI.
+struct Inner {
+    std::int64_t k;
+    ZEN_SHAPE(Inner, 1, ZEN_FIELD(k));
+};
+
+struct Nested {
+    Inner one;
+    std::vector<Inner> many;
+    ZEN_SHAPE(Nested, 1, ZEN_FIELD(one), ZEN_FIELD(many));
 };
 
 // The weave's state, carrying BOTH field-scope tags. This shape crosses the C ABI in

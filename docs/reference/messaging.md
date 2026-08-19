@@ -167,6 +167,76 @@ Evidence note: across six Night Lab applications, no natural use for ordinary
 reply survived — every response wanted either an *answer* (provable) or a
 *role send* (replacement-surviving). Kept, documented, low-observed-use.
 
+## Self-description — what may be said to this weave
+
+**Ask the target.** Every woven weave (`WeaveBase`) carries a fifth substrate
+door beside the four `zen.Poke*` ones:
+
+```text
+zen.DescribeAccepted {}          ->   zen.AcceptedShapes { referenced?, accepted }
+```
+
+The request is **fieldless and addressed to the target**, because the envelope
+already names who is being asked and the target owns the answer:
+`send_to_role("zengine.timer", DescribeAccepted{})`. There is no directory
+service, no `role` field, no `WeaveId` lookup, and no registry enumeration
+anywhere in the path — Loom has never had a way to enumerate schemas, and this
+does not add one.
+
+The answer is built from `Weave::accepted_schemas()` — **the same vector the
+Switchboard captured as this weave's doors at registration**, which is what
+every delivery is matched against. One store, read twice; there is no second
+acceptance list that could drift from the enforced one.
+
+**Two lists, and the difference is load-bearing:**
+
+| Section | Is | Is not |
+|---|---|---|
+| `accepted` | the ROOTS — the `(name, version)` shapes that may actually be SENT to this target, in the target's own declaration order | filtered, categorised, or ranked. It is the raw accept-set, so it mixes commands, replies a relay accepts, notifications and the substrate doors; Loom encodes no direction metadata and this invents none |
+| `referenced` | the transitive structural CLOSURE the roots nest, in post-order (a schema's own references first), deduplicated by (name, version). Optional; absent means nothing nested | sendable. A dependency is present only so a root can be understood |
+
+The closure is not decoration. `zen.SchemaDesc v1` names a nested message by
+`(name, version)` and `decode_schema` resolves that against a dependency
+`Registry`, so a consumer handed only the roots **cannot decode a root that
+nests anything** — measured, not assumed. Shipping the closure in post-order is
+what makes one round trip self-sufficient for a stranger that never compiled
+against any of these shapes. A shape that is genuinely both a root and a
+dependency appears in both lists; re-registering it is identical and therefore a
+no-op. Consumer side: `decode_accepted_referenced` then `decode_accepted_roots`
+(`zen/weave/describe.hpp`), over `zen.SchemaDesc v1` unchanged — no second
+descriptor format, and `zen.Manifest` is untouched.
+
+**The answer includes the question.** A target genuinely accepts
+`zen.DescribeAccepted`, so it says so. That terminates: the request is
+fieldless, so it names no dependency and describes nothing that describes it
+back.
+
+**Three properties worth stating out loud:**
+
+- **Discovery is an ordinary gated message.** Permission to ask target X about
+  its vocabulary *is* an ordinary `SendRule` for `(zen.DescribeAccepted, 1)` to
+  X or to X's role. Nothing is auto-granted globally, there is no new authority
+  type, and the answer is an ordinary gated send from the target — a weave
+  mounted without `allow_describe_answers` is `CapabilityDenied` at delivery,
+  visible on the tap, exactly as an ungranted poke answer is.
+- **Knowing a door exists is not permission to walk through it.** Receiving
+  `StartTimer v1` in the answer confers nothing toward sending it; the composed
+  message is refused by the ordinary gate like any other. Asking one target
+  confers nothing toward another.
+- **The answer is a SNAPSHOT** — what this target accepted when it answered, and
+  specifically the holder that answered, since `send_to_role` resolves at
+  delivery. It is not live: there is no subscription, no invalidation, no
+  arrival/departure notification and no polling. If the role is swapped
+  afterwards the snapshot is stale, and that is honest rather than a defect.
+
+**A self-describing weave cannot be `AcceptMode::AnyRegistered`.** The wildcard
+widens the door set on the Switchboard's side, where the weave cannot see it and
+so cannot describe it; the two are refused together at `register_weave` rather
+than left to produce a truthful-looking understatement. So self-description is
+available exactly for finitely-declared accept-sets. Every wildcard weave in
+Loom (the console, the bridge's operator proxy) is a raw `loom::Weave` that
+carries no substrate doors at all, so nothing is narrowed by this.
+
 ## Observation
 
 `add_observer` taps every delivery/refusal/lifecycle event (`BusEvent`, with
@@ -269,5 +339,5 @@ drain-to-empty.
 
 ## Tests
 
-Suites `switchboard`, `provenance`, `capabilities`, `poke`; the bridge suite
-for the operator protocol.
+Suites `switchboard`, `provenance`, `capabilities`, `poke`, `describe`; the
+bridge suite for the operator protocol.
