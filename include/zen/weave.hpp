@@ -12,6 +12,7 @@
 /// public API, with no second schema, no second validator, and no change to the
 /// gate, the wire format, the bus, or the kernel.
 
+#include <zen/weave/describe.hpp>
 #include <zen/weave/poke.hpp>
 #include <zen/weave/poke_weave.hpp>
 #include <zen/weave/relay.hpp>

@@ -148,19 +148,39 @@ and it has no consumer yet. F and I are separate entries above and below.
 
 ## Service discovery is not a participant's power
 
-**Status: CURRENT (by design), recorded by TERM-0.**
+**Status: KNOWN SEAM — recorded by TERM-0, and NARROWED IN ONE HALF by MSG-1.**
 
-`ConsoleEngine::weaves()` enumerates the bus's registry and needs a
-`Switchboard&`. A [terminal session](terminal.md) therefore does **not** have it,
-and TERM-0 declined to build a message-driven directory to replace it: a terminal
-that can speak to an office the user names is a useful terminal, and none of the
-phase's workflows needed a list of who is running.
+The note used to hold two different questions in one sentence. They have come
+apart:
 
-Do not read the absence as a defect. Enumerating live weaves is a fact about the
-running world rather than about the participant, and handing it to every terminal
-would give an ordinary weave a power nothing granted it. A future directory
-should be an ordinary service holding an office, answering ordinary asks under an
-ordinary grant — at which point it is not a terminal feature at all.
+```text
+WHO IS RUNNING?              still HOST ONLY   Switchboard::list_weaves
+WHAT DOES THAT ONE ACCEPT?   CLOSED by MSG-1   ask the target: zen.DescribeAccepted
+```
+
+**Closed.** A participant holding a role name and an ordinary grant can ask one
+target what it accepts and get back enough schema truth to reconstruct those
+shapes and inspect their fields — see
+[self-description](messaging.md#self-description--what-may-be-said-to-this-weave).
+It took the shape this note prescribed: an ordinary ask under an ordinary grant,
+answered by an ordinary participant. What it did *not* need was the directory —
+the target is the natural owner of "what I accept", so no third party has to
+hold the fact and no new authority type appeared.
+
+**Still open, and deliberately.** `ConsoleEngine::weaves()` enumerates the bus's
+registry and needs a `Switchboard&`; a [terminal session](terminal.md) does not
+have it, and neither does anything else. Enumerating live weaves is a fact about
+the running world rather than about the participant, and handing it to every
+terminal would give an ordinary weave a power nothing granted it. `send_to_role`
+already addresses an office without resolving it, which is why no consumer has
+needed the list yet.
+
+**Also still absent, and not wanted:** global schema enumeration. Nothing in
+Loom can enumerate schemas — `Registry` offers lookup/contains/size and the
+`Switchboard` publishes no `registry()` accessor — so even the console's
+"catalog" is derived from accept-sets. A `ListSchemas` would have no owner, no
+natural authority scope, and no consumer: the product question is *what can I
+say to THIS thing*, which is now answered directly.
 
 ## The operator seat is a WeaveId, not a person
 

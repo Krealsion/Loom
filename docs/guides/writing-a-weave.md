@@ -46,6 +46,17 @@ it reaches you). `Emit<...>` is what you declare you say. `state_` is your
 declared state struct; the bus can snapshot, kill and revive you from it
 without another line of your code.
 
+**You get five doors you did not write**, and you cannot intercept any of them —
+which is what makes the answers worth trusting. Four are the `zen.Poke*` doors
+(inspect and manipulate your state's fields, under `ZEN_EXPOSE` / `ZEN_HIDE`);
+the fifth is `zen.DescribeAccepted`, which answers *"what shapes do you
+accept?"* from the very accept-set above. So your `Accept<...>` list is a
+published fact, not just a filter: anyone the host authorizes to ask can read
+it, reconstruct those shapes and build a form from them. That is a reason to
+name your doors deliberately — and not a reason to hide anything, since knowing
+a shape is accepted grants nobody permission to send it. See
+[self-description](../reference/messaging.md#self-description--what-may-be-said-to-this-weave).
+
 ## Mount it
 
 ```cpp
@@ -56,9 +67,12 @@ bus.pump();                                  // nothing runs until the host pump
 ```
 
 `mount<>` registers the weave with a default grant matched to its `Emit`
-declarations; a host that wants tighter reach passes its own `Grant`
-(`mount_granted`). Speak only through the `Mail` you are handed — it stamps
-your identity and authorizes every send against your grant.
+declarations, plus the substrate's own answers (`allow_poke_answers`,
+`allow_describe_answers` — the construction layer answers those doors, and its
+answers are gated sends like any other). A host that wants tighter reach passes
+its own `Grant` (`mount_granted`), and then decides for itself whether those
+answers may leave. Speak only through the `Mail` you are handed — it stamps your
+identity and authorizes every send against your grant.
 
 ## What happens, and the common failures
 

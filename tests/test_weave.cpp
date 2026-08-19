@@ -269,28 +269,33 @@ TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is del
     CHECK(static_cast<RefusedSink*>(bus.weave(sink))->snapshot().get("count")->as_int() == 1);
 }
 
-TEST_CASE("the accept-set is the typed handlers plus the universal poke doors; emit-set stays "
-          "the maker's declaration") {
+TEST_CASE("the accept-set is the typed handlers plus the universal substrate doors; emit-set "
+          "stays the maker's declaration") {
     Switchboard bus;
     WeaveId responder = au::mount<Responder>(bus);
 
-    // The maker's doors (from Accept<...>) plus the four substrate poke doors
-    // every woven Weave answers (the inspect-the-structure floor, always on).
+    // The maker's doors (from Accept<...>) plus the FIVE substrate doors every
+    // woven Weave answers: the four poke doors (the inspect-the-structure floor)
+    // and the self-description door (what may be SAID to it — the other half of
+    // the same honesty, see zen/weave/describe.hpp). Always on, and this set is
+    // deliberately exact: a door that appears or vanishes is a change to what
+    // every weave in the system advertises, so it is declared here on purpose.
     auto acc = bus.accepted_schemas(responder);
     std::set<std::string> door_names;
     for (const auto& s : acc) {
         door_names.insert(s->name());
     }
     CHECK(door_names == std::set<std::string>{"Ping", "zen.PokeDescribe", "zen.PokeRead",
-                                              "zen.PokeWrite", "zen.PokeResetState"});
-    REQUIRE(acc.size() == 5);
+                                              "zen.PokeWrite", "zen.PokeResetState",
+                                              "zen.DescribeAccepted"});
+    REQUIRE(acc.size() == 6);
     CHECK(acc[0]->name() == "Ping");
     CHECK(acc[0]->content_id() == au::schema_of<Ping>()->content_id());
 
     // emitted_schemas() remains the MAKER's declared Emit<...> alone — the
-    // construction layer's poke answers are substrate machinery, granted
-    // separately by mount() (allow_poke_answers), never smuggled into the
-    // maker's declaration.
+    // construction layer's poke and self-description answers are substrate
+    // machinery, granted separately by mount() (allow_poke_answers,
+    // allow_describe_answers), never smuggled into the maker's declaration.
     auto* r = static_cast<Responder*>(bus.weave(responder));
     auto emitted = r->emitted_schemas();
     REQUIRE(emitted.size() == 1);
