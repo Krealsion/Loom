@@ -808,7 +808,8 @@ void Switchboard::forget_office_claims(const std::string& role) {
 }
 
 void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_view claimed_name,
-                                    std::uint32_t claimed_version, const Refusal& refusal) {
+                                    std::uint32_t claimed_version, const Refusal& refusal,
+                                    std::string_view addressed_role) {
     // Deliberately `refuse_now`'s body rather than a second mechanism — the only
     // difference is that no admitted Message exists to read a schema off, so the
     // CLAIMED name and version are passed in. Same seq, same journal slot, same
@@ -822,6 +823,11 @@ void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_
     ev.sender = sender;
     ev.schema_name = std::string(claimed_name);
     ev.schema_version = claimed_version;
+    // WHERE IT WAS GOING, on the doors that were told. `addressed_role` reads
+    // the same here as on a delivery — the office the SENDER named — and it is
+    // empty for the doors that named none, exactly as it is for a native
+    // directed send and a native publication.
+    ev.addressed_role = std::string(addressed_role);
     // No correlation: the emission never became a Message, so there is no
     // envelope to read one off, and manufacturing a 0 that LOOKED chosen would
     // be the fiction this function's own comment refuses everywhere else.

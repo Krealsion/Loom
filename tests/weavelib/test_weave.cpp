@@ -85,6 +85,12 @@
 //                                   never loaded). The emission cannot resolve at the
 //                                   host seam; whether that leaves a Loom-owned fact
 //                                   is the question the reproducer asks.
+//   ZEN_WEAVE_SEAM_PUBLISH        — the seam-emit twin with the ADDRESS taken away: it
+//                                   PUBLISHES SeamOnly v1 instead of sending it to a
+//                                   role, and then publishes a resolvable `Pong` whose
+//                                   bytes fail the gate. One artifact, two publications,
+//                                   the two halves of MSG-08's publication rule
+//                                   (FRIC-0): unheard is not refused, undelivered is.
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
@@ -297,7 +303,7 @@ std::shared_ptr<const Schema> ping_schema() {
     static const auto s = SchemaBuilder("SenseProbe", 1).field("role", Kind::Text).build();
     return s;
 }
-[[maybe_unused]] std::shared_ptr<const Schema> seamonly_schema() { // only the seam-emit variant
+[[maybe_unused]] std::shared_ptr<const Schema> seamonly_schema() { // the two seam variants
     // DECLARED NOWHERE ELSE. Not in accepted_schemas(), not in any other library,
     // not by the host — so no registry in the process has ever heard of it. That
     // is the whole fixture: an emission the host seam cannot resolve.
@@ -607,6 +613,24 @@ public:
         Value want(seamonly_schema());
         want.set("want", Cell::integer(seq));
         bus.send_to_role("nobody.home", Message(std::move(want)));
+#elif defined(ZEN_WEAVE_SEAM_PUBLISH)
+        // THE SAME UNRESOLVABLE SHAPE, SPOKEN TO NOBODY IN PARTICULAR (FRIC-0).
+        // The seam-emit twin above ADDRESSES a slot; this one publishes, which
+        // names no destination at all. Both carry SeamOnly v1, so the seam meets
+        // exactly the same unresolvable claim and only the door differs — which
+        // is the whole comparison.
+        //
+        // Then a SECOND publication, of a shape the host does know, carrying
+        // bytes that cannot pass the gate: `Pong` with 'seq' deliberately
+        // absent. Its shape resolves, so somebody accepts it and would have been
+        // handed these bytes — a real failed delivery, on a publication, and the
+        // discriminator that keeps the first half from being mere suppression.
+        {
+            Value want(seamonly_schema());
+            want.set("want", Cell::integer(seq));
+            bus.publish(Message(std::move(want)));
+        }
+        bus.publish(Message(Value(pong_schema()))); // 'seq' deliberately absent
 #elif defined(ZEN_WEAVE_SILENT)
         (void)seq;
         (void)bus; // a deliberately silent Weave: it never replies

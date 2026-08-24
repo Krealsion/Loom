@@ -60,9 +60,10 @@ exist: `ForeignAuthority` (an authority this Loom did not issue), `Exhausted`
 drifted — an admission refusal, not a message failure),
 `RoleAuthorshipDenied` (an office-authorship request from a sender that does
 not hold the office — refused at the *authorship* moment, before anything is
-queued; see below), and `SeamUnresolved` (a loaded weave claimed a shape this
-Loom has never heard of — rejected at the library/host seam before routing, so
-no target was ever consulted; see [diagnostics](#diagnostics-and-the-seam)).
+queued; see below), and `SeamUnresolved` (a loaded weave *addressed* something
+with a shape this Loom has never heard of — rejected at the library/host seam
+before routing, so no target was ever consulted; a publication addresses nothing
+and is not refused for this, see [diagnostics](#diagnostics-and-the-seam)).
 
 ## Addressing
 
@@ -289,12 +290,24 @@ slot and a tap event — `SeamUnresolved` for an unresolvable claimed shape,
 `GateRefused` (with the gate's error) for bytes that fail the gate — carrying the
 **claimed** (name, version), the sending artifact, and a target *only where one
 was actually named*. A publication names none; a role is a slot resolved at a
-delivery that never happened. Nothing is manufactured.
+delivery that never happened. Nothing is manufactured. A role door does report the
+**role**, which the library stated and the seam was handed: an address, beside an
+invalid target, and never a resolution.
+
+**An unresolvable PUBLICATION is not one of these.** Being unheard is what a
+publication into a world with no listeners *is*, on either tier: an accept-set is
+claimed in the registry for its weave's whole life and fanout selects by that same
+(name, version), so a shape that does not resolve has no accepter and the
+publication reached zero recipients — exactly what a native `publish` does
+silently. What still refuses is a publication whose shape resolves and whose bytes
+fail the gate: there a real accepter was denied real bytes.
 
 This is not send fate and does not become it: no ticket crosses the seam, nothing
 is returned to the sender that was not already returned, and there is no future,
 retry or dead letter. Found by Night Lab III (P-011), where a loaded weave's
-emission vanished entirely while the identical native reach refused loudly.
+emission vanished entirely while the identical native reach refused loudly; the
+publication half was corrected by FRIC-0, where the same uniformity had made an
+ordinary quiet startup look like a failure.
 
 ## Bounded dispatch
 
