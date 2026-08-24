@@ -47,7 +47,7 @@ TEST_CASE("a directed send to an accepting target is delivered and gated") {
     Registered r = reg(bus, {ping_schema()});
     Ticket t = bus.send(r.id, Message(ping(7)));
     CHECK(bus.outcome(t).disposition == Disposition::Pending); // deferred until pump
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
     REQUIRE(r.weave->handled_values.size() == 1);
     CHECK(r.weave->handled_values[0] == 7);
@@ -57,7 +57,7 @@ TEST_CASE("a send whose shape the target does not accept is refused, handler unt
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     Ticket t = bus.send(r.id, Message(greet("hi")));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NotAccepted);
     CHECK(r.weave->handled_names.empty());
@@ -66,7 +66,7 @@ TEST_CASE("a send whose shape the target does not accept is refused, handler unt
 TEST_CASE("a directed send to an unknown target is refused") {
     Switchboard bus;
     Ticket t = bus.send(WeaveId{9999}, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
@@ -90,7 +90,7 @@ TEST_CASE("the delivery journal is a bounded ring: recent outcomes survive, anci
         if (seq == flood - cap) edge_out = t;        // one slot past the retained window
         if (seq == flood - cap + 1) edge_in = t;     // the oldest slot still inside the window
         recent = t;
-        bus.pump(); // drain fully each time — the leak was in the journal, not the queue
+        bus.drain_until_idle(); // drain fully each time — the leak was in the journal, not the queue
     }
 
     // In-window tickets still report their true fate — correlation is preserved.
@@ -113,7 +113,7 @@ TEST_CASE("publish reaches every accepter in registration order; non-accepters g
 
     std::size_t recipients = bus.publish(Message(ping(5)));
     CHECK(recipients == 2);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(a.weave->handled_values.size() == 1);
     CHECK(b.weave->handled_values.size() == 1);
     CHECK(c.weave->handled_values.empty());
@@ -124,7 +124,7 @@ TEST_CASE("publish with zero accepters is legal: recipient count 0, no delivery"
     reg(bus, {ping_schema()});
     std::size_t recipients = bus.publish(Message(tick(1)));
     CHECK(recipients == 0);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.pending() == 0);
 }
 
@@ -134,7 +134,7 @@ TEST_CASE("a fixed sequence of sends is delivered FIFO, reproducibly") {
     for (std::int64_t i = 1; i <= 5; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(r.weave->handled_values == std::vector<std::int64_t>{1, 2, 3, 4, 5});
 }
 
@@ -162,7 +162,7 @@ TEST_CASE("a handler that sends during handling causes a later delivery, never a
     b.weave->on_handle = [&track](const Message&, Bus&, ProbeWeave&) { track(); };
 
     bus.send(a.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(re.max == 1); // delivery never nested
     REQUIRE(b.weave->handled_values.size() == 1);
@@ -175,7 +175,7 @@ TEST_CASE("the live delivery path funnels through the same gate as persistence")
 
     const auto g0 = gate_invocations();
     Ticket t = bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     const auto g1 = gate_invocations();
     CHECK(g1 == g0 + 1); // exactly one validator call for one delivery
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
@@ -198,7 +198,7 @@ TEST_CASE("an observer taps deliveries and refusals without being a recipient") 
     bus.send(r.id, Message(ping(1)));          // delivered
     bus.send(r.id, Message(greet("x")));       // refused: NotAccepted
     bus.send(r.id, Message(malformed_ping())); // refused: GateRefused (MissingField)
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(tap.size() == 3);
     CHECK(tap[0].kind == EventKind::Delivered);
@@ -221,7 +221,7 @@ TEST_CASE("two weaves declaring the same (name,version) with different shapes co
 //
 // The Rule Garden's sharpest seam: a perpetual service (Zengine's Timer paces
 // itself inside Drive and enqueues its next Drive before returning) means the
-// queue never becomes empty, so a drain-to-empty pump never returns to the
+// queue never becomes empty, so `drain_until_idle()` never returns to the
 // outer network loop. Both components work as designed; their liveness
 // assumptions do not compose. Reproduced here with the same SHAPE as a Timer —
 // a weave whose handler re-enqueues its own next turn — without needing Zengine.
@@ -245,8 +245,8 @@ private:
     std::int64_t stop_after_;
 };
 
-TEST_CASE("R2E-0: a perpetual service starves the outer loop — pump() returns only when the "
-          "PRODUCER stops, not when the host wants control back") {
+TEST_CASE("R2E-0: a perpetual service starves the outer loop — drain_until_idle() returns only "
+          "when the PRODUCER stops, not when the host wants control back") {
     Switchboard bus;
     auto owned = std::make_unique<Perpetual>(500);
     Perpetual* raw = owned.get();
@@ -254,9 +254,9 @@ TEST_CASE("R2E-0: a perpetual service starves the outer loop — pump() returns 
     raw->self = id;
 
     bus.send(id, Message(ping(0)));
-    bus.pump(); // ONE call
+    bus.drain_until_idle(); // ONE call
 
-    // 500 deliveries in a single pump: the queue emptied only because the weave
+    // 500 deliveries in a single call: the queue emptied only because the weave
     // chose to stop re-arming. A real Timer never does. This is the starvation.
     CHECK(raw->count == 500);
 }
@@ -272,7 +272,7 @@ TEST_CASE("R2E-0: a perpetual service starves the outer loop — pump() returns 
 // which is the only bounded turn Loom now offers. The experiment itself is kept
 // as history in `docs/decisions/`, not as API nobody wanted.
 
-TEST_CASE("R2E-0: pump() itself is unchanged — still drain-to-empty for every existing caller") {
+TEST_CASE("R2E-0: drain_until_idle() is drain-to-empty — the contract every existing caller has") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     for (std::int64_t i = 1; i <= 5; ++i) {
@@ -280,7 +280,7 @@ TEST_CASE("R2E-0: pump() itself is unchanged — still drain-to-empty for every 
     }
     CHECK(bus.pending() == 5);
 
-    bus.pump(); // the original drain-to-empty contract, untouched by either bounded turn
+    bus.drain_until_idle(); // the original contract, untouched by the bounded turn beside it
     CHECK(r.weave->count == 5);
     CHECK(bus.pending() == 0);
 }
@@ -349,7 +349,7 @@ TEST_CASE("R2E-0: pump_pending keeps FIFO exact and honours stop()") {
     CHECK(r.weave->handled_values == expected);
 }
 
-TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as pump() is") {
+TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as drain_until_idle() is") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     std::size_t nested = 1; // a sentinel the handler must overwrite
@@ -366,6 +366,87 @@ TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as pump() is") {
     CHECK(r.weave->count == 2);
 }
 
+// ---- FRIC-1: two powers, and a call site that says which one ---------------
+//
+// R2E-0 gave Loom the bounded turn; FRIC-1 gave the pair NAMES that make the
+// choice legible, because the old spelling did not: `pump()` was drain-to-idle
+// while `pump_pending()` — the ordinary host-loop operation — wore the qualifier
+// that made it look like the special case. A stranger reached for the short
+// name and got a program that never returned.
+//
+// The names are only worth what the semantics behind them are, so these two
+// cases pin that the semantics are actually two. Both use `Perpetual`, whose
+// `stop_after` is a FUSE and not the subject: it exists so that wiring either
+// public entry to the other implementation goes RED rather than HANGING, which
+// is the only way a canary of this shape can be run at all.
+
+TEST_CASE("FRIC-1: bounded turn and drain are two POWERS, not two names — on one perpetually "
+          "productive world they leave measurably different worlds behind") {
+    constexpr std::int64_t kFuse = 400; // never reached by the bounded arm
+
+    auto world = [kFuse](Switchboard& bus) {
+        auto owned = std::make_unique<Perpetual>(kFuse);
+        Perpetual* raw = owned.get();
+        raw->self = bus.register_weave(std::move(owned), Grant{}.allow_any());
+        bus.send(raw->self, Message(ping(0)));
+        return raw;
+    };
+
+    // (a) THE BOUNDED TURN SERVICES THE BACKLOG AND HANDS CONTROL BACK, leaving
+    //     the producer's own successor for the next turn. Wire `pump_pending()`
+    //     to the drain and every one of these four reads differently.
+    {
+        Switchboard bus;
+        Perpetual* raw = world(bus);
+        REQUIRE(bus.pending() == 1);
+
+        CHECK(bus.pump_pending() == 1); // exactly what was waiting
+        CHECK(raw->count == 1);
+        CHECK(bus.pending() == 1);      // the successor it seeded: alive, and not this turn's
+    }
+
+    // (b) THE DRAIN COUNTS THAT SUCCESSOR AS ITS OWN WORK, and so on until the
+    //     producer itself stops. Same world, same seed, same one waiting
+    //     envelope at entry. Wire `drain_until_idle()` to the bounded turn and
+    //     this is 1 and 1, not kFuse and 0.
+    {
+        Switchboard bus;
+        Perpetual* raw = world(bus);
+        REQUIRE(bus.pending() == 1);
+
+        bus.drain_until_idle();
+        CHECK(raw->count == kFuse);
+        CHECK(bus.pending() == 0);
+    }
+}
+
+TEST_CASE("FRIC-1: an ordinary host loop keeps control every lap while a perpetual service stays "
+          "healthy — the user story the old name denied") {
+    Switchboard bus;
+    // A fuse far beyond anything this test approaches: within these 100 laps the
+    // producer is indistinguishable from a real repeating Timer, which never
+    // stops at all.
+    auto owned = std::make_unique<Perpetual>(100'000);
+    Perpetual* raw = owned.get();
+    raw->self = bus.register_weave(std::move(owned), Grant{}.allow_any());
+    bus.send(raw->self, Message(ping(0)));
+
+    int laps = 0;
+    for (; laps < 100; ++laps) {
+        // A real host polls its OS, its sockets, its window here. The whole
+        // point is that this line runs at all — a drain-to-idle on this world
+        // reaches it exactly never.
+        const std::size_t served = bus.pump_pending();
+        CHECK(served == 1);        // one beat this lap: the chain is one deep
+        CHECK(bus.pending() == 1); // and still alive for the next
+    }
+
+    // The host ran 100 times AND the service ran 100 times. Neither starved the
+    // other, and no budget, deadline or cap was named anywhere.
+    CHECK(laps == 100);
+    CHECK(raw->count == 100);
+}
+
 // ---------------------------------------------------------------------------
 // The native callback boundary (MSG-10).
 //
@@ -375,7 +456,8 @@ TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as pump() is") {
 // Loom's.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("STF-1: a native handler that throws through pump() leaves no poisoned dispatch") {
+TEST_CASE("STF-1: a native handler that throws through drain_until_idle() leaves no poisoned "
+          "dispatch") {
     Switchboard bus;
     Registered a = reg(bus, {ping_schema()});
     Registered b = reg(bus, {pong_schema()});
@@ -390,7 +472,7 @@ TEST_CASE("STF-1: a native handler that throws through pump() leaves no poisoned
 
     // 1. THE EXCEPTION REACHES THE HOST. Not swallowed, not translated into a
     //    refusal, not turned into a process abort.
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
     CHECK(a.weave->count == 1); // the handler did run
 
     // 2. The failed message was consumed — it is not silently retried — and what
@@ -404,17 +486,17 @@ TEST_CASE("STF-1: a native handler that throws through pump() leaves no poisoned
     //    refused. The QUEUE is what says the message was consumed.
     CHECK(bus.outcome(doomed).disposition == Disposition::Pending);
 
-    // 4. DISPATCH IS NOT POISONED. Without the restore this pump would return
+    // 4. DISPATCH IS NOT POISONED. Without the restore this turn would return
     //    immediately, believing itself reentrant, and the backlog would never
     //    move again.
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.pending() == 0);
     CHECK(b.weave->handled_values == std::vector<std::int64_t>{2, 7});
     CHECK(bus.outcome(doomed).disposition == Disposition::Pending); // still, and forever
 
     // 5. ...and the bus is an ordinary working bus afterwards.
     const Ticket later = bus.send(b.id, Message(pong(3)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(later).disposition == Disposition::Delivered);
     CHECK(b.weave->handled_values.size() == 3);
 }
@@ -439,9 +521,9 @@ TEST_CASE("STF-1: a native handler that throws through pump_pending() leaves no 
     REQUIRE(b.weave->handled_values.size() == 1);
     CHECK(b.weave->handled_values[0] == 2);
 
-    // And pump() is equally unpoisoned by a pump_pending() that threw.
+    // And drain_until_idle() is equally unpoisoned by a pump_pending() that threw.
     bus.send(b.id, Message(pong(4)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(b.weave->handled_values.size() == 2);
 }
 
@@ -489,7 +571,7 @@ TEST_CASE("STF-1: a callback that throws leaves no delivery-scoped authority beh
             throw std::runtime_error("coordinator failure mid-readiness");
         };
         s.ask();
-        CHECK_THROWS_AS(s.bus.pump(), std::runtime_error);
+        CHECK_THROWS_AS(s.bus.drain_until_idle(), std::runtime_error);
     }
 
     SUBCASE("an observer throws while the coordinator's delivery is live") {
@@ -506,7 +588,7 @@ TEST_CASE("STF-1: a callback that throws leaves no delivery-scoped authority beh
             }
         });
         s.ask();
-        CHECK_THROWS_AS(s.bus.pump(), std::runtime_error);
+        CHECK_THROWS_AS(s.bus.drain_until_idle(), std::runtime_error);
     }
 
     const TxnResult late = s.bus.accept_preparation_answer(s.txn, PreparationAnswer::Ready);
@@ -527,7 +609,7 @@ TEST_CASE("STF-1: an already-minted deferred answer survives a handler that late
     };
 
     bus.send_as(asker.id, responder.id, Message(ping(1), asker.id, asker.id, 0));
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
 
     // AMBIENT authority is delivery-scoped and gone. A capability the handler
     // deliberately minted is neither, and the throw does not revoke it: the answer is
@@ -537,7 +619,7 @@ TEST_CASE("STF-1: an already-minted deferred answer survives a handler that late
         (void)b.spend_deferred(self.pending, Message(pong(9)));
     };
     bus.send(responder.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(asker.weave->handled_values.size() == 1);
     CHECK(asker.weave->handled_values[0] == 9);
 }
@@ -560,7 +642,7 @@ TEST_CASE("STF-1: an observer that throws propagates, and later observation stil
 
     bus.send(a.id, Message(ping(1)));
     bus.send(b.id, Message(pong(2)));
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
     CHECK(seen == 1);
     CHECK(a.weave->count == 1); // the delivery itself completed
     CHECK(bus.pending() == 1);  // the message behind it is still queued
@@ -570,7 +652,7 @@ TEST_CASE("STF-1: an observer that throws propagates, and later observation stil
     // behind it, and Loom has no error channel to report that on.
     CHECK(behind == 0);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(b.weave->handled_values.size() == 1); // later dispatch succeeds
     CHECK(seen == 2);                           // ...and so does later observation
     CHECK(behind == 1);
@@ -601,12 +683,12 @@ TEST_CASE("RTH-1a: an observer that throws on HandlerFailed REPLACES the handler
 
     const Ticket t = bus.send(r.id, Message(ping(1)));
     // The observer's, not the handler's. That is the cost, stated.
-    CHECK_THROWS_AS(bus.pump(), std::logic_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::logic_error);
     CHECK(saw_failure_event);
     // ...and every other truth is unchanged: Loom recorded no outcome (MSG-10),
     // and the bus is usable afterwards.
     CHECK(bus.outcome(t).disposition == Disposition::Pending);
-    bus.pump();
+    bus.drain_until_idle();
 }
 
 // ---------------------------------------------------------------------------
@@ -628,12 +710,12 @@ TEST_CASE("STF-1: an observer added during notification joins at the NEXT event"
     });
 
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(early == 1);
     CHECK(late == 0); // the newcomer did not join the event it was added during
 
     bus.send(r.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(early == 2);
     CHECK(late == 1); // ...and does receive the next one
 }
@@ -651,12 +733,12 @@ TEST_CASE("STF-1: an observer may remove itself while being notified") {
     bus.add_observer([&after](const BusEvent&) { ++after; });
 
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(calls == 1);
     CHECK(after == 1); // the observer behind the self-removing one still ran
 
     bus.send(r.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(calls == 1); // never again
     CHECK(after == 2);
 }
@@ -679,7 +761,7 @@ TEST_CASE("STF-1: removing another observer during notification takes effect at 
     bus.add_observer([&survivor_calls](const BusEvent&) { ++survivor_calls; });
 
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // REMOVAL IS IMMEDIATE, and that is the point: `remove_observer` is how the
     // console and the bridge stop a callback before the object it captures dies.
@@ -689,7 +771,7 @@ TEST_CASE("STF-1: removing another observer during notification takes effect at 
     CHECK(survivor_calls == 1); // and the traversal was not derailed
 
     bus.send(r.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(victim_calls == 0);
     CHECK(survivor_calls == 2);
 }
@@ -719,13 +801,13 @@ TEST_CASE("STF-1: observer notification survives reallocation of the observer li
     bus.add_observer([&second](const BusEvent&) { ++second; });
 
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(first == 1);
     CHECK(second == 1);
     CHECK(newcomers == 0); // this event's view was fixed before they existed
 
     bus.send(r.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(first == 2);
     CHECK(second == 2);
     CHECK(newcomers == 64); // ...and all of them are in the next one
@@ -751,14 +833,14 @@ TEST_CASE("STF-1: an observer may mutate the observer list and then throw") {
     victim = bus.add_observer([&victim_calls](const BusEvent&) { ++victim_calls; });
 
     bus.send(r.id, Message(ping(1)));
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
     CHECK(victim_calls == 0);
     CHECK(newcomer_calls == 0);
 
     // The mutations stand — they were not a transaction — and the NEXT event uses
     // the updated set.
     bus.send(r.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(victim_calls == 0);
     CHECK(newcomer_calls == 1);
 }
@@ -873,7 +955,7 @@ TEST_CASE("R2F-B: a weave that unregisters itself from inside its handler stays 
     };
 
     const Ticket t = bus.send(w.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(returned_null);                    // no ownership transferred
     CHECK(destroyed_at_the_attempt == 0);    // the destructor did not run inside the callback
@@ -894,7 +976,7 @@ TEST_CASE("R2F-B: the host retries once the callback is over, and receives the w
         CHECK(bus.unregister_weave(w.id) == nullptr);
     };
     bus.send(w.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(ledger.destroyed == 0);
 
     // Immediately after the delivery returns to the host: the ordinary contract,
@@ -931,7 +1013,7 @@ TEST_CASE("R2F-B: a DIFFERENT weave may still be removed from inside a callback"
 
     const Ticket to_active = bus.send(active.id, Message(ping(1)));
     const Ticket to_victim = bus.send(victim.id, Message(pong(9))); // queued behind
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(taken != nullptr);                                 // returned
     CHECK(taken.get() == static_cast<Weave*>(victim.weave));
@@ -989,7 +1071,7 @@ struct RemovalSurface {
             (void)b.send(helper.id, Message(ping(1)));
         };
         bus.send(svc.id, Message(ping(0)));
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(helper.weave->pending.valid());
         svc.weave->on_handle = nullptr;
 
@@ -1025,7 +1107,7 @@ struct RemovalSurface {
         };
         const std::size_t before = svc.weave->handled_names.size();
         bus.send(helper.id, Message(tick(1)));
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(svc.weave->handled_names.size() == before + 1);
         CHECK(svc.weave->handled_names.back() == "Pong");
     }
@@ -1044,7 +1126,7 @@ TEST_CASE("R2F-B: a refused active-target removal performs no part of unregistra
         s.expect_untouched();
     };
     s.bus.send(s.svc.id, Message(ping(2)));
-    s.bus.pump();
+    s.bus.drain_until_idle();
 
     CHECK(returned_null);
     s.expect_untouched();               // ...and still, after the turn
@@ -1077,7 +1159,7 @@ TEST_CASE("R2F-B: an ordinary removal outside a callback still does all of it") 
         (void)b.spend_deferred(self.pending, Message(pong(5)));
     };
     s.bus.send(s.helper.id, Message(tick(1)));
-    s.bus.pump();
+    s.bus.drain_until_idle();
     CHECK(s.svc.weave->handled_names.size() == before); // nothing arrived
 
     CHECK(s.ledger.destroyed == 0); // teardown order is the host's, exactly as before
@@ -1101,7 +1183,7 @@ TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave rem
     bus.send(w.id, Message(ping(1)));
     // The exception is the host's, exactly as MSG-10 already says. LIFE-06 neither
     // catches it, translates it, nor suppresses it.
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
     CHECK(returned_null);
     CHECK(destroyed_at_the_attempt == 0);
     CHECK(ledger.destroyed == 0); // not destroyed during the callback
@@ -1118,7 +1200,7 @@ TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave rem
     // ...and dispatch itself is unpoisoned (MSG-10).
     Registered other = reg(bus, {pong_schema()});
     const Ticket t = bus.send(other.id, Message(pong(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
 }
 
@@ -1182,7 +1264,7 @@ TEST_CASE("BL-0: a refused active-target removal releases nothing") {
         resolvable_during = (bus.resolve_schema("Vocab", 1) != nullptr);
     };
     bus.send(w.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(refused);
     CHECK(resolvable_during);

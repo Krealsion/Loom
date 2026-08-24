@@ -173,7 +173,7 @@ private:
     void run(Switchboard& bus, std::function<void(Bus&)> errand) {
         errand_ = std::move(errand);
         bus.send(self_, Message(to_value(Kick{})));  // root send, to start the turn
-        bus.pump();
+        bus.drain_until_idle();
         errand_ = nullptr;
     }
 

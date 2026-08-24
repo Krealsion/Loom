@@ -1393,7 +1393,7 @@ void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refus
     JournalSlot& slot = journal_[seq % kJournalCapacity];
     if (slot.seq == seq) {
         // Still the slot's owner. If a wrap past kJournalCapacity already evicted this
-        // seq (only possible when a single pump outruns the window), the guard leaves
+        // seq (only possible when a single turn outruns the window), the guard leaves
         // the newer owner untouched and this outcome is simply forgotten — never
         // misattributed. Read-immediately consumers never reach that depth.
         slot.outcome = DeliveryOutcome{disposition, refusal};
@@ -1783,12 +1783,12 @@ void Switchboard::deliver_one(Envelope env) {
     emit(ev);
 }
 
-void Switchboard::pump() {
+void Switchboard::drain_until_idle() {
     if (in_dispatch_) {
         return; // non-reentrant: a handler's sends were enqueued, not nested
     }
     // Scoped, because a native handler that throws unwinds straight past this
-    // line — and a dispatch flag left standing makes every later pump believe
+    // line — and a dispatch flag left standing makes every later turn believe
     // itself reentrant and return without delivering anything (MSG-10).
     const DispatchGuard dispatching(*this);
     stop_requested_ = false;
@@ -1804,15 +1804,17 @@ std::size_t Switchboard::pump_pending() {
     // which is the whole difference from a number the caller supplies. A
     // handler's own continuation is enqueued behind this snapshot and is simply
     // not part of this turn, so a self-re-arming producer cannot hold the turn
-    // open and a busy bus still clears its backlog in one go.
+    // open and a busy bus still clears its backlog in one go. That is the whole
+    // difference from drain_until_idle(), which counts that continuation as its
+    // own work and therefore never finishes while the producer lives.
     return dispatch_at_most(queue_.size());
 }
 
 std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
     if (in_dispatch_) {
-        return 0; // non-reentrant, exactly as pump() is
+        return 0; // non-reentrant, exactly as drain_until_idle() is
     }
-    const DispatchGuard dispatching(*this); // and unpoisoned by a throw, exactly as pump() is
+    const DispatchGuard dispatching(*this); // unpoisoned by a throw, as drain_until_idle() is
     stop_requested_ = false;
     std::size_t dispatched = 0;
     // `dispatched < budget` is checked against deliveries ACTUALLY MADE, so an
@@ -1919,7 +1921,7 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
 
     // ...AND THEN THE WHOLE CHANGE, WITH NO DELIVERY BETWEEN ANY TWO LINES OF IT.
     // There is no lock here and none is needed: dispatch is single-threaded and
-    // `pump()` is non-reentrant, so an ordinary observer's next delivery either
+    // non-reentrant, so an ordinary observer's next delivery either
     // precedes all of this or follows all of it. What would NOT be atomic is
     // expressing the same change as several ordinary messages — which is exactly
     // what today's SwapWeave does, and exactly the observable window it documents.
@@ -2167,8 +2169,8 @@ void Switchboard::deliver_admission(Envelope env) {
 
     // ---- 4. THE TOPOLOGY CHANGE, with no delivery in between -----------------
     //
-    // There is no lock and none is needed: `pump()` is non-reentrant and
-    // dispatches one envelope at a time, so an observer's next delivery either
+    // There is no lock and none is needed: dispatch is non-reentrant and takes
+    // one envelope at a time, so an observer's next delivery either
     // precedes all of this or follows all of it — and what follows it is this
     // candidate's own activation, below, with nothing whatever between them.
     WeaveRecord* inc = find(env.admission.incumbent.who);

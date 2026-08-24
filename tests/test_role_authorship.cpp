@@ -153,7 +153,7 @@ TEST_CASE("R2D-0: the same holder speaks personally and as the office, and the t
         CHECK(office.valid()); // authored: verified and queued
     };
     bus.send(holder.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 2);
     const Heard& personal = log->heard[0];
@@ -199,7 +199,7 @@ TEST_CASE("R2D-0: wrong office and no office are refused at authorship — visib
     };
     bus.send(holder_a.id, Message(ping(1)));
     bus.send(nobody.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Nothing arrived — a refused authorship is not a personal send in disguise.
     CHECK(log->heard.empty());
@@ -225,7 +225,7 @@ TEST_CASE("R2D-0: a payload role field buys zero provenance") {
         (void)b.send(player.id, Message(claim));
     };
     bus.send(forger.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 1);
     CHECK_FALSE(log->heard[0].from_matchmaker);
@@ -268,7 +268,7 @@ TEST_CASE("R2D-0: authorship and destination are orthogonal — all four combina
         CHECK(b.office_send_to_role("worker.a", "dispatcher", Message(greet("o-role"))).valid());
     };
     bus.send(worker.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 4);
     CHECK(log->heard[0].authored_role.empty());           // personal -> direct
@@ -305,7 +305,7 @@ TEST_CASE("R2D-0: publication carries the office fact to every listener; a rogue
     };
     bus.send(worker.id, Message(ping(1)));
     bus.send(rogue.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
 
     for (const auto& log : {log_a, log_b}) {
         REQUIRE(log->heard.size() == 3);
@@ -338,7 +338,7 @@ TEST_CASE("R2D-0: an authorized publication with zero recipients is not a refusa
     };
     bus.send(worker.id, Message(ping(1)));
     bus.send(rogue.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     // Exactly one of the two attempts was an authorship refusal.
     CHECK(tap.count(RefusalReason::RoleAuthorshipDenied) == 1);
 }
@@ -363,7 +363,7 @@ TEST_CASE("R2D-0: a valid office author with an insufficient ordinary grant is s
     const Ticket t =
         bus.office_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
     CHECK(t.valid()); // authorship verified; the delivery was queued...
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::CapabilityDenied); // ...and denied.
     CHECK(log->heard.empty());
@@ -389,7 +389,7 @@ TEST_CASE("R2D-0: office speech from a life that ended obeys SenderLifeEnded —
         bus.office_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
     REQUIRE(t.valid());
     bus.kill(holder.id); // the author's life ends while the speech is queued
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::SenderLifeEnded);
     CHECK(log->heard.empty());
@@ -409,7 +409,7 @@ TEST_CASE("R2D-0: a root cannot author office speech — the refusal is visible,
     CHECK_FALSE(as_bus.office_send_to_role("matchmaker", "matchmaker", Message(greet("root")))
                     .valid());
     CHECK_FALSE(as_bus.office_publish("matchmaker", Message(greet("root"))).authored);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(log->heard.empty());
     CHECK(tap.count(RefusalReason::RoleAuthorshipDenied) == 3);
 }
@@ -437,7 +437,7 @@ TEST_CASE("R2D-0: re-sending a received office-authored Message — provenance f
     Registered holder = register_role_probe(bus, "matchmaker", {ping_schema()});
     REQUIRE(bus.office_send_as(holder.id, "matchmaker", launderer.id, Message(greet("real")))
                 .valid());
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 1);
     // The re-send is the LAUNDERER'S personal speech: its own stamp, no office.
@@ -467,7 +467,7 @@ TEST_CASE("R2D-0: a legitimately authored fact survives a later role move — hi
     REQUIRE(t.valid()); // authored while holder held the office
     REQUIRE(bus.commit_candidate(successor.id, holder.id, "matchmaker"));
     REQUIRE(bus.role_holder("matchmaker") == successor.id); // the office has moved
-    bus.pump();
+    bus.drain_until_idle();
 
     // Delivered — and the historical fact is intact: the author DID deliberately
     // speak as matchmaker while it held matchmaker. Current membership is a
@@ -496,7 +496,7 @@ TEST_CASE("R2D-0: a message queued personally does not become office-authored be
     // Queued while the candidate holds NO role (it is a sealed candidate);
     // delivered after the admission has made it the service.
     const Ticket personal = bus.send_as(candidate.id, coordinator.id, Message(greet("hello")));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(bus.role_holder("service") == candidate.id); // it holds the office now...
     CHECK(bus.outcome(personal).disposition == Disposition::Delivered);
@@ -528,7 +528,7 @@ TEST_CASE("R2D-0: the office survives its officeholder — prepared replacement 
 
     // v1 office speech accepted.
     REQUIRE(bus.office_send_as(v1.id, "service", player.id, Message(greet("from v1"))).valid());
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(log->heard.size() == 1);
     CHECK(log->heard[0].sender == v1.id.value);
     CHECK(log->heard[0].authored_role == "service");
@@ -557,12 +557,12 @@ TEST_CASE("R2D-0: the office survives its officeholder — prepared replacement 
         (void)bus.accept_preparation_answer(txn, PreparationAnswer::Ready);
     };
     REQUIRE(bus.ask_candidate_to_prepare(txn, Message(ping(7))).ok);
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(bus.transaction_state(txn) == TxnState::Ready);
 
     // v1 remains the office throughout preparation.
     REQUIRE(bus.office_send_as(v1.id, "service", player.id, Message(greet("still v1"))).valid());
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(log->heard.back().sender == v1.id.value);
     CHECK(log->heard.back().authored_role == "service");
 
@@ -575,7 +575,7 @@ TEST_CASE("R2D-0: the office survives its officeholder — prepared replacement 
 
     // Dispatch the admission: the role moves, and the candidate's first breath
     // is a lifecycle attestation — not office speech, not an answer.
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(bus.role_holder("service") == cand.id);
     CHECK(bus.transaction_state(txn) == TxnState::Committed);
 
@@ -585,7 +585,7 @@ TEST_CASE("R2D-0: the office survives its officeholder — prepared replacement 
         bus.office_send_as(cand.id, "service", player.id, Message(greet("from v2"))).valid());
     CHECK_FALSE(
         bus.office_send_as(v1.id, "service", player.id, Message(greet("v1 again"))).valid());
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 3);
     // A strict receiver trusting the OFFICE accepts v1's pre-move speech and
@@ -649,7 +649,7 @@ TEST_CASE("R2D-0: an office-authored ask earns an ordinary authenticated answer 
 
     REQUIRE(bus.office_send_to_role_as(asker, "client", "service", Message(greet("ask")))
                 .valid());
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 1);
     CHECK(log->heard[0].answers_ask);              // Loom's word: THE answer
@@ -679,7 +679,7 @@ TEST_CASE("R2D-0: a committed activation remains lifecycle provenance — never 
     REQUIRE(bus.admit_candidate(cand, incumbent.id, "service", host_lifecycle_authority(bus),
                                 Message(activation_of(9)), 9)
                 .scheduled);
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 1);
     CHECK(log->heard[0].lifecycle);
@@ -759,7 +759,7 @@ TEST_CASE("R2D-0: the definition-of-done program — a strict player joins only 
     maker_raw->zen_set_self(maker_id);
 
     bus.send(maker_id, Message(to_value(MakeMatch{})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Two identical statements arrived from one weave; the player joined on the
     // office-authored one and rejected the personal one. No Switchboard access,

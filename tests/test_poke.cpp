@@ -393,7 +393,7 @@ TEST_CASE("a poke is an ordinary gated message: the substrate doors answer on th
     bus.send(metrics, Message(au::to_value(au::PokeRead{"rate"}), WeaveId{}, asker.reg.id, 6));
     bus.send(metrics,
              Message(au::to_value(au::PokeWrite{"rate", "42"}), WeaveId{}, asker.reg.id, 7));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(asker.got.size() == 3);
     CHECK(asker.got[0].schema().name() == "zen.PokeStructure");
@@ -422,7 +422,7 @@ TEST_CASE("the access model holds on the wire: hidden read and un-exposed write 
     bus.send(metrics, Message(au::to_value(au::PokeRead{"raw_total"}), WeaveId{}, asker.reg.id));
     bus.send(metrics,
              Message(au::to_value(au::PokeWrite{"label", "hijacked"}), WeaveId{}, asker.reg.id));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(asker.got.size() == 2);
     CHECK(asker.got[0].schema().name() == "zen.Refused");
@@ -448,7 +448,7 @@ TEST_CASE("the front door stays sovereign: a hidden value is still reachable thr
     };
 
     bus.send(metrics, Message(au::to_value(MetricsQuery{}), WeaveId{}, asker.id));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The weave ANSWERED the hidden data through its own message interface —
     // computed, on its own terms. ZEN_HIDE never touches the front door.
@@ -469,7 +469,7 @@ TEST_CASE("answering pokes confers no authority: an ungranted weave's answer is 
     bus.add_observer([&](const BusEvent& e) { tap.push_back(sbfx::to_record(e)); });
 
     bus.send(metrics, Message(au::to_value(au::PokeRead{"rate"}), WeaveId{}, asker.reg.id));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The request arrived and was enforced; the ANSWER bowed to the grant.
     CHECK(asker.got.empty());
@@ -502,7 +502,7 @@ TEST_CASE("a fire-and-forget poke is performed but has nowhere to answer") {
     // Root-sent, no sender, no reply address: the write happens, the answer
     // has no destination, and nothing is emitted (not even a misfire to id 0).
     bus.send(metrics, Message(au::to_value(au::PokeWrite{"rate", "9"}), WeaveId{}, WeaveId{}));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(static_cast<MetricsWeave*>(bus.weave(metrics))->rate() == 9);
     CHECK(from_metrics.empty());
@@ -522,7 +522,7 @@ TEST_CASE("the Poke weave relays: command in, protocol out, answer back to the a
     bus.send(poke, Message(au::to_value(au::PokeSet{tid, "rate", "42"}), WeaveId{}, asker.reg.id, 12));
     bus.send(poke, Message(au::to_value(au::PokeGet{tid, "rate"}), WeaveId{}, asker.reg.id, 13));
     bus.send(poke, Message(au::to_value(au::PokeReset{tid}), WeaveId{}, asker.reg.id, 14));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(asker.got.size() == 4);
     CHECK(asker.got[0].schema().name() == "zen.PokeStructure");
@@ -563,7 +563,7 @@ TEST_CASE("a forged answer is not the target's voice: relay requires the stamped
     bus.send(poke, Message(au::to_value(au::PokeGet{static_cast<std::int64_t>(mute.id.value),
                                                     "rate"}),
                            WeaveId{}, asker.reg.id, 21));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(asker.got.empty()); // nothing answered; the pending poke is parked
 
     // The forger emits a perfectly-shaped zen.Result with the pending
@@ -586,7 +586,7 @@ TEST_CASE("a forged answer is not the target's voice: relay requires the stamped
     });
 
     bus.send(liar, Message(au::to_value(Nudge{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Not relayed: the stamped sender (the forger) is not the poked target.
     CHECK(forged_delivered); // the frame reached the relay...
@@ -606,7 +606,7 @@ TEST_CASE("an unsolicited answer with no pending poke is dropped, not relayed") 
     voice->poke_weave = poke;
     voice->forged_corr = 99; // matches nothing
     bus.send(liar, Message(au::to_value(Nudge{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(asker.got.empty());
 }

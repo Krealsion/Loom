@@ -25,8 +25,10 @@ never collapse into each other:
   ask; a lifecycle fact)? A delivery fact, never a payload field
   ([ANS-01](../laws/answer-authority-laws.md)).
 
-Dispatch is single-threaded FIFO: nothing runs until the host `pump()`s, a
-handler's sends become later deliveries, and there are no threads to fear
+Dispatch is single-threaded FIFO: nothing runs until the host asks for a
+dispatch turn — `bus.pump_pending()` in an ordinary host loop,
+`bus.drain_until_idle()` to settle a world — a handler's sends become later
+deliveries, and there are no threads to fear
 ([MSG-01](../laws/messaging-laws.md)). Everything observable is observable —
 refusals are named events, not silence.
 

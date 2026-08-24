@@ -70,7 +70,7 @@ TEST_CASE("a send the grant does not permit is denied before the gate, and obser
 
     const auto before = gate_invocations();
     bus.send(sender.id, Message(ping(1))); // host-injected root trigger
-    bus.pump();
+    bus.drain_until_idle();
     const auto after = gate_invocations();
 
     // Only the trigger (Ping -> sender) was gated; the denied Pong never reached
@@ -92,7 +92,7 @@ TEST_CASE("an authorized send still goes through the one gate, and is delivered"
 
     const auto before = gate_invocations();
     bus.send(sender.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     const auto after = gate_invocations();
 
     CHECK(after == before + 2); // Ping -> sender, then the authorized Pong -> recorder
@@ -113,7 +113,7 @@ TEST_CASE("publish only reaches the accepters the sender is permitted to send to
     };
 
     bus.send(pub.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(a.weave->handled_names.size() == 1); // permitted
     CHECK(b.weave->handled_names.empty());     // denied at delivery
@@ -132,7 +132,7 @@ TEST_CASE("the kernel door is driven by message only with the load capability") 
     lw->lib_name = "viamsg";
     lw->lib_path = ZEN_SO_WEAVE;
     bus.send(with_cap, Message(au::to_value(Go{1}))); // host-injected root trigger
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(kernel.is_loaded("viamsg"));
 
     // Without it, the same send is denied at the control Weave's door; the kernel
@@ -146,7 +146,7 @@ TEST_CASE("the kernel door is driven by message only with the load capability") 
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
     bus.send(no_cap, Message(au::to_value(Go{2})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(kernel.is_loaded("denied"));
     CHECK(tap_has_denied(tap, control, "LoadLibrary"));

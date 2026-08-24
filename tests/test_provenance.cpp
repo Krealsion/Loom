@@ -391,7 +391,7 @@ TEST_CASE("the request-time role holder is the only weave whose answer carries L
     // incarnation will receive this.
     bus.send_as(asker, holder,
                 Message(to_value(ProvAsk{"one"}), asker, WeaveId{}, kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].tag == "holder");
@@ -412,7 +412,7 @@ TEST_CASE("the same bytes sent ordinarily carry no word — provenance is not th
 
     bus.send_as(asker, holder,
                 Message(to_value(ProvAsk{"one"}), asker, WeaveId{}, kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].sender == holder.value);
@@ -430,7 +430,7 @@ TEST_CASE("an ordinary weave that knows the shape, the correlation and the victi
     // Nudged by a root, so the forger acts from an ordinary handler with an
     // ordinary Mail — the same standing any weave has.
     bus.send(forger, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The forgery arrived — it is a legal message and the forger holds the grant.
     // What it does not have is Loom's word.
@@ -457,7 +457,7 @@ TEST_CASE("the answer's recipient and label are Loom's, so a proof for one reque
     // Two different askers, two different correlations, one responder.
     bus.send_as(asker_a, holder, Message(to_value(ProvAsk{"a"}), asker_a, WeaveId{}, 11));
     bus.send_as(asker_b, holder, Message(to_value(ProvAsk{"b"}), asker_b, WeaveId{}, 22));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Each answer went to its own asker with its own correlation. The responder
     // named neither: it only said what it wanted to say.
@@ -479,7 +479,7 @@ TEST_CASE("one delivery authorizes exactly one answer, and the second is refused
     const WeaveId holder = mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Twice);
 
     bus.send_as(asker, holder, Message(to_value(ProvAsk{"one"}), asker, WeaveId{}, 7));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Exactly one answer exists, and it is the first.
     REQUIRE(heard.answers.size() == 1);
@@ -504,7 +504,7 @@ TEST_CASE("a request from a root confers no authority: there is nobody to answer
 
     // Root-sent: no stamped sender, so no requester.
     bus.send(holder, Message(to_value(ProvAsk{"rootless"})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(heard.answers.empty());
     CHECK(tap.capability_denied == 1);
@@ -520,7 +520,7 @@ TEST_CASE("the role changing hands hands the new holder nothing: it never receiv
 
     // The ask is delivered to `first`, which deliberately says nothing.
     bus.send_as(asker, first, Message(to_value(ProvAsk{"one"}), asker, WeaveId{}, kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
 
     // Now the role changes hands — the exact window a successor could exploit if
@@ -528,7 +528,7 @@ TEST_CASE("the role changing hands hands the new holder nothing: it never receiv
     bus.unregister_weave(first);
     const WeaveId second = mount_into_role<Forger>(bus, kProvRole, asker, kPublicCorrelation);
     bus.send(second, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The successor holds the role, knows the correlation, and holds the grant.
     // Its message arrives — and carries nothing.
@@ -549,14 +549,14 @@ TEST_CASE("a copied answer is an ordinary message: hoarding a delivered one and 
     const WeaveId holder = mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Authenticated);
 
     bus.send_as(magpie, holder, Message(to_value(ProvAsk{"one"}), magpie, WeaveId{}, 5));
-    bus.pump();
+    bus.drain_until_idle();
     // ...and really did see Loom's word, so the re-send below is a copy of a
     // genuinely attested message rather than of nothing.
     CHECK(static_cast<Magpie*>(bus.weave(magpie))->kept_attested_);
 
     // Now it re-sends that exact message to the victim.
     bus.send(magpie, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].correlation == 5); // the payload and label copied perfectly...
@@ -585,14 +585,14 @@ TEST_CASE("the ENVELOPE itself cannot be hoarded and replayed: re-sending a deli
 
     // The magpie asks, and receives a genuinely attested answer.
     bus.send_as(magpie, holder, Message(to_value(ProvAsk{"one"}), magpie, WeaveId{}, 5));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(magpie_heard.answers.size() == 1);
     REQUIRE(magpie_heard.answers[0].attested);
     REQUIRE(magpie_raw->kept_was_attested()); // it really is holding Loom's word
 
     // Now it replays that exact envelope at the victim.
     bus.send(magpie, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(victim_heard.answers.size() == 1);
     CHECK(victim_heard.answers[0].tag == "holder"); // the payload copied perfectly...
@@ -621,11 +621,11 @@ TEST_CASE("the requester dying strands the answer safely: it is refused at deliv
         }
     });
     bus.send_as(asker, holder, Message(to_value(ProvAsk{"one"}), asker, WeaveId{}, 9));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.pending() == 1); // the answer, waiting
 
     bus.unregister_weave(asker);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(heard.answers.empty());
     CHECK(tap.delivered_answers == 0);
@@ -641,9 +641,9 @@ TEST_CASE("the respondent dying before it answers ends the conversation — noth
     const WeaveId holder = mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Silent);
 
     bus.send_as(asker, holder, Message(to_value(ProvAsk{"one"}), asker, WeaveId{}, 3));
-    bus.pump();
+    bus.drain_until_idle();
     bus.unregister_weave(holder);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(heard.answers.empty());
     // And the authority did not outlive the delivery: nothing is dispatching, so
@@ -662,7 +662,7 @@ TEST_CASE("ordinary messaging is untouched: send, publish and role-send carry no
     bus.send_as(forger, asker, Message(to_value(ProvAnswer{"direct"}), forger, WeaveId{}, 1));
     // A publish (fanout to every accepter).
     CHECK(bus.publish(Message(to_value(ProvAnswer{"published"}))) == 1);
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(heard.answers.size() == 2);
     CHECK_FALSE(heard.answers[0].attested);
@@ -783,7 +783,7 @@ TEST_CASE("R2B-1a: an ordinary weave with an exact zen.Activated grant, the vict
     CHECK(g.permits(loom::Activated::zen_name, loom::Activated::zen_version, victim));
 
     bus.send(impostor, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // It arrived — a legal, well-formed, correctly-stamped message.
     CHECK(log.delivered == 1);
@@ -796,7 +796,7 @@ TEST_CASE("R2B-1a: an ordinary weave with an exact zen.Activated grant, the vict
     // above are satisfied just as well by a victim that ignores everything.
     const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
     bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(log.delivered == 2);
     CHECK(log.accepted == 1); // the difference is the authority, and only that
     CHECK(log.lineage == 1);
@@ -816,7 +816,7 @@ TEST_CASE("R2B-1a: a genuine authority still binds to one target and one sequenc
     const auto attest = [&](WeaveId target, std::int64_t announce, std::int64_t claim) {
         bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(target.value),
                                                   announce, claim})));
-        bus.pump();
+        bus.drain_until_idle();
     };
 
     // Honest: accepted, once.
@@ -867,7 +867,7 @@ TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnatio
     bus.unregister_weave(first);
     const WeaveId second =
         mount_into_role<Responder>(bus, kProvRole, "second", Speak::Authenticated);
-    bus.pump();
+    bus.drain_until_idle();
 
     // It arrived at `second`, which answered from inside that delivery — with
     // Loom's word behind it, and with the correlation the ASKER chose.
@@ -893,7 +893,7 @@ TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnatio
     // reaches its own nudger and never the asker, and its ordinary direct send
     // of the response shape arrives unauthenticated.
     bus.send(third, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 2);
     CHECK(heard.answers[1].tag == "forged");
     CHECK_FALSE(heard.answers[1].attested);
@@ -1013,7 +1013,7 @@ TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy b
     CHECK(g.permits(loom::Activated::zen_name, loom::Activated::zen_version, victim));
 
     bus.send(attacker, Message(to_value(DecoyAttack{static_cast<std::int64_t>(victim.value), 1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Nothing was delivered at all: the attestation was refused where it was
     // asked for, not swallowed quietly at the far end.
@@ -1036,7 +1036,7 @@ TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy b
     // satisfied just as well by an attacker that never fired.
     const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
     bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.delivered == 1);
     CHECK(log.accepted == 1);
     CHECK(log.lineage == 1);
@@ -1052,7 +1052,7 @@ TEST_CASE("R2B-1b: an authority whose issuing Loom has been destroyed cannot be 
     const WeaveId attacker = mount<DeadBoardAttacker>(bus);
 
     bus.send(attacker, Message(to_value(DecoyAttack{static_cast<std::int64_t>(victim.value), 1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(tap.delivered == 0);
     CHECK(tap.foreign_authority == 1);
@@ -1062,7 +1062,7 @@ TEST_CASE("R2B-1b: an authority whose issuing Loom has been destroyed cannot be 
     // Destroying somebody else's board did nothing to THIS one's authority.
     const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
     bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(log.accepted == 1);
 }
 
@@ -1094,7 +1094,7 @@ TEST_CASE("R2B-1b: authority does not follow a board's ADDRESS — reusing a dea
 
     second->send(smuggler,
                  Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
-    second->pump();
+    second->drain_until_idle();
     CHECK(tap.delivered == 0);
     CHECK(tap.foreign_authority == 1);
     CHECK(tap.capability_denied == 0);
@@ -1104,7 +1104,7 @@ TEST_CASE("R2B-1b: authority does not follow a board's ADDRESS — reusing a dea
     const WeaveId op = mount<Operator>(*second, host_lifecycle_authority(*second));
     second->send(op,
                  Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
-    second->pump();
+    second->drain_until_idle();
     CHECK(log.accepted == 1);
 
     second->~Switchboard();
@@ -1135,7 +1135,7 @@ TEST_CASE("R2B-1b: two worlds, the same logical ids and the same sequences — a
     const auto attest = [](Switchboard& bus, WeaveId op, WeaveId target, std::int64_t seq) {
         bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(target.value), seq,
                                                   seq})));
-        bus.pump();
+        bus.drain_until_idle();
     };
 
     // Authority A works through board A; authority B works through board B.
@@ -1348,7 +1348,7 @@ TEST_CASE("R2B-2: the answer waits — a responder defers, the handler returns, 
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
 
     // THE HANDLER RETURNED WITHOUT ANSWERING, and the proof is that the queue is
     // empty and the asker has heard nothing — not merely that the answer came
@@ -1361,14 +1361,14 @@ TEST_CASE("R2B-2: the answer waits — a responder defers, the handler returns, 
     // pump: an ordinary message to somebody else, handled in between.
     const WeaveId bystander = mount<Asker>(bus, heard);
     bus.send(bystander, Message(to_value(ProvAnswer{"unrelated"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1); // the bystander's, not an answer to the ask
     CHECK_FALSE(heard.answers[0].attested);
 
     // Now the completion arrives, and the SAME LIVING INCARNATION spends what it
     // kept.
     bus.send(steward, Message(to_value(ProvFinish{"prepared"})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(heard.answers.size() == 2);
     CHECK(heard.answers[1].tag == "prepared");
@@ -1389,7 +1389,7 @@ TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second def
             mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::DeferTwice);
         bus.send_as_to_role(asker, kProvRole,
                             Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
-        bus.pump();
+        bus.drain_until_idle();
         Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
         CHECK(d->deferred_valid_);
         CHECK_FALSE(d->second_defer_valid_); // nothing left to convert
@@ -1402,7 +1402,7 @@ TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second def
             mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::AnswerAfter);
         bus.send_as_to_role(asker, kProvRole,
                             Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
-        bus.pump();
+        bus.drain_until_idle();
         Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
         CHECK(d->deferred_valid_);
         CHECK_FALSE(d->immediate_after_defer_); // the immediate door is closed
@@ -1416,9 +1416,9 @@ TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second def
             mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::SpendTwice);
         bus.send_as_to_role(asker, kProvRole,
                             Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
-        bus.pump();
+        bus.drain_until_idle();
         bus.send(steward, Message(to_value(ProvFinish{"once"})));
-        bus.pump();
+        bus.drain_until_idle();
         Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
         CHECK(d->first_spend_);
         CHECK_FALSE(d->second_spend_);        // consumed before queueing
@@ -1436,9 +1436,9 @@ TEST_CASE("R2B-2: releasing abandons the conversation — silently to the reques
         mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::ReleaseThenSpend);
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"x"}), asker, WeaveId{}, 5));
-    bus.pump();
+    bus.drain_until_idle();
     bus.send(steward, Message(to_value(ProvFinish{"too late"})));
-    bus.pump();
+    bus.drain_until_idle();
 
     Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
     CHECK_FALSE(d->first_spend_);  // released, so there is nothing to spend
@@ -1458,7 +1458,7 @@ TEST_CASE("R2B-2: another weave knowing every public value cannot finish somebod
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.empty());
 
     // The thief knows the requester, the correlation and the shape. The
@@ -1466,14 +1466,14 @@ TEST_CASE("R2B-2: another weave knowing every public value cannot finish somebod
     // field — so there is nothing for it to hold, and its best effort is an
     // ordinary send.
     bus.send(thief, Message(to_value(ProvFinish{"now"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].tag == "stolen");
     CHECK_FALSE(heard.answers[0].attested); // no provenance, so not an answer
 
     // And the real steward can still finish, so the refusal above cost nothing.
     bus.send(steward, Message(to_value(ProvFinish{"prepared"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 2);
     CHECK(heard.answers[1].attested);
     CHECK(heard.answers[1].correlation == kPublicCorrelation);
@@ -1499,7 +1499,7 @@ TEST_CASE("R2B-2: the real token, forged into a capability by a weave that never
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
     REQUIRE(d->deferred_valid_);
     const std::uint64_t real_token = d->token();
@@ -1508,7 +1508,7 @@ TEST_CASE("R2B-2: the real token, forged into a capability by a weave that never
     // Handed the genuine number — not a guess.
     const WeaveId forger = mount<TokenForger>(bus, real_token);
     bus.send(forger, Message(to_value(ProvFinish{"take it"})));
-    bus.pump();
+    bus.drain_until_idle();
     TokenForger* f = static_cast<TokenForger*>(bus.weave(forger));
     CHECK(f->forged_valid_); // the capability object really was constructible...
     CHECK_FALSE(f->spent_);  // ...and spending it reached nothing
@@ -1516,7 +1516,7 @@ TEST_CASE("R2B-2: the real token, forged into a capability by a weave that never
 
     // And the conversation is untouched: still open, still the steward's to finish.
     bus.send(steward, Message(to_value(ProvFinish{"mine"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d->first_spend_);
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].tag == "mine");
@@ -1533,7 +1533,7 @@ TEST_CASE("R2B-2: the role moving on does not carry the unfinished conversation 
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.empty());
 
     // A ROLE CHOOSES WHO RECEIVES AN ASK. IT DOES NOT INHERIT UNFINISHED
@@ -1545,7 +1545,7 @@ TEST_CASE("R2B-2: the role moving on does not carry the unfinished conversation 
 
     // The successor gets the completion message and has nothing to spend.
     bus.send(second, Message(to_value(ProvFinish{"not mine"})));
-    bus.pump();
+    bus.drain_until_idle();
     Deferrer* d = static_cast<Deferrer*>(bus.weave(second));
     CHECK_FALSE(d->deferred_valid_); // it never received the ask
     CHECK_FALSE(d->first_spend_);
@@ -1568,7 +1568,7 @@ TEST_CASE("R2B-2: reload behind a stable WeaveId is a NEW incarnation — the su
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
 
     // Reload it in place: SAME WeaveId, same role, new code behind it.
@@ -1580,7 +1580,7 @@ TEST_CASE("R2B-2: reload behind a stable WeaveId is a NEW incarnation — the su
     // The completion arrives at the same id — and the right is gone with the
     // incarnation that earned it.
     bus.send(steward, Message(to_value(ProvFinish{"after reload"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
     CHECK(heard.answers.empty());
 }
@@ -1596,7 +1596,7 @@ TEST_CASE("R2B-2: the requester dying prevents delivery, and no successor inheri
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"prepare"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
 
     // The requester goes away, and a fresh weave takes its place in the world.
@@ -1604,7 +1604,7 @@ TEST_CASE("R2B-2: the requester dying prevents delivery, and no successor inheri
     const WeaveId newcomer = mount<Asker>(bus, successor_heard);
 
     bus.send(steward, Message(to_value(ProvFinish{"prepared"})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
     CHECK(heard.answers.empty());
@@ -1624,13 +1624,13 @@ TEST_CASE("R2B-2: an ordinary delivery has no answer authority to defer") {
 
     // Root-sent: nobody to answer, so nothing to convert into a deferred answer.
     bus.send(steward, Message(to_value(ProvAsk{"rootless"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->deferred_valid_);
 
     // And spending an invalid capability is safe and loud rather than silent: the
     // completion handler's attempt simply fails.
     bus.send(steward, Message(to_value(ProvFinish{"nothing to say"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
     CHECK(heard.answers.empty());
 }
@@ -1658,17 +1658,17 @@ TEST_CASE("R2B-2: a deferred answer is board-relative — World A's capability h
     world_a.send_as_to_role(asker_a, kProvRole,
                             Message(to_value(ProvAsk{"a"}), asker_a, WeaveId{},
                                     kPublicCorrelation));
-    world_a.pump();
+    world_a.drain_until_idle();
     world_b.send_as_to_role(asker_b, kProvRole,
                             Message(to_value(ProvAsk{"b"}), asker_b, WeaveId{},
                                     kPublicCorrelation));
-    world_b.pump();
+    world_b.drain_until_idle();
 
     // Each world finishes its own conversation, and only its own.
     world_a.send(steward_a, Message(to_value(ProvFinish{"from-a"})));
-    world_a.pump();
+    world_a.drain_until_idle();
     world_b.send(steward_b, Message(to_value(ProvFinish{"from-b"})));
-    world_b.pump();
+    world_b.drain_until_idle();
 
     REQUIRE(heard_a.answers.size() == 1);
     REQUIRE(heard_b.answers.size() == 1);
@@ -1704,11 +1704,11 @@ TEST_CASE("R2B-2: and the capability ITSELF does not cross — World A's answer 
     world_a.send_as_to_role(asker_a, kProvRole,
                             Message(to_value(ProvAsk{"a"}), asker_a, WeaveId{},
                                     kPublicCorrelation));
-    world_a.pump();
+    world_a.drain_until_idle();
     world_b.send_as_to_role(asker_b, kProvRole,
                             Message(to_value(ProvAsk{"b"}), asker_b, WeaveId{},
                                     kPublicCorrelation));
-    world_b.pump();
+    world_b.drain_until_idle();
 
     Deferrer* da = static_cast<Deferrer*>(world_a.weave(steward_a));
     Deferrer* db = static_cast<Deferrer*>(world_b.weave(steward_b));
@@ -1721,7 +1721,7 @@ TEST_CASE("R2B-2: and the capability ITSELF does not cross — World A's answer 
     // it changed: same id, same role, same incarnation, same live record.
     db->adopt(da->take());
     world_b.send(steward_b, Message(to_value(ProvFinish{"with a's right"})));
-    world_b.pump();
+    world_b.drain_until_idle();
 
     CHECK_FALSE(db->first_spend_);
     CHECK(heard_b.answers.empty()); // nothing was answered in B...
@@ -1746,7 +1746,7 @@ struct FullRegistry {
         bus.send_as_to_role(asker, kProvRole,
                             Message(to_value(ProvAsk{tag}), asker, WeaveId{},
                                     kPublicCorrelation));
-        bus.pump();
+        bus.drain_until_idle();
     }
 
     Deferrer* fill(Switchboard& bus, Deferrer::Mode mode,
@@ -1883,7 +1883,7 @@ struct LifeTap {
 void ask_by_role(Switchboard& bus, WeaveId asker, const char* role, const char* tag) {
     bus.send_as_to_role(asker, role,
                         Message(to_value(ProvAsk{tag}), asker, WeaveId{}, kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
 }
 
 constexpr const char* kOtherRole = "prov.other";
@@ -1925,7 +1925,7 @@ TEST_CASE("R2B-2a: the respondent DYING ends the conversation, and revival from 
     // The completion arrives, and the revived life STILL HOLDS THE CAPABILITY
     // OBJECT — nothing library-side changed. The board is what refuses.
     bus.send(steward, Message(to_value(ProvFinish{"after revival"})));
-    bus.pump();
+    bus.drain_until_idle();
     Deferrer* revived = static_cast<Deferrer*>(bus.weave(steward));
     CHECK_FALSE(revived->first_spend_);
     CHECK(heard.answers.empty());
@@ -1936,7 +1936,7 @@ TEST_CASE("R2B-2a: the respondent DYING ends the conversation, and revival from 
     ask_by_role(bus, asker, kProvRole, "again");
     CHECK(revived->deferred_valid_);
     bus.send(steward, Message(to_value(ProvFinish{"fresh"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(revived->first_spend_);
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].tag == "fresh");
@@ -1972,7 +1972,7 @@ TEST_CASE("R2B-2a: LAST-KNOWN-GOOD revival cannot restore an answer right either
     CHECK(bus.alive(steward));
 
     bus.send(steward, Message(to_value(ProvFinish{"from the old life"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
     CHECK(heard.answers.empty());
     CHECK(tap.foreign_authority == 1);
@@ -2009,7 +2009,7 @@ TEST_CASE("R2B-2a: the REQUESTER dying and reviving does not inherit the answer 
     CHECK(bus.alive(asker));
 
     bus.send(steward, Message(to_value(ProvFinish{"owed to your predecessor"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(d->first_spend_);
     CHECK(heard.answers.empty()); // the new life is not handed the old life's answer
     CHECK(tap.foreign_authority == 1);
@@ -2019,7 +2019,7 @@ TEST_CASE("R2B-2a: the REQUESTER dying and reviving does not inherit the answer 
     ask_by_role(bus, asker, kProvRole, "my own question");
     CHECK(d->deferred_valid_);
     bus.send(steward, Message(to_value(ProvFinish{"mine"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d->first_spend_);
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].tag == "mine");
@@ -2115,7 +2115,7 @@ TEST_CASE("R2B-2a: death cleanup is SELECTIVE — killing one participant ends o
 
     // B still holds both capability objects and tries both. Neither is honoured.
     bus.send(b, Message(to_value(ProvFinish{"revived-b"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bw->spent_from_retained_ == 0);
     CHECK(heard_a.answers.empty());
     CHECK(heard_e.answers.empty());
@@ -2123,7 +2123,7 @@ TEST_CASE("R2B-2a: death cleanup is SELECTIVE — killing one participant ends o
     // C -> D was never B's business, and it still works — the registry was not
     // simply emptied.
     bus.send(d, Message(to_value(ProvFinish{"c-gets-this"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(dw->first_spend_);
     REQUIRE(heard_c.answers.size() == 1);
     CHECK(heard_c.answers[0].tag == "c-gets-this");
@@ -2154,7 +2154,7 @@ TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICA
 
     // The real (now reclaimed) token, presented by the weave that earned it.
     bus.send(steward, Message(to_value(ProvFinish{"reclaimed"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(d->first_spend_);
     const std::int64_t after_reclaimed = tap.foreign_authority;
     CHECK(after_reclaimed == 1);
@@ -2162,7 +2162,7 @@ TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICA
     // A number that never named anything, presented by a weave that never asked.
     const WeaveId forger = mount<TokenForger>(bus, real_token + 12345u);
     bus.send(forger, Message(to_value(ProvFinish{"never-existed"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(static_cast<TokenForger*>(bus.weave(forger))->spent_);
     CHECK(tap.foreign_authority == after_reclaimed + 1); // same reason, same altitude
     CHECK(tap.delivered_answers == 0);
@@ -2241,7 +2241,7 @@ void queue_one_utterance(Switchboard& bus, WeaveId speaker) {
         }
     });
     bus.send(speaker, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
     bus.remove_observer(stopper);
 }
 
@@ -2280,7 +2280,7 @@ TEST_CASE("R2B-2b: an ask queued by a life that then died is not speech from its
     kill_and_revive(bus, speaker, life);
 
     // The queued ask now comes up for delivery, and its author is a different life.
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.sender_life_ended == 1);   // refused, and NAMED
     CHECK(tap.capability_denied == 0);   // not blamed on a grant
     CHECK(tap.other_refusals == 0);      // nor on the target or the payload
@@ -2295,14 +2295,14 @@ TEST_CASE("R2B-2b: an ask queued by a life that then died is not speech from its
     // THE POSITIVE CONTROL: the revived life is a perfectly ordinary speaker.
     static_cast<Speaker*>(bus.weave(speaker))->say("after revival");
     queue_one_utterance(bus, speaker);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d->deliveries() == 1);
     CHECK(d->deferred_valid_);
     // ...and its speech carries the NEW generation, matching the sender's own.
     CHECK(tap.last_authored_life == 2);
     CHECK(tap.last_current_life == 2);
     bus.send(steward, Message(to_value(ProvFinish{"answered"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].tag == "answered");
     CHECK(heard.answers[0].attested);
@@ -2335,7 +2335,7 @@ TEST_CASE("R2B-2b: a queued message from a sender that is DEAD AND NOT YET REVIV
     REQUIRE(life.died == 1);
     REQUIRE(life.revived == 0); // dead, and staying dead for the length of this test
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.sender_life_ended == 1);
     CHECK(tap.last_authored_life == 1);
     CHECK(tap.last_current_life == 1); // EQUAL — and still refused
@@ -2369,7 +2369,7 @@ TEST_CASE("R2B-2b: a stale ROLE-addressed message reaches neither the old holder
     const WeaveId new_holder =
         mount_into_role<Deferrer>(bus, kProvRole, Deferrer::Mode::Normal);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.sender_life_ended == 1);
     CHECK(tap.other_refusals == 0); // NOT "no such target", NOT a role miss
     CHECK(static_cast<Deferrer*>(bus.weave(new_holder))->deliveries() == 0);
@@ -2396,7 +2396,7 @@ TEST_CASE("R2B-2b: a stale PUBLICATION reaches no subscriber, and every recipien
     REQUIRE(bus.pending() == 2); // one envelope per subscriber
     kill_and_revive(bus, speaker, life);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.sender_life_ended == 2); // BOTH copies refused, individually
     CHECK(tap.delivered_answers == 0);
     CHECK(static_cast<Deferrer*>(bus.weave(sub_a))->deliveries() == 0);
@@ -2422,14 +2422,14 @@ TEST_CASE("R2B-2b: a stale ask creates no IMMEDIATE answer authority") {
     REQUIRE(bus.pending() == 1);
     kill_and_revive(bus, speaker, life);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(answers.delivered_answers == 0);
     CHECK(answers.capability_denied == 0); // no answer was even attempted
 
     // POSITIVE CONTROL: the same responder answers the revived life's own ask.
     queue_one_utterance(bus, speaker);
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].attested);
 }
@@ -2457,7 +2457,7 @@ TEST_CASE("R2B-2b: a stale ask creates no DEFERRED answer authority and occupies
     queue_one_utterance(bus, speaker);
     REQUIRE(bus.pending() == 1);
     kill_and_revive(bus, speaker, life);
-    bus.pump();
+    bus.drain_until_idle();
 
     Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
     CHECK(d->deliveries() == 0);
@@ -2500,12 +2500,12 @@ TEST_CASE("R2B-2b: killing one speaker leaves another living speaker's queued me
     });
     bus.send(a, Message(to_value(ProvNudge{})));
     bus.send(b, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
     bus.remove_observer(stopper);
     REQUIRE(bus.pending() == 2);
 
     kill_and_revive(bus, a, life);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(tap.sender_life_ended == 1); // exactly one of the two
     Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
@@ -2533,7 +2533,7 @@ TEST_CASE("R2B-2b: a queued message from a PERMANENTLY REMOVED sender is refused
     REQUIRE(bus.pending() == 1);
     bus.unregister_weave(speaker);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.sender_life_ended == 1);
     CHECK(tap.capability_denied == 0);
     CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 0);
@@ -2562,7 +2562,7 @@ TEST_CASE("R2B-2b: a LIVE code reload is not a death — speech already in the q
     fresh.set("n", Cell::integer(0));
     REQUIRE(bus.swap_state(speaker, serialize(fresh)).revived);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.sender_life_ended == 0);
     CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 1);
     CHECK(tap.last_authored_life == 1);
@@ -2596,7 +2596,7 @@ TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold �
         mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Authenticated);
 
     bus.send_as(magpie, holder, Message(to_value(ProvAsk{"one"}), magpie, WeaveId{}, 5));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(magpie_raw->kept_was_attested()); // it is holding a real answer
 
     // The RESPONDER — the life that authored the hoarded envelope — dies.
@@ -2607,7 +2607,7 @@ TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold �
     // pinned. The dead author's life was never the question, because the dead
     // author is not who is speaking.
     bus.send(magpie, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(victim_heard.answers.size() == 1);
     CHECK_FALSE(victim_heard.answers[0].attested);
     CHECK(victim_heard.answers[0].sender == magpie.value);
@@ -2648,7 +2648,7 @@ void queue_one_answer(Switchboard& bus, WeaveId asker, const char* role, const c
     });
     bus.send_as_to_role(asker, role,
                         Message(to_value(ProvAsk{tag}), asker, WeaveId{}, kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     bus.remove_observer(stopper);
 }
 
@@ -2659,14 +2659,14 @@ void queue_one_deferred_answer(Switchboard& bus, WeaveId asker, WeaveId steward,
     bus.send_as_to_role(asker, role,
                         Message(to_value(ProvAsk{"defer me"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     const ObserverId stopper = bus.add_observer([&bus](const BusEvent& ev) {
         if (ev.kind == EventKind::Delivered && ev.schema_name == ProvFinish::zen_name) {
             bus.stop();
         }
     });
     bus.send(steward, Message(to_value(ProvFinish{tag})));
-    bus.pump();
+    bus.drain_until_idle();
     bus.remove_observer(stopper);
 }
 
@@ -2706,7 +2706,7 @@ TEST_CASE("R2B-2c: an authenticated answer queued for a requester that then died
     REQUIRE(bus.reload(asker, own_state).revived);
     REQUIRE(life.revived == 1);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());          // the revival was told nothing
     CHECK(tap.answer_target_changed == 1); // and the refusal NAMES the cause
     CHECK(tap.delivered_answers == 0);
@@ -2723,7 +2723,7 @@ TEST_CASE("R2B-2c: an authenticated answer queued for a requester that then died
     } else {
         queue_one_answer(bus, asker, kProvRole, "fresh");
     }
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].attested);
     CHECK(heard.answers[0].correlation == kPublicCorrelation);
@@ -2751,7 +2751,7 @@ TEST_CASE("R2B-2c: a LIVE code reload of the requester does not inherit the conv
     REQUIRE(bus.swap_state(asker, serialize(fresh)).revived);
     CHECK(bus.alive(asker)); // it never stopped living
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(tap.answer_target_changed == 1);
     CHECK(tap.expected_life == 1);
@@ -2761,7 +2761,7 @@ TEST_CASE("R2B-2c: a LIVE code reload of the requester does not inherit the conv
 
     // ...and the successor's own question is answered normally.
     queue_one_answer(bus, asker, kProvRole, "asked by incarnation 2");
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].attested);
 }
@@ -2793,7 +2793,7 @@ TEST_CASE("R2B-2c: ORDINARY messages keep their logical targeting — a queued d
     fresh.set("n", Cell::integer(0));
     REQUIRE(bus.swap_state(steward, serialize(fresh)).revived);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.answer_target_changed == 0);
     CHECK(tap.other_refusals == 0);
     CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 1); // it arrived
@@ -2819,7 +2819,7 @@ TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and th
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"defer me"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
     REQUIRE(d->deferred_valid_);
 
@@ -2830,7 +2830,7 @@ TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and th
     REQUIRE(bus.swap_state(asker, serialize(fresh)).revived);
 
     bus.send(steward, Message(to_value(ProvFinish{"too late"})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(d->first_spend_);   // the spend itself failed...
     CHECK(bus.pending() == 0);      // ...so no answer was ever queued
     CHECK(heard.answers.empty());
@@ -2840,9 +2840,9 @@ TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and th
     bus.send_as_to_role(asker, kProvRole,
                         Message(to_value(ProvAsk{"mine"}), asker, WeaveId{},
                                 kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     bus.send(steward, Message(to_value(ProvFinish{"answered"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].attested);
 }
@@ -2875,7 +2875,7 @@ TEST_CASE("R2B-2c: an UNCHANGED requester still gets its answer, whatever else t
     fresh.set("n", Cell::integer(0));
     REQUIRE(bus.swap_state(responder, serialize(fresh)).revived);
 
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].attested);                       // authentic
     CHECK(heard.answers[0].correlation == kPublicCorrelation); // original label
@@ -2901,7 +2901,7 @@ TEST_CASE("R2B-2c: an answer pumped while the requester is STILL DEAD is refused
     REQUIRE(bus.pending() == 1);
     bus.kill(asker);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(tap.answer_target_changed == 0); // NOT "changed" — it has not changed yet
     CHECK(tap.other_refusals == 1);        // TargetUnavailable, the pre-existing truth
@@ -2927,13 +2927,13 @@ TEST_CASE("R2B-2c: LAST-KNOWN-GOOD revival is no back door either") {
     REQUIRE(ro.from_last_known_good);
     REQUIRE(life.revived_from_lkg == 1);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(tap.answer_target_changed == 1);
 
     // And a fresh conversation works afterwards.
     queue_one_answer(bus, asker, kProvRole, "again");
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].attested);
 }
@@ -2961,7 +2961,7 @@ TEST_CASE("R2B-2c: when BOTH participants change, the answer still does not arri
     bus.kill(responder);
     REQUIRE(bus.reload(responder, responder_state).revived);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(tap.delivered_answers == 0);
     // Exactly one refusal, whichever cause it names.
@@ -2993,7 +2993,7 @@ TEST_CASE("R2B-2c: changing one requester does not invalidate an answer queued f
                         Message(to_value(ProvAsk{"a"}), a, WeaveId{}, kPublicCorrelation));
     bus.send_as_to_role(b, kProvRole,
                         Message(to_value(ProvAsk{"b"}), b, WeaveId{}, kPublicCorrelation));
-    bus.pump();
+    bus.drain_until_idle();
     bus.remove_observer(stopper);
     REQUIRE(bus.pending() == 2);
 
@@ -3002,7 +3002,7 @@ TEST_CASE("R2B-2c: changing one requester does not invalidate an answer queued f
     bus.kill(b);
     REQUIRE(bus.reload(b, b_state).revived);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap.answer_target_changed == 1); // exactly one, and it is B's
     CHECK(heard_b.answers.empty());
     REQUIRE(heard_a.answers.size() == 1);  // A's conversation was never anyone's business
@@ -3032,7 +3032,7 @@ TEST_CASE("R2B-2c: WeaveIds are never reused, so a later participant cannot inhe
     queue_one_answer(bus, asker, kProvRole, "q");
     REQUIRE(bus.pending() == 1);
     bus.unregister_weave(asker);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(later_heard.answers.empty());
     CHECK(tap.delivered_answers == 0);
@@ -3061,7 +3061,7 @@ TEST_CASE("R2B-2c: a SWAP successor holds a different WeaveId, so an answer owed
     const WeaveId successor = mount<Asker>(bus, successor_heard);
     CHECK(successor.value != asker.value);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(successor_heard.answers.empty());
     CHECK(tap.delivered_answers == 0);
@@ -3091,14 +3091,14 @@ TEST_CASE("R2B-2c: a replayed raw envelope carries no target expectation, becaus
         mount_into_role<Responder>(bus, kProvRole, "holder", Speak::Authenticated);
 
     bus.send_as(magpie, holder, Message(to_value(ProvAsk{"one"}), magpie, WeaveId{}, 5));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(magpie_raw->kept_was_attested());
 
     // The magpie's own conversation was with the MAGPIE. Replaying it at the
     // victim delivers an ordinary message — the target expectation did not come
     // along, because it was never in anything the magpie could hold.
     bus.send(magpie, Message(to_value(ProvNudge{})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(victim_heard.answers.size() == 1);
     CHECK_FALSE(victim_heard.answers[0].attested);
     CHECK(victim_heard.answers[0].sender == magpie.value);

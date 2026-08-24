@@ -51,7 +51,7 @@ public:
 loom::Switchboard bus;
 loom::WeaveId id = loom::mount<Responder>(bus);
 bus.send(id, loom::Message(loom::to_value(Ping{7})));
-bus.pump();
+bus.drain_until_idle();
 ```
 
 Runnable versions live in [`examples/`](examples/) — `quickstart.cpp` (the

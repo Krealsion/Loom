@@ -188,7 +188,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
         b.send(sid, Message(work(1)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard_from.empty());
     CHECK(tap_has_denied(tap, service.id, "Work"));
 
@@ -199,7 +199,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
         b.send(aid, Message(ask_admin(1)));
     };
     bus.send(session.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(admin.weave->handled_names.size() == 1); // the ask arrived
     CHECK(last.outcome == GrantOutcome::Installed);
     CHECK(last.subject == session.id);
@@ -213,7 +213,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
         b.send(sid, Message(work(2)));
     };
     bus.send(session.id, Message(ping(3)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_values.size() == 1);
     CHECK(service.weave->handled_values[0] == 2); // the RETRY, not the refused work(1)
 
@@ -230,7 +230,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
         b.send(aid, Message(ask_admin(2)));
     };
     bus.send(session.id, Message(ping(4)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(last.outcome == GrantOutcome::Installed);
     CHECK_FALSE(last.previous.empty()); // it HAD Work
     CHECK(last.installed.empty());      // and now holds nothing delegated
@@ -241,7 +241,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
         b.send(sid, Message(work(3)));
     };
     bus.send(session.id, Message(ping(5)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(service.weave->handled_values.size() == 1); // still just the one from step 4
     CHECK(tap_has_denied(tap, service.id, "Work"));
 
@@ -251,7 +251,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
         b.send(aid, Message(ask_admin(3)));
     };
     bus.send(session.id, Message(ping(6)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(admin.weave->handled_names.size() == asks_before + 1);
 }
 
@@ -272,14 +272,14 @@ TEST_CASE("a message queued while authorized is refused when delivery finds the 
         b.delegate_authority(cap, to_install);
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Sanity: while the rule is held, this exact send lands.
     session.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
         b.send(service.id, Message(work(1)));
     };
     bus.send(session.id, Message(ping(0)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_names.size() == 1);
 
     // THE WITNESS, and its shape is the point. `pump_pending()` dispatches
@@ -306,7 +306,7 @@ TEST_CASE("a message queued while authorized is refused when delivery finds the 
     REQUIRE(bus.pending() == queued_before + 1);       // the Work envelope, in flight
     REQUIRE(service.weave->handled_names.size() == 1); // and NOT yet delivered
 
-    bus.pump();
+    bus.drain_until_idle();
 
     // Refused. What was true when the message was authored bought nothing:
     // nothing on the envelope remembered it, and the check read the record as it
@@ -331,11 +331,11 @@ TEST_CASE("granting after a denial does not resurrect the message that was refus
         b.send(service.id, Message(work(7)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_names.empty()); // refused and DISCARDED
 
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Authority changed. History did not: nothing was replayed, no dead letter
     // was delivered, and the target has still never seen that Work.
@@ -343,7 +343,7 @@ TEST_CASE("granting after a denial does not resurrect the message that was refus
 
     // Only an explicit retry gets through.
     bus.send(session.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_values.size() == 1);
     CHECK(service.weave->handled_values[0] == 7);
 }
@@ -373,7 +373,7 @@ TEST_CASE("revoking delegated authority leaves the admission baseline untouched"
     };
 
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(view.available);
     CHECK(view.permits("Work", 1, service.id));    // delegated
     CHECK(view.permits("AskAdmin", 1, admin.id));  // baseline
@@ -384,7 +384,7 @@ TEST_CASE("revoking delegated authority leaves the admission baseline untouched"
 
     to_install = LiveAuthority::nothing();
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(view.available);
     CHECK_FALSE(view.permits("Work", 1, service.id)); // delegated gone
     CHECK(view.permits("AskAdmin", 1, admin.id));     // baseline intact
@@ -397,7 +397,7 @@ TEST_CASE("revoking delegated authority leaves the admission baseline untouched"
     };
     const std::size_t before = admin.weave->handled_names.size();
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(admin.weave->handled_names.size() == before + 1);
 }
 
@@ -418,12 +418,12 @@ TEST_CASE("a rule the baseline already carries survives revoking the delegated c
         view = b.describe_authority(cap);
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(view.permits("Work", 1, service.id));
 
     to_install = LiveAuthority::nothing();
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Effective authority is a UNION, so removing the delegated copy cannot
     // remove the host's. The inspection explains why: base still carries it.
@@ -435,7 +435,7 @@ TEST_CASE("a rule the baseline already carries survives revoking the delegated c
         b.send(service.id, Message(work(5)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_values.size() == 1);
     CHECK(service.weave->handled_values[0] == 5);
 }
@@ -463,7 +463,7 @@ TEST_CASE("an administrator cannot install authority outside its ceiling") {
         attempt = std::move(a);
         out = GrantChange{};
         bus.send(admin.id, Message(ask_admin(1)));
-        bus.pump();
+        bus.drain_until_idle();
         return out;
     };
 
@@ -499,7 +499,7 @@ TEST_CASE("an administrator cannot install authority outside its ceiling") {
         view = b.describe_authority(cap);
     };
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(view.available);
     CHECK(view.delegated.permits("Work", 1, service.id));
     CHECK_FALSE(view.delegated.permits("OtherWork", 1, service.id));
@@ -524,7 +524,7 @@ TEST_CASE("a broad ceiling contains narrower rules, in every direction that is r
     auto try_install = [&](LiveAuthority a) {
         attempt = std::move(a);
         bus.send(admin.id, Message(ask_admin(1)));
-        bus.pump();
+        bus.drain_until_idle();
         return out;
     };
 
@@ -586,7 +586,7 @@ TEST_CASE("an office rule and a weave rule never contain one another, whoever ho
         cap = std::move(c);
         attempt = std::move(a);
         bus.send(admin.id, Message(ask_admin(1)));
-        bus.pump();
+        bus.drain_until_idle();
         return out.outcome;
     };
 
@@ -629,7 +629,7 @@ TEST_CASE("containment does not depend on the order rules were added") {
     auto try_install = [&](LiveAuthority a) {
         attempt = std::move(a);
         bus.send(admin.id, Message(ask_admin(1)));
-        bus.pump();
+        bus.drain_until_idle();
         return out.outcome;
     };
 
@@ -672,7 +672,7 @@ TEST_CASE("a capability for one subject does nothing to another") {
         view_b = bs.describe_authority(host_grant_authority(bus, b_sub.id, LiveAuthority{}));
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(view_a.available);
     REQUIRE(view_b.available);
@@ -685,7 +685,7 @@ TEST_CASE("a capability for one subject does nothing to another") {
         bs.send(service.id, Message(work(1)));
     };
     bus.send(b_sub.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(service.weave->handled_names.empty());
 }
 
@@ -710,7 +710,7 @@ TEST_CASE("a capability minted by another Loom has no standing here") {
         view = b.describe_authority(foreign);
     };
     board_b.send(admin.id, Message(ask_admin(1)));
-    board_b.pump();
+    board_b.drain_until_idle();
 
     CHECK(out.outcome == GrantOutcome::ForeignBoard);
     CHECK_FALSE(view.available); // and it learns nothing about board B either
@@ -720,7 +720,7 @@ TEST_CASE("a capability minted by another Loom has no standing here") {
         b.send(service.id, Message(work(1)));
     };
     board_b.send(session.id, Message(ping(1)));
-    board_b.pump();
+    board_b.drain_until_idle();
     CHECK(service.weave->handled_names.empty());
 
     // The same capability IS real on its own board — the point is domain, not
@@ -735,7 +735,7 @@ TEST_CASE("a capability minted by another Loom has no standing here") {
         home_out = b.delegate_authority(home, LiveAuthority{}.allow("Work", 1, a_service.id));
     };
     board_a.send(a_admin.id, Message(ask_admin(1)));
-    board_a.pump();
+    board_a.drain_until_idle();
     CHECK(home_out.outcome == GrantOutcome::Installed);
 }
 
@@ -758,7 +758,7 @@ TEST_CASE("a capability whose board has died administers nothing") {
         out = b.delegate_authority(ghost, LiveAuthority{}.allow("Work", 1, service.id));
     };
     living.send(admin.id, Message(ask_admin(1)));
-    living.pump();
+    living.drain_until_idle();
     CHECK(out.outcome == GrantOutcome::ForeignBoard);
 }
 
@@ -781,7 +781,7 @@ TEST_CASE("a default-constructed capability is inert, and a wide grant is not on
         view = b.describe_authority(forged);
     };
     bus.send(loud.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(out.outcome == GrantOutcome::NoAuthority);
     CHECK_FALSE(view.available);
@@ -794,7 +794,7 @@ TEST_CASE("a default-constructed capability is inert, and a wide grant is not on
         b.send(service.id, Message(work(1)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(service.weave->handled_names.empty());
 }
 
@@ -813,7 +813,7 @@ TEST_CASE("administering a subject that is gone fails explicitly and touches nob
         b.delegate_authority(cap, LiveAuthority{}.allow("Work", 1, service.id));
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     std::unique_ptr<Weave> handed_back = bus.unregister_weave(departed);
     CHECK(handed_back != nullptr);
@@ -825,7 +825,7 @@ TEST_CASE("administering a subject that is gone fails explicitly and touches nob
         view = b.describe_authority(cap);
     };
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(out.outcome == GrantOutcome::NoSuchSubject);
     CHECK(out.subject == departed);
@@ -841,7 +841,7 @@ TEST_CASE("administering a subject that is gone fails explicitly and touches nob
             b.send(service.id, Message(work(1)));
         };
         bus.send(r->id, Message(ping(1)));
-        bus.pump();
+        bus.drain_until_idle();
     }
     CHECK(service.weave->handled_names.empty());
 }
@@ -857,14 +857,14 @@ TEST_CASE("a subject's delegated authority dies with the subject") {
         b.delegate_authority(cap, LiveAuthority{}.allow("Work", 1, service.id));
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // It worked while the subject lived.
     session.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
         b.send(service.id, Message(work(1)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(service.weave->handled_names.size() == 1);
 
     // The record's destruction is the whole of the cleanup: there is no delegated
@@ -876,7 +876,7 @@ TEST_CASE("a subject's delegated authority dies with the subject") {
         view = b.describe_authority(cap);
     };
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(view.available);
 }
 
@@ -895,7 +895,7 @@ TEST_CASE("delegated authority outlives the administrator that installed it") {
             b.delegate_authority(cap, LiveAuthority{}.allow("Work", 1, service.id));
         };
         bus.send(admin.id, Message(ask_admin(1)));
-        bus.pump();
+        bus.drain_until_idle();
     }
     // ...and the administrator weave itself is removed.
     (void)bus.unregister_weave(admin.id);
@@ -904,7 +904,7 @@ TEST_CASE("delegated authority outlives the administrator that installed it") {
         b.send(service.id, Message(work(11)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_values.size() == 1);
     CHECK(service.weave->handled_values[0] == 11);
 }
@@ -934,7 +934,7 @@ TEST_CASE("observe authority is delegable and revocable, and is read at the mome
         b.claim(std::move(v));
     };
     bus.send(claimer, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The reader is admitted with NO observe authority at all.
     Registered reader = register_probe(bus, {ping_schema()}, 2, true, Grant::nothing());
@@ -946,7 +946,7 @@ TEST_CASE("observe authority is delegable and revocable, and is read at the mome
         had_value = r.value.has_value();
     };
     bus.send(reader.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(seen == SenseRefusal::NotAuthorized);
     CHECK_FALSE(had_value);
 
@@ -959,19 +959,19 @@ TEST_CASE("observe authority is delegable and revocable, and is read at the mome
         b.delegate_authority(cap, to_install);
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     bus.send(reader.id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(seen == SenseRefusal::None);
     CHECK(had_value);
 
     // Revoke — and the very next read is refused. Nothing cached the answer.
     to_install = LiveAuthority::nothing();
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
     bus.send(reader.id, Message(ping(3)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(seen == SenseRefusal::NotAuthorized);
     CHECK_FALSE(had_value);
 }
@@ -1001,13 +1001,13 @@ TEST_CASE("replacement is one transition: the old rule is never live beside the 
         view = bus_.describe_authority(cap);
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(view.delegated.permits("Work", 1, a.id));
     CHECK_FALSE(view.delegated.permits("OtherWork", 1, b_svc.id));
 
     to_install = LiveAuthority{}.allow("OtherWork", 1, b_svc.id);
     bus.send(admin.id, Message(ask_admin(2)));
-    bus.pump();
+    bus.drain_until_idle();
     // A allowed/B denied became A denied/B allowed, with nothing in between:
     // the board is single-threaded and the transition is one assignment, so no
     // observer — weave, tap or handler — can be scheduled inside it.
@@ -1020,7 +1020,7 @@ TEST_CASE("replacement is one transition: the old rule is never live beside the 
         bus_.send(b_svc.id, Message(other_work(2)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(a.weave->handled_names.empty());
     CHECK(b_svc.weave->handled_names.size() == 1);
 }
@@ -1044,10 +1044,10 @@ TEST_CASE("inspection reports the state delivery will actually apply") {
     auto delivered_after = [&](LiveAuthority a) {
         to_install = std::move(a);
         bus.send(admin.id, Message(ask_admin(1)));
-        bus.pump();
+        bus.drain_until_idle();
         const std::size_t before = service.weave->handled_names.size();
         bus.send(session.id, Message(ping(1)));
-        bus.pump();
+        bus.drain_until_idle();
         return service.weave->handled_names.size() > before;
     };
 
@@ -1075,7 +1075,7 @@ TEST_CASE("delegated authority survives a reload of the same subject") {
         b.delegate_authority(cap, LiveAuthority{}.allow("Work", 1, service.id));
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Kill and revive: the same WeaveId, a new life, the same mounted subject.
     const std::string bytes = bus.snapshot_bytes(session.id);
@@ -1094,7 +1094,7 @@ TEST_CASE("delegated authority survives a reload of the same subject") {
         b.send(service.id, Message(work(3)));
     };
     bus.send(session.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(service.weave->handled_values.size() == 1);
     CHECK(service.weave->handled_values[0] == 3);
 }
@@ -1136,7 +1136,7 @@ TEST_CASE("every administration outcome is reachable and named") {
         refused = b.delegate_authority(narrow, LiveAuthority{}.allow_any());
     };
     bus.send(admin.id, Message(ask_admin(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(refused.outcome == GrantOutcome::ExceedsCeiling);
     CHECK(refused.previous.empty());
     CHECK(refused.installed.empty());

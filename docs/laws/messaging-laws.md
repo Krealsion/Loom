@@ -4,8 +4,8 @@ Reference: [messaging](../reference/messaging.md).
 
 ## MSG-01 — Single-threaded, FIFO, non-reentrant
 
-LAW — Dispatch is single-threaded FIFO. `pump()` is non-reentrant; a handler's
-sends enqueue *later* deliveries, never nested ones.
+LAW — Dispatch is single-threaded FIFO. A dispatch turn is non-reentrant; a
+handler's sends enqueue *later* deliveries, never nested ones.
 
 MEANS
 - ordering is deterministic;
@@ -17,7 +17,8 @@ DOES NOT MEAN
 - that concurrency is supported and merely untested — multi-threaded dispatch
   is an explicit non-feature until a consumer forces it.
 
-PROVEN BY — `Switchboard::pump` (`in_dispatch_` guard); suites `switchboard`
+PROVEN BY — `Switchboard::drain_until_idle` / `pump_pending` (the shared
+`in_dispatch_` guard); suites `switchboard`
 (reentrancy cases), `kernel` (admission atomicity riding the queue turn).
 
 ## MSG-02 — The bus stamps the sender
@@ -213,9 +214,10 @@ Evidence: [night-lab](../evidence/night-lab.md), reproducer
 
 ## MSG-09 — A dispatch turn can be bounded without bending FIFO
 
-LAW — `pump()` drains to empty, unchanged and forever. **One** bounded turn
-exists beside it: `pump_pending()` dispatches exactly the backlog present at
-entry. Both return how many they dispatched, and neither reorders anything.
+LAW — Loom offers exactly **two** dispatch turns, and each is spelled for what it
+promises. `pump_pending()` dispatches exactly the backlog present at entry and
+returns; `drain_until_idle()` keeps dispatching until the queue is empty. Both
+honour `stop()`, neither reorders anything, and there is no third.
 
 MEANS
 - a host composing Loom with an outer event loop has a deterministic way to get
@@ -233,15 +235,27 @@ MEANS
 - **the bound is a work boundary, not a quota.** It is a count taken from the
   queue, never a deadline — a core primitive whose result depends on host timing
   jitter cannot be reasoned about;
-- a bound is a pause between two deliveries, landing exactly where `pump()` was
+- a bound is a pause between two deliveries, landing exactly where the drain was
   already between two envelopes;
-- `stop()` still ends the turn early, and the return value reports what actually
-  happened;
-- non-reentrant, exactly as `pump()`; an empty queue is a no-op, not a drain.
+- `drain_until_idle()` is **unbounded by contract**: work enqueued during it
+  belongs to it, so it returns only when the participants themselves stop
+  producing. Under a perpetual service that is never, and that is the correct
+  answer rather than a defect — a caller asking for quiescence in a world that
+  will not become quiescent has asked for something that does not exist;
+- **the call site says which promise was made** (FRIC-1). This is part of the law
+  and not presentation: the two names must state the terminating condition each
+  turn actually has, because a host chooses between them at the moment it is
+  least able to read the substrate's source. The retired spellings `pump()` and
+  `run()` both named the drain in words an ordinary C++ reader takes for the
+  bounded one, and a first-contact host that reached for the short name got a
+  program that never returned;
+- both return how many deliveries they made, and both are non-reentrant; an
+  empty queue is a no-op for either, not a drain.
 
 DOES NOT MEAN
-- that `pump()` changed. Every existing caller keeps drain-to-empty, and
-  `BridgeServer` defaults to that same contract until a host says otherwise;
+- that the drain's behaviour changed. It is the same function every existing
+  caller had under the name `pump()`, and `BridgeServer` still defaults to it
+  until a host says otherwise;
 - that Loom acquired a thread or a scheduler. It did not, and neither is planned;
 - that the substrate chose a bound. The primitive is the Switchboard's because
   only the queue's owner can bound dispatch without reordering; the **policy** is
@@ -249,7 +263,10 @@ DOES NOT MEAN
 - that `pump_pending()` is unbounded because it takes no number. Its bound is a
   fact about the queue, read before anything runs, and a producer cannot extend
   it from inside the turn;
-- that a **numeric** budget is available. It was tried and withdrawn — see below.
+- that a **numeric** budget is available. It was tried and withdrawn — see below;
+- that `drain_until_idle()` is discouraged. It is the right call for a test or
+  script settling a world before it asserts, for a one-shot bootstrap, and for a
+  host whose entire program *is* the bus and whose exit is `stop()`.
 
 A NUMERIC BUDGET WAS TRIED AND REJECTED. R2E-0 first shipped `pump_bounded(n)`
 and `BridgeServer::set_dispatch_budget(n)`, counting deliveries dispatched. The
@@ -262,15 +279,24 @@ removed in R2E-0a; the count survives only as `pump_pending`'s private
 implementation. The experiment is kept as history, not as API — see
 [`../decisions/`](../decisions/).
 
-PROVEN BY — `Switchboard::pump_pending`; `BridgeServer::set_bounded_dispatch`;
-suite `switchboard` (the starvation reproduction, the entry-snapshot bound
-against a self-re-arming producer, the finite backlog cleared whole, FIFO and
-`stop()` across the boundary, the empty-queue no-op, reentrancy, and `pump()`
-still draining to empty), suite `bridge` (a bridge host staying responsive —
-accepting and welcoming an operator — while a perpetual driver runs, and the
-default still draining). Evidence: Codex Rule Garden finding 1, and its
-follow-up — the fake `GardenYieldPump → bus.stop()` message is deleted, replaced
-by `set_bounded_dispatch()`, and the live round-trip runs in the same 2s it did
+NOR IS A CAP AN ACCEPTABLE REPAIR OF THE DRAIN. FRIC-1 renamed the drain rather
+than bounding it, for the same reason: a turn limit or a wall-clock deadline
+inside `drain_until_idle()` would convert a semantic operation into a heuristic
+and leave the caller with neither promise. The unbounded operation stays
+unbounded and says so in its name.
+
+PROVEN BY — `Switchboard::pump_pending`; `Switchboard::drain_until_idle`;
+`BridgeServer::set_bounded_dispatch`; suite `switchboard` (the starvation
+reproduction, the entry-snapshot bound against a self-re-arming producer, the
+finite backlog cleared whole, FIFO and `stop()` across the boundary, the
+empty-queue no-op, reentrancy, the drain still draining to empty, and FRIC-1's
+two cases — one perpetually productive world left measurably different by each
+turn, and an outer host loop keeping control every lap while the service stays
+healthy), suite `bridge` (a bridge host staying responsive — accepting and
+welcoming an operator — while a perpetual driver runs, and the default still
+draining). Evidence: Codex Rule Garden finding 1, and its follow-up — the fake
+`GardenYieldPump → bus.stop()` message is deleted, replaced by
+`set_bounded_dispatch()`, and the live round-trip runs in the same 2s it did
 with the fake.
 
 ## MSG-10 — A callback that throws costs the delivery, not the bus
@@ -297,8 +323,8 @@ MEANS
   and the bus emits `HandlerFailed` rather than `Delivered`. The exception still
   never reaches the Switchboard — only the fact does;
 - the dispatch flag is restored, so the bus does not spend the rest of its life
-  believing itself reentrant. A later `pump()` or `pump_pending()` dispatches
-  normally, and the escaped exception is not a permanent poisoning;
+  believing itself reentrant. A later `pump_pending()` or `drain_until_idle()`
+  dispatches normally, and the escaped exception is not a permanent poisoning;
 - the ambient delivery context — who is being dispatched, its one reply
   authority, and the facts about what was just delivered — is cleared on the
   throwing path exactly as on the returning one. Nothing that runs afterwards
@@ -333,20 +359,21 @@ DOES NOT MEAN
   at the ABI boundary and never reach the Switchboard
   ([dynamic-abi](../reference/dynamic-abi.md)); what crosses is a status, and what
   the bus does with it is announce `HandlerFailed`. Nothing is rethrown there, so
-  a pump over a throwing loaded weave still returns normally;
+  a dispatch turn over a throwing loaded weave still returns normally;
 - that Loom is exception-safe in any wider sense, or thread-safe in any sense.
   Dispatch is still single-threaded
   ([MSG-01](#msg-01--single-threaded-fifo-non-reentrant)).
 
-PROVEN BY — `Switchboard::DispatchGuard` and `Switchboard::DeliveryScope`
-(held across `pump`, `dispatch_at_most`, `deliver_one`, `deliver_admission`);
-suite `switchboard` (a handler throwing through `pump()` and through
-`pump_pending()`; the stale-readiness witness in both its handler and its
-observer form; the deferred answer that survives; the throwing observer); suite
-`recorder` (the native throw becomes a `HandlerFailed` record while the journal
-stays `Pending`); suite `kernel` (a loaded weave whose handler throws — the
-`ZEN_WEAVE_THROW_ON_MAGIC` fixture — is `HandlerFailed` on the tap and `Pending`
-in the journal, and the pump does not throw).
+PROVEN BY — `Switchboard::DispatchGuard` and `Switchboard::DeliveryScope` (held
+across `drain_until_idle`, `dispatch_at_most`, `deliver_one`,
+`deliver_admission`); suite `switchboard` (a handler throwing through
+`drain_until_idle()` and through `pump_pending()`; the stale-readiness witness
+in both its handler and its observer form; the deferred answer that survives;
+the throwing observer); suite `recorder` (the native throw becomes a
+`HandlerFailed` record while the journal stays `Pending`); suite `kernel` (a
+loaded weave whose handler throws — the `ZEN_WEAVE_THROW_ON_MAGIC` fixture — is
+`HandlerFailed` on the tap and `Pending` in the journal, and the dispatch turn
+does not throw).
 
 ## MSG-11 — Every event has its own view of the tap list
 

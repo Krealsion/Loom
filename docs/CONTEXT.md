@@ -42,7 +42,7 @@ the named laws → the reference page → tests when exactness matters.
 | prepared replacement | guides/replacing-a-service.md, reference/prepared-replacement.md | PR-01..09 | tests/test_kernel.cpp (R2B-3*/4a sections) | decisions/admission-and-activation-share-one-boundary.md, decisions/no-rollback-after-committed-production.md, evidence/night-lab.md |
 | senses (latest claims) | guides/observing.md, reference/senses.md | SENSE-01..05 | tests/test_sense.cpp, test_kernel.cpp (R2E-0 sections) | decisions/a-claim-is-not-a-message.md |
 | authored handoff (continuity across an incompatible schema) | reference/handoff.md | HANDOFF-01..03, PR-09 | tests/test_handoff.cpp | decisions/migration-is-authored-not-inferred.md |
-| event-loop composition | reference/messaging.md#bounded-dispatch | MSG-09 | tests/test_switchboard.cpp, test_bridge.cpp (R2E-0 sections) | Codex Rule Garden finding 1 |
+| event-loop composition | reference/messaging.md#two-dispatch-turns-and-the-call-site-says-which | MSG-09 | tests/test_switchboard.cpp, test_bridge.cpp (R2E-0 sections) | Codex Rule Garden finding 1 |
 | Timer continuity — **not in this repo**; owned by the separate Zengine repository, and unreachable from a Loom-only checkout | Zengine repo: `docs/reference/timer-continuity.md` | TIMER-01..05 | Zengine repo: `tests/test_timer.cpp` | Zengine repo: `docs/decisions/timer-continuity-carries-remaining-duration.md` |
 | what a green run means (suite/case/enforcement populations, declared absence, the opt-out, the required build-artifact population) | laws/population-laws.md, ../AGENTS.md | POP-01..05 | tests/suite_population.txt, tests/entry_population.txt, tests/check_population.cmake, tests/check_entry_population.cmake, tests/verify.cmake, tests/enforcement_gate.hpp, tests/weave_population.cmake | — |
 | how the `isolation` granted-network positive control proves the sandbox is a sandbox and not a muzzle — the endpoint the test binds and owns, why the positive witness is a successful connect plus a token byte rather than a particular errno, and why BL-VER-07's WSL2 mirrored-networking exception is RETIRED (a failure there is now a NEW failure) | reference/capabilities.md#the-granted-network-positive-control-and-the-endpoint-it-uses, ../AGENTS.md | POP-04 | tests/test_isolation.cpp, tests/weavelib/test_weave.cpp | BL-VER-08 (the replacement witness), BL-VER-07 + TERM-0-RB §66 (the retired exception) |
@@ -80,8 +80,10 @@ movement never relabels a predecessor's office claim; it stamps it stale
 (SENSE-03) · reading a Sense needs its own **observe rule**, absent by default —
 a send rule is never consulted (SENSE-05) · authored handoff added **no Loom
 API**: migration is an authored transformation before admission, never coercion
-inside the gate (HANDOFF-01) · `pump()` still drains to empty; `pump_pending()`
-is the bounded turn and leaves newly enqueued work for the next one (MSG-09) ·
+inside the gate (HANDOFF-01) · `pump_pending()` is the bounded
+host-loop turn and leaves newly enqueued work for the next one, while
+`drain_until_idle()` — the operation formerly spelled `pump()`/`run()` — keeps
+going until the queue is empty and says so in its name (MSG-09) ·
 a native callback that throws propagates to the host and poisons nothing — the
 bus restores its own state, the failed envelope is consumed with no outcome
 recorded, and a deferred answer already minted survives (MSG-10) · an observer

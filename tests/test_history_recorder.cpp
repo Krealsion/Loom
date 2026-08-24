@@ -81,7 +81,7 @@ TEST_CASE("RTH-1: an ordinary delivery becomes a structured record") {
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
     const Ticket t = bus.send(r.id, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* p = only_of(all, "Ping");
@@ -111,7 +111,7 @@ TEST_CASE("RTH-1: the sender is retained, and it is the bus's stamp") {
         b.send(to.id, Message(pong(1)));
     };
     bus.send(from.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Pong");
@@ -127,7 +127,7 @@ TEST_CASE("RTH-1: a refusal becomes a structured record, with its reason and its
 
     SUBCASE("a shape the target does not accept") {
         bus.send(r.id, Message(greet("hi")));
-        bus.pump();
+        bus.drain_until_idle();
         const std::vector<HistoryRecord> all_p = rec.snapshot();
         const HistoryRecord* p = only_of(all_p, "Greet");
         REQUIRE(p != nullptr);
@@ -140,7 +140,7 @@ TEST_CASE("RTH-1: a refusal becomes a structured record, with its reason and its
     }
     SUBCASE("a payload the gate refuses keeps the gate's own account of it") {
         bus.send(r.id, Message(malformed_ping()));
-        bus.pump();
+        bus.drain_until_idle();
         const std::vector<HistoryRecord> all_p = rec.snapshot();
         const HistoryRecord* p = only_of(all_p, "Ping");
         REQUIRE(p != nullptr);
@@ -160,7 +160,7 @@ TEST_CASE("RTH-1: an ask's correlation survives into history") {
         b.answer(Message(pong(in.payload.get("seq")->as_int())));
     };
     bus.send_as(asker.id, service.id, Message(ping(5), asker.id, asker.id, /*correlation=*/4242));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* ask = only_of(all, "Ping");
@@ -179,7 +179,7 @@ TEST_CASE("RTH-1: the role a message was ADDRESSED to survives, beside the resol
         ping_schema()});
     const WeaveId holder = bus.register_weave(std::move(owned), Grant{}.allow_any(), "room.light");
     bus.send_to_role("room.light", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Ping");
@@ -206,7 +206,7 @@ TEST_CASE("RTH-1: dispatch ancestry is exact for a synchronous chain") {
         b.send(third.id, Message(greet("deep")));
     };
     const Ticket t = bus.send(first.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* a = only_of(all, "Ping");
@@ -243,9 +243,9 @@ TEST_CASE("RTH-1: an async observation names the delivery that DRAINED it, not t
         }
     };
     const Ticket request = bus.send(runner.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     const Ticket beat = bus.send(runner.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* out = only_of(all, "BuildOutput");
@@ -274,7 +274,7 @@ TEST_CASE("RTH-1: a handler that throws is a recorded fact, not a silence") {
         throw std::runtime_error("native handler failure");
     };
     const Ticket t = bus.send(r.id, Message(ping(1)));
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error); // still the host's exception
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error); // still the host's exception
 
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Ping");
@@ -298,11 +298,11 @@ TEST_CASE("RTH-1: a failed handler is a rare fact and is protected from ordinary
         throw std::runtime_error("boom");
     };
     bus.send(thrower.id, Message(greet("x")));
-    CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+    CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
     for (int i = 0; i < 40; ++i) {
         bus.send(quiet.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* p = only_of(all, "Greet");
@@ -328,7 +328,7 @@ TEST_CASE("RTH-1: history records how long a handler held the one mind") {
         }
     };
     bus.send(slow.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Ping");
@@ -343,7 +343,7 @@ TEST_CASE("RTH-1: a refusal ran no handler and claims no duration") {
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
     bus.send(r.id, Message(greet("no")));
-    bus.pump();
+    bus.drain_until_idle();
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Greet");
     REQUIRE(p != nullptr);
@@ -363,7 +363,7 @@ TEST_CASE("RTH-1: metadata outlives its payload, and says which") {
     for (int i = 0; i < 10; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     REQUIRE(count_of(all, "Ping") == 10); // every record is here
@@ -383,7 +383,7 @@ TEST_CASE("RTH-1: a payload over the ceiling leaves its metadata standing") {
     Recorder rec(bus, policy);
     Registered r = reg(bus, {ping_schema()});
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Ping");
@@ -403,7 +403,7 @@ TEST_CASE("RTH-1: a shape declared not-retained is counted, never silently dropp
         bus.send(r.id, Message(tick(i)));
     }
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(count_of(rec.snapshot(), "Tick") == 0);
     CHECK(count_of(rec.snapshot(), "Ping") == 1);
@@ -430,9 +430,9 @@ TEST_CASE("RTH-1: a dedicated window keeps a shape out of the shared budget") {
     for (int i = 0; i < 20; ++i) {
         bus.send(r.id, Message(tick(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     CHECK(count_of(all, "Tick") == 20); // its own window held all of them
@@ -447,7 +447,7 @@ TEST_CASE("RTH-1: a shape's payloads can be declined while its metadata is kept"
     Recorder rec(bus, policy);
     Registered r = reg(bus, {tick_schema()});
     bus.send(r.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all_p = rec.snapshot();
     const HistoryRecord* p = only_of(all_p, "Tick");
@@ -470,14 +470,14 @@ TEST_CASE("RTH-1: forgotten, never-recorded and never-observed are three differe
 
     const Ticket first = bus.send(r.id, Message(ping(0)));
     const Ticket old_declined = bus.send(r.id, Message(tick(0)));
-    bus.pump();
+    bus.drain_until_idle();
     for (int i = 1; i < 12; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     const Ticket declined = bus.send(r.id, Message(tick(1)));
     const Ticket recent = bus.send(r.id, Message(ping(99)));
-    bus.pump();
+    bus.drain_until_idle();
     // Queued and NOT pumped: the bus has issued a seq and nothing has dispatched.
     const Ticket queued = bus.send(r.id, Message(ping(100)));
 
@@ -527,7 +527,7 @@ TEST_CASE("RTH-1: recorder-internal machinery never enters the recordable univer
     bus.send(store.id, Message(greet("write")));
     bus.send(ordinary.id, Message(ping(1)));
     bus.send(ordinary.id, Message(tick(1))); // refused shape, but blacklisted by name
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     CHECK(count_of(all, "Greet") == 0);
@@ -552,7 +552,7 @@ TEST_CASE("RTH-1: a policy change is remembered once, and nothing is published t
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     const std::size_t before = rec.snapshot().size();
     const std::uint64_t deliveries_before = rec.counters().observed;
 
@@ -574,7 +574,7 @@ TEST_CASE("RTH-1: a policy change is remembered once, and nothing is published t
     // did not manufacture the traffic a recorder exists to watch.
     CHECK(bus.pending() == 0);
     CHECK(rec.counters().observed == deliveries_before);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(rec.snapshot().size() == before + 1);
 }
 
@@ -585,7 +585,7 @@ TEST_CASE("RTH-1: shrinking a window destroys nothing, and says how much is over
     for (int i = 0; i < 20; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(count_of(rec.snapshot(), "Ping") == 20);
 
     RecorderPolicy smaller = rec.policy();
@@ -601,7 +601,7 @@ TEST_CASE("RTH-1: shrinking a window destroys nothing, and says how much is over
     // ...and the excess drains as new traffic arrives, rather than in a lump
     // nobody asked for.
     bus.send(r.id, Message(ping(100)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(count_of(rec.snapshot(), "Ping") <= 5);
     CHECK(rec.bounds().forgotten > 0);
 }
@@ -636,7 +636,7 @@ TEST_CASE("RTH-1: the dump renders what the reader returns, and is not the reade
     Registered r = reg(bus, {ping_schema()});
     bus.send(r.id, Message(ping(1)));
     bus.send(r.id, Message(greet("no")));
-    bus.pump();
+    bus.drain_until_idle();
 
     std::ostringstream out;
     DumpOptions opts;
@@ -666,7 +666,7 @@ TEST_CASE("RTH-1a: every observed shape keeps its most recent observation, by de
     bus.send(r.id, Message(ping(1)));
     bus.send(r.id, Message(tick(7)));
     bus.send(r.id, Message(tick(8)));
-    bus.pump();
+    bus.drain_until_idle();
 
     const Lookup last_tick = rec.last_of("Tick");
     REQUIRE(last_tick.horizon == Horizon::Retained);
@@ -697,11 +697,11 @@ TEST_CASE("RTH-1a: a heartbeat can leave the recent FIFO and stay fully discover
     for (int i = 0; i < 500; ++i) {
         bus.send(r.id, Message(tick(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     for (int i = 0; i < 6; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     // 1. FIVE HUNDRED BEATS DID NOT FLOOD RECENT CONTEXT.
     const std::vector<HistoryRecord> ctx = rec.recent();
@@ -740,7 +740,7 @@ TEST_CASE("RTH-1a: a rare shape stays discoverable long after it leaves recent c
     Registered r = reg(bus, {ping_schema(), tick_schema()});
 
     bus.send(r.id, Message(tick(1))); // the one-off, first and never again
-    bus.pump();
+    bus.drain_until_idle();
     const Lookup while_recent = rec.last_of("Tick");
     REQUIRE(while_recent.horizon == Horizon::Retained);
     CHECK(held_in(while_recent.record->held, Held::Recent));
@@ -748,7 +748,7 @@ TEST_CASE("RTH-1a: a rare shape stays discoverable long after it leaves recent c
     for (int i = 0; i < 200; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     for (const HistoryRecord& h : rec.recent()) {
         CHECK(h.shape != "Tick"); // long gone from context
@@ -771,7 +771,7 @@ TEST_CASE("RTH-1a: removing a shape from the FIFO does not make it unrecordable"
     Registered r = reg(bus, {tick_schema(), greet_schema()});
     bus.send(r.id, Message(tick(1)));
     bus.send(r.id, Message(greet("hi")));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(rec.last_of("Tick").horizon == Horizon::Retained);
     // Observed, and deliberately given no slot. NOT `Unobserved` — the recorder saw
@@ -799,7 +799,7 @@ TEST_CASE("RTH-1a: the counters add up, and a policy note is on neither side of 
     for (int i = 0; i < 3; ++i) {
         bus.send(r.id, Message(tick(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     RecorderPolicy next = rec.policy();
     next.recent_capacity = 100;
     rec.apply_policy(next); // writes a note, and it is NOT an event
@@ -825,7 +825,7 @@ TEST_CASE("RTH-1a: the per-shape last-call depth is a number, and it is honoured
     for (int i = 0; i < 10; ++i) {
         bus.send(r.id, Message(tick(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> kept = rec.last_calls_of("Tick");
     REQUIRE(kept.size() == 3); // the last three, oldest first
@@ -841,7 +841,7 @@ TEST_CASE("RTH-1a: one fact, several windows, and the mask says which") {
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
     bus.send(r.id, Message(greet("refused"))); // a refusal: structurally protected
-    bus.pump();
+    bus.drain_until_idle();
 
     const std::vector<HistoryRecord> all = rec.snapshot();
     const HistoryRecord* p = only_of(all, "Greet");
@@ -871,11 +871,11 @@ TEST_CASE("RTH-1a: protection decides what is KEPT; the shape decides what takes
     for (int i = 0; i < 20; ++i) {
         bus.send(r.id, Message(greet("nobody accepts this"))); // refusals of a muted shape
     }
-    bus.pump();
+    bus.drain_until_idle();
     for (int i = 0; i < 4; ++i) {
         bus.send(r.id, Message(ping(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     // KEPT: the refusals are structural and the shape rule did not swallow them.
     CHECK(count_of(rec.snapshot(), "Greet") > 0);
@@ -900,7 +900,7 @@ TEST_CASE("RTH-1a: a policy change reseats every shape already being watched") {
     Recorder rec(bus);
     Registered r = reg(bus, {tick_schema()});
     bus.send(r.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(held_in(rec.last_of("Tick").record->held, Held::Recent));
 
     RecorderPolicy next = rec.policy();
@@ -910,7 +910,7 @@ TEST_CASE("RTH-1a: a policy change reseats every shape already being watched") {
     for (int i = 0; i < 5; ++i) {
         bus.send(r.id, Message(tick(i)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(rec.last_calls_of("Tick").size() == 2);
     CHECK(!held_in(rec.last_of("Tick").record->held, Held::Recent));
 }

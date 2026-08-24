@@ -641,7 +641,7 @@ debug lens only (the HOST looking - powers no participant has):
                 // way every other command does, a bounded number of times, and stops the moment
                 // the core says nothing is outstanding.
                 while (me.awaiting() && spent < turns) {
-                    bus.pump();
+                    bus.drain_until_idle();
                     ++spent;
                 }
                 if (me.awaiting()) {
@@ -698,8 +698,8 @@ debug lens only (the HOST looking - powers no participant has):
 
         // Drive the ordinary loop so whatever this command caused actually happens. Nothing else
         // in this process produces work, so the person typing is the clock — which is exactly why
-        // a blocking getline is safe here and would not be in a process with its own traffic.
-        bus.pump();
+        // draining to idle is safe here and would not be in a process with its own traffic.
+        bus.drain_until_idle();
 
         if (lens == Lens::Debug && tap.size() > tap_before) {
             print_tap(tap.size() - tap_before);

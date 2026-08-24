@@ -12,7 +12,7 @@
 //
 // Single-threaded by construction: the multiplexer is the SERVER'S readiness-to-receive-from-many-
 // sources (a select over {listener, connection fds}), NOT bus concurrency. Inbound operator sends
-// enter through the one gated path and pump() processes them in FIFO order — the bus's FIFO and
+// enter through the one gated path and an ordinary dispatch turn processes them in FIFO order — the bus's FIFO and
 // reentrancy guarantees are untouched, and no threads are added. The Switchboard must outlive the
 // server.
 //
@@ -65,12 +65,12 @@ public:
     /// → a registered proxy-participant), drain + dispatch each connection's inbound frames, pump the
     /// bus (proxies ship replies, the tap observer streams events), flush every connection, then reap
     /// any disconnected connection (eof/failed → unregister its proxy). Compose this with a pure
-    /// in-process system's own pump(); the bridge never blocks the bus on a slow/hung operator.
+    /// in-process system's own dispatch turn; the bridge never blocks the bus on a slow/hung operator.
     void step();
 
     /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN (MSG-09). Off by
-    /// default, which keeps the existing contract exactly: `step()` calls `pump()`
-    /// and drains to empty.
+    /// default, which keeps the existing contract exactly: `step()` calls
+    /// `drain_until_idle()`.
     ///
     /// A host serving a PERPETUAL in-process service — a repeating Zengine Timer
     /// re-arms itself inside its own handler, so the queue never empties — must
@@ -93,7 +93,7 @@ public:
 
     /// Block in select() over {listener, all connection fds} until any is ready OR `timeout_ms`
     /// elapses (negative = indefinite), then step() once. This is the event-driven loop: bytes arrive
-    /// when the FAR side decides, replies/tap push unbidden through pump(), and disconnect is an
+    /// when the FAR side decides, replies/tap push unbidden through the bus turn, and disconnect is an
     /// absence the wait surfaces as a readable-then-EOF socket — none of which a synchronous
     /// block-on-read could represent.
     void wait_and_step(int timeout_ms);

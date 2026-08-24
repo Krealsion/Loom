@@ -196,8 +196,14 @@ public:
     /// a fresh console starts a fresh window at zero.
     virtual Evicted evicted() const = 0;
 
-    // Drive the transport so sends are delivered and replies/tap arrive (in-process: pump the bus;
-    // remote: flush + poll the socket and process the pushed frames).
+    // Drive the transport so sends are delivered and replies/tap arrive (in-process: a bus
+    // dispatch turn; remote: flush + poll the socket and process the pushed frames).
+    //
+    // Deliberately still spelled `pump` — it is the CONSOLE's contract, not the
+    // Switchboard's, and the two implementations do different things. In-process it is
+    // `Switchboard::drain_until_idle()`, which suits an operator lens issuing one command
+    // and reading its outcome, and would suit a console sharing a bus with a perpetual
+    // service no better than any other drain (FRIC-1).
     virtual void pump() = 0;
 };
 

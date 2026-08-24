@@ -66,7 +66,7 @@ int main() {
 
     std::cout << "directed Ping -> responder (reply_to collector):\n";
     bus.send(responder, Message(au::to_value(Ping{7}), WeaveId{}, collector));
-    bus.pump();
+    bus.drain_until_idle();
 
     std::cout << "responder dies and revives from its own (derived) snapshot:\n";
     std::string saved = bus.snapshot_bytes(responder);

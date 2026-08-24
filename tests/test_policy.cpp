@@ -154,7 +154,7 @@ TEST_CASE("a send addressed to a role reaches the role's holder, authorized by a
         b.send_to_role("storage", Message(ping(5)));
     };
     bus.send(sender.id, Message(tick(1))); // host trigger (ungated root authority)
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(storage.weave->handled_names.size() == 1);
     CHECK(storage.weave->handled_names[0] == "Ping");
     CHECK(storage.weave->handled_values[0] == 5);
@@ -170,7 +170,7 @@ TEST_CASE("a role send the grant does not permit is denied, even when the role i
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
     bus.send(sender.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(storage.weave->handled_names.empty()); // never delivered
     CHECK(tap_has(tap, EventKind::Refused, RefusalReason::CapabilityDenied, "Ping"));
 }
@@ -187,7 +187,7 @@ TEST_CASE("authorization precedes resolution: an unauthorized sender cannot prob
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
     bus.send(sender.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(tap_has(tap, EventKind::Refused, RefusalReason::CapabilityDenied, "Ping"));
     CHECK_FALSE(tap_has(tap, EventKind::Refused, RefusalReason::NoSuchTarget, "Ping"));
 }
@@ -203,7 +203,7 @@ TEST_CASE("a WeaveId grant does not authorize a role send (the role wall is its 
         b.send_to_role("storage", Message(ping(5)));
     };
     bus.send(sender.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(storage.weave->handled_names.empty());
 }
 
@@ -217,7 +217,7 @@ TEST_CASE("a role rule does not authorize a direct WeaveId send to the same hold
         b.send(holder, Message(ping(5))); // direct to the resolved id, bypassing the role
     };
     bus.send(sender.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(storage.weave->handled_names.empty());
 }
 
@@ -225,7 +225,7 @@ TEST_CASE("a role with no live holder degrades to NoSuchTarget — unavailable, 
     Switchboard bus;
     // No "storage" holder registered; a (host, ungated) role-send simply finds none.
     Ticket t = bus.send_to_role("storage", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
@@ -239,7 +239,7 @@ TEST_CASE("a role binding survives the holder reloading; the role rule keeps rou
         b.send_to_role("storage", Message(ping(7)));
     };
     bus.send(sender.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(storage.weave->handled_names.size() == 1);
 
     // Hot-swap the holder's implementation: same WeaveId, same role binding.
@@ -248,7 +248,7 @@ TEST_CASE("a role binding survives the holder reloading; the role rule keeps rou
     CHECK(bus.alive(storage.id));
 
     bus.send(sender.id, Message(tick(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(storage.weave->handled_names.size() == 2); // still routed after the reload
 }
 

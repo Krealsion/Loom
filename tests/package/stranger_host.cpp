@@ -113,7 +113,7 @@ private:
     void run(loom::Switchboard& bus, std::function<void(loom::Bus&)> errand) {
         errand_ = std::move(errand);
         bus.send(self_, loom::Message(loom::to_value(Nudge{})));
-        bus.pump();
+        bus.drain_until_idle();
         errand_ = nullptr;
     }
     std::function<void(loom::Bus&)> errand_;
@@ -191,7 +191,7 @@ int main() {
     // ---- a live delivery, and a reply back across the seam ------------------------
     bus.send(loaded.id,
              loom::Message(loom::to_value(witness::Ping{41}), loom::WeaveId{}, collector_id));
-    bus.pump();
+    bus.drain_until_idle();
 
     bool seen_ok = false;
     const Seen seen = state_of<Seen>(bus, collector_id, seen_ok);

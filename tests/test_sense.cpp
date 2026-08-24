@@ -153,14 +153,14 @@ TEST_CASE("S1: many readers observe a producer's latest claim synchronously, wit
     // The producer's opening claim, made by the host on its behalf is NOT how
     // this works — a claim is the producer's own act. So: damage it once.
     bus.send(pid, Message(to_value(Damage{18})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(producer->last_claim.accepted);
     CHECK(producer->last_claim.revision == 1);
 
     // TWO readers, ONE claim, ZERO messages between them and the producer.
     bus.send(r1, Message(to_value(ReaderTick{1})));
     bus.send(r2, Message(to_value(ReaderTick{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(reader1->seen.size() == 1);
     REQUIRE(reader2->seen.size() == 1);
@@ -174,7 +174,7 @@ TEST_CASE("S1: many readers observe a producer's latest claim synchronously, wit
     bus.send(r1, Message(to_value(ReaderTick{2})));
     bus.send(pid, Message(to_value(Damage{30})));
     bus.send(r1, Message(to_value(ReaderTick{3})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(reader1->seen.size() == 3);
     CHECK(hp_of(reader1->seen[1]) == 70); // after Damage{12}, before Damage{30}
@@ -195,7 +195,7 @@ TEST_CASE("S1: a reading carries truthful authorship — who claimed it, under w
 
     bus.send(pid, Message(to_value(Damage{1})));
     bus.send(rid, Message(to_value(ReaderTick{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(reader->seen.size() == 1);
     const SenseAuthorship& by = reader->seen[0].by;
@@ -220,7 +220,7 @@ TEST_CASE("S2: a reader delivered BEFORE a state-changing message observes the O
     reader->watch = pid;
 
     bus.send(pid, Message(to_value(Damage{0}))); // establish Health{100}
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(hp_of(bus.observe(pid, "Health", 1)) == 100);
 
     // THE READER IS QUEUED FIRST, the change SECOND. Both are already in the
@@ -228,7 +228,7 @@ TEST_CASE("S2: a reader delivered BEFORE a state-changing message observes the O
     // reader must not see it.
     bus.send(rid, Message(to_value(ReaderTick{1})));
     bus.send(pid, Message(to_value(Damage{25})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(reader->seen.size() == 1);
     CHECK(hp_of(reader->seen[0]) == 100); // the claim as it stood, not as it will be
@@ -247,7 +247,7 @@ TEST_CASE("S3: role movement never relabels a predecessor's office claim, and th
     incumbent->role = "station";
 
     bus.send(aid, Message(to_value(ClaimAsOffice{"A is on duty"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(incumbent->office.accepted);
 
     // The office claim reads as A's, and A currently holds the office.
@@ -276,7 +276,7 @@ TEST_CASE("S3: role movement never relabels a predecessor's office claim, and th
     CHECK_FALSE(bus.observe(bid, "Status", 1));
 
     bus.send(bid, Message(to_value(ClaimAsOffice{"B is on duty"})));
-    bus.pump();
+    bus.drain_until_idle();
     SenseReading now = bus.observe_office("station", "Status", 1);
     REQUIRE(now);
     CHECK(text_of(now) == "B is on duty");
@@ -315,7 +315,7 @@ TEST_CASE("S3b: a same-life code replacement leaves the LIFE current and the INC
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
 
     bus.send(pid, Message(to_value(Damage{10})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(producer->last_claim.accepted);
 
     // BEFORE: the claim is the current code's, on the current life. Both true.
@@ -350,7 +350,7 @@ TEST_CASE("S3b: a same-life code replacement leaves the LIFE current and the INC
     // The successor claims for itself, and reports both current — so the flag
     // tracks the topology rather than latching once a swap has ever happened.
     bus.send(pid, Message(to_value(Damage{5})));
-    bus.pump();
+    bus.drain_until_idle();
     SenseReading current = bus.observe(pid, "Health", 1);
     REQUIRE(current);
     CHECK(hp_of(current) == 85);
@@ -365,7 +365,7 @@ TEST_CASE("S3b: a DEATH-AND-REVIVAL moves both generations — incarnation-curre
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
 
     bus.send(pid, Message(to_value(Damage{10})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(producer->last_claim.accepted);
     REQUIRE(bus.observe(pid, "Health", 1).by.author_life_is_current);
 
@@ -392,7 +392,7 @@ TEST_CASE("S4: the SAME holder's personal claim and office claim stay distinguis
 
     bus.send(oid, Message(to_value(ClaimPersonally{"personally speaking"})));
     bus.send(oid, Message(to_value(ClaimAsOffice{"officially speaking"})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(officer->personal.accepted);
     REQUIRE(officer->office.accepted);
 
@@ -415,7 +415,7 @@ TEST_CASE("S4: a role holder's personal claim does NOT become the office's claim
     officer->role = "station";
 
     bus.send(oid, Message(to_value(ClaimPersonally{"just me"})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(bus.observe(oid, "Status", 1));               // the personal claim exists
     CHECK_FALSE(bus.observe_office("station", "Status", 1)); // the office has claimed nothing
@@ -435,7 +435,7 @@ TEST_CASE("S5: the repository is bounded by CURRENT KEYS — a thousand claims, 
         for (int i = 0; i < 1000; ++i) {
             bus.send(pid, Message(to_value(Damage{1})));
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(bus.retained_claim_count() == 1);
         CHECK(bus.observe(pid, "Health", 1).by.revision == 1000);
         bus.unregister_weave(pid);
@@ -448,7 +448,7 @@ TEST_CASE("S5: the repository is bounded by CURRENT KEYS — a thousand claims, 
         auto [pid, producer] = put<Producer>(bus, Grant{}, "");
         (void)producer;
         bus.send(pid, Message(to_value(Damage{1})));
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(bus.retained_claim_count() == 1);
         bus.unregister_weave(pid);
         CHECK(bus.retained_claim_count() == 0);
@@ -461,7 +461,7 @@ TEST_CASE("S5: the repository is bounded by CURRENT KEYS — a thousand claims, 
         for (int i = 0; i < 50; ++i) {
             bus.send(oid, Message(to_value(ClaimAsOffice{"on duty"})));
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(bus.retained_claim_count() == 1);
         bus.unregister_weave(oid); // the role becomes unheld
         CHECK(bus.retained_claim_count() == 0);
@@ -475,7 +475,7 @@ TEST_CASE("S5: a revival replaces the value under one key rather than adding a k
     (void)producer;
 
     bus.send(pid, Message(to_value(Damage{5})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.retained_claim_count() == 1);
     CHECK(bus.observe(pid, "Health", 1).by.author_life_is_current);
 
@@ -505,7 +505,7 @@ TEST_CASE("S6: an unauthorized read refuses EXPLICITLY, and is not confusable wi
 
     bus.send(pid, Message(to_value(Damage{4})));
     bus.send(rid, Message(to_value(ReaderTick{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(reader->seen.size() == 1);
     CHECK_FALSE(reader->seen[0]);
@@ -535,7 +535,7 @@ TEST_CASE("S6: an authorized reader is authorized per SHAPE — the rule it hold
 
     bus.send(oid, Message(to_value(ClaimPersonally{"visible"})));
     bus.send(pid, Message(to_value(Damage{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(bus.observe_as(reader, oid, "Status", 1));  // the granted shape
     CHECK(bus.observe_as(reader, pid, "Health", 1).refusal == SenseRefusal::NotAuthorized);
@@ -551,7 +551,7 @@ TEST_CASE("S6: claiming as an office you do not hold is refused, and NOTHING is 
     pretender->role = "station"; // it will ASK to claim as an office it does not hold
 
     bus.send(bid, Message(to_value(ClaimAsOffice{"I am the station"})));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(pretender->office.accepted);
     CHECK(pretender->office.why == SenseRefusal::OfficeNotHeld);
@@ -606,7 +606,7 @@ TEST_CASE("a reading owns its value — mutating it cannot reach the claimant, a
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     (void)producer;
     bus.send(pid, Message(to_value(Damage{10})));
-    bus.pump();
+    bus.drain_until_idle();
 
     SenseReading mine = bus.observe(pid, "Health", 1);
     REQUIRE(mine);
@@ -633,7 +633,7 @@ TEST_CASE("a newer claim always wins: revisions advance and an older value never
     std::int64_t last = 0;
     for (int i = 1; i <= 20; ++i) {
         bus.send(pid, Message(to_value(Damage{1})));
-        bus.pump();
+        bus.drain_until_idle();
         SenseReading r = bus.observe(pid, "Health", 1);
         REQUIRE(r);
         CHECK(r.by.revision == static_cast<std::uint64_t>(i));
@@ -649,7 +649,7 @@ TEST_CASE("a malformed claim is refused by the same one gate, and does not repla
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     (void)producer;
     bus.send(pid, Message(to_value(Damage{1})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(bus.observe(pid, "Health", 1).by.revision == 1);
 
     // 'hp' deliberately absent — the value claims Health v1 and does not conform.
@@ -675,7 +675,7 @@ TEST_CASE("Senses generate no bus traffic: claiming and observing enqueue nothin
 
     bus.send(pid, Message(to_value(Damage{1})));
     bus.send(rid, Message(to_value(ReaderTick{1})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Exactly two deliveries happened — the two ordinary messages. The claim and
     // the observation added no envelope, no seq, and no event. That is the

@@ -302,7 +302,7 @@ std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t label_number) co
     return e;
 }
 
-void ConsoleEngine::pump() { bus_.pump(); }
+void ConsoleEngine::pump() { bus_.drain_until_idle(); }
 
 std::shared_ptr<const loom::Schema> ConsoleEngine::resolve_schema(std::string_view name,
                                                                  std::uint32_t version) const {

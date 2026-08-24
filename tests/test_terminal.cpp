@@ -267,11 +267,11 @@ std::uint64_t request_and_approve(Cast& c) {
     const TerminalResult asked =
         c.acting().request_authority("Work", 1, kServiceRole, "so I can finish the job");
     REQUIRE(submitted(asked));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const TerminalResult approved = c.op().ask(Address::to_role(kWeaverRole),
                                                "zen.ApproveAuthority", 1, {});
     REQUIRE(submitted(approved));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     return asked.ask;
 }
 
@@ -317,7 +317,7 @@ TEST_CASE("a shape outside this participant's vocabulary is refused HERE, not by
     // Nothing was authored, so nothing was denied by anybody. The transcript must say so.
     CHECK(c.of_kind(c.acting(), TranscriptKind::Submitted).empty());
     REQUIRE(c.of_kind(c.acting(), TranscriptKind::LocalRefusal).size() == 1);
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.tap.empty()); // the bus never saw a thing
 }
 
@@ -375,7 +375,7 @@ TEST_CASE("composing authors nothing at all") {
     Cast c;
     const Composition ready = c.acting().compose("Query", 1, {bare(std::string("hi"))});
     REQUIRE(ready.status == Composition::Status::Ready);
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.tap.empty());
     CHECK(c.acting().transcript().size() == 0);
     CHECK(c.service->handled_names.empty());
@@ -386,7 +386,7 @@ TEST_CASE("composing authors nothing at all") {
 TEST_CASE("a message a terminal authors comes from the TERMINAL, never from the host") {
     Cast c;
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     REQUIRE(c.service->handled_names.size() == 1);
     CHECK(c.service->handled_names.front() == "Query");
     // THE ASSERTION THE WHOLE ARCHITECTURE TURNS ON. A host-root send would arrive stamped with
@@ -422,7 +422,7 @@ TEST_CASE("a channel names an identity and confers no authority whatever") {
     // The same terminal core, the same vocabulary, the same door — and an EMPTY grant.
     Cast c(Grant::nothing());
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());   // the Kernel refused it
     CHECK(c.tap_refused("Query"));             // ...and only the HOST was told
     // The participant's own record says exactly what it knows and no more.
@@ -437,7 +437,7 @@ TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
     SUBCASE("role: resolved to whoever holds the office at delivery") {
         REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1,
                                 {bare(std::string("hi"))})));
-        c.bus.pump();
+        c.bus.drain_until_idle();
         CHECK(c.service->handled_names.size() == 1);
         const TranscriptEntry e = c.of_kind(c.acting(), TranscriptKind::Submitted).front();
         CHECK(e.addressing == Addressing::Role);
@@ -448,7 +448,7 @@ TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
         // is the point: the addressing MODE reached the bus intact.
         REQUIRE(submitted(c.acting().send(Address::to_weave(c.service_id), "Query", 1,
                                 {bare(std::string("hi"))})));
-        c.bus.pump();
+        c.bus.drain_until_idle();
         CHECK(c.service->handled_names.empty());
         CHECK(c.tap_refused("Query"));
         CHECK(c.of_kind(c.acting(), TranscriptKind::Submitted).front().addressing ==
@@ -461,7 +461,7 @@ TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
         const TranscriptEntry e = c.of_kind(c.acting(), TranscriptKind::Submitted).front();
         CHECK(e.addressing == Addressing::Publish);
         CHECK(e.recipients == 1); // the service accepts Query; nobody else does
-        c.bus.pump();
+        c.bus.drain_until_idle();
         CHECK(c.service->handled_names.empty()); // ...and it was still refused for want of a rule
     }
     SUBCASE("an unaddressed send is not a mode") {
@@ -565,7 +565,7 @@ TEST_CASE("the shared address grammar addresses a real send, exactly as a typed 
     Address to;
     REQUIRE(parse_address(std::string("@") + kServiceRole, to));
     REQUIRE(submitted(c.acting().send(to, "Query", 1, {bare(std::string("hi"))})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.size() == 1);
     const TranscriptEntry e = c.of_kind(c.acting(), TranscriptKind::Submitted).front();
     CHECK(e.addressing == Addressing::Role);
@@ -579,7 +579,7 @@ TEST_CASE("SUBMITTED means authored, and says nothing about delivery — in eith
     // Two sends whose fates are OPPOSITE: one lands, one is refused for want of authority.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("a"))})));
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The HOST can tell them apart. The participant cannot, and its transcript does not pretend.
     CHECK(c.tap_delivered("Query", c.service_id));
@@ -599,7 +599,7 @@ TEST_CASE("SUBMITTED means authored, and says nothing about delivery — in eith
 TEST_CASE("an unsolicited message is recorded as one, with its trusted provenance") {
     Cast c;
     c.bus.send(c.session.id, Message(notice("nobody asked")));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::vector<TranscriptEntry> got = c.of_kind(c.acting(), TranscriptKind::Received);
     REQUIRE(got.size() == 1);
     CHECK(got.front().shape == "Notice");
@@ -619,7 +619,7 @@ TEST_CASE("a message this participant did not declare a door for never arrives")
     Value w(work_schema());
     w.set("n", Cell::integer(1));
     c.bus.send(c.session.id, Message(std::move(w)));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.of_kind(c.acting(), TranscriptKind::Received).empty());
     CHECK(c.tap_refused("Work"));
 }
@@ -641,7 +641,7 @@ TEST_CASE("an ask is settled by LOOM's answer, and by nothing that merely looks 
     REQUIRE(submitted(asked));
     REQUIRE(asked.ask == 1);
     CHECK(c.acting().awaiting());
-    c.bus.pump();
+    c.bus.drain_until_idle();
     REQUIRE(held.size() == 1);
     CHECK(c.acting().waiting_on(1));
 
@@ -650,7 +650,7 @@ TEST_CASE("an ask is settled by LOOM's answer, and by nothing that merely looks 
     Value pretender(reply_schema());
     pretender.set("answer", Cell::text("I am not your answer"));
     c.bus.send(c.session.id, Message(std::move(pretender)));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.acting().waiting_on(1));
     REQUIRE(c.of_kind(c.acting(), TranscriptKind::Received).size() == 1);
     CHECK(c.of_kind(c.acting(), TranscriptKind::AnswerReceived).empty());
@@ -664,7 +664,7 @@ TEST_CASE("an ask is settled by LOOM's answer, and by nothing that merely looks 
     Value wake(query_schema());
     wake.set("q", Cell::text("wake"));
     c.bus.send(c.service_id, Message(std::move(wake)));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK_FALSE(c.acting().waiting_on(1));
     CHECK_FALSE(c.acting().awaiting());
     const std::vector<TranscriptEntry> answers =
@@ -694,7 +694,7 @@ TEST_CASE("two conversations at once, each answer landing on its own — by Loom
     CHECK(first.ask == 1);
     CHECK(second.ask == 2);
     CHECK(c.acting().outstanding() == 2);
-    c.bus.pump();
+    c.bus.drain_until_idle();
     REQUIRE(held.size() == 2);
 
     // Answer the SECOND one first. Nothing in the payload says which is which — the whole
@@ -709,7 +709,7 @@ TEST_CASE("two conversations at once, each answer landing on its own — by Loom
         Value q(query_schema());
         q.set("q", Cell::text("wake"));
         c.bus.send(c.service_id, Message(std::move(q)));
-        c.bus.pump();
+        c.bus.drain_until_idle();
     }
     CHECK(c.acting().waiting_on(1));
     CHECK_FALSE(c.acting().waiting_on(2));
@@ -727,7 +727,7 @@ TEST_CASE("two conversations at once, each answer landing on its own — by Loom
         Value q(query_schema());
         q.set("q", Cell::text("wake"));
         c.bus.send(c.service_id, Message(std::move(q)));
-        c.bus.pump();
+        c.bus.drain_until_idle();
     }
     CHECK_FALSE(c.acting().awaiting());
     const std::vector<TranscriptEntry> both =
@@ -768,7 +768,7 @@ TEST_CASE("stopping waiting is local, and says so; the answer may still arrive")
     const TerminalResult asked =
         c.acting().ask(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))});
     REQUIRE(submitted(asked));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     REQUIRE(held.size() == 1);
 
     REQUIRE(submitted(c.acting().cancel_ask(asked.ask)));
@@ -787,7 +787,7 @@ TEST_CASE("stopping waiting is local, and says so; the answer may still arrive")
     Value q(query_schema());
     q.set("q", Cell::text("wake"));
     c.bus.send(c.service_id, Message(std::move(q)));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::vector<TranscriptEntry> answers =
         c.of_kind(c.acting(), TranscriptKind::AnswerReceived);
     REQUIRE(answers.size() == 1);
@@ -801,13 +801,13 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
     Cast c;
     // The premise: it may not speak Work.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());
 
     const TerminalResult asked =
         c.acting().request_authority("Work", 1, kServiceRole, "so I can finish the job");
     REQUIRE(submitted(asked));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The prompt reaches the OPERATOR SEAT, as an ordinary unsolicited message — the operator
     // asked nothing, so it is not an answer.
@@ -828,7 +828,7 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
 
     const std::size_t submitted_before = c.of_kind(c.acting(), TranscriptKind::Submitted).size();
     REQUIRE(submitted(c.op().ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The session hears yes, as LOOM's answer to the request it actually sent.
     const std::vector<TranscriptEntry> answers =
@@ -845,7 +845,7 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
 
     // The retry is the session's own explicit act, under its own identity.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{7})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     REQUIRE(c.service->handled_names.size() == 1);
     CHECK(c.service->handled_names.front() == "Work");
     CHECK(c.delivered_from("Work", c.service_id) == c.session.id);
@@ -878,12 +878,12 @@ TEST_CASE("a session cannot approve its own request, even holding the shape and 
     const TerminalResult asked =
         c.acting().request_authority("Work", 1, kServiceRole, "let me in");
     REQUIRE(submitted(asked));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The SESSION authors the approval. The presentation does not reroute it; it is authored by
     // the participant that was asked to author it, and it leaves through that participant's door.
     REQUIRE(submitted(c.acting().ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The Weaver refuses: reaching it is not being the user.
     const std::vector<TranscriptEntry> answers =
@@ -895,7 +895,7 @@ TEST_CASE("a session cannot approve its own request, even holding the shape and 
 
     // Authority did not change, and the operator's request is still waiting for a person.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());
     // The operator authored nothing at all.
     CHECK(c.of_kind(c.op(), TranscriptKind::Submitted).empty());
@@ -904,25 +904,25 @@ TEST_CASE("a session cannot approve its own request, even holding the shape and 
 TEST_CASE("the session's approval attempt is refused by the KERNEL when it has no route") {
     Cast c; // the ordinary baseline: no ApproveAuthority rule of any kind
     REQUIRE(submitted(c.acting().request_authority("Work", 1, kServiceRole, "let me in")));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::size_t weaver_heard = c.tap.size();
 
     REQUIRE(submitted(c.acting().send(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.tap_refused("zen.ApproveAuthority"));
     CHECK(c.tap.size() > weaver_heard);
     // ...and the session was told nothing about it, which is the sender-fate seam, honestly.
     CHECK(c.of_kind(c.acting(), TranscriptKind::AnswerReceived).empty());
     // Authority unchanged.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());
 }
 
 TEST_CASE("a third participant that can reach the Weaver is still not the user") {
     Cast c;
     REQUIRE(submitted(c.acting().request_authority("Work", 1, kServiceRole, "let me in")));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // An ordinary terminal participant, with exactly the operator's grant and none of its
     // standing. The terminal core privileges nobody; the Weaver decides.
@@ -931,7 +931,7 @@ TEST_CASE("a third participant that can reach the Weaver is still not the user")
         c.bus, std::make_unique<TerminalSession>("intruder", operator_vocabulary(), c.order),
         std::move(intruder_grant));
     REQUIRE(submitted(intruder.session->ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     const std::vector<TranscriptEntry> answers =
         intruder.session->transcript().entries();
@@ -942,7 +942,7 @@ TEST_CASE("a third participant that can reach the Weaver is still not the user")
     CHECK(refusal->shape == "zen.Refused");
     // Nothing was installed.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());
 }
 
@@ -952,7 +952,7 @@ TEST_CASE("a participant reads its authority from the Kernel, and keeps no copy 
 
     const TerminalResult described = c.acting().describe_authority();
     REQUIRE(described);
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::vector<TranscriptEntry> answers =
         c.of_kind(c.acting(), TranscriptKind::AnswerReceived);
     REQUIRE(answers.size() == 2); // the grant, then the description
@@ -971,15 +971,15 @@ TEST_CASE("revoking takes back the delegated rule, and the session is not told i
     Cast c;
     (void)request_and_approve(c);
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     REQUIRE(c.service->handled_names.size() == 1); // it worked once
 
     REQUIRE(submitted(c.op().ask(Address::to_role(kWeaverRole), "zen.RevokeAuthority", 1, {})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The delegated overlay is empty; the admission baseline is untouched.
     REQUIRE(submitted(c.acting().describe_authority()));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::vector<TranscriptEntry> answers =
         c.of_kind(c.acting(), TranscriptKind::AnswerReceived);
     const std::optional<ReceivedMessage> desc = c.acting().received(answers.back().message);
@@ -990,7 +990,7 @@ TEST_CASE("revoking takes back the delegated rule, and the session is not told i
     // The next Work is denied — and THE HOST is the only party that knows.
     const std::size_t before = c.service->handled_names.size();
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{2})})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.service->handled_names.size() == before);
     CHECK(c.tap_refused("Work"));
     // The participant's transcript records an authored message and never a denial it was not told.
@@ -1012,7 +1012,7 @@ TEST_CASE("a transcript holds this participant's own experience, and no third pa
     }
     // ...and a refusal, which is exactly the kind of fact a tap would hand over.
     c.bus.send(a.id, Message(malformed_ping()));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     CHECK(a.weave->count == 5);
     CHECK(b.weave->count == 5);
@@ -1057,7 +1057,7 @@ TEST_CASE("the transcript is bounded, counts what it dropped, and never loses a 
     const TerminalResult asked =
         c.acting().ask(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))});
     REQUIRE(submitted(asked));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     for (std::size_t i = 0; i < kTranscriptCapacity * 2; ++i) {
         c.acting().record_notice("noise " + std::to_string(i));
@@ -1083,7 +1083,7 @@ TEST_CASE("a received-message id is an identity: once evicted it refuses, never 
     for (std::size_t i = 0; i < kReceivedCapacity + 5; ++i) {
         c.bus.send(c.session.id, Message(notice("n" + std::to_string(i))));
     }
-    c.bus.pump();
+    c.bus.drain_until_idle();
     CHECK(c.acting().transcript().received_size() == kReceivedCapacity);
     CHECK(c.acting().transcript().received_evicted() == 5);
 
@@ -1103,7 +1103,7 @@ TEST_CASE("a received-message id is an identity: once evicted it refuses, never 
 TEST_CASE("one message's output wires into another's input, by reference") {
     Cast c;
     c.bus.send(c.session.id, Message(notice("carried")));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::uint64_t id = c.acting().transcript().last_received_id();
     const Composition wired =
         c.acting().compose("Query", 1, {Arg{std::nullopt, Ref{"r" + std::to_string(id), "text"}}});
@@ -1136,7 +1136,7 @@ TEST_CASE("the core keeps exactly the bytes that arrived, and escapes nothing") 
     Cast c;
     const std::string hostile = "\x1b[2Jcleared\x07";
     c.bus.send(c.session.id, Message(notice(hostile)));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::optional<ReceivedMessage> m =
         c.acting().received(c.acting().transcript().last_received_id());
     REQUIRE(m);
@@ -1154,15 +1154,15 @@ TEST_CASE("receiving authors nothing: the terminal's handler has no send in it")
     // Every kind of inbound a terminal sees — an answer, an unsolicited message, a refusal —
     // and after all of them the bus has carried nothing this participant authored in response.
     REQUIRE(submitted(c.acting().ask(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     c.bus.send(c.session.id, Message(notice("hello")));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     const std::size_t authored = c.of_kind(c.acting(), TranscriptKind::Submitted).size();
     CHECK(authored == 1); // the ask, and nothing else
 
     const std::size_t events = c.tap.size();
-    c.bus.pump();
-    c.bus.pump();
+    c.bus.drain_until_idle();
+    c.bus.drain_until_idle();
     CHECK(c.tap.size() == events); // pumping a settled bus produces nothing new
 }
 
@@ -1170,9 +1170,9 @@ TEST_CASE("a presentation's snapshots outlive the participant they came from") {
     Cast c;
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1,
                                       {bare(std::string("hi"))})));
-    c.bus.pump();
+    c.bus.drain_until_idle();
     c.bus.send(c.session.id, Message(notice("kept")));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // BY VALUE, deliberately: a pane must be able to render what it read without holding a
     // reference into a ring buffer that eviction — or the participant's death — will move.
@@ -1188,7 +1188,7 @@ TEST_CASE("a presentation's snapshots outlive the participant they came from") {
     std::unique_ptr<Weave> gone = c.bus.unregister_weave(c.session.id);
     REQUIRE(gone != nullptr);
     gone.reset();
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     CHECK_FALSE(chronology.empty());
     CHECK_FALSE(entries.empty());

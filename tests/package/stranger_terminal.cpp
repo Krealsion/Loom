@@ -113,7 +113,7 @@ int main() {
 
     // 5. The pane owns the LOOP; the core never pumps.
     for (int turn = 0; turn < 4 && session.session->awaiting(); ++turn) {
-        bus.pump();
+        bus.drain_until_idle();
     }
     ok(!session.session->awaiting(), "the answer settled the ask");
     ok(oracle_raw->heard_from == session.id, "the service heard the PARTICIPANT, not the host");

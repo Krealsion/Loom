@@ -370,7 +370,7 @@ void BridgeServer::step() {
         }
     }
     // Proxies fire-and-continue (ship Delivered); the tap observer streams Tap.
-    // Unbounded by default — the contract every existing caller has. A host
+    // Drain-to-idle by default — the contract every existing caller has. A host
     // composing with a perpetual in-process service asks for a bounded turn so
     // this returns (MSG-09); FIFO is identical either way.
     if (bounded_dispatch_) {
@@ -378,7 +378,7 @@ void BridgeServer::step() {
         // in-process service cannot extend it, and a busy bus is not throttled.
         bus_.pump_pending();
     } else {
-        bus_.pump();
+        bus_.drain_until_idle();
     }
     // Drain the deferred weave-list refresh (E): the registry reads happen HERE, outside dispatch.
     if (weaves_dirty_) {

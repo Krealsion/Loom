@@ -140,7 +140,7 @@ The core never pumps. It owns the *state machine*; the presentation owns the
 *loop*:
 
 ```cpp
-while (session.awaiting() && turns-- > 0) { bus.pump(); }
+while (session.awaiting() && turns-- > 0) { bus.drain_until_idle(); }
 ```
 
 No thread, no sleep, no busy loop, and Loom dispatch is never blocked.

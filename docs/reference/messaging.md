@@ -6,13 +6,14 @@ Guide: [messaging](../guides/messaging.md).
 
 ## Dispatch model
 
-Single-threaded FIFO. `send`/`publish` enqueue; `pump()` drains, one envelope
-at a time, non-reentrant — a handler's sends become *later* deliveries
+Single-threaded FIFO. `send`/`publish` enqueue; a dispatch turn
+(`pump_pending()` or `drain_until_idle()`) delivers, one envelope at a time,
+non-reentrant — a handler's sends become *later* deliveries
 ([MSG-01](../laws/messaging-laws.md)). "Between two deliveries" is therefore a
 real atomic boundary; the admission dispatch rides it.
 
-**If a native handler throws**, the exception propagates out of `pump()` /
-`pump_pending()` to whoever called it — Loom does not swallow it, does not turn
+**If a native handler throws**, the exception propagates out of whichever
+dispatch turn was running to whoever called it — Loom does not swallow it, does not turn
 it into a refusal, and does not terminate. What Loom guarantees is that it has
 put its own temporary state back first: dispatch is not left looking reentrant,
 and the finished delivery's answer authority is not left standing. The failed
@@ -309,12 +310,18 @@ emission vanished entirely while the identical native reach refused loudly; the
 publication half was corrected by FRIC-0, where the same uniformity had made an
 ordinary quiet startup look like a failure.
 
-## Bounded dispatch
+## Two dispatch turns, and the call site says which
 
-`pump()` drains to empty — unchanged, and the contract every existing caller
-has. `pump_pending()` dispatches exactly the backlog present at entry and returns
-how many it made ([MSG-09](../laws/messaging-laws.md)), for a host composing Loom
-with an outer event loop:
+Nothing runs until a host asks for a dispatch turn, and there are exactly two to
+ask for ([MSG-09](../laws/messaging-laws.md)):
+
+| | bound | newly enqueued work | you must pick |
+|---|---|---|---|
+| `pump_pending()` | `pending()` at entry | waits for the next turn | nothing |
+| `drain_until_idle()` | until the queue is empty | dispatched in the same call | nothing |
+
+**`pump_pending()` is the ordinary host-loop operation.** It dispatches exactly
+the backlog present at entry, returns how many it made, and hands control back:
 
 ```cpp
 while (serving) {
@@ -323,21 +330,30 @@ while (serving) {
 }
 ```
 
-Without a bound, a perpetual in-process service starves the outer loop: a
-repeating Timer re-arms itself inside its own handler, so the queue never empties
-and a drain-to-empty pump never returns.
-
-**One bound, and it takes no number:**
-
-| | bound | newly enqueued work | you must pick |
-|---|---|---|---|
-| `pump()` | drains to empty | dispatched in the same call | nothing |
-| `pump_pending()` | `pending()` at entry | waits for the next turn | nothing |
-
 The snapshot is a **work boundary, not a quota**: the backlog you walked in with
 is processed in FIFO order, and a handler's own continuation lands behind it. So
 a busy bus clears its whole backlog in one turn while a self-re-arming producer
 still cannot hold the turn open.
+
+**`drain_until_idle()` keeps going until nothing is queued** — and work a
+handler enqueues during the call belongs to the call, so the queue empties only
+when the participants themselves stop producing. It is the right call for a test
+or script that wants everything settled before it asserts, for a one-shot
+bootstrap, and for a host whose *entire program* is the bus and whose exit is
+`stop()`.
+
+It is also **unbounded by contract**, and the name is where that is said. A
+perpetual in-process service — a repeating Timer re-arms itself inside its own
+handler — means the queue never empties and the drain never returns. That is the
+correct answer to the question asked, not a defect: quiescence in a world that
+will not become quiescent does not exist, and Loom will not invent a turn budget
+or a deadline to pretend otherwise.
+
+**The names carry that difference deliberately** (FRIC-1). The drain used to be
+called `pump()`, with `run()` beside it as a synonym, and the bounded turn wore
+the qualifier — so the short, obvious-looking name made the expensive promise
+and a first-contact host that reached for it never got control back. Neither
+spelling survives; the behaviour behind the drain is unchanged.
 
 A numeric `pump_bounded(n)` existed briefly and was withdrawn in R2E-0a: sizing
 `n` means knowing the producer's rate, and with a real Zengine Timer 64 throttled
@@ -345,7 +361,7 @@ the Codex Rule Garden 17× while a value large enough not to throttle was
 drain-to-empty again. If you want a hard cap on work per turn, bound it in your
 own loop — Loom will not pretend it can pick the number for you.
 
-Both are counts, never deadlines; FIFO is untouched; `stop()` still ends the turn
+Both are counts, never deadlines; FIFO is untouched; `stop()` ends either turn
 early and the return value reports what actually happened.
 `BridgeServer::set_bounded_dispatch()` exposes the policy, defaulting to
 drain-to-empty.

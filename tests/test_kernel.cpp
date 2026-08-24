@@ -114,7 +114,7 @@ TEST_CASE("a loaded DLL Weave mounts and is indistinguishable; both directions a
 
     const auto before = gate_invocations();
     bus.send(lr.id, Message(ping(7), /*sender=*/WeaveId{}, /*reply_to=*/recorder.id));
-    bus.pump();
+    bus.drain_until_idle();
     const auto after = gate_invocations();
 
     // A delivery TO the DLL Weave, plus the Pong it EMITTED (admitted host-side),
@@ -142,7 +142,7 @@ TEST_CASE("RTH-1: a loaded handler that throws is reported, not announced as del
 
     const Ticket ok = bus.send(lr.id, Message(ping(1)));
     const Ticket bad = bus.send(lr.id, Message(ping(0xDEAD)));
-    bus.pump(); // the exception NEVER crosses the seam, so this does not throw
+    bus.drain_until_idle(); // the exception NEVER crosses the seam, so this does not throw
 
     const auto kind_of = [&seen](std::uint64_t seq) {
         for (const auto& e : seen) {
@@ -169,7 +169,7 @@ TEST_CASE("a DLL that emits a malformed message is refused by the host gate, nev
     REQUIRE(lr.ok);
 
     bus.send(lr.id, Message(ping(1), WeaveId{}, recorder.id));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The DLL handled the valid Ping, then emitted a Pong missing 'seq'; the host
     // gate refused it, so the recorder received nothing.
@@ -256,7 +256,7 @@ TEST_CASE("hot-reload swaps the library and the state survives the swap") {
     for (int i = 0; i < 3; ++i) {
         bus.send(id, Message(ping(1), WeaveId{}, recorder.id));
     }
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, id) == 3);
 
     // Reload from an identical "rebuilt" library; the WeaveId is unchanged.
@@ -271,7 +271,7 @@ TEST_CASE("hot-reload swaps the library and the state survives the swap") {
 
     // And it still works after the swap.
     bus.send(id, Message(ping(9), WeaveId{}, recorder.id));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE_FALSE(recorder.weave->handled_values.empty()); // guard the index below
     CHECK(recorder.weave->handled_values.back() == 9);
 }
@@ -300,7 +300,7 @@ TEST_CASE("intentional hot-reload spends no crash-revival budget: it never exhau
 
     // Still live and serving after a dozen swaps.
     bus.send(id, Message(ping(77), WeaveId{}, recorder.id));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE_FALSE(recorder.weave->handled_values.empty());
     CHECK(recorder.weave->handled_values.back() == 77);
 }
@@ -322,7 +322,7 @@ TEST_CASE("a reload to a newer state-schema version is a clean refusal; the old 
 
     // The original (v1) Weave keeps running.
     bus.send(id, Message(ping(5), WeaveId{}, recorder.id));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE_FALSE(recorder.weave->handled_values.empty());
     CHECK(recorder.weave->handled_values.back() == 5);
 }
@@ -387,14 +387,14 @@ TEST_CASE("reload refuses a drifted door contract before commit; the incumbent k
     CHECK(kernel.accepts(id, loom::Activated::zen_name, loom::Activated::zen_version));
 
     bus.send(id, Message(ping(5), WeaveId{}, recorder.id));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE_FALSE(recorder.weave->handled_values.empty());
     CHECK(recorder.weave->handled_values.back() == 5);
 
     // And the drifted shape genuinely cannot be routed to it — the accept-set is
     // the incumbent's, in fact and not only in the query's answer.
     Ticket t = bus.send(id, Message(greet("hi")));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NotAccepted);
 
     // The refusal is about the DRIFT, not about reload: the same library with an
@@ -528,7 +528,7 @@ TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only 
     // Round one: the ask is delivered, the steward's handler runs to completion,
     // and the pump drains. No handler is on the stack when this returns.
     bus.send(asker.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     Steward s1 = steward_state(bus, steward);
     CHECK(s1.count == 1);    // it really did handle the ask...
     CHECK(s1.deferred == 1); // ...and really did take the answer right with it...
@@ -538,7 +538,7 @@ TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only 
     // Round two: an unrelated delivery, a fresh Bus, a new stack frame — and the
     // answer to the ORIGINAL request goes out.
     bus.send(asker.id, Message(tick(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(answers == 1);
     CHECK(asker.weave->handled_names.back() == "Pong");
     CHECK(steward_state(bus, steward).spent == 1);
@@ -551,7 +551,7 @@ TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only 
     // Round three: the same completion again. Deferring did not multiply the
     // right; it moved it. One delivered request, one answer, across handlers.
     bus.send(asker.id, Message(tick(2)));
-    bus.pump();
+    bus.drain_until_idle();
     const Steward s3 = steward_state(bus, steward);
     CHECK(s3.count == 3); // POSITIVE CONTROL: the third delivery really happened...
     CHECK(answers == 1);  // ...and still produced no second answer
@@ -586,7 +586,7 @@ TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused —
     };
 
     bus.send(asker.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     const Steward before = steward_state(bus, steward);
     REQUIRE(before.deferred == 1);
     REQUIRE(before.token != 0); // the number really is in its persisted state
@@ -602,7 +602,7 @@ TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused —
     // ...and the completion buys it nothing. Same WeaveId, same role in the world,
     // same token — different incarnation.
     bus.send(asker.id, Message(tick(2)));
-    bus.pump();
+    bus.drain_until_idle();
     const Steward tried = steward_state(bus, steward);
     CHECK(tried.count == 2); // POSITIVE CONTROL: the successor DID handle it...
     CHECK(answers == 0);     // ...and reached nobody
@@ -629,7 +629,7 @@ TEST_CASE("R2B-2: the requester dying strands a loaded steward's answer rather t
     };
 
     bus.send(asker.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(steward_state(bus, steward).deferred == 1);
 
     // The requester leaves, and somebody else arrives after it.
@@ -637,7 +637,7 @@ TEST_CASE("R2B-2: the requester dying strands a loaded steward's answer rather t
     Registered newcomer = register_probe(bus, {pong_schema(), tick_schema()});
 
     bus.send(steward, Message(greet("now")));
-    bus.pump();
+    bus.drain_until_idle();
     const Steward after = steward_state(bus, steward);
     CHECK(after.count == 2); // POSITIVE CONTROL: it really tried
     CHECK(answers == 0);
@@ -677,7 +677,7 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
     };
 
     bus.send(asker.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     const Steward victim = steward_state(bus, first.id);
     REQUIRE(victim.token != 0);
 
@@ -693,7 +693,7 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
     REQUIRE(steward_state(bus, second.id).deferred == 1); // it believes it holds one
 
     bus.send(second.id, Message(greet("mine now")));
-    bus.pump();
+    bus.drain_until_idle();
     const Steward robbed = steward_state(bus, second.id);
     CHECK(robbed.count == 1); // POSITIVE CONTROL: the thief really did try
     CHECK(answers == 0);
@@ -702,7 +702,7 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
     // And the rightful holder is unharmed: the conversation is still open and
     // still its own to finish.
     bus.send(first.id, Message(greet("now")));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(answers == 1);
     CHECK(steward_state(bus, first.id).spent == 1);
 }
@@ -756,7 +756,7 @@ TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT i
     // (1) A publication reaches every living participant that accepts the shape —
     //     and not the candidate.
     const std::size_t heard = bus.publish(Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard == 2); // the incumbent and the bystander; NOT the candidate
     CHECK(live_count(bus, candidate.id) == 0);
     CHECK(live_count(bus, incumbent.id) == 1);
@@ -767,7 +767,7 @@ TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT i
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
     bus.send_as(bystander.id, candidate.id, Message(ping(2)));
     bus.send_as(bystander.id, WeaveId{999999}, Message(ping(3)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(tap.size() == 2);
     CHECK(tap[0].kind == EventKind::Refused);
     CHECK(tap[0].reason == RefusalReason::NoSuchTarget);
@@ -776,14 +776,14 @@ TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT i
 
     // (3) The role still points at the incumbent, and role traffic still lands there.
     bus.send_to_role("worker", Message(ping(4)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, incumbent.id) == 2);
     CHECK(live_count(bus, candidate.id) == 0);
 
     // (4) ...and its coordinator CAN reach it. That is the whole point of a seal
     //     rather than a quarantine: preparation is a conversation.
     bus.send_as(coordinator.id, candidate.id, Message(ping(5)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, candidate.id) == 1);
 }
 
@@ -808,7 +808,7 @@ TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every atte
     bus.send_as(candidate.id, victim.id, Message(pong(1)));
     bus.send_as_to_role(candidate.id, "worker", Message(ping(2)));
     const std::size_t published = bus.publish_as(candidate.id, Message(pong(3)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(published == 0);
     CHECK(victim.weave->handled_names.empty());
@@ -823,7 +823,7 @@ TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every atte
 
     // And the one thing it MAY do still works.
     bus.send_as(candidate.id, coordinator.id, Message(pong(4)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(coordinator.weave->handled_names.size() == 1);
     CHECK(coordinator.weave->handled_names[0] == "Pong");
 }
@@ -859,10 +859,10 @@ TEST_CASE("R2B-3: commit is ONE visible change — no observer sees a gap, two h
 
     // Traffic before, the commit, traffic after — all in one drain.
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(kernel.commit_candidate("live", "cand", "worker"));
     bus.send_to_role("worker", Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Four samples, not two: each Ping is delivered AND draws a Pong whose
     // reply_to is nobody, so each round produces a delivery and a refusal. Both
@@ -916,7 +916,7 @@ TEST_CASE("R2B-3: a refused commit changes NOTHING — it is observationally ide
 
     // The incumbent never stopped serving.
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, incumbent.id) == 1);
     CHECK(live_count(bus, candidate.id) == 0);
 }
@@ -947,7 +947,7 @@ TEST_CASE("R2B-3: an artifact that cannot load never becomes a candidate, and th
     CHECK(bus.role_holder("worker") == incumbent.id);
     CHECK(bus.alive(incumbent.id));
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, incumbent.id) == 1);
     CHECK(bus.list_weaves().size() == 2); // coordinator + incumbent; no wreckage
 }
@@ -969,13 +969,13 @@ TEST_CASE("R2B-3: abandoning a prepared candidate leaves the world as it was, an
     bus.send_as(cand_id, coordinator.id, Message(pong(1)));
     REQUIRE(bus.pending() == 1);
     REQUIRE(kernel.unload("cand"));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(coordinator.weave->handled_names.empty()); // MSG-03: its life ended
     CHECK_FALSE(bus.alive(cand_id));
     CHECK(bus.role_holder("worker") == incumbent.id);
     bus.send_to_role("worker", Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, incumbent.id) == 1);
     CHECK(victim.weave->handled_names.empty());
 }
@@ -1012,7 +1012,7 @@ TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor it
 
     // Before: the coordinator can converse with its candidate.
     bus.send_as(coordinator.id, candidate.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(live_count(bus, candidate.id) == 1);
 
     // The coordinator becomes a different participant at the same address.
@@ -1033,7 +1033,7 @@ TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor it
     // ...and the candidate cannot reach the successor either: its one permitted
     // correspondent was a life, not an address.
     bus.send_as(candidate.id, coordinator.id, Message(pong(3)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(live_count(bus, candidate.id) == 1); // unchanged: nothing got through
     REQUIRE(tap.size() == 2);
@@ -1044,7 +1044,7 @@ TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor it
     // The incumbent never noticed any of it.
     CHECK(bus.role_holder("worker") == incumbent.id);
     bus.send_to_role("worker", Message(ping(4)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(live_count(bus, incumbent.id) == 1);
 }
 
@@ -1082,7 +1082,7 @@ TEST_CASE("R2B-3b: at admission the candidate's FIRST live delivery is its activ
                                 host_lifecycle_authority(bus),
                                 Message(to_value(fact)), 7));
 
-    bus.pump();
+    bus.drain_until_idle();
 
     // The candidate saw its activation FIRST, then the production that was already
     // waiting. Nothing was dropped to achieve that.
@@ -1111,7 +1111,7 @@ TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no
 
     ProbeWeave* inc_raw = static_cast<ProbeWeave*>(bus.weave(incumbent));
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(inc_raw->handled_names.size() == 1);
 
     loom::Activated fact{3};
@@ -1125,20 +1125,20 @@ TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no
     CHECK_FALSE(bus.sealed(incumbent));
     CHECK(bus.sealed(candidate));
     CHECK(bus.role_holder("worker") == incumbent);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.sealed(incumbent));
     CHECK_FALSE(bus.sealed(candidate));
 
     // Production by role AND by id both miss the incumbent now.
     bus.send_to_role("worker", Message(ping(2)));
     bus.send_as(outsider.id, incumbent, Message(ping(3)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(inc_raw->handled_names.size() == 1); // still just the pre-commit one
     CHECK(cand_raw->handled_names.size() == 2); // activation + the role message
 
     // ...and the private retirement conversation still reaches it.
     bus.send_as(coordinator.id, incumbent, Message(ping(4)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(inc_raw->handled_names.size() == 2);
 }
 
@@ -1176,7 +1176,7 @@ TEST_CASE("R2B-3b: admission refuses without Loom's own authority, and a refusal
     CHECK_FALSE(bus.sealed(incumbent));
     CHECK(bus.pending() == 0);
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(static_cast<ProbeWeave*>(bus.weave(incumbent))->handled_names.size() == 1);
 }
 
@@ -1279,7 +1279,7 @@ TEST_CASE("R2B-3b-1a: a coordinator successor cannot admit its predecessor's can
 
     // ...and the incumbent is still the service.
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(p.incumbent_raw->handled_names.size() == 1);
     CHECK(p.candidate_raw->handled_names.empty());
 }
@@ -1303,7 +1303,7 @@ TEST_CASE("R2B-3b-1a: the unchanged exact coordinator still admits — the posit
     CHECK_FALSE(bus.sealed(p.incumbent));
 
     bus.send_to_role("worker", Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.role_holder("worker") == p.candidate);
     CHECK_FALSE(bus.sealed(p.candidate));
     CHECK(bus.sealed(p.incumbent));
@@ -1497,7 +1497,7 @@ TEST_CASE("R2B-3b-1a: mail.answer() means the same thing natively and dynamicall
                                                            WeaveId{}, kAskCorr));
     bus.send_as(dynamic_asker.id, dyn.id, Message(ping(22), dynamic_asker.id, WeaveId{},
                                                   kAskCorr));
-    bus.pump();
+    bus.drain_until_idle();
 
     // Delivered: exactly one each.
     CHECK(native_heard.count == 1);
@@ -1529,7 +1529,7 @@ TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY RO
 
     bus.send_as_to_role(asker.id, "answerer",
                         Message(ping(5), asker.id, WeaveId{}, kAskCorr));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.count == 1);
     CHECK(heard.all_attested);
     CHECK(heard.correlation == kAskCorr);
@@ -1538,7 +1538,7 @@ TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY RO
     // ordinary way. Provenance is a delivery fact, not a payload (ANS-07).
     Registered rogue = register_probe(bus, {tick_schema()});
     bus.send_as(rogue.id, asker.id, Message(pong(5), rogue.id, WeaveId{}, kAskCorr));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(heard.count == 2);
     CHECK_FALSE(heard.all_attested); // the forgery is the one that is not attested
 }
@@ -1554,7 +1554,7 @@ TEST_CASE("R2B-3b-1a: one delivery authorizes one dynamic answer, and the second
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
 
     bus.send_as(asker.id, dyn.id, Message(ping(1), asker.id, WeaveId{}, kAskCorr));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(heard.count == 1); // exactly one answer exists
     const AnswerState st = answer_state(bus, dyn.id);
@@ -1589,7 +1589,7 @@ TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer cap
     Registered nagger = register_probe(bus, {pong_schema()});
     for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
         bus.send_as(nagger.id, hoarder.id, Message(ping(1), nagger.id, WeaveId{}, 1));
-        bus.pump();
+        bus.drain_until_idle();
     }
 
     // The registry is now full, and says so: one more deferral is refused.
@@ -1600,7 +1600,7 @@ TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer cap
         }
     });
     bus.send_as(nagger.id, hoarder.id, Message(ping(1), nagger.id, WeaveId{}, 1));
-    bus.pump();
+    bus.drain_until_idle();
     std::size_t exhausted = 0;
     for (const TapRecord& r : tap) {
         if (r.reason == RefusalReason::Exhausted) {
@@ -1613,7 +1613,7 @@ TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer cap
     // exactly as a native one does. It never wanted a slot.
     tap.clear();
     bus.send_as(asker.id, dyn.id, Message(ping(7), asker.id, WeaveId{}, kAskCorr));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.count == 1);
     CHECK(heard.all_attested);
     CHECK(heard.correlation == kAskCorr);
@@ -1645,7 +1645,7 @@ TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle 
         }
     });
     bus.send_as(asker.id, dyn.id, Message(ping(3), asker.id, WeaveId{}, kAskCorr));
-    bus.pump();
+    bus.drain_until_idle();
     bus.remove_observer(stopper);
     REQUIRE(bus.pending() == 1);
     REQUIRE(heard.count == 0);
@@ -1659,7 +1659,7 @@ TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle 
         // MSG-03: queued speech belongs to the life that authored it.
         bus.kill(dyn.id);
     }
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(heard.count == 0); // neither law is weakened by crossing the seam
 }
 
@@ -1864,7 +1864,7 @@ struct Cast {
         const std::size_t before = log->answers.size();
         bus.send_as_to_role(observer.id, role,
                             Message(ping(1), observer.id, observer.id, 0));
-        bus.pump();
+        bus.drain_until_idle();
         return log->answers.size() > before ? log->answers.back()
                                             : std::string("<no answer>");
     }
@@ -1942,7 +1942,7 @@ void ask_to_prepare(Switchboard& bus, Cast& c, TxnId id, const char* plan = "rea
     ask.transaction = static_cast<std::int64_t>(id.value);
     ask.plan = plan;
     REQUIRE(bus.ask_candidate_to_prepare(id, Message(to_value(ask))).ok);
-    bus.pump();
+    bus.drain_until_idle();
 }
 
 /// A coordinator that offers every delivery to the bus TWICE, so "one ask, one
@@ -1960,7 +1960,7 @@ void offer_readiness_twice(Switchboard& bus, Cast& c) {
 void continue_preparation(Switchboard& bus, Cast& c, TxnId id) {
     versioned::ContinuePreparation more{static_cast<std::int64_t>(id.value)};
     bus.send_as(c.coordinator.id, c.candidate, Message(to_value(more)));
-    bus.pump();
+    bus.drain_until_idle();
 }
 
 /// The whole conversation, for the cases whose subject is something else.
@@ -2036,7 +2036,7 @@ TEST_CASE("R2B-3b-2: one prepared replacement, remembered from Preparing to Comm
                                                 Message(to_value(fact)), 1)
                     .ok);
 
-    bus.pump();
+    bus.drain_until_idle();
 
     // One terminal result, for the exact operator, consumed once.
     TxnOutcome out{};
@@ -2343,7 +2343,7 @@ TEST_CASE("R2B-3b-3: readiness needs the exact coordinator and the exact candida
     ask.transaction = static_cast<std::int64_t>(t.id.value); // the id it will name
     ask.plan = "ready";
     REQUIRE(bus.ask_candidate_to_prepare(u.id, Message(to_value(ask))).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(other.last_readiness().ok);
     CHECK(other.last_readiness().why == TxnReason::InvalidReadiness);
@@ -2375,7 +2375,7 @@ TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its
     bus.send_as(c.candidate, c.coordinator.id, Message(pong(1)));
     REQUIRE(bus.pending() == 1);
     REQUIRE(bus.abort_prepared_replacement(t.id, c.op.id).ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(c.coordinator.weave->handled_names.size() == heard); // MSG-03: its life ended
 
     // And the admission primitive itself will not take it: it is gone.
@@ -2590,7 +2590,7 @@ TEST_CASE("R2B-3b-2a: a committed candidate is public, so it cannot be named as 
     CHECK_FALSE(bus.begin_prepared_replacement(b.op.id, b.coordinator.id, b.incumbent,
                                                a.candidate, "role-b", 8)
                     .ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.active_transactions() == 0);
     exactly_one_outcome(bus, a.op.id, t.id, TxnState::Committed, TxnReason::None);
 
@@ -2701,7 +2701,7 @@ TEST_CASE("R2B-3b-3: an immediate readiness answer consumes no deferred-answer c
         hoarders.push_back(h);
         bus.send_as(asker.id, h.id, Message(pong(1), asker.id, asker.id, 0));
     }
-    bus.pump();
+    bus.drain_until_idle();
     for (Registered& h : hoarders) {
         REQUIRE(h.weave->pending.valid()); // every slot really is taken
     }
@@ -2755,7 +2755,7 @@ TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer
         *quiet.live_txn = q.id;
         versioned::CandidateReady early{static_cast<std::int64_t>(q.id.value)};
         bus.send_as(quiet.candidate, quiet.coordinator.id, Message(to_value(early)));
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(quiet.log->readiness.size() == 1);
         CHECK(quiet.last_readiness().why == TxnReason::InvalidReadiness);
         CHECK(bus.transaction_state(q.id) == TxnState::Preparing);
@@ -2771,7 +2771,7 @@ TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer
             bus.send_as(rogue.id, c.coordinator.id,
                         Message(to_value(no), rogue.id, rogue.id, correlation));
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(c.log->readiness.size() == 8); // the coordinator offered every one
         for (const TxnResult& r : c.log->readiness) {
             CHECK_FALSE(r.ok);
@@ -2786,7 +2786,7 @@ TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer
         Message frame(to_value(yes), rogue.id, rogue.id, 1);
         frame.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
         bus.send_as(rogue.id, c.coordinator.id, std::move(frame));
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(c.log->readiness.size() == 1);
         CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
     }
@@ -2795,7 +2795,7 @@ TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer
         // The sharpest one in the suite: the right speaker, the right listener,
         // the right shape, the right transaction — and nobody asked.
         bus.send_as(c.candidate, c.coordinator.id, Message(to_value(yes)));
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(c.log->readiness.size() == 1);
         CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
     }
@@ -2841,7 +2841,7 @@ TEST_CASE("R2B-3b-3: an authentic answer to a DIFFERENT ask, with the right corr
     versioned::PrepareReplacement lookalike{static_cast<std::int64_t>(t.id.value), "ready", 0};
     bus.send_as(c.coordinator.id, c.candidate,
                 Message(to_value(lookalike), c.coordinator.id, WeaveId{}, /*correlation=*/1));
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(c.log->readiness.size() == 1); // the candidate answered, and was offered
     CHECK_FALSE(c.last_readiness().ok);
@@ -2956,7 +2956,7 @@ TEST_CASE("R2B-3b-3: an authentic answer that names another transaction satisfie
     ask.transaction = static_cast<std::int64_t>(tb.id.value); // the lie
     ask.plan = "ready";
     REQUIRE(bus.ask_candidate_to_prepare(ta.id, Message(to_value(ask))).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(a.last_readiness().ok);
     CHECK(a.last_readiness().why == TxnReason::InvalidReadiness);
@@ -3055,7 +3055,7 @@ TEST_CASE("R2B-3b-3: a forged refusal cannot abort a legitimate transaction") {
 
     versioned::CandidateRefused no{static_cast<std::int64_t>(t.id.value), "give up"};
     bus.send_as(rogue.id, c.coordinator.id, Message(to_value(no), rogue.id, rogue.id, 1));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(c.last_readiness().why == TxnReason::InvalidReadiness);
     CHECK(bus.transaction_active(t.id));
@@ -3087,7 +3087,7 @@ TEST_CASE("R2B-3b-3: an authentic answer offered against a transaction that has 
     ask.transaction = static_cast<std::int64_t>(ended.id.value); // names the dead one
     ask.plan = "ready";
     REQUIRE(bus.ask_candidate_to_prepare(live.id, Message(to_value(ask))).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(a.last_readiness().ok);
     CHECK(a.last_readiness().why == TxnReason::LateReadiness);
@@ -3136,7 +3136,7 @@ TEST_CASE("R2B-3b-3: the budget keeps running through a deferred preparation, an
     // transaction left to name in any case. That is stronger than "the late answer
     // is refused": there is no late answer.
     const std::size_t offered = c.log->readiness.size();
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(c.log->readiness.size() == offered);
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
 }
@@ -3196,7 +3196,7 @@ TEST_CASE("R2B-3b-3: a lifecycle change during preparation aborts before any ans
     const std::size_t offered = c.log->readiness.size();
     versioned::ContinuePreparation more{static_cast<std::int64_t>(t.id.value)};
     bus.send_as(c.coordinator.id, c.candidate, Message(to_value(more)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(c.log->readiness.size() == offered);
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
     CHECK(bus.role_holder(kRole) == c.incumbent);
@@ -3232,7 +3232,7 @@ TEST_CASE("R2B-3b-3: the role drifting under a live preparation refuses the read
     loom::Activated fact{7};
     REQUIRE(bus.admit_candidate(usurper_id, c.incumbent, kRole, host_lifecycle_authority(bus),
                                 Message(to_value(fact)), 7));
-    bus.pump(); // the admission is a dispatch (PR-07); the drift is real after it
+    bus.drain_until_idle(); // the admission is a dispatch (PR-07); the drift is real after it
     REQUIRE(bus.role_holder(kRole) == usurper_id);
     CHECK(bus.transaction_state(t.id) == TxnState::Preparing); // nothing announced it
 
@@ -3313,7 +3313,7 @@ struct DynCast {
         bus.send_as_to_role(observer.id, kService,
                             Message(to_value(versioned::QueryVersion{1}), observer.id,
                                     observer.id, 0));
-        bus.pump();
+        bus.drain_until_idle();
         return log->answers.size() > before ? log->answers.back()
                                             : std::string("<no answer>");
     }
@@ -3405,14 +3405,14 @@ void dyn_ask(Switchboard& bus, DynCast& d, TxnId id, const char* plan) {
     ask.plan = plan;
     ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
     REQUIRE(bus.ask_candidate_to_prepare(id, Message(to_value(ask))).ok);
-    bus.pump();
+    bus.drain_until_idle();
 }
 
 void dyn_continue(Switchboard& bus, DynCast& d, TxnId id) {
     bus.send_as(d.coordinator.id, d.candidate,
                 Message(to_value(versioned::ContinuePreparation{
                     static_cast<std::int64_t>(id.value)})));
-    bus.pump();
+    bus.drain_until_idle();
 }
 
 /// Everything an ordinary observer could notice about the incumbent, asked of the
@@ -3443,7 +3443,7 @@ void announce_activation(Switchboard& bus, WeaveId target, std::int64_t sequence
                               sequence);
     };
     bus.send(herald.id, Message(tick(1)));
-    bus.pump();
+    bus.drain_until_idle();
     (void)bus.unregister_weave(herald.id); // its one errand is done
 }
 
@@ -3523,7 +3523,7 @@ TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answ
     CHECK(bus.role_holder(kService) == d.incumbent);
     CHECK_FALSE(bus.sealed(d.incumbent));
     CHECK(bus.sealed(d.candidate));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.role_holder(kService) == d.candidate);
     CHECK(bus.sealed(d.incumbent));     // sealed for retirement, not merely renamed
     CHECK_FALSE(bus.sealed(d.candidate));
@@ -3560,7 +3560,7 @@ TEST_CASE("R2B-3b-3: the same readiness, answered inside the preparation handler
     loom::Activated fact{1};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 1).ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d.ask(bus) == "v2");
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
 }
@@ -3595,7 +3595,7 @@ TEST_CASE("R2B-3b-3: queued production waiting on the role reaches the new servi
     loom::Activated fact{5};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 5).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     // The activation was INSERTED AHEAD of traffic that was already waiting — the
     // narrowest placement that works, and nothing was dropped to achieve it.
@@ -3706,7 +3706,7 @@ TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidat
     bus.send_as(d.coordinator.id, d.candidate,
                 Message(to_value(versioned::ContinuePreparation{
                     static_cast<std::int64_t>(t.id.value)})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d.log->readiness.size() == offered);
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
     CHECK(bus.role_holder(kService) != d.candidate);
@@ -3762,7 +3762,7 @@ TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothi
     loom::Activated fact{1};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 1).ok);
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(d.ask(bus) == "v2");
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
 
@@ -3771,13 +3771,13 @@ TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothi
     // works, and then it stops working — the retired incumbent dies before the
     // word reaches it.
     bus.send_as(d.coordinator.id, d.incumbent, Message(to_value(versioned::RetireNow{1})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(state_field(bus, d.incumbent, "retired") == 1);
 
     bus.kill(d.incumbent);
     const Ticket late = bus.send_as(d.coordinator.id, d.incumbent,
                                     Message(to_value(versioned::RetireNow{2})));
-    bus.pump();
+    bus.drain_until_idle();
     // ONE TRUTHFUL DIAGNOSTIC, and no rollback of anything.
     CHECK(bus.outcome(late).disposition == Disposition::Refused);
     CHECK(bus.outcome(late).refusal.reason == RefusalReason::TargetUnavailable);
@@ -3816,7 +3816,7 @@ TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation an
     // even from its own coordinator, which is the only party that can reach it.
     const Ticket undeclared =
         bus.send_as(d.coordinator.id, d.candidate, Message(to_value(versioned::CandidateReady{1})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(undeclared).refusal.reason == RefusalReason::NotAccepted);
 
     // ...and the contract does not change at admission. The list after commit is
@@ -3828,7 +3828,7 @@ TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation an
     loom::Activated fact{1};
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 1).ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(names(d.candidate) == candidate_contract);
     CHECK(d.ask(bus) == "v2");
 }
@@ -4058,7 +4058,7 @@ TEST_CASE("R2B-3b-3a: a released candidate name is reusable, and nothing of the 
         CHECK_FALSE(bus.alive(old));
         CHECK(bus.role_of(old).empty());
         const Ticket t = bus.send(old, Message(to_value(versioned::QueryVersion{1})));
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
     }
 
@@ -4126,7 +4126,7 @@ TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's bo
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
 
-    bus.pump();
+    bus.drain_until_idle();
 
     // 8-12. IMMEDIATELY — no later host call, no reconciliation pass.
     CHECK(bus.role_holder(kService) == d.candidate);
@@ -4180,7 +4180,7 @@ TEST_CASE("R2B-3b-3a: unloading the retired incumbent does not disturb the new s
     dyn_ask(bus, d, t.id, "ready");
     REQUIRE(bus.commit_prepared_replacement(t.id, host_lifecycle_authority(bus),
                                             Message(to_value(loom::Activated{3})), 3).ok);
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(d.ask(bus) == "v2");
 
     LifetimeDelta ledger;
@@ -4222,7 +4222,7 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
 
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
@@ -4628,7 +4628,7 @@ TEST_CASE("R2B-3d: admission and first breath are one event — v2 is never publ
     CHECK(state_field(bus, d.candidate, "activations") == 0);
 
     // 9-12. One dispatch does the whole thing.
-    bus.pump();
+    bus.drain_until_idle();
 
     // Topology changed EXACTLY ONCE, and in the committed direction.
     CHECK(bus.role_holder(kService) == d.candidate);
@@ -4683,7 +4683,7 @@ TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated g
     // so the grant is the only thing that can be refusing.
     const Ticket forged = bus.send_as(d.coordinator.id, d.incumbent,
                                       Message(to_value(loom::Activated{99})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(forged).refusal.reason == RefusalReason::CapabilityDenied);
     CHECK(state_field(bus, d.incumbent, "activations") == 0);
 
@@ -4695,7 +4695,7 @@ TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated g
     REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
                                             Message(to_value(fact)), 5)
                 .ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     // Committed, authentic, and production follows.
     exactly_one_outcome(bus, d.op.id, t, TxnState::Committed, TxnReason::None);
@@ -4715,7 +4715,7 @@ TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated g
     // never ordinary speech.
     const Ticket after = bus.send_as(d.coordinator.id, d.candidate,
                                      Message(to_value(loom::Activated{6})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(after).refusal.reason == RefusalReason::CapabilityDenied);
     CHECK(state_field(bus, d.candidate, "activations") == 1); // still one
 }
@@ -4734,7 +4734,7 @@ TEST_CASE("R2B-3d: an ordinary weave holding the grant sends a perfect zen.Activ
     // First against the live incumbent, which is public and accepts the shape.
     const Ticket at_v1 =
         bus.send_as(impostor.id, d.incumbent, Message(to_value(loom::Activated{1})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(at_v1).disposition == Disposition::Delivered); // it arrived...
     CHECK(state_field(bus, d.incumbent, "activations") == 0);        // ...and meant nothing
 
@@ -4746,13 +4746,13 @@ TEST_CASE("R2B-3d: an ordinary weave holding the grant sends a perfect zen.Activ
     REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
                                             Message(to_value(loom::Activated{4})), 4)
                 .ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(state_field(bus, d.candidate, "activations") == 1);
     CHECK(state_field(bus, d.candidate, "last_activation") == 4);
 
     const Ticket replay =
         bus.send_as(impostor.id, d.candidate, Message(to_value(loom::Activated{5})));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(replay).disposition == Disposition::Delivered);
     CHECK(state_field(bus, d.candidate, "activations") == 1);      // unmoved
     CHECK(state_field(bus, d.candidate, "last_activation") == 4);  // and unadvanced
@@ -4805,7 +4805,7 @@ TEST_CASE("R2B-3d: a candidate that cannot receive its own activation is not adm
     CHECK(bus.role_holder("worker") == incumbent);
     CHECK(bus.sealed(candidate));
     CHECK_FALSE(bus.sealed(incumbent));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(cand_raw->handled_names.empty());
 }
 
@@ -4910,7 +4910,7 @@ TEST_CASE("R2B-3d: a scheduled admission whose world drifts before dispatch refu
         break;
     }
 
-    bus.pump();
+    bus.drain_until_idle();
 
     // Refused, named, and nothing moved.
     const DeliveryOutcome o = bus.outcome(r.ticket);
@@ -4949,7 +4949,7 @@ TEST_CASE("R2B-3d: two admissions racing for one role — the first wins whole, 
                                                    Message(to_value(loom::Activated{2})), 2);
     REQUIRE(first.scheduled);
     REQUIRE(second.scheduled); // both look fine from here, and that is honest
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(bus.outcome(first.ticket).disposition == Disposition::Delivered);
     CHECK(bus.outcome(second.ticket).refusal.reason == RefusalReason::AdmissionRevoked);
@@ -4979,7 +4979,7 @@ TEST_CASE("R2B-3d: aborting a pending admission stops it, once — the queued ac
 
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
-    bus.pump();
+    bus.drain_until_idle();
 
     // THE QUEUED ADMISSION FINDS NOTHING AND DOES NOTHING. In particular it does
     // not write a second terminal outcome — the abort already wrote the only one.
@@ -5038,7 +5038,7 @@ TEST_CASE("R2B-3d: a pending admission holds its promises — no second commit, 
               .why == TxnReason::IncumbentBusy);
     CHECK(bus.active_transactions() == 1);
 
-    bus.pump();
+    bus.drain_until_idle();
     exactly_one_outcome(bus, c.op.id, begun.id, TxnState::Committed, TxnReason::None);
     CHECK(c.candidate_raw->activations == 1); // exactly one, ever
 }
@@ -5071,7 +5071,7 @@ TEST_CASE("R2B-3d: the admission dispatch keeps activation-first ordering, unrel
     REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
                                 Message(to_value(loom::Activated{9})), 9));
     CHECK(bus.pending() == queued + 1); // exactly one envelope added; nothing removed
-    bus.pump();
+    bus.drain_until_idle();
 
     // The candidate: activation first, then everything that was waiting for it,
     // in the order it was queued. Nothing was dropped to achieve that.
@@ -5092,7 +5092,7 @@ TEST_CASE("R2B-3d: the admission dispatch keeps activation-first ordering, unrel
 
     // A publication AFTER the admission reaches the new service and not the old.
     bus.publish(Message(ping(6)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(cand_raw->handled_values.back() == 6);
     CHECK(inc_raw->handled_values.size() == 1); // sealed for retirement, hears nothing
 }
@@ -5110,7 +5110,7 @@ TEST_CASE("R2B-3d: a foreign lifecycle authority cannot even schedule an admissi
     CHECK(r.why == AdmitRefusal::ForeignAuthority);
     CHECK_FALSE(r.ticket.valid());
     CHECK(bus.pending() == 0); // nothing was queued to be revoked later
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(Topology::of(bus, p) == before);
 }
 
@@ -5152,7 +5152,7 @@ TEST_CASE("R2B-3d: a lifecycle change during a pending admission ends the transa
     exactly_one_outcome(bus, d.op.id, t, TxnState::Aborted, expected);
     CHECK(bus.active_transactions() == 0);
 
-    bus.pump();
+    bus.drain_until_idle();
 
     // The role never moved, and the Kernel says so — including about the artifact
     // an aborted transaction discards: a candidate that never entered the world is
@@ -5193,7 +5193,7 @@ TEST_CASE("R2B-3d: a stale queued admission cannot land on a namesake artifact l
     REQUIRE(again.ok);
     CHECK_FALSE(again.id == d.candidate);
 
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(r.ticket).refusal.reason == RefusalReason::AdmissionRevoked);
     v1_still_the_service(bus, d);
     CHECK(bus.sealed(again.id));
@@ -5267,7 +5267,7 @@ TEST_CASE("R2B-3d-1: a candidate cannot answer its own activation, cannot defer 
 
     REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
                                 Message(to_value(loom::Activated{5})), 5));
-    bus.pump();
+    bus.drain_until_idle();
 
     // THE ACTIVATION ITSELF IS UNTOUCHED: authentic, delivered, exactly once.
     REQUIRE(cand_raw->handled_names.size() == 1);
@@ -5300,7 +5300,7 @@ TEST_CASE("R2B-3d-1: a candidate cannot answer its own activation, cannot defer 
     // A LATER REAL ASK IS ANSWERABLE NORMALLY — the authority was scoped to a
     // delivery, not taken away from the candidate.
     bus.send_as(coordinator.id, candidate, Message(ping(7), coordinator.id, coordinator.id, 42));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(coordinator.weave->handled_names.size() == 2);
     CHECK(coordinator.weave->handled_values[1] == 99); // the answer to the real question
 }
@@ -5330,7 +5330,7 @@ TEST_CASE("R2B-3d-1: an activation's refused deferral consumes none of the bound
     for (std::size_t i = 0; i < bound - 1; ++i) {
         bus.send_as(asker.id, responder.id, Message(ping(static_cast<std::int64_t>(i))));
     }
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(held.size() == bound - 1);
     for (const loom::DeferredAnswer& d : held) {
         REQUIRE(d.valid()); // every one of them is real
@@ -5352,20 +5352,20 @@ TEST_CASE("R2B-3d-1: an activation's refused deferral consumes none of the bound
 
     REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
                                 Message(to_value(loom::Activated{2})), 2));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK_FALSE(tried.deferred_valid);
 
     // THE LAST SLOT IS STILL THERE. If the activation had taken it, this
     // legitimate deferral — a real ask, from a real requester — would fail.
     bus.send_as(asker.id, responder.id, Message(ping(1000)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(held.size() == bound);
     CHECK(held.back().valid());
 
     // ...and the bound is real, which is what makes the check above mean
     // something: the next one has nowhere to go.
     bus.send_as(asker.id, responder.id, Message(ping(1001)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(held.size() == bound + 1);
     CHECK_FALSE(held.back().valid());
 }
@@ -5408,7 +5408,7 @@ TEST_CASE("R2B-3d-1: nothing delivered because of an activation can later be mad
 
     REQUIRE(bus.admit_candidate(candidate, incumbent, "worker", host_lifecycle_authority(bus),
                                 Message(to_value(loom::Activated{3})), 3));
-    bus.pump();
+    bus.drain_until_idle();
 
     // The copy ARRIVED — it is ordinary speech and the candidate is entitled to
     // send it — and Loom called it exactly what it is.
@@ -5420,7 +5420,7 @@ TEST_CASE("R2B-3d-1: nothing delivered because of an activation can later be mad
     // forever, not merely at the moment it was refused.
     CHECK_FALSE(bus.weave(candidate) == nullptr);
     bus.send_as(coordinator.id, candidate, Message(ping(4)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(answers_seen == 0);
     CHECK(coordinator.weave->handled_names.size() == 1); // still just the copy
 }
@@ -5445,7 +5445,7 @@ TEST_CASE("R2B-3d-1: an ORDINARY zen.Activated-shaped message is still answerabl
 
     bus.send_as(sender.id, target.id, Message(to_value(loom::Activated{1}), sender.id,
                                               sender.id, 7));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(attested);  // not a lifecycle fact...
     CHECK(answered);        // ...and still an ordinary question, answerable
@@ -5468,7 +5468,7 @@ TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library se
     REQUIRE(bus.commit_prepared_replacement(t, host_lifecycle_authority(bus),
                                             Message(to_value(loom::Activated{6})), 6)
                 .ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     // The activation is authentic, first, and exactly once.
     CHECK(state_field(bus, d.candidate, "activations") == 1);
@@ -5607,7 +5607,7 @@ TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement
     ask.plan = "ready";
     ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
     REQUIRE(upgrade.ask(ask).ok);
-    bus.pump(); // pumping is always the caller's
+    bus.drain_until_idle(); // pumping is always the caller's
 
     // 9-10. Real Ready — the handle's word is the Switchboard's word — and the
     // incumbent still serves.
@@ -5633,7 +5633,7 @@ TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement
 
     // 14-17. One EXTERNAL pump: activation first, then the queued production;
     // the role moves; v2 serves.
-    bus.pump();
+    bus.drain_until_idle();
     const std::vector<std::string> live = log->delivered_since(deliveries_before);
     REQUIRE(live.size() >= 2);
     CHECK(live[0] == std::string(loom::Activated::zen_name));
@@ -5682,7 +5682,7 @@ TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's si
     ask.plan = "defer";
     ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
     REQUIRE(upgrade.ask(ask).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     // The candidate took the answer right away with it: no answer yet, budget
     // spendable while it works, the transaction honestly still Preparing.
@@ -5696,14 +5696,14 @@ TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's si
     // SAME hook, which offers it the same way.
     bus.send_as(d.coordinator.id, upgrade.candidate(),
                 Message(to_value(versioned::ContinuePreparation{})));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(offers.size() == 1);
     CHECK(offers[0].ok);
     CHECK(upgrade.state() == TxnState::Ready);
     REQUIRE(d.ask(bus) == "v1"); // readiness is not admission
 
     REQUIRE(upgrade.commit(7).ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d.ask(bus) == "v2");
     const std::optional<TxnOutcome> outcome = upgrade.take_outcome();
     REQUIRE(outcome.has_value());
@@ -5735,7 +5735,7 @@ TEST_CASE("R2B-4a: the candidate's refusal arrives whole — reason, cleanup, an
     ask.plan = "refuse";
     ask.escape_to = static_cast<std::int64_t>(d.observer.id.value);
     REQUIRE(upgrade.ask(ask).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     // The candidate said no, authentically; the transaction ended once with the
     // candidate's OWN reason; the substrate discarded the candidate and released
@@ -5902,7 +5902,7 @@ TEST_CASE("R2B-4a: a delivery offered to the wrong handle refuses, consumes noth
         results.push_back(a.offer_current_answer(PreparationAnswer::Ready));
     };
     REQUIRE(a.ask(Message(ping(1))).ok);
-    bus.pump();
+    bus.drain_until_idle();
 
     REQUIRE(results.size() == 3);
     CHECK_FALSE(results[0].ok); // the wrong handle...
@@ -6047,11 +6047,11 @@ TEST_CASE("R2B-4a: the handle's state is the Switchboard's, under every mutation
         versioned::PrepareReplacement ask;
         ask.plan = "ready";
         REQUIRE(upgrade.ask(ask).ok);
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(upgrade.state() == TxnState::Ready);
         REQUIRE(upgrade.commit(3).ok);
         CHECK(upgrade.state() == TxnState::AdmissionPending);
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(upgrade.state() == TxnState::Committed); // read straight off the store
         REQUIRE(upgrade.take_outcome().has_value());
     }
@@ -6081,10 +6081,10 @@ TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exact
     versioned::PrepareReplacement ask;
     ask.plan = "ready";
     REQUIRE(first.ask(ask).ok);
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(first.state() == TxnState::Ready);
     REQUIRE(first.commit(31337).ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(d.ask(bus) == "v2");
     // The candidate observed EXACTLY the caller's number, through the same
     // attested-sequence check the Zengine cursor applies.
@@ -6107,10 +6107,10 @@ TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exact
     CHECK(second.incumbent() == first.candidate()); // v2 is the incumbent now
     live_handle = &second;
     REQUIRE(second.ask(ask).ok);
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(second.state() == TxnState::Ready);
     REQUIRE(second.commit(31400).ok);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(state_field(bus, second.candidate(), "last_activation") == 31400);
     REQUIRE(second.take_outcome().has_value());
 }
@@ -6145,14 +6145,14 @@ TEST_CASE("R2B-4a: the budget is the author's, one unit per tick, and nothing ti
             }
         };
         REQUIRE(r.ask(Message(ping(1))).ok);
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(offers.size() == 1);
         REQUIRE(offers[0].ok);
         // Ask, delivery, answer, offer, readiness — and the one budget unit is
         // still there, because none of those is a tick.
         CHECK(r.state() == TxnState::Ready);
         REQUIRE(r.commit(2).ok);
-        bus.pump();
+        bus.drain_until_idle();
         REQUIRE(r.take_outcome().has_value());
     }
 }
@@ -6224,7 +6224,7 @@ TEST_CASE("unload tears down cleanly: instance destroyed before the library clos
 
     // The weave is gone; a directed send is refused, not delivered into a closed library.
     Ticket t = bus.send(id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
 
@@ -6337,7 +6337,7 @@ struct OfficeStage {
         c.mode = mode;
         c.target = static_cast<std::int64_t>(target.value);
         bus.send_as(commander, worker, Message(to_value(c)));
-        bus.pump();
+        bus.drain_until_idle();
     }
 };
 
@@ -6427,7 +6427,7 @@ TEST_CASE("R2D-0/v5: inbound office provenance crosses the seam — authored_fro
                 .valid());
     // Personal speech from the same dispatcher.
     s.bus.send_as(s.dispatcher, s.worker, Message(to_value(office::WorkerNews{"psst"})));
-    s.bus.pump();
+    s.bus.drain_until_idle();
 
     const auto heard = reports_named(*s.commander_log, "heard");
     REQUIRE(heard.size() == 2);
@@ -6509,7 +6509,7 @@ TEST_CASE("R2E-0/S3: a committed admission moves the role in place — the prede
     // The incumbent deliberately claims AS the office.
     incumbent->say = "incumbent on duty";
     bus.send(inc_id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(incumbent->last.accepted);
     SenseReading before = bus.observe_office("worker", "SenseStatus", 1);
     REQUIRE(before);
@@ -6521,7 +6521,7 @@ TEST_CASE("R2E-0/S3: a committed admission moves the role in place — the prede
     loom::Activated fact{1};
     REQUIRE(bus.admit_candidate(cand_id, inc_id, "worker", host_lifecycle_authority(bus),
                                 Message(to_value(fact)), 1));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(bus.role_holder("worker") == cand_id);
 
     // THE MANDATORY WITNESS. The claim is still readable and still the
@@ -6541,7 +6541,7 @@ TEST_CASE("R2E-0/S3: a committed admission moves the role in place — the prede
     // activation — the role-bound view follows it and is current again.
     successor->say = "successor on duty";
     bus.send(cand_id, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(successor->last.accepted);
     SenseReading now = bus.observe_office("worker", "SenseStatus", 1);
     REQUIRE(now);
@@ -6565,7 +6565,7 @@ TEST_CASE("R2E-0/S3: a SEALED candidate cannot claim as the office it does not y
     // The sealed candidate tries to claim the office DURING preparation.
     candidate->say = "I am the worker";
     bus.send_as(coordinator.id, cand_id, Message(ping(1))); // its coordinator may reach it
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK_FALSE(candidate->last.accepted);
     CHECK(candidate->last.why == SenseRefusal::OfficeNotHeld);
@@ -6655,7 +6655,7 @@ TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, an
 
     // reply_to points the fixture's read-back at itself.
     bus.send(dyn.id, Message(ping(42), WeaveId{}, dyn.id, 0));
-    bus.pump();
+    bus.drain_until_idle();
 
     const SenseWindow w = sense_window(bus, dyn.id);
     CHECK(w.claimed);            // the claim took, across the seam
@@ -6676,7 +6676,7 @@ TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, an
 
     // A second claim REPLACES rather than accumulating, exactly as natively.
     bus.send(dyn.id, Message(ping(7), WeaveId{}, dyn.id, 0));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.retained_claim_count() == 1);
     CHECK(bus.observe(dyn.id, "SenseHealth", 1).by.revision == 2);
 
@@ -6762,7 +6762,7 @@ TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office id
     const WeaveId officer =
         bus.register_weave(std::make_unique<HealthOfficer>(role_a), Grant{}.allow_any(), role_a);
     bus.send(officer, Message(ping(42)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // NATIVE: exact, and it always was — std::string imposes no bound.
     SenseReading native = bus.observe_office(role_a, "SenseHealth", 1);
@@ -6775,7 +6775,7 @@ TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office id
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
     bus.send(dyn.id, Message(sense_probe(role_a)));
-    bus.pump();
+    bus.drain_until_idle();
 
     SenseWindow w = sense_window(bus, dyn.id);
     CHECK(w.read_hp == 42);                    // it really did read the claim
@@ -6804,7 +6804,7 @@ TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the li
     const WeaveId officer =
         bus.register_weave(std::make_unique<HealthOfficer>(role), Grant{}.allow_any(), role);
     bus.send(officer, Message(ping(42)));
-    bus.pump();
+    bus.drain_until_idle();
 
     LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
@@ -6813,7 +6813,7 @@ TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the li
     // BEFORE: the claim is the current code's, on the current life. Both true,
     // as reported to the LIBRARY through ZenSenseBy.
     bus.send(dyn.id, Message(sense_probe(role)));
-    bus.pump();
+    bus.drain_until_idle();
     const SenseWindow before = sense_window(bus, dyn.id);
     REQUIRE(before.read_hp == 42);
     CHECK(before.read_life_current);
@@ -6828,7 +6828,7 @@ TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the li
     // replaced. A seam that derived this from life-currentness reports `true`
     // here and hides the replacement completely.
     bus.send(dyn.id, Message(sense_probe(role)));
-    bus.pump();
+    bus.drain_until_idle();
     const SenseWindow stale = sense_window(bus, dyn.id);
     REQUIRE(stale.read_hp == 42);        // not rewritten, not withdrawn
     CHECK(stale.read_life_current);      // the life stands
@@ -6837,9 +6837,9 @@ TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the li
     // The successor claims for itself, and both read current again — so the flag
     // tracks the topology rather than latching once a swap has ever happened.
     bus.send(officer, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
     bus.send(dyn.id, Message(sense_probe(role)));
-    bus.pump();
+    bus.drain_until_idle();
     const SenseWindow current = sense_window(bus, dyn.id);
     REQUIRE(current.read_hp == 7);
     CHECK(current.read_life_current);
@@ -6870,18 +6870,18 @@ TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay di
     bus.register_weave(std::make_unique<HealthOfficer>(role_b), Grant{}.allow_any(), role_b);
     bus.send_to_role(role_a, Message(ping(1)));
     bus.send_to_role(role_b, Message(ping(2)));
-    bus.pump();
+    bus.drain_until_idle();
 
     LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
 
     bus.send(dyn.id, Message(sense_probe(role_a)));
-    bus.pump();
+    bus.drain_until_idle();
     const SenseWindow saw_a = sense_window(bus, dyn.id);
 
     bus.send(dyn.id, Message(sense_probe(role_b)));
-    bus.pump();
+    bus.drain_until_idle();
     const SenseWindow saw_b = sense_window(bus, dyn.id);
 
     // Each reading names ITS OWN office, and the two are not confusable.
@@ -6903,7 +6903,7 @@ TEST_CASE("R2E-0/v6: a loaded weave without observe authority is refused a read,
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
 
     bus.send(dyn.id, Message(ping(5), WeaveId{}, dyn.id, 0));
-    bus.pump();
+    bus.drain_until_idle();
 
     const SenseWindow w = sense_window(bus, dyn.id);
     CHECK(w.claimed);       // claiming needs no observe rule — it is its own act
@@ -6959,7 +6959,7 @@ TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-o
     // One Ping in; the fixture reaches for `nobody.home` carrying SeamOnly v1,
     // a shape no registry in this process has ever heard of.
     bus.send(dyn.id, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // THE FACT THAT USED TO NOT EXIST.
     CHECK(seam.count == 1);
@@ -7001,7 +7001,7 @@ TEST_CASE("R2E-0/P-011: the comparable NATIVE reach is still observable, and now
     // NoSuchTarget — the loud failure Night Lab witnessed in the control arm.
     Registered native = register_probe(bus, {ping_schema()});
     bus.send_as_to_role(native.id, "nobody.home", Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(native_refusals == 1);
     // The native path is a DIFFERENT refusal for a different reason, and this fix
@@ -7023,7 +7023,7 @@ TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam
     // The plain fixture replies Pong to reply_to — a shape the listener's
     // accept-set registered, so the seam resolves it and the delivery lands.
     bus.send(dyn.id, Message(ping(3), WeaveId{}, listener.id, 0));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(seam.count == 0);
     CHECK(listener.weave->count == 1);
@@ -7072,7 +7072,7 @@ TEST_CASE("FRIC-0: an unresolvable PUBLICATION from a loaded weave leaves no ref
     LoadResult dyn = kernel.load("crier", ZEN_SO_SEAM_PUBLISH);
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
     bus.send(dyn.id, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // NOT REFUSED, AND NOT BECAUSE THE DIAGNOSTIC WAS TURNED DOWN. `SeamOnly v1`
     // is in no accept-set, and `fanout` selects recipients by the same
@@ -7098,7 +7098,7 @@ TEST_CASE("FRIC-0: a PUBLICATION whose shape resolves and whose bytes fail the g
     LoadResult dyn = kernel.load("crier", ZEN_SO_SEAM_PUBLISH);
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
     bus.send(dyn.id, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
 
     // THE DISCRIMINATOR. One artifact published twice in one handler: an
     // unresolvable shape and a malformed-but-resolvable one. Exactly one of them
@@ -7131,7 +7131,7 @@ TEST_CASE("FRIC-0: taking the address away is the ONLY difference — the same s
 
     bus.send(crier.id, Message(ping(7)));
     bus.send(caller.id, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(seam.count == 1);
     CHECK(seam.last.sender == caller.id);
@@ -7188,7 +7188,7 @@ TEST_CASE("R2F-B: a candidate cannot unregister itself from its committed activa
                                             Message(to_value(loom::Activated{7})), 7)
                 .ok);
     REQUIRE(bus.transaction_state(t.id) == TxnState::AdmissionPending);
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(returned_null);                 // the attempted removal returned nullptr
     CHECK(destroyed_at_the_attempt == 0); // nothing was destroyed inside the callback

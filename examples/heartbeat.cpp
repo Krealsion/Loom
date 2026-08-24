@@ -102,11 +102,11 @@ int main() {
 
     std::cout << "directed Ping -> responder (reply_to collector):\n";
     bus.send(responder, Message(ping_value(7), WeaveId{}, collector));
-    bus.pump();
+    bus.drain_until_idle();
 
     std::cout << "a malformed Ping is refused at the door:\n";
     bus.send(responder, Message(Value(ping_schema()))); // 'seq' missing
-    bus.pump();
+    bus.drain_until_idle();
 
     std::cout << "responder dies and revives from its own snapshot:\n";
     std::string saved = bus.snapshot_bytes(responder);

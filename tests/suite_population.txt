@@ -63,7 +63,7 @@ serialize          portable  31
 compat             portable  10
 integration        portable  4
 fuzz               portable  9
-switchboard        portable  44
+switchboard        portable  46
 provenance         portable  62
 role_authorship    portable  17
 sense              portable  19
