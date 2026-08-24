@@ -6970,6 +6970,12 @@ TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-o
     // there is no weave to name — and inventing one would be a second lie on top
     // of the silence this fixes.
     CHECK_FALSE(seam.last.target.valid());
+    // ...AND THE ADDRESS IS NOT A MANUFACTURE (FRIC-0). The role is what the
+    // library literally said, carried out rather than invented, and it is the
+    // difference between "refused SeamOnly" and a sentence a reader can act on.
+    // It sits BESIDE the invalid target on purpose: where it was sent, never
+    // who answered.
+    CHECK(seam.last.addressed_role == "nobody.home");
 
     // ...and it is exactly one refusal in total: the seam rejection is the only
     // thing that happened. Nothing was queued, so no delivery-time refusal
@@ -7021,6 +7027,115 @@ TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam
 
     CHECK(seam.count == 0);
     CHECK(listener.weave->count == 1);
+}
+
+// ---- FRIC-0: a publication names nobody, so being unheard is not a refusal --
+//
+// SeamOnly v1, spelled out again here for `defers_state_schema()`'s reason: the
+// native control must not share a definition with the library it is being
+// compared against, or a drift in either would cancel out. Declared in no
+// accept-set on either side, which is the whole point of it.
+inline std::shared_ptr<const Schema> seamonly_schema() {
+    static const auto s = SchemaBuilder("SeamOnly", 1).field("want", Kind::Int).build();
+    return s;
+}
+
+//
+// The three cases below are one argument. The middle one is the repair; the two
+// on either side are what stop it from being a suppression, and they are the
+// canary: broaden the rule to "the seam does not refuse publications" and the
+// third goes red, broaden it to "the seam does not refuse" and the first goes
+// red too.
+
+TEST_CASE("FRIC-0: an unresolvable PUBLICATION from a loaded weave leaves no refusal, because "
+          "an unresolvable shape has no accepter and the publication reached nobody") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    RefusalTap seam;
+    seam.arm(bus, RefusalReason::SeamUnresolved);
+
+    // THE NATIVE CONTROL, FIRST AND IN THE SAME PROCESS, because the claim is a
+    // claim about PARITY and an unmeasured half proves nothing. A native weave
+    // publishing a shape no live weave accepts is the ordinary quiet outcome:
+    // zero recipients, no seq, no journal slot, no event.
+    std::size_t native_events = 0;
+    bus.add_observer([&native_events](const BusEvent&) { ++native_events; });
+    Value lonely(seamonly_schema());
+    lonely.set("want", Cell::integer(1));
+    CHECK(bus.publish(Message(std::move(lonely))) == 0);
+    CHECK(native_events == 0);
+
+    // The loaded twin of exactly that: same shape, no address, across the seam.
+    // Pong has an accepter so the fixture's SECOND publication can reach the
+    // gate — this case is about the first one.
+    Registered listener = register_probe(bus, {pong_schema()});
+    LoadResult dyn = kernel.load("crier", ZEN_SO_SEAM_PUBLISH);
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+    bus.send(dyn.id, Message(ping(7)));
+    bus.pump();
+
+    // NOT REFUSED, AND NOT BECAUSE THE DIAGNOSTIC WAS TURNED DOWN. `SeamOnly v1`
+    // is in no accept-set, and `fanout` selects recipients by the same
+    // (name, version) the registry is keyed on, so there was never a listener to
+    // lose. Both tiers are now silent about the same non-event.
+    CHECK(seam.count == 0);
+    // The listener heard nothing either — the malformed Pong did not sneak
+    // through on the way past.
+    CHECK(listener.weave->count == 0);
+}
+
+TEST_CASE("FRIC-0: a PUBLICATION whose shape resolves and whose bytes fail the gate is still "
+          "refused — the delivery that should have happened did not") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    RefusalTap gate;
+    gate.arm(bus, RefusalReason::GateRefused);
+    RefusalTap seam;
+    seam.arm(bus, RefusalReason::SeamUnresolved);
+
+    // Pong is registered here, by an accepter that would have received it.
+    Registered listener = register_probe(bus, {pong_schema()});
+    LoadResult dyn = kernel.load("crier", ZEN_SO_SEAM_PUBLISH);
+    REQUIRE_MESSAGE(dyn.ok, dyn.error);
+    bus.send(dyn.id, Message(ping(7)));
+    bus.pump();
+
+    // THE DISCRIMINATOR. One artifact published twice in one handler: an
+    // unresolvable shape and a malformed-but-resolvable one. Exactly one of them
+    // is a failure, and it is the one where a real recipient was denied real
+    // bytes.
+    CHECK(gate.count == 1);
+    CHECK(gate.last.schema_name == "Pong");
+    CHECK(seam.count == 0);
+    CHECK(listener.weave->count == 0);
+    // A publication names no destination even when it fails, so the address
+    // stays empty here — the role doors are the only ones that fill it.
+    CHECK(gate.last.addressed_role.empty());
+    CHECK_FALSE(gate.last.target.valid());
+}
+
+TEST_CASE("FRIC-0: taking the address away is the ONLY difference — the same shape, from the "
+          "same seam, addressed to a role is still refused") {
+    Switchboard bus;
+    Kernel kernel(bus);
+    RefusalTap seam;
+    seam.arm(bus, RefusalReason::SeamUnresolved);
+
+    // Both artifacts carry SeamOnly v1 and neither can resolve it. One addresses
+    // a slot; the other addresses nobody. If a later change ever reads the repair
+    // as "the seam is quieter now", this is the case that says which half.
+    LoadResult crier = kernel.load("crier", ZEN_SO_SEAM_PUBLISH);
+    REQUIRE_MESSAGE(crier.ok, crier.error);
+    LoadResult caller = kernel.load("caller", ZEN_SO_SEAM_EMIT);
+    REQUIRE_MESSAGE(caller.ok, caller.error);
+
+    bus.send(crier.id, Message(ping(7)));
+    bus.send(caller.id, Message(ping(7)));
+    bus.pump();
+
+    CHECK(seam.count == 1);
+    CHECK(seam.last.sender == caller.id);
+    CHECK(seam.last.addressed_role == "nobody.home");
 }
 
 // ---- LIFE-06 reaches the committed activation too ---------------------------

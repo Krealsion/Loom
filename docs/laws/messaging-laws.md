@@ -163,10 +163,32 @@ MEANS
 - the fact carries the **claimed** (name, version) and the sending artifact, and
   a target **only where one was actually named** — a publication names none, a
   role is a slot resolved at a delivery that never happened. Replacing silence
-  with a fabricated target would be the worse bug;
+  with a fabricated target would be the worse bug. A role door reports the
+  **role it was handed**, which is an address the sender stated and not a
+  resolution: it sits beside an invalid target, and the pair reads "where it was
+  sent", never "who answered";
 - the observability floor is now the same on both tiers: a loaded weave's
   unresolvable reach and a native weave's unresolvable reach are both loud, and
-  a comparable native failure is not reclassified.
+  a comparable native failure is not reclassified;
+- **an unresolvable PUBLICATION is unheard, not refused**, and that is the same
+  floor rather than an exception to it. A weave's accept-set is claimed in the
+  registry for its record's whole life and `fanout` selects by the same
+  (name, version), so an unresolvable shape has no live accepter *by
+  construction*: the publication provably reached nobody, which is what a native
+  publication into a world with no listeners does silently every day. Reporting
+  the loaded tier and not the native one made the seam LOUDER than the floor this
+  law sets, on the one case where nothing had gone wrong.
+
+DOES NOT MEAN, of that last clause
+- that a publication cannot fail. One whose shape RESOLVES and whose bytes fail
+  the gate is still refused: somebody accepts that shape and would have been
+  handed those bytes, so a delivery that should have happened did not;
+- that an addressed reach is ever quiet. A send, a role send, an answer and an
+  office send each named somewhere they expected to arrive, so zero arrivals is a
+  failure there whatever the reason — which is the P-011 case itself;
+- that the library is told less. The seam's status to the emitting library is
+  unchanged; only Loom's own diagnostic is withheld, and `Bus::publish`'s
+  recipient count never crossed this seam in either direction.
 
 DOES NOT MEAN
 - that senders observe delivery fate — they still do not
@@ -179,9 +201,13 @@ DOES NOT MEAN
   delivery, so no path produces both.
 
 PROVEN BY — `Switchboard::note_seam_refusal` (deliberately `refuse_now`'s body,
-not a second mechanism); `kernel.cpp`'s one `seam_reject` helper behind all eight
-seam entry points; suite `kernel` (the Night Lab III P-011 reproducer against a
-real artifact, the native-still-loud control, the no-false-refusal case).
+not a second mechanism); `kernel.cpp`'s one `seam_reject` helper behind every
+addressed seam entry point, and `kUnheardPublication` behind the two publication
+doors; suite `kernel` (the Night Lab III P-011 reproducer against a real
+artifact, the native-still-loud control, the no-false-refusal case, and FRIC-0's
+three-part publication argument: the native control measured in the same process,
+the gate-refused publication that stays loud, and the same shape from the same
+seam going quiet only when its address is taken away).
 Evidence: [night-lab](../evidence/night-lab.md), reproducer
 `workshop-marathon/repros/core/silent-seam-emission/`.
 

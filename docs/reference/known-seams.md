@@ -244,7 +244,15 @@ differed **by tier**.
 Seam rejections now leave a host-side fact at the same altitude a capability
 refusal already had: `SeamUnresolved` for an unresolvable claimed shape,
 `GateRefused` for bytes that fail the gate, carrying the claimed (name, version),
-the sending artifact, and a target only where one was actually named. Reproducer:
+the sending artifact, a target only where one was actually named, and the role
+where the library named one.
+
+**Corrected by FRIC-0 for publications.** The rule is about an emission that
+expected to ARRIVE somewhere. A publication expects nothing of the sort, and an
+unresolvable shape has no accepter by construction, so it reached zero recipients
+— which native `publish` does in silence. Reporting only the loaded tier made the
+seam louder than the floor this closed. A publication whose shape resolves and
+whose bytes fail the gate is still refused. Reproducer:
 `playground/night-lab/workshop-marathon/repros/core/silent-seam-emission/`, and a
 real-artifact regression fixture in suite `kernel`.
 

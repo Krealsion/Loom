@@ -202,12 +202,52 @@ struct HostCtx {
 /// publication, an answer whose conversation partner the seam never looked up) —
 /// see RefusalReason::SeamUnresolved on why a fabricated one would be worse than
 /// the silence this replaces.
+///
+/// `to_role` is the office the library NAMED, empty on every door that named
+/// none. It is not the fabrication MSG-08 forbids and is the opposite of one:
+/// the two role doors are handed the slot as a string and used to drop it, so
+/// the diagnostic said `refused StartTimer` with no word for where it was going.
+/// A role is not resolved to a weave here — that is the resolution that never
+/// happened — and this reports the address, never an arrival.
 ZenStatus seam_reject(HostCtx* h, const loom::Unverified& u, loom::WeaveId target,
-                      const loom::Refusal& refusal) {
-    h->sb->note_seam_refusal(h->self, target, u.claimed_name(), u.claimed_version(), refusal);
+                      const loom::Refusal& refusal, std::string_view to_role = {}) {
+    h->sb->note_seam_refusal(h->self, target, u.claimed_name(), u.claimed_version(), refusal,
+                             to_role);
     return refusal.reason == loom::RefusalReason::SeamUnresolved ? ZEN_ERR_UNKNOWN_SCHEMA
                                                                  : ZEN_ERR_REFUSED;
 }
+
+/// A PUBLICATION THAT RESOLVES TO NOTHING IS UNHEARD, NOT REFUSED (MSG-08).
+///
+/// The two publication doors do not call `seam_reject` for an unresolvable
+/// shape, and the reason is an equivalence the Switchboard can be read off
+/// directly rather than a judgement about how alarming the line looks.
+///
+/// A weave's accept-set is claimed in the schema registry for exactly as long as
+/// its record exists (`register_weave`, LIFE-08), and `fanout` selects
+/// recipients by that same (name, version). So an unresolvable shape has NO live
+/// accepter by construction: `resolve_schema` returning null PROVES the
+/// publication would have reached zero recipients, which is what a native
+/// publication into a world with no listeners does every day — silently, with no
+/// seq, no journal slot and no event. Reporting one tier and not the other made
+/// the seam LOUDER than the native floor MSG-08 set out to match, and the loud
+/// half was the case where nothing had gone wrong.
+///
+/// Deliberately NOT extended to the gate refusal below it. There the shape DID
+/// resolve, so somebody accepts it and would have been handed these bytes; the
+/// payload is malformed and the delivery that should have happened did not. That
+/// is a real failure on a publication and it stays loud.
+///
+/// Nor to any addressed door. A send, a role send, an answer and an office send
+/// each named somewhere they expected to arrive, so zero arrivals is a failure
+/// there whatever the reason — that is the P-011 case, and it is untouched.
+///
+/// The library learns exactly what it learned before: the status is unchanged,
+/// and only the host's own diagnostic is withheld. `Bus::publish`'s recipient
+/// count deliberately does not cross this seam anyway (`export.hpp`), and the
+/// office door's `recipients_out` is already 0 on this path — which is the
+/// truthful answer to the question it asks.
+constexpr ZenStatus kUnheardPublication = ZEN_ERR_UNKNOWN_SCHEMA;
 
 /// The two seam refusals, named once.
 inline loom::Refusal seam_unresolved() {
@@ -307,9 +347,10 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
     loom::Unverified u = loom::parse(loom::as_view(payload, len));
     std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        // A publication names NO target. The diagnostic says so rather than
-        // inventing one; fanout never ran, so there is nobody to blame.
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        // Unresolvable means no live accepter, which means zero recipients —
+        // the ordinary silent outcome of publishing into a world that is not
+        // listening. See kUnheardPublication.
+        return kUnheardPublication;
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
@@ -331,12 +372,13 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
         // A ROLE is a destination slot, not a WeaveId, and it is resolved at
-        // delivery — which never happens here. No target is named.
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        // delivery — which never happens here. No target is named; the SLOT is,
+        // because the library named it, and it is the whole address a reader has.
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), role);
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), role);
     }
     h->gated->send_to_role(role, loom::Message(std::move(a).value(), loom::WeaveId{},
                                                   loom::WeaveId{reply_to}, correlation));
@@ -435,11 +477,11 @@ static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, co
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), to_role);
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), to_role);
     }
     const loom::Ticket t = h->gated->office_send_to_role(
         as_role, to_role,
@@ -459,7 +501,7 @@ static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::ui
     std::shared_ptr<const loom::Schema> door =
         h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
     if (!door) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        return kUnheardPublication; // an office publication is a publication
     }
     loom::Admission a = loom::admit(u, door);
     if (!a.ok()) {

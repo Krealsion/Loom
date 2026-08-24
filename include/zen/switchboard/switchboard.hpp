@@ -194,6 +194,12 @@ struct BusEvent {
     /// resolved to `target` at dispatch. Empty for a directed send and for a
     /// publication, which name no role at all.
     ///
+    /// It is also set on a SEAM refusal from a role door (`note_seam_refusal`),
+    /// where the resolution never happened at all: there the field is the
+    /// address and nothing more, and `target` stays invalid beside it. That is
+    /// the one place the two are not two views of one dispatch, and it is why a
+    /// reader should take this as "where it was sent", never "who answered".
+    ///
     /// A DIFFERENT QUESTION FROM `authored_role`, and the two are not
     /// interchangeable: this is whose door was knocked on, that is which office
     /// the speaker spoke as. Without it the resolution is unrecoverable - an
@@ -728,13 +734,21 @@ public:
     /// invalid id wherever the emission named none. MANUFACTURE NOTHING HERE — a
     /// publication has no target, and a role is a slot resolved at a delivery that
     /// never happened; inventing one would replace silence with a fiction.
+    ///
+    /// `addressed_role` is the exception that proves that rule rather than a
+    /// crack in it: on the two role doors the caller was HANDED the slot and
+    /// threw it away, so the fact was lost rather than absent. It is reported as
+    /// the address the sender named and never as a resolution — no weave is
+    /// looked up, and `target` stays invalid beside it. Empty on every other
+    /// door, including both publication doors, which name nothing.
     /// MSG-08; docs/laws/messaging-laws.md
     ///
     /// Callable by the host (holding a `Switchboard&` is already root authority)
     /// because the Kernel's seam callbacks are the only intended caller and they
     /// hold exactly that.
     void note_seam_refusal(WeaveId sender, WeaveId target, std::string_view claimed_name,
-                           std::uint32_t claimed_version, const Refusal& refusal);
+                           std::uint32_t claimed_version, const Refusal& refusal,
+                           std::string_view addressed_role = {});
 
     /// THE DELIVERY BEING DISPATCHED RIGHT NOW DID NOT COMPLETE NORMALLY - said
     /// by the only caller in a position to know, the Kernel's `HostAdapter`,
