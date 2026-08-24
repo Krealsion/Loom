@@ -265,18 +265,20 @@ before.
 **Status: CLOSED (R2E-0, corrected R2E-0a) — current, law-backed
 ([MSG-09](../laws/messaging-laws.md)).**
 
-`pump()`'s drain-to-empty contract does not compose with a perpetual in-process
-service: a repeating Timer re-arms itself inside its own handler, so the queue
-never empties and a single-threaded host never returns to poll its sockets. Found
-by the Codex Rule Garden, whose workaround was a fake application message whose
-handler called `Switchboard::stop()`.
+A drain-to-empty turn does not compose with a perpetual in-process service: a
+repeating Timer re-arms itself inside its own handler, so the queue never empties
+and a single-threaded host never returns to poll its sockets. Found by the Codex
+Rule Garden, whose workaround was a fake application message whose handler called
+`Switchboard::stop()`.
 
 `pump_pending()` is the bounded turn, and the only one: it dispatches the backlog
-present at entry and leaves work enqueued during the turn for the next one.
-`pump()` is unchanged for every existing caller, and
-`BridgeServer::set_bounded_dispatch()` is off by default (drain to empty). The
-Rule Garden's fake yield message is deleted and replaced by that surface in suite
-`bridge`.
+present at entry and leaves work enqueued during the turn for the next one. The
+drain is unchanged for every existing caller — FRIC-1 renamed it
+`drain_until_idle()` so the call site says which promise it makes, and retired
+the `pump()`/`run()` spellings that made the expensive one look like the ordinary
+one. `BridgeServer::set_bounded_dispatch()` is off by default (drain to idle).
+The Rule Garden's fake yield message is deleted and replaced by that surface in
+suite `bridge`.
 
 **The first attempt is kept as evidence, not as API.** R2E-0 shipped a *numeric*
 bound first — `pump_bounded(n)` and `BridgeServer::set_dispatch_budget(n)` — and

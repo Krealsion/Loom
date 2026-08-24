@@ -103,7 +103,7 @@ int main() {
     for (int i = 0; i < 400; ++i) {
         bus.send(sink, loom::Message(loom::to_value(Beat{i})));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     // 1. THE BEATS DID NOT FLOOD RECENT CONTEXT...
     bool beat_in_context = false;

@@ -240,7 +240,7 @@ TEST_CASE("wildcard-accept buffers a non-pre-declared shape (gated); an unregist
     loom::Value v(unreg);
     v.set("x", loom::Cell::integer(9));
     Ticket u = bus.send(engine.console_id(), Message(std::move(v)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(u).disposition == Disposition::Refused);
     CHECK(bus.outcome(u).refusal.reason == RefusalReason::NotAccepted);
     CHECK(engine.buffer_size() == 1); // unchanged — the unregistered shape was not buffered
@@ -264,7 +264,7 @@ TEST_CASE("wildcard-accept gates against the REGISTRY schema, not the payload's 
     v.set("seq", loom::Cell::integer(1));
     v.set("lie", loom::Cell::text("gotcha"));
     Ticket u = bus.send(engine.console_id(), Message(std::move(v)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(u).disposition == Disposition::Refused);
     CHECK(bus.outcome(u).refusal.reason == RefusalReason::GateRefused);
     CHECK(bus.outcome(u).refusal.error.kind == loom::ErrorKind::SchemaMismatch);

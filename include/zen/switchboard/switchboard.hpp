@@ -451,7 +451,8 @@ enum class AcceptMode { Listed, AnyRegistered };
 /// through loom's one validator. It reimplements no validation, schema, or
 /// serialization logic — it routes Values and calls admit().
 ///
-/// Dispatch is single-threaded and FIFO: send/publish enqueue; pump() drains.
+/// Dispatch is single-threaded and FIFO: send/publish enqueue; a dispatch turn
+/// (`pump_pending()` or `drain_until_idle()`) delivers.
 /// A handler that sends during handling enqueues a *later* delivery — delivery is
 /// never reentrant, and ordering is deterministic.
 class Switchboard : public Bus {
@@ -605,18 +606,17 @@ public:
     OfficePublication office_publish(std::string_view as_role, Message msg) override;
 
 
-    /// Deliver until the queue drains. Single-threaded, FIFO, non-reentrant: a
-    /// reentrant call (from within a handler) is a no-op.
-    void pump();
-    void run() { pump(); }
-    void stop() noexcept { stop_requested_ = true; }
-
-    /// DISPATCH EXACTLY WHAT WAS ALREADY QUEUED, THEN GIVE THE CALLER BACK
-    /// CONTROL. Returns how many were dispatched.
+    /// SERVICE THE WORK THAT WAS WAITING, THEN GIVE THE CALLER BACK CONTROL —
+    /// THE ORDINARY HOST-LOOP OPERATION. Returns how many deliveries it made.
     ///
-    /// THE bounded turn, and the one an event-loop host wants: `pump()` drains to
-    /// empty, so a perpetual service (a repeating Timer re-arms inside its own
-    /// handler) means it never returns and the outer loop never polls again.
+    /// This is the one an embedded host wants:
+    ///
+    /// ```cpp
+    /// while (running) {
+    ///     poll_input();            // the OS, sockets, whatever else this host owns
+    ///     bus.pump_pending();      // exactly the backlog that was waiting; control returns
+    /// }
+    /// ```
     ///
     /// THE BOUND IS `pending()` AT ENTRY, and it deliberately takes no number.
     /// Work a handler enqueues DURING this call lands behind that snapshot and
@@ -632,10 +632,42 @@ public:
     /// only as this function's private implementation.
     /// MSG-09; docs/laws/messaging-laws.md
     ///
-    /// `stop()` ends the turn early here too, and the return value reports what
-    /// actually happened. Non-reentrant, like every pump. An empty queue is a
-    /// no-op returning 0.
+    /// `stop()` ends the turn early, and the return value reports what actually
+    /// happened. Non-reentrant: a call from inside a handler dispatches nothing
+    /// and returns 0. An empty queue is a no-op returning 0.
     std::size_t pump_pending();
+
+    /// KEEP DISPATCHING UNTIL THE BUS IS IDLE — the stronger promise, and the
+    /// name says which one it is. Single-threaded, FIFO, non-reentrant: a
+    /// reentrant call (from within a handler) is a no-op.
+    ///
+    /// UNBOUNDED BY CONTRACT. Work a handler enqueues during this call belongs
+    /// to this call, so the queue empties only when the participants themselves
+    /// stop producing. A perpetual in-process service never lets that happen —
+    /// Zengine's Timer seeds its one successor beat inside every beat's own
+    /// handler, so a process with the Timer service loaded is never idle and
+    /// this never returns. That is the correct semantics, not a defect: a caller
+    /// asking for quiescence in a world that will not become quiescent has asked
+    /// for something that does not exist, and Loom will not invent a turn budget
+    /// or a deadline to pretend otherwise (MSG-09).
+    ///
+    /// Legitimately wanted by: a test or script that wants everything settled
+    /// before it asserts; a one-shot bootstrap; and a host whose ENTIRE program
+    /// is the bus, which drives it with `stop()` as the exit (Zengine's snake and
+    /// Workshop hosts do exactly this — `drain_until_idle()` returning on its own
+    /// there means nothing in the process will ever speak again).
+    ///
+    /// A host that wants control back between turns wants `pump_pending()`.
+    ///
+    /// There is deliberately no `pump()` and no `run()`. Both spelled this
+    /// contract in words that promised the bounded one, which is how a stranger
+    /// composing Loom with an outer loop chose a call that never returned
+    /// (FRIC-1). Do not reintroduce either as a synonym.
+    void drain_until_idle();
+
+    /// End the current turn after the delivery in flight — both operations
+    /// honour it, and each reports what it actually did.
+    void stop() noexcept { stop_requested_ = true; }
 
     // ---- Senses --------------------------------------------------------------
     //
@@ -771,12 +803,12 @@ public:
     /// The fate of a previously-issued Ticket (Pending until pumped). The journal retains
     /// only the most recent `kJournalCapacity` outcomes (see below), so a Ticket older than
     /// that window — or one never issued — reads as Pending. This is loss-free *provided a
-    /// single pump() does not deliver more than `kJournalCapacity` envelopes between a
-    /// Ticket's submit and its read*: the window can roll *within one pump* if a handler
-    /// cascades past the capacity, so a consumer that batches many sends before one pump, or
+    /// single dispatch turn does not deliver more than `kJournalCapacity` envelopes between
+    /// a Ticket's submit and its read*: the window can roll *within one turn* if a handler
+    /// cascades past the capacity, so a consumer that batches many sends before one turn, or
     /// reads an outcome after such a cascade, can see Pending for a Ticket that was in fact
     /// Delivered/Refused. Every current consumer stays inside that breath — the relay tracks
-    /// its own pending (kMaxRelayPending), the console reads one outcome per pump — so the
+    /// its own pending (kMaxRelayPending), the console reads one outcome per turn — so the
     /// window is not a live hazard today; a future high-fan-out consumer must size for it.
     DeliveryOutcome outcome(Ticket t) const;
 
@@ -784,7 +816,7 @@ public:
     /// `kJournalCapacity` deliveries, not one per message ever sent. A bus is exactly
     /// the component that runs for weeks, so its footprint must be bounded by design,
     /// never by lifetime throughput (audit F-6). The window is far larger than any real
-    /// per-pump delivery count in the current tree (no consumer batches or cascades this
+    /// per-turn delivery count in the current tree (no consumer batches or cascades this
     /// many before reading — see outcome() for the sufficiency condition), so eviction
     /// never touches a live read today; published and pinned, like kMaxRelayPending.
     static constexpr std::size_t kJournalCapacity = 1024;
@@ -853,8 +885,8 @@ public:
     /// Unseals `candidate` and moves `role` from `incumbent` to it. Everything an
     /// ordinary observer could notice — the candidate becoming reachable, the role
     /// changing hands, the incumbent ceasing to hold it — happens between two
-    /// deliveries, so no pump can run in the middle of it. That atomicity is a
-    /// property of the single-threaded queue rather than a lock (MSG-01): `pump()`
+    /// deliveries, so no dispatch turn can run in the middle of it. That atomicity
+    /// is a property of the single-threaded queue rather than a lock (MSG-01): a turn
     /// dispatches one envelope at a time and is non-reentrant, so a commit
     /// performed outside `deliver_one` (or wholly within one handler) cannot be
     /// observed half-done.

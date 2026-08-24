@@ -274,13 +274,13 @@ through the tap like every other participant's, with their structured reason
 ## Composing it
 
 `step()` is one non-blocking iteration: accept → drain and dispatch inbound
-frames → pump the bus → push a deferred discovery refresh → flush → reap.
+frames → take a bus dispatch turn → push a deferred discovery refresh → flush →
+reap.
 `wait_and_step(timeout_ms)` blocks in `poll` over `{listener, connections}`
 first; `run(tick_ms)` loops that until `stop()`.
 
 **A host that also runs a perpetual in-process service must call
-`set_bounded_dispatch()`.** By default `step()` calls `pump()`, which drains
-to empty — and a self-re-arming service (a repeating Timer) never lets the
+`set_bounded_dispatch()`.** By default `step()` calls `drain_until_idle()` — and a self-re-arming service (a repeating Timer) never lets the
 queue empty, so `step()` never returns to poll its sockets and operators
 freeze. With it set, `step()` dispatches the backlog present at entry and
 moves on. It takes **no number**, deliberately: the numeric version was
@@ -290,8 +290,8 @@ shipped, measured 17× slower by a real consumer, and withdrawn
 
 Registry reads (`list_weaves`, `accepted_schemas`) are deliberately **not**
 done from inside the tap observer callback: `on_tap` copies event fields only
-and sets a dirty flag, and `step()` pushes the refreshed weave list after
-`pump()` returns. The bridge does not lean on an unstated bus property.
+and sets a dirty flag, and `step()` pushes the refreshed weave list after the
+dispatch turn returns. The bridge does not lean on an unstated bus property.
 
 ## Tests
 

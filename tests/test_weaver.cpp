@@ -291,7 +291,7 @@ struct Cast {
     /// Nudge a weave and drain the bus.
     void go(WeaveId who, std::int64_t s) {
         bus.send(who, Message(to_value(Go{s})));
-        bus.pump();
+        bus.drain_until_idle();
     }
     void clear_tap() { tap.clear(); }
 
@@ -961,7 +961,7 @@ TEST_CASE("holding the Weaver's role confers no authority at all") {
     (void)session_id;
 
     bus.send(session_id, Message(to_value(Go{step::kAsk})));
-    bus.pump();
+    bus.drain_until_idle();
 
     // It governs nobody, so it grants nobody anything. The office got the
     // message delivered; it did not make its holder an administrator.
@@ -1009,7 +1009,7 @@ TEST_CASE("the Weaver reads authority fresh and remembers only the human's quest
         (void)b.delegate_authority(host_cap, LiveAuthority::nothing());
     };
     c.bus.send(admin.id, Message(ping(1)));
-    c.bus.pump();
+    c.bus.drain_until_idle();
 
     // The Weaver never noticed, was never told, and does not care: its next
     // description reports the truth, because it has no picture of its own to be

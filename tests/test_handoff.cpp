@@ -169,7 +169,7 @@ struct Garden {
         if (add_total != 0) {
             bus.send(incumbent, Message(to_value(AddV1{add_total})));
         }
-        bus.pump();
+        bus.drain_until_idle();
     }
 
     void load_migrator() {
@@ -183,7 +183,7 @@ struct Garden {
     void ask_describe() {
         bus.send_as(coordinator_id, incumbent,
                     Message(to_value(Describe{1}), coordinator_id, coordinator_id, 77));
-        bus.pump();
+        bus.drain_until_idle();
     }
 
     SenseReading ledger_status() {
@@ -235,7 +235,7 @@ TEST_CASE("R2E-0/H1: a snapshot taken while the incumbent is LIVE is a snapshot 
     // ...and the incumbent proves the point by moving.
     g.bus.send_as(g.client_id, g.incumbent,
                   Message(to_value(Issue{9}), g.client_id, g.client_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
 
     // The captured snapshot is now WRONG about the world, and nothing in Loom
     // stopped that. PR-09 is unchanged: replacement creates no atomic handoff.
@@ -263,7 +263,7 @@ TEST_CASE("R2E-0/H2: the FIFO boundary makes the incumbent's final value EXACT �
     g.bus.send(g.incumbent, Message(to_value(AddV1{999})));                    // D
     g.bus.send_as(g.client_id, g.incumbent,
                   Message(to_value(Issue{4}), g.client_id, g.client_id, 0));   // E
-    g.bus.pump();
+    g.bus.drain_until_idle();
 
     const LedgerStatus st = g.status();
     // A/B/C landed under ordinary policy: three ids issued in total (2 + C).
@@ -294,7 +294,7 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
 
     // 1. THE BOUNDARY. The incumbent quiesces at an exact FIFO position.
     g.bus.send(g.incumbent, Message(to_value(Quiesce{1})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.status().quiesced);
 
     // 2. THE FINAL AUTHORED VALUE, taken after the boundary — exact, not a
@@ -323,7 +323,7 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
     // 4. THE MIGRATION, authored by a temporary weave with a bus identity.
     g.coordinator->forward_to_migrator = true;
     g.ask_describe(); // this report is forwarded to the migrator
-    g.bus.pump();
+    g.bus.drain_until_idle();
     REQUIRE(g.coordinator->got_migration);
     CHECK(g.coordinator->migration.ok);
     // The transformation really transformed: a "next" became a "highest issued".
@@ -335,7 +335,7 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
 
     // 5. The candidate adopted it and answered for itself; the coordinator
     //    mapped that authenticated answer to Ready.
-    g.bus.pump();
+    g.bus.drain_until_idle();
     REQUIRE(g.coordinator->got_adopted);
     CHECK(g.coordinator->adopted.ready);
     CHECK(g.coordinator->offered);
@@ -343,7 +343,7 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
 
     // 6. COMMIT. The role moves in place, and the candidate is told it is alive.
     REQUIRE(txn.commit(1).ok);
-    g.bus.pump();
+    g.bus.drain_until_idle();
     const auto outcome = txn.take_outcome();
     REQUIRE(outcome.has_value());
     CHECK(outcome->state == TxnState::Committed);
@@ -354,7 +354,7 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
     //    it, and for no other reason.
     g.bus.send_as(g.client_id, candidate,
                   Message(to_value(Issue{99}), g.client_id, g.client_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     REQUIRE(g.client->ids.size() == 48);
     CHECK(g.client->ids.back() == 48);
     // No id was ever issued twice.
@@ -375,7 +375,7 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
     // "temporary" has to mean to be worth the word.
     g.bus.send_as(g.client_id, candidate,
                   Message(to_value(Issue{100}), g.client_id, g.client_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.client->ids.back() == 49);
 }
 
@@ -389,7 +389,7 @@ TEST_CASE("R2E-0/H: the control case — a domain that deliberately does NOT car
     g.coordinator->carry_namespace = false; // THE ONLY DIFFERENCE
 
     g.bus.send(g.incumbent, Message(to_value(Quiesce{1})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
 
     PreparedReplacement txn(g.bus, g.kernel);
     g.coordinator->txn = &txn;
@@ -398,13 +398,13 @@ TEST_CASE("R2E-0/H: the control case — a domain that deliberately does NOT car
     REQUIRE_MESSAGE(started.ok, started.error);
 
     g.ask_describe();
-    g.bus.pump();
-    g.bus.pump();
+    g.bus.drain_until_idle();
+    g.bus.drain_until_idle();
     REQUIRE(g.coordinator->migration.ok);
     CHECK(g.coordinator->migration.to.ids.high_water == 0); // deliberately dropped
 
     REQUIRE(txn.commit(1).ok);
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.bus.role_holder(kLedgerRole) == txn.candidate());
 
     // THE DEFECT, made visible: the successor mints 1 again — an id the
@@ -412,7 +412,7 @@ TEST_CASE("R2E-0/H: the control case — a domain that deliberately does NOT car
     // namespace obligation was the domain's, and this domain declined it.
     g.bus.send_as(g.client_id, txn.candidate(),
                   Message(to_value(Issue{99}), g.client_id, g.client_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.client->ids.back() == 1);
     std::vector<std::int64_t> sorted = g.client->ids;
     std::sort(sorted.begin(), sorted.end());
@@ -432,7 +432,7 @@ TEST_CASE("R2E-0/H: a migrator that does not understand its input REFUSES, nothi
     g.bus.send_as(g.coordinator_id, g.migrator,
                   Message(to_value(MigrateV1ToV2{LedgerV1{5, 0, ""}, true}), g.coordinator_id,
                           g.coordinator_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
 
     REQUIRE(g.coordinator->got_migration);
     CHECK_FALSE(g.coordinator->migration.ok);
@@ -460,7 +460,7 @@ TEST_CASE("R2E-0/H: queued OLD-PROTOCOL traffic is never magically migrated — 
     // POSITION 1 — before the boundary, incumbent owns the office. Ordinary
     // handling: the old command means what it always meant.
     g.bus.send(g.incumbent, Message(to_value(AddV1{10})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(refusals.empty());
 
     // POSITION 2 — after the boundary, incumbent STILL owns the office. The
@@ -469,7 +469,7 @@ TEST_CASE("R2E-0/H: queued OLD-PROTOCOL traffic is never magically migrated — 
     // the two are deliberately different things.
     g.bus.send(g.incumbent, Message(to_value(Quiesce{1})));
     g.bus.send(g.incumbent, Message(to_value(AddV1{20})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.status().refused_after_boundary == 1);
     CHECK(refusals.empty()); // nothing was refused BY LOOM
 
@@ -480,8 +480,8 @@ TEST_CASE("R2E-0/H: queued OLD-PROTOCOL traffic is never magically migrated — 
         g.coordinator_id, g.coordinator_id, kLedgerRole, "ledger.v2", ZEN_SO_HANDOFF_V2, 16});
     REQUIRE_MESSAGE(started.ok, started.error);
     g.ask_describe();
-    g.bus.pump();
-    g.bus.pump();
+    g.bus.drain_until_idle();
+    g.bus.drain_until_idle();
     REQUIRE(txn.state() == TxnState::Ready);
 
     // POSITION 3 — queued AROUND the commit, addressed to the ROLE. It is
@@ -489,13 +489,13 @@ TEST_CASE("R2E-0/H: queued OLD-PROTOCOL traffic is never magically migrated — 
     // successor, which does not accept the old shape.
     REQUIRE(txn.commit(1).ok);
     g.bus.send_to_role(kLedgerRole, Message(to_value(AddV1{30})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.bus.role_holder(kLedgerRole) == txn.candidate());
 
     // POSITION 4 — after the role moved, to a successor that no longer accepts
     // the old shape at all.
     g.bus.send_to_role(kLedgerRole, Message(to_value(AddV1{40})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
 
     // THE LESSON, in the refusal list. Loom gave the developer a boundary and a
     // refusal; it did not pretend to know whether AddV1 still meant anything.
@@ -525,7 +525,7 @@ TEST_CASE("R2E-0/H+S: across the handoff the office's claim is never relabelled 
 
     // The boundary: the incumbent makes its FINAL claim as the office.
     g.bus.send(g.incumbent, Message(to_value(Quiesce{1})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     SenseReading final_claim = g.ledger_status();
     REQUIRE(final_claim);
     CHECK(from_value<LedgerStatus>(*final_claim.value).quiesced);
@@ -541,10 +541,10 @@ TEST_CASE("R2E-0/H+S: across the handoff the office's claim is never relabelled 
     CHECK_FALSE(g.bus.observe(txn.candidate(), "LedgerStatus", 1));
 
     g.ask_describe();
-    g.bus.pump();
-    g.bus.pump();
+    g.bus.drain_until_idle();
+    g.bus.drain_until_idle();
     REQUIRE(txn.commit(1).ok);
-    g.bus.pump();
+    g.bus.drain_until_idle();
     REQUIRE(g.bus.role_holder(kLedgerRole) == txn.candidate());
 
     // The successor's zen.Activated handler claimed as the office — legally,
@@ -578,19 +578,19 @@ TEST_CASE("R2E-0/H+S: an ordinary Sense is NOT an exact handoff snapshot — a d
     // pre-boundary snapshot would be.
     g.bus.send_as(g.client_id, g.incumbent,
                   Message(to_value(Issue{4}), g.client_id, g.client_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(mid_flight.issued_high_water == 3); // what the reader holds
     CHECK(g.status().issued_high_water == 4); // what is now claimed
 
     // AFTER the boundary the same Sense IS exact, and says which it is — the
     // `quiesced` flag is the domain's own honest label, not a Loom guarantee.
     g.bus.send(g.incumbent, Message(to_value(Quiesce{1})));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     const LedgerStatus settled = g.status();
     CHECK(settled.quiesced);
     g.bus.send_as(g.client_id, g.incumbent,
                   Message(to_value(Issue{5}), g.client_id, g.client_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
     CHECK(g.status().issued_high_water == settled.issued_high_water); // nothing moved
 }
 
@@ -613,7 +613,7 @@ TEST_CASE("R2E-0/H: PR-09 is unchanged — a replacement with NO authored migrat
     g.bus.send_as(g.coordinator_id, txn.candidate(),
                   Message(to_value(AdoptMigrated{LedgerV2{}}), g.coordinator_id,
                           g.coordinator_id, 0));
-    g.bus.pump();
+    g.bus.drain_until_idle();
 
     // The transaction is not Ready: that AdoptMigrated was an ordinary send, not
     // the preparation ask, so its answer authenticated nothing.

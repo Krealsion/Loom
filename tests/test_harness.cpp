@@ -30,7 +30,7 @@ TEST_CASE("a handler emitting a malformed payload: refused, recipient untouched,
     };
 
     bus.send(saboteur.id, Message(ping(1))); // valid trigger: saboteur handles, then sabotages
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(saboteur.weave->handled_values.size() == 1); // the valid trigger got through
     CHECK(recorder.weave->handled_names.empty());       // the malformed delivery never landed
@@ -49,7 +49,7 @@ TEST_CASE("a directed send to a non-accepting target is refused") {
     Switchboard bus;
     Registered r = register_probe(bus, {ping_schema()});
     Ticket t = bus.send(r.id, Message(greet("hi")));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NotAccepted);
     CHECK(r.weave->handled_names.empty());
 }
@@ -58,7 +58,7 @@ TEST_CASE("a publish with zero accepters delivers nothing and errs nothing") {
     Switchboard bus;
     register_probe(bus, {ping_schema()});
     CHECK(bus.publish(Message(tick(0))) == 0);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.pending() == 0);
 }
 
@@ -70,7 +70,7 @@ TEST_CASE("revive from corrupt state falls back to last-known-good when policy a
     for (int i = 0; i < 3; ++i) {
         bus.send(r.id, Message(ping(1)));
     }
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(r.weave->count == 3);
     std::string good = bus.snapshot_bytes(r.id);
     ReviveOutcome ok = bus.reload(r.id, good);
@@ -117,7 +117,7 @@ TEST_CASE("a flooder's many messages are all delivered FIFO and the loop termina
     };
 
     bus.send(flooder.id, Message(ping(0)));
-    bus.pump(); // delivers the trigger, which enqueues kN ticks, which all drain
+    bus.drain_until_idle(); // delivers the trigger, which enqueues kN ticks, which all drain
 
     REQUIRE(sink.weave->handled_values.size() == static_cast<std::size_t>(kN));
     for (int i = 0; i < kN; ++i) {

@@ -134,7 +134,7 @@ TEST_CASE("typed handlers dispatch the right struct and reply with plain structs
     WeaveId collector = au::mount<Collector>(bus);
 
     bus.send(responder, Message(au::to_value(Ping{42}), /*sender=*/WeaveId{}, /*reply_to=*/collector));
-    bus.pump();
+    bus.drain_until_idle();
 
     auto* c = static_cast<Collector*>(bus.weave(collector));
     REQUIRE(c != nullptr);
@@ -150,7 +150,7 @@ TEST_CASE("each accepted shape routes to its own handler and to no other") {
     bus.send(rid, Message(au::to_value(Alpha{10})));
     bus.send(rid, Message(au::to_value(Beta{20})));
     bus.send(rid, Message(au::to_value(Gamma{30})));
-    bus.pump();
+    bus.drain_until_idle();
 
     auto* r = static_cast<Router*>(bus.weave(rid));
     REQUIRE(r != nullptr);
@@ -184,7 +184,7 @@ TEST_CASE("a Weave's declared Emit<...> matches what it actually emits") {
 
     bus.send(responder, Message(au::to_value(Ping{1}), WeaveId{}, collector));
     bus.send(responder, Message(au::to_value(Ping{2}), WeaveId{}, collector));
-    bus.pump();
+    bus.drain_until_idle();
 
     auto declared_of = [](auto* weave) {
         std::set<std::string> names;
@@ -231,7 +231,7 @@ TEST_CASE("the mount<> auto-grant denies an emit the Weave did not declare") {
     });
 
     bus.send(leaker, Message(au::to_value(Ping{1}))); // host root trigger (ungated)
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(pong_ok);      // the DECLARED emit went through the auto-grant
     CHECK(rogue_denied); // the UNDECLARED emit was CapabilityDenied on the auto-grant path
@@ -263,7 +263,7 @@ TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is del
     });
 
     bus.send(leaker, Message(au::to_value(Ping{1}))); // host root trigger (ungated)
-    bus.pump();
+    bus.drain_until_idle();
 
     CHECK(refused_delivered); // undeclared, yet delivered: the carve-out, on the record
     CHECK(static_cast<RefusedSink*>(bus.weave(sink))->snapshot().get("count")->as_int() == 1);
@@ -310,7 +310,7 @@ TEST_CASE("snapshot/revive are derived; state round-trips through the gate") {
     for (int i = 0; i < 3; ++i) {
         bus.send(responder, Message(au::to_value(Ping{1}), WeaveId{}, collector));
     }
-    bus.pump();
+    bus.drain_until_idle();
 
     auto* r = static_cast<Responder*>(bus.weave(responder));
     CHECK(r->count() == 3);

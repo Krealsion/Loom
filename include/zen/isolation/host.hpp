@@ -144,9 +144,15 @@ public:
 
     /// One host-loop iteration, single-threaded: flush + drain child I/O
     /// (re-enqueue child output gated, refresh cached snapshots, note deaths) →
-    /// pump the bus (proxies fire-and-continue) → supervise (reap dead children,
-    /// drive bounded reload-then-quarantine). Pure in-process systems can keep
-    /// calling Switchboard::pump() alone; this composes with it.
+    /// dispatch the bus (proxies fire-and-continue) → supervise (reap dead
+    /// children, drive bounded reload-then-quarantine).
+    ///
+    /// ⚠ THE BUS STEP IS `Switchboard::drain_until_idle()`, so this iteration
+    /// inherits that contract: composed with a perpetual in-process service it
+    /// does not return. Isolation's own hosts have no such service; a host that
+    /// wants one must drive `Switchboard::pump_pending()` itself rather than
+    /// this (FRIC-1 recorded the gap; `BridgeServer::set_bounded_dispatch()` is
+    /// the shape a bounded switch would take here).
     void step();
 
     /// Step until `predicate()` holds or `max_steps` is reached. Sleeps briefly

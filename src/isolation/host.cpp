@@ -1103,8 +1103,10 @@ void IsolationHost::step() {
         }
     }
 
-    // (2) pump the bus — proxies fire-and-continue, so this never blocks on a child.
-    bus_.pump();
+    // (2) dispatch the bus — proxies fire-and-continue, so this never blocks on a
+    // child. Drain-to-idle, which is what makes step() itself unbounded when it is
+    // composed with a perpetual in-process service (see host.hpp).
+    bus_.drain_until_idle();
 
     // (3) supervise: detect deaths, drive bounded reload-then-quarantine.
     for (auto& entry : links_) {

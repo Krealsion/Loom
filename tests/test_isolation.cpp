@@ -1331,7 +1331,7 @@ TEST_CASE("unmount tears the child down cleanly and the proxy leaves the bus") {
     CHECK_FALSE(host.is_mounted("w"));
 
     Ticket t = bus.send(id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
 

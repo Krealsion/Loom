@@ -92,12 +92,12 @@ int main() {
 
     std::cout << "immediate (the station is already warm enough for 0):\n";
     bus.send(chef, Message(to_value(Go{0})));
-    bus.pump();
+    bus.drain_until_idle();
 
     std::cout << "deferred (heat 200 is not there yet; the answer follows the oven):\n";
     bus.send(chef, Message(to_value(Go{200})));
-    bus.pump();
+    bus.drain_until_idle();
     bus.send(station, Message(to_value(OvenHot{250})));
-    bus.pump();
+    bus.drain_until_idle();
     return 0;
 }

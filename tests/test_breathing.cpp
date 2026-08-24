@@ -35,7 +35,7 @@ TEST_CASE("a directed reply, a selective publish, and a death/revival under poli
 
     // 1) A directed, gated send, with a reply routed back as a send.
     bus.send(responder.id, Message(ping(42), /*sender=*/WeaveId{}, /*reply_to=*/collector.id));
-    bus.pump();
+    bus.drain_until_idle();
     REQUIRE(responder.weave->handled_values.size() == 1);
     REQUIRE(collector.weave->handled_names.size() == 1);
     CHECK(collector.weave->handled_names[0] == "Pong");
@@ -44,7 +44,7 @@ TEST_CASE("a directed reply, a selective publish, and a death/revival under poli
     // 2) A publish reaches the accepter, not the non-accepter.
     const std::size_t recipients = bus.publish(Message(greet("hello, weaves")));
     CHECK(recipients == 1);
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(responder.weave->handled_values.size() == 1); // unchanged: doesn't accept Greet
     REQUIRE(collector.weave->handled_names.size() == 2);
     CHECK(collector.weave->handled_names[1] == "Greet");
@@ -57,7 +57,7 @@ TEST_CASE("a directed reply, a selective publish, and a death/revival under poli
 
     // While dead, a directed send is refused (and observed).
     Ticket dead = bus.send(responder.id, Message(ping(7)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(bus.outcome(dead).refusal.reason == RefusalReason::TargetUnavailable);
 
     // Corrupt the in-memory self, then revive from the saved snapshot through the gate.

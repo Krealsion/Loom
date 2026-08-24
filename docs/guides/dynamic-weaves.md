@@ -109,7 +109,7 @@ loom::Kernel kernel(bus);
 loom::LoadResult lr = kernel.load("responder-v1", path, "responder");  // role optional
 if (!lr.ok) { /* lr.error carries the loader's words */ }
 bus.send_to_role("responder", loom::Message(loom::to_value(Ping{1})));
-bus.pump();
+bus.drain_until_idle();
 ```
 
 Everything the library emits crosses as **bytes** and is re-admitted through

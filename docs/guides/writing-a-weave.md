@@ -63,7 +63,7 @@ a shape is accepted grants nobody permission to send it. See
 loom::Switchboard bus;                       // the host owns this
 loom::WeaveId responder = loom::mount<Responder>(bus);
 bus.send(responder, loom::Message(loom::to_value(Ping{7})));
-bus.pump();                                  // nothing runs until the host pumps
+bus.drain_until_idle();                      // nothing runs until the host asks
 ```
 
 `mount<>` registers the weave with a default grant matched to its `Emit`
@@ -88,8 +88,8 @@ event — the usual first three:
 
 See [diagnostics](diagnostics.md) for reading the tap and the journal.
 
-**If your handler throws**, the exception travels out to whoever called `pump()`
-— it is the host's to catch, and Loom neither hides it nor punishes you for it.
+**If your handler throws**, the exception travels out to whoever asked for the
+dispatch turn — it is the host's to catch, and Loom neither hides it nor punishes you for it.
 Loom puts its own bookkeeping back before it leaves, so the bus keeps working and
 the messages queued behind yours are still delivered; what you lose is that one
 delivery, and the ambient right to answer it

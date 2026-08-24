@@ -89,7 +89,7 @@ TEST_CASE("RTH-1a: a logger keeps what was named and nothing else") {
         for (int i = 0; i < 50; ++i) {
             bus.send(r.id, Message(tick(i))); // ordinary traffic, nobody selected it
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(log.counters().observed == 51);
         CHECK(log.counters().selected == 1);
         CHECK(log.counters().appended == 1);
@@ -129,7 +129,7 @@ TEST_CASE("RTH-1a: a recorder seeing a fact does not put it in the log") {
         Registered r = reg(bus, {ping_schema(), tick_schema()});
         bus.send(r.id, Message(ping(1)));
         bus.send(r.id, Message(tick(1)));
-        bus.pump();
+        bus.drain_until_idle();
 
         CHECK(rec.retained() == 2);          // the recorder knows about both
         CHECK(log.counters().appended == 1); // the logger kept one
@@ -156,7 +156,7 @@ TEST_CASE("RTH-1a: a durable fact outlives the recorder window that held its liv
         for (int i = 0; i < 30; ++i) {
             bus.send(r.id, Message(ping(i)));
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(rec.bounds().forgotten > 0);
         CHECK(rec.snapshot_of("Ping").size() == 4); // the window kept four
     }
@@ -175,7 +175,7 @@ TEST_CASE("RTH-1a: a logger works in a process with no recorder at all") {
         REQUIRE(log.open(file.path));
         Registered r = reg(bus, {ping_schema()});
         bus.send(r.id, Message(ping(1)));
-        bus.pump();
+        bus.drain_until_idle();
     }
     std::vector<LogRecord> back;
     REQUIRE(Logger::read(file.path, &back));
@@ -197,7 +197,7 @@ TEST_CASE("RTH-1a: a failed handler is durable by default, whatever shape it was
             throw std::runtime_error("native handler failure");
         };
         bus.send(r.id, Message(ping(1)));
-        CHECK_THROWS_AS(bus.pump(), std::runtime_error);
+        CHECK_THROWS_AS(bus.drain_until_idle(), std::runtime_error);
     }
     std::vector<LogRecord> back;
     REQUIRE(Logger::read(file.path, &back));
@@ -235,7 +235,7 @@ TEST_CASE("RTH-1a: ordinary refusals are NOT durable by default, and that is mea
         for (int i = 0; i < 20; ++i) {
             bus.send(r.id, Message(greet("nobody accepts this")));
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(log.counters().selected == 0);
         CHECK(log.counters().appended == 0);
     }
@@ -294,7 +294,7 @@ TEST_CASE("RTH-1a: a per-shape cap bounds ITS shape and says so, once") {
         for (int i = 0; i < 40; ++i) {
             bus.send(r.id, Message(tick(i)));
         }
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(log.appended_of("Tick") == 5);
         CHECK(log.counters().capped == 35);
     }
@@ -327,10 +327,10 @@ TEST_CASE("RTH-1a: a capped shape cannot consume the horizon of an uncapped one"
         for (int i = 0; i < 2000; ++i) {
             bus.send(r.id, Message(tick(i)));
         }
-        bus.pump();
+        bus.drain_until_idle();
         // ...and only NOW, after all that traffic, the fact that matters.
         bus.send(r.id, Message(ping(7)));
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(log.appended_of("Ping") == 1);
     }
     std::vector<LogRecord> back;
@@ -352,7 +352,7 @@ TEST_CASE("RTH-1a: a host diagnostic is durable and is never mistaken for a Loom
         CHECK(log.error("zengine.workshop", "the build tool is missing"));
         Registered r = reg(bus, {ping_schema()});
         bus.send(r.id, Message(ping(1)));
-        bus.pump();
+        bus.drain_until_idle();
         CHECK(log.counters().diagnostics == 1);
         // NOTHING WAS PUBLISHED to carry it. A fake message would have been
         // observable, and a history that observed its own diagnostics would be
@@ -423,7 +423,7 @@ TEST_CASE("RTH-1a: a selected fact with nowhere to go is counted, never pretende
     Logger log(bus, only("Ping")); // never opened
     Registered r = reg(bus, {ping_schema()});
     bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     CHECK(!log.open());
     CHECK(log.counters().selected == 1);
     CHECK(log.counters().appended == 0);
@@ -434,7 +434,7 @@ TEST_CASE("RTH-1a: logging changes what is remembered and nothing about delivery
     Logger log(bus, only("Ping"));
     Registered r = reg(bus, {ping_schema()});
     const Ticket t = bus.send(r.id, Message(ping(1)));
-    bus.pump();
+    bus.drain_until_idle();
     // The message reached its recipient without passing through the logger: it is
     // a tap consumer, not a stage in the delivery path.
     CHECK(bus.outcome(t).disposition == Disposition::Delivered);
@@ -450,7 +450,7 @@ TEST_CASE("RTH-1a: the log dump names every record's ORIGIN before its content")
         log.warn("zen.tests", "a note from the host");
         Registered r = reg(bus, {ping_schema()});
         bus.send(r.id, Message(ping(1)));
-        bus.pump();
+        bus.drain_until_idle();
     }
     std::vector<LogRecord> back;
     REQUIRE(Logger::read(file.path, &back));

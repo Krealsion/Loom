@@ -140,6 +140,12 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
 
 ## Do not assume
 
+- That `Switchboard` has a `pump()` or a `run()`. Neither exists: both spelled
+  drain-to-idle in words an ordinary C++ reader takes for the bounded turn, which
+  is how a first-contact host chose the call that never returns. The ordinary
+  host-loop operation is `pump_pending()`; the drain is `drain_until_idle()`, and
+  it is unbounded by contract (MSG-09, FRIC-1). Do not reintroduce either as a
+  synonym, and do not give the drain a turn or time cap.
 - A transaction id, a correlation, or a payload field is ever authority.
 - `Committed` at commit-call time — commit *schedules*; `AdmissionPending` is
   real (PR-07).
