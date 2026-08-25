@@ -283,11 +283,14 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
                       "a publication cannot be an ask: it has no one respondent, so there is no "
                       "conversation for Loom to authorize an answer in");
     }
-    if (as_ask && pending_.size() >= kMaxOutstandingAsks) {
+    if (as_ask && asks_.full()) {
         // The outstanding conversations are UNTOUCHED. A new ask must never displace one somebody
-        // is waiting on, so this refuses before anything is composed or authored.
+        // is waiting on, so this refuses before anything is composed or authored. The book refuses
+        // the same way for the same reason; asking it first is what keeps this participant from
+        // composing and authoring a message it would then have nowhere to remember.
         return refuse(TerminalOutcome::TooManyAsks,
-                      "this participant is already waiting on " + std::to_string(pending_.size()) +
+                      "this participant is already waiting on " +
+                          std::to_string(asks_.outstanding()) +
                           " answers (the most it will track at once); cancel one first");
     }
 
@@ -309,7 +312,31 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
     // THE CORRELATION IS THIS PARTICIPANT'S OWN, monotonic and never zero. Loom echoes it back on
     // whatever answer it authorizes, which is what lets several conversations be outstanding at
     // once without this core inventing a request id beside the one Loom already keeps.
-    const std::uint64_t correlation = ++correlation_;
+    //
+    // ONE SEQUENCE, TWO DOORS INTO IT. An ask draws its number by OPENING a conversation in this
+    // participant's book; a fire-and-forget send draws one from the same counter. A second counter
+    // here could number an ordinary send with a value an open conversation is already using, and
+    // that send's answer would then settle the conversation.
+    AskOpened opened;
+    if (as_ask) {
+        // WHICH DOOR IS THE ADDRESSING'S ANSWER, and it is the whole expected-respondent question:
+        // a directed ask names the one weave whose answer may settle it, while a role-addressed
+        // one cannot, because whoever holds the office at delivery is not knowable here.
+        opened = to.mode == Addressing::Role
+                     ? asks_.open_to_role(to.role, composition.schema->name(),
+                                          composition.schema->version())
+                     : asks_.open(to.target, composition.schema->name(),
+                                  composition.schema->version());
+        if (!opened) {
+            // The book refuses for exactly the three reasons this function already refused for
+            // above — a full book, no target, an empty office — so arriving here means one of
+            // those doors has stopped agreeing with it. Refuse rather than author a question this
+            // participant would then have nowhere to remember asking.
+            return refuse(TerminalOutcome::TooManyAsks,
+                          "this participant could not open another conversation");
+        }
+    }
+    const std::uint64_t correlation = as_ask ? opened.correlation : asks_.mint_correlation();
     loom::Value payload = assemble(composition);
 
     TranscriptEntry entry;
@@ -344,20 +371,7 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
     transcript_.record(entry);
     result.outcome = TerminalOutcome::Submitted;
     result.entry = entry.seq;
-
-    if (as_ask) {
-        PendingAsk p;
-        p.id = ++next_ask_;
-        p.correlation = correlation;
-        p.shape = entry.shape;
-        p.version = entry.version;
-        p.addressing = to.mode;
-        p.target = to.target;
-        p.role = to.role;
-        p.submitted = entry.seq;
-        pending_.push_back(std::move(p));
-        result.ask = next_ask_;
-    }
+    result.ask = opened.id; // 0 for a send, which is what "this authored no question" means
     return result;
 }
 
@@ -382,16 +396,16 @@ TerminalResult TerminalSession::describe_authority(std::string_view office) {
 
 TerminalResult TerminalSession::cancel_ask(std::uint64_t ask_id) {
     TerminalResult result;
-    const auto it = std::find_if(pending_.begin(), pending_.end(),
-                                 [&](const PendingAsk& p) { return p.id == ask_id; });
-    if (it == pending_.end()) {
+    // FORGET, which is the book's word for it and the true one: the record comes back so this
+    // notice can name what was dropped, and nothing was told to anybody.
+    const std::optional<PendingAsk> dropped = asks_.forget(ask_id);
+    if (!dropped) {
         result.outcome = TerminalOutcome::NoSuchAsk;
         result.detail = "ask " + std::to_string(ask_id) + " is not outstanding";
         result.entry = record_local(TranscriptKind::LocalRefusal, result.detail);
         return result;
     }
-    const std::string shape = it->shape;
-    pending_.erase(it);
+    const std::string shape = dropped->shape;
     result.outcome = TerminalOutcome::Submitted;
     result.ask = ask_id;
     // SAID EXACTLY, because the tempting shorter sentence would be a lie: Loom has no cancellation
@@ -401,15 +415,6 @@ TerminalResult TerminalSession::cancel_ask(std::uint64_t ask_id) {
                                     shape + "). The request was NOT cancelled — nobody was told, "
                                     "and its answer may still arrive.");
     return result;
-}
-
-bool TerminalSession::waiting_on(std::uint64_t ask_id) const noexcept {
-    for (const PendingAsk& p : pending_) {
-        if (p.id == ask_id) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // ---- the Weave contract ----------------------------------------------------
@@ -451,17 +456,16 @@ void TerminalSession::handle(const loom::Message& in, loom::Bus& bus) {
     entry.message = message_id;
 
     if (answers) {
-        // WHICH ask, by LOOM'S OWN correlation — the one the answer doors copy out of the request
-        // they are answering. This is strictly stronger than the standing consumer obligation for
-        // the standard reply shapes (match correlation AND bus-stamped sender): an unsolicited
-        // `zen.Ack` from a weave that merely holds the grant for it carries no answer provenance
-        // at all, so it never reaches this branch.
-        const auto it =
-            std::find_if(pending_.begin(), pending_.end(),
-                         [&](const PendingAsk& p) { return p.correlation == in.correlation; });
-        if (it != pending_.end()) {
-            entry.answers = it->id;
-            pending_.erase(it);
+        // WHICH ask, out of this participant's own book: Loom's correlation says which
+        // conversation, and the bus's sender stamp says the answer came from the weave that was
+        // asked. THE PROVENANCE GATE ABOVE IS A THIRD WALL AND IT IS THIS PARTICIPANT'S OWN, not
+        // the book's — an unsolicited `zen.Ack` from a weave that merely holds the grant for it
+        // carries no answer provenance at all, so it never reaches this branch. The book cannot
+        // require that of every asker, because Loom's own Weave Manager relays a load's answer to
+        // its asker as an ORDINARY send; a terminal participant is talking to weaves that answer
+        // it directly, so it can and does insist.
+        if (const std::optional<PendingAsk> settled = asks_.settle(in.correlation, in.sender)) {
+            entry.answers = settled->id;
         }
         // ...and when it matches nothing, it is still recorded as the authenticated answer it is.
         // An answer to an ask this participant stopped waiting on is a true fact about the world,

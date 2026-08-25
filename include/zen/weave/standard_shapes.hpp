@@ -51,9 +51,23 @@
 // its own outstanding requests — by correlation AND by bus-stamped sender
 // (the answer must come from the weave you actually asked; the sender is
 // stamped by the bus, so a third party cannot speak as it) — and must treat an
-// unsolicited reply as plain data at best. loom::relay (relay.hpp) implements
-// exactly this wall; a hand-written consumer owes the same two checks. The
-// producer side is symmetric: replying with a standard shape is an ordinary
+// unsolicited reply as plain data at best.
+//
+// LOOM SHIPS THAT WALL, in the two shapes the obligation actually takes, and a
+// consumer should spend one rather than write a third:
+//
+//   loom::AskBook   (ask_book.hpp)  the participant that ASKED, keeping its own
+//                                   outstanding conversations — open one, and
+//                                   settle it by (correlation, bus-stamped sender)
+//   loom::relay     (relay.hpp)     the MIDDLEMAN forwarding somebody else's
+//                                   request and relaying the answer back
+//
+// Neither replaces the reason. They are this paragraph implemented once, so the
+// two checks stop being something every consumer has to remember; a hand-written
+// consumer still owes exactly the same two, and owes them on EVERY reply shape it
+// accepts — a wall applied to zen.Result and not to zen.Refused is not a wall.
+//
+// The producer side is symmetric: replying with a standard shape is an ordinary
 // emission — declare it in Emit<...> like any shape your code sends.
 //
 // (One honest note on the correlation the Ack argument leans on: it is real

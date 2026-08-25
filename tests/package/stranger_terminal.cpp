@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -117,6 +118,24 @@ int main() {
     }
     ok(!session.session->awaiting(), "the answer settled the ask");
     ok(oracle_raw->heard_from == session.id, "the service heard the PARTICIPANT, not the host");
+
+    // 5b. THE RECORD BEHIND THAT `awaiting()` IS ITSELF PART OF THE PACKAGE (FRIC-2).
+    //
+    // A stranger writing an ordinary weave -- no terminal anywhere near it -- needs the same
+    // two facts the session just used, and it should not have to rewrite them. This is the
+    // only lane that can say whether `loom::AskBook` is REACHABLE through `find_package`
+    // rather than merely present in the source tree.
+    loom::AskBook book(2);
+    const loom::AskOpened opened = book.open(oracle_id, "Question", 1);
+    ok(static_cast<bool>(opened) && opened.correlation != 0,
+       "a stranger can open a conversation with the installed asker record");
+    ok(book.settle(opened.correlation, session.id) == std::nullopt,
+       "...it is not settled by the right conversation from the wrong respondent");
+    ok(book.settle(opened.correlation + 1, oracle_id) == std::nullopt,
+       "...nor by the right respondent about a different conversation");
+    const std::optional<loom::PendingAsk> closed = book.settle(opened.correlation, oracle_id);
+    ok(closed.has_value() && closed->shape == "Question" && !book.awaiting(),
+       "...and the pair closes it, handing back the record it closed");
 
     // 6. Render the transcript from STRUCTURE, never from console strings.
     bool saw_answer = false;

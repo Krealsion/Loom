@@ -22,6 +22,16 @@
 //
 // RelayState is honest weave state: an ordinary shape that snapshots, revives,
 // and is itself poke-inspectable (default access: readable, not writable).
+//
+// NOT THE SAME THING AS `loom::AskBook` (ask_book.hpp), and the difference is
+// which participant's conversation it is about. This is the MIDDLEMAN's record:
+// every entry exists on behalf of somebody else, carries the asker it must answer
+// and that asker's own correlation, and is SHED OLDEST-FIRST when full — losing
+// one disappoints a caller, which is the right trade for a weave whose whole job
+// is other people's traffic. An asker's book is about its OWN questions, so it
+// refuses a new conversation rather than drop one it is waiting on. Same two
+// checks on the way back (correlation AND bus-stamped sender); different owner,
+// different capacity policy, different thing to lose.
 
 #include <zen/weave/shape.hpp>
 #include <zen/weave/weave.hpp>

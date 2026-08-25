@@ -46,6 +46,7 @@
 #include <zen/terminal/composer.hpp>
 #include <zen/terminal/transcript.hpp>
 #include <zen/terminal/vocabulary.hpp>
+#include <zen/weave/ask_book.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -176,30 +177,28 @@ struct TerminalResult {
     explicit operator bool() const noexcept { return outcome == TerminalOutcome::Submitted; }
 };
 
-/// ONE CONVERSATION THIS PARTICIPANT IS WAITING ON.
+/// WHICH CONVERSATIONS THIS PARTICIPANT IS WAITING ON — `loom::AskBook`, the
+/// reusable asker-side record (`zen/weave/ask_book.hpp`), and `loom::PendingAsk`,
+/// one entry of it.
+///
+/// THIS CORE NO LONGER OWNS THAT BOOKKEEPING; it spends it. What used to be a
+/// `PendingAsk` struct and a hand-written correlation match here is the same
+/// invariant every other asker in this tree needs, so it moved to where an ordinary
+/// weave can reach it and this file became one of its consumers.
 ///
 /// `correlation` is the load-bearing field and it is LOOM'S, not an invention of
-/// this core: an answer is delivered carrying the correlation of the ask it
-/// answers (`Switchboard::enqueue_answer`), for the immediate and the deferred
-/// path alike. So "which of my asks is this?" is answered by Loom's own record,
-/// exactly as "is this a real answer at all?" is. `id` is only the small number a
-/// person types.
-struct PendingAsk {
-    std::uint64_t id = 0;
-    std::uint64_t correlation = 0;
-    std::string shape;
-    std::uint32_t version = 0;
-    Addressing addressing = Addressing::Weave;
-    WeaveId target{};
-    std::string role;
-    std::uint64_t submitted = 0; ///< the observation seq of the Submitted entry
-};
+/// this core: an answer is delivered carrying the correlation of the ask it answers
+/// (`Switchboard::enqueue_answer`), for the immediate and the deferred path alike.
+/// So "which of my asks is this?" is answered by Loom's own record, exactly as "is
+/// this a real answer at all?" is. `id` is only the small number a person types.
 
 /// The most conversations one participant will track at once.
 ///
-/// A BOUND, NOT A LIMITATION OF LOOM. Loom correlates any number; this is the
-/// terminal refusing to grow an unbounded map because a user held down a key. The
-/// (N+1)th ask is refused LOCALLY and nothing is authored, so the N already
+/// A BOUND, NOT A LIMITATION OF LOOM, AND NOT A LOOM LAW. Loom correlates any
+/// number, and `loom::AskBook` has no default of its own; this is the TERMINAL
+/// refusing to grow an unbounded map because a user held down a key, so it is stated
+/// here, where that product decision lives, and handed to the book at construction.
+/// The (N+1)th ask is refused LOCALLY and nothing is authored, so the N already
 /// outstanding are untouched — a new ask must never be able to displace a
 /// conversation somebody is waiting on.
 inline constexpr std::size_t kMaxOutstandingAsks = 8;
@@ -302,14 +301,18 @@ public:
     TerminalResult cancel_ask(std::uint64_t ask_id);
 
     // ---- conversation state (never derived from the transcript) -------------
+    //
+    // A PROJECTION OF THIS PARTICIPANT'S ASK BOOK, and deliberately nothing more.
+    // These four names are what presentations already call, so they stay; what is
+    // behind them is one `loom::AskBook` and no second list.
 
-    bool awaiting() const noexcept { return !pending_.empty(); }
-    std::size_t outstanding() const noexcept { return pending_.size(); }
-    std::vector<PendingAsk> pending() const { return pending_; }
+    bool awaiting() const noexcept { return asks_.awaiting(); }
+    std::size_t outstanding() const noexcept { return asks_.outstanding(); }
+    std::vector<PendingAsk> pending() const { return asks_.entries(); }
     /// Is this ask still outstanding? False for a settled, cancelled or unknown
     /// one — a presentation's await loop stops on false either way, and the
     /// transcript says which it was.
-    bool waiting_on(std::uint64_t ask_id) const noexcept;
+    bool waiting_on(std::uint64_t ask_id) const noexcept { return asks_.waiting_on(ask_id); }
 
     // ---- what this participant knows ---------------------------------------
 
@@ -354,9 +357,11 @@ private:
     WeaveId self_{};
 
     Transcript transcript_;
-    std::vector<PendingAsk> pending_; ///< bounded by kMaxOutstandingAsks
-    std::uint64_t correlation_ = 0;    ///< this participant's own, monotonic, never 0
-    std::uint64_t next_ask_ = 0;
+    /// THE ONE OWNER of this participant's conversation membership, and of the one
+    /// correlation sequence every message it authors is numbered from — asks through
+    /// the book, ordinary sends through `mint_correlation()`. Two counters here would
+    /// let a fire-and-forget send wear a number an open conversation is using.
+    AskBook asks_{kMaxOutstandingAsks};
     std::int64_t received_count_ = 0;  ///< total observed, for the state snapshot
     std::int64_t submitted_count_ = 0; ///< total authored, likewise
 };

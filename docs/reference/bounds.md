@@ -121,7 +121,17 @@ there is one ring rather than six.
 |---|---|---|---|---|
 | `kTranscriptCapacity` | 256 | transcript entries | `Transcript::entries_` -- a participant's own record | ring: oldest evicted, counted in `Transcript::evicted()` |
 | `kReceivedCapacity` | 64 | received `Value`s | `Transcript::received_` -- the `rN` store the `$rN.field` syntax reads | ring: oldest evicted, counted in `Transcript::received_evicted()`; its **id** then refuses |
-| `kMaxOutstandingAsks` | 8 | conversations | how many asks one participant will track at once | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
+| `kMaxOutstandingAsks` | 8 | conversations | how many asks one participant will track at once -- the number the terminal hands its `loom::AskBook` | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
+
+**`loom::AskBook` has no default capacity, and that is a bound too.** The number
+above is the *terminal's* product decision, stated where that decision lives. The
+reusable record ([`weave/ask_book.hpp`](../../include/zen/weave/ask_book.hpp))
+takes its bound at construction and refuses a book with no room, so a number
+invented in the substrate can never become every asker's limit by accident. What
+the book does fix is the *policy*: at capacity the NEW conversation is refused and
+the outstanding ones are untouched — never `loom::relay`'s shed-the-oldest, which
+is right for a middleman and wrong for the participant whose own questions these
+are.
 
 **An entry is metadata; a received value is not.** An entry is a few short
 strings and an id, so a session's worth of scrollback is cheap; a received

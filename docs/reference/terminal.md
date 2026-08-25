@@ -128,11 +128,33 @@ an unbounded map, not a limit of Loom: the (N+1)th ask is refused **locally**,
 nothing is authored, and the N already outstanding are untouched — a new ask
 must never displace a conversation somebody is waiting on.
 
-This is strictly stronger than the standing consumer obligation for the
-[standard reply shapes](../../include/zen/weave/standard_shapes.hpp) ("match
-correlation AND bus-stamped sender"): an unsolicited `zen.Ack` from a weave that
-merely holds the grant for it carries no answer provenance at all, so it is
-recorded as the unsolicited message it is and settles nothing.
+**The bookkeeping itself is not the terminal's** (FRIC-2). Which conversations
+are open, which arrival settles which one, and the correlation sequence this
+participant numbers everything it authors from are all
+[`loom::AskBook`](../../include/zen/weave/ask_book.hpp) — the reusable asker-side
+record, described under
+[the asker's own book](messaging.md#the-askers-own-book). `awaiting()`,
+`outstanding()`, `pending()` and `waiting_on()` are projections of it and there is
+no second list behind them; `kMaxOutstandingAsks` stays here, because the number is
+the terminal's product decision and the book has no default of its own.
+
+Two things a terminal participant adds on top of the book, both because it can:
+
+- **Loom's own answer provenance.** Nothing reaches the matching step unless
+  `mail.answers_ask()` — Loom's word that this delivery is the authorized answer
+  to a request this participant sent. That is strictly stronger than the standing
+  consumer obligation for the
+  [standard reply shapes](../../include/zen/weave/standard_shapes.hpp) ("match
+  correlation AND bus-stamped sender"): an unsolicited `zen.Ack` from a weave that
+  merely holds the grant for it carries no answer provenance at all, so it is
+  recorded as the unsolicited message it is and settles nothing. The book cannot
+  require that of every asker — Loom's own Weave Manager relays a load's answer to
+  its asker as an *ordinary* send — but a terminal talks to weaves that answer it
+  directly, so it insists.
+- **The expected respondent, where there is one.** `ask` to a weave records that
+  weave as the one whose answer may settle the conversation; `ask` to an office
+  cannot, because whoever holds it at delivery is not knowable when the ask is
+  authored.
 
 ### Awaiting, and stopping
 

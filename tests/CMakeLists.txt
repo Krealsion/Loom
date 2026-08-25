@@ -52,6 +52,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_schema_codec.cpp
     test_weave_shape.cpp
     test_weave.cpp
+    test_ask_book.cpp
     test_poke.cpp
     test_describe.cpp
     test_console.cpp
