@@ -623,9 +623,9 @@ debug lens only (the HOST looking - powers no participant has):
                 }
                 for (const loom::PendingAsk& p : me.pending()) {
                     std::cout << "  ask " << p.id << "  " << p.shape << " v" << p.version << "  "
-                              << (p.addressing == loom::Addressing::Role
+                              << (p.to_role()
                                       ? "-> role " + loom::safe_terminal_text(p.role)
-                                      : "-> weave #" + std::to_string(p.target.value))
+                                      : "-> weave #" + std::to_string(p.respondent.value))
                               << "   (Loom correlation " << p.correlation << ")\n";
                 }
                 std::cout << "  'awaiting an answer' is all this means: not that the request was\n"

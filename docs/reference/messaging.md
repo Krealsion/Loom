@@ -169,6 +169,53 @@ Evidence note: across six Night Lab applications, no natural use for ordinary
 reply survived — every response wanted either an *answer* (provable) or a
 *role send* (replacement-surviving). Kept, documented, low-observed-use.
 
+### The asker's own book
+
+An asker owns the record of what it is still asking. `loom::AskBook`
+([`weave/ask_book.hpp`](../../include/zen/weave/ask_book.hpp)) is that record,
+written once instead of per consumer: open a conversation and it hands back the
+correlation to send and a small local id to hold it by; hand it an arrival's
+correlation and bus-stamped sender and it says which — if any — of *your*
+conversations that arrival settles.
+
+```cpp
+loom::AskBook asks{4};                       // the bound is the owner's; there is no default
+const loom::AskOpened mine = asks.open(manager, loom::LoadWeave::zen_name, 1);
+bus.send_as(self, manager, loom::Message(payload, self, self, mine.correlation));
+...
+if (const std::optional<loom::PendingAsk> closed = asks.settle(mail.correlation(),
+                                                               mail.sender())) {
+    // this arrival closed closed->id, and the record is still readable here
+}
+```
+
+- **Both halves, and neither is sufficient.** The correlation says *which*
+  conversation; the bus-stamped sender says the answer came from the weave that
+  was asked. A correlation identifies and never authenticates
+  ([ANS-05](../laws/answer-authority-laws.md)) — it is guessable by design — and
+  the respondent you *are* waiting on is perfectly able to say something
+  admissible about a different conversation.
+- **An ask to an office cannot name its respondent**, because whoever holds the
+  office at delivery is not knowable when you ask. `open_to_role` is that case
+  said out loud; its record constrains the correlation and nothing narrower.
+- **Recognizing and closing are two acts.** `match(...)` looks without removing;
+  `settle(...)` closes and hands the record back, so a consumer never has to
+  choose between reading its own bookkeeping and destroying it.
+- **It interprets nothing.** No shape appears in that header. What an answer
+  *means* — succeeded, refused, here is the value — stays with the consumer, and
+  a conversation may be answered by any shape at all.
+- **Outstanding means only "I asked, and no answer of mine has settled it."**
+  Not that the respondent received it, owes an answer, or will ever reply. There
+  is no timeout, no expiry and no unanswerability notice in Loom today, so an ask
+  stays outstanding until the asker locally `forget`s it — which cancels nothing
+  at the far end, because there is no cancellation vocabulary to cancel it with.
+
+`loom::relay` ([`weave/relay.hpp`](../../include/zen/weave/relay.hpp)) is the same
+wall for the opposite role: a **middleman** forwarding somebody else's request and
+relaying the answer back. The two are deliberately separate — a relay's record is
+about the asker it answers *for* and sheds its oldest entry when full, while an
+asker's book refuses a new conversation rather than drop one of its own.
+
 ## Self-description — what may be said to this weave
 
 **Ask the target.** Every woven weave (`WeaveBase`) carries a fifth substrate
