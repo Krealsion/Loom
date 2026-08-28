@@ -16,9 +16,11 @@
 //
 // Lifted out of the console (Phase B): the vocabulary lives here, in its own target (zen-ui),
 // with NO console dependency — the console is one consumer (it emits its own interface as this
-// tree; see zen/console/ui.hpp), the TUI renderer another, the SDL2 renderer a third. The
-// ~50-line outline walk (render_outline) is the standing renderer-agnosticism proof: it
-// consumes the same tree and shows it carries meaning, not medium.
+// tree; see zen/console/ui.hpp), the TUI renderer another, and a pixel projection a third
+// (zen/ui/pixel.hpp). The ~50-line outline walk (render_outline) is the standing
+// renderer-agnosticism proof: it consumes the same tree and shows it carries meaning, not
+// medium. The proof is what is load-bearing, not the roll of projections that happen to exist
+// — one can be retired without this vocabulary owing it a line.
 
 #include <concepts>
 #include <cstdint>
@@ -165,10 +167,11 @@ Widget field(std::string prompt, std::string value, std::string hint, bool focus
 Widget slot(std::string slot_name, std::string accepts, std::vector<Widget> placeholder);
 
 // ---- Input: renderer-agnostic semantic actions (symmetric with the output tree) ----
-// What the operator MEANS, not which key or gesture. The TUI maps raw keys onto these; the SDL
-// renderer maps clicks/keys onto the same set — so every frontend inherits the input
-// abstraction. The raw-key -> Action map lives in the TUI alone; the raw-SDL-event -> Action
-// map lives in the SDL renderer alone.
+// What the operator MEANS, not which key or gesture. The TUI maps raw keys onto these; a
+// pointer-driven frontend maps clicks onto the same set — so every frontend inherits the input
+// abstraction instead of inventing one. Each medium's raw-event -> Action map lives in that
+// frontend ALONE (the TUI's in the TUI), which is what keeps this enumeration free of any
+// medium's vocabulary: nothing below names a key, a button or a gesture.
 enum class Action : std::uint8_t {
     None,       ///< a true no-op: an unknown/unhandled key maps here (dispatched as nothing)
     FocusNext,  ///< move focus to the next focusable region

@@ -14,8 +14,8 @@
 # shrink. That half is implemented once, in tests/check_entry_population.cmake, and executed
 # from two places that do not depend on each other.
 #
-# Usage (all arguments required except ZEN_SDL_TESTS_EXE and ZEN_BUILD_CONFIG):
-#   cmake -DZEN_TESTS_EXE=<path> -DZEN_SDL_TESTS_EXE=<path-or-empty>
+# Usage (all arguments required except ZEN_BUILD_CONFIG):
+#   cmake -DZEN_TESTS_EXE=<path>
 #         -DZEN_MANIFEST=<path> -DZEN_GATES=portable,kernel,posix
 #         -DZEN_BUILD_DIR=<build dir> -DZEN_BUILD_CONFIG=<config-or-empty>
 #         -P check_population.cmake
@@ -30,9 +30,6 @@ foreach(required IN ITEMS ZEN_TESTS_EXE ZEN_MANIFEST ZEN_GATES ZEN_BUILD_DIR)
         message(FATAL_ERROR "check_population.cmake: -D${required}=... is required")
     endif()
 endforeach()
-if(NOT DEFINED ZEN_SDL_TESTS_EXE)
-    set(ZEN_SDL_TESTS_EXE "")
-endif()
 # Empty under a single-configuration generator, and passing `-C ""` to ctest would be a
 # different question from passing nothing.
 if(NOT DEFINED ZEN_BUILD_CONFIG)
@@ -124,7 +121,6 @@ zen_entry_population_custody("${ZEN_BUILD_DIR}" "${ZEN_BUILD_CONFIG}")
 file(STRINGS "${ZEN_MANIFEST}" manifest_lines)
 
 set(expected_main "")     # suites this configuration must have in zen-tests
-set(expected_sdl "")      # ...and in zen-sdl-tests
 set(declared_absent "")   # suites no active gate reaches: absent BY DECLARATION
 set(problems "")
 set(manifest_suites "")   # every suite named, in file order
@@ -161,7 +157,6 @@ foreach(line IN LISTS manifest_lines)
         list(APPEND manifest_suites "${suite}")
         set(floor_${suite} 0)
         set(present_${suite} 0)
-        set(binary_${suite} "main")
         set(rows_${suite} "")
         set(formula_${suite} "")
     endif()
@@ -173,9 +168,6 @@ foreach(line IN LISTS manifest_lines)
     endif()
     math(EXPR floor_${suite} "${floor_${suite}} + ${minimum}")
     set(present_${suite} 1)
-    if(gate STREQUAL "sdl")
-        set(binary_${suite} "sdl")
-    endif()
     if(formula_${suite} STREQUAL "")
         set(formula_${suite} "${minimum} ${gate}")
     else()
@@ -185,11 +177,7 @@ endforeach()
 
 foreach(suite IN LISTS manifest_suites)
     if(present_${suite})
-        if(binary_${suite} STREQUAL "sdl")
-            list(APPEND expected_sdl "${suite}")
-        else()
-            list(APPEND expected_main "${suite}")
-        endif()
+        list(APPEND expected_main "${suite}")
     else()
         string(REPLACE ";" "/" why "${rows_${suite}}")
         list(APPEND declared_absent "${suite} (gate '${why}' off here)")
@@ -200,6 +188,13 @@ endforeach()
 
 # One binary's worth of contract: the declared set must equal the built set exactly,
 # and every declared suite must clear its floor.
+#
+# It takes the binary as a PARAMETER, and it keeps doing so with one call site below. That is
+# deliberate: "which suites live in which binary" is a question this project has answered with
+# more than one binary before and may again, and the empty-exe arm -- suites declared for an
+# active gate with no binary handed over -- is the failure that arm exists to name. Collapsing
+# this into the one binary that happens to exist today would delete a check nobody would think
+# to re-derive, in exchange for no behaviour at all.
 function(zen_check_binary label exe expected out_problems out_report)
     set(local_problems "")
     set(local_report "")
@@ -262,8 +257,7 @@ function(zen_check_binary label exe expected out_problems out_report)
 endfunction()
 
 zen_check_binary("zen-tests" "${ZEN_TESTS_EXE}" "${expected_main}" main_problems main_report)
-zen_check_binary("zen-sdl-tests" "${ZEN_SDL_TESTS_EXE}" "${expected_sdl}" sdl_problems sdl_report)
-list(APPEND problems ${main_problems} ${sdl_problems})
+list(APPEND problems ${main_problems})
 
 # ---- the report ------------------------------------------------------------------
 
@@ -271,10 +265,6 @@ message(STATUS "population: gates active: ${ZEN_GATES}")
 message(STATUS "population: zen-tests")
 if(NOT main_report STREQUAL "")
     message("${main_report}")
-endif()
-if(NOT sdl_report STREQUAL "")
-    message(STATUS "population: zen-sdl-tests")
-    message("${sdl_report}")
 endif()
 if(NOT declared_absent STREQUAL "")
     message(STATUS "population: DECLARED ABSENT in this configuration (not run, and not passed):")
@@ -293,7 +283,5 @@ if(NOT problems STREQUAL "")
         "  (contract: ${ZEN_MANIFEST})")
 endif()
 
-list(LENGTH expected_main main_count)
-list(LENGTH expected_sdl sdl_count)
-math(EXPR total_suites "${main_count} + ${sdl_count}")
+list(LENGTH expected_main total_suites)
 message(STATUS "population: OK -- ${total_suites} declared suites all present and above their floors")

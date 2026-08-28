@@ -4,20 +4,21 @@
 #ifndef ZEN_UI_PIXEL_HPP
 #define ZEN_UI_PIXEL_HPP
 
-// The PIXEL projection's logic — one renderer's brain, kept SDL-free so it is provable
-// everywhere the suite runs (no display, no SDL, no fonts). This is NOT part of the tree
-// vocabulary: pixel-space geometry exists ONLY here and below (in the SDL skin that executes
-// these commands), exactly as terminal cells exist only in the TUI's Grid. The tree stays
+// The PIXEL projection's logic — one renderer's brain, owning no window, font library or
+// display, so it is provable everywhere the suite runs. This is NOT part of the tree
+// vocabulary: pixel-space geometry exists ONLY here and below (in whatever executes these
+// commands), exactly as terminal cells exist only in the TUI's Grid. The tree stays
 // intent-only; this layer RESOLVES intent into rectangles.
 //
 // The split mirrors the TUI's: tui_render.cpp = layout-to-cells + key mapping (the only place
-// cells and raw keys exist); here = layout-to-draw-commands (the only place pixel rects exist),
-// and the SDL skin (src/ui/sdl/) = the only place raw SDL events, windows, and textures exist.
-// A renderer is: px_layout (this, pure) + a thin executor (SDL) + an input mapper (SDL events
-// -> the same semantic InputEvents the TUI's tui_map_key produces).
+// cells and raw keys exist); here = layout-to-draw-commands (the only place pixel rects exist).
+// A complete renderer is px_layout (this, pure) + a thin executor for the commands + an input
+// mapper turning that medium's raw events into the same semantic InputEvents the TUI's
+// tui_map_key produces. The last two are a presentation's business; this repository ships the
+// brain and no skin, which is the shape that lets a skin be someone else's.
 //
 // Text metrics are INJECTED (PxMetrics.text_width) so the layout is deterministic under test
-// (a fixed per-codepoint width) and honest under SDL_ttf (real advances). Widths are treated
+// and honest under a real typeface, whose advances are per glyph. Widths are treated
 // as additive across codepoints — the thin renderer's stated simplification (kerning-free
 // wrap/truncate decisions; the glyph rasterizer still draws whatever it draws).
 //
@@ -102,8 +103,10 @@ struct PxScene {
     std::vector<PxTarget> targets;
 };
 
-/// Injected text metrics: the line height and the pixel advance of a UTF-8 string. Tests use a
-/// fixed per-codepoint width; the SDL skin uses TTF advances.
+/// Injected text metrics: the line height and the pixel advance of a UTF-8 string. A real
+/// typeface answers per glyph; tests inject both a fixed per-codepoint width and a
+/// deliberately proportional one, because uniform widths make "fits the bound" and "counts
+/// the codepoints" the same sentence and a proportional typeface does not.
 struct PxMetrics {
     int line_height = 16;
     int pad = 4; ///< inner padding for selection bars / marker boxes

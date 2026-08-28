@@ -59,7 +59,7 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
 - **Suite registration is derived** from the `TEST_SUITE(...)` declarations in
   the compiled sources — there is no hand-kept name list to drift.
 - **`tests/suite_population.txt`** is the inventory contract: exact suite set per
-  gate (`portable`/`kernel`/`posix`/`sdl`), plus a per-suite case FLOOR set at the
+  gate (`portable`/`kernel`/`posix`), plus a per-suite case FLOOR set at the
   measured baseline. Adding cases is free; deleting one crosses its floor. Adding
   or renaming a *suite* needs a line here — deliberately. Enforced by the
   `population` CTest entry (query-mode only; it runs no cases).
@@ -68,7 +68,7 @@ at all under the enforcement opt-out. Full laws: `docs/laws/population-laws.md`.
   witnesses, `weave_contract`, `weave_population`, `doc_links`, `all`. Expected
   set = the suites declared for the active gates **∪** these; compared to
   `ctest -N` by name, both directions (declared-and-missing is a red, and so is
-  registered-and-undeclared). Same four gates, one taxonomy. Adding a CTest entry
+  registered-and-undeclared). The same gates, one taxonomy. Adding a CTest entry
   of any kind is a line in one of the two files, and which file says what kind of
   thing it is.
 - **The entry inventory is taken TWICE, by two doors that do not lean on each
