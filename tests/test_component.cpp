@@ -651,6 +651,35 @@ TEST_CASE("the vocabulary reads as intent: outline of a schematic names bindings
     CHECK(render_outline(plain) == render_outline(wrapped));
 }
 
+TEST_CASE("the outline names intent and never the medium that serves it") {
+    // The NEGATIVE half of the law above, and the half that can actually be violated: the
+    // outline may say a node is ACTIVATABLE, and must never say how one activates it. Every
+    // projection resolves the same declared intent its own way — a pointer names a row, keys
+    // walk to it — so a gesture word surfacing here would be one medium's vocabulary leaking
+    // into the vocabulary all of them read. Geometry is fenced out for the same reason.
+    Widget rows = list("rows", "Rows", {"alpha", "beta"}, 0, /*activatable=*/true,
+                       /*focused=*/true);
+    rows.reorderable = true;
+    rows.route_to = "detail-view";
+    const Widget tree =
+        region("board", "Board",
+               vstack("body", {rows, field("say>", "hi", "a line", /*focused=*/false),
+                               slot("nav", "Route", {})}));
+    const std::string outline = render_outline(tree);
+
+    // Every declared intent IS there, in intent's own words.
+    CHECK(outline.find("(activatable)") != std::string::npos);
+    CHECK(outline.find("(editable)") != std::string::npos);
+    CHECK(outline.find("(reorderable)") != std::string::npos);
+    CHECK(outline.find("-> detail-view") != std::string::npos);
+
+    // And no medium's word for how any of it happens, or for where any of it lands.
+    for (const char* medium : {"click", "key", "press", "button", "mouse", "tap", "gesture",
+                               "scroll", "hover", "drag", "cell", "pixel"}) {
+        CHECK_MESSAGE(outline.find(medium) == std::string::npos, medium);
+    }
+}
+
 TEST_CASE("the TUI projects the evolved vocabulary: slots and stress previews land in cells") {
     const Widget card = task_card_tree();
     // Round-trip first — the TUI draws what came back through the gate, not a local shortcut.

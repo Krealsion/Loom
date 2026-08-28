@@ -31,7 +31,6 @@
 #   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
 #             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
 #   posix     rides `NOT WIN32`; the OS sandbox exists only there.
-#   sdl       rides `TARGET zen-ui-sdl`; lives in the separate zen-sdl-tests binary.
 #
 # A suite may carry MORE THAN ONE row, and its floor is the SUM of the rows whose gate is
 # active. That is how a conditional subpopulation INSIDE a suite is stated exactly instead
@@ -81,8 +80,8 @@ describe           portable  24
 console            portable  27
 recorder           portable  31
 logger             portable  15
-component          portable  18
-pixel              portable  9
+component          portable  19
+pixel              portable  12
 bridge             portable  20
 bridge             posix     8
 kernel             kernel    136
@@ -92,4 +91,3 @@ manager            kernel    43
 capabilities       kernel    4
 isolation          posix     38
 policy             posix     23
-sdl                sdl       3

@@ -499,19 +499,6 @@ add_test(NAME empty_population_says_so
 set_tests_properties(empty_population_says_so PROPERTIES
     PASS_REGULAR_EXPRESSION "EMPTY TEST POPULATION")
 
-# The SDL skin's smoke: a SEPARATE binary (zen-tests stays SDL-free) that runs the full
-# pipeline headless under SDL's dummy video driver — real SDL, real TTF metrics, no display.
-# Registered only when the gated SDL renderer is built; the projection LOGIC is pinned
-# SDL-free in the `pixel` suite above, which runs everywhere.
-if(TARGET zen-ui-sdl)
-    add_executable(zen-sdl-tests doctest_main.cpp test_sdl.cpp)
-    target_include_directories(zen-sdl-tests PRIVATE ${CMAKE_SOURCE_DIR})
-    target_link_libraries(zen-sdl-tests
-        PRIVATE zen-doctest zen-ui-sdl zen-ui-pixel zen-ui zen-warnings zen-sanitize)
-    add_test(NAME sdl COMMAND zen-sdl-tests --no-skipped-summary)
-    set_tests_properties(sdl PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
-endif()
-
 # The cgroup-scoped suites are Linux-only, and their NAMES are derived exactly like the
 # direct ones — only the launcher differs. The isolation and policy suites mount
 # out-of-process Weaves under the default resource containment, which needs cgroup-v2
@@ -537,11 +524,6 @@ endif() # NOT WIN32 (isolation/policy/all suites)
 # where the difference is written down, and this entry is what enforces it — exact suite
 # inventory per active gate, plus a per-suite case floor. It runs no cases (doctest query
 # modes only), so it costs a fraction of a second and can sit in every lane.
-set(zen_sdl_tests_exe "")
-if(TARGET zen-sdl-tests)
-    list(APPEND ZEN_POPULATION_GATES sdl)
-    set(zen_sdl_tests_exe "$<TARGET_FILE:zen-sdl-tests>")
-endif()
 # Comma-separated: a ;-list would be split into separate arguments on the command line.
 string(REPLACE ";" "," zen_population_gates_arg "${ZEN_POPULATION_GATES}")
 
@@ -567,7 +549,6 @@ file(WRITE ${CMAKE_BINARY_DIR}/zen-test-gates.cmake
 # $<CONFIG> is empty under a single-configuration generator and is handled as such.
 add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_TESTS_EXE=$<TARGET_FILE:zen-tests>
-    -DZEN_SDL_TESTS_EXE=${zen_sdl_tests_exe}
     -DZEN_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/suite_population.txt
     -DZEN_GATES=${zen_population_gates_arg}
     -DZEN_BUILD_DIR=${CMAKE_BINARY_DIR}

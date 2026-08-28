@@ -7,9 +7,8 @@
 
 #include <zen/serialize.hpp>
 
-// The decoder's caps live with the wire primitives, internal to loom (the same
-// reach test_sdl.cpp already takes into src/). The decode-budget cases pin the exact
-// boundary, so they must read the real constant rather than a copy of it.
+// The decoder's caps live with the wire primitives, internal to loom. The decode-budget cases
+// pin the exact boundary, so they must read the real constant rather than a copy of it.
 #include "../src/detail/binary.hpp"
 
 #include <cmath>

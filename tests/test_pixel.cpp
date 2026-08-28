@@ -12,11 +12,13 @@
 #include <string_view>
 #include <vector>
 
-// The pixel projection's LOGIC, proven with no display, no SDL, and no fonts: injected
-// fixed-width metrics make the layout deterministic, so tree -> draw-commands is pinned like
-// any pure function. The SDL skin only executes these commands (its own smoke lives in the
-// gated zen-sdl-tests binary); everything that can be proven here IS proven here — on every
-// platform the suite runs, including where SDL does not exist.
+// The pixel projection's LOGIC, proven with no display, no window and no font library:
+// injected metrics make the layout deterministic, so tree -> draw-commands is pinned like any
+// pure function. Two metrics are injected on purpose — a fixed per-codepoint width, and a
+// deliberately proportional one, because under uniform widths "fits the bound" and "counts the
+// codepoints" are the same sentence and a real typeface makes them different sentences.
+// Executing the commands belongs to a presentation; everything that can be proven without one
+// IS proven here, on every platform the suite runs.
 
 using namespace loom;
 
@@ -31,6 +33,71 @@ PxMetrics fixed_metrics() {
     m.pad = 2;
     m.text_width = [](std::string_view s) {
         return static_cast<int>(px_codepoint_count(s)) * 8;
+    };
+    return m;
+}
+
+// Length of the UTF-8 sequence starting at `first` (1 for a stray/invalid byte) — the
+// walker the proportional metric below needs to charge per codepoint rather than per byte.
+std::size_t lead_byte_len(unsigned char first) {
+    if ((first & 0x80u) == 0x00u) {
+        return 1;
+    }
+    if ((first & 0xE0u) == 0xC0u) {
+        return 2;
+    }
+    if ((first & 0xF0u) == 0xE0u) {
+        return 3;
+    }
+    if ((first & 0xF8u) == 0xF0u) {
+        return 4;
+    }
+    return 1;
+}
+
+// The advance of ONE codepoint under a deliberately PROPORTIONAL metric: every value below
+// differs from the others, the space and the ellipsis glyph included, and none is a multiple
+// of a common width. This is the shape a real typeface has — and it is the shape under which
+// "sum the advances" and "count the codepoints" stop agreeing, so a layout that quietly
+// counted would land somewhere else.
+int proportional_advance(std::string_view cp) {
+    if (cp == "\xE2\x80\xA6") {
+        return 15; // the ellipsis: its own glyph, wider than the run it stands in for
+    }
+    if (cp.size() != 1) {
+        return 12; // any other multi-byte codepoint
+    }
+    switch (cp.front()) {
+    case 'W':
+        return 20;
+    case 'm':
+        return 18;
+    case ' ':
+        return 6;
+    case 'l':
+        return 5;
+    case 'i':
+        return 4;
+    default:
+        return 10;
+    }
+}
+
+// Proportional metrics: same injected seam, non-uniform answers. `pad` is 0 so that WIDTH is
+// the only variable these cases introduce.
+PxMetrics proportional_metrics() {
+    PxMetrics m;
+    m.line_height = 10;
+    m.pad = 0;
+    m.text_width = [](std::string_view s) {
+        int total = 0;
+        for (std::size_t i = 0; i < s.size();) {
+            const std::size_t n = lead_byte_len(static_cast<unsigned char>(s[i]));
+            const std::size_t take = (i + n <= s.size()) ? n : s.size() - i;
+            total += proportional_advance(s.substr(i, take));
+            i += take;
+        }
+        return total;
     };
     return m;
 }
@@ -125,7 +192,7 @@ TEST_CASE("truncate ellipsizes at a codepoint boundary and leaves fitting text a
 }
 
 TEST_CASE("the same tree the TUI draws lays out to pixel draw-commands (one tree, two media)") {
-    // The exact node set the console emits — nothing SDL-specific exists to add.
+    // The exact node set the console emits — a projection adds no node of its own.
     Widget rows = list("rows", "Rows", {"alpha", "beta", "gamma"}, 1, /*activatable=*/true,
                        /*focused=*/true);
     const Widget root =
@@ -326,6 +393,116 @@ TEST_CASE("degenerate areas stay defined: a squeezed list with a huge legal curs
     degenerate.line_height = 0;
     const PxScene d = px_layout(squeezed, PxRect{0, 0, 100, 15}, degenerate);
     CHECK_FALSE(d.cmds.empty()); // laid out (15 one-px lines), no UB — the clamp held
+}
+
+// ---- The same brain under a PROPORTIONAL metric --------------------------------------
+//
+// Everything above injects a uniform width, under which "this line is 80px" and "this line is
+// ten codepoints" are the same sentence. A real typeface makes them different sentences, and
+// the layout must be reading the first one. These cases feed the same injected seam a metric
+// where text_width("W") != text_width("i") != text_width(" ") != text_width("…"), and pin what
+// the layout ANSWERS — not that the injected function returned two different numbers.
+
+TEST_CASE("proportional metrics: wrap sums real advances, so one bound holds different counts") {
+    const PxMetrics prop = proportional_metrics();
+
+    // "WWWWW iiiii" at 80px. Four W's already fill the bound (4 * 20), so the fifth
+    // hard-breaks with no space seen yet; the tail then carries W + space + five i's
+    // (20 + 6 + 5 * 4 = 46) and never needs a second break.
+    const std::vector<std::string> wide_first = px_wrap("WWWWW iiiii", 80, prop);
+    REQUIRE(wide_first.size() == 2);
+    CHECK(wide_first[0] == "WWWW");
+    CHECK(wide_first[1] == "W iiiii");
+
+    // The SAME string at the SAME bound under the uniform metric breaks somewhere else: ten
+    // codepoints per line, so the split lands at the space. The metric decided the answer.
+    const std::vector<std::string> uniform = px_wrap("WWWWW iiiii", 80, fixed_metrics());
+    REQUIRE(uniform.size() == 2);
+    CHECK(uniform[0] == "WWWWW");
+    CHECK(uniform[1] == "iiiii");
+    CHECK(wide_first != uniform);
+
+    // Lines bounded by the same width hold DIFFERENT numbers of codepoints — the whole
+    // difference a proportional typeface makes — and every one of them still fits.
+    CHECK(px_codepoint_count(wide_first[0]) == 4);
+    CHECK(px_codepoint_count(wide_first[1]) == 7);
+    for (const std::string& line : wide_first) {
+        CHECK(prop.text_width(line) <= 80);
+    }
+
+    // The soft break carries the remainder's REAL width across, the consumed space included:
+    // "iiiiiiiiii WWWW" breaks back to the space with one W (20px) already on the new line,
+    // so all four W's (80px exactly) still fit it. Charge the wrong width for the space that
+    // the break consumed and the tail splits a second time.
+    const std::vector<std::string> narrow_first = px_wrap("iiiiiiiiii WWWW", 80, prop);
+    REQUIRE(narrow_first.size() == 2);
+    CHECK(narrow_first[0] == "iiiiiiiiii");
+    CHECK(narrow_first[1] == "WWWW");
+    CHECK(prop.text_width(narrow_first[1]) == 80);
+}
+
+TEST_CASE("proportional metrics: truncate reserves the ellipsis's own advance, not a cell") {
+    const PxMetrics prop = proportional_metrics();
+    CHECK(prop.text_width("\xE2\x80\xA6") == 15); // the reserved glyph is its own width
+
+    // Wide glyphs: three W's (60) + the ellipsis (15) = 75; a fourth would be 95.
+    CHECK(px_truncate("WWWWWWWW", 80, prop) == "WWW\xE2\x80\xA6");
+    // Narrow glyphs, SAME bound: sixteen i's (64) + the ellipsis (15) = 79.
+    CHECK(px_truncate(std::string(30, 'i'), 80, prop) == std::string(16, 'i') + "\xE2\x80\xA6");
+
+    // Same bound, different surviving counts — and both results measure inside the bound,
+    // which is the invariant a uniform metric can satisfy by accident.
+    const std::string wide = px_truncate("WWWWWWWW", 80, prop);
+    const std::string narrow = px_truncate(std::string(30, 'i'), 80, prop);
+    CHECK(px_codepoint_count(wide) == 4);
+    CHECK(px_codepoint_count(narrow) == 17);
+    CHECK(prop.text_width(wide) <= 80);
+    CHECK(prop.text_width(narrow) <= 80);
+
+    // "It fits" is measured by advance too: twenty narrow glyphs are 80px and survive whole,
+    // while five wide ones are 100px and do not.
+    CHECK(px_truncate(std::string(20, 'i'), 80, prop) == std::string(20, 'i'));
+    CHECK(px_truncate("WWWWW", 80, prop) != "WWWWW");
+
+    // Codepoint boundaries hold under the non-uniform metric exactly as under the uniform one.
+    const std::string cut = px_truncate(stress_text_unicode(), 80, prop);
+    CHECK_FALSE(starts_mid_codepoint(cut));
+    REQUIRE(cut.size() >= 3);
+    CHECK(cut.substr(cut.size() - 3) == "\xE2\x80\xA6");
+}
+
+TEST_CASE("proportional metrics reach the whole layout: rows, fields and wrapped text") {
+    const PxMetrics prop = proportional_metrics(); // pad 0: the rect's width IS the text bound
+
+    // Two rows of the SAME pixel width, one wide-glyph and one narrow. The layout cuts each by
+    // what it measures, so eight wide glyphs lose five and twenty narrow ones lose none.
+    Widget rows = list("rows", "Rows", {"WWWWWWWW", std::string(20, 'i')}, -1,
+                       /*activatable=*/true, /*focused=*/false);
+    const PxScene scene = px_layout(rows, PxRect{0, 0, 80, 40}, prop);
+    const PxCmd* wide_row = find_text(scene, "WWW");
+    const PxCmd* narrow_row = find_text(scene, "iii");
+    REQUIRE(wide_row != nullptr);
+    REQUIRE(narrow_row != nullptr);
+    CHECK(wide_row->text == "WWW\xE2\x80\xA6");
+    CHECK(narrow_row->text == std::string(20, 'i'));
+    CHECK(px_codepoint_count(wide_row->text) < px_codepoint_count(narrow_row->text));
+
+    // A Field measures its whole run — prompt, separator and value — the same way.
+    const Widget entry = field("mmm>", "WWWWWW", "", /*focused=*/false);
+    const PxScene f = px_layout(entry, PxRect{0, 0, 80, 10}, prop);
+    const PxCmd* run = find_text(f, "mmm>");
+    REQUIRE(run != nullptr);
+    CHECK(run->text == "mmm>\xE2\x80\xA6"); // 3 * 18 + 10 + 15 = 79; the space would be 85
+    CHECK(prop.text_width(run->text) <= 80);
+
+    // And wrap, through the layout rather than the primitive: the node emits the lines the
+    // advances produce, so the draw COUNT follows the metric too.
+    Widget wrapped = text_widget("WWWWW iiiii");
+    wrapped.overflow = Overflow::Wrap;
+    const PxScene w = px_layout(wrapped, PxRect{0, 0, 80, 40}, prop);
+    CHECK(count_op(w, PxCmd::Op::Text) == 2);
+    CHECK(find_text(w, "WWWW") != nullptr);
+    CHECK(find_text(w, "W iiiii") != nullptr);
 }
 
 TEST_CASE("the pure layout is deterministic: same tree, same metrics, same scene") {

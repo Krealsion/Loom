@@ -13,9 +13,9 @@
 //
 // The tree is built in the engine LIBRARY from the engine's public domain data (weaves, the
 // reply buffer, the tap, the registry-derived guidance) — renderer-agnostic and fully testable
-// with no terminal. The TUI (console_tui.cpp) and the SDL renderer are skins over the SAME
-// tree; the test-only outline walk (render_outline, in zen/ui) proves the tree carries no
-// medium.
+// with no terminal. The TUI (console_tui.cpp) is one skin over that tree and deliberately not
+// a privileged one; the test-only outline walk (render_outline, in zen/ui) proves the tree
+// carries no medium, so a second skin needs nothing added here.
 
 #include <zen/console/console.hpp>
 #include <zen/ui/tree.hpp>

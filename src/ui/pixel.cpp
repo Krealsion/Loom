@@ -2,10 +2,11 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // The pixel projection's layout: intent + relationship -> paint-ordered draw commands. Pure
-// (injected metrics, no SDL, no display) so the projection LOGIC is provable in the ordinary
-// suite on every platform; the SDL skin merely executes the commands. Mirrors the TUI's layout
-// decisions where the semantics are shared (weight split, scroll-keeps-selection-visible) and
-// gives the overflow hints the TUI ignores their REAL meaning (wrap, truncate).
+// (injected metrics, no display, no font library) so the projection LOGIC is provable in the
+// ordinary suite on every platform; executing the commands belongs to whichever presentation
+// wants them. Mirrors the TUI's layout decisions where the semantics are shared (weight split,
+// scroll-keeps-selection-visible) and gives the overflow hints the TUI ignores their REAL
+// meaning (wrap, truncate).
 
 #include <zen/ui/pixel.hpp>
 

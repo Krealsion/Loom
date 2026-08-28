@@ -38,9 +38,10 @@ not the copyright owner and not an LLC.
 Files or directories carrying their own license or copyright notice remain
 under those terms. Bundled third-party material is listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); today that is the doctest
-test framework (`tests/third_party/doctest.h`, MIT). Dependencies fetched at
-build time (such as the optional pinned SDL used by the gated UI renderer)
-are not distributed in this repository and remain under their own licenses.
+test framework (`tests/third_party/doctest.h`, MIT), and it is the whole
+list — the build fetches no dependency and links no third-party library.
+Should one ever be fetched at build time, it would not be distributed in this
+repository and would remain under its own license.
 
 Files without an individual header — build scripts, CMake lists, Markdown
 documentation, JSON fixtures — are covered by this repository-level statement

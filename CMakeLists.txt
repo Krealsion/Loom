@@ -214,8 +214,9 @@ endif() # NOT WIN32 (isolation)
 # The renderer-agnostic widget tree + the UI-Builder component vocabulary (components with
 # typed slots serializing as gated Values, zen.ui.*). Lifted out of the console (Phase B):
 # the vocabulary depends ONLY on the core (schemas/values/gate) — never on the console, the
-# bus, or any renderer. The console EMITS this tree; the TUI and the SDL renderer PROJECT it;
-# the outline walk proves it carries no medium. Everyone consumes; nobody owns.
+# bus, or any renderer. The console EMITS this tree; the TUI PROJECTS it; the outline walk
+# proves it carries no medium — the vocabulary owns no presentation, which is exactly why a
+# projection can arrive or leave without the tree changing. Everyone consumes; nobody owns.
 add_library(zen-ui
     src/ui/tree.cpp
     src/ui/component.cpp)
@@ -227,9 +228,11 @@ target_link_libraries(zen-ui
     PRIVATE zen-warnings)
 add_library(loom::ui ALIAS zen-ui)
 
-# The PIXEL projection's logic — one renderer's layout brain (tree -> draw commands), kept
-# SDL-free so it is provable in the ordinary suite on every platform (incl. Windows/MinGW,
-# where the SDL skin does not build). The SDL target below merely executes these commands.
+# The PIXEL projection's logic — one renderer's layout brain (tree -> draw commands). It owns
+# no window, no font library and no display: text metrics are INJECTED, so the layout is a pure
+# function of tree + metrics and is provable in the ordinary suite on every platform this
+# repository builds on. EXECUTING the commands is a presentation's job, and no presentation
+# that does so lives here — which is the point: the brain outlives any one skin.
 add_library(zen-ui-pixel src/ui/pixel.cpp)
 target_compile_features(zen-ui-pixel PUBLIC cxx_std_20)
 target_link_libraries(zen-ui-pixel
@@ -342,8 +345,8 @@ if(WIN32)
 else()
     target_sources(zen-tui PRIVATE src/console/terminal_posix.cpp)
 endif()
-# The renderer consumes the VOCABULARY, not the console — the same one-way dependency the SDL
-# renderer has. (The console frontends link zen-tui AND zen-console side by side.)
+# The renderer consumes the VOCABULARY, not the console — the one-way dependency every
+# projection of this tree owes. (The console frontends link zen-tui AND zen-console side by side.)
 target_link_libraries(zen-tui
     PUBLIC  zen-ui zen-sanitize
     PRIVATE zen-warnings)
@@ -373,85 +376,6 @@ target_link_libraries(zen-terminal-repl
 add_executable(zen-console-tui src/console/console_tui.cpp)
 target_link_libraries(zen-console-tui
     PRIVATE zen-tui zen-console zen-switchboard loom zen-warnings zen-sanitize)
-
-# ---- The SDL2 projection (the second real renderer: same tree, to pixels) ---------------
-#
-# GATED: only the SDL renderer target needs SDL2 — the vocabulary, the pixel-layout logic,
-# the console, the bus, and the core stay SDL-free and portable. WSL/Linux-first (default ON
-# there, OFF on Windows — the flagged platform decision; the vocabulary + pixel logic still
-# build and test on Windows). Prefers a system SDL2; otherwise fetches PINNED release
-# tarballs (static SDL2 + SDL2_ttf with its vendored FreeType) so nothing is installed on the
-# host and the checksum is part of the build.
-if(WIN32)
-    set(zen_sdl_default OFF)
-else()
-    set(zen_sdl_default ON)
-endif()
-option(ZEN_SDL "Build the SDL2 renderer, its demo, and its dummy-driver tests" ${zen_sdl_default})
-
-if(ZEN_SDL)
-    find_package(SDL2 CONFIG QUIET)
-    find_package(SDL2_ttf CONFIG QUIET)
-    if(NOT (TARGET SDL2::SDL2 OR TARGET SDL2::SDL2-static) OR
-       NOT (TARGET SDL2_ttf::SDL2_ttf OR TARGET SDL2_ttf::SDL2_ttf-static))
-        # On WSL building from a Windows-mounted checkout (/mnt/...), the 9p filesystem cannot
-        # hold the symlinks inside SDL's tarball (and compiles dependencies slowly) — keep the
-        # fetched trees on the WSL-native filesystem instead. Only the MODULE DEFAULT is
-        # replaced (the FetchContent module pre-defines FETCHCONTENT_BASE_DIR when included,
-        # so a bare NOT-DEFINED check never fires); a user's own choice is respected. Keyed
-        # per build dir: build/ and build-san/ must not share dependency OBJECTS (different
-        # flags), only re-download the same pinned tarball.
-        if(CMAKE_SOURCE_DIR MATCHES "^/mnt/"
-           AND (CMAKE_HOST_SYSTEM_VERSION MATCHES "[Mm]icrosoft" OR DEFINED ENV{WSL_DISTRO_NAME}))
-            get_filename_component(zen_bindir_name "${CMAKE_BINARY_DIR}" NAME)
-            if(NOT DEFINED FETCHCONTENT_BASE_DIR
-               OR FETCHCONTENT_BASE_DIR STREQUAL "${CMAKE_BINARY_DIR}/_deps")
-                set(FETCHCONTENT_BASE_DIR "$ENV{HOME}/.cache/zen-fetch/${zen_bindir_name}"
-                    CACHE PATH
-                    "FetchContent trees (WSL-native: drvfs cannot hold SDL's symlinks)" FORCE)
-                message(STATUS "zen: FetchContent trees under ${FETCHCONTENT_BASE_DIR} "
-                               "(drvfs symlink workaround)")
-            endif()
-        endif()
-        include(FetchContent)
-        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-        set(SDL_STATIC ON CACHE BOOL "" FORCE)
-        set(SDL_TEST OFF CACHE BOOL "" FORCE)
-        set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
-        set(SDL2TTF_SAMPLES OFF CACHE BOOL "" FORCE)
-        set(SDL2TTF_INSTALL OFF CACHE BOOL "" FORCE)
-        set(BUILD_SHARED_LIBS OFF)
-        FetchContent_Declare(sdl2_fetched
-            URL https://github.com/libsdl-org/SDL/releases/download/release-2.30.11/SDL2-2.30.11.tar.gz
-            URL_HASH SHA256=8b8d4aef2038533da814965220f88f77d60dfa0f32685f80ead65e501337da7f)
-        FetchContent_Declare(sdl2_ttf_fetched
-            URL https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-2.22.0.tar.gz
-            URL_HASH SHA256=d48cbd1ce475b9e178206bf3b72d56b66d84d44f64ac05803328396234d67723)
-        FetchContent_MakeAvailable(sdl2_fetched sdl2_ttf_fetched)
-    endif()
-    if(TARGET SDL2::SDL2-static)
-        set(zen_sdl2_lib SDL2::SDL2-static)
-    else()
-        set(zen_sdl2_lib SDL2::SDL2)
-    endif()
-    if(TARGET SDL2_ttf::SDL2_ttf-static)
-        set(zen_sdl2_ttf_lib SDL2_ttf::SDL2_ttf-static)
-    else()
-        set(zen_sdl2_ttf_lib SDL2_ttf::SDL2_ttf)
-    endif()
-
-    # The skin: executes the pixel layout's commands, maps raw SDL events to semantic
-    # InputEvents. The ONLY target that sees SDL.
-    add_library(zen-ui-sdl src/ui/sdl/sdl_ui.cpp)
-    target_link_libraries(zen-ui-sdl
-        PUBLIC  zen-ui-pixel ${zen_sdl2_lib} ${zen_sdl2_ttf_lib} zen-sanitize
-        PRIVATE zen-warnings)
-
-    # The preview window (Josh's visual verify): stress-placeholder trees, input-as-messages.
-    add_executable(zen-ui-sdl-demo src/ui/sdl/sdl_demo.cpp)
-    target_link_libraries(zen-ui-sdl-demo
-        PRIVATE zen-ui-sdl zen-ui zen-warnings zen-sanitize)
-endif()
 
 # ---- The remote-operator bridge (operator-protocol transport; server + remote console land here) --
 #
@@ -528,10 +452,10 @@ endif()
 # the split: every rough edge in this surface hits the house before it hits a guest.
 #
 # Exported deliberately SMALLER than what the build tree offers: only the substrate that is
-# Loom's forever. The UI trio, the console, the TUI, the bridge and the SDL skin are
-# Zengine-destined (each moves in its own port phase), so exporting them now would publish a
-# surface we are about to relocate. The kernel and isolation ARE Loom's, but they are
-# Linux-only; the rule was that each joins the export when a hosting consumer appears — and
+# Loom's forever. The UI pair, the console, the TUI and the bridge are Zengine-destined (each
+# moves in its own port phase), so exporting them now would publish a surface we are about to
+# relocate. The kernel and isolation ARE Loom's, but they are Linux-only; the rule was that
+# each joins the export when a hosting consumer appears — and
 # for the KERNEL that trigger has now fired (Zengine's snake slice hosts .so weaves), so
 # loom::kernel rides the export on Linux. Isolation still waits for its first out-of-process
 # consumer. SEAM APPRECIATION: the export set is the honest answer to "what is public", and
@@ -539,7 +463,7 @@ endif()
 # leans on an unexported target fails on the DEFAULT path, which is exactly where we want
 # that mistake to surface.
 #
-# THE UI TRIO'S TRIGGER HAS ALSO FIRED, AND THE ANSWER WAS STILL NO. W-1 sent a real hosting
+# THE UI PAIR'S TRIGGER HAS ALSO FIRED, AND THE ANSWER WAS STILL NO. W-1 sent a real hosting
 # consumer at it (Zengine's Workshop wanted an authored tree, a pixel resolution and a hit
 # test) and measured two independent blockers. Recording them here because the sentence above
 # reads like a promise that one packaging decision is all that stands in the way, and it is
@@ -547,11 +471,11 @@ endif()
 #
 #   1. THE CONSOLE IS A PRIOR HOSTING CONSUMER THAT NEVER LEFT. zen-ui is not waiting for its
 #      first host: zen-console emits its own interface as this tree (include/zen/console/
-#      ui.hpp), zen-tui renders it, zen-bridge reaches it through the console, and
-#      zen-ui-sdl executes zen-ui-pixel's commands. Live suites: console 27, component 15,
-#      pixel 9, bridge 19+8, sdl 3. The Loom cannot depend on Zengine, so relocating the tree
-#      means relocating the console, the TUI and the bridge with it. "Moves in its own port
-#      phase" is true; "moves when a hosting consumer appears" is not the trigger.
+#      ui.hpp), zen-tui renders it, and zen-bridge reaches it through the console — each with
+#      a live suite behind it (the counts belong to tests/suite_population.txt, not to this
+#      comment). The Loom cannot depend on Zengine, so relocating the tree means relocating
+#      the console, the TUI and the bridge with it. "Moves in its own port phase" is true;
+#      "moves when a hosting consumer appears" is not the trigger.
 #   2. IT IS A DIFFERENT MODEL FROM THE ONE AN APPLICATION CANVAS NEEDS, and would not have
 #      served the consumer even if it had moved. loom::Widget fences OUT the authored
 #      placement Workshop authors, `weight` is documented as a relative grow hint and never
@@ -600,9 +524,9 @@ if(LOOM_INSTALL)
     # anywhere in it. Its whole purpose is to be presented by something that is not in this
     # repository, and a core a stranger cannot reach is a core with exactly one presentation.
     #
-    # The UI trio, the console, the TUI, the bridge and the SDL skin still stay home for the
-    # reasons written at the top of this section; nothing about that changed, and the terminal
-    # core deliberately depends on NONE of them.
+    # The UI pair, the console, the TUI and the bridge still stay home for the reasons written
+    # at the top of this section; nothing about that changed, and the terminal core
+    # deliberately depends on NONE of them.
     install(TARGETS loom zen-switchboard zen-terminal zen-history zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
