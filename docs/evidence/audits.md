@@ -14,8 +14,8 @@ security-critical paths, never trust the report) is standing doctrine.
 ## 2026-07-26 — the trust gate (operator workspace, out-of-repo)
 
 A full-repo trust audit whose report and backups live **outside the
-repositories** in the operator workspace (`Zen/zen-trust-gate-report.md`,
-`Zen/audit-bundles/*.bundle` — verified, test-restored). Recorded here because
+repositories**, in the maintainer's workspace (the report, and repository
+bundles that were verified and test-restored). Recorded here because
 a fresh clone will not contain them. What it changed *is* in-tree: the R1
 repairs are ratified on Zengine `main`, the timer-survival over-claim it
 measured false is corrected everywhere current, and its two process rules —
