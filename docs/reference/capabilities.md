@@ -485,6 +485,6 @@ PROVEN BY — `tests/test_isolation.cpp` (the case
 `"network is OS-enforced: a child without the Network grant cannot reach the
 network"`, identified by that sentence and never by a line number) and
 `tests/enforcement_gate.hpp` (the executed-count assertions). Evidence trail:
-`Zen/reportbacks/TERM-0-RB.md` §66 and `Zen/reportbacks/BL-VER-07-RB.md` (the
-measurement and the exception it recorded), `Zen/reportbacks/BL-VER-08-RB.md` (the
-replacement witness and the retirement).
+three phase records kept outside this repository — the terminal phase's
+measurement, the verification phase that recorded the exception, and the one
+that replaced the witness and retired it.

@@ -467,7 +467,7 @@ endif()
 # consumer at it (Zengine's Workshop wanted an authored tree, a pixel resolution and a hit
 # test) and measured two independent blockers. Recording them here because the sentence above
 # reads like a promise that one packaging decision is all that stands in the way, and it is
-# not — see reportbacks/W-1-RB.md in the workspace for the full measurement.
+# not; the full measurement is in that phase's record, kept outside this repository.
 #
 #   1. THE CONSOLE IS A PRIOR HOSTING CONSUMER THAT NEVER LEFT. zen-ui is not waiting for its
 #      first host: zen-console emits its own interface as this tree (include/zen/console/
