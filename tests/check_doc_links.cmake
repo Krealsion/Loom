@@ -4,11 +4,17 @@
 # THE DOCUMENTATION-LINK CHECK (VOLATILE-2) -- the `doc_links` CTest entry.
 #
 # It answers one question: does every repo-local documentation reference this repository
-# currently makes still resolve? Two populations, one rule:
+# currently makes still resolve? Two populations, one rule -- and a third population under
+# the external-reader rule (CONTRIBUTING.md states it; this entry enforces it): a public
+# repository names no path outside itself.
 #
 #   markdown          every relative link in a current-facing *.md, plus its #anchor
 #   source comments   every repository-relative *.md path written in a first-party
 #                     C/C++ comment, plus its #anchor
+#   outside paths     every current-facing file of a text kind, read whole, names no path
+#                     outside this repository -- not the maintainers' workspace or its
+#                     private siblings, not the drive or mount it sits on, not a tool's
+#                     scratch directory, not a build root beyond the tree, not a home
 #
 # WHY IT IS MECHANICAL. The reference itself was already the project's convention -- laws
 # cite reference pages, reference pages cite tests, AGENTS cites both. What was missing is
@@ -76,6 +82,10 @@ set(ZEN_DOC_EXCLUDE
     "^cmake-build"
     "^_install"
     "^\\.git/"
+    "^out/"                  # a build tree name .gitignore also names
+    "^\\.idea/"              # editor state, gitignored: it holds this machine's paths by design
+    "^\\.vscode/"
+    "^\\.claude/"            # harness state, gitignored
     "^docs/history/"         # frozen: describes the tree at its source commit
     "^docs/audits/"          # dated audit artifacts and their repro programs
     "^archive/"              # rehomed historical source
@@ -88,6 +98,30 @@ set(ZEN_DOC_SOURCE_GLOBS *.h *.hpp *.ipp *.c *.cc *.cpp *.cxx)
 # The document the self-test interrogates. Every repository has one, it is current-facing by
 # definition, and it carries headings.
 set(ZEN_DOC_SELFTEST_FILE "AGENTS.md")
+
+# ---- paths outside this repository ----------------------------------------------------
+#
+# The external-reader rule made mechanical: a public repository names no path outside
+# itself. These are the spellings that have leaked into this tree or its sibling and were
+# reworded out -- the maintainers' workspace root (which is also where its report and prompt
+# directories live), the drive letter and the mount that workspace sits on, a harness's
+# scratch directory, a build root beyond the tree, the maintainer's home. A leak is a
+# substring wherever it sits, comment or code, so every current-facing file of a text kind
+# is read whole and raw (no escape stripping: `G:\` must be found as written); binaries are
+# not text and are skipped by extension. The file that DECLARES these spellings -- this one
+# -- is the only file allowed to carry them, and the self-test asserts it carries every one
+# of them. The list is the same as the sibling repository's, on purpose: the two trees were
+# swept together and a spelling that leaked into one had leaked into the other.
+#
+# The spelling ending in a backslash is LAST on purpose: `\` before a `;` escapes CMake's
+# list separator, so anywhere else it would weld itself to the next spelling. The self-test
+# counts the list against the number written here so that a reorder is a red, not a silence.
+set(ZEN_DOC_OUTSIDE_SPELLINGS
+    "Zen/" "reportbacks/" "/mnt/g/" "G:/" "programming/cpp" "scratchpad" "zen-build"
+    "Temp/claude" "/home/joshua" "Users/Joshua" "G:\\")
+set(ZEN_DOC_OUTSIDE_SPELLING_COUNT 11)
+set(ZEN_DOC_OUTSIDE_DECLARERS tests/check_doc_links.cmake)
+set(ZEN_DOC_TEXT_EXTENSIONS md h hpp ipp c cc cpp cxx cmake txt json in yml yaml py sh)
 
 # ---- the slug, GitHub's convention ---------------------------------------------------
 #
@@ -300,9 +334,49 @@ if(NOT v MATCHES "^broken:")
         "check, silently.")
 endif()
 
+# The outside-path predicate: the INDICES (into ZEN_DOC_OUTSIDE_SPELLINGS) of every spelling
+# the text carries, empty when it names nothing outside the tree. Indices rather than the
+# spellings themselves, so the backslash one can never reach a CMake list.
+function(zen_doc_outside_hits text out)
+    set(hits "")
+    set(i 0)
+    foreach(spelling IN LISTS ZEN_DOC_OUTSIDE_SPELLINGS)
+        string(FIND "${text}" "${spelling}" at)
+        if(NOT at EQUAL -1)
+            list(APPEND hits "${i}")
+        endif()
+        math(EXPR i "${i} + 1")
+    endforeach()
+    set(${out} "${hits}" PARENT_SCOPE)
+endfunction()
+
+list(LENGTH ZEN_DOC_OUTSIDE_SPELLINGS outside_spelling_count)
+if(NOT outside_spelling_count EQUAL ZEN_DOC_OUTSIDE_SPELLING_COUNT)
+    message(FATAL_ERROR
+        "doc-links: SELF-TEST FAILED -- ZEN_DOC_OUTSIDE_SPELLINGS holds ${outside_spelling_count} "
+        "elements and ${ZEN_DOC_OUTSIDE_SPELLING_COUNT} were written. A spelling has welded into "
+        "its neighbour (a trailing backslash before the list separator), and the welded pair "
+        "would match nothing.")
+endif()
+zen_doc_outside_hits("the matrix is in Zen/reportbacks/X-evidence.md, on G:/ and /mnt/g/" outside_yes)
+zen_doc_outside_hits("see docs/reference/messaging.md, and /home/you/my-thing in the guide" outside_no)
+file(READ "${CMAKE_CURRENT_LIST_FILE}" outside_own_text)
+zen_doc_outside_hits("${outside_own_text}" outside_own)
+list(LENGTH outside_yes n_outside_yes)
+list(LENGTH outside_own n_outside_own)
+if(NOT n_outside_yes EQUAL 4 OR NOT outside_no STREQUAL ""
+   OR NOT n_outside_own EQUAL outside_spelling_count)
+    message(FATAL_ERROR
+        "doc-links: SELF-TEST FAILED -- the outside-path predicate found ${n_outside_yes} of 4 "
+        "planted spellings, '${outside_no}' in a clean sentence, and ${n_outside_own} of "
+        "${outside_spelling_count} in the file that declares them. Every 'no leak' below would "
+        "then be meaningless.")
+endif()
+
 message(STATUS
     "doc-links: self-test OK -- a missing path and a missing anchor are both refused, a "
-    "live document and one of its own headings are both accepted")
+    "live document and one of its own headings are both accepted; four planted outside paths "
+    "are found, a clean sentence is not, and this file carries every declared spelling")
 
 # ---- gathering the two populations -----------------------------------------------------
 
@@ -378,6 +452,42 @@ foreach(rel IN LISTS all_src)
         list(APPEND src_files "${rel}")
     endif()
 endforeach()
+
+# Population 3: every current-facing file of a text kind -- root files by a plain glob, then
+# everything under each unpruned top-level directory. Text is decided by extension, plus the
+# extensionless and dot-named files at the root (LICENSE, .gitignore, .clang-format).
+file(GLOB root_any RELATIVE "${ZEN_REPO}" "${ZEN_REPO}/*")
+set(any_globs "")
+foreach(entry IN LISTS top_level)
+    if(IS_DIRECTORY "${ZEN_REPO}/${entry}" AND NOT entry IN_LIST pruned)
+        list(APPEND any_globs "${ZEN_REPO}/${entry}/*")
+    endif()
+endforeach()
+set(nested_any "")
+if(any_globs)
+    file(GLOB_RECURSE nested_any RELATIVE "${ZEN_REPO}" ${any_globs})
+endif()
+set(text_files "")
+foreach(rel IN LISTS root_any nested_any)
+    if(IS_DIRECTORY "${ZEN_REPO}/${rel}")
+        continue()
+    endif()
+    zen_doc_excluded("${rel}" skip)
+    if(skip)
+        continue()
+    endif()
+    get_filename_component(name "${rel}" NAME)
+    get_filename_component(ext "${rel}" LAST_EXT)
+    string(REGEX REPLACE "^\\." "" ext "${ext}")
+    if(ext STREQUAL "" OR name MATCHES "^\\.[A-Za-z-]+$")
+        if(NOT rel MATCHES "/")
+            list(APPEND text_files "${rel}")
+        endif()
+    elseif(ext IN_LIST ZEN_DOC_TEXT_EXTENSIONS)
+        list(APPEND text_files "${rel}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES text_files)
 
 list(LENGTH md_files md_count)
 list(LENGTH src_files src_count)
@@ -471,6 +581,44 @@ foreach(rel IN LISTS src_files)
     endforeach()
 endforeach()
 
+# ---- population 3: paths outside this repository ---------------------------------------
+#
+# Every current-facing text file, read whole and raw. A hit names the file, the line and the
+# spelling; the remedy is to say the thing in words, never to widen the exclusions. The
+# declaring file is exempt by written rule and counted as such.
+
+set(outside_read 0)
+set(outside_exempt 0)
+set(outside_leaks 0)
+foreach(rel IN LISTS text_files)
+    if(rel IN_LIST ZEN_DOC_OUTSIDE_DECLARERS)
+        math(EXPR outside_exempt "${outside_exempt} + 1")
+        continue()
+    endif()
+    file(READ "${ZEN_REPO}/${rel}" raw)
+    math(EXPR outside_read "${outside_read} + 1")
+    zen_doc_outside_hits("${raw}" hits)
+    foreach(i IN LISTS hits)
+        list(GET ZEN_DOC_OUTSIDE_SPELLINGS ${i} spelling)
+        string(FIND "${raw}" "${spelling}" at)
+        string(SUBSTRING "${raw}" 0 ${at} before)
+        string(REGEX MATCHALL "\n" newlines "${before}")
+        list(LENGTH newlines line0)
+        math(EXPR line "${line0} + 1")
+        string(REPLACE "\\" "<backslash>" shown "${spelling}")
+        string(CONCAT problem "${rel}:${line}: names a path outside this repository ('${shown}')"
+               "   (the external-reader rule, CONTRIBUTING.md: say the thing in words)")
+        list(APPEND problems "${problem}")
+        math(EXPR outside_leaks "${outside_leaks} + 1")
+    endforeach()
+endforeach()
+if(outside_read EQUAL 0)
+    message(FATAL_ERROR
+        "doc-links: the sweep read ZERO current-facing text files for outside paths. An "
+        "expectation of nothing is satisfied by anything; check the text-kind list and the "
+        "exclusion rules at the top of this file.")
+endif()
+
 # ---- the report ------------------------------------------------------------------------
 
 list(LENGTH pruned pruned_count)
@@ -481,6 +629,9 @@ message(STATUS "doc-links: ${src_count} first-party C/C++ files, ${src_scanned} 
                ".md reference, ${src_refs} comment references checked")
 message(STATUS "doc-links: ${outside} references counted and declined (external URL, "
                "same-file anchor, or above the repository root)")
+message(STATUS "doc-links: ${outside_read} current-facing text files read whole for a path "
+               "outside this repository (${outside_spelling_count} spellings; "
+               "${outside_exempt} declaring file exempt by rule) -- ${outside_leaks} found")
 
 if(NOT problems STREQUAL "")
     list(LENGTH problems problem_count)
@@ -489,10 +640,13 @@ if(NOT problems STREQUAL "")
         string(APPEND text "  ${problem}\n")
     endforeach()
     message(FATAL_ERROR
-        "doc-links FAILED: ${problem_count} broken repo-local documentation reference(s).\n"
+        "doc-links FAILED: ${problem_count} broken repo-local documentation reference(s) or "
+        "path(s) outside this repository.\n"
         "${text}\n"
         "  Fix the reference, or -- if the document is deliberately frozen history -- widen "
-        "ZEN_DOC_EXCLUDE in this file with a written rule rather than silencing one path.")
+        "ZEN_DOC_EXCLUDE in this file with a written rule rather than silencing one path. A "
+        "path outside the repository is reworded into words, never excluded.")
 endif()
 
-message(STATUS "doc-links: PASSED -- every repo-local documentation reference resolves")
+message(STATUS "doc-links: PASSED -- every repo-local documentation reference resolves, and no "
+               "current-facing file names a path outside this repository")
