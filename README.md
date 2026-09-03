@@ -156,19 +156,19 @@ weave what it exports and loads it through the real Kernel.
 
 ## Where this lives
 
+Loom is one of two repositories, usually checked out side by side:
+
 ```
-Zen/
-  Loom/        this repo — the substrate, everyone's
-  Zengine/     the default weave set (Timer, Input, Surface, snake) — the first consumer
-  playground/  your own weaves
+Loom/        this repo — the substrate, everyone's
+Zengine/     the default weave set (Timer, Input, Surface, snake) — the first consumer
 ```
 
+Your own weaves live wherever you keep them; nothing here assumes a layout.
 Zengine consumes the Loom **by the stranger's path** (an installed package),
 which keeps the dependency arrow un-invertible and makes an unexported surface
 fail at home before it fails for a guest. **Per-repo green:** each repo's
-suite proves that repo; every report states *which* repo's green was proven.
-Assistant sessions launch from the `Zen/` root (the memory graph is keyed to
-it); git runs per-repo (`git -C Loom status`).
+suite proves that repo; every report states *which* repo's green was proven,
+and git runs per repository (`git -C Loom status`).
 
 ## License
 
