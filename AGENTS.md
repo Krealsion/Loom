@@ -46,6 +46,14 @@ cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
   `cmake -DZEN_PREFIX=<prefix> -DZEN_WORK=<dir> -P tests/package/run.cmake`.
   It is the only lane that can catch a requirement the package fails to carry,
   because it is the only one that reaches Loom solely through `find_package`.
+- **Never change Loom's linker without the full lane.** `-fuse-ld=gold` links
+  faster and segfaults the weave suites (`kernel`, `handoff`, `all`): an
+  exception propagating out of a `dlopen`ed weave dies, because gold resolves
+  the ELF vague-linkage behaviour the reloadable-weave contract (KERN-05,
+  `cmake/loom-weave.cmake`) depends on; the same tree under the default linker
+  is green. The rule is general: a build speedup of any kind — linker, launcher,
+  unity build, flag — is not adopted until `tests/verify.cmake` has run whole
+  under it, and a faster red is not a result.
 
 ## The population contract — what a green run means (POP-01..05)
 

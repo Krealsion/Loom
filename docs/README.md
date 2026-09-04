@@ -11,7 +11,10 @@ pages, no history required.
 Timers are not Loom's: they are the Timer *package*, owned by the separate
 **Zengine** repository, at `Zengine/docs/`. Zengine-owned pages are named that
 way throughout and never linked — no page under `docs/` reaches into a sibling
-checkout, so this tree is readable from a Loom clone alone.
+checkout, so this tree is readable from a Loom clone alone. That is the narrow
+case of the rule in [CONTRIBUTING.md](../CONTRIBUTING.md#documentation): a
+public repository names no path outside itself, and `doc_links` reads every
+current-facing file for one.
 
 **I need exact semantics.** [reference/](reference/) — one page per subsystem:
 [values & admission](reference/values-and-admission.md),
