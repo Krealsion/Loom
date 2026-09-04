@@ -103,14 +103,40 @@ rides `loom::core` and arrives on its own.
 
 ## Load it
 
+Through the kernel's **control door**, not around it. `Kernel::load` alone
+opens the library, registers the weave and binds its role — and tells the weave
+nothing. The door (`zen/kernel/control.hpp`) is the ordinary message participant
+that sits on the kernel's operations, and it is the one thing that announces
+`zen.Activated` to a freshly loaded weave ([LIFE-01](../laws/lifecycle-laws.md)),
+so a weave loaded by a bare `Kernel::load` is registered and never activated.
+
 ```cpp
+#include <zen/kernel/control.hpp>
+
 loom::Switchboard bus;
 loom::Kernel kernel(bus);
-loom::LoadResult lr = kernel.load("responder-v1", path, "responder");  // role optional
-if (!lr.ok) { /* lr.error carries the loader's words */ }
+const loom::WeaveId control = loom::mount_control(kernel, bus);
+
+// The host holds root: Switchboard::send is ungated. A weave that loads on the
+// host's behalf holds load_capability(control) in its grant instead.
+bus.send(control, loom::Message(loom::to_value(
+    loom::LoadLibrary{"responder-v1", path, "responder"})));   // role optional: ""
+bus.drain_until_idle();
+
+if (!kernel.is_loaded("responder-v1")) { /* the door answered zen.Refused with the loader's words */ }
 bus.send_to_role("responder", loom::Message(loom::to_value(Ping{1})));
 bus.drain_until_idle();
 ```
+
+The door answers every operation — `zen.Result{weave id}` or `zen.Refused{why}`
+— to the message's `reply_to`, else to its bus-stamped sender. A host-injected
+send has neither, so the host above reads the outcome from the kernel; a
+participant that drives the door hears the answer, and the Weave Manager
+(`zen/kernel/manager.hpp`) is the first one that does. The test that pins the
+door's ownership of the fact is `tests/test_manager.cpp`, case *"R2A-1 C: the
+direct control door activates too — the fact is not the Manager's"*: a
+participant holding exactly `load_capability` loads with no Manager in the path,
+and exactly one activation is delivered, stamped from the door.
 
 Everything the library emits crosses as **bytes** and is re-admitted through
 the one gate host-side ([KERN-01](../laws/kernel-laws.md)) — a malformed
