@@ -88,6 +88,26 @@ event — the usual first three:
 
 See [diagnostics](diagnostics.md) for reading the tap and the journal.
 
+**A copied weave that kept a shape's name is refused at mount, not at delivery.**
+A `(name, version)` publishes once per process, and every shape a weave touches —
+its `Accept` doors, what it emits, and its state struct — is registered when the
+weave is mounted. So copy `Responder` to make a second participant, rename the
+class and rename its doors, give the copy's `Count` a field of its own, and leave
+`ZEN_SHAPE(Count, 1, ...)` spelled as it was: mounting it throws
+`loom::SchemaConflict`, saying
+
+```text
+schema 'Count' v1 is already published with a different shape (published schemas are immutable)
+```
+
+and a host that loaded the copy from a library rather than compiling it in reports
+that same sentence back to you. Rename the shape too and both mount. The condition
+is exact and worth knowing: two weaves that register the *identical* shape share
+one published entry and neither is refused — that is the rule working, not a
+loophole. What is refused is divergence under a name that was kept, because the
+name is already a promise about somebody else's fields
+([GATE-04](../laws/admission-laws.md)).
+
 **If your handler throws**, the exception travels out to whoever asked for the
 dispatch turn — it is the host's to catch, and Loom neither hides it nor punishes you for it.
 Loom puts its own bookkeeping back before it leaves, so the bus keeps working and
