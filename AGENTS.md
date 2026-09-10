@@ -5,6 +5,21 @@ tests). Human docs: `docs/README.md`. Normative truth is `docs/reference/` +
 `docs/laws/` only; `docs/history/` is frozen record; `docs/evidence/` is not
 the API contract.
 
+## Intent, evidence, and architectural fit
+
+Approved purpose, requirements, and architectural contracts determine whether a change is right.
+Code, observations, and tests establish current behavior under the conditions examined. A passing
+test cannot by itself settle intended behavior or justify weakening a contract. If they disagree,
+trace the requirement and actual path, identify whether code, test, or prose is wrong, and correct
+that part within the authorized scope. Escalate changes to intended contracts to their owner.
+
+Before implementation and again at review, assess the complete result: does it serve the intended
+capability, preserve coherent ownership/authority/composition, and leave selected next work and
+known consumers able to build on it? Local green does not excuse avoidable coupling, duplicate
+truth, special cases, or migration burdens imposed on future owners. Revise that design; make
+necessary tradeoffs explicit for acceptance. Keep the argument proportional and grounded in
+real consumers, not speculative abstractions. Required checks still have to pass.
+
 ## Build / test (canonical: WSL Ubuntu, GCC ≥ 11.4, cmake ≥ 3.22)
 
 ```bash
@@ -182,7 +197,8 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
   that capability's ceiling; its admission **baseline** never changes, and its
   OS/filesystem/resource containment was consumed into kernel state before the
   child ran — `LiveAuthority` has no word for any of it.
-- Green means correct — "proven" means a regression test asserts it; check
-  case *counts*, not just pass/fail.
-- Docs claims over source: when they disagree, current source + tests win;
-  record the contradiction rather than silently fixing prose.
+- Green means correct — a regression test pins an assertion under its arranged
+  conditions, not the fitness of the whole architecture. Check the population too.
+- A discrepancy means prose is automatically wrong. Code and tests establish
+  observed behavior; intended contracts still require judgment. Follow
+  [intent, evidence, and architectural fit](#intent-evidence-and-architectural-fit).
