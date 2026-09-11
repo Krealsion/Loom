@@ -8,7 +8,10 @@ be retrieved alone and still make sense, each carries what it **means**, what it
 **"Proven" means a regression test asserts it.** A property that holds only by
 reading the code is *"true by construction, not yet pinned"* — Zen's docs say it
 that way, never "proven". (The project's own ethos applied to its prose: never
-claim an enforcement, or a proof, you did not earn.)
+claim an enforcement, or a proof, you did not earn.) A test can pin an incorrect
+expectation: its passing result is evidence of the exercised behavior, not permission
+to weaken the intended invariant. Investigate a disagreement before changing the
+law, implementation, or test.
 
 ## Namespaces
 

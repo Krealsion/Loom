@@ -277,6 +277,16 @@ std::uint64_t request_and_approve(Cast& c) {
 
 } // namespace
 
+namespace {
+std::vector<TranscriptEntry> dispatch_rows(const TerminalSession& session) {
+    std::vector<TranscriptEntry> rows;
+    for (const auto& e : session.transcript().entries()) {
+        if(e.dispatch_refusal) { rows.push_back(e); }
+    }
+    return rows;
+}
+}
+
 TEST_SUITE("terminal") {
 
 // ---- what a participant may know, and what knowing is not -------------------
@@ -303,7 +313,8 @@ TEST_CASE("knowing a shape is not a door, and neither is authority") {
     CHECK(has_door("Reply"));
     CHECK_FALSE(has_door("Work"));       // a door it never asked for
     CHECK_FALSE(has_door("Query"));      // ...nor for the shape it SENDS
-    CHECK(doors.size() == 6);
+    CHECK(has_door("zen.DispatchRefused"));
+    CHECK(doors.size() == 7);
 
     // And knowing `Work` confers nothing: the participant's authority says nothing about it.
     CHECK(c.acting().describe("Work", 1).has_value());
@@ -424,10 +435,13 @@ TEST_CASE("a channel names an identity and confers no authority whatever") {
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))})));
     c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());   // the Kernel refused it
-    CHECK(c.tap_refused("Query"));             // ...and only the HOST was told
+    CHECK(c.tap_refused("Query"));             // host evidence remains available
     // The participant's own record says exactly what it knows and no more.
     REQUIRE(c.of_kind(c.acting(), TranscriptKind::Submitted).size() == 1);
-    CHECK(c.of_kind(c.acting(), TranscriptKind::Received).empty());
+    const auto receipts = c.of_kind(c.acting(), TranscriptKind::Received);
+    REQUIRE(receipts.size() == 1);
+    REQUIRE(receipts.front().dispatch_refusal);
+    CHECK(receipts.front().dispatch_refusal->send.reason == "CapabilityDenied");
 }
 
 // ---- addressing -------------------------------------------------------------
@@ -581,7 +595,7 @@ TEST_CASE("SUBMITTED means authored, and says nothing about delivery — in eith
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
     c.bus.drain_until_idle();
 
-    // The HOST can tell them apart. The participant cannot, and its transcript does not pretend.
+    // Submitted remains authorship; a separate authenticated event now explains refusal.
     CHECK(c.tap_delivered("Query", c.service_id));
     CHECK(c.tap_refused("Work"));
     const std::vector<TranscriptEntry> submitted =
@@ -589,9 +603,13 @@ TEST_CASE("SUBMITTED means authored, and says nothing about delivery — in eith
     REQUIRE(submitted.size() == 2);
     CHECK(submitted[0].kind == submitted[1].kind); // identical records for opposite outcomes
     CHECK(std::string(name_of(TranscriptKind::Submitted)) == "submitted");
-    // There is no delivery/outcome/refusal field on a Submitted entry to be filled in later, and
-    // the participant's only inbound record is the answer it actually received.
-    CHECK(c.of_kind(c.acting(), TranscriptKind::Received).empty());
+    REQUIRE(c.of_kind(c.acting(), TranscriptKind::Received).size()==1);
+    CHECK(c.of_kind(c.acting(), TranscriptKind::Received)[0].shape=="zen.DispatchRefused");
+    const auto refused=dispatch_rows(c.acting());
+    REQUIRE(refused.size()==1);
+    CHECK(refused[0].dispatch_refusal->send.refused_attempt().seq==submitted[1].attempt);
+    CHECK(refused[0].dispatch_refusal->send.reason=="CapabilityDenied");
+    CHECK(refused[0].dispatch_refusal->send.shape=="Work");
 }
 
 // ---- receiving --------------------------------------------------------------
@@ -816,7 +834,10 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
     CHECK(prompts.front().shape == "zen.AuthorityPrompt");
     CHECK(prompts.front().sender == c.weaver_id);
     CHECK_FALSE(prompts.front().answers_ask);
-    CHECK(c.of_kind(c.acting(), TranscriptKind::Received).empty()); // the session saw nothing
+    const auto receipts = c.of_kind(c.acting(), TranscriptKind::Received);
+    REQUIRE(receipts.size() == 1); // only its earlier Work refusal, no AuthorityPrompt
+    REQUIRE(receipts.front().dispatch_refusal);
+    CHECK(receipts.front().dispatch_refusal->send.shape == "Work");
 
     // The prompt's trusted facts are the WEAVER's, and the untrusted prose is kept apart.
     const std::optional<ReceivedMessage> prompt = c.op().received(prompts.front().message);
@@ -967,7 +988,7 @@ TEST_CASE("a participant reads its authority from the Kernel, and keeps no copy 
     CHECK(delegated[0].as_text() == "Work v1 -> role some.service");
 }
 
-TEST_CASE("revoking takes back the delegated rule, and the session is not told it was denied") {
+TEST_CASE("revoking takes back the delegated rule, and the next send receives a dispatch refusal") {
     Cast c;
     (void)request_and_approve(c);
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
@@ -987,16 +1008,17 @@ TEST_CASE("revoking takes back the delegated rule, and the session is not told i
     CHECK(desc->value.get("delegated")->as_list().empty());
     CHECK(desc->value.get("base")->as_list().size() == 3);
 
-    // The next Work is denied — and THE HOST is the only party that knows.
+    // The next Work is denied; the session learns through its own declared door.
     const std::size_t before = c.service->handled_names.size();
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{2})})));
     c.bus.drain_until_idle();
     CHECK(c.service->handled_names.size() == before);
     CHECK(c.tap_refused("Work"));
-    // The participant's transcript records an authored message and never a denial it was not told.
-    for (const TranscriptEntry& e : c.log(c.acting())) {
-        CHECK(e.kind != TranscriptKind::Received);
-    }
+    const auto receipts = c.of_kind(c.acting(), TranscriptKind::Received);
+    REQUIRE(receipts.size() == 1);
+    REQUIRE(receipts.front().dispatch_refusal);
+    CHECK(receipts.front().dispatch_refusal->send.reason == "CapabilityDenied");
+    CHECK(receipts.front().dispatch_refusal->send.shape == "Work");
 }
 
 // ---- what a participant may observe -----------------------------------------
@@ -1209,3 +1231,63 @@ TEST_CASE("an unattached participant authors nothing and says why") {
 }
 
 } // TEST_SUITE("terminal")
+
+TEST_SUITE("terminal") {
+TEST_CASE("dispatch refusal retires only its exact ask while a delivered unanswered ask stays pending") {
+    Cast c;
+    c.service->on_handle=[](const Message&,Bus&,ProbeWeave&) {};
+    auto refused=c.acting().ask(Address::to_role(kServiceRole),"Work",1,{bare(std::int64_t{1})});
+    auto waiting=c.acting().ask(Address::to_role(kServiceRole),"Query",1,{bare(std::string("hello"))});
+    REQUIRE(refused); REQUIRE(waiting); REQUIRE(c.acting().outstanding()==2);
+    c.bus.pump_pending(); CHECK(c.acting().outstanding()==2);
+    c.bus.pump_pending(); CHECK_FALSE(c.acting().waiting_on(refused.ask));
+    CHECK(c.acting().waiting_on(waiting.ask));
+    auto rows=dispatch_rows(c.acting()); REQUIRE(rows.size()==1);
+    CHECK(rows[0].dispatch_refusal->retired_ask==refused.ask); CHECK_FALSE(rows[0].answers_ask); CHECK(rows[0].answers==0);
+    CHECK(rows[0].dispatch_refusal->send.role==kServiceRole); CHECK(rows[0].dispatch_refusal->send.addressed_weave()==WeaveId{});
+}
+TEST_CASE("a forged refusal cannot retire a terminal ask before its real notice arrives") {
+    Cast c;
+    auto ask=c.acting().ask(Address::to_role(kServiceRole),"Work",1,{bare(std::int64_t{1})});
+    REQUIRE(ask); const auto pending=c.acting().pending().front();
+    DispatchRefused fake; fake.attempt=std::to_string(pending.attempt); fake.role=pending.role;
+    fake.shape=pending.shape; fake.version=pending.version; fake.reason="CapabilityDenied";
+    Message msg(to_value(fake),{}, {},pending.correlation);
+    msg.provenance=Provenance::attested(Provenance::Kind::DispatchRefusal,0);
+    c.bus.send(c.session.id,std::move(msg));
+    c.bus.pump_pending(); CHECK(c.acting().waiting_on(ask.ask));
+    CHECK(dispatch_rows(c.acting()).empty());
+    REQUIRE(c.of_kind(c.acting(),TranscriptKind::Received).size()==1);
+    c.bus.pump_pending(); CHECK_FALSE(c.acting().waiting_on(ask.ask));
+}
+TEST_CASE("late refusal after local forgetting cannot settle a newer ask") {
+    Cast c; c.service->on_handle=[](const Message&,Bus&,ProbeWeave&) {};
+    auto old=c.acting().ask(Address::to_role(kServiceRole),"Work",1,{bare(std::int64_t{1})}); REQUIRE(old);
+    c.bus.pump_pending(); REQUIRE(c.acting().cancel_ask(old.ask));
+    auto fresh=c.acting().ask(Address::to_role(kServiceRole),"Query",1,{bare(std::string("fresh"))}); REQUIRE(fresh);
+    c.bus.pump_pending(); CHECK(c.acting().waiting_on(fresh.ask));
+    auto rows=dispatch_rows(c.acting()); REQUIRE(rows.size()==1);
+    CHECK(rows[0].dispatch_refusal->retired_ask==0); CHECK(c.acting().outstanding()==1);
+}
+TEST_CASE("transcript eviction leaves exact local attempt matching and bounded retention intact") {
+    Cast c;
+    auto ask=c.acting().ask(Address::to_role(kServiceRole),"Work",1,{bare(std::int64_t{1})}); REQUIRE(ask);
+    c.bus.pump_pending();
+    for(std::size_t i=0;i<kTranscriptCapacity+8;++i) { c.acting().record_notice("newer local fact"); }
+    REQUIRE(c.of_kind(c.acting(),TranscriptKind::Submitted).empty());
+    REQUIRE(c.acting().waiting_on(ask.ask)); c.bus.pump_pending();
+    CHECK_FALSE(c.acting().waiting_on(ask.ask));
+    auto rows=dispatch_rows(c.acting()); REQUIRE(rows.size()==1);
+    CHECK(rows[0].dispatch_refusal->retired_ask==ask.ask); CHECK(c.acting().transcript().entries().size()==kTranscriptCapacity);
+}
+}
+TEST_SUITE("ask_book") {
+TEST_CASE("attempt binding refuses zero rebinding and duplicate identities without changing old records") {
+    AskBook book(2); auto a=book.open(WeaveId{9}); auto b=book.open(WeaveId{9}); REQUIRE(a); REQUIRE(b);
+    CHECK_FALSE(book.bind_attempt(a.id,0)); CHECK(book.bind_attempt(a.id,14));
+    CHECK_FALSE(book.bind_attempt(a.id,15)); CHECK_FALSE(book.bind_attempt(b.id,14));
+    CHECK(book.bind_attempt(b.id,15)); REQUIRE(book.match_attempt(14)); CHECK(book.match_attempt(14)->id==a.id);
+    CHECK(book.match_attempt(0)==nullptr); REQUIRE(book.forget(a.id));
+    CHECK(book.match_attempt(14)==nullptr); REQUIRE(book.match_attempt(15)); CHECK(book.match_attempt(15)->id==b.id);
+}
+}

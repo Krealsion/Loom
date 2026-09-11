@@ -117,6 +117,7 @@ struct PendingAsk {
     std::string role;
     std::string shape;
     std::uint32_t version = 0;
+    std::uint64_t attempt = 0; ///< queued send identity, explicitly bound by its author
 
     /// Was this ask addressed to an office rather than to one exact weave?
     bool to_role() const noexcept { return !role.empty(); }
@@ -231,6 +232,33 @@ public:
     /// number an open conversation is already using, and an answer to that send would
     /// then settle the conversation.
     std::uint64_t mint_correlation() { return mint(); }
+
+    /// Bind once to an actual queued attempt. This supplies no authentication.
+    /// Zero, rebinding, and sharing an attempt between records are refused.
+    bool bind_attempt(std::uint64_t id, std::uint64_t attempt) noexcept {
+        if (attempt == 0) { return false; }
+        for (const PendingAsk& p : open_) {
+            if (p.attempt == attempt) { return false; }
+        }
+        for (PendingAsk& p : open_) {
+            if (p.id == id && p.attempt == 0) { p.attempt = attempt; return true; }
+        }
+        return false;
+    }
+
+    /// Local recognition only: caller must authenticate the notice and compare
+    /// its authored facts before forgetting. Zero/ambiguous identities match none.
+    const PendingAsk* match_attempt(std::uint64_t attempt) const noexcept {
+        if (attempt == 0) { return nullptr; }
+        const PendingAsk* found = nullptr;
+        for (const PendingAsk& p : open_) {
+            if (p.attempt == attempt) {
+                if (found != nullptr) { return nullptr; }
+                found = &p;
+            }
+        }
+        return found;
+    }
 
     // ---- settling -----------------------------------------------------------
 

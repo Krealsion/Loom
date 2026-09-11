@@ -68,13 +68,13 @@ role_authorship    portable  17
 sense              portable  19
 grant              portable  21
 weaver             portable  26
-terminal           portable  37
+terminal           portable  41
 harness            portable  7
 breathing          portable  1
 schema_codec       portable  7
 weave_shape        portable  4
 weave              portable  10
-ask_book           portable  20
+ask_book           portable  21
 poke               portable  20
 describe           portable  24
 console            portable  27
@@ -82,12 +82,15 @@ recorder           portable  31
 logger             portable  15
 component          portable  19
 pixel              portable  12
-bridge             portable  20
+bridge             portable  21
 bridge             posix     8
 kernel             kernel    136
 kernel             posix     2
 handoff            kernel    10
 manager            kernel    43
 capabilities       kernel    4
-isolation          posix     38
+isolation          posix     39
 policy             posix     23
+
+dispatch_refusal   portable  15
+dispatch_loaded    kernel    5

@@ -15,8 +15,13 @@
 
 namespace loom {
 
-/// A handle to a queued delivery. After the delivery is pumped, the sender can
-/// read its fate via Switchboard::outcome(). The zero ticket is invalid.
+/// Identifies a queued attempt for ordinary directed/role sends, including
+/// office-authored sends and ABI v7. It proves enqueue, not delivery.
+/// Switchboard::outcome() is a host journal query; opted-in participants learn
+/// selected later refusals through authenticated notifications (see
+/// docs/reference/messaging.md#sender-visible-dispatch-refusal).
+/// Dynamic answer doors retain success-sentinel tickets, not queued-attempt
+/// identities; see docs/reference/dynamic-abi.md. The zero ticket is invalid.
 struct Ticket {
     std::uint64_t seq = 0;
     bool valid() const noexcept { return seq != 0; }

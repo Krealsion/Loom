@@ -51,16 +51,19 @@ inline std::string_view as_view(const std::uint8_t* data, std::size_t len) {
 // A Bus implementation that lives inside the library and forwards a Weave's
 // send/publish across the host callback table as serialized payload bytes. The
 // host assigns the real sender id and admits the bytes through the gate before
-// routing; the library-side Ticket/count are therefore not meaningful here.
+// routing. ABI v7 returns the real attempt sequence for ordinary/office sends.
+// Answer tickets remain status sentinels; publication counts remain unchanged.
 class HostApiBus final : public loom::Bus {
 public:
     explicit HostApiBus(const ZenHostApi* host) : host_(host) {}
 
     loom::Ticket send(loom::WeaveId target, loom::Message msg) override {
+        std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         if (host_ != nullptr && host_->send != nullptr) {
-            host_->send(host_->ctx, target.value, msg.reply_to.value, msg.correlation,
-                        reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+            const ZenStatus status = host_->send(host_->ctx, target.value, msg.reply_to.value, msg.correlation,
+                        reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
+            if (status == ZEN_OK) { return loom::Ticket{attempt}; }
         }
         return loom::Ticket{};
     }
@@ -78,11 +81,13 @@ public:
     // which stamps the authoritative sender from the connection and routes via
     // send_as_to_role. The sender is never passed here and never rides the wire.
     loom::Ticket send_to_role(std::string_view role, loom::Message msg) override {
+        std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         const std::string role_z(role); // NUL-terminated for the C ABI
         if (host_ != nullptr && host_->send_to_role != nullptr) {
-            host_->send_to_role(host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
-                                reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+            const ZenStatus status = host_->send_to_role(host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
+                                reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
+            if (status == ZEN_OK) { return loom::Ticket{attempt}; }
         }
         return loom::Ticket{};
     }
@@ -100,7 +105,7 @@ public:
         const std::string bytes = loom::serialize(msg.payload);
         const ZenStatus st = host_->answer(
             host_->ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-        // Not a bus seq — it never is across this seam — but success/failure IS
+        // This answer ticket remains a status sentinel, but success/failure IS
         // meaningful, and is the only way a loaded weave learns whether its answer
         // was authorized.
         return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
@@ -128,7 +133,7 @@ public:
         const ZenStatus st = host_->answer_deferred(
             host_->ctx, answer.opaque_token(),
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-        // The library-side Ticket is not a bus seq (it never is across this seam),
+        // This deferred-answer ticket remains a status sentinel,
         // but success/failure IS meaningful and is the only way a loaded steward
         // can learn whether its answer went out.
         return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
@@ -153,12 +158,13 @@ public:
         if (host_ == nullptr || host_->office_send == nullptr) {
             return loom::Ticket{}; // no door: honestly refused, not downgraded
         }
+        std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         const std::string role_z(as_role); // NUL-terminated for the C ABI
         const ZenStatus st = host_->office_send(
             host_->ctx, role_z.c_str(), target.value, msg.reply_to.value, msg.correlation,
-            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-        return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
+        return st == ZEN_OK ? loom::Ticket{attempt} : loom::Ticket{};
     }
 
     loom::Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
@@ -166,13 +172,14 @@ public:
         if (host_ == nullptr || host_->office_send_to_role == nullptr) {
             return loom::Ticket{};
         }
+        std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         const std::string as_z(as_role);
         const std::string to_z(to_role);
         const ZenStatus st = host_->office_send_to_role(
             host_->ctx, as_z.c_str(), to_z.c_str(), msg.reply_to.value, msg.correlation,
-            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-        return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
+        return st == ZEN_OK ? loom::Ticket{attempt} : loom::Ticket{};
     }
 
     loom::OfficePublication office_publish(std::string_view as_role,
@@ -415,6 +422,9 @@ inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequen
     switch (flags) {
     case ZEN_PROV_ANSWER:
         p = loom::Provenance::attested(loom::Provenance::Kind::Answer, 0);
+        break;
+    case ZEN_PROV_DISPATCH_REFUSAL:
+        p = loom::Provenance::attested(loom::Provenance::Kind::DispatchRefusal, 0);
         break;
     case ZEN_PROV_ACTIVATION:
         p = loom::Provenance::attested(loom::Provenance::Kind::Activation, sequence);

@@ -80,6 +80,85 @@ Grants authorize by shape→target or shape→role
 *before* resolution, so an unauthorized sender cannot learn whether a role is
 held.
 
+## Sender-visible dispatch refusal
+
+An ordinary native or in-process loaded weave opts in by **explicitly accepting
+`zen.DispatchRefused` v1** (`loom::DispatchRefused`, in
+`zen/weave/dispatch_refusal.hpp`). `AcceptMode::AnyRegistered` alone does not opt in.
+The declaration is captured at authorship. Ordinary directed and role-addressed
+sends participate, including verified office-authored sends; publication, answers,
+preparation and lifecycle operations do not acquire this contract.
+
+```cpp
+// Add DispatchRefused to this weave's Accept<...> list.
+attempt = mail.send_to_role("builder", Build{...}, correlation);
+// Later, in on(const loom::DispatchRefused& refused, loom::Mail& mail):
+if (!mail.dispatch_refused()) { return; } // shape alone is ordinary speech
+if (refused.refused_attempt().seq == attempt.seq && attempt.valid()) {
+    // This exact send was refused before the target handler was entered.
+}
+```
+
+`Ticket::seq` from the four ordinary addressed send doors identifies the queued
+attempt in this Loom, including across ABI v7. It grants no authority, needs no
+journal lookup, and proves only enqueue. Zero means no queued identity. Sequences
+are not reused: after the last unsigned 64-bit sequence, native enqueue throws
+`std::overflow_error`; the loaded addressed seam returns a refusal. A callback
+that could not queue has no later dispatch notice. Existing dynamic answer
+success sentinels and publication return values are separate contracts.
+
+A notice is **Loom's later attestation**, not an application answer:
+`mail.dispatch_refused()` is true, `answers_ask()` is false, and neither an
+immediate nor a deferred answer right exists. Ordinary sends strip provenance;
+copying the same Message, shape, sequence, sender or correlation cannot mint this
+fact. The in-process image shares native memory; this is supported-API authority,
+not a memory sandbox. See [dynamic ABI](dynamic-abi.md).
+
+The safe reasons are `CapabilityDenied`, `NoSuchTarget`, `TargetUnavailable`,
+`NotAccepted`, and `GateRefused`. The existing dispatch owner decides; no handler
+has run. Sealed candidates remain concealed. A denied send reports
+`CapabilityDenied` regardless of the addressed target's state, even when the host
+diagnostic's earlier seal check reports `NoSuchTarget`. Original host diagnostics
+are retained. A notice includes no gate detail string or resolved role holder.
+
+The notice carries the original shape/version, target **or** role, attempt, and
+safe reason. The original unsigned correlation is on the delivery envelope.
+`attempt` and direct `target` use canonical unsigned decimal text because the
+value grammar's integer is signed; `refused_attempt()` and `addressed_weave()`
+decode without truncation. Role addresses and shape names are carried whole.
+The original payload and `reply_to` are not copied. The notice returns to the
+actual author, never its reply address or a subsequent holder of its office.
+
+Loom captures the author's life **and incarnation at authorship**, checks both
+before generating a notice, and checks both again before delivering it. Death,
+removal, revival or live replacement disposes the obsolete notice. This does not
+change MSG-03: ordinary queued speech still survives live code replacement.
+
+Caller correlations may be zero or reused. Match the returned queued attempt,
+then the expected authored context, after authenticating the notice. A small
+`AskBook::bind_attempt(id, seq)` / `match_attempt(seq)` helper keeps this scalar
+on the existing local record; it sends nothing and authenticates nothing.
+Binding rejects zero, rebinding and duplicate attempts. A consumer forgets only
+the matching local operation; forgotten or ambiguous records must stay untouched.
+A refused non-ask needs no AskBook to be reported.
+
+At most one notice is appended to the ordinary FIFO after an eligible refusal.
+`pump_pending()` leaves it for a later turn; no handler is re-entered. There is
+no receipt persistence or eventual-delivery promise. A missing, dead, replaced or
+closed recipient disposes the notice; rejecting it or failing in its handler
+never generates refusal-of-refusal traffic. Allocation failure or exhausted
+sequence space may drop a notice while preserving the original host refusal.
+See [bounds](bounds.md#dispatch-refusal-notices).
+
+**Absence proves nothing about delivery or success.** Handler failure, a
+delivered-but-unanswered request, or a later released/invalidated deferred answer
+right produces no dispatch-refusal claim. Malformed dynamic bytes, unresolved
+dynamic shapes, refused office authorship and invalid deferred rights can fail
+synchronously before ordinary dispatch begins. Timeout, cancellation, abandonment,
+retry, authority requests and publication aggregation are separate capabilities.
+The isolated pipe refuses a manifest requesting the notice door; its attestation
+protocol is not extended. Wire-originated payloads cannot attest this fact.
+
 ## Office authorship (role-authored provenance)
 
 A weave may **deliberately** author one statement in the capacity of a role it
@@ -350,12 +429,15 @@ publication reached zero recipients — exactly what a native `publish` does
 silently. What still refuses is a publication whose shape resolves and whose bytes
 fail the gate: there a real accepter was denied real bytes.
 
-This is not send fate and does not become it: no ticket crosses the seam, nothing
-is returned to the sender that was not already returned, and there is no future,
-retry or dead letter. Found by Night Lab III (P-011), where a loaded weave's
-emission vanished entirely while the identical native reach refused loudly; the
-publication half was corrected by FRIC-0, where the same uniformity had made an
-ordinary quiet startup look like a failure.
+These are immediate seam rejections: no queued-attempt ticket is returned, and
+no later dispatch-refusal notice follows. ABI v7's ordinary addressed callbacks
+return real attempts when they enqueue; see
+[sender-visible dispatch refusal](#sender-visible-dispatch-refusal) and
+[dynamic ABI](dynamic-abi.md) for that contract. The host diagnostics add no
+future, retry or dead letter. This diagnostic gap was found by Night Lab III
+(P-011), where a loaded weave's emission vanished entirely while the identical
+native reach refused loudly; the publication half was corrected by FRIC-0, where
+the same uniformity had made an ordinary quiet startup look like a failure.
 
 ## Two dispatch turns, and the call site says which
 

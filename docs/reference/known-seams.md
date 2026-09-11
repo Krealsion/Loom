@@ -124,7 +124,7 @@ B own authored/submitted messages   ORDINARY   it authored them
 C authenticated answers             ORDINARY   provenance + Loom's correlation
 D policy notifications to a seat    ORDINARY   an ordinary message to that weave
 E authority descriptions asked for  ORDINARY   zen.DescribeAuthority, capability-scoped
-F send fate for its own messages    NOT AVAILABLE  the standing sender-fate seam
+F dispatch refusal of its own sends AVAILABLE      explicit, authenticated, best effort
 G traffic involving a named role    NOT AVAILABLE  needs a scoped observation law
 H whole-bus traffic                 HOST ONLY  Switchboard::add_observer
 I authority changes by another
@@ -205,29 +205,18 @@ therefore label that identity as a seat and never as a person.
 
 ## Sender cannot observe send fate
 
-**Status: KNOWN SEAM.** (Narrowed at R2E-0, not closed — see below.)
+**Status: PARTLY SUPPLIED — dispatch refusal only.**
 
-A weave-originated send may be refused later at delivery; the sending weave
-receives no eventual delivery result (native tickets are journal handles the
-*host* can read; dynamic sends return no ticket at all). Applications needing
-absence detection author it per domain: watchdogs, timeouts, reconciliation,
-application-level acknowledgment. Do not invent ticket-outcome semantics in
-docs or designs; the refusals are observable on the tap/journal — by an
-observer, not the sender.
+An explicit notice acceptor can now receive an authenticated pre-handler refusal
+of an ordinary addressed send, native or in-process loaded. TerminalSession is
+the first ordinary consumer. Current contract:
+[sender-visible dispatch refusal](messaging.md#sender-visible-dispatch-refusal).
 
-What R2E-0 changed is only the **observer's** side, and only where a refusal was
-observable *nowhere*: see the next entry. Nothing about the sender's view moved.
-
-**TERM-0 priced it in a user interface**, which is where it stops being abstract.
-A [terminal session](terminal.md)'s transcript says `SUBMITTED` and carries no
-outcome field, so two sends with opposite fates leave identical records; and
-three UX consequences follow directly, each of which the phase declined to fake:
-a denied send may not trigger an automatic authority request (the participant
-cannot know it was denied); "awaiting an answer" may not be rendered as
-"delivered", "being worked on" or "a person saw it"; and an authority request to
-an unreachable seat simply stays pending, with nobody told. The only surface
-that can honestly say "delivered" is a host lens, and TERM-0 keeps that lens
-visibly separate rather than merging its facts into a participant's record.
+Absence of a notice proves nothing. Delivered-but-unanswered work, later released
+or invalidated answer rights, timeout, cancellation, progress/closing answers,
+retry and publication aggregation remain separate questions. AskBook stays local
+bookkeeping and creates no global obligation. The isolated pipe does not carry
+the new attestation and refuses a manifest requesting its notice door.
 
 ## The silent dynamic seam
 
@@ -256,9 +245,11 @@ whose bytes fail the gate is still refused. Reproducer:
 `playground/night-lab/workshop-marathon/repros/core/silent-seam-emission/`, and a
 real-artifact regression fixture in suite `kernel`.
 
-Deliberately **not** closed by this: send fate (above). No ticket crosses the
-seam, no future exists, and nothing is returned to a sender that was not returned
-before.
+This seam diagnostic remains synchronous. The narrower later
+[dispatch-refusal contract](messaging.md#sender-visible-dispatch-refusal) now
+returns authenticated refusal to an opted-in native or loaded sender and carries
+the real attempt ticket across ABI v7. It does not turn seam rejection into a
+queued attempt or supply general delivery/success knowledge.
 
 ## Event-loop composition
 
