@@ -65,8 +65,8 @@ PROVEN BY — `role_of`/`query_role`/`unload_role` all derive; suite `kernel`
 
 LAW — An artifact built against a different ABI version is refused at load,
 naming both versions. The current version is `ZEN_ABI_VERSION`
-(`include/zen/kernel/abi.h`) — **v6** today, and that header is the authority
-whenever prose disagrees with it.
+in `include/zen/kernel/abi.h`; that header owns the version, rather than a
+second version number maintained in this law.
 
 MEANS
 - the stale-artifact fixture always declares `ZEN_ABI_VERSION - 1`, so the pin

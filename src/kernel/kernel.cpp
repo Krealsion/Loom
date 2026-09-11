@@ -761,12 +761,13 @@ public:
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_, self_};
-        // BY NAME, in declaration order (KERN-04). No two fields of ZenHostApi share
-        // a type today, so a positional drift here would be a compile error rather
-        // than a silent miswire — but that is a property of the CURRENT field set,
-        // not a rule the table obeys, and the next appended callback could end that
-        // without anyone noticing. The designator states the mapping instead of
-        // depending on it.
+        // BY NAME, in declaration order (KERN-04). Since ABI v7, send_to_role
+        // and office_publish share a type: attempt_out and recipients_out are
+        // both uint64_t*. A designator can still name the wrong function. The
+        // loaded semantic witness distinguishes destination, office provenance
+        // and attempt versus count through this actual host table; the payload
+        // gate cannot distinguish two operations carrying the same shape.
+        // See docs/reference/dynamic-abi.md#constructing-the-tables-bl-4.
         ZenHostApi api{.ctx                  = &ctx,
                        .send                 = &zen_host_send,
                        .publish              = &zen_host_publish,

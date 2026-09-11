@@ -7,6 +7,7 @@
 #include <zen/kernel/kernel.hpp>
 
 #include <doctest.h>
+#include <algorithm>
 #include <limits>
 using namespace loom;
 using namespace sbfx;
@@ -16,6 +17,73 @@ Value mind(Switchboard& sb, WeaveId id) {
 }
 } // namespace
 TEST_SUITE("dispatch_loaded") {
+    TEST_CASE("ABI v7: loaded role sends and office publications have distinct successful semantics") {
+        // Both miswired callbacks can succeed here: the addressed role is also an
+        // office the author holds, and all recipients accept the SAME payload.
+        // Snapshot receipts do not depend on sending a report through either door.
+        for (const std::string mode : {"role", "office-publish", "publish", "direct", "office-denied"}) {
+            CAPTURE(mode);
+            Switchboard sb;
+            Kernel kernel(sb);
+            const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+            REQUIRE_MESSAGE(loaded.ok, loaded.error);
+            const auto first = register_probe(sb, {schema_of<dispatch_test::Payload>()});
+            const auto second = register_probe(sb, {schema_of<dispatch_test::Payload>()});
+            struct Delivery {
+                std::uint64_t target;
+                std::uint64_t attempt;
+                std::string office;
+            };
+            std::vector<Delivery> deliveries;
+            sb.add_observer([&](const BusEvent& ev) {
+                if (ev.kind == EventKind::Delivered &&
+                    ev.schema_name == dispatch_test::Payload::zen_name) {
+                    CHECK(ev.sender == loaded.id);
+                    deliveries.push_back({ev.target.value, ev.seq, ev.authored_role});
+                }
+            });
+            // Keep any attempt above the three-recipient count, independent of
+            // activation traffic or incidental equality at the start of a board.
+            for (int i = 0; i < 8; ++i) {
+                sb.send(loaded.id, Message(to_value(dispatch_test::Command{"prime", 0, "", "0"})));
+            }
+            sb.pump_pending();
+            REQUIRE(sb.pending() == 0);
+            const bool denied = mode == "office-denied";
+            const bool office = mode == "office-publish";
+            const bool addressed = mode == "role" || mode == "direct";
+            sb.send(loaded.id, Message(to_value(dispatch_test::Command{
+                denied ? "office-publish" : mode, static_cast<std::int64_t>(first.id.value),
+                denied ? "not-held" : "dispatch.author", "77"})));
+            sb.pump_pending();
+            const auto state = mind(sb, loaded.id);
+            CHECK(state.get("authored")->as_bool() == office);
+            CHECK(state.get("recipients")->as_int() == (office ? 3 : 0));
+            CHECK(state.get("queued")->as_int() == (addressed ? 1 : 0));
+            const auto& attempts = state.get("attempts")->as_list();
+            REQUIRE(attempts.size() == (addressed ? 1u : 0u));
+            const auto attempt = addressed ? std::stoull(attempts.front().as_text()) : 0;
+            if (addressed) { CHECK(attempt > 3); }
+            sb.drain_until_idle();
+
+            std::vector<std::uint64_t> actual;
+            for (const auto& delivery : deliveries) {
+                actual.push_back(delivery.target);
+                CHECK(delivery.office == (office ? "dispatch.author" : ""));
+                if (addressed) { CHECK(delivery.attempt == attempt); }
+                if (office) { CHECK(delivery.attempt > 3); }
+            }
+            std::vector<std::uint64_t> expected;
+            if (mode == "role") { expected = {loaded.id.value}; }
+            else if (mode == "direct") { expected = {first.id.value}; }
+            else if (!denied) { expected = {loaded.id.value, first.id.value, second.id.value}; }
+            std::sort(actual.begin(), actual.end());
+            std::sort(expected.begin(), expected.end());
+            CHECK(actual == expected);
+            CHECK(sb.pending() == 0);
+        }
+    }
+
     TEST_CASE("a real image authors all addressed forms and receives exact authenticated refusal "
               "attempts") {
         for (const std::string mode : {"direct", "role", "office-direct", "office-role"}) {
