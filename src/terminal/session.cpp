@@ -419,8 +419,8 @@ TerminalResult TerminalSession::cancel_ask(std::uint64_t ask_id) {
 // ---- the Weave contract ----------------------------------------------------
 
 std::vector<std::shared_ptr<const loom::Schema>> TerminalSession::accepted_schemas() const {
-    // EXACTLY THE DOORS the host declared — never the catalog, and never
-    // AcceptMode::AnyRegistered. A participant that accepted every registered shape would be
+    // The supplied vocabulary's doors plus TerminalSession's common DispatchRefused door —
+    // never the catalog or AcceptMode::AnyRegistered. Accepting every registered shape would be
     // accepting shapes chosen by whoever else happens to be running, which is a decision its host
     // never made.
     auto doors = vocabulary_.doors();

@@ -429,12 +429,15 @@ publication reached zero recipients — exactly what a native `publish` does
 silently. What still refuses is a publication whose shape resolves and whose bytes
 fail the gate: there a real accepter was denied real bytes.
 
-This is not send fate and does not become it: no ticket crosses the seam, nothing
-is returned to the sender that was not already returned, and there is no future,
-retry or dead letter. Found by Night Lab III (P-011), where a loaded weave's
-emission vanished entirely while the identical native reach refused loudly; the
-publication half was corrected by FRIC-0, where the same uniformity had made an
-ordinary quiet startup look like a failure.
+These are immediate seam rejections: no queued-attempt ticket is returned, and
+no later dispatch-refusal notice follows. ABI v7's ordinary addressed callbacks
+return real attempts when they enqueue; see
+[sender-visible dispatch refusal](#sender-visible-dispatch-refusal) and
+[dynamic ABI](dynamic-abi.md) for that contract. The host diagnostics add no
+future, retry or dead letter. This diagnostic gap was found by Night Lab III
+(P-011), where a loaded weave's emission vanished entirely while the identical
+native reach refused loudly; the publication half was corrected by FRIC-0, where
+the same uniformity had made an ordinary quiet startup look like a failure.
 
 ## Two dispatch turns, and the call site says which
 
