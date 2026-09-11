@@ -41,6 +41,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_integration.cpp
     test_fuzz.cpp
     test_switchboard.cpp
+    test_dispatch_refusal.cpp
     test_provenance.cpp
     test_role_authorship.cpp
     test_sense.cpp
@@ -64,6 +65,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
+    test_dispatch_loaded.cpp
     test_handoff.cpp
     test_manager.cpp
     test_capabilities.cpp)
@@ -236,6 +238,12 @@ target_link_libraries(zen_test_handoff_migrator
     PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_handoff_migrator)
 
+# Sender-visible refusal: a real loaded author and authenticated recipient.
+add_library(zen_test_dispatch SHARED weavelib/dispatch_probe.cpp)
+target_link_libraries(zen_test_dispatch PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_dispatch)
+target_compile_definitions(zen-tests PRIVATE "ZEN_SO_DISPATCH=\"$<TARGET_FILE:zen_test_dispatch>\"")
+
 # R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
 # under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
 # where the pipe's fail-closed law is the thing under test.
@@ -286,7 +294,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_senses
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
-    zen_test_office_worker
+    zen_test_office_worker zen_test_dispatch
     zen_test_contract_applied zen_test_contract_bypass)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 

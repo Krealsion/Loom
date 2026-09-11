@@ -189,8 +189,9 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
 - That a `TerminalSession` is powerful because it is a terminal. It is an
   ordinary weave: no `Switchboard&`, no tap, no registry read, no `allow_any`,
   and a vocabulary its host supplied rather than discovered. Its transcript says
-  **SUBMITTED**, never "delivered" — an ordinary sender is not told its send's
-  fate — and `loom::ConsoleEngine` remains a separate, deliberately trusted
+  **SUBMITTED**, never "delivered"; an authenticated later dispatch-refusal
+  record explains a refused addressed send. Absence proves nothing, and
+  `loom::ConsoleEngine` remains a separate, deliberately trusted
   host/debug lens that *can* say delivered (`docs/reference/terminal.md`).
 - That grants are mutable (GATE-05). A subject's *delegated* message authority
   can be replaced live, by a holder of a host-minted `GrantAuthority`, within

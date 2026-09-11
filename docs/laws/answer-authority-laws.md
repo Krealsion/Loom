@@ -100,7 +100,7 @@ suite `kernel` (forged-readiness cases).
 LAW — A public delivery operation means the same thing for a dynamically loaded
 weave as for a native one, or fails loudly. Dynamic `answer`/`defer_answer`
 carry real success/failure across the C ABI (the doors arrived at ABI v4; the
-current ABI is [v6](../reference/dynamic-abi.md)).
+current ABI is [v7](../reference/dynamic-abi.md)).
 
 MEANS
 - a refused dynamic answer is *told* to the weave (`ZEN_ERR_REFUSED`), never
@@ -108,9 +108,9 @@ MEANS
 - out-of-process children get null answer doors and fail closed.
 
 DOES NOT MEAN
-- that an ordinary dynamic `send` returns a bus ticket — it structurally cannot
-  (no seq crosses the seam); delivery fate is observed at the recipient, not
-  the ticket.
+- that a dynamic answer's success sentinel is a queued attempt. Since ABI v7,
+  ordinary addressed sends return actual queued identities for dispatch-refusal
+  matching; neither kind of return is proof of delivery or semantic success.
 
 PROVEN BY — `abi.h`'s answer doors (`answer` / `defer_answer` /
 `answer_deferred` / `release_deferred`); suite `kernel` (dynamic parity cases);

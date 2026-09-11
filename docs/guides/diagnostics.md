@@ -40,8 +40,9 @@ The full delivery-order ladder is in
 
 `Ticket t = bus.send(...)` → after pumping, `bus.outcome(t)` reads the
 recorded disposition (last 1024 deliveries retained). Weave code cannot do
-this — a sender does not observe its send's fate; observers do
-([the seam](../reference/known-seams.md#sender-cannot-observe-send-fate)).
+this. An opted-in ordinary sender can receive a narrower authenticated
+[dispatch refusal](../reference/messaging.md#sender-visible-dispatch-refusal);
+it cannot query the journal or infer success from silence.
 
 ## 4. Replacement outcomes
 

@@ -1,11 +1,30 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v6**
+The C seam a weave library and the host agree on. Current version: **v7**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..05](../laws/sense-laws.md).
+
+**v7 carries sender-visible dispatch refusal.** The four ordinary addressed
+send callbacks (`send`, `send_to_role`, `office_send`, `office_send_to_role`)
+return their actual queued sequence through `attempt_out`; NULL is allowed and
+zero means no queued identity. The C++ wrappers return that sequence as Ticket,
+so matching no longer relies on invalid or success-sentinel tickets. Immediate
+seam failures queue nothing and receive no later dispatch notice.
+
+The accept-set declares zen.DispatchRefused through the existing manifest.
+The host generates its payload and sets ZEN_PROV_DISPATCH_REFUSAL; handle's
+existing provenance argument carries that fact and the library adapter rebuilds
+it. Ordinary outbound callbacks have no provenance parameter. Answer and
+publication callbacks keep their separate existing status/return contracts.
+
+No binary compatibility with v6 is claimed: a real pre-v7 image is refused at
+load with both versions named. The isolated pipe returns no attempt identity and
+refuses a manifest accepting zen.DispatchRefused, naming its unsupported
+attestation reach. Nonparticipating child speech retains its existing behavior.
+The bridge/wire payload format gains no trusted provenance field.
 
 **v6 carries Senses across the seam, both ways**, so a loaded weave has exactly
 the surface a native one has: `claim` / `office_claim` outbound, `observe` /
@@ -160,8 +179,8 @@ When a field is added to either table:
 ## Host services (what a loaded weave's `Bus` really is)
 
 The library-side `Bus` shim forwards through host callbacks: `send`,
-`send_to_role`, `publish` (fire-and-forget across the seam — **no bus ticket
-crosses**; an ordinary dynamic send always returns an invalid `Ticket`), since
+`send_to_role`, `publish` (addressed sends carry actual queued tickets since v7;
+publication counts retain their existing behavior), since
 v4 the **answer doors** with real success/failure: `answer`, `defer_answer`
 (opaque token), `answer_deferred`, `release_deferred` — a refused dynamic
 answer is *told* to the weave (`ZEN_ERR_REFUSED`), the parity law

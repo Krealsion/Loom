@@ -135,7 +135,8 @@ bool emit_snapshot(const ZenWeaveAbi* abi, void* instance) {
 extern "C" {
 static ZenStatus zen_child_send(void* ctx, std::uint64_t target, std::uint64_t reply_to,
                                 std::uint64_t correlation, const std::uint8_t* payload,
-                                std::size_t len) {
+                                std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
     (void)ctx;
     return ship_emit(kEmitSend, target, reply_to, correlation, payload, len);
 }
@@ -146,7 +147,8 @@ static ZenStatus zen_child_publish(void* ctx, std::uint64_t reply_to, std::uint6
 }
 static ZenStatus zen_child_send_to_role(void* ctx, const char* role, std::uint64_t reply_to,
                                         std::uint64_t correlation, const std::uint8_t* payload,
-                                        std::size_t len) {
+                                        std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
     (void)ctx;
     return ship_emit_role(role, reply_to, correlation, payload, len);
 }

@@ -321,24 +321,30 @@ static void zen_host_sink(void* ctx, const std::uint8_t* data, std::size_t len) 
 // The host admits them through the gate (the DLL-seam boundary) before routing.
 static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t reply_to,
                                std::uint64_t correlation, const std::uint8_t* payload,
-                               std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        // The one target the seam CAN honestly name: the library said where.
-        return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
+                               std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
+    try {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            // The one target the seam CAN honestly name: the library said where.
+            return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
+        }
+        // Route through the gated WeaveBus (it stamps the loaded Weave's id and
+        // authorizes against its grant), exactly as a native Weave's send is.
+        const loom::Ticket t = h->gated->send(loom::WeaveId{target},
+                       loom::Message(std::move(a).value(), loom::WeaveId{},
+                                        loom::WeaveId{reply_to}, correlation));
+        if (attempt_out != nullptr) { *attempt_out = t.seq; }
+        return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+    } catch (const std::overflow_error&) {
+        return ZEN_ERR_REFUSED;
     }
-    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
-    }
-    // Route through the gated WeaveBus (it stamps the loaded Weave's id and
-    // authorizes against its grant), exactly as a native Weave's send is.
-    h->gated->send(loom::WeaveId{target},
-                   loom::Message(std::move(a).value(), loom::WeaveId{},
-                                    loom::WeaveId{reply_to}, correlation));
-    return ZEN_OK;
 }
 
 static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64_t correlation,
@@ -365,24 +371,30 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
 // role; the host admits, stamps the loaded Weave's id, and routes by role.
 static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_t reply_to,
                                        std::uint64_t correlation, const std::uint8_t* payload,
-                                       std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        // A ROLE is a destination slot, not a WeaveId, and it is resolved at
-        // delivery — which never happens here. No target is named; the SLOT is,
-        // because the library named it, and it is the whole address a reader has.
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), role);
+                                       std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
+    try {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            // A ROLE is a destination slot, not a WeaveId, and it is resolved at
+            // delivery — which never happens here. No target is named; the SLOT is,
+            // because the library named it, and it is the whole address a reader has.
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), role);
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), role);
+        }
+        const loom::Ticket t = h->gated->send_to_role(role, loom::Message(std::move(a).value(), loom::WeaveId{},
+                                                      loom::WeaveId{reply_to}, correlation));
+        if (attempt_out != nullptr) { *attempt_out = t.seq; }
+        return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+    } catch (const std::overflow_error&) {
+        return ZEN_ERR_REFUSED;
     }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), role);
-    }
-    h->gated->send_to_role(role, loom::Message(std::move(a).value(), loom::WeaveId{},
-                                                  loom::WeaveId{reply_to}, correlation));
-    return ZEN_OK;
 }
 
 // Deferred answers (ANS-02, ANS-06). Each of these is a thin pass-through to the gated
@@ -448,46 +460,58 @@ static void zen_host_release_deferred(void* ctx, uint64_t token) {
 // that role" rather than a generic failure.
 static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint64_t target,
                                       std::uint64_t reply_to, std::uint64_t correlation,
-                                      const std::uint8_t* payload, std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
+                                      const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
+    try {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
+        }
+        const loom::Ticket t = h->gated->office_send(
+            as_role, loom::WeaveId{target},
+            loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                          correlation));
+        // On this door an invalid ticket means exactly one thing: the authorship was
+        // refused (shape and schema failures returned above).
+        if (attempt_out != nullptr) { *attempt_out = t.seq; }
+        return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+    } catch (const std::overflow_error&) {
+        return ZEN_ERR_REFUSED;
     }
-    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
-    }
-    const loom::Ticket t = h->gated->office_send(
-        as_role, loom::WeaveId{target},
-        loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
-                      correlation));
-    // On this door an invalid ticket means exactly one thing: the authorship was
-    // refused (shape and schema failures returned above).
-    return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
 }
 
 static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, const char* to_role,
                                               std::uint64_t reply_to, std::uint64_t correlation,
-                                              const std::uint8_t* payload, std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), to_role);
+                                              const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
+    try {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), to_role);
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), to_role);
+        }
+        const loom::Ticket t = h->gated->office_send_to_role(
+            as_role, to_role,
+            loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                          correlation));
+        if (attempt_out != nullptr) { *attempt_out = t.seq; }
+        return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+    } catch (const std::overflow_error&) {
+        return ZEN_ERR_REFUSED;
     }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), to_role);
-    }
-    const loom::Ticket t = h->gated->office_send_to_role(
-        as_role, to_role,
-        loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
-                      correlation));
-    return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
 }
 
 static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::uint64_t reply_to,
@@ -764,6 +788,9 @@ public:
         // learns Loom's word and never a place it can invent one.
         std::uint32_t prov = ZEN_PROV_NONE;
         switch (in.provenance.kind()) {
+        case Provenance::Kind::DispatchRefusal:
+            prov = ZEN_PROV_DISPATCH_REFUSAL;
+            break;
         case loom::Provenance::Kind::Answer:
             prov = ZEN_PROV_ANSWER;
             break;

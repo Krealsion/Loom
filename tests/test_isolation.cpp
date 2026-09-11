@@ -1895,6 +1895,14 @@ TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
     ::close(fds.producer);
 }
 
+TEST_CASE("an isolated image requesting dispatch-refusal attestation is refused explicitly") {
+    Switchboard bus; IsolationHost host(bus,kHostExe);
+    auto result=host.mount("dispatch",ZEN_SO_DISPATCH,Grant{});
+    CHECK_FALSE(result.ok);
+    CHECK(result.error.find("isolated pipe cannot attest dispatch refusal")!=std::string::npos);
+    CHECK(bus.list_weaves().empty());
+}
+
 // Keep this LAST in the file: a positive tally so a green can never mean "every OS-enforcement case
 // silently skipped." (Relies on doctest's default registration order; a --order-by=rand run would
 // instead assert the count in a reporter hook.)

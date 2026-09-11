@@ -3,6 +3,7 @@
 
 #include <zen/isolation/host.hpp>
 
+#include <zen/weave/dispatch_refusal.hpp>
 #include <zen/kernel/schema_codec.hpp> // manifest_schema, decode_schema (shared encode/decode)
 #include <zen/serialize.hpp>           // parse, admit, serialize
 #include <zen/value.hpp>
@@ -614,7 +615,13 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
 
     std::vector<std::shared_ptr<const Schema>> accept;
     for (const loom::Cell& c : mv.get("accepted")->as_list()) {
-        accept.push_back(loom::decode_schema(*c.as_message(), registry_));
+        auto door = loom::decode_schema(*c.as_message(), registry_);
+        if (door->name() == DispatchRefused::zen_name &&
+            door->version() == DispatchRefused::zen_version) {
+            throw std::runtime_error("zen.DispatchRefused requires native or loaded delivery; "
+                                     "the isolated pipe cannot attest dispatch refusal");
+        }
+        accept.push_back(std::move(door));
     }
     auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
     // One transaction for the child's whole vocabulary (LIFE-08): cross-mount

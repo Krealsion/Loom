@@ -161,12 +161,14 @@ authorship works identically too (since ABI v5): `mail.as_role(...)`
 requests, the host verifies the membership at that moment, and incoming
 `mail.authored_from_role(...)` reads the same stamped fact a native recipient
 reads ([MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit)).
-One structural difference: an ordinary dynamic `send` returns no bus ticket
-(no seq crosses the C seam), so delivery fate is observed at recipients and
-taps, not at the sender — which is the substrate-wide truth anyway
-([the seam](../reference/known-seams.md#sender-cannot-observe-send-fate)).
-An office-authored dynamic send is sharper: its ticket-validity does cross as
-a status, so a refused authorship is *told* rather than silent.
+ABI v7 returns the real attempt ticket for directed and role-addressed sends,
+including office authorship. Explicitly accepting `zen.DispatchRefused` v1 opts
+into the same authenticated later refusal a native sender can receive. Check
+`mail.dispatch_refused()` and match the attempt, not correlation alone. A malformed
+seam value or refused office authorship returns an invalid ticket immediately.
+The [contract](../reference/messaging.md#sender-visible-dispatch-refusal) distinguishes
+those boundaries from later dispatch and from unanswered delivery. Isolated
+children cannot request this new attestation; their manifest is refused.
 
 Platforms: canonical on Linux/WSL; the opt-in Windows backend is
 development-only and says so ([reference/kernel](../reference/kernel.md)).
@@ -174,7 +176,7 @@ development-only and says so ([reference/kernel](../reference/kernel.md)).
 ## Deeper
 
 Reference: [kernel](../reference/kernel.md) ·
-[dynamic-abi](../reference/dynamic-abi.md) (current: **v6**) ·
+[dynamic-abi](../reference/dynamic-abi.md) (current: **v7**) ·
 [capabilities](../reference/capabilities.md#the-grant-in-process) (the
 in-process trust statement above, in its own reference). Real artifacts to
 crib:
