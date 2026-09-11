@@ -11,18 +11,17 @@
 // legitimately came by. A command it was given. A message it authored. A message
 // that was actually delivered to it. Loom's own word that one of those answers an
 // ask it made. It is NOT fed by `Switchboard::add_observer`, so it never contains
-// another weave's traffic, another weave's refusals, or a delivery outcome the
-// sender is not told (see `submitted` below). A transcript that quietly mixed
+// another weave's traffic or another weave's refusals. A dispatch refusal here
+// was delivered to this participant through its own declared door. A transcript that quietly mixed
 // host-lens facts into a participant's own record would be the most convincing
 // lie in the system, because every line would look the same.
 //
 // SUBMITTED IS NOT DELIVERED, and the vocabulary refuses to blur them:
 //
-//   SUBMITTED  I authored this and Loom took it. Whether it was delivered,
-//              refused at the gate, refused for want of authority, or dropped for
-//              want of a target, I DO NOT KNOW — Loom does not tell a sender its
-//              send's fate, and this participant holds no journal and no tap.
-//   RECEIVED   this arrived here, past this participant's own door.
+//   SUBMITTED  I authored this and Loom took it. Delivery is unknown.
+//   RECEIVED   this arrived here, past this participant's own door. Authenticated
+//              DispatchRefused detail says Loom refused an earlier attempt before
+//              invoking its handler; ordinary identical speech has no such detail.
 //   ANSWERED   ...and Loom itself says it answers an ask I made. Not a message
 //              that merely looks like a reply: the provenance is Loom's, and no
 //              sender can write it.
@@ -38,6 +37,7 @@
 // the business of whichever renderer has a terminal to protect.
 
 #include <zen/bounded_history.hpp>
+#include <zen/weave/dispatch_refusal.hpp>
 #include <zen/schema.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/value.hpp>
@@ -111,6 +111,15 @@ const char* name_of(Addressing mode) noexcept;
 /// them and never gets copied into one — that conflation is the exact mistake the
 /// Weaver vocabulary is shaped to prevent, and re-making it one layer up would
 /// undo it.
+/// Authenticated detail of a received Loom dispatch-refusal notice. The outer
+/// entry retains the actual received shape and its message id; this record
+/// describes the original send. Existing presentations can still show the
+/// receipt honestly, without mistaking the original shape for a new arrival.
+struct TranscriptDispatchRefusal {
+    DispatchRefused send;
+    std::uint64_t retired_ask = 0;
+};
+
 struct TranscriptEntry {
     /// This presentation's observation order (see ObservationOrder).
     std::uint64_t seq = 0;
@@ -154,6 +163,10 @@ struct TranscriptEntry {
     /// received store evicts it, the id refuses rather than re-binding to a newer
     /// message.
     std::uint64_t message = 0;
+    std::uint64_t attempt = 0; ///< Submitted: exact queued attempt
+    /// Received: present only after checking Loom's dispatch-refusal provenance.
+    /// Bounded by the transcript window; no original payload is retained here.
+    std::shared_ptr<const TranscriptDispatchRefusal> dispatch_refusal;
 };
 
 /// A retained inbound message: its stable id and the EXACT Value that arrived.

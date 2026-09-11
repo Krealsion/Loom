@@ -28,7 +28,7 @@
 //     no `allow_any`, no `observe_any`, no load capability, no filesystem,
 //         no network — being a terminal confers NOTHING
 //     no weave enumeration, no role directory, no registry read
-//     no journal, so no delivery outcomes: it cannot tell you a send landed
+//     no journal or delivery guarantee: an authenticated refusal is a later receipt
 //     no way to speak as anybody else, because there is no verb for it
 //
 // A terminal is powerful because it can ask for authority and say true things
@@ -127,9 +127,9 @@ public:
     /// binding; there is no setter.
     virtual WeaveId self() const noexcept = 0;
 
-    /// Author `payload` to one exact weave. The returned Ticket is a HOST-SIDE
-    /// journal handle: a participant cannot read an outcome from it, and this
-    /// core never tries — see the sender-fate seam.
+    /// Author `payload` to one exact weave. The returned Ticket identifies this
+    /// attempt for matching an authenticated DispatchRefused notice. A participant
+    /// cannot use it to read the host journal or infer delivery.
     virtual Ticket send(WeaveId target, Value payload, std::uint64_t correlation) = 0;
 
     /// Author `payload` to whoever holds `office` AT DELIVERY.
@@ -255,8 +255,8 @@ public:
     // ---- acting ------------------------------------------------------------
 
     /// FIRE AND FORGET. Author one message; expect no answer. On success the
-    /// transcript says SUBMITTED, which is the whole truth available: an ordinary
-    /// sender is not told whether its message was delivered.
+    /// transcript says SUBMITTED. A later authenticated dispatch refusal is a
+    /// separate receipt; absence of one never establishes delivery.
     TerminalResult send(const Address& to, std::string_view name, std::uint32_t version,
                         const std::vector<Arg>& args);
 

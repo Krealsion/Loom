@@ -14,6 +14,7 @@
 
 #include <zen/weave/ask_book.hpp>
 #include <zen/weave/describe.hpp>
+#include <zen/weave/dispatch_refusal.hpp>
 #include <zen/weave/poke.hpp>
 #include <zen/weave/poke_weave.hpp>
 #include <zen/weave/relay.hpp>

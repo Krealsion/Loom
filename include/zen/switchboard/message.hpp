@@ -67,7 +67,7 @@ private:
 /// delivery:
 ///
 ///   KIND          "what standing does Loom give this message in a
-///                  conversation or a lifecycle?"    (None / Answer / Activation)
+///                  conversation or a lifecycle?"    (None / Answer / Activation / DispatchRefusal)
 ///   AUTHORED ROLE "which office did the sender deliberately speak as,
 ///                  with Loom verifying it held that office at authorship?"
 ///                  (empty = none — spoken personally)
@@ -84,13 +84,14 @@ private:
 /// forms) OVERWRITES it with nothing. So a weave that stores a delivered Message
 /// and re-sends it — the copy-what-you-observed attack — sends an ordinary
 /// message. Only the Switchboard's attesting paths (the answer doors, the
-/// lifecycle door, and the office-authorship doors) write a non-empty one.
+/// lifecycle and dispatch-refusal doors, and office-authorship doors) write one.
 class Provenance {
 public:
     enum class Kind : std::uint8_t {
         None = 0,       ///< an ordinary message; it stands on shape and stamp alone
         Answer = 1,     ///< THE one authorized answer to a request this weave sent
         Activation = 2, ///< Loom attests a lifecycle commit for THIS incarnation
+        DispatchRefusal = 3, ///< Loom refused an ordinary send before handler entry
     };
 
     Provenance() = default;
@@ -128,6 +129,9 @@ public:
 
     /// Is this delivery THE one authorized answer to a request this weave sent?
     bool answers_ask() const noexcept { return kind_ == Kind::Answer; }
+
+    /// Loom attests refusal of dispatch, never an application answer.
+    bool dispatch_refused() const noexcept { return kind_ == Kind::DispatchRefusal; }
 
     /// Does Loom attest a lifecycle commit for the incarnation being delivered to?
     bool lifecycle_activation() const noexcept { return kind_ == Kind::Activation; }

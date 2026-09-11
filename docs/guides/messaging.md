@@ -103,10 +103,13 @@ supported.
 
 ## When something refuses
 
-A refusal is a named observable event, never silence — but note it is the
-*observer's* to see, not the sender's (a weave cannot watch its own send's
-fate; see [diagnostics](diagnostics.md) and
-[the seam](../reference/known-seams.md#sender-cannot-observe-send-fate)).
+A host can observe every refusal. An ordinary native or loaded sender can also
+explicitly accept `zen.DispatchRefused` v1: Loom may later deliver an authenticated
+notice for its refused directed or role send. Check `mail.dispatch_refused()`
+before trusting the payload, and match `refused_attempt()` against the original
+send ticket, never correlation alone. The notice is not an answer and its absence
+proves nothing. See [the contract](../reference/messaging.md#sender-visible-dispatch-refusal)
+and [diagnostics](diagnostics.md) for the different host surface.
 
 ## Deeper
 

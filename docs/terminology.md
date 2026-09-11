@@ -7,7 +7,8 @@ Bold marks the normative reference for each.
 |---|---|---|
 | **Loom** | the substrate: gate, bus, kernel, isolation, console. One `loom::` namespace. The Loom is everyone's | [reference/](reference/) |
 | **weave** | the unit of authorship-that-composes: a bus participant, native or loaded, whole and part at once | [guides/writing-a-weave.md](guides/writing-a-weave.md) |
-| **weaver** | the human maker. Vocabulary only — deliberately no type in the code (identity is a deferred phase) | [reference/known-seams.md](reference/known-seams.md#deferred-with-intent-the-standing-trigger-map) |
+| **weaver (human)** | the human maker; persistent human identity remains separate from runtime authority | [reference/known-seams.md](reference/known-seams.md#deferred-with-intent-the-standing-trigger-map) |
+| **`loom::Weaver`** | an ordinary policy delegate, host-appointed to administer one session's message authority within a ceiling; the session performs its own actions | [reference/weaver.md](reference/weaver.md) |
 | **schema / shape** | a frozen `(name, version)` + fields; identity = content-id | [reference/values-and-admission.md](reference/values-and-admission.md) |
 | **the gate / admission** | `admit()`, the sole conformance authority at every boundary | [laws/admission-laws.md](laws/admission-laws.md) |
 | **`Unverified`** | parsed-but-unproven bytes; no accessors | [reference/values-and-admission.md](reference/values-and-admission.md) |

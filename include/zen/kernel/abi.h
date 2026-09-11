@@ -42,7 +42,11 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 6u
+#define ZEN_ABI_VERSION 7u
+/* v7: addressed sends return their actual queued attempt via attempt_out (NULL
+ * is allowed; zero means no queued identity). Dispatch-refusal provenance is a
+ * host delivery fact. The isolated pipe supplies no attempt and refuses a
+ * manifest requesting this notice door. Pre-v7 binaries refuse at load. */
 
 /* v3 (R2B-2): the host API gained the deferred-answer door, so a DYNAMICALLY
  * LOADED weave can hold an answer right across handler boundaries — the case a
@@ -125,7 +129,8 @@ enum {
     /* Loom attests a lifecycle commit for THIS incarnation. The attested
      * sequence travels beside the flag so an attestation issued for one
      * activation cannot authenticate another. */
-    ZEN_PROV_ACTIVATION = 2u
+    ZEN_PROV_ACTIVATION = 2u,
+    ZEN_PROV_DISPATCH_REFUSAL = 3u
 };
 
 /* Status codes returned across the seam. 0 == OK; negatives are errors. No
@@ -213,14 +218,14 @@ typedef struct ZenSenseBy {
 typedef struct ZenHostApi {
     void* ctx;
     ZenStatus (*send)(void* ctx, uint64_t target, uint64_t reply_to, uint64_t correlation,
-                      const uint8_t* payload, size_t len);
+                      const uint8_t* payload, size_t len, uint64_t* attempt_out);
     ZenStatus (*publish)(void* ctx, uint64_t reply_to, uint64_t correlation,
                          const uint8_t* payload, size_t len);
     /* Send to whichever Weave currently holds `role` (Part A's role-addressing). The
      * sender is NOT passed and never rides the wire — the host stamps it from the
      * connection, so a mod cannot impersonate another. `role` is NUL-terminated. */
     ZenStatus (*send_to_role)(void* ctx, const char* role, uint64_t reply_to,
-                              uint64_t correlation, const uint8_t* payload, size_t len);
+                              uint64_t correlation, const uint8_t* payload, size_t len, uint64_t* attempt_out);
     /* Deferred answers (ANS-02). The capability crosses as an OPAQUE token: it has
      * no wire form, is not a message field, is not reconstructible from sender,
      * correlation, role or schema, and is validated host-side against the bound
@@ -258,10 +263,10 @@ typedef struct ZenHostApi {
      * `recipients_out` (may be NULL) so "authorized, zero listeners" and
      * "authorship denied" stay distinct across the seam. */
     ZenStatus (*office_send)(void* ctx, const char* as_role, uint64_t target, uint64_t reply_to,
-                             uint64_t correlation, const uint8_t* payload, size_t len);
+                             uint64_t correlation, const uint8_t* payload, size_t len, uint64_t* attempt_out);
     ZenStatus (*office_send_to_role)(void* ctx, const char* as_role, const char* to_role,
                                      uint64_t reply_to, uint64_t correlation,
-                                     const uint8_t* payload, size_t len);
+                                     const uint8_t* payload, size_t len, uint64_t* attempt_out);
     ZenStatus (*office_publish)(void* ctx, const char* as_role, uint64_t reply_to,
                                 uint64_t correlation, const uint8_t* payload, size_t len,
                                 uint64_t* recipients_out);

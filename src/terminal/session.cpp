@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 #include <zen/terminal/session.hpp>
+#include <zen/weave/dispatch_refusal.hpp>
 
 #include <zen/switchboard/switchboard.hpp> // lifecycle_policy_schema() only
 
@@ -352,10 +353,10 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
 
     switch (to.mode) {
     case Addressing::Weave:
-        (void)channel_->send(to.target, std::move(payload), correlation);
+        entry.attempt = channel_->send(to.target, std::move(payload), correlation).seq;
         break;
     case Addressing::Role:
-        (void)channel_->send_to_role(to.role, std::move(payload), correlation);
+        entry.attempt = channel_->send_to_role(to.role, std::move(payload), correlation).seq;
         break;
     case Addressing::Publish:
         // The fanout count is the one delivery fact an ordinary sender is given, and it says how
@@ -363,9 +364,7 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
         entry.recipients = channel_->publish(std::move(payload), correlation);
         break;
     }
-    // The Ticket is deliberately dropped. It is a HOST-side journal handle: a participant cannot
-    // read an outcome from it, so keeping one would be keeping the shape of an answer this
-    // participant will never have.
+    if (as_ask) { (void)asks_.bind_attempt(opened.id, entry.attempt); }
 
     ++submitted_count_;
     transcript_.record(entry);
@@ -420,11 +419,17 @@ TerminalResult TerminalSession::cancel_ask(std::uint64_t ask_id) {
 // ---- the Weave contract ----------------------------------------------------
 
 std::vector<std::shared_ptr<const loom::Schema>> TerminalSession::accepted_schemas() const {
-    // EXACTLY THE DOORS the host declared — never the catalog, and never
-    // AcceptMode::AnyRegistered. A participant that accepted every registered shape would be
+    // The supplied vocabulary's doors plus TerminalSession's common DispatchRefused door —
+    // never the catalog or AcceptMode::AnyRegistered. Accepting every registered shape would be
     // accepting shapes chosen by whoever else happens to be running, which is a decision its host
     // never made.
-    return vocabulary_.doors();
+    auto doors = vocabulary_.doors();
+    const auto notice = schema_of<DispatchRefused>();
+    const bool already = std::any_of(doors.begin(), doors.end(), [&](const auto& s) {
+        return s->name() == notice->name() && s->version() == notice->version();
+    });
+    if (!already) { doors.push_back(notice); }
+    return doors;
 }
 
 void TerminalSession::handle(const loom::Message& in, loom::Bus& bus) {
@@ -454,6 +459,21 @@ void TerminalSession::handle(const loom::Message& in, loom::Bus& bus) {
     entry.authored_role = std::string(in.provenance.authored_role());
     entry.answers_ask = answers;
     entry.message = message_id;
+
+    if (in.provenance.dispatch_refused() &&
+        in.payload.schema().content_id() == schema_of<DispatchRefused>()->content_id()) {
+        auto detail = std::make_shared<TranscriptDispatchRefusal>();
+        detail->send = from_value<DispatchRefused>(in.payload);
+        const auto& notice = detail->send;
+        const PendingAsk* pending = asks_.match_attempt(notice.refused_attempt().seq);
+        if (pending != nullptr && pending->correlation == in.correlation &&
+            pending->shape == notice.shape && pending->version == notice.version &&
+            pending->role == notice.role && pending->respondent == notice.addressed_weave()) {
+            detail->retired_ask = pending->id;
+            (void)asks_.forget(pending->id);
+        }
+        entry.dispatch_refusal = std::move(detail);
+    }
 
     if (answers) {
         // WHICH ask, out of this participant's own book: Loom's correlation says which

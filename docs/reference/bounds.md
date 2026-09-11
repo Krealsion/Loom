@@ -290,3 +290,28 @@ leaf imposes — see
 `kBeatCapMs = 10`. Owned by the **separate Zengine repository**, at
 `Zengine/docs/reference/timer-continuity.md` — quoted here for reach, not
 linked, because a Loom checkout does not contain it.
+
+## Dispatch-refusal notices
+
+No pending-send ledger is added. An envelope retains one extra unsigned scalar:
+the opted-in author's incarnation. The existing life scalar supplies the other
+half. A notice carries metadata proportional to the original authored identifiers,
+never a copy of the original payload, and pins no deferred answer or conversation.
+
+One refused envelope is consumed before at most one notice is appended. Thus
+notice generation alone cannot increase the queue's envelope count beyond the
+backlog it replaces. This bounds incremental growth, not the pre-existing
+ordinary send queue. No arbitrary numeric notice quota is introduced.
+
+If the sender disappeared, changed life/incarnation or closed its door, the
+notice is disposable. Allocation failure or delivery-sequence exhaustion may
+discard it while the original refusal retains its host evidence. There is no
+persistence/eventual-delivery promise and no refusal-of-refusal chain.
+
+AskBook optionally retains one scalar per existing bounded local ask. The
+terminal adds one attempt scalar and one shared pointer per transcript entry;
+authenticated refusal metadata is allocated only for refused receipts, retained
+under kTranscriptCapacity. Its exact notice Value uses the existing received
+window. Neither window retains the original refused payload. Transcript eviction
+does not evict the separate pending ask; local forgetting removes that ask's
+attempt binding, so late notices cannot settle a newer operation.
