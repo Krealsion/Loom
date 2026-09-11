@@ -17,6 +17,7 @@
 // No stringly-typed set(), no hand-built schema, no hand-written snapshot/revive.
 
 #include <zen/weave/describe.hpp>
+#include <zen/weave/dispatch_refusal.hpp>
 #include <zen/weave/poke.hpp>
 #include <zen/weave/shape.hpp>
 #include <zen/kernel/schema_codec.hpp>
@@ -91,6 +92,7 @@ public:
     loom::WeaveId sender() const { return in_.sender; }
     loom::WeaveId reply_to() const { return in_.reply_to; }
     std::uint64_t correlation() const { return in_.correlation; }
+    bool dispatch_refused() const noexcept { return in_.provenance.dispatch_refused(); }
 
     /// Reply to the inbound sender's reply address, echoing the correlation.
     template <class T>

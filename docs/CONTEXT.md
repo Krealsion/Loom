@@ -20,6 +20,7 @@ the named laws → the reference page → tests when exactness matters.
 | how long a schema stays resolvable (what a claim is, who holds one, what a rejected candidate leaves, why a remote console's mirror is different) | reference/values-and-admission.md#registry, reference/bounds.md#schema-registry-bounded-by-claims-not-by-a-number | LIFE-08 | tests/test_registry.cpp (BL-0 cases), test_switchboard.cpp, test_kernel.cpp | COLD-1/COLD-2 finding C-10 / F-9 |
 | message authority, dispatch, roles | reference/messaging.md | MSG-01..07 | tests/test_switchboard.cpp | history/pre-r2c/DESIGN.md §Switchboard |
 | native callback boundaries (a handler or observer that throws; mutating the tap list mid-notification) | reference/messaging.md#dispatch-model, reference/messaging.md#observation | MSG-10, MSG-11 | tests/test_switchboard.cpp (STF-1 sections) | — |
+| sender-visible dispatch refusal, exact attempts, life/incarnation disposal | reference/messaging.md#sender-visible-dispatch-refusal, reference/dynamic-abi.md, reference/terminal.md | MSG-12 | tests/test_dispatch_refusal.cpp, test_dispatch_loaded.cpp, test_terminal.cpp | decisions/dispatch-refusal-returns-to-its-author.md |
 | answers, deferral, provenance | reference/messaging.md#answers | ANS-01..07 | tests/test_provenance.cpp | decisions/readiness-is-authenticated-conversation.md |
 | what an ASKER remembers about its own outstanding conversations (which of mine an arrival settles, why correlation alone is not enough, an ask to an office, capacity, forgetting locally) | reference/messaging.md#the-askers-own-book | ANS-05 | tests/test_ask_book.cpp, tests/test_terminal.cpp | FRIC-2 |
 | what may be SAID to one weave (the self-description door, why the target owns the answer, why a descriptor package carries its dependency closure, why discovering a shape grants no authority to send it, and why the answer is a snapshot) | reference/messaging.md#self-description--what-may-be-said-to-this-weave | MSG-02, GATE-01 | tests/test_describe.cpp, tests/package/stranger_host.cpp | MSG-R0 (the blocked arrow), MSG-1 |
@@ -69,7 +70,8 @@ because a grant is not a lease
 ([weaver](reference/weaver.md)) · **a terminal is not root** — a `TerminalSession` is an
 ordinary weave with no `Switchboard&`, no tap, no registry read and no
 `allow_any`; its transcript says SUBMITTED and never "delivered", because a
-sender is not told its send's fate; and `ConsoleEngine` stays a separate trusted
+sender gets no delivery guarantee; its explicit refusal door can report a
+pre-handler failure. `ConsoleEngine` stays a separate trusted
 host/debug lens that *can* say delivered
 ([terminal](reference/terminal.md)) · a transaction id is never readiness authority (PR-04, ANS-05) · `Committed`
 becomes true only inside the admission dispatch (PR-07) · a candidate receives

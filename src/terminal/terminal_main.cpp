@@ -168,6 +168,18 @@ std::string render_address(const loom::TranscriptEntry& e) {
 std::string render_entry(const loom::DeskEntry& d) {
     const loom::TranscriptEntry& e = d.entry;
     const std::string out = "[" + d.lens + "] ";
+    if (e.dispatch_refusal) {
+        const auto& refused = *e.dispatch_refusal;
+        const auto& send = refused.send;
+        const std::string address = send.role.empty()
+            ? "to weave #" + send.target : "to @" + loom::safe_terminal_text(send.role);
+        return out + "DISPATCH REFUSED " + loom::safe_terminal_text(send.shape) + " v" +
+               std::to_string(send.version) + " " + address +
+               "  (attempt " + send.attempt + ", corr " + std::to_string(e.correlation) + "): " +
+               loom::safe_terminal_text(send.reason) +
+               (refused.retired_ask ? " — stopped waiting on ask " + std::to_string(refused.retired_ask) : "") +
+               ". Review the address, shape or authority; retry explicitly when ready.";
+    }
     switch (e.kind) {
     case loom::TranscriptKind::LocalCommand:
         return out + "> " + loom::safe_terminal_text(e.text);
@@ -176,9 +188,9 @@ std::string render_entry(const loom::DeskEntry& d) {
     case loom::TranscriptKind::LocalNotice:
         return out + loom::safe_terminal_text(e.text);
     case loom::TranscriptKind::Submitted:
-        return out + "SUBMITTED " + e.shape + " v" + std::to_string(e.version) + " " +
+        return out + "SUBMITTED " + loom::safe_terminal_text(e.shape) + " v" + std::to_string(e.version) + " " +
                render_address(e) + "  (corr " + std::to_string(e.correlation) +
-               ")   — delivery unknown to me";
+               ", attempt " + std::to_string(e.attempt) + ")   — delivery unknown to me";
     case loom::TranscriptKind::Received:
         return out + "RECEIVED  " + e.shape + " v" + std::to_string(e.version) + " from weave #" +
                std::to_string(e.sender.value) +
@@ -449,8 +461,8 @@ debug lens only (the HOST looking - powers no participant has):
                  "  there is no socket, no login, and no remote anything here.\n\n";
     print_who();
     std::cout << "\n  try:  ask @some.service Query 1 \"are you there\"\n"
-                 "        send @some.service Work 1 7          (no authority yet; see `debug` -> "
-                 "tap)\n"
+                 "        send @some.service Work 1 7          (no authority yet; watch the refusal "
+                 "receipt)\n"
                  "        request Work 1 @some.service \"so I can finish the job\"\n"
                  "        operator   -> show r1  -> approve\n"
                  "        session    -> send @some.service Work 1 7\n\n"
@@ -513,9 +525,8 @@ debug lens only (the HOST looking - powers no participant has):
                 if (tok.size() == 2) {
                     (void)parse_u64(tok[1].text, n);
                 }
-                std::cout << "  [debug] the HOST's tap. Delivery outcomes here are facts NEITHER\n"
-                             "  [debug] participant is told — never read them as something either\n"
-                             "  [debug] transcript claims to know.\n";
+                std::cout << "  [debug] the HOST's tap: full delivery outcomes across this Loom.\n"
+                             "  [debug] Each participant only knows its own receipts and authorship.\n";
                 print_tap(static_cast<std::size_t>(n));
             } else if (cmd == "notify" && tok.size() >= 2) {
                 // A root send: ungated, so it arrives whatever the grants say. It is how this demo

@@ -110,7 +110,7 @@ enum class RefusalReason : std::uint8_t {
     /// It carries the CLAIMED name and version, the sending artifact, and a
     /// target ONLY where one was actually named — inventing one would replace
     /// silence with a fiction. A diagnostic, not an answer and not a delivery:
-    /// send fate remains unobservable to senders.
+    /// the sender sees synchronous seam rejection, not a later dispatch notice.
     /// MSG-08; docs/laws/messaging-laws.md
     /// docs/reference/known-seams.md#sender-cannot-observe-send-fate
     SeamUnresolved,
@@ -1315,6 +1315,10 @@ private:
         /// same reason: a fact ABOUT a message must not be one the message can
         /// carry in. 0 when nothing was being dispatched.
         std::uint64_t dispatch_parent = 0;
+        // Opt-in captured at authorship, beside sender_life. On a Loom refusal
+        // notice these two scalars instead bind the exact recipient. Ordinary
+        // queued speech still compares life alone (MSG-03).
+        std::uint64_t refusal_incarnation = 0;
     };
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
@@ -1432,6 +1436,11 @@ private:
     /// itself: an ordinary enqueue overwrites whatever the caller's Message
     /// carried with the default, so only the attesting doors — which pass one
     /// explicitly — ever queue a non-empty fact.
+    friend struct DispatchRefusalProbe; // test-only counter boundary and retained-size witness
+    std::uint64_t allocate_sequence();
+    void capture_refusal_recipient(Envelope& env);
+    void notify_dispatch_refusal(const Envelope& env, const BusEvent& ev,
+                                 bool permitted);
     Ticket enqueue_directed(WeaveId target, Message msg, bool gated,
                             Provenance provenance = Provenance{}, TxnId preparation = TxnId{});
     Ticket enqueue_role(std::string role, Message msg, bool gated,

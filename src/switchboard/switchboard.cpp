@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 #include <zen/switchboard/switchboard.hpp>
+#include <zen/weave/dispatch_refusal.hpp>
+#include <stdexcept>
 
 #include <zen/gate.hpp>
 #include <zen/serialize.hpp>
@@ -528,10 +530,63 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
 // That single assignment is what makes provenance unforgeable by ordinary weave
 // code: a weave may construct a Message however it likes, and may even copy one
 // it was delivered, but the moment it hands that Message to the bus the fact is
-// erased. Only answer_as() and announce_as() pass a non-empty one.
+// erased. Only the verified answer, lifecycle, office and refusal paths attest.
+std::uint64_t Switchboard::allocate_sequence() {
+    if (next_seq_ == 0) {
+        throw std::overflow_error("Loom delivery sequence exhausted");
+    }
+    return next_seq_++;
+}
+
+void Switchboard::capture_refusal_recipient(Envelope& env) {
+    if (!env.gated || env.preparation.valid() ||
+        env.msg.provenance.kind() != Provenance::Kind::None) { return; }
+    const WeaveRecord* sender = find(env.msg.sender);
+    if (sender != nullptr && sender->alive &&
+        accept_match(*sender, DispatchRefused::zen_name, DispatchRefused::zen_version)) {
+        env.refusal_incarnation = sender->incarnation;
+    }
+}
+
+void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& ev,
+                                          bool permitted) {
+    if (env.refusal_incarnation == 0 || !env.gated) { return; }
+    switch (ev.refusal.reason) {
+    case RefusalReason::CapabilityDenied:
+    case RefusalReason::NoSuchTarget:
+    case RefusalReason::TargetUnavailable:
+    case RefusalReason::NotAccepted:
+    case RefusalReason::GateRefused:
+        break;
+    default:
+        return;
+    }
+    const WeaveRecord* sender = find(env.msg.sender);
+    if (sender == nullptr || !sender->alive || sender->life != env.sender_life ||
+        sender->incarnation != env.refusal_incarnation ||
+        !accept_match(*sender, DispatchRefused::zen_name, DispatchRefused::zen_version)) {
+        return;
+    }
+    DispatchRefused notice;
+    notice.attempt = std::to_string(env.seq);
+    notice.target = env.role.empty() ? std::to_string(env.target.value) : std::string{};
+    notice.role = env.role;
+    notice.shape = ev.schema_name; // the gate may already have consumed the payload
+    notice.version = ev.schema_version;
+    notice.reason = name_of(permitted ? ev.refusal.reason : RefusalReason::CapabilityDenied);
+    const std::uint64_t seq = allocate_sequence();
+    Message msg(to_value(notice), WeaveId{}, WeaveId{}, env.msg.correlation);
+    msg.provenance = Provenance::attested(Provenance::Kind::DispatchRefusal, 0);
+    Envelope reply{std::move(msg), env.msg.sender, seq, false, {}, env.sender_life};
+    reply.refusal_incarnation = env.refusal_incarnation;
+    reply.dispatch_parent = env.seq;
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
+    queue_.push_back(std::move(reply));
+}
+
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
                                      Provenance provenance, TxnId preparation) {
-    const std::uint64_t seq = next_seq_++;
+    const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = std::move(provenance);
     // AND EVERY ENQUEUE PATH ALSO DECIDES WHOSE LIFE IS SPEAKING (MSG-03). The
@@ -541,6 +596,7 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
     Envelope env{std::move(msg), target, seq, gated, std::string{}, life};
     env.preparation = preparation; // invalid for every caller but one
+    capture_refusal_recipient(env);
     // ...AND WHICH DELIVERY THIS WAS AUTHORED FROM (RTH-1). Read from the bus's
     // own dispatch state for the same reason the life stamp is read from the
     // bus's own record: it is a fact about the message, so the message never
@@ -552,7 +608,7 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
 
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
                                  Provenance provenance) {
-    const std::uint64_t seq = next_seq_++;
+    const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     // The same single assignment that makes provenance unforgeable on the
     // directed path: ordinary callers pass nothing and the default ERASES
@@ -561,6 +617,7 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     msg.provenance = std::move(provenance);
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
     Envelope env{std::move(msg), WeaveId{}, seq, gated, std::move(role), life};
+    capture_refusal_recipient(env);
     env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from (RTH-1)
     queue_.push_back(std::move(env));
     return Ticket{seq};
@@ -571,7 +628,7 @@ Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& ms
     // A refusal that never became a delivery still gets a seq, a journal slot and
     // a tap event, so "this weave tried to answer without authority" is visible at
     // exactly the altitude "this weave tried to send without a grant" already is.
-    const std::uint64_t seq = next_seq_++;
+    const std::uint64_t seq = allocate_sequence();
     const Refusal r{reason, {}};
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{Disposition::Refused, r}};
     BusEvent ev;
@@ -814,7 +871,7 @@ void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_
     // difference is that no admitted Message exists to read a schema off, so the
     // CLAIMED name and version are passed in. Same seq, same journal slot, same
     // tap event: one refusal altitude, whichever side of the seam it happened on.
-    const std::uint64_t seq = next_seq_++;
+    const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{Disposition::Refused, refusal}};
     BusEvent ev;
     ev.kind = EventKind::Refused;
@@ -855,7 +912,7 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     msg.sender = as_sender;
     msg.reply_to = WeaveId{};
     msg.correlation = correlation;
-    const std::uint64_t seq = next_seq_++;
+    const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     msg.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
     Envelope env{std::move(msg), to, seq, /*gated=*/true, std::string{}, life_of(as_sender)};
@@ -1235,7 +1292,7 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         if (accept_match(rec, name, version) == nullptr) {
             continue;
         }
-        const std::uint64_t seq = next_seq_++;
+        const std::uint64_t seq = allocate_sequence();
         journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
         // Rebuilt field by field, which also means a published Message carries no
         // provenance whatever the caller's copy held. EVERY recipient's envelope is
@@ -1456,6 +1513,19 @@ void Switchboard::deliver_one(Envelope env) {
         return;
     }
 
+    // Internal notices are disposable, incarnation-bound deliveries. They never
+    // seed refusal-of-refusal traffic, and a successor cannot inherit one.
+    const bool is_notice = env.msg.provenance.dispatch_refused();
+    if (is_notice) {
+        const WeaveRecord* recipient = find(env.target);
+        if (recipient == nullptr || !recipient->alive ||
+            recipient->life != env.sender_life ||
+            recipient->incarnation != env.refusal_incarnation ||
+            !accept_match(*recipient, DispatchRefused::zen_name, DispatchRefused::zen_version)) {
+            return;
+        }
+    }
+
     BusEvent ev;
     ev.seq = env.seq;
     ev.target = env.target;
@@ -1474,6 +1544,30 @@ void Switchboard::deliver_one(Envelope env) {
     // authorship (MSG-07). Set before any refusal branch, so a refused
     // office-authored delivery still shows which office it was authored as.
     ev.authored_role = std::string(env.msg.provenance.authored_role());
+
+    const WeaveRecord* author = env.gated ? find(env.msg.sender) : nullptr;
+    const bool permitted = !env.gated ||
+        (author != nullptr &&
+         (env.role.empty()
+              ? effective_permits(author->grant.live(), author->delegated, ev.schema_name,
+                                  ev.schema_version, env.target)
+              : effective_permits_role(author->grant.live(), author->delegated, ev.schema_name,
+                                       ev.schema_version, env.role)));
+    const auto refuse = [&](const Refusal& r) {
+        record(env.seq, Disposition::Refused, r);
+        ev.kind = EventKind::Refused;
+        ev.refusal = r;
+        // Queue before calling arbitrary observers: neither their exceptions nor
+        // their topology mutations change the already-made dispatch decision.
+        try {
+            notify_dispatch_refusal(env, ev, permitted);
+        } catch (const std::bad_alloc&) {
+            // Best-effort metadata allocation must not erase the original host evidence.
+        } catch (const std::overflow_error&) {
+            // No sequence can be reused to make a notice look like a newer attempt.
+        }
+        emit(ev);
+    };
 
     // Capability authorization — only for Weave-originated (gated) messages, and
     // *before* role resolution and the gate, so a denied message never reaches
@@ -1508,10 +1602,7 @@ void Switchboard::deliver_one(Envelope env) {
             // that ended, it is no sender at all, and the grant check below already
             // refuses it as CapabilityDenied.
             const Refusal r{RefusalReason::SenderLifeEnded, {}};
-            record(env.seq, Disposition::Refused, r);
-            ev.kind = EventKind::Refused;
-            ev.refusal = r;
-            emit(ev);
+            refuse(r);
             return;
         }
         // ---- the candidate boundary (PR-01) --------------------------------
@@ -1531,10 +1622,7 @@ void Switchboard::deliver_one(Envelope env) {
             if (!env.role.empty() || !(env.target == sender->sealed_by.who) ||
                 !owner_is_current) {
                 const Refusal r{RefusalReason::SealedSpeech, {}};
-                record(env.seq, Disposition::Refused, r);
-                ev.kind = EventKind::Refused;
-                ev.refusal = r;
-                emit(ev);
+                refuse(r);
                 return;
             }
         }
@@ -1547,10 +1635,7 @@ void Switchboard::deliver_one(Envelope env) {
             // the world must not be able to discover that a candidate exists, still
             // less start a conversation with one. Only its coordinator gets through.
             const Refusal r{RefusalReason::NoSuchTarget, {}};
-            record(env.seq, Disposition::Refused, r);
-            ev.kind = EventKind::Refused;
-            ev.refusal = r;
-            emit(ev);
+            refuse(r);
             return;
         }
         // EFFECTIVE AUTHORITY, AT THE MOMENT OF DELIVERY (GATE-05). Baseline union
@@ -1562,19 +1647,9 @@ void Switchboard::deliver_one(Envelope env) {
         // administrator took that rule back, is refused here: what was true at
         // send time buys nothing, because nothing on the envelope remembers it.
         // Approval changes authority, not history — and so does withdrawal.
-        const bool permitted =
-            sender != nullptr &&
-            (env.role.empty()
-                 ? effective_permits(sender->grant.live(), sender->delegated, ev.schema_name,
-                                     ev.schema_version, env.target)
-                 : effective_permits_role(sender->grant.live(), sender->delegated, ev.schema_name,
-                                          ev.schema_version, env.role));
         if (!permitted) {
             const Refusal r{RefusalReason::CapabilityDenied, {}};
-            record(env.seq, Disposition::Refused, r);
-            ev.kind = EventKind::Refused;
-            ev.refusal = r;
-            emit(ev);
+            refuse(r);
             return;
         }
     }
@@ -1586,10 +1661,7 @@ void Switchboard::deliver_one(Envelope env) {
         auto it = roles_.find(env.role);
         if (it == roles_.end()) {
             const Refusal r{RefusalReason::NoSuchTarget, {}};
-            record(env.seq, Disposition::Refused, r);
-            ev.kind = EventKind::Refused;
-            ev.refusal = r;
-            emit(ev);
+            refuse(r);
             return;
         }
         env.target = it->second;
@@ -1599,18 +1671,12 @@ void Switchboard::deliver_one(Envelope env) {
     WeaveRecord* rec = find(env.target);
     if (rec == nullptr) {
         const Refusal r{RefusalReason::NoSuchTarget, {}};
-        record(env.seq, Disposition::Refused, r);
-        ev.kind = EventKind::Refused;
-        ev.refusal = r;
-        emit(ev);
+        refuse(r);
         return;
     }
     if (!rec->alive) {
         const Refusal r{RefusalReason::TargetUnavailable, {}};
-        record(env.seq, Disposition::Refused, r);
-        ev.kind = EventKind::Refused;
-        ev.refusal = r;
-        emit(ev);
+        refuse(r);
         return;
     }
 
@@ -1637,10 +1703,7 @@ void Switchboard::deliver_one(Envelope env) {
         if (rec->life != env.answer_target.life ||
             rec->incarnation != env.answer_target.incarnation) {
             const Refusal r{RefusalReason::AnswerTargetChanged, {}};
-            record(env.seq, Disposition::Refused, r);
-            ev.kind = EventKind::Refused;
-            ev.refusal = r;
-            emit(ev);
+            refuse(r);
             return;
         }
     }
@@ -1658,10 +1721,7 @@ void Switchboard::deliver_one(Envelope env) {
     }
     if (door == nullptr && !wildcard_door) {
         const Refusal r{RefusalReason::NotAccepted, {}};
-        record(env.seq, Disposition::Refused, r);
-        ev.kind = EventKind::Refused;
-        ev.refusal = r;
-        emit(ev);
+        refuse(r);
         return;
     }
 
@@ -1671,10 +1731,7 @@ void Switchboard::deliver_one(Envelope env) {
     Admission a = loom::admit(std::move(env.msg.payload), door_schema);
     if (!a.ok()) {
         const Refusal r{RefusalReason::GateRefused, a.first_error()};
-        record(env.seq, Disposition::Refused, r);
-        ev.kind = EventKind::Refused;
-        ev.refusal = r;
-        emit(ev);
+        refuse(r);
         return;
     }
 
@@ -1723,13 +1780,15 @@ void Switchboard::deliver_one(Envelope env) {
         // through it — but "this delivery answers THAT ask" would have been false,
         // which is the one thing this field exists to make exactly true.
         const TxnId answerable = env.answer_target.present ? TxnId{} : env.preparation;
-        authority_ = ReplyAuthority{env.msg.sender,
-                                    env.msg.correlation,
-                                    /*spent=*/false,
-                                    trusted.payload.schema_ptr(),
-                                    asker == nullptr ? 0 : asker->life,
-                                    asker == nullptr ? 0 : asker->incarnation,
-                                    answerable};
+        if (!is_notice) {
+            authority_ = ReplyAuthority{env.msg.sender,
+                                        env.msg.correlation,
+                                        /*spent=*/false,
+                                        trusted.payload.schema_ptr(),
+                                        asker == nullptr ? 0 : asker->life,
+                                        asker == nullptr ? 0 : asker->incarnation,
+                                        answerable};
+        }
         // ...AND WHAT THIS DELIVERY IS, for a handler that must prove to the bus what
         // it just heard (PR-04). Every field comes from the envelope Loom built:
         // the provenance no ordinary enqueue can write, the sender stamp no weave can
@@ -1831,7 +1890,7 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
 }
 
 DeliveryOutcome Switchboard::outcome(Ticket t) const {
-    if (t.seq == 0 || t.seq >= next_seq_) {
+    if (t.seq == 0 || (next_seq_ != 0 && t.seq >= next_seq_)) {
         return DeliveryOutcome{}; // the invalid ticket, or a seq never issued
     }
     const JournalSlot& slot = journal_[t.seq % kJournalCapacity];
@@ -2076,7 +2135,7 @@ AdmitResult Switchboard::schedule_admission(WeaveId candidate, WeaveId incumbent
     // behind it — including anything this call's caller enqueues next — arrives
     // after the candidate has been told.
     // PR-05; docs/laws/replacement-laws.md
-    const std::uint64_t seq = next_seq_++;
+    const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     activation.sender = owner.who;
     activation.provenance = Provenance::attested(Provenance::Kind::Activation, sequence);

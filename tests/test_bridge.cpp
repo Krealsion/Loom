@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 #include <doctest.h>
+#include "switchboard_fixtures.hpp"
+#include <zen/weave/dispatch_refusal.hpp>
 
 #include <zen/bridge/channel.hpp>
 #include <zen/bridge/remote_console.hpp>
@@ -2152,3 +2154,45 @@ TEST_CASE("C-1 (bridge): the absent-schema memo is bounded — a host cannot gro
 }
 
 TEST_SUITE_END();
+
+TEST_SUITE("bridge") {
+TEST_CASE("wire-originated refusal-shaped speech cannot acquire Loom attestation") {
+    Switchboard bus;
+    auto recipient=sbfx::register_probe(bus,{schema_of<DispatchRefused>()});
+    int ordinary=0,trusted=0;
+    WeaveId actual_sender{};
+    recipient.weave->on_handle=[&](const Message& in,Bus&,sbfx::ProbeWeave&) {
+        if(in.provenance.dispatch_refused()) { ++trusted; }
+        else { ++ordinary; actual_sender=in.sender; }
+        CHECK_FALSE(in.provenance.answers_ask());
+    };
+    std::string error;
+    const auto listener=bridge_listen_tcp(0,&error);
+    REQUIRE_MESSAGE(listener!=kInvalidSocket,error);
+    BridgeServer server(bus,listener);
+    const auto connection=bridge_connect_tcp("127.0.0.1",bridge_socket_port(listener),&error);
+    REQUIRE_MESSAGE(connection!=kInvalidSocket,error);
+    BridgeChannel raw(connection);
+    std::string hello;put_u32(hello,kBridgeProtocolVersion);
+    raw.queue(BridgeOp::Hello,hello);raw.flush();
+    std::uint64_t operator_id=0;
+    REQUIRE(wait_until([&] {
+        server.step();std::vector<BridgeIncoming> frames;raw.poll(frames);
+        for(const auto& frame:frames) if(frame.op==BridgeOp::Welcome) {
+            Cursor cur(frame.payload);std::uint32_t version=0;
+            if(!cur.u64(operator_id)||!cur.u32(version)) operator_id=0;
+        }
+        return operator_id!=0;
+    },2000));
+    DispatchRefused fake;fake.attempt="1";fake.target="999";
+    fake.shape="Ping";fake.version=1;fake.reason="CapabilityDenied";
+    raw.queue(BridgeOp::Send,make_send_frame(999999,recipient.id.value,999999,0,serialize(to_value(fake))));
+    raw.flush();
+    REQUIRE(wait_until([&] {server.step();return ordinary==1;},2000));
+    CHECK(trusted==0);CHECK(actual_sender.value==operator_id);
+    // Same payload family, genuine dispatch owner: the recipient can distinguish it.
+    const auto attempt=bus.send_as(recipient.id,WeaveId{999},Message(sbfx::ping(1)));
+    REQUIRE(attempt.valid());bus.pump_pending();CHECK(trusted==0);bus.pump_pending();
+    CHECK(trusted==1);CHECK(ordinary==1);CHECK(bus.pending()==0);
+}
+}

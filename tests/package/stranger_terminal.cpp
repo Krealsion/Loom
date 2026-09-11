@@ -137,6 +137,12 @@ int main() {
     ok(closed.has_value() && closed->shape == "Question" && !book.awaiting(),
        "...and the pair closes it, handing back the record it closed");
 
+    // Existing aggregate initialization keeps its field positions; the optional
+    // attempt is appended, so an older source consumer has no migration burden.
+    const loom::PendingAsk legacy{1, 2, oracle_id, {}, "Question", 1};
+    ok(legacy.respondent == oracle_id && legacy.shape == "Question" && legacy.attempt == 0,
+       "existing PendingAsk aggregate source remains usable without an attempt binding");
+
     // 6. Render the transcript from STRUCTURE, never from console strings.
     bool saw_answer = false;
     for (const loom::TranscriptEntry& e : session.session->transcript().entries()) {
@@ -151,6 +157,24 @@ int main() {
     ok(got.has_value() && got->value.get("a") != nullptr &&
            got->value.get("a")->as_text() == "you asked: is anybody there",
        "the exact Value is readable, verbatim, by id");
+
+    // A denied ask is still a Submitted fact; only a later authenticated receipt
+    // retires its local record. This consumer sees only installed public headers.
+    const auto denied=session.session->ask(loom::Address::to_role("ungranted.office"),"Question",1,args);
+    ok(static_cast<bool>(denied),"a stranger can author an ask without a delivery guarantee");
+    bus.pump_pending();
+    ok(session.session->waiting_on(denied.ask),"refusal notification is a later delivery");
+    bus.pump_pending();
+    ok(!session.session->waiting_on(denied.ask),"authenticated dispatch refusal retires the exact ask");
+    bool saw_refusal=false;
+    for(const auto& e : session.session->transcript().entries()) {
+        if(e.dispatch_refusal) {
+            saw_refusal=e.kind==loom::TranscriptKind::Received && e.shape=="zen.DispatchRefused" &&
+                e.dispatch_refusal->send.reason=="CapabilityDenied" &&
+                e.dispatch_refusal->retired_ask==denied.ask && !e.answers_ask;
+        }
+    }
+    ok(saw_refusal,"installed transcript separates the authenticated refusal from ordinary speech");
 
     // 7. Two identities, and the refusal to merge them, reach a stranger too.
     const loom::MountedTerminal seat = loom::host_mount_terminal(

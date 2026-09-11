@@ -83,9 +83,9 @@ MEANS
 - reasons are distinct because they send an operator to distinct fixes.
 
 DOES NOT MEAN
-- that the *sender* is asynchronously told — a weave cannot observe its send's
-  eventual fate without asking; see
-  [known-seams](../reference/known-seams.md#sender-cannot-observe-send-fate).
+- that every refusal reaches its sender. An explicit notice acceptor may learn
+  an ordinary addressed send's pre-handler refusal under MSG-12; absence proves
+  nothing. Disposal of an internal notice is not an ordinary refused send.
 
 PROVEN BY — `record`/`emit` on every refusal path; suites `switchboard`,
 `provenance` (reason-exactness cases).
@@ -192,10 +192,8 @@ DOES NOT MEAN, of that last clause
   recipient count never crossed this seam in either direction.
 
 DOES NOT MEAN
-- that senders observe delivery fate — they still do not
-  ([known-seams](../reference/known-seams.md#sender-cannot-observe-send-fate)).
-  Nothing is returned to the sender that was not already returned, no ticket
-  crosses the seam, and no future, retry or dead letter exists;
+- that a synchronous seam failure becomes a later dispatch notice. MSG-12 begins
+  only after an ordinary send has been enqueued; seam diagnostics remain distinct;
 - that a diagnostic is an answer — it creates no provenance and no delivery;
 - that failures are reported twice. These fire only on the pre-enqueue path;
   anything that passes both checks is queued and reported once by ordinary
@@ -409,3 +407,31 @@ PROVEN BY — `Switchboard::emit` (the per-event view; `observers_` held by
 `shared_ptr` so a self-removing callback outlives its registration); suite
 `switchboard` (add-during-notification, self-removal, removing another,
 reallocation pressure, mutation followed by a throw, nested emission).
+
+## MSG-12 — A sender may learn an authenticated refusal of its exact send
+
+LAW — Explicit acceptance of zen.DispatchRefused requests a later, Loom-attested
+notification when an ordinary directed or role-addressed send is refused before
+handler entry. Its return address is the actual author's life and incarnation at
+authorship. Every ordinary send path strips caller-supplied attestation.
+
+MEANS
+
+- verified office authorship participates without changing grant or role resolution;
+- public reasons preserve authority-before-resolution and candidate concealment;
+- the exact queued attempt, never correlation alone, identifies local work;
+- notification is FIFO and non-reentrant, at most one per eligible refused send;
+- a notice creates no answer right and never generates a notice about itself;
+- native and loaded participants share this meaning; unsupported isolated reach refuses.
+
+DOES NOT MEAN
+
+- delivery, success, eventual receipt, cancellation or post-delivery abandonment;
+- ordinary queued speech changes its life-only reload rule (MSG-03);
+- an in-process image is a native-memory sandbox;
+- AskBook becomes a global obligation tracker.
+
+PROVEN BY — Switchboard::capture_refusal_recipient, notify_dispatch_refusal,
+deliver_one; suites dispatch_refusal, dispatch_loaded, terminal, isolation;
+installed-package witness. Full representation and disposal contract:
+[messaging](../reference/messaging.md#sender-visible-dispatch-refusal).

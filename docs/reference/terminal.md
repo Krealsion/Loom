@@ -77,38 +77,42 @@ the user names is a useful terminal, and none of the workflows below needed it.
 The accept-set handed to the bus is exactly the doors — never the catalog, and
 never `AcceptMode::AnyRegistered`.
 
-## Submitted, received, answered — and never "delivered"
+## Submitted, received, answered and dispatch refusal
 
-```text
-SUBMITTED  I authored this and Loom took it. Whether it was delivered, refused
-           at the gate, refused for want of authority, or dropped for want of a
-           target, I DO NOT KNOW.
-RECEIVED   this arrived here, past my own door.
-ANSWERED   ...and Loom itself says it answers an ask I made.
-```
+Submitted remains the authored fact, never a delivery guarantee. An authenticated
+dispatch refusal is a later received zen.DispatchRefused message. TerminalSession
+explicitly declares that common notice door in addition to its supplied vocabulary;
+it uses no host tap, registry access or private routing exception.
 
-This inherits the standing
-[sender-cannot-observe-send-fate](known-seams.md#sender-cannot-observe-send-fate)
-seam and does not paper over it. A `Submitted` entry carries **no** outcome
-field to be filled in later, and two sends with opposite fates produce
-identical records (pinned in suite `terminal`). The console can print
-"delivered" because a console holds a `Switchboard&` and reads the journal; a
-participant cannot, and does not.
+TranscriptEntry keeps the actual received shape and retained message id, and its
+`dispatch_refusal` record holds authenticated original-send metadata plus the
+retired local ask id, if any. The top-level Received category stays source
+compatible with existing presentations. A generic renderer can show the actual
+received shape; an updated renderer checks this structured detail first to show
+the safe reason, address and exact attempt. Ordinary speech of the same shape has
+no such record. It is never AnswerReceived and answers_ask remains false.
 
-The visible consequences a terminal UX must live with:
+The existing Loom terminal presents DISPATCH REFUSED with the original send and
+reason, separate from SUBMITTED and local composition refusal. Text escaping is
+applied at presentation. Matching uses the queued attempt, correlation, original
+shape/version and authored address after checking Loom provenance. Only that
+matching ask leaves the outstanding set. Local forgetting cannot cancel remote
+work; transcript eviction cannot settle another ask. Delivered but unanswered
+requests remain outstanding under the existing local policy.
 
-- a denied send looks exactly like a successful one, so **nothing may auto-retry
-  or auto-request authority on denial** — the user asks, explicitly;
-- "awaiting an answer" means only that. Not that the request was delivered, not
-  that anyone is working on it, not that a person saw it;
-- a request to a policy office whose seat is unreachable simply stays pending.
+No authority request or retry is automatic. The maker can review the reason,
+use the existing authority workflow where appropriate, then explicitly retry
+from the same participant. Zengine's pane can integrate the public structured
+detail later; this does not change its parked Editor transaction.
+
+Full contract: [messaging](messaging.md#sender-visible-dispatch-refusal).
 
 ## Ask, answer, and which conversation an answer belongs to
 
 An ask is an ordinary gated send that the participant additionally remembers. No
 protocol is added and the far end is not obliged to answer.
 
-What settles it is **Loom's provenance and Loom's correlation**, never a shape
+What settles an answer is **Loom's provenance and Loom's correlation**, never a shape
 that looks like a reply:
 
 ```text
@@ -290,6 +294,30 @@ a presentation of participants that live in the same process.
 
 Its `debug>` lens is the **host's** own tap and registry read, labelled as such
 on every line, and wired into neither participant.
+
+### A denied send and an explicit retry
+
+In the session lens, `send @some.service Work 1 7` first authors a submission,
+then prints `DISPATCH REFUSED` with that attempt, address, shape and safe reason.
+`ask @some.service Work 1 7` additionally removes that exact local ask when the
+authenticated refusal arrives. No debug lens is needed. `pending` shows the
+remaining asks; a delivered, unanswered request stays there.
+
+To change authority deliberately, use the existing workflow:
+
+```text
+request Work 1 @some.service "so I can finish the job"
+operator
+show r1
+approve
+session
+send @some.service Work 1 7
+```
+
+The operator's received id depends on its earlier traffic; use the id printed
+with its actual `AuthorityPrompt`. Approval changes authority only. The final
+send is the maker's explicit retry, with a fresh attempt identity. A notice never
+requests a grant, switches the speaking participant or retries on its own.
 
 ## What this does not govern
 
