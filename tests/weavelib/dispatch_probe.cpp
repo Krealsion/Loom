@@ -11,10 +11,13 @@ struct DispatchProbeState {
     std::vector<std::string> attempts;
     std::int64_t queued = 0, matched = 0, trusted = 0, ordinary = 0;
     bool answer_right = false;
+    bool authored = false;
+    std::int64_t recipients = 0;
     std::string reason, target, role, correlation;
     ZEN_SHAPE(DispatchProbeState, 1, ZEN_FIELD(attempts), ZEN_FIELD(queued), ZEN_FIELD(matched),
               ZEN_FIELD(trusted), ZEN_FIELD(ordinary), ZEN_FIELD(answer_right), ZEN_FIELD(reason),
-              ZEN_FIELD(target), ZEN_FIELD(role), ZEN_FIELD(correlation));
+              ZEN_FIELD(target), ZEN_FIELD(role), ZEN_FIELD(correlation),
+              ZEN_FIELD(authored), ZEN_FIELD(recipients));
 };
 class DispatchProbe
     : public WeaveBase<DispatchProbe, DispatchProbeState,
@@ -33,6 +36,12 @@ public:
         } else if (cmd.mode == "office-role") {
             t = mail.as_role("dispatch.author")
                     .send_to_role(cmd.role, dispatch_test::Payload{1}, corr);
+        } else if (cmd.mode == "office-publish") {
+            const auto p = mail.as_role(cmd.role).publish(dispatch_test::Payload{1});
+            state_.authored = p.authored;
+            state_.recipients = static_cast<std::int64_t>(p.recipients);
+        } else if (cmd.mode == "publish") {
+            (void)mail.publish(dispatch_test::Payload{1});
         } else if (cmd.mode == "malformed") {
             t = mail.bus().send(target, Message(Value(schema_of<dispatch_test::Payload>())));
         } else if (cmd.mode == "forge") {

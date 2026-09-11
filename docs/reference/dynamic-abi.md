@@ -134,47 +134,66 @@ imply one another:
 
 | protection | mechanism | scope |
 |---|---|---|
-| binary compatibility | `abi_version` refused at load (KERN-04) | a *stale artifact* against a newer host |
-| an appended field left uninitialized | `-Wmissing-field-initializers` (in `-Wextra`, with `-Werror`) | rebuilt in-tree sources; fires for positional **and** designated forms alike |
-| correct current wiring | designators + the one gate | *this* build's field-to-function mapping |
+| stale-binary refusal | `abi_version` checked at load before descriptor callbacks (KERN-04) | an artifact built against another ABI meeting this host |
+| rebuilt-source compatibility | declared function-pointer types; `-Wmissing-field-initializers` with `-Werror` on in-tree C++ producers | incompatible assignments and omitted appended fields; outside producers choose their own warnings |
+| correct current wiring | named initializers plus semantic witnesses through the real host and loaded image | this build's field-to-function mapping, including assignment-compatible mistakes |
 
-A designator can still name the wrong function. What catches *that* is the gate,
-not the syntax: the three byte-emitting doors emit three different schemas, and
-the host re-admits each against the door it asked for, so a miswire is refused
-rather than believed. BL-4 measured this rather than assuming it — all three
-possible swaps build clean and turn seven CTest entries red — and
-`tests/test_kernel.cpp` now names the property directly, so the failure says
-"the doors are miswired" instead of surfacing as a downstream schema mismatch.
+A designator can still name the wrong function. For the descriptor's three
+byte-emitting doors, the gate catches that mistake: manifest, state and lifecycle
+policy have different schemas. The existing `kernel` case "BL-4: the descriptor's
+three same-signature doors each answer for themselves" pins the successful
+consequences. BL-4's v6 mutation evidence covers all three descriptor swaps;
+v7 leaves those signatures, named mappings and schema distinctions unchanged.
 
-`ZenHostApi` is a weaker case that reads stronger: **no two of its fifteen fields
-share a type**, so a positional drift there is a compile error today. That is a
-property of the current field set, not a rule the table obeys — the next appended
-callback can end it silently.
+**The host table now has a compatible pair.** `send_to_role` and `office_publish`
+share a function-pointer type since v7 added `attempt_out` to the addressed door:
+both end in `uint64_t*`, but one returns an attempt and the other a recipient count.
+They are the only pair among the host's fourteen callbacks (fifteen fields including
+`ctx`), and they are not adjacent. Both can admit the same payload shape, so the
+descriptor-schema argument does not distinguish their operations.
 
-### Before the next ABI revision
+The `dispatch_loaded` case "ABI v7: loaded role sends and office publications have
+distinct successful semantics" loads the real image and checks the host's actual
+destination set, personal versus verified office provenance, and exact attempt
+versus recipient count. It chooses an addressed role the author also holds and
+primes sequences above the fanout count, so both wrong callbacks can succeed and
+an accidental numerical equality cannot hide the swap. Results are read through
+the image's snapshot, independent of the callbacks being tested. Ordinary direct
+send/publication and unauthorized-office controls remain. Cross-wiring the real
+host's two named initializers compiles and makes this witness fail semantically;
+restoring that host makes it pass.
 
-`abi.h` claims to be valid C, and it is — verified under GCC at `-std=c99`,
-`c11` and `c17` with `-Wall -Wextra -Wpedantic -Werror`, including a C producer
-initializing the descriptor by name. **Nothing guards that claim**: the project is
-`LANGUAGES CXX` only, so no C compiler ever sees the header. When a C or
-non-C++ producer actually arrives, that check becomes worth standing up; until
-then the claim is true and unenforced, and this sentence is the honest statement
-of it.
+### When fields or signatures evolve
 
-When a field is added to either table:
+`abi.h` promises valid C. Bounded v7 checks compiled the actual header and a
+minimal named C producer under strict C99/C11/C17, and the export path under
+C++20. There is no standing C-producer compilation gate: the project remains
+`LANGUAGES CXX`. A real C/non-C++ producer or public binding is the trigger to
+add that infrastructure; this compatibility witness does not create one.
 
-1. Add it **at the end**, and say in the header what it is for — appending is
-   what keeps the two hand-written fixtures compiling for the right reason.
-2. Check whether it shares a type with its neighbours. If it does, it has joined
-   a permutable set, and the question below is now live for it too.
-3. Ask whether a semantic witness can tell the new door from the ones it matches.
-   For the three byte-emitting doors the answer is "yes, because they emit
-   different schemas" — **two doors emitting the same schema would silently
-   break that**, and would need their own witness.
-4. Update the two fixtures (`tests/weavelib/bad_abi.cpp`, `stale_abi.cpp`); they
-   name every field, so they fail loudly and specifically.
-5. Decide the version deliberately. A break is paid, not avoided — see the v2/v4/
-   v5/v6 notes in `abi.h` for why appending silently is the worse failure.
+For an appended field **or a changed existing signature**:
+
+1. Inventory assignment-compatible callbacks across **all** fields, including
+   nonadjacent pairs. A signature change can create a collision without adding
+   or moving a field, as `attempt_out` did in v7.
+2. Keep each construction site explicit and in declaration order: export macro,
+   in-process host, isolation child and manual bad/stale descriptors. Append new
+   fields at the end and document their meaning in the header; review existing
+   mappings when a signature changes. Null unsupported child doors deliberately.
+3. Check each interchangeable pair through its public semantic consequences.
+   Different descriptor schemas distinguish the three descriptor doors; two
+   operations accepting the same schema need destination/provenance/result
+   witnesses. A same-type swap in a fake table or compilation alone is insufficient.
+   Use an isolated real-host/image mutation when the changed surface leaves a gap,
+   prove it reached the executed artifact, and require a successful restored control.
+4. Compile the header and named producer in the promised C standards and the
+   export path in C++20; check the changed assignments at every construction site.
+   Preserve the missing-field warnings, while keeping source compatibility
+   separate from semantic wiring and stale-binary evidence.
+5. Decide the version deliberately and preserve rejection before callbacks.
+   The manual previous/future-version fixtures pin the gate's ordering; a current
+   image relabeled old does not replace evidence from an actual pre-change artifact.
+   See the v2/v4/v5/v6/v7 notes in `abi.h` for the breaks already paid.
 
 ## Host services (what a loaded weave's `Bus` really is)
 

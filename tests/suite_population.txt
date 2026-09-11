@@ -93,4 +93,4 @@ isolation          posix     39
 policy             posix     23
 
 dispatch_refusal   portable  15
-dispatch_loaded    kernel    4
+dispatch_loaded    kernel    5
