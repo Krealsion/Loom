@@ -74,8 +74,10 @@ discovery is deliberately **omitted** — a terminal that can speak to an office
 the user names is a useful terminal, and none of the workflows below needed it.
 
 `knows()` adds type knowledge; `accepts()` adds type knowledge **and a door**.
-The accept-set handed to the bus is exactly the doors — never the catalog, and
-never `AcceptMode::AnyRegistered`.
+The accept-set handed to the bus is the supplied vocabulary's doors plus
+TerminalSession's common `zen.DispatchRefused` v1 door — never the catalog, and
+never `AcceptMode::AnyRegistered`. Neither type knowledge nor acceptance grants
+authority to send; the participant's grant governs its speech.
 
 ## Submitted, received, answered and dispatch refusal
 
