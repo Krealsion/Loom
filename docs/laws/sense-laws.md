@@ -254,8 +254,15 @@ MEANS
   facts and a failure hold live on the claim records, untouched;
 - an operator's replacement, removal, death or revival retires every record it
   began; a successor at the same address inherits none, as it inherits no
-  authority; a stale notice meets a record that says Missing and decides
-  nothing; a duplicate release is `NoSuchOperation`.
+  authority — the `JointAuthority` names the exact life and incarnation it was
+  minted for, is refused `NotOperator` once either moves, and the host mints
+  again for the successor (retiring the records and refusing the retained
+  capability are two obligations); a stale notice meets a record that says
+  Missing and decides nothing; a duplicate release is `NoSuchOperation`;
+- a valid authority reaches only the records its holder began: a verb named
+  with another operator's operation id is refused `NotOperator` before the
+  record is touched, and nothing of that record — state, offers, notices owed —
+  changes; a refusal is judged by what it changed, never by its name alone.
 
 DOES NOT MEAN
 - that Loom keeps a history — eight records is a bound, not a journal, and no
@@ -266,5 +273,7 @@ DOES NOT MEAN
 
 PROVEN BY — `Switchboard::begin_joint_as` (only a Missing slot is taken),
 `release_joint_as`, `retire_joint`, `invalidate_joint_for` (the operator's
-lifecycle), `joint_records`, `kMaxJointOperations`; suite `joint` (J8, J17 both
-schedules, J18, J19).
+lifecycle), `joint_records`, `kMaxJointOperations`; `mint_joint_authority` and
+`joint_authority_check` (the exact life and incarnation), `commit_joint_as`
+(ownership before any effect); suite `joint` (J8, J17 both schedules, J18, J19;
+J23 the foreign operator, J24 the retained capability).

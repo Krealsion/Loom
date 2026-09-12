@@ -227,6 +227,14 @@ struct SenseClaimResult {
 // stay on the claim record, so a held claimant is still held and still repaired, and a
 // repair's re-settlement of a released record is owed to nobody.
 //
+// THE AUTHORITY IS BOUND THE SAME WAY, AND ONLY TO ITS OWN RECORDS. A `JointAuthority`
+// names the exact operator life and incarnation it was minted for and expires with
+// either; retiring the operator's records at that transition and refusing its retained
+// capability are two obligations, and the bus keeps both (the successor is authorized
+// by the host minting again). A valid authority reaches only the operations its
+// holder began: another operator's operation id meets `NotOperator` before that
+// record is touched, and nothing of it -- state, offers, notices owed -- changes.
+//
 // WHAT IT DOES NOT ADD. No document, layout or application vocabulary; no queue;
 // no answer; no retry; no timeout; no durability across a process. An operation
 // is bounded (`Switchboard::kMaxJointOperations`, `kMaxJointKeys`,
@@ -265,7 +273,10 @@ enum class JointRefusal : std::uint8_t {
     /// The authority was not issued by this Loom, or its board is gone.
     ForeignAuthority,
     /// The caller is not the exact operator (weave, life and incarnation) the
-    /// authority names — a successor at the same address inherits nothing.
+    /// authority names — a successor at the same address inherits nothing, and a
+    /// capability retained across the operator's swap, revival or removal names
+    /// nobody now; the host mints again — OR the operation named is another
+    /// operator's: refused before the record is touched, changing nothing of it.
     NotOperator,
     /// A named claimant holds none of the roles the authority's ceiling names.
     OutsideCeiling,
@@ -374,6 +385,25 @@ struct JointStatus {
 /// checks that the presenter is the exact operator (id, life and incarnation) it
 /// names and that this Loom issued it. An operation id in a payload is never
 /// authority; this object plus the live delivery is.
+///
+/// WHAT IT NAMES IS A PARTICIPANT, NOT AN ADDRESS. Minting captures the operator's
+/// life and incarnation AT THAT MOMENT, and the capability expires with either: a
+/// code swap or reload (new incarnation), a death and revival (new life), or a
+/// removal leaves a successor at the same `WeaveId` that this object does not
+/// name, exactly as the operator's records are retired at that transition. A
+/// retained copy in the successor's hands meets `NotOperator`; the host, and only
+/// the host, authorizes the successor by minting again. Nothing here refreshes
+/// itself, and ordinary activity (a snapshot, a Poke) is not a new incarnation.
+/// An authority minted for an absent or dead operator is not `valid()`: there is
+/// no live participant to bind, so it cannot become a future life's by accident.
+///
+/// WHAT IT AUTHORIZES IS THE HOLDER'S OWN RECORDS. A valid authority is the right
+/// to coordinate operations this operator began, never an effect on another
+/// operator's record: a verb named with somebody else's operation id is refused
+/// `NotOperator` before the record is touched, its state, offers and obligations
+/// left exactly as they were. A refusal is judged by what it changed, which must
+/// be nothing, and not by its return value alone.
+/// docs/reference/joint-publication.md#authority; SENSE-07.
 class JointAuthority {
 public:
     JointAuthority() = default;
@@ -382,20 +412,36 @@ public:
     JointAuthority(JointAuthority&&) = default;
     JointAuthority& operator=(JointAuthority&&) = default;
 
+    /// Does this name an operator at all? False for a default one and for one
+    /// minted when its operator was absent or dead. It does NOT promise the
+    /// operator is still that life and incarnation -- only the issuing
+    /// Switchboard can say that, and only at the moment of use.
     bool valid() const noexcept { return operator_.valid(); }
     WeaveId operator_id() const noexcept { return operator_; }
+    /// The exact life and incarnation this was minted for. Readable so a host
+    /// can see, beside `Switchboard::participant`-level facts of its own, whether a
+    /// capability it holds still names the operator it is about to hand it to.
+    std::uint64_t operator_life() const noexcept { return life_; }
+    std::uint64_t operator_incarnation() const noexcept { return incarnation_; }
     const std::vector<std::string>& ceiling() const noexcept { return ceiling_; }
 
 private:
     friend class Switchboard;
-    JointAuthority(std::weak_ptr<const LoomIdentity> issuer, WeaveId op,
-                   std::vector<std::string> ceiling)
-        : issuer_(std::move(issuer)), operator_(op), ceiling_(std::move(ceiling)) {}
+    JointAuthority(std::weak_ptr<const LoomIdentity> issuer, WeaveId op, std::uint64_t life,
+                   std::uint64_t incarnation, std::vector<std::string> ceiling)
+        : issuer_(std::move(issuer)), operator_(op), life_(life), incarnation_(incarnation),
+          ceiling_(std::move(ceiling)) {}
 
     /// WEAK, for the reason every authority's is: it must not keep its board
     /// alive, and one from a dead world must not validate against a later board.
     std::weak_ptr<const LoomIdentity> issuer_;
+    /// The three facts of a participant, as `ParticipantRef` carries them for a
+    /// bound claimant: the id, and the life and incarnation captured at minting.
+    /// Two integers rather than the struct because this header sits below the
+    /// Switchboard's; the truth of what they mean stays in one place, the record.
     WeaveId operator_{};
+    std::uint64_t life_ = 0;
+    std::uint64_t incarnation_ = 0;
     std::vector<std::string> ceiling_;
 };
 

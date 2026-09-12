@@ -807,10 +807,17 @@ public:
     /// Mint the right to coordinate joint publications for ONE operator weave
     /// over claimants holding one of `ceiling_roles`. Host root authority, like
     /// every other minting door: a weave holds a Bus& and cannot reach this.
+    ///
+    /// BOUND TO THE OPERATOR AS IT IS NOW -- its life and incarnation are captured
+    /// here, and the capability expires when either moves (a swap or reload, a
+    /// death and revival, a removal): the successor at that address is authorized
+    /// only by the host calling this again. Nothing in the bus or the SDK renews
+    /// it. For an operator that is not registered, or is dead, there is no live
+    /// participant to bind, and the result is not `valid()` (refused
+    /// `ForeignAuthority` if ever presented) rather than a capability that would
+    /// become a future life's; mint after the revival, for the life that exists.
     JointAuthority mint_joint_authority(WeaveId operator_id,
-                                        std::vector<std::string> ceiling_roles) noexcept {
-        return JointAuthority{identity_, operator_id, std::move(ceiling_roles)};
-    }
+                                        std::vector<std::string> ceiling_roles) const;
     bool issued_here(const JointAuthority& authority) const noexcept {
         const std::shared_ptr<const LoomIdentity> issuer = authority.issuer_.lock();
         return issuer != nullptr && issuer == identity_;
@@ -2000,7 +2007,12 @@ private:
     /// End an operation: state, reason, and every offer released. `noexcept`, so
     /// it is safe to call from any lifecycle transition.
     void finish_joint(JointOp& op, JointState state, JointRefusal reason) noexcept;
-    /// The operator/claimant half of the authority check, shared by every verb.
+    /// The operator half of the authority check, shared by every operator verb: a
+    /// live delivery of the caller, an authority this board issued, and the caller
+    /// being the EXACT participant -- id, life and incarnation -- the authority was
+    /// minted for (`still`, asked of the minted identity). What it does not decide
+    /// is which record the verb may touch: that is the record's own `operator_`,
+    /// checked by each verb before any effect.
     JointRefusal joint_authority_check(WeaveId caller, const JointAuthority& authority) const;
     /// Abort every Preparing operation that binds `changed` (as operator or as
     /// claimant) whose bound life/incarnation no longer holds; retire every record

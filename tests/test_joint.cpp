@@ -43,6 +43,17 @@
 //                             records kept until released, exhaustion in words, the operator's
 //                             lifetime, and the third answer, Declined, native and loaded.
 //                             Their own list heads that block.
+//   J22 a refused replacement runs nothing of the incumbent's (its own list head).
+//   J23-J24: authority is exact and reaches only its holder's own records --
+//                             a foreign operator's VALID capability, named with another
+//                             operator's operation id, is refused NotOperator before the
+//                             record is touched, and the owner still commits (J23); a
+//                             capability names the operator's exact life and incarnation,
+//                             expires with either (swap, death and revival), cannot reach a
+//                             record the successor began, and the host authorizes the
+//                             successor by minting again (J24). J6's copied capability and
+//                             J19's operator lifetime are the neighbours, not the same
+//                             predicates: J6 never reaches the record, J19 retires it.
 
 #include <doctest.h>
 
@@ -498,6 +509,9 @@ TEST_CASE("J5: a removed claimant aborts the operation and its offers are releas
 TEST_CASE("J6: every unauthorized or mistaken act is refused by name and changes nothing") {
     Rig rig;
     SUBCASE("a second weave presenting the operator's authority is not the operator") {
+        // THE COPY IS REFUSED AT THE AUTHORITY, before any operation is looked at. The
+        // other case -- a second operator's OWN valid authority named with this
+        // operator's operation id, which does reach the record -- is J23.
         auto [other_id, other] = put<Operator>(rig.bus, Grant{}, "joint.other");
         other->authority = rig.o->authority; // copied, as a capability can be
         other->keys = rig.o->keys;
@@ -1688,22 +1702,42 @@ TEST_CASE("J19: an operator replaced, removed or dead leaves nobody to consume i
         REQUIRE(rig.bus.has_failed_application(rig.doc));
         REQUIRE(rig.bus.joint_status(id).application == JointApplication::Failed);
         // THE OPERATOR IS SWAPPED before that notice is delivered: same id, new incarnation.
+        const JointAuthority retained = rig.o->authority; // the predecessor's, in the same member
         const std::string bytes = rig.bus.snapshot_bytes(rig.op);
         REQUIRE(rig.bus.swap_state(rig.op, bytes).revived);
         CHECK(rig.bus.joint_status(id).state == JointState::Missing);
         CHECK(rig.bus.joint_records() == 0);
+        // THE HOST AUTHORIZES THE SUCCESSOR, explicitly: the predecessor's capability
+        // names an incarnation that is gone (J24 pins every verb refusing it), and the
+        // host, not the bus, decides that the new code may coordinate. This case's
+        // subject is the RECORD's lifetime, so the successor holds current authority.
+        rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
         // THE STALE NOTICE reaches the successor and decides nothing: the record it
         // consults says Missing.
         rig.bus.drain_until_idle();
         REQUIRE(rig.o->applied.size() == 1);
         CHECK(rig.o->applied_status[0].state == JointState::Missing);
         CHECK(rig.o->applied_status[0].reason == JointRefusal::NoSuchOperation);
-        // THE SUCCESSOR'S OWN VERBS on the old id name nothing.
+        // THE SUCCESSOR'S OWN VERBS on the old id name nothing -- and with the retained
+        // predecessor's capability they name nobody: the ungated host view is what says
+        // the record is Missing, never a stale capability regaining a door for it.
         tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(id)});
         tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
         rig.bus.drain_until_idle();
         CHECK(rig.o->status.state == JointState::Missing);
         CHECK(rig.o->released.why == JointRefusal::NoSuchOperation);
+        {
+            const JointAuthority current = rig.o->authority;
+            rig.o->authority = retained;
+            tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(id)});
+            tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
+            rig.bus.drain_until_idle();
+            CHECK(rig.o->status.state == JointState::Missing);
+            CHECK(rig.o->status.reason == JointRefusal::NotOperator);
+            CHECK(rig.o->released.why == JointRefusal::NotOperator);
+            CHECK(rig.bus.joint_status(id).state == JointState::Missing);
+            rig.o->authority = current;
+        }
         // THE HELD CLAIMANT never depended on the slot: still held, still refused, and
         // still repaired by its own swap -- shown again, applying, with no notice owed.
         CHECK(rig.bus.has_failed_application(rig.doc));
@@ -1957,6 +1991,182 @@ TEST_CASE("J22: a refused replacement runs nothing of the incumbent's -- a v7 ca
     REQUIRE(kernel.unload("joint-doc")); // unload first: a mapped image cannot be deleted on Windows
     std::error_code ec;
     std::filesystem::remove(copy, ec);
+}
+
+// ---- J23-J24: authority is exact, and reaches only its holder's own records ----------
+//
+// Two defects a review reproduced against the landed candidate, both present since the
+// experiment: a foreign operator's refused commit ABORTED the record it named (the
+// refusal was checked by its return value, not by what it changed), and a capability
+// that named only the operator's address survived the operator's swap. The lessons live
+// in the reference page's authority section and on `JointAuthority`; these two cases are
+// the proof. J6's copied capability (refused at the authority, never reaching a record)
+// and J19's operator lifetime (the record retired) are neighbouring predicates, not these.
+
+TEST_CASE("J23: a foreign operator's valid authority reaches none of another operator's operation -- refused NotOperator before the record is touched, and the owner still commits") {
+    Rig rig;
+    const std::uint64_t id = rig.prepare();
+    const std::size_t retained = rig.bus.joint_retained_bytes();
+    REQUIRE(retained > 0);
+    // X: a second operator with its OWN host-minted authority over an unrelated ceiling. It
+    // holds neither A's capability (J6's copy) nor authority over A's participants; what it
+    // presents is valid, issued here, and its own -- the request is wrong only in the
+    // operation it names.
+    auto [stranger_id, stranger] = put<Doc>(rig.bus, Grant{}, "joint.stranger");
+    tell(rig.bus, stranger_id, Cmd{"claim", 0, "S", 1});
+    rig.bus.drain_until_idle();
+    REQUIRE(stranger->last_claim.accepted);
+    auto [x_id, x] = put<Operator>(rig.bus, Grant{}, "joint.x");
+    x->authority = rig.bus.mint_joint_authority(x_id, {"joint.stranger"});
+    x->keys = {claim_key<DocFact>(stranger_id)};
+    REQUIRE(x->authority.valid());
+    // EVERY OPERATOR VERB, NAMED WITH A'S OPERATION: refused by name, and A's record is
+    // exactly what it was -- Preparing, no reason, its offers retained, nothing owed.
+    tell(rig.bus, x_id, Cmd{"commit", static_cast<std::int64_t>(id)});
+    tell(rig.bus, x_id, Cmd{"cancel", static_cast<std::int64_t>(id)});
+    tell(rig.bus, x_id, Cmd{"status", static_cast<std::int64_t>(id)});
+    tell(rig.bus, x_id, Cmd{"release", static_cast<std::int64_t>(id)});
+    rig.bus.drain_until_idle();
+    CHECK_FALSE(x->committed.ok);
+    CHECK_MESSAGE(x->committed.why == JointRefusal::NotOperator, std::string(name_of(x->committed.why)));
+    CHECK(x->cancelled.why == JointRefusal::NotOperator);
+    CHECK(x->status.state == JointState::Missing);
+    CHECK(x->status.reason == JointRefusal::NotOperator);
+    CHECK(x->released.why == JointRefusal::NotOperator);
+    CHECK_MESSAGE(rig.bus.joint_status(id).state == JointState::Preparing,
+                  std::string(name_of(rig.bus.joint_status(id).state)));
+    CHECK(rig.bus.joint_status(id).reason == JointRefusal::None);
+    CHECK(rig.bus.joint_retained_bytes() == retained);
+    CHECK(rig.bus.joint_pending() == 1);
+    CHECK(rig.doc_path() == "A");
+    CHECK(rig.view_shown() == "hidden");
+    CHECK(rig.o->ended.empty()); // nothing ended, so no notice of an ending was queued
+    // X IS A GENUINE OPERATOR over its own ceiling: its own begin works. That is what
+    // separates this case from J6's copy, which never reaches a record at all.
+    tell(rig.bus, x_id, Cmd{"begin"});
+    rig.bus.drain_until_idle();
+    CHECK_MESSAGE(x->begun.ok, std::string(name_of(x->begun.why)));
+    CHECK(rig.bus.joint_pending() == 2);
+    // A'S LEGITIMATE COMMIT AFTERWARDS publishes as if X had never spoken.
+    rig.commit(id);
+    rig.bus.drain_until_idle();
+    CHECK_MESSAGE(rig.o->committed.ok, std::string(name_of(rig.o->committed.why)));
+    CHECK(rig.doc_path() == "B");
+    CHECK(rig.view_shown() == "B");
+    CHECK(rig.bus.joint_status(id).state == JointState::Committed);
+    // ...and A's committed record is no more X's to release than its live one was.
+    tell(rig.bus, x_id, Cmd{"release", static_cast<std::int64_t>(id)});
+    rig.bus.drain_until_idle();
+    CHECK(x->released.why == JointRefusal::NotOperator);
+    CHECK(rig.bus.joint_status(id).state == JointState::Committed);
+    CHECK(rig.bus.joint_records() == 2);
+}
+
+TEST_CASE("J24: a JointAuthority names the operator's exact life and incarnation -- retiring its records and refusing its retained capability are two obligations, and the host authorizes a successor by minting again") {
+    SUBCASE("swapped: new code behind the operator's id") {
+        Rig rig;
+        const std::uint64_t id = rig.prepare();
+        // THE PREDECESSOR'S CAPABILITY, retained in the same object's member across the
+        // swap -- what a native operator that is never re-authorized holds.
+        const JointAuthority retained = rig.o->authority;
+        CHECK(retained.operator_id() == rig.op);
+        CHECK(retained.operator_life() == 1);
+        CHECK(retained.operator_incarnation() == 1);
+        const std::string bytes = rig.bus.snapshot_bytes(rig.op);
+        REQUIRE(rig.bus.swap_state(rig.op, bytes).revived);
+        // OBLIGATION ONE: the records the predecessor began are retired at the transition.
+        CHECK(rig.bus.joint_status(id).state == JointState::Missing);
+        CHECK(rig.bus.joint_records() == 0);
+        // OBLIGATION TWO: the retained capability names nobody now. Every operator verb
+        // presented with it is refused NotOperator, and a begin creates no record.
+        tell(rig.bus, rig.op, Cmd{"begin"});
+        tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(id)});
+        tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
+        rig.bus.drain_until_idle();
+        CHECK_FALSE(rig.o->begun.ok);
+        CHECK_MESSAGE(rig.o->begun.why == JointRefusal::NotOperator, std::string(name_of(rig.o->begun.why)));
+        CHECK(rig.o->status.state == JointState::Missing);
+        CHECK(rig.o->status.reason == JointRefusal::NotOperator);
+        CHECK(rig.o->released.why == JointRefusal::NotOperator);
+        CHECK(rig.bus.joint_records() == 0);
+        CHECK(rig.bus.joint_pending() == 0);
+        // THE HOST AUTHORIZES THE SUCCESSOR, explicitly, for the incarnation that exists;
+        // nothing in the bus or the SDK did it for the host.
+        const JointAuthority current =
+            rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
+        REQUIRE(current.valid());
+        CHECK(current.operator_life() == retained.operator_life());
+        CHECK(current.operator_incarnation() == retained.operator_incarnation() + 1);
+        rig.o->authority = current;
+        const std::uint64_t fresh = rig.prepare("C");
+        REQUIRE(rig.bus.joint_status(fresh).state == JointState::Preparing);
+        const std::size_t offered = rig.bus.joint_retained_bytes();
+        REQUIRE(offered > 0);
+        // ...AND THE STALE CAPABILITY CANNOT REACH THE NEW RECORD: the same weave, the
+        // predecessor's capability, the successor's own operation -- every verb refused,
+        // and the record exactly as it was.
+        rig.o->authority = retained;
+        tell(rig.bus, rig.op, Cmd{"commit", static_cast<std::int64_t>(fresh)});
+        tell(rig.bus, rig.op, Cmd{"cancel", static_cast<std::int64_t>(fresh)});
+        tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(fresh)});
+        tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(fresh)});
+        rig.bus.drain_until_idle();
+        CHECK(rig.o->committed.why == JointRefusal::NotOperator);
+        CHECK(rig.o->cancelled.why == JointRefusal::NotOperator);
+        CHECK(rig.o->status.reason == JointRefusal::NotOperator);
+        CHECK(rig.o->released.why == JointRefusal::NotOperator);
+        CHECK(rig.bus.joint_status(fresh).state == JointState::Preparing);
+        CHECK(rig.bus.joint_status(fresh).reason == JointRefusal::None);
+        CHECK(rig.bus.joint_retained_bytes() == offered);
+        CHECK(rig.doc_path() == "A");
+        // THE POSITIVE PATH, with the current authority: the successor coordinates.
+        rig.o->authority = current;
+        rig.commit(fresh);
+        rig.bus.drain_until_idle();
+        CHECK_MESSAGE(rig.o->committed.ok, std::string(name_of(rig.o->committed.why)));
+        CHECK(rig.doc_path() == "C");
+        CHECK(rig.view_shown() == "C");
+        CHECK(rig.bus.joint_status(fresh).state == JointState::Committed);
+    }
+    SUBCASE("dead and revived: a new life behind the operator's id, and nothing minted for the dead") {
+        Rig rig;
+        const std::uint64_t id = rig.prepare();
+        const JointAuthority retained = rig.o->authority;
+        const std::string bytes = rig.bus.snapshot_bytes(rig.op);
+        rig.bus.kill(rig.op);
+        CHECK(rig.bus.joint_status(id).state == JointState::Missing); // retired with the life
+        CHECK(rig.bus.joint_records() == 0);
+        // MINTED FOR THE DEAD, OR FOR NOBODY: there is no live participant to bind, so the
+        // result is not valid and can never become the revived life's by accident.
+        const JointAuthority for_the_dead =
+            rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
+        CHECK_FALSE(for_the_dead.valid());
+        CHECK_FALSE(rig.bus.mint_joint_authority(WeaveId{987654}, {"joint.doc"}).valid());
+        REQUIRE(rig.bus.reload(rig.op, bytes).revived);
+        // THE ENDED LIFE'S CAPABILITY is refused by the revived one; so is the one minted
+        // while it was dead. Neither creates a record.
+        tell(rig.bus, rig.op, Cmd{"begin"});
+        rig.bus.drain_until_idle();
+        CHECK_FALSE(rig.o->begun.ok);
+        CHECK_MESSAGE(rig.o->begun.why == JointRefusal::NotOperator, std::string(name_of(rig.o->begun.why)));
+        rig.o->authority = for_the_dead;
+        tell(rig.bus, rig.op, Cmd{"begin"});
+        rig.bus.drain_until_idle();
+        CHECK_FALSE(rig.o->begun.ok);
+        CHECK(rig.o->begun.why == JointRefusal::ForeignAuthority);
+        CHECK(rig.bus.joint_records() == 0);
+        // MINTED FOR THE LIFE THAT EXISTS, it coordinates.
+        rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
+        REQUIRE(rig.o->authority.valid());
+        CHECK(rig.o->authority.operator_life() == retained.operator_life() + 1);
+        CHECK(rig.o->authority.operator_incarnation() == retained.operator_incarnation());
+        const std::uint64_t fresh = rig.prepare("C");
+        rig.commit(fresh);
+        rig.bus.drain_until_idle();
+        CHECK_MESSAGE(rig.o->committed.ok, std::string(name_of(rig.o->committed.why)));
+        CHECK(rig.doc_path() == "C");
+        CHECK(rig.view_shown() == "C");
+    }
 }
 
 } // TEST_SUITE("joint")
