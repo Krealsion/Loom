@@ -24,6 +24,28 @@
 # expectation is not met.
 
 cmake_minimum_required(VERSION 3.22)
+
+# COMPILE ONLY, from the compiler check onward. Nothing here is linked, so the
+# toolchain's linker, resource compiler and manifest tool are never consulted --
+# which is what lets this witness run from the fresh shell an official lane runs
+# in, where an MSVC build tree still knows its `cl.exe` by absolute path but the
+# dev shell's PATH (rc.exe, link.exe) is gone. Set BEFORE project(), or the
+# compiler check links a test executable and fails there.
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+# THE COMPILER'S OWN ENVIRONMENT, HANDED THROUGH. `cl.exe` finds the standard
+# headers through INCLUDE, which the dev shell exported when the OUTER tree was
+# configured and a fresh shell does not carry. tests/CMakeLists.txt captures that
+# value at configure time and passes it here with `;` spelled `|` (a `;` would
+# split the argument into a CMake list); it is restored into this process's
+# environment, which every try_compile build inherits. Empty everywhere else.
+foreach(var IN ITEMS INCLUDE LIB)
+    if(DEFINED ZEN_HOOK_ENV_${var} AND NOT ZEN_HOOK_ENV_${var} STREQUAL "")
+        string(REPLACE "|" ";" zen_hook_env_value "${ZEN_HOOK_ENV_${var}}")
+        set(ENV{${var}} "${zen_hook_env_value}")
+    endif()
+endforeach()
+
 project(zen_hook_return_witness CXX)
 
 if(NOT DEFINED ZEN_LOOM_INCLUDE OR NOT EXISTS "${ZEN_LOOM_INCLUDE}/zen/weave.hpp")
@@ -32,7 +54,6 @@ if(NOT DEFINED ZEN_LOOM_INCLUDE OR NOT EXISTS "${ZEN_LOOM_INCLUDE}/zen/weave.hpp
         "contain zen/weave.hpp (got '${ZEN_LOOM_INCLUDE}')")
 endif()
 
-set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY) # compile only; nothing is linked
 set(zen_hook_flags "")
 if(MSVC)
     # Loom's public macros use __VA_OPT__, which MSVC supports only under the
