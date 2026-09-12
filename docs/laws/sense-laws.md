@@ -185,3 +185,95 @@ PROVEN BY — `Grant::permits_observe` (its own rule vector),
 `forget_personal_claims` / `forget_office_claims`; suite `sense` (S5 the
 lifetime witness, S6 the authorization witnesses), suite `kernel` (a loaded
 reader refused without a rule; `Kernel::load`'s explicit-grant overload).
+
+## SENSE-06 — A publication is shown, and what the showing came to is recorded, never assumed
+
+LAW — When a joint operation publishes a value under a claimant's key, the
+claimant is **shown** it once, before its next delivery and before its next
+snapshot. What the showing came to — Applied, Declined, Failed, or Lost when the
+claimant was removed unshown — is recorded against exactly that participant and
+publication. Publication is not application; nothing is read as Applied except
+the defined Applied answer.
+
+MEANS
+- no reader — a delivery, a poke, a snapshot, an observer — can find a weave
+  standing behind a claim it has not been shown;
+- **Declined is an answer, not a failure**: a functioning owner that keeps or
+  reconciles state of its own is not held; its next ordinary claim replaces the
+  published value; a reload re-shows nothing; the operator is told, naming it.
+  A successor shown what its predecessor prepared answers this, and a repaired
+  owner is therefore never proof that its old operation applied;
+- **Failed holds the claimant**: every delivery to it (a Poke included) is
+  refused `ApplicationFailed` by exact attempt, its ordinary snapshot is
+  refused, and the hook is never re-run for that incarnation. A reload shows
+  the successor again; removal ends the hold and reads Lost for an unshown part;
+- a native throw is recorded Failed **before** it is re-raised to the host
+  (MSG-10's discipline); `PublishedClaim::Failed` records the same without an
+  exception; across the ABI the slot's status is the fact, mapped exactly as
+  `zen/kernel/abi.h` says, and a hook return type the SDK cannot read is refused
+  at compile time;
+- a substrate door that mutated the maker's state (a performed `zen.PokeWrite`
+  or `zen.PokeResetState`) runs the participant's `after_delivery`, so its
+  claim follows its state whichever door moved it; the doors that only read or
+  refuse invalidate nothing.
+
+DOES NOT MEAN
+- that the bus retries, rolls back or times out an application — repair is the
+  owner's (a reload or a removal), and observation never retries a hook;
+- that a warning followed by an ordinary `void` return is anything but Applied —
+  expected non-application is said as `Declined` or it was not said;
+- that the operator's notice is the fact — the record is (SENSE-07);
+- that the host is relieved of a native exception: recorded, then re-raised,
+  and the host loop decides what a held owner's throw costs.
+
+PROVEN BY — `Switchboard::observe_published_claims` (the showing driver:
+fixed order, stops at the first failure), `note_application`,
+`ClaimRecord::application` / `published_by` / `published_revision`,
+`RefusalReason::ApplicationFailed`, `SnapshotAccess`,
+`reset_failed_application_for_successor`, `WeaveBase::published_as` (the
+three return types, `static_assert` on any other), `HostAdapter::claim_published`
+(`src/kernel/kernel.cpp`, the status mapping); suite `joint` (J2, J7, J11–J16,
+J20, J21), the `hook_return_types` entry.
+
+## SENSE-07 — An operation's record is kept until its operator releases it
+
+LAW — A joint operation's record — Committed with its application, or Aborted
+with its reason — is kept until its operator explicitly releases it or the
+operator's own life or incarnation ends, within `kMaxJointOperations` records
+live or unreleased per bus. Only a released slot is reused; a released record
+reads Missing.
+
+MEANS
+- publication is not the end of an outcome's lifetime, and a queued
+  notification is not consumption: the operator's `zen.JointApplied` /
+  `zen.JointEnded` is a promise the record will still be there when it re-reads;
+- an unrelated `begin` — any operator's, any keys — takes nothing from a record
+  somebody is still owed; genuine exhaustion is refused `Exhausted`, in words;
+- releasing a committed record early relinquishes its later notices (a repair's
+  re-settlement is told to nobody) and nothing else: the claimants' application
+  facts and a failure hold live on the claim records, untouched;
+- an operator's replacement, removal, death or revival retires every record it
+  began; a successor at the same address inherits none, as it inherits no
+  authority — the `JointAuthority` names the exact life and incarnation it was
+  minted for, is refused `NotOperator` once either moves, and the host mints
+  again for the successor (retiring the records and refusing the retained
+  capability are two obligations); a stale notice meets a record that says
+  Missing and decides nothing; a duplicate release is `NoSuchOperation`;
+- a valid authority reaches only the records its holder began: a verb named
+  with another operator's operation id is refused `NotOperator` before the
+  record is touched, and nothing of that record — state, offers, notices owed —
+  changes; a refusal is judged by what it changed, never by its name alone.
+
+DOES NOT MEAN
+- that Loom keeps a history — eight records is a bound, not a journal, and no
+  fairness between operators is promised: what one keeps, all pay for;
+- that a Preparing record can be released — it is live; cancel it;
+- that a record's release repairs or unholds anything — those are the
+  claimants' facts, never the operation's slot.
+
+PROVEN BY — `Switchboard::begin_joint_as` (only a Missing slot is taken),
+`release_joint_as`, `retire_joint`, `invalidate_joint_for` (the operator's
+lifecycle), `joint_records`, `kMaxJointOperations`; `mint_joint_authority` and
+`joint_authority_check` (the exact life and incarnation), `commit_joint_as`
+(ownership before any effect); suite `joint` (J8, J17 both schedules, J18, J19;
+J23 the foreign operator, J24 the retained capability).

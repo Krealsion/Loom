@@ -170,6 +170,15 @@ Loaded artifacts get their grant from `Kernel::load`'s explicit-grant overload:
 reading another participant's claims is a host decision, not a consequence of
 being loadable.
 
+**The substrate's own mutation doors are mutations.** A weave that derives its
+claim from its state re-claims in `after_delivery(Mail&)`, which `WeaveBase`
+runs after every handler — and after a substrate door that *changed* the state:
+a performed `zen.PokeWrite` or `zen.PokeResetState`. A describe, a read, a
+refused write or a bad literal changes nothing and runs nothing. Any hook that
+runs "at the end of every delivery" is accounted against the doors the
+construction layer answers before maker dispatch (`zen/weave/poke.hpp`), and
+this is which of them it covers ([SENSE-06](../laws/sense-laws.md)).
+
 ### Who can author a claim as someone else
 
 Two different answers, and conflating them is the mistake:
@@ -206,6 +215,12 @@ An admission overwrites the role holder **in place** and never passes through
 unheld, which is exactly why a predecessor's office claim survives a replacement
 rather than being deleted.
 
+**Joint publication.** Several claimants can change their latest claims
+together, in one protected exchange, and each is then shown what was published
+under its key — publication and application recorded as separate facts, and the
+operation's record kept until its operator releases it. Its own page:
+[joint publication](joint-publication.md) ([SENSE-06, SENSE-07](../laws/sense-laws.md)).
+
 ## Native/dynamic parity
 
 Senses cross the seam at [ABI v6](dynamic-abi.md): claim/observe doors both ways,
@@ -219,4 +234,5 @@ in both directions, joining the standing V1 law.
 Suite `sense` (S1–S6, discovery, the reading-owns-its-value case, the
 no-bus-traffic case); suite `kernel` (office claim across a real committed
 admission, the sealed candidate refused, dynamic parity); suite `handoff`
-(Senses meeting an authored handoff).
+(Senses meeting an authored handoff); suite `joint` (joint publication, native
+and loaded).

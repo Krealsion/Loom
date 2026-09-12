@@ -68,7 +68,10 @@ set(ZEN_TEST_SOURCES_KERNEL
     test_dispatch_loaded.cpp
     test_handoff.cpp
     test_manager.cpp
-    test_capabilities.cpp)
+    test_capabilities.cpp
+    # Joint publication of latest claims (SENSE-06/07), with a real loaded
+    # claimant -- kernel-gated because it loads one.
+    test_joint.cpp)
 # Isolation-dependent suites: Linux-only (the sandbox exists only there).
 set(ZEN_TEST_SOURCES_POSIX
     test_policy.cpp
@@ -244,6 +247,14 @@ target_link_libraries(zen_test_dispatch PRIVATE loom zen-switchboard zen-warning
 loom_weave_build_contract(zen_test_dispatch)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_DISPATCH=\"$<TARGET_FILE:zen_test_dispatch>\"")
 
+# Joint publication (ABI v8): a real loaded claimant that offers into a joint
+# publication across the seam and hears `claim_published` back across it, answering
+# all three ways (J7 Applied, J11 Failed, J21 Declined).
+add_library(zen_test_joint SHARED weavelib/joint_probe.cpp)
+target_link_libraries(zen_test_joint PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_joint)
+target_compile_definitions(zen-tests PRIVATE "ZEN_SO_JOINT=\"$<TARGET_FILE:zen_test_joint>\"")
+
 # R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
 # under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
 # where the pipe's fail-closed law is the thing under test.
@@ -294,7 +305,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_senses
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
-    zen_test_office_worker zen_test_dispatch
+    zen_test_office_worker zen_test_dispatch zen_test_joint
     zen_test_contract_applied zen_test_contract_bypass)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
@@ -579,6 +590,33 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
 add_test(NAME doc_links COMMAND ${CMAKE_COMMAND}
     -DZEN_REPO=${CMAKE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_links.cmake)
+
+# ---- The hook-return contract (SENSE-06) -------------------------------------------------
+#
+# A COMPILE-JUDGED entry: `on_claim_published` may return `void`, `bool` or
+# `loom::Weave::PublishedClaim`, and nothing else -- an answer the construction layer
+# cannot read must be refused at compile time rather than recorded as Applied. Four
+# positive controls and one negative, each a `try_compile` of a one-weave source against
+# this tree's public headers, in a project and a build tree OF ITS OWN
+# (tests/hook_return/CMakeLists.txt): a compile test builds something, which makes it a
+# writer of the tree it names, and the one tree it must never name is this one. Portable,
+# because the SDK header is; the same compiler, so the refusal is this build's.
+#
+# THE COMPILER'S ENVIRONMENT TRAVELS WITH THE ENTRY. An MSVC `cl.exe` finds its standard
+# headers through INCLUDE, which the dev shell exports at THIS configure and the fresh
+# shell an official lane runs in does not carry; captured here and handed to the witness
+# with `;` spelled `|` so the path list survives as one argument (empty on every other
+# toolchain). The witness links nothing, so PATH's rc/link/mt are never needed.
+string(REPLACE ";" "|" zen_hook_env_include "$ENV{INCLUDE}")
+string(REPLACE ";" "|" zen_hook_env_lib "$ENV{LIB}")
+add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
+    -S ${CMAKE_CURRENT_SOURCE_DIR}/hook_return
+    -B ${CMAKE_BINARY_DIR}/hook_return-witness
+    -G ${CMAKE_GENERATOR}
+    -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include
+    "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
+    "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
 
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #

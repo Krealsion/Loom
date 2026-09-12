@@ -22,7 +22,7 @@ law, implementation, or test.
 | `ANS-xx` | [answer-authority-laws.md](answer-authority-laws.md) | answer authority, deferral, provenance |
 | `LIFE-xx` | [lifecycle-laws.md](lifecycle-laws.md) | `zen.Activated`, lifecycle authority, and lifetime — of a weave through its callback, and of bytes in a transport buffer |
 | `PR-xx` | [replacement-laws.md](replacement-laws.md) | the candidate seal, the transaction, admission |
-| `SENSE-xx` | [sense-laws.md](sense-laws.md) | latest claims: settlement, provenance, office claims, authority, lifetime |
+| `SENSE-xx` | [sense-laws.md](sense-laws.md) | latest claims: settlement, provenance, office claims, authority, lifetime; joint publication — the showing's recorded answer, the record kept until released |
 | `HANDOFF-xx` | [handoff-laws.md](handoff-laws.md) | authored continuity across an incompatible schema: migration, the FIFO boundary, protocol vs state |
 | `KERN-xx` | [kernel-laws.md](kernel-laws.md) | dynamic artifacts, lifetimes, role truth |
 | `POP-xx` | [population-laws.md](population-laws.md) | what a green result means: suite/case/enforcement populations, declared absence, the opt-out |

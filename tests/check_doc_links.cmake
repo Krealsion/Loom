@@ -81,7 +81,9 @@ set(ZEN_DOC_EXCLUDE
     "^build"                 # every build tree, including build-san / build-win / cmake-build-*
     "^cmake-build"
     "^_install"
-    "^\\.git/"
+    "^\\.git(/|$)"           # the repository's own store -- a directory in a clone, and in a
+                             # git WORKTREE a one-line file naming the main checkout's path,
+                             # which is the VCS's record of itself and never documentation
     "^out/"                  # a build tree name .gitignore also names
     "^\\.idea/"              # editor state, gitignored: it holds this machine's paths by design
     "^\\.vscode/"
