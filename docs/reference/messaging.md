@@ -53,9 +53,17 @@ distinct observable reason:
 6  answer-target still exact?    AnswerTargetChanged
 7  accept-set door?              NotAccepted
 8  the gate                      GateRefused (with the gate's error)
+9  target not held?              ApplicationFailed (the target is held behind a
+                                 joint-published claim it could not apply;
+                                 nothing is delivered to it, a Poke included,
+                                 until it is reloaded or removed)
 ```
 
-Host/root sends (`Switchboard::send`, ungated) skip 1–3. Further reasons
+Host/root sends (`Switchboard::send`, ungated) skip 1–3. Step 9 is a fact about
+the **target's own state**, not the message: the target is alive and could not
+apply a value the bus published under its claim
+([joint publication](joint-publication.md#the-hold-and-diagnostic-access),
+[SENSE-06](../laws/sense-laws.md)). Further reasons
 exist: `ForeignAuthority` (an authority this Loom did not issue), `Exhausted`
 (a published bound), `AdmissionRevoked` (a scheduled admission whose world
 drifted — an admission refusal, not a message failure),
@@ -115,8 +123,10 @@ fact. The in-process image shares native memory; this is supported-API authority
 not a memory sandbox. See [dynamic ABI](dynamic-abi.md).
 
 The safe reasons are `CapabilityDenied`, `NoSuchTarget`, `TargetUnavailable`,
-`NotAccepted`, and `GateRefused`. The existing dispatch owner decides; no handler
-has run. Sealed candidates remain concealed. A denied send reports
+`NotAccepted`, `GateRefused`, and `ApplicationFailed` (the target is held behind
+a joint-published claim it could not apply — the one an operator most needs by
+exact attempt). The existing dispatch owner decides; no handler has run. Sealed
+candidates remain concealed. A denied send reports
 `CapabilityDenied` regardless of the addressed target's state, even when the host
 diagnostic's earlier seal check reports `NoSuchTarget`. Original host diagnostics
 are retained. A notice includes no gate detail string or resolved role holder.
@@ -149,6 +159,16 @@ closed recipient disposes the notice; rejecting it or failing in its handler
 never generates refusal-of-refusal traffic. Allocation failure or exhausted
 sequence space may drop a notice while preserving the original host refusal.
 See [bounds](bounds.md#dispatch-refusal-notices).
+
+**A notice names a record; the record's lifetime is the consumer's.** The same
+discipline governs the two joint-publication notices, `zen.JointEnded` and
+`zen.JointApplied` (`zen/weave/dispatch_refusal.hpp`): each is an ungated
+wake-up to the exact operator that began the operation, once per event, never
+an authenticated outcome in itself. The operator re-reads `joint_status` for the
+bus's own record, and that record is **kept until the operator releases it**
+([SENSE-07](../laws/sense-laws.md)) — a queued notification is not consumption,
+so a notice is never the last copy of an outcome. A forged notice meets a record
+that says otherwise; a stale one, a record that says Missing.
 
 **Absence proves nothing about delivery or success.** Handler failure, a
 delivered-but-unanswered request, or a later released/invalidated deferred answer

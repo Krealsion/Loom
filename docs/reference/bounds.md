@@ -18,11 +18,15 @@ than as the contract. The names are grep-able for exactly that reason.
 | `kMaxPreparedReplacements` | 8 | `CapacityExhausted` before anything is inspected |
 | `kMaxPreparationBudget` | 1024 | larger requests refused at `begin` |
 | `kMaxTerminalOutcomes` | 16 | oldest outcome dropped (evidence, not authority) |
+| `kMaxJointOperations` | 8 | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its operator releases it, so an operator that never releases meets this bound and never another operator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |
+| `kMaxJointKeys` | 4 | keys one operation binds; `Exhausted` at `begin` |
+| `kMaxJointOfferBytes` | 64 KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
 | activation sequence | `INT64_MAX` | the door refuses further activations, naming the boundary; it does not brick |
 | deferred-answer tokens | 2^64, monotonic | deliberately unguarded: process-local, never persisted, +1 per deferral |
 
 Also structural (not knobs): one active replacement transaction per incumbent
-*and* per candidate; one preparation conversation per transaction.
+*and* per candidate; one preparation conversation per transaction; one live
+joint operation per claim key.
 
 ## Recorder (host working memory)
 

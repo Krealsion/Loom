@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace loom {
 
@@ -298,6 +299,76 @@ public:
     virtual AuthorityView describe_authority(const GrantAuthority& authority) {
         (void)authority;
         return AuthorityView{};
+    }
+
+    // ---- Joint publication of latest claims ------------------------------------
+    //
+    // The account is the section header in zen/switchboard/sense.hpp and the
+    // reference page docs/reference/joint-publication.md. Two roles, six verbs,
+    // on the Bus rather than the Switchboard for the reason the administration
+    // verbs are: an operator must be an ORDINARY WEAVE holding a capability, and
+    // a claimant offers from inside its own delivery like it claims.
+    //
+    // The defaults refuse, truthfully: a Bus that is not a live participating
+    // context has no board, no identity and no delivery to speak from. A LOADED
+    // weave's Bus overrides `offer_claim` only: the operator's five verbs keep
+    // these defaults across the ABI, so loaded coordination is refused by name
+    // rather than absent by accident.
+
+    /// CLAIMANT: offer the next value of my own key `(me, value's shape)` for
+    /// the exact operation `op`. Admitted through the one gate against the
+    /// declared claim-set, checked against the revision the operation bound,
+    /// stored by the bus until commit or abort. NOTHING IS PUBLISHED HERE.
+    virtual JointResult offer_claim(std::uint64_t op, Value value) {
+        (void)op;
+        (void)value;
+        return JointResult{false, JointRefusal::NoLiveDelivery};
+    }
+
+    /// OPERATOR: bind the exact claimants and current revisions of `keys` into
+    /// one operation. Every key must currently hold a claim whose claimant holds
+    /// a role in the authority's ceiling, and no other live operation may bind it.
+    virtual JointBegin begin_joint(const JointAuthority& authority, std::vector<ClaimKey> keys) {
+        (void)authority;
+        (void)keys;
+        return JointBegin{false, 0, JointRefusal::NoLiveDelivery};
+    }
+
+    /// OPERATOR: publish. Revalidates everything, then exchanges every offered
+    /// value into its claim record in one protected step. `ok` IS the commitment:
+    /// false means nothing changed and the operation is terminal with `why`.
+    virtual JointResult commit_joint(const JointAuthority& authority, std::uint64_t op) {
+        (void)authority;
+        (void)op;
+        return JointResult{false, JointRefusal::NoLiveDelivery};
+    }
+
+    /// OPERATOR: end a Preparing operation without publishing; offers are released.
+    virtual JointResult cancel_joint(const JointAuthority& authority, std::uint64_t op) {
+        (void)authority;
+        (void)op;
+        return JointResult{false, JointRefusal::NoLiveDelivery};
+    }
+
+    /// OPERATOR: the operation's state and, when terminal, why.
+    virtual JointStatus joint_status(const JointAuthority& authority, std::uint64_t op) {
+        (void)authority;
+        (void)op;
+        return JointStatus{JointState::Missing, JointRefusal::NoLiveDelivery};
+    }
+
+    /// OPERATOR: RELEASE a terminal record this operator has consumed -- Committed,
+    /// its application settled or still owed, or Aborted with its reason -- so that
+    /// its slot may be reused (SENSE-07). The
+    /// operator's own explicit act: the bus never reuses a record under an operator
+    /// that has not released it, and a record the operator never releases is a slot
+    /// it keeps, up to the published bound. Afterwards the operation reads Missing;
+    /// the per-key facts stay on the claim records. Refused `WrongState` while the
+    /// operation is Preparing (cancel it instead) and `NoSuchOperation` once released.
+    virtual JointResult release_joint(const JointAuthority& authority, std::uint64_t op) {
+        (void)authority;
+        (void)op;
+        return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
 protected:

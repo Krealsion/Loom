@@ -266,7 +266,40 @@ public:
         return decode_reading(st, bytes, office, by, shape);
     }
 
+    // ---- Joint publication (ABI v8): the claimant's one verb across the seam ----
+    //
+    // A missing door refuses honestly (`NoLiveDelivery`) rather than pretending.
+    // THE OPERATOR'S VERBS DO NOT CROSS: `begin_joint`, `commit_joint`,
+    // `cancel_joint`, `joint_status` and `release_joint` inherit the refusing
+    // defaults of `loom::Bus`, so a loaded weave that tries to coordinate is told
+    // `NoLiveDelivery` at every one of them. Loaded coordination is unsupported by
+    // decision, not by omission: the authority is a native capability the host
+    // mints, and carrying it across the seam is a design of its own
+    // (docs/reference/joint-publication.md#what-crosses-the-abi).
+    loom::JointResult offer_claim(std::uint64_t op, loom::Value value) override {
+        if (host_ == nullptr || host_->sense_offer == nullptr) {
+            return loom::JointResult{false, loom::JointRefusal::NoLiveDelivery};
+        }
+        const std::string bytes = loom::serialize(value);
+        const ZenStatus st = host_->sense_offer(
+            host_->ctx, op, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        if (st == ZEN_OK) {
+            return loom::JointResult{true, loom::JointRefusal::None};
+        }
+        return loom::JointResult{false, joint_refusal_of(st)};
+    }
+
 private:
+    /// ZEN_ERR_JOINT_BASE minus the enumerator, back to the enumerator; anything
+    /// else is a refusal this side cannot name and reads as `NoLiveDelivery`.
+    static loom::JointRefusal joint_refusal_of(ZenStatus st) {
+        const int why = ZEN_ERR_JOINT_BASE - st;
+        if (why > 0 && why <= static_cast<int>(loom::JointRefusal::Cancelled)) {
+            return static_cast<loom::JointRefusal>(why);
+        }
+        return loom::JointRefusal::NoLiveDelivery;
+    }
+
     /// The host's status, back to the four distinct answers. A status this side
     /// does not recognize becomes `NoClaim` rather than a fabricated success.
     static loom::SenseRefusal sense_refusal_of(ZenStatus st) {
@@ -386,6 +419,52 @@ ZenStatus do_policy(void* instance, ZenByteSink sink) {
     try {
         sink_write(sink, loom::serialize(static_cast<S*>(instance)->policy()));
         return ZEN_OK;
+    } catch (...) {
+        return ZEN_ERR;
+    }
+}
+
+/// The joint-published value of one of this weave's own claims (ABI v8),
+/// re-admitted library-side against the weave's own declared claim-set before
+/// its C++ `claim_published` sees a Value — the same discipline `do_revive`
+/// keeps for state bytes.
+///
+/// THE STATUS IS THE FACT. The hook's three answers cross as three statuses:
+/// Applied as ZEN_OK, Declined as ZEN_CLAIM_DECLINED (the one positive status),
+/// Failed as ZEN_ERR. An exception that escapes the maker's handler is Failed,
+/// contained here and said as ZEN_ERR -- never allowed to cross, never turned into
+/// a success. Bytes this library's own gate would not admit are Failed too
+/// (ZEN_ERR_UNKNOWN_SCHEMA / ZEN_ERR_REFUSED): a value the weave could not be
+/// shown is a value it did not apply. The host's mapping of every status is on
+/// the slot in zen/kernel/abi.h.
+template <class S>
+ZenStatus do_claim_published(void* instance, const std::uint8_t* value, std::size_t len) {
+    try {
+        S* s = static_cast<S*>(instance);
+        loom::Unverified u = loom::parse(as_view(value, len));
+        std::shared_ptr<const loom::Schema> door;
+        for (auto& sc : s->claimed_schemas()) {
+            if (sc->name() == u.claimed_name() && sc->version() == u.claimed_version()) {
+                door = sc;
+                break;
+            }
+        }
+        if (!door) {
+            return ZEN_ERR_UNKNOWN_SCHEMA;
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return ZEN_ERR_REFUSED;
+        }
+        switch (s->claim_published(a.value())) {
+        case loom::Weave::PublishedClaim::Applied:
+            return ZEN_OK;
+        case loom::Weave::PublishedClaim::Declined:
+            return ZEN_CLAIM_DECLINED;
+        case loom::Weave::PublishedClaim::Failed:
+            return ZEN_ERR;
+        }
+        return ZEN_ERR;
     } catch (...) {
         return ZEN_ERR;
     }
@@ -524,15 +603,19 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         return ::loom::detail::do_handle<WeaveClass>(i, sender, reply_to, correlation, prov, \
                                                             attested, authored_role, p, n, h);     \
     }                                                                                              \
+    static ZenStatus zen__abi_claim_published(void* i, const uint8_t* v, size_t n) {              \
+        return ::loom::detail::do_claim_published<WeaveClass>(i, v, n);                     \
+    }                                                                                              \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
-        static const ZenWeaveAbi abi = {.abi_version = ZEN_ABI_VERSION,                             \
-                                        .create      = zen__abi_create,                            \
-                                        .destroy     = zen__abi_destroy,                           \
-                                        .describe    = zen__abi_describe,                          \
-                                        .snapshot    = zen__abi_snapshot,                          \
-                                        .policy      = zen__abi_policy,                            \
-                                        .revive      = zen__abi_revive,                            \
-                                        .handle      = zen__abi_handle};                           \
+        static const ZenWeaveAbi abi = {.abi_version     = ZEN_ABI_VERSION,                         \
+                                        .create          = zen__abi_create,                        \
+                                        .destroy         = zen__abi_destroy,                       \
+                                        .describe        = zen__abi_describe,                      \
+                                        .snapshot        = zen__abi_snapshot,                      \
+                                        .policy          = zen__abi_policy,                        \
+                                        .revive          = zen__abi_revive,                        \
+                                        .handle          = zen__abi_handle,                        \
+                                        .claim_published = zen__abi_claim_published};              \
         return &abi;                                                                               \
     }                                                                                              \
     }

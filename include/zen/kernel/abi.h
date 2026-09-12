@@ -42,8 +42,32 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 7u
-/* v7: addressed sends return their actual queued attempt via attempt_out (NULL
+#define ZEN_ABI_VERSION 8u
+/* v8: JOINT PUBLICATION crosses the seam for a CLAIMANT. Two slots are appended,
+ * one to each table: ZenHostApi::sense_offer (the claimant offers the next value
+ * of its own latest claim for an exact operation) and ZenWeaveAbi::claim_published
+ * (the host shows the library a value a joint operation published under its key,
+ * and the library's status IS the application fact). Two statuses join the
+ * table: ZEN_ERR_JOINT_BASE (a refused offer, by name) and ZEN_CLAIM_DECLINED,
+ * the one positive status -- neither OK nor an error -- for a library that,
+ * functioning, did not apply a published value and keeps state of its own.
+ *
+ * ONLY THE CLAIMANT'S SURFACE CROSSES. The operator's verbs (begin, commit,
+ * cancel, status, release) and the authority they need are native: a loaded
+ * operator's Bus inherits the refusing defaults, deliberately and visibly, and
+ * a loaded coordinator ABI is a design of its own (docs/reference/joint-publication.md).
+ *
+ * Paid as a break, as every earlier addition was, and for the same reason: the
+ * host reads ZenWeaveAbi past `handle` only because the version says the slot
+ * is there. A v7 image loaded by this host would be read past its descriptor's
+ * end; a v8 image under a v7 host would offer into a table that ends before its
+ * door. The loader checks exact equality and nothing else, so both refuse at
+ * load with both versions named -- an image built against v7 is refused whole,
+ * including as a replacement for a live participant, and the incumbent stands.
+ * No size negotiation, no old-image bridge: rebuild hosts, libraries and images
+ * together (docs/reference/dynamic-abi.md).
+ *
+ * v7: addressed sends return their actual queued attempt via attempt_out (NULL
  * is allowed; zero means no queued identity). Dispatch-refusal provenance is a
  * host delivery fact. The isolated pipe supplies no attempt and refuses a
  * manifest requesting this notice door. Pre-v7 binaries refuse at load. */
@@ -158,7 +182,22 @@ enum {
     ZEN_ERR_SENSE_NO_CLAIM = -6,
     ZEN_ERR_SENSE_NOT_AUTHORIZED = -7,
     ZEN_ERR_SENSE_UNDECLARED = -8,
-    ZEN_ERR_SENSE_OFFICE_NOT_HELD = -9
+    ZEN_ERR_SENSE_OFFICE_NOT_HELD = -9,
+    /* Joint publication (v8): a refused joint OFFER crosses back as
+     * ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator, so the library
+     * side can name the refusal rather than receive one silence. A status below
+     * the base that maps to no enumerator reads as NoLiveDelivery library-side --
+     * a refusal, never a fabricated acceptance. */
+    ZEN_ERR_JOINT_BASE = -100,
+    /* Joint publication (v8): THE ONE ANSWER THAT IS NEITHER OK NOR AN ERROR, and
+     * the one positive status in this table. Returned only by
+     * ZenWeaveAbi::claim_published: the library, functioning, did NOT apply the
+     * published value and keeps state of its own (it re-claims that truth at its
+     * next delivery). The host records Declined and holds nothing. Every negative
+     * status from that slot is a FAILED application and a held weave; every other
+     * positive status is UNDEFINED for that slot and the host reads it as Failed
+     * (the raw mapping is on the slot below). */
+    ZEN_CLAIM_DECLINED = 1
 };
 
 /* A host-provided byte sink. The library hands bytes to the host via write();
@@ -307,6 +346,15 @@ typedef struct ZenHostApi {
     ZenStatus (*sense_observe_office)(void* ctx, const char* role, const char* shape_name,
                                       uint32_t shape_version, ZenByteSink sink,
                                       ZenByteSink office_sink, ZenSenseBy* by);
+    /* v8: OFFER the next value of one of this weave's own latest claims for the
+     * exact joint operation `op` (docs/reference/joint-publication.md). The bytes
+     * are admitted host-side against the weave's DECLARED claim-set; the host
+     * checks the operation, the bound revision and the exact claimant, and stores
+     * the value until the operator commits or the operation aborts. Nothing is
+     * published by this call. ZEN_OK, or ZEN_ERR_JOINT_BASE minus the refusal.
+     * The isolated pipe supplies no offer door (NULL): a child cannot present the
+     * exact identity an operation binds. */
+    ZenStatus (*sense_offer)(void* ctx, uint64_t op, const uint8_t* payload, size_t len);
 } ZenHostApi;
 
 /* The single descriptor a Weave library exposes, returned by zen_weave_abi().
@@ -354,6 +402,45 @@ typedef struct ZenWeaveAbi {
     ZenStatus (*handle)(void* instance, uint64_t sender, uint64_t reply_to, uint64_t correlation,
                         uint32_t provenance, int64_t attested_sequence, const char* authored_role,
                         const uint8_t* payload, size_t len, const ZenHostApi* host);
+    /* v8: one of this weave's own latest claims was PUBLISHED BY A JOINT OPERATION
+     * and the weave has not run since. The host calls this before the weave's next
+     * `handle` and before its next `snapshot`, with the published value as bytes
+     * the library re-admits against its own claim-set. No host table is passed:
+     * this is not a delivery, and the weave may send nothing from it. The host
+     * reads this slot for every v8 image; ZEN_EXPORT_WEAVE always fills it, and a
+     * hand-written descriptor that leaves it NULL is shown nothing and is read as
+     * Failed -- a value a weave cannot be shown is a value it did not apply.
+     *
+     * THE STATUS IS THE FACT, and the host maps it exactly as follows
+     * (docs/reference/joint-publication.md#the-showing-and-its-three-answers):
+     *
+     *   ZEN_OK               Applied.  The library applied the value and stands
+     *                                  behind it. Nothing is owed.
+     *   ZEN_CLAIM_DECLINED   Declined. The library, functioning, did NOT apply it
+     *                                  and keeps state of its own -- what a
+     *                                  successor answers when shown a value its
+     *                                  predecessor prepared. Recorded against
+     *                                  exactly this instance and publication; not
+     *                                  held; the operator is told; the library
+     *                                  re-claims its own truth at its next delivery.
+     *   any negative status  Failed.   The showing did not complete. ZEN_ERR is
+     *                                  what `do_claim_published` returns for an
+     *                                  exception that escaped the maker's handler
+     *                                  or for `PublishedClaim::Failed`;
+     *                                  ZEN_ERR_UNKNOWN_SCHEMA / ZEN_ERR_REFUSED for
+     *                                  bytes the library's own gate would not
+     *                                  admit. The weave is HELD -- deliveries
+     *                                  refused `ApplicationFailed`, its ordinary
+     *                                  snapshot refused, this slot not called
+     *                                  again for that value -- until it is
+     *                                  reloaded or removed; the operator is told.
+     *   any other positive   Failed.   Undefined for this slot; never Applied.
+     *
+     * A host that discards this status turns a weave that could not apply its
+     * claim into one that silently stands behind it; a host that reads "did not
+     * apply, and is fine" as "applied" reports a repair as a success. Neither
+     * mapping is permitted here. */
+    ZenStatus (*claim_published)(void* instance, const uint8_t* value, size_t len);
 } ZenWeaveAbi;
 
 /* THE EXPORT DECORATION BELONGS TO THE DECLARATION, NOT ONLY THE DEFINITION.

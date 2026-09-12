@@ -30,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -371,11 +372,60 @@ public:
         return bus_.describe_authority(authority);
     }
 
+    // ---- Joint publication (docs/reference/joint-publication.md) --------------
+    //
+    // See zen/switchboard/sense.hpp. A CLAIMANT offers the next value of a claim
+    // it declared, for the exact operation an operator named to it; an OPERATOR
+    // holding a host-minted `JointAuthority` binds, commits, cancels, reads and
+    // releases. Every verb is authenticated by the bus against the live delivery
+    // this Mail is. A loaded weave can offer; its operator verbs are refused
+    // `NoLiveDelivery` (loaded coordination is not carried across the ABI).
+
+    /// CLAIMANT: offer `next` as my key's value for `op`. Not published here.
+    template <class T>
+    loom::JointResult offer(std::uint64_t op, const T& next) {
+        return bus_.offer_claim(op, to_value(next));
+    }
+
+    /// OPERATOR: bind the exact claimants and revisions of `keys`.
+    loom::JointBegin begin_joint(const loom::JointAuthority& authority,
+                                 std::vector<loom::ClaimKey> keys) {
+        return bus_.begin_joint(authority, std::move(keys));
+    }
+    /// OPERATOR: publish; `ok` is the commitment and nothing else is.
+    loom::JointResult commit_joint(const loom::JointAuthority& authority, std::uint64_t op) {
+        return bus_.commit_joint(authority, op);
+    }
+    loom::JointResult cancel_joint(const loom::JointAuthority& authority, std::uint64_t op) {
+        return bus_.cancel_joint(authority, op);
+    }
+    loom::JointStatus joint_status(const loom::JointAuthority& authority, std::uint64_t op) {
+        return bus_.joint_status(authority, op);
+    }
+    /// OPERATOR: retire a terminal record whose outcome this weave has consumed; the
+    /// operation reads Missing afterwards and its slot is free (see bus.hpp).
+    loom::JointResult release_joint(const loom::JointAuthority& authority, std::uint64_t op) {
+        return bus_.release_joint(authority, op);
+    }
+
 private:
     loom::Bus& bus_;
     const loom::Message& in_;
     loom::WeaveId self_;
 };
+
+/// Name one latest-claim key the way an operator binds it — by the exact weave,
+/// or by the office whose holder the bus resolves and binds at begin.
+template <class T>
+loom::ClaimKey claim_key(loom::WeaveId claimant) {
+    const std::shared_ptr<const loom::Schema> s = schema_of<T>();
+    return loom::ClaimKey{claimant, std::string(), s->name(), s->version()};
+}
+template <class T>
+loom::ClaimKey claim_key(std::string_view role) {
+    const std::shared_ptr<const loom::Schema> s = schema_of<T>();
+    return loom::ClaimKey{loom::WeaveId{}, std::string(role), s->name(), s->version()};
+}
 
 /// Spend a deferred answer, or abandon it. Free functions rather than members of
 /// `DeferredAnswer` because the capability lives in `switchboard/message.hpp`,
@@ -506,15 +556,29 @@ public:
                       "(the ZEN_SHAPE type), not the weave class — it is read from the state type");
         // The substrate's poke doors are answered here, before maker dispatch,
         // from the state shape's declared access model (see poke.hpp).
-        if (try_poke(in, bus)) {
+        Self* self = static_cast<Self*>(this);
+        if (const PokeOutcome poked = try_poke(in, bus); poked != PokeOutcome::NotAPoke) {
+            // A SUBSTRATE DOOR THAT CHANGED THE MAKER'S STATE IS A DELIVERY THAT
+            // CHANGED THE MAKER'S STATE (docs/reference/senses.md#authority). A
+            // successful zen.PokeWrite or zen.PokeResetState wrote `state_` from outside
+            // every handler, so a weave that derives a claim or a mirror from its state
+            // must hear the end of THIS delivery too, or its claim stands behind what a
+            // poker wrote and an operation bound to the old revision commits over it.
+            // Exactly the doors that mutated: a describe, a read, a refused write, a
+            // refused reset and a bad literal changed nothing and invalidate nothing.
+            if (poked == PokeOutcome::Mutated) {
+                if constexpr (requires(Self* s, Mail& m) { s->after_delivery(m); }) {
+                    Mail mail(bus, in, self_);
+                    self->after_delivery(mail);
+                }
+            }
             return;
         }
         // The self-description door, likewise before maker dispatch and from
-        // this class's own accept-set (see describe.hpp).
+        // this class's own accept-set (see describe.hpp). It changes nothing.
         if (try_describe(in, bus)) {
             return;
         }
-        Self* self = static_cast<Self*>(this);
         Mail mail(bus, in, self_);
         // A delivered message has passed the gate against one accepted schema, and
         // the handler is selected by the same (name, version) the bus used to pick
@@ -531,6 +595,52 @@ public:
                 std::to_string(in.payload.schema().version()) +
                 "' matched no handler — accept-set and handler set are out of sync");
         }
+        // A maker's own end-of-delivery hook, run after the handler and inside
+        // the same delivery, so a weave
+        // that DERIVES a mirror or a latest claim from its native state can do so
+        // once per delivery mechanically rather than at every handler's tail.
+        // Also run after a substrate door that MUTATED the state (above); not run
+        // after the doors that only read or describe. A weave that declares none
+        // pays nothing.
+        if constexpr (requires(Self* s, Mail& m) { s->after_delivery(m); }) {
+            self->after_delivery(mail);
+        }
+    }
+
+    /// The bus published one of THIS weave's declared claims by a joint operation
+    /// (docs/reference/joint-publication.md#the-showing-and-its-three-answers).
+    /// Routed to `Self::on_claim_published(const T&)` for the `T` in `Claims<...>`
+    /// whose identity the value carries; a Self that declares no such handler for
+    /// that shape hears nothing, which is honest for a weave that derives nothing
+    /// from its own claims. `final`, for the reason `handle` is: the routing is
+    /// the construction layer's, and it is matched exactly as a delivery is.
+    ///
+    /// WHAT THE MAKER'S HANDLER ANSWERS, and the only three return types it may
+    /// have. A handler returning `void` applied the value when it returned. One
+    /// returning `bool` answers `true` for applied and `false` for DECLINED: the
+    /// owner keeps or reconciles state of its own, is not broken, and re-claims its
+    /// truth at its next delivery -- the truthful word of a successor shown what
+    /// its predecessor prepared. One returning `loom::Weave::PublishedClaim` says
+    /// any of the three. ANY OTHER RETURN TYPE IS REFUSED AT COMPILE TIME: an
+    /// answer the construction layer cannot read would otherwise be read as
+    /// Applied, and "applied" is the one word this hook must never fabricate.
+    /// A handler that throws answers nothing -- the exception is the answer, and the
+    /// bus records the failed application before re-raising it (weave_contract.hpp).
+    /// A shape no handler is declared for is applied trivially: a weave that derives
+    /// nothing from its claim stands behind whatever the bus published under it.
+    ///
+    /// AUTHORING: the hook runs outside any delivery -- no Mail, no send, no
+    /// answer. Apply the value or decline it; do not begin work from it. A weave
+    /// that mirrors its state into its claim updates its "what the bus holds under
+    /// my key" bookkeeping here whatever it answers, so an owner that applied
+    /// claims nothing again and an owner that declined re-claims its own truth at
+    /// its next delivery. An exception here is a FAILURE that holds the weave;
+    /// expected non-application is `Declined`, never a throw.
+    loom::Weave::PublishedClaim claim_published(const loom::Value& v) final {
+        [[maybe_unused]] Self* self = static_cast<Self*>(this); // unused with an empty claim-set
+        loom::Weave::PublishedClaim answer = loom::Weave::PublishedClaim::Applied;
+        (void)(published_as<C>(self, v, answer) || ...);
+        return answer;
     }
 
     /// Set by mount(); used as the sender id of emitted messages.
@@ -586,6 +696,40 @@ private:
         return true;
     }
 
+    /// `dispatch_to`'s twin for a joint-published claim — matched by the same true
+    /// identity, converted only after the match. The handler's return type is its
+    /// answer (see `claim_published`); `answer` is written only when a handler for
+    /// this shape ran. EXACTLY THREE RETURN TYPES ARE READ: `PublishedClaim`,
+    /// `bool`, `void`. Anything else fails to compile here, by name, rather than
+    /// being discarded and read as Applied -- the permissive fallback this branch
+    /// once had turned an unreadable answer into a fabricated success.
+    template <class S>
+    bool published_as(Self* self, const loom::Value& v, loom::Weave::PublishedClaim& answer) {
+        if (!loom::same_identity(*schema_of<S>(), v.schema())) {
+            return false;
+        }
+        if constexpr (requires(Self* s, const S& x) { s->on_claim_published(x); }) {
+            using Answer = decltype(self->on_claim_published(std::declval<const S&>()));
+            if constexpr (std::is_same_v<Answer, loom::Weave::PublishedClaim>) {
+                answer = self->on_claim_published(from_value<S>(v));
+            } else if constexpr (std::is_same_v<Answer, bool>) {
+                answer = self->on_claim_published(from_value<S>(v))
+                             ? loom::Weave::PublishedClaim::Applied
+                             : loom::Weave::PublishedClaim::Declined;
+            } else if constexpr (std::is_void_v<Answer>) {
+                self->on_claim_published(from_value<S>(v));
+                answer = loom::Weave::PublishedClaim::Applied;
+            } else {
+                static_assert(std::is_void_v<Answer>,
+                              "on_claim_published must return void (applied), bool (true "
+                              "applied / false declined) or loom::Weave::PublishedClaim; any "
+                              "other return type cannot be read as an answer and is refused "
+                              "rather than recorded as Applied");
+            }
+        }
+        return true;
+    }
+
     // ---- the poke doors (substrate-answered; see poke.hpp) -----------------
 
     /// Send a substrate answer to the requester: reply_to if given, else the
@@ -622,32 +766,41 @@ private:
         bus.send(to, loom::Message(std::move(answer), self_, self_, in.correlation));
     }
 
+    /// What a poke door came to, for `handle`: not a poke at all; answered without
+    /// touching the state (a describe, a read, a refused write or reset); or
+    /// answered with an Ack that WROTE the state (a write or a reset that was
+    /// performed). Only the last is a change of the maker's state.
+    enum class PokeOutcome : std::uint8_t { NotAPoke, Answered, Mutated };
+
     /// Answer the four protocol shapes from the declared access model. Matched
     /// the same way dispatch_to matches (same_identity against the gated
     /// payload), so a delivered poke request converts safely.
-    bool try_poke(const loom::Message& in, loom::Bus& bus) {
+    PokeOutcome try_poke(const loom::Message& in, loom::Bus& bus) {
         const loom::Schema& shape = in.payload.schema();
         if (loom::same_identity(*schema_of<PokeDescribe>(), shape)) {
             answer_poke(in, bus, poke_structure<State>());
-            return true;
+            return PokeOutcome::Answered;
         }
         if (loom::same_identity(*schema_of<PokeRead>(), shape)) {
             const PokeRead req = from_value<PokeRead>(in.payload);
             std::visit([&](const auto& a) { answer_poke(in, bus, a); },
                        poke_read(state_, req.field));
-            return true;
+            return PokeOutcome::Answered;
         }
         if (loom::same_identity(*schema_of<PokeWrite>(), shape)) {
             const PokeWrite req = from_value<PokeWrite>(in.payload);
-            std::visit([&](const auto& a) { answer_poke(in, bus, a); },
-                       poke_write(state_, req.field, req.value));
-            return true;
+            const std::variant<Ack, Refused> answer = poke_write(state_, req.field, req.value);
+            std::visit([&](const auto& a) { answer_poke(in, bus, a); }, answer);
+            return std::holds_alternative<Ack>(answer) ? PokeOutcome::Mutated
+                                                       : PokeOutcome::Answered;
         }
         if (loom::same_identity(*schema_of<PokeResetState>(), shape)) {
-            std::visit([&](const auto& a) { answer_poke(in, bus, a); }, poke_reset(state_));
-            return true;
+            const std::variant<Ack, Refused> answer = poke_reset(state_);
+            std::visit([&](const auto& a) { answer_poke(in, bus, a); }, answer);
+            return std::holds_alternative<Ack>(answer) ? PokeOutcome::Mutated
+                                                       : PokeOutcome::Answered;
         }
-        return false;
+        return PokeOutcome::NotAPoke;
     }
 
     /// Answer zen.DescribeAccepted from THIS weave's accepted_schemas() — the
