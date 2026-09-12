@@ -328,6 +328,9 @@ public:
     /// OPERATOR: bind the exact claimants and current revisions of `keys` into
     /// one operation. Every key must currently hold a claim whose claimant holds
     /// a role in the authority's ceiling, and no other live operation may bind it.
+    /// The authority names THIS weave at the exact life and incarnation the host
+    /// minted it for; a successor behind the same id presents one the host minted
+    /// for it, or meets `NotOperator` (zen/switchboard/sense.hpp, `JointAuthority`).
     virtual JointBegin begin_joint(const JointAuthority& authority, std::vector<ClaimKey> keys) {
         (void)authority;
         (void)keys;
@@ -336,7 +339,11 @@ public:
 
     /// OPERATOR: publish. Revalidates everything, then exchanges every offered
     /// value into its claim record in one protected step. `ok` IS the commitment:
-    /// false means nothing changed and the operation is terminal with `why`.
+    /// false means nothing was published. A failed revalidation of THIS operator's
+    /// own Preparing operation ends it (Aborted, with `why`); a request that was not
+    /// this operator's to make -- another operator's operation (`NotOperator`), or
+    /// a capability naming a life or incarnation that is gone -- is refused with no
+    /// effect on the record it named.
     virtual JointResult commit_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;

@@ -984,6 +984,20 @@ void Switchboard::finish_joint(JointOp& op, JointState state, JointRefusal reaso
     }
 }
 
+JointAuthority Switchboard::mint_joint_authority(WeaveId operator_id,
+                                                 std::vector<std::string> ceiling_roles) const {
+    // THE PARTICIPANT AS IT IS NOW, or nothing. The same three facts a bound
+    // claimant is held by (`participant`): a capability that named only the address
+    // was one a successor incarnation could present, which is what made "a successor
+    // inherits no authority" a sentence rather than a check.
+    const WeaveRecord* rec = find(operator_id);
+    if (rec == nullptr || !rec->alive) {
+        return JointAuthority{}; // no live participant to bind: not valid()
+    }
+    return JointAuthority{identity_, operator_id, rec->life, rec->incarnation,
+                          std::move(ceiling_roles)};
+}
+
 JointRefusal Switchboard::joint_authority_check(WeaveId caller,
                                                 const JointAuthority& authority) const {
     // THE LIVE DELIVERY IS HALF THE CHECK — the same discipline every deferred
@@ -998,8 +1012,14 @@ JointRefusal Switchboard::joint_authority_check(WeaveId caller,
     if (!(authority.operator_id() == caller)) {
         return JointRefusal::NotOperator;
     }
-    const WeaveRecord* rec = find(caller);
-    if (rec == nullptr || !rec->alive) {
+    // THE EXACT PARTICIPANT THE AUTHORITY WAS MINTED FOR, asked the way every bound
+    // participant is asked (`still`): alive, and at the life and incarnation the
+    // host minted it for. A swap, a revival or a removal-and-replacement leaves a
+    // weave at this address that the capability does not name; the records that
+    // operator began were retired at that transition, and its capability is refused
+    // here -- two obligations, both kept. The host mints again for the successor.
+    if (!still(ParticipantRef{caller, authority.operator_life(),
+                              authority.operator_incarnation()})) {
         return JointRefusal::NotOperator;
     }
     return JointRefusal::None;
@@ -1174,10 +1194,27 @@ JointResult Switchboard::commit_joint_as(WeaveId caller, const JointAuthority& a
     if (op == nullptr) {
         return JointResult{false, JointRefusal::NoSuchOperation};
     }
+    // SOMEBODY ELSE'S RECORD IS REFUSED BEFORE IT IS TOUCHED. A valid authority is
+    // the right to coordinate the operations ITS holder began; an operation id is
+    // never authority, and a caller naming another operator's operation is not
+    // that operation's operator. This used to share a branch with the lifecycle
+    // check below, so a foreign operator's refused commit aborted the record and
+    // discarded its offers -- the owner's own commit then met WrongState. Ownership
+    // first, as every other operator verb asks it, and with no effect: the record's
+    // state, reason, offers and notices owed stay exactly as they were.
+    if (!(op->operator_.who == caller)) {
+        return JointResult{false, JointRefusal::NotOperator};
+    }
     if (op->state != JointState::Preparing) {
         return JointResult{false, JointRefusal::WrongState};
     }
-    if (!(op->operator_.who == caller) || !still(op->operator_)) {
+    // THE OPERATOR'S OWN RECORD, BOUND TO A LIFE OR INCARNATION THAT MOVED. Not
+    // reachable in the ordinary course -- `invalidate_joint_for` retires every record
+    // of an operator whose life or incarnation changed, at that transition, and the
+    // authority check above refuses a caller the capability does not name -- but if
+    // it is ever met, it is the lifecycle rule that answers, for the record's own
+    // operator: aborted, as a bound claimant's change aborts it, never a stranger's act.
+    if (!still(op->operator_)) {
         finish_joint(*op, JointState::Aborted, JointRefusal::ParticipantChanged);
         return JointResult{false, JointRefusal::ParticipantChanged};
     }

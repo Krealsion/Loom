@@ -60,8 +60,44 @@ it is spoken from inside the operator's own live delivery. Only claimants
 holding one of the ceiling's roles at `begin` may be bound. **An operation id,
 a role name, a payload field or a correlation is never authority** — a forged
 `op` meets `NoSuchOperation` or `NotOperator`, and a copied authority in another
-weave's hands meets `NotOperator`. A successor at the same address inherits
-nothing.
+weave's hands meets `NotOperator`.
+
+**What the capability names is a participant, not an address.** Minting
+captures the operator's life and incarnation at that moment, and the
+capability expires with either: a code swap or reload (new incarnation), a
+death and revival (new life), or removal. Retiring the operator's records at
+that transition ([lifetime](#the-records-lifetime-and-release)) and refusing
+its retained capability are **two obligations**, kept separately: a successor
+at the same address inherits neither, and a capability the predecessor kept —
+in the same object's member, for a native operator — meets `NotOperator` at
+every verb, against the retired records and against any record the successor
+begins under fresh authority. **The host authorizes the successor by minting
+again.** Nothing in the bus or the SDK renews a capability, and ordinary
+activity (a snapshot, a Poke) is not a new incarnation. Minting for an absent
+or dead operator yields an authority that is not `valid()` (refused
+`ForeignAuthority` if ever presented): there is no live participant to bind,
+so it cannot become a future life's by accident — mint after the revival, for
+the life that exists. `JointAuthority::operator_life()` and
+`operator_incarnation()` say what a capability names.
+
+**What a valid capability authorizes is the holder's own records.** It is the
+right to coordinate the operations its holder began, never an effect on
+another operator's record: every verb named with somebody else's operation id
+is refused `NotOperator` *before* the record is touched — its state, reason,
+offers and the notices owed on it stay exactly as they were, and its owner
+still commits. **A refusal is judged by what it changed, which must be
+nothing, not by its return value alone**: the landed candidate once refused a
+foreign commit `ParticipantChanged` while aborting the record it named and
+discarding its offers, because the ownership test shared a branch with the
+lifecycle abort, and a passing refusal-by-name test did not see it.
+
+Proof: J23 (a foreign operator's *own valid* authority named with another
+operator's operation id — every verb refused, the record untouched, the owner
+commits), J24 (the retained capability across a swap and across a death and
+revival; nothing minted for the dead; the fresh-authority path). J6's copied
+capability and J19's operator lifetime are the neighbouring predicates: the
+copy is refused at the authority before any record is looked at, and the
+lifetime case retires the record — neither is proof of these two properties.
 
 ## The operation
 
@@ -72,7 +108,7 @@ the live delivery the Mail is.
 |---|---|---|---|
 | `begin_joint(authority, keys)` | operator | binds each key's exact claimant (life + incarnation) and current revision; one live operation per key | `ForeignAuthority`, `NotOperator`, `OutsideCeiling`, `NoClaim` (no current claim, or a key naming both weave and role), `KeyBusy`, `Exhausted` (no free slot, or more than `kMaxJointKeys`) |
 | `offer(op, next)` | claimant | admits `next` through the one gate against the claimant's declared claim-set, checks the bound revision, stores it until commit or abort. **Nothing is published here** | `NoSuchOperation`, `WrongState`, `NotBound`, `NotClaimant`, `StaleRevision` (aborts), `Undeclared`, `GateRefused`, `TooLarge` |
-| `commit_joint(authority, op)` | operator | revalidates every participant, revision and offer, **then exchanges every offered value into its claim record in one protected step**: no participant code, gate, allocation, observer, I/O or lifecycle path runs between two exchanges. `ok` *is* the commitment; `false` means nothing changed and the operation is terminal with `why` | `WrongState`, `ParticipantChanged`, `NoClaim`, `StaleRevision`, `OfferMissing` |
+| `commit_joint(authority, op)` | operator | revalidates every participant, revision and offer, **then exchanges every offered value into its claim record in one protected step**: no participant code, gate, allocation, observer, I/O or lifecycle path runs between two exchanges. `ok` *is* the commitment; `false` means nothing was published. A failed revalidation of the operator's own Preparing operation ends it (Aborted with `why`); a request that was not this operator's to make — another operator's operation, a capability that names a life or incarnation that is gone — is refused with **no effect on the record** | `NotOperator` (another operator's operation; nothing changed), `WrongState`, `ParticipantChanged`, `NoClaim`, `StaleRevision`, `OfferMissing` |
 | `cancel_joint(authority, op)` | operator | ends a Preparing operation; offers released; the record reads Aborted/`Cancelled` | `WrongState`, `NotOperator` |
 | `joint_status(authority, op)` | operator | the record: state, reason, and after a commit the application (below) | `Missing`/`NoSuchOperation` after a release |
 | `release_joint(authority, op)` | operator | retires a terminal record it has consumed; the slot is free, the id names nothing again | `WrongState` while Preparing (cancel it), `NoSuchOperation` once released, `NotOperator` |
@@ -212,7 +248,9 @@ promise the record will still be there.
 - **The operator's replacement, removal, death or revival retires every record
   it began**, whatever its state, at that transition: nobody is left to consume
   it, and a successor at the same address inherits no record, as it inherits no
-  authority. The claimants lose nothing by it.
+  authority — the capability minted for the predecessor is refused from that
+  transition on, and the host mints again for the successor
+  ([authority](#authority)). The claimants lose nothing by it.
 - A duplicate release is `NoSuchOperation`; a stale notice makes the operator
   consult a record that says Missing and decide nothing. **Missing is
   legitimate exactly after a release or after the operator's own lifecycle
@@ -337,6 +375,9 @@ under one weave, J14 Lost, J15/J16 the mutation doors native and loaded, J17
 the committed record outlives an unrelated begin (both schedules), J18 the
 aborted record outlives one, J19 the operator's lifetime, J20 Declined native
 (and Failed by answer), J21 Declined loaded, J22 a refused replacement runs
-nothing of the incumbent's. The `hook_return_types` entry pins
+nothing of the incumbent's, J23 a foreign operator's valid authority changes
+nothing of another operator's record, J24 the capability names the exact
+life and incarnation and the host authorizes a successor by minting again.
+The `hook_return_types` entry pins
 the compile-time refusal of an unsupported hook return type; suite `kernel`
 pins the v8 gate at load and at reload.
