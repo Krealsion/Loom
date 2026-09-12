@@ -601,12 +601,22 @@ add_test(NAME doc_links COMMAND ${CMAKE_COMMAND}
 # (tests/hook_return/CMakeLists.txt): a compile test builds something, which makes it a
 # writer of the tree it names, and the one tree it must never name is this one. Portable,
 # because the SDK header is; the same compiler, so the refusal is this build's.
+#
+# THE COMPILER'S ENVIRONMENT TRAVELS WITH THE ENTRY. An MSVC `cl.exe` finds its standard
+# headers through INCLUDE, which the dev shell exports at THIS configure and the fresh
+# shell an official lane runs in does not carry; captured here and handed to the witness
+# with `;` spelled `|` so the path list survives as one argument (empty on every other
+# toolchain). The witness links nothing, so PATH's rc/link/mt are never needed.
+string(REPLACE ";" "|" zen_hook_env_include "$ENV{INCLUDE}")
+string(REPLACE ";" "|" zen_hook_env_lib "$ENV{LIB}")
 add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
     -S ${CMAKE_CURRENT_SOURCE_DIR}/hook_return
     -B ${CMAKE_BINARY_DIR}/hook_return-witness
     -G ${CMAKE_GENERATOR}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-    -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include)
+    -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include
+    "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
+    "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
 
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #
