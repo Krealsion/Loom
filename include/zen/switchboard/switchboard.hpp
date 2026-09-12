@@ -13,13 +13,16 @@
 #include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -114,6 +117,21 @@ enum class RefusalReason : std::uint8_t {
     /// MSG-08; docs/laws/messaging-laws.md
     /// docs/reference/known-seams.md#sender-cannot-observe-send-fate
     SeamUnresolved,
+    /// THE TARGET IS HELD BEHIND A PUBLISHED CLAIM IT COULD NOT APPLY (step 9 of the
+    /// delivery order, docs/reference/messaging.md#the-envelope-and-the-delivery-order).
+    /// A joint operation published a value under
+    /// one of the target's own keys; when the bus showed the target that value (the
+    /// `claim_published` hook, before its next delivery or snapshot) the hook did not
+    /// complete -- a native throw, or a non-OK status across the seam. The record says
+    /// so (`joint_status`, `has_failed_application`), the operator was told once
+    /// (`zen.JointApplied`), and until the weave is repaired -- reloaded, so that its
+    /// successor is shown the value again, or removed -- nothing is delivered to it:
+    /// running an ordinary handler as if the application had happened would let a
+    /// weave act from a self it no longer is, and re-running the hook would retry
+    /// whatever it half-did. Every later attempt to reach it is refused here, so the
+    /// failure stays attributable at every door that meets it, and a sender that
+    /// accepts `zen.DispatchRefused` hears it by exact attempt.
+    ApplicationFailed,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -128,6 +146,16 @@ struct Refusal {
 };
 
 enum class Disposition : std::uint8_t { Pending, Delivered, Refused };
+
+/// Thrown by an ORDINARY `Switchboard::snapshot_bytes` of a weave that is held
+/// behind a published claim it could not apply (SENSE-06). Not the weave's own
+/// exception (that one is re-raised at the
+/// showing that failed); this is the bus refusing to serve, as a normal snapshot,
+/// a state the weave no longer stands behind. `SnapshotAccess::Diagnostic` reads it.
+class ApplicationFailedError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 /// The fate of one queued delivery.
 struct DeliveryOutcome {
@@ -730,6 +758,9 @@ public:
     /// quiet because the hiding is declared rather than accidental.
     using Bus::observe;
     using Bus::observe_office;
+    /// The same for `joint_status`: the host's ungated `joint_status(op)` view
+    /// sits beside the operator's authenticated `Bus::joint_status(authority, op)`.
+    using Bus::joint_status;
 
     SenseReading observe(WeaveId author, std::string_view shape_name,
                          std::uint32_t shape_version) const;
@@ -750,6 +781,127 @@ public:
     std::size_t retained_claim_count() const noexcept {
         return personal_claims_.size() + office_claims_.size();
     }
+
+    // ---- Joint publication of latest claims -----------------------------------
+    //
+    // docs/reference/joint-publication.md; SENSE-06, SENSE-07. The whole
+    // account — what it is for, what it adds to a Sense and what it deliberately
+    // does not — is the section header in zen/switchboard/sense.hpp; the Bus
+    // verbs a weave reaches are in zen/switchboard/bus.hpp. What is here is the
+    // host's half: minting the operator's authority, the `*_as` doors the gated
+    // WeaveBus funnels through, and the root views a host or a test may read.
+    //
+    // DISPATCH ASSUMPTIONS, STATED: single-threaded, FIFO, non-reentrant dispatch
+    // (MSG-01). A commit runs inside the operator's own delivery; the exchange
+    // it performs touches bus-private records only and calls no participant, no
+    // gate, no allocator that can fail after validation, no I/O and no observer
+    // between two exchanges. Nothing here is durable across a process.
+
+    static constexpr std::size_t kMaxJointOperations = 8;
+    static constexpr std::size_t kMaxJointKeys = 4;
+    /// The bound on ONE OFFERED VALUE's serialized size. A joint publication
+    /// carries facts, not documents: a consumer whose fact would not fit here
+    /// has put a body where an identity belongs.
+    static constexpr std::size_t kMaxJointOfferBytes = 64u * 1024u;
+
+    /// Mint the right to coordinate joint publications for ONE operator weave
+    /// over claimants holding one of `ceiling_roles`. Host root authority, like
+    /// every other minting door: a weave holds a Bus& and cannot reach this.
+    ///
+    /// BOUND TO THE OPERATOR AS IT IS NOW -- its life and incarnation are captured
+    /// here, and the capability expires when either moves (a swap or reload, a
+    /// death and revival, a removal): the successor at that address is authorized
+    /// only by the host calling this again. Nothing in the bus or the SDK renews
+    /// it. For an operator that is not registered, or is dead, there is no live
+    /// participant to bind, and the result is not `valid()` (refused
+    /// `ForeignAuthority` if ever presented) rather than a capability that would
+    /// become a future life's; mint after the revival, for the life that exists.
+    JointAuthority mint_joint_authority(WeaveId operator_id,
+                                        std::vector<std::string> ceiling_roles) const;
+    bool issued_here(const JointAuthority& authority) const noexcept {
+        const std::shared_ptr<const LoomIdentity> issuer = authority.issuer_.lock();
+        return issuer != nullptr && issuer == identity_;
+    }
+
+    // PUBLICATION IS NOT APPLICATION. A commit
+    // publishes: from that instant every reader of the claims sees the new values.
+    // Each claimant is then SHOWN its published value once, before its next delivery
+    // and before its next snapshot (`Weave::claim_published`), and what that showing
+    // came to is a second, attributable fact -- Pending until shown, Applied when the
+    // hook completed, Declined when the claimant answered that it keeps state of its
+    // own (functioning, not held; its next ordinary claim replaces the value), Failed
+    // when the hook did not complete (a native throw, or a non-OK status across the
+    // seam), Lost when the claimant was removed unshown. A Failed claimant is HELD:
+    // nothing is delivered to it (`RefusalReason::ApplicationFailed`), its ordinary
+    // snapshot is refused, the hook is not re-run, and only a reload (its successor
+    // is shown again) or a removal ends the hold. The operator is told once per
+    // settlement (`zen.JointApplied`); the record is the fact (`joint_status`).
+    //
+    // THE RECORD OUTLIVES THE PUBLICATION.
+    // A record -- Committed with its application, Aborted with its reason -- is kept
+    // until its operator releases it (`release_joint_as`) or the operator's own life
+    // or incarnation changes (released by the bus at that transition: nobody is left
+    // to consume it, and a successor at the same address inherits nothing). Only a
+    // released slot is reused; `kMaxJointOperations` bounds the live and unreleased
+    // records together, and an operator that never releases meets `Exhausted` at its
+    // next begin rather than another operator's outstanding record being reused under
+    // it. A released operation reads Missing, legitimately; the per-key facts stay on
+    // the claim records, so the hold and the repair of a claimant never depended on
+    // the operation's slot, and a re-settlement of a released record tells nobody.
+
+    /// How a snapshot may meet a publication the weave has not been shown.
+    enum class SnapshotAccess : std::uint8_t {
+        /// Show the weave every pending publication first; refuse (throw) for a weave
+        /// whose application failed. The host's ordinary read, and the reload's twin
+        /// for a healthy weave.
+        Ordinary,
+        /// The reload's read: pending publications are shown first as above, but a
+        /// failed application does not refuse the read -- the bytes are returned as
+        /// they are, because the successor revived from them will be shown the
+        /// value again (`swap_state` returns Failed to Pending for it). The failed
+        /// hook itself is never retried on the incarnation that failed.
+        Reload,
+        /// Run nothing, change nothing: the weave's state as it is, for a diagnostic
+        /// or a repair tool that explicitly wants what a held weave holds. The
+        /// records stay exactly as they were.
+        Diagnostic,
+    };
+
+    /// The gated doors (the WeaveBus funnels here; the caller is the stamped
+    /// speaker of a live delivery, never a payload field).
+    JointResult offer_claim_as(WeaveId claimant, std::uint64_t op, Value value);
+    JointBegin begin_joint_as(WeaveId caller, const JointAuthority& authority,
+                              std::vector<ClaimKey> keys);
+    JointResult commit_joint_as(WeaveId caller, const JointAuthority& authority,
+                                std::uint64_t op);
+    JointResult cancel_joint_as(WeaveId caller, const JointAuthority& authority,
+                                std::uint64_t op);
+    JointStatus joint_status_as(WeaveId caller, const JointAuthority& authority,
+                                std::uint64_t op);
+    /// The operator retires a terminal record it has consumed (see `Bus::release_joint`).
+    JointResult release_joint_as(WeaveId caller, const JointAuthority& authority,
+                                 std::uint64_t op);
+
+    /// Host/root views (ungated, exactly as the host's `observe` is): the state
+    /// of one operation, how many are live, how many records are held (live or
+    /// unreleased -- what counts against `kMaxJointOperations`), and how many
+    /// offered bytes are held.
+    JointStatus joint_status(std::uint64_t op) const noexcept;
+    std::size_t joint_pending() const noexcept;
+    std::size_t joint_records() const noexcept;
+    std::size_t joint_retained_bytes() const noexcept;
+    /// Is this weave standing behind a joint publication of one of its keys it
+    /// has not yet been shown (Pending)? A test reads it; a completed showing clears it.
+    bool has_unobserved_publication(WeaveId id) const noexcept;
+    /// Is this weave HELD -- was it shown a published value and did its hook fail to
+    /// complete? Deliveries to it are refused `ApplicationFailed` until it is
+    /// reloaded or removed; `snapshot_bytes(id)` refuses; `SnapshotAccess::Diagnostic`
+    /// reads it as it is.
+    bool has_failed_application(WeaveId id) const noexcept;
+    /// The worst application state over this weave's keys: Failed over Lost over
+    /// Declined over Pending over Applied over None. What a host asks before it
+    /// decides to repair.
+    JointApplication application_of(WeaveId id) const noexcept;
 
     /// RECORD A REJECTION THAT HAPPENED AT A BOUNDARY THIS LOOM OWNS BUT THE BUS
     /// NEVER SAW. The dynamic seam admits a loaded weave's bytes host-side
@@ -841,7 +993,17 @@ public:
     // ---- Lifecycle (mechanics reused from loom) -----------------------
 
     /// Serialize the Weave's current snapshot to native bytes.
-    std::string snapshot_bytes(WeaveId id) const;
+    /// NON-CONST SINCE THE JOINT-PUBLICATION EXPERIMENT: a snapshot of a weave
+    /// standing behind a joint-published claim first shows it the claim
+    /// (`Weave::claim_published`), so the bytes a reload carries agree with what
+    /// the bus has already published about that weave. `SnapshotAccess::Ordinary`:
+    /// a weave whose showing fails, or that is already held, is REFUSED -- the
+    /// weave's own exception for a native hook that threw at this call, and
+    /// `ApplicationFailedError` for a held weave -- rather than served as a normal
+    /// snapshot of a state it no longer stands behind. The two other accesses are
+    /// documented on the enum.
+    std::string snapshot_bytes(WeaveId id);
+    std::string snapshot_bytes(WeaveId id, SnapshotAccess access);
 
     /// SEAL a weave: it becomes a prepared candidate outside the live world,
     /// able to converse only with `coordinator` (PR-01; docs/laws/replacement-laws.md).
@@ -1422,6 +1584,27 @@ private:
         AuthorityView describe_authority(const GrantAuthority& authority) override {
             return sb_.describe_authority_as(self_, authority);
         }
+        // Joint publication: every verb funnels to its `*_as` door with the
+        // stamped speaker of this live delivery, never a payload field.
+        JointResult offer_claim(std::uint64_t op, Value value) override {
+            return sb_.offer_claim_as(self_, op, std::move(value));
+        }
+        JointBegin begin_joint(const JointAuthority& authority,
+                               std::vector<ClaimKey> keys) override {
+            return sb_.begin_joint_as(self_, authority, std::move(keys));
+        }
+        JointResult commit_joint(const JointAuthority& authority, std::uint64_t op) override {
+            return sb_.commit_joint_as(self_, authority, op);
+        }
+        JointResult cancel_joint(const JointAuthority& authority, std::uint64_t op) override {
+            return sb_.cancel_joint_as(self_, authority, op);
+        }
+        JointStatus joint_status(const JointAuthority& authority, std::uint64_t op) override {
+            return sb_.joint_status_as(self_, authority, op);
+        }
+        JointResult release_joint(const JointAuthority& authority, std::uint64_t op) override {
+            return sb_.release_joint_as(self_, authority, op);
+        }
 
     private:
         Switchboard& sb_;
@@ -1715,6 +1898,22 @@ private:
         std::uint64_t author_life = 0;
         std::uint64_t author_incarnation = 0;
         std::uint64_t revision = 0;
+        /// Joint publication: what became of the value a joint commit put here at
+        /// its claimant -- None for an ordinary claim (nothing is owed),
+        /// Pending until the claimant was shown it, Applied when its hook completed,
+        /// Declined when it answered that it keeps state of its own (not held),
+        /// Failed when it did not complete (the claimant is held), Lost when the
+        /// claimant was removed unshown. Set by the hook driver, reset to None by the
+        /// claimant's own next ordinary claim (the owner spoke; nothing is owed any
+        /// more), and returned from Failed to Pending by a code swap (the successor is
+        /// shown). Kept here whatever becomes of the operation's record: the hold and
+        /// the repair of a claimant read this, never the operation's slot.
+        JointApplication application = JointApplication::None;
+        /// ...which operation published it (0 for an ordinary claim), and the
+        /// revision the record had the instant it did -- the attribution a failure
+        /// keeps: exactly this participant, this publication, this revision.
+        std::uint64_t published_by = 0;
+        std::uint64_t published_revision = 0;
     };
     /// key: (claimant id, shape name, shape version)
     using PersonalKey = std::tuple<std::uint64_t, std::string, std::uint32_t>;
@@ -1757,6 +1956,106 @@ private:
     /// stale rather than deleted or relabelled.
     void forget_personal_claims(WeaveId id);
     void forget_office_claims(const std::string& role);
+
+    // ---- Joint publication: the bus-private records -------------------------------
+    struct JointPart {
+        ClaimKey key;
+        ParticipantRef claimant{};   ///< exact life + incarnation, bound at begin
+        /// The office the key was named by at begin, or the one its claimant held
+        /// then -- the words a failure about this part is told in.
+        std::string bound_role;
+        std::uint64_t revision = 0;  ///< the key's revision at begin
+        std::optional<Value> offer;  ///< the admitted next value, until commit/abort
+        std::size_t offer_bytes = 0; ///< its serialized size, measured at the offer
+        /// After a commit: what became of the published value at this claimant. The
+        /// operation's own copy of the fact, so it outlives the claim record (a removed
+        /// claimant's record is gone; the operation still says what happened to it).
+        JointApplication application = JointApplication::None;
+    };
+    /// ONE RECORD, HELD FROM `begin` UNTIL RELEASED (SENSE-07): a slot whose
+    /// state is Missing is free; any other state is a
+    /// record somebody is owed -- live, or terminal and not yet released by its
+    /// operator. Releasing resets the slot to `JointOp{}`; `next_joint_id_` never
+    /// hands an id out twice, so a released id names nothing afterwards.
+    struct JointOp {
+        std::uint64_t id = 0;
+        ParticipantRef operator_{};
+        JointState state = JointState::Missing;
+        JointRefusal reason = JointRefusal::None;
+        std::vector<JointPart> parts;
+        /// the operator was told this operation ended (zen.JointEnded), once.
+        bool notified = false;
+        /// ...and the last application outcome it was told (zen.JointApplied): each
+        /// settlement -- Applied, Declined, Failed, Lost -- is said once, and a repair
+        /// that re-settles is said again.
+        JointApplication applied_told = JointApplication::None;
+    };
+    std::array<JointOp, kMaxJointOperations> joint_ops_{};
+    std::uint64_t next_joint_id_ = 1;
+
+    JointOp* find_joint(std::uint64_t id) noexcept;
+    const JointOp* find_joint(std::uint64_t id) const noexcept;
+    /// Retire a record: the slot is free, the id names nothing. The operator's
+    /// release, or the bus's when the operator's life or incarnation changed.
+    void retire_joint(JointOp& op) noexcept;
+    /// The operation's state, reason and -- after a commit -- the application
+    /// aggregated over its parts (Failed over Lost over Declined over Pending over
+    /// Applied), naming the part a Failed, Lost or Declined aggregate is about.
+    JointStatus status_of(const JointOp& op) const;
+    /// The notice behind `settle_application`, to the exact operator, once per settlement.
+    void notify_joint_applied(JointOp& op, JointApplication what, const JointPart* about);
+    /// End an operation: state, reason, and every offer released. `noexcept`, so
+    /// it is safe to call from any lifecycle transition.
+    void finish_joint(JointOp& op, JointState state, JointRefusal reason) noexcept;
+    /// The operator half of the authority check, shared by every operator verb: a
+    /// live delivery of the caller, an authority this board issued, and the caller
+    /// being the EXACT participant -- id, life and incarnation -- the authority was
+    /// minted for (`still`, asked of the minted identity). What it does not decide
+    /// is which record the verb may touch: that is the record's own `operator_`,
+    /// checked by each verb before any effect.
+    JointRefusal joint_authority_check(WeaveId caller, const JointAuthority& authority) const;
+    /// Abort every Preparing operation that binds `changed` (as operator or as
+    /// claimant) whose bound life/incarnation no longer holds; retire every record
+    /// whose OPERATOR `changed` no longer is (nobody is left to consume it); make a
+    /// removed claimant's Pending part Lost. Called from every lifecycle transition
+    /// through `invalidate_transactions_for`.
+    void invalidate_joint_for(WeaveId changed);
+    /// ...and the operator is told when the bus ended its operation (zen.JointEnded to an
+    /// operator that accepts it; the record is the fact, the notice a wake-up).
+    void notify_joint_ended(JointOp& op);
+    /// Abort every Preparing operation that binds this personal key — its
+    /// claimant claimed ordinarily, so the bound revision is stale.
+    void abort_joint_on_claim(const PersonalKey& key);
+    /// What a showing came to: `held` when the weave was already held and nothing
+    /// was shown; `failed` when a hook did not complete at this call (`op` names the
+    /// publication, `error` the native exception if there was one, so the caller can
+    /// re-raise it after the record says what happened).
+    struct Showing {
+        bool failed = false;
+        bool held = false;
+        std::uint64_t op = 0;
+        std::exception_ptr error;
+    };
+    /// THE HOOK DRIVER: show `rec` every joint-published value under its own keys
+    /// that it has not seen, in a fixed order (by publishing operation, then key),
+    /// and record what each showing came to. An Applied or Declined showing goes on
+    /// to the next key. Stops at the first FAILURE: that key is Failed, the keys
+    /// after it stay Pending (never attempted, so nothing partial), and the weave is
+    /// held. Never shows anything to a weave already held. Called before a delivery
+    /// to `rec` and before its snapshot; never inside a dispatch to somebody else.
+    Showing observe_published_claims(WeaveRecord& rec);
+    /// Record one showing's outcome on the claim record AND on the operation that
+    /// published it (if its record is still held), then settle the operation's
+    /// application if every part is in.
+    void note_application(const PersonalKey& key, ClaimRecord& record, JointApplication what);
+    /// The operator is told once per settlement -- Applied, Declined, Failed, Lost --
+    /// naming the operation and, for a non-application, the exact claimant and the
+    /// office it was bound through (zen.JointApplied). The record is the fact.
+    void settle_application(JointOp& op);
+    /// A code swap's successor is shown a value its predecessor could not apply:
+    /// every Failed key of `id` returns to Pending, on the record and on its
+    /// operation. Applied and Pending keys are untouched.
+    void reset_failed_application_for_successor(WeaveId id) noexcept;
 
     WeaveRecord* find(WeaveId id);
     const WeaveRecord* find(WeaveId id) const;

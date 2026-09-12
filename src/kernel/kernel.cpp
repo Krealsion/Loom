@@ -642,6 +642,30 @@ static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
     return r.accepted ? ZEN_OK : sense_status_of(r.why);
 }
 
+// A loaded claimant's joint OFFER (ABI v8). The bytes are admitted host-side
+// exactly as a claim's are, then handed to the gated bus, which checks the
+// operation, the exact claimant and the bound revision
+// (docs/reference/joint-publication.md).
+static ZenStatus zen_host_sense_offer(void* ctx, std::uint64_t op, const std::uint8_t* payload,
+                                      std::size_t len) {
+    auto* h = static_cast<HostCtx*>(ctx);
+    loom::Unverified u = loom::parse(loom::as_view(payload, len));
+    std::shared_ptr<const loom::Schema> door =
+        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+    if (!door) {
+        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+    }
+    loom::Admission a = loom::admit(u, door);
+    if (!a.ok()) {
+        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+    }
+    const loom::JointResult r = h->gated->offer_claim(op, std::move(a).value());
+    if (r.ok) {
+        return ZEN_OK;
+    }
+    return static_cast<ZenStatus>(ZEN_ERR_JOINT_BASE - static_cast<int>(r.why));
+}
+
 static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const char* shape_name,
                                         std::uint32_t shape_version, ZenByteSink sink,
                                         ZenByteSink office_sink, ZenSenseBy* by) {
@@ -743,6 +767,42 @@ public:
         abi_ = new_abi;
         instance_ = new_instance;
         lib_ = std::move(new_lib);
+        // A successor reloaded over a predecessor that could not apply a published
+        // value is SHOWN that value again (`Switchboard::swap_state` returns it to
+        // Pending). Nothing is inherited here for that to work: every image this
+        // host admits is v8 and carries the `claim_published` slot, which is what
+        // the version gate at load establishes (KERN-04).
+    }
+
+    /// The host's half of the showing (ABI v8): the published value crosses as
+    /// bytes the library re-admits against its own claim-set. No host table
+    /// crosses: this is not a delivery.
+    ///
+    /// THE STATUS IS NOT DISCARDED, and it is mapped exactly as the slot's
+    /// comment in zen/kernel/abi.h says: ZEN_OK is Applied; ZEN_CLAIM_DECLINED is
+    /// Declined -- the library, functioning, keeps state of its own and is not
+    /// held; every other status, negative or positive, is Failed, and the
+    /// Switchboard records it against exactly this instance and publication. A
+    /// descriptor that carries no slot (a hand-written v8 table with a NULL door)
+    /// answers Failed too: a value a weave cannot be shown is a value it did not
+    /// apply, never one it silently did. A host that discarded the status once
+    /// turned a library whose hook threw into a weave that stood silently behind a
+    /// claim it never applied; that is the defect this mapping exists to refuse.
+    loom::Weave::PublishedClaim claim_published(const loom::Value& value) override {
+        using Answer = loom::Weave::PublishedClaim;
+        if (abi_->claim_published == nullptr) {
+            return Answer::Failed;
+        }
+        const std::string bytes = loom::serialize(value);
+        const ZenStatus st = abi_->claim_published(
+            instance_, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        if (st == ZEN_OK) {
+            return Answer::Applied;
+        }
+        if (st == ZEN_CLAIM_DECLINED) {
+            return Answer::Declined;
+        }
+        return Answer::Failed;
     }
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
@@ -782,7 +842,10 @@ public:
                        .sense_claim          = &zen_host_sense_claim,
                        .sense_office_claim   = &zen_host_sense_office_claim,
                        .sense_observe        = &zen_host_sense_observe,
-                       .sense_observe_office = &zen_host_sense_observe_office};
+                       .sense_observe_office = &zen_host_sense_observe_office,
+                       // v8: the claimant's joint offer, appended last in
+                       // declaration order. Its type is unique in this table.
+                       .sense_offer          = &zen_host_sense_offer};
         // Provenance crosses as host-computed facts beside the sender, and it
         // crosses ONE WAY ONLY: the office doors above carry REQUESTS the host
         // verifies, never attested facts, so the seam is a place a loaded weave
@@ -1140,14 +1203,12 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
     Loaded& rec = it->second;
 
-    std::string snapshot;
-    try {
-        snapshot = bus_.snapshot_bytes(rec.id); // host-owned, independent of either library
-    } catch (const std::exception& e) {
-        return {false, false, false, std::string("snapshot of the live weave failed: ") + e.what()};
-    }
-
     std::string error;
+    // THE CANDIDATE IS JUDGED BEFORE THE INCUMBENT IS TOUCHED. Its ABI version
+    // (KERN-04), its descriptor and its manifest are all checked below before the
+    // incumbent's snapshot is taken, so a refused replacement -- an image built
+    // against another ABI included -- runs no code of the incumbent's, not even
+    // the showing its snapshot would perform, and leaves it exactly as it was.
     // Owned from the moment it is open, as in `load`: every refusal below returns,
     // and the handle closes when this share leaves scope.
     std::shared_ptr<LoadedLibrary> new_lib = open_library(new_path, error);
@@ -1198,6 +1259,21 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
         destroy_instance(new_abi, new_inst);
         return {true, false, false, "accepted schema contract mismatch; reload refused"};
+    }
+
+    std::string snapshot;
+    try {
+        // THE RELOAD'S READ, taken only once the candidate has been admitted: the
+        // live weave is shown any publication it has not seen, as the ordinary
+        // snapshot shows it -- but a weave held behind a value it could not apply is
+        // not refused here: a reload is exactly how such a weave is repaired, and
+        // the successor revived from these bytes is shown the value again. The
+        // predecessor's failed hook is never retried; its outcome stays on the
+        // record (docs/reference/joint-publication.md#repair).
+        snapshot = bus_.snapshot_bytes(rec.id, loom::Switchboard::SnapshotAccess::Reload);
+    } catch (const std::exception& e) {
+        destroy_instance(new_abi, new_inst);
+        return {false, false, false, std::string("snapshot of the live weave failed: ") + e.what()};
     }
 
     // Commit: swap the library behind the same adapter/WeaveId. rebind destroys

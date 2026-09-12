@@ -218,6 +218,20 @@ retry and publication aggregation remain separate questions. AskBook stays local
 bookkeeping and creates no global obligation. The isolated pipe does not carry
 the new attestation and refuses a manifest requesting its notice door.
 
+## Loaded coordination of a joint publication
+
+**Status: UNSUPPORTED BY DECISION, refused by name.**
+
+ABI v8 carries a joint publication's *claimant* surface — offer outbound, the
+showing inbound — and nothing of the *operator's*. A loaded weave's
+`begin_joint`, `commit_joint`, `cancel_joint`, `joint_status` and
+`release_joint` inherit `loom::Bus`'s refusing defaults and answer
+`NoLiveDelivery`. The authority is a native capability the host mints; carrying
+it across the seam means the host keeping the minted authority in a table keyed
+by the adapter and checking the operator's exact incarnation at every verb,
+with its own witnesses. That is a design of its own, wanted by no consumer yet
+([joint publication](joint-publication.md#what-crosses-the-abi)).
+
 ## The silent dynamic seam
 
 **Status: CLOSED (R2E-0) — current, law-backed

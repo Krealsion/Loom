@@ -1677,6 +1677,50 @@ TEST_CASE("R2B-3b-1a: an artifact built against the previous ABI is refused, nam
     CHECK(bus.list_weaves().empty());
 }
 
+TEST_CASE("KERN-04 / v8: an image built against the previous ABI cannot replace a live "
+          "participant -- refused before any callback of anybody's, and the incumbent stands") {
+    // The v8 break appended a slot to BOTH tables (docs/reference/dynamic-abi.md). The
+    // load-time gate is one door; a reload is the other, and the more dangerous one: a
+    // v7 descriptor swapped behind a live participant would be read past its end at the
+    // next showing. So the candidate is judged BEFORE the incumbent is touched -- no
+    // snapshot, no showing, no rebind -- and the fixture that declares the previous
+    // version pins that ordering. A retained image genuinely built against the v7
+    // header supplies the mixed-artifact evidence; this fixture is the ordering control
+    // (docs/reference/dynamic-abi.md#compatibility-discipline).
+    Switchboard bus;
+    Kernel kernel(bus);
+    Registered recorder = register_probe(bus, {pong_schema()});
+    // A rebuilt v8 image that never offers into anything loads as ever: the appended
+    // slots cost a nonparticipant nothing.
+    LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    const WeaveId id = lr.id;
+    for (int i = 0; i < 3; ++i) {
+        bus.send(id, Message(ping(1), WeaveId{}, recorder.id));
+    }
+    bus.drain_until_idle();
+    REQUIRE(live_count(bus, id) == 3);
+
+    ReloadResult rr = kernel.reload_from("t", ZEN_SO_STALEABI);
+    CHECK_FALSE(rr.ok);
+    CHECK_FALSE(rr.reloaded);
+    CHECK_FALSE(rr.version_mismatch); // not a STATE-schema mismatch: refused one door earlier
+    CHECK(rr.error.find("abi_version") != std::string::npos);
+    CHECK(rr.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(rr.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
+
+    // THE INCUMBENT IS EXACTLY WHAT IT WAS: same artifact, same WeaveId, same state,
+    // still delivering -- and the refused candidate's null doors were never called
+    // (they are null so that a call would crash rather than pass).
+    CHECK(kernel.is_loaded("t"));
+    CHECK(kernel.weave_id("t") == id);
+    CHECK(live_count(bus, id) == 3);
+    bus.send(id, Message(ping(1), WeaveId{}, recorder.id));
+    bus.drain_until_idle();
+    CHECK(live_count(bus, id) == 4);
+    CHECK(bus.list_weaves().size() == 2); // the probe and the incumbent; nothing else
+}
+
 // ---- the transaction remembers (PR-02) ----------------------------------------
 //
 // The door already knew how to open. What it did not have was a memory of who was
