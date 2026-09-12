@@ -336,6 +336,7 @@ throw recorded then re-raised and repaired by a swap, J13 several publications
 under one weave, J14 Lost, J15/J16 the mutation doors native and loaded, J17
 the committed record outlives an unrelated begin (both schedules), J18 the
 aborted record outlives one, J19 the operator's lifetime, J20 Declined native
-(and Failed by answer), J21 Declined loaded. The `hook_return_types` entry pins
+(and Failed by answer), J21 Declined loaded, J22 a refused replacement runs
+nothing of the incumbent's. The `hook_return_types` entry pins
 the compile-time refusal of an unsupported hook return type; suite `kernel`
 pins the v8 gate at load and at reload.

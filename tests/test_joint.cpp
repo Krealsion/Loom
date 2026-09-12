@@ -1908,4 +1908,55 @@ TEST_CASE("J21: a loaded owner's declined showing crosses the seam as its own st
     REQUIRE(kernel.unload("joint-doc"));
 }
 
+TEST_CASE("J22: a refused replacement runs nothing of the incumbent's -- a v7 candidate is judged before the incumbent's snapshot, so a pending showing stays pending and the real reload still repairs") {
+    // The candidate is judged (ABI version, descriptor, manifest) BEFORE the reload's
+    // snapshot of the incumbent is taken (docs/reference/joint-publication.md#repair).
+    // The observable is the showing: a snapshot SHOWS the weave its pending publication,
+    // so a refused candidate that had been judged after it would leave a showing behind.
+    Rig rig;
+    Kernel kernel(rig.bus);
+    const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
+    REQUIRE_MESSAGE(loaded.ok, loaded.error);
+    rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
+    rig.o->keys = {claim_key<DocFact>(loaded.id), claim_key<ViewFact>(rig.view)};
+    tell(rig.bus, loaded.id, Cmd{"claim", 0, "A", 1});
+    rig.bus.drain_until_idle();
+    REQUIRE(claimed_path_of(rig.bus, loaded.id) == "A");
+    tell(rig.bus, rig.op, Cmd{"begin"});
+    rig.bus.drain_until_idle();
+    REQUIRE_MESSAGE(rig.o->begun.ok, name_of(rig.o->begun.why));
+    const std::uint64_t id = rig.o->op();
+    tell(rig.bus, loaded.id, Cmd{"offer", static_cast<std::int64_t>(id), "B", 2});
+    tell(rig.bus, rig.view, Cmd{"offer", static_cast<std::int64_t>(id), "B", 1});
+    rig.bus.drain_until_idle();
+    rig.commit(id);
+    rig.bus.drain_until_idle();
+    REQUIRE(rig.o->committed.ok);
+    REQUIRE(rig.bus.has_unobserved_publication(loaded.id));
+    // THE REFUSED REPLACEMENT: a current-layout image claiming the previous ABI version.
+    const ReloadResult rr = kernel.reload_from("joint-doc", ZEN_SO_STALEABI);
+    CHECK_FALSE(rr.ok);
+    CHECK(rr.error.find("abi_version") != std::string::npos);
+    CHECK(rr.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    // NOTHING OF THE INCUMBENT'S RAN: still Pending, no attempt counted, still bound to
+    // the same incarnation (the operation is intact, not aborted by a swap that never was).
+    CHECK(rig.bus.has_unobserved_publication(loaded.id));
+    CHECK(probe_state(rig.bus, loaded.id, Switchboard::SnapshotAccess::Diagnostic).published_seen == 0);
+    CHECK(rig.bus.joint_status(id).state == JointState::Committed);
+    CHECK(rig.bus.joint_status(id).application == JointApplication::Pending);
+    CHECK(kernel.weave_id("joint-doc") == loaded.id);
+    // ...AND A REAL RELOAD STILL DOES ITS WORK: the incumbent is shown at the reload's
+    // read, applies, and the successor revives carrying B.
+    const std::filesystem::path copy = std::filesystem::temp_directory_path() / "zen-joint-j22.so";
+    std::filesystem::copy_file(ZEN_SO_JOINT, copy, std::filesystem::copy_options::overwrite_existing);
+    const ReloadResult ok = kernel.reload_from("joint-doc", copy.string());
+    REQUIRE_MESSAGE(ok.reloaded, ok.error);
+    CHECK_FALSE(rig.bus.has_unobserved_publication(loaded.id));
+    CHECK(probe_state(rig.bus, loaded.id).path == "B");
+    CHECK(probe_state(rig.bus, loaded.id).published_seen == 1);
+    REQUIRE(kernel.unload("joint-doc")); // unload first: a mapped image cannot be deleted on Windows
+    std::error_code ec;
+    std::filesystem::remove(copy, ec);
+}
+
 } // TEST_SUITE("joint")
