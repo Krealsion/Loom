@@ -1,11 +1,45 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v7**
+The C seam a weave library and the host agree on. Current version: **v8**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
-[SENSE-01..05](../laws/sense-laws.md).
+[SENSE-01..07](../laws/sense-laws.md).
+
+**v8 carries a joint publication's claimant surface** ([joint
+publication](joint-publication.md#what-crosses-the-abi)). Two slots are
+appended, one to each table: `ZenHostApi::sense_offer` — the loaded claimant
+offers the next value of its own latest claim for an exact operation; the bytes
+are admitted host-side against its declared claim-set and handed to the gated
+bus — and `ZenWeaveAbi::claim_published` — the host shows the library a value a
+joint operation published under its key, before its next `handle` and before
+its next `snapshot`, and **the library's status is the application fact**. Two
+statuses join the table: `ZEN_ERR_JOINT_BASE` (a refused offer, minus the
+`JointRefusal` enumerator, so the library can name it) and `ZEN_CLAIM_DECLINED`,
+the one positive status — neither OK nor an error — for a library that,
+functioning, did not apply the value and keeps state of its own.
+
+The host maps every status of the showing slot, and the mapping is on the slot
+in `abi.h`: `ZEN_OK` is Applied; `ZEN_CLAIM_DECLINED` is Declined (not held; the
+operator told; the library re-claims its own truth at its next delivery); every
+negative status is Failed (`ZEN_ERR` for an exception that escaped the maker's
+handler or a returned `PublishedClaim::Failed`, `ZEN_ERR_UNKNOWN_SCHEMA` /
+`ZEN_ERR_REFUSED` for bytes the library's gate would not admit) and the weave is
+held; every other positive status is undefined for the slot and read as Failed.
+A descriptor whose slot is NULL is shown nothing and read as Failed. Each of
+the three answers is witnessed through the real image (suite `joint`: J7
+Applied, J11 Failed, J21 Declined).
+
+Only the claimant's verbs cross. The operator's — begin, commit, cancel,
+status, release — and the authority they need are native; a loaded operator's
+Bus inherits the refusing defaults and answers `NoLiveDelivery`
+([known seams](known-seams.md#loaded-coordination-of-a-joint-publication)). The
+isolated pipe supplies no offer door. No compatibility with v7 is claimed: a v7
+image is refused at load **and at reload** with both versions named, before any
+callback of anybody's runs, and an incumbent it was meant to replace stands
+untouched. No descriptor-size negotiation and no old-image bridge: rebuild
+hosts, libraries and images together.
 
 **v7 carries sender-visible dispatch refusal.** The four ordinary addressed
 send callbacks (`send`, `send_to_role`, `office_send`, `office_send_to_role`)
@@ -145,12 +179,20 @@ three same-signature doors each answer for themselves" pins the successful
 consequences. BL-4's v6 mutation evidence covers all three descriptor swaps;
 v7 leaves those signatures, named mappings and schema distinctions unchanged.
 
-**The host table now has a compatible pair.** `send_to_role` and `office_publish`
+**The host table has one compatible pair.** `send_to_role` and `office_publish`
 share a function-pointer type since v7 added `attempt_out` to the addressed door:
 both end in `uint64_t*`, but one returns an attempt and the other a recipient count.
-They are the only pair among the host's fourteen callbacks (fifteen fields including
+They are the only pair among the host's fifteen callbacks (sixteen fields including
 `ctx`), and they are not adjacent. Both can admit the same payload shape, so the
-descriptor-schema argument does not distinguish their operations.
+descriptor-schema argument does not distinguish their operations. v8's appended
+`sense_offer` (`void*, uint64_t, const uint8_t*, size_t`) shares its type with
+nothing in the host table, and the descriptor's appended `claim_published`
+(`void*, const uint8_t*, size_t`) is assignment-compatible with `revive` — the
+same shape, bytes in. A designator can still name the wrong one; what tells
+them apart is their consequence: `revive` admits the bytes against the STATE
+schema and `claim_published` against the CLAIM-SET, so a swap is a gate
+refusal at the first real showing (J7 shows a `DocFact`, which the probe's
+`ProbeState` gate refuses), never a silent success.
 
 The `dispatch_loaded` case "ABI v7: loaded role sends and office publications have
 distinct successful semantics" loads the real image and checks the host's actual
@@ -190,10 +232,21 @@ For an appended field **or a changed existing signature**:
    export path in C++20; check the changed assignments at every construction site.
    Preserve the missing-field warnings, while keeping source compatibility
    separate from semantic wiring and stale-binary evidence.
-5. Decide the version deliberately and preserve rejection before callbacks.
-   The manual previous/future-version fixtures pin the gate's ordering; a current
-   image relabeled old does not replace evidence from an actual pre-change artifact.
-   See the v2/v4/v5/v6/v7 notes in `abi.h` for the breaks already paid.
+5. Decide the version deliberately and preserve rejection before callbacks —
+   at load and at reload, where a refused candidate must leave the incumbent
+   untouched. The manual previous/future-version fixtures pin the gate's
+   ordering; a current image relabeled old does not replace evidence from an
+   actual pre-change artifact. See the v2/v4/v5/v6/v7/v8 notes in `abi.h` for
+   the breaks already paid.
+6. **State what the bus records for every status of a new callback slot** —
+   including the one that is neither OK nor an error — and witness each with a
+   loaded image whose callback answers it. A slot whose status the host
+   discards, or maps by default to success, turns a library that failed into
+   one that silently succeeded: `claim_published`'s first host `(void)`-ed its
+   `ZEN_ERR`, and a library whose hook threw stood behind a claim it never
+   applied. Document the raw mapping on the slot, including undefined values,
+   and pin each defined value through the real image (suite `joint`: J7, J11,
+   J21).
 
 ## Host services (what a loaded weave's `Bus` really is)
 
@@ -219,6 +272,12 @@ shim, so `mail.answers_ask()` / `mail.lifecycle_attested()` /
 to *itself* here; it buys nothing — provenance has no wire form and the host
 recomputes its own truth.
 
+Since v8 the **claimant's joint-publication door**: `sense_offer` outbound
+(`Mail::offer` on the library side), and `claim_published` inbound — not a
+delivery, no host table crosses, and the status crosses back as the
+application fact ([joint publication](joint-publication.md#what-crosses-the-abi)).
+The operator's verbs keep the refusing defaults across the seam.
+
 Out-of-process children receive **null** capability doors and fail closed
 (cross-process attestation is deliberately out of scope in V1) — including
 the v5 office doors, in both directions: an isolated weave genuinely holding
@@ -232,15 +291,22 @@ parent minted.
 ## Compatibility discipline
 
 The stale-artifact test fixture always declares `ZEN_ABI_VERSION - 1`, so the
-refusal pin keeps meaning "the previous ABI refuses" after every bump. A
-version number is structurally unobservable within one self-consistent build —
-it protects **mixed** artifacts.
+refusal pin keeps meaning "the previous ABI refuses" after every bump — at
+load, and at reload over a live participant, where the incumbent must stand.
+A version number is structurally unobservable within one self-consistent build —
+it protects **mixed** artifacts. The fixture is a current-layout image that
+*claims* the previous version: it pins the gate's ordering, and it is not
+evidence about an old binary's descriptor. That evidence is an image genuinely
+compiled against the pre-change header, retained with its hash and refused by
+the current host with both versions named; each bump's landing record carries
+one.
 
 ## Tests
 
 Suite `kernel` (descriptor gate, byte-sink ownership, dynamic answer parity,
 provenance across the seam, office-authorship parity + the previous-ABI
-refusal — the fixture always declares `ZEN_ABI_VERSION - 1`, so that case
-never names a frozen number); suite
-`isolation` (the fail-closed pipe, both directions); Night Lab
-`repro_answer_seam.cpp` as the application-shaped witness.
+refusal at load and at reload — the fixture always declares
+`ZEN_ABI_VERSION - 1`, so those cases never name a frozen number); suite
+`joint` (the v8 claimant doors: offer across the seam, and the showing's
+three statuses); suite `isolation` (the fail-closed pipe, both directions);
+Night Lab `repro_answer_seam.cpp` as the application-shaped witness.

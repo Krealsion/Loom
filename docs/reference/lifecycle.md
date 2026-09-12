@@ -33,6 +33,18 @@ deferred answer rights bind to the **incarnation**
   speech dies with it (fail-closed). Returns `nullptr` — changing nothing — for
   an unknown id **and** for the weave whose callback is running (below).
 
+**Where a joint publication's showing sits in all of this.** A weave whose
+claim a joint operation published is shown the value (`Weave::claim_published`)
+before its next delivery and before its next snapshot — so the bytes a
+`reload` or a `swap_state` revives from already agree with what the bus
+published. A showing that failed holds the weave; `swap_state` returns every
+Failed key to Pending, so the successor is shown again (its own attempt, never
+a retry by the incarnation that failed), and a reload is thereby the repair of
+a held weave. `unregister_weave` takes the claim record with the weave, and a
+part it was never shown reads Lost. The operator's own replacement, death or
+removal retires every operation record it began
+([joint publication](joint-publication.md#repair), [SENSE-06, SENSE-07](../laws/sense-laws.md)).
+
 ## Permanent removal and the active callback
 
 *A weave outlives its own callback* ([LIFE-06](../laws/lifecycle-laws.md)).

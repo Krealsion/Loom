@@ -8,6 +8,7 @@
 #include <zen/gate.hpp>
 #include <zen/serialize.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <stdexcept>
@@ -108,6 +109,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "RoleAuthorshipDenied";
     case RefusalReason::SeamUnresolved:
         return "SeamUnresolved";
+    case RefusalReason::ApplicationFailed:
+        return "ApplicationFailed";
     }
     return "?";
 }
@@ -249,6 +252,14 @@ std::string Refusal::message() const {
         // to admit this against and no target was ever consulted.
         return "the shape claimed across the library seam is not registered in "
                "this Loom; nothing was queued";
+    case RefusalReason::ApplicationFailed:
+        // Names the TARGET'S OWN STATE, not the message, the grant or the address:
+        // the target is there and alive and could not apply a value the bus
+        // published under its claim, so nothing is delivered to it until it is
+        // reloaded or removed. The record and the operator's notice say which
+        // participant and which publication.
+        return "the target is held behind a published claim it could not apply; "
+               "nothing is delivered to it until it is reloaded or removed";
     }
     return "?";
 }
@@ -557,6 +568,10 @@ void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& e
     case RefusalReason::TargetUnavailable:
     case RefusalReason::NotAccepted:
     case RefusalReason::GateRefused:
+    // A target held behind a published claim it could not apply is a pre-handler
+    // refusal like the five above, and the one an operator most needs by exact
+    // attempt.
+    case RefusalReason::ApplicationFailed:
         break;
     default:
         return;
@@ -733,6 +748,10 @@ SenseClaimResult Switchboard::claim_as(WeaveId claimant, Value value) {
     } else {
         slot->second = std::move(*made.record);
     }
+    // Joint publication: the claimant's own claim is the newest fact under this
+    // key, so any operation that bound the previous revision is stale — aborted
+    // now, its offers released, rather than at its commit.
+    abort_joint_on_claim(key);
     return made.result;
 }
 
@@ -861,6 +880,770 @@ void Switchboard::forget_personal_claims(WeaveId id) {
 void Switchboard::forget_office_claims(const std::string& role) {
     for (auto it = office_claims_.begin(); it != office_claims_.end();) {
         it = std::get<0>(it->first) == role ? office_claims_.erase(it) : std::next(it);
+    }
+}
+
+// ============================================================================
+// Joint publication of latest claims
+// ============================================================================
+//
+// The account is the section header in zen/switchboard/sense.hpp and
+// docs/reference/joint-publication.md; what is here is the mechanism, in the order a
+// commitment happens: bind, offer, revalidate, exchange, and the hook that shows
+// a claimant its own published value before anything can observe it.
+
+const char* name_of(JointRefusal r) noexcept {
+    switch (r) {
+    case JointRefusal::None: return "None";
+    case JointRefusal::NoLiveDelivery: return "NoLiveDelivery";
+    case JointRefusal::ForeignAuthority: return "ForeignAuthority";
+    case JointRefusal::NotOperator: return "NotOperator";
+    case JointRefusal::OutsideCeiling: return "OutsideCeiling";
+    case JointRefusal::NoClaim: return "NoClaim";
+    case JointRefusal::KeyBusy: return "KeyBusy";
+    case JointRefusal::Exhausted: return "Exhausted";
+    case JointRefusal::NoSuchOperation: return "NoSuchOperation";
+    case JointRefusal::WrongState: return "WrongState";
+    case JointRefusal::NotBound: return "NotBound";
+    case JointRefusal::NotClaimant: return "NotClaimant";
+    case JointRefusal::StaleRevision: return "StaleRevision";
+    case JointRefusal::Undeclared: return "Undeclared";
+    case JointRefusal::GateRefused: return "GateRefused";
+    case JointRefusal::TooLarge: return "TooLarge";
+    case JointRefusal::ParticipantChanged: return "ParticipantChanged";
+    case JointRefusal::OfferMissing: return "OfferMissing";
+    case JointRefusal::Cancelled: return "Cancelled";
+    }
+    return "?";
+}
+
+const char* name_of(JointState s) noexcept {
+    switch (s) {
+    case JointState::Missing: return "Missing";
+    case JointState::Preparing: return "Preparing";
+    case JointState::Committed: return "Committed";
+    case JointState::Aborted: return "Aborted";
+    }
+    return "?";
+}
+
+const char* name_of(JointApplication a) noexcept {
+    switch (a) {
+    case JointApplication::None: return "None";
+    case JointApplication::Pending: return "Pending";
+    case JointApplication::Applied: return "Applied";
+    case JointApplication::Failed: return "Failed";
+    case JointApplication::Lost: return "Lost";
+    case JointApplication::Declined: return "Declined";
+    }
+    return "?";
+}
+
+namespace {
+/// THE WORST-FIRST ORDER every aggregate uses: Failed over Lost over Declined over
+/// Pending over Applied over None. A held owner outranks a missing one, which
+/// outranks one that answered no, which outranks one still to be shown.
+int rank_of(JointApplication a) noexcept {
+    switch (a) {
+    case JointApplication::Failed: return 5;
+    case JointApplication::Lost: return 4;
+    case JointApplication::Declined: return 3;
+    case JointApplication::Pending: return 2;
+    case JointApplication::Applied: return 1;
+    case JointApplication::None: return 0;
+    }
+    return 0;
+}
+} // namespace
+
+Switchboard::JointOp* Switchboard::find_joint(std::uint64_t id) noexcept {
+    if (id == 0) {
+        return nullptr;
+    }
+    for (JointOp& op : joint_ops_) {
+        if (op.id == id) {
+            return &op;
+        }
+    }
+    return nullptr;
+}
+
+const Switchboard::JointOp* Switchboard::find_joint(std::uint64_t id) const noexcept {
+    return const_cast<Switchboard*>(this)->find_joint(id);
+}
+
+void Switchboard::finish_joint(JointOp& op, JointState state, JointRefusal reason) noexcept {
+    // TERMINAL, AND THE OFFERS GO WITH IT. Whichever way it ended, nothing of
+    // what was offered is retained: a committed offer already lives in its claim
+    // record, an aborted one was never anybody's value.
+    op.state = state;
+    op.reason = reason;
+    for (JointPart& p : op.parts) {
+        p.offer.reset();
+        p.offer_bytes = 0;
+    }
+}
+
+JointRefusal Switchboard::joint_authority_check(WeaveId caller,
+                                                const JointAuthority& authority) const {
+    // THE LIVE DELIVERY IS HALF THE CHECK — the same discipline every deferred
+    // spend keeps: the weave speaking now must be the weave the WeaveBus stamps,
+    // and it must be speaking from inside its own delivery.
+    if (!current_target_.valid() || !(caller == current_target_)) {
+        return JointRefusal::NoLiveDelivery;
+    }
+    if (!authority.valid() || !issued_here(authority)) {
+        return JointRefusal::ForeignAuthority;
+    }
+    if (!(authority.operator_id() == caller)) {
+        return JointRefusal::NotOperator;
+    }
+    const WeaveRecord* rec = find(caller);
+    if (rec == nullptr || !rec->alive) {
+        return JointRefusal::NotOperator;
+    }
+    return JointRefusal::None;
+}
+
+JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& authority,
+                                       std::vector<ClaimKey> keys) {
+    if (const JointRefusal why = joint_authority_check(caller, authority);
+        why != JointRefusal::None) {
+        return JointBegin{false, 0, why};
+    }
+    if (keys.empty() || keys.size() > kMaxJointKeys) {
+        return JointBegin{false, 0, JointRefusal::Exhausted};
+    }
+    std::vector<JointPart> parts;
+    parts.reserve(keys.size());
+    for (ClaimKey key : keys) {
+        const std::string named_role = key.role; // kept for the words a failure is told in
+        // A KEY NAMED BY ROLE IS RESOLVED NOW, to the exact holder, and bound as that
+        // weave: what the parts record is always a participant, never an office.
+        if (!key.role.empty()) {
+            if (key.claimant.valid()) {
+                return JointBegin{false, 0, JointRefusal::NoClaim}; // both: a contradiction
+            }
+            const auto held = roles_.find(key.role);
+            if (held == roles_.end()) {
+                return JointBegin{false, 0, JointRefusal::NoClaim};
+            }
+            key.claimant = held->second;
+            key.role.clear();
+        }
+        for (const JointPart& already : parts) {
+            if (already.key == key) {
+                return JointBegin{false, 0, JointRefusal::KeyBusy}; // named twice
+            }
+        }
+        const WeaveRecord* claimant = find(key.claimant);
+        if (claimant == nullptr || !claimant->alive) {
+            return JointBegin{false, 0, JointRefusal::NoClaim};
+        }
+        // THE CEILING IS A SET OF ROLES, RESOLVED NOW: the claimant must hold one
+        // of them at this moment. What is bound is the exact participant, so a
+        // role that moves afterwards does not move the operation with it.
+        bool within = false;
+        for (const std::string& role : authority.ceiling()) {
+            const auto held = roles_.find(role);
+            if (held != roles_.end() && held->second == key.claimant) {
+                within = true;
+                break;
+            }
+        }
+        if (!within) {
+            return JointBegin{false, 0, JointRefusal::OutsideCeiling};
+        }
+        const PersonalKey pk{key.claimant.value, key.schema_name, key.schema_version};
+        const auto record = personal_claims_.find(pk);
+        if (record == personal_claims_.end()) {
+            return JointBegin{false, 0, JointRefusal::NoClaim};
+        }
+        // ONE LIVE OPERATION PER KEY. Supersession is the operator's explicit act
+        // (`cancel_joint`), never something begin performs on its behalf.
+        for (const JointOp& live : joint_ops_) {
+            if (live.state != JointState::Preparing) {
+                continue;
+            }
+            for (const JointPart& p : live.parts) {
+                if (p.key == key) {
+                    return JointBegin{false, 0, JointRefusal::KeyBusy};
+                }
+            }
+        }
+        JointPart part;
+        part.key = key;
+        part.claimant = participant(key.claimant);
+        // THE OFFICE A FAILURE WILL BE TOLD IN: the one the key was named by, or --
+        // for a key named by weave -- the one the claimant holds at this moment. A
+        // fact about the bound participant, recorded now, so a later role movement
+        // does not rewrite whom the operator was coordinating.
+        part.bound_role = named_role.empty() ? claimant->role : named_role;
+        part.revision = record->second.revision;
+        parts.push_back(std::move(part));
+    }
+    for (JointOp& slot : joint_ops_) {
+        if (slot.state != JointState::Missing) {
+            // A RECORD IS NEVER REUSED UNDER AN OPERATOR THAT HAS NOT RELEASED IT
+            //. A Preparing record is live;
+            // a Committed one is what its operator re-reads when the bus's word of
+            // the application reaches it; an Aborted one, when the bus's word that it
+            // ended does. One unrelated begin used to take any terminal slot -- and
+            // with it a legitimate outcome whose notice was still queued, or whose
+            // application had not even settled. Only a released slot is free, and the
+            // bound below is what a non-releasing operator meets, in words.
+            continue;
+        }
+        slot = JointOp{next_joint_id_++, participant(caller), JointState::Preparing,
+                       JointRefusal::None, std::move(parts), false};
+        return JointBegin{true, slot.id, JointRefusal::None};
+    }
+    return JointBegin{false, 0, JointRefusal::Exhausted};
+}
+
+JointResult Switchboard::offer_claim_as(WeaveId claimant, std::uint64_t op_id, Value value) {
+    if (!current_target_.valid() || !(claimant == current_target_)) {
+        return JointResult{false, JointRefusal::NoLiveDelivery};
+    }
+    JointOp* op = find_joint(op_id);
+    if (op == nullptr) {
+        return JointResult{false, JointRefusal::NoSuchOperation};
+    }
+    if (op->state != JointState::Preparing) {
+        return JointResult{false, JointRefusal::WrongState};
+    }
+    WeaveRecord* rec = find(claimant);
+    if (rec == nullptr || !rec->alive) {
+        return JointResult{false, JointRefusal::NotClaimant};
+    }
+    const ClaimKey key{claimant, std::string(), value.schema().name(), value.schema().version()};
+    JointPart* part = nullptr;
+    for (JointPart& p : op->parts) {
+        if (p.key == key) {
+            part = &p;
+            break;
+        }
+    }
+    if (part == nullptr) {
+        // Bound for somebody else, or not bound at all — two different mistakes.
+        for (const JointPart& p : op->parts) {
+            if (p.key.schema_name == key.schema_name &&
+                p.key.schema_version == key.schema_version && !(p.key.claimant == claimant)) {
+                return JointResult{false, JointRefusal::NotClaimant};
+            }
+        }
+        return JointResult{false, JointRefusal::NotBound};
+    }
+    if (!still(part->claimant)) {
+        finish_joint(*op, JointState::Aborted, JointRefusal::ParticipantChanged);
+        return JointResult{false, JointRefusal::ParticipantChanged};
+    }
+    const PersonalKey pk{claimant.value, key.schema_name, key.schema_version};
+    const auto record = personal_claims_.find(pk);
+    if (record == personal_claims_.end()) {
+        finish_joint(*op, JointState::Aborted, JointRefusal::NoClaim);
+        return JointResult{false, JointRefusal::NoClaim};
+    }
+    if (record->second.revision != part->revision) {
+        finish_joint(*op, JointState::Aborted, JointRefusal::StaleRevision);
+        return JointResult{false, JointRefusal::StaleRevision};
+    }
+    // THE SAME ONE GATE, AGAINST THE SAME DECLARED CLAIM-SET, as an ordinary claim.
+    MadeClaim made = make_claim(*rec, std::move(value), record->second.revision);
+    if (!made.result.accepted) {
+        return JointResult{false, made.result.why == SenseRefusal::Undeclared
+                                      ? JointRefusal::Undeclared
+                                      : JointRefusal::GateRefused};
+    }
+    const std::size_t bytes = loom::serialize(made.record->value).size();
+    if (bytes > kMaxJointOfferBytes) {
+        return JointResult{false, JointRefusal::TooLarge};
+    }
+    part->offer = std::move(made.record->value);
+    part->offer_bytes = bytes;
+    return JointResult{true, JointRefusal::None};
+}
+
+JointResult Switchboard::commit_joint_as(WeaveId caller, const JointAuthority& authority,
+                                         std::uint64_t op_id) {
+    if (const JointRefusal why = joint_authority_check(caller, authority);
+        why != JointRefusal::None) {
+        return JointResult{false, why};
+    }
+    JointOp* op = find_joint(op_id);
+    if (op == nullptr) {
+        return JointResult{false, JointRefusal::NoSuchOperation};
+    }
+    if (op->state != JointState::Preparing) {
+        return JointResult{false, JointRefusal::WrongState};
+    }
+    if (!(op->operator_.who == caller) || !still(op->operator_)) {
+        finish_joint(*op, JointState::Aborted, JointRefusal::ParticipantChanged);
+        return JointResult{false, JointRefusal::ParticipantChanged};
+    }
+    // REVALIDATE EVERYTHING FIRST, AND ALLOCATE WHAT THE EXCHANGE NEEDS NOW. Past
+    // this loop nothing can fail and nothing can run but this function.
+    std::vector<ClaimRecord*> targets;
+    targets.reserve(op->parts.size());
+    for (const JointPart& p : op->parts) {
+        if (!still(p.claimant)) {
+            finish_joint(*op, JointState::Aborted, JointRefusal::ParticipantChanged);
+            return JointResult{false, JointRefusal::ParticipantChanged};
+        }
+        const PersonalKey pk{p.key.claimant.value, p.key.schema_name, p.key.schema_version};
+        const auto record = personal_claims_.find(pk);
+        if (record == personal_claims_.end()) {
+            finish_joint(*op, JointState::Aborted, JointRefusal::NoClaim);
+            return JointResult{false, JointRefusal::NoClaim};
+        }
+        if (record->second.revision != p.revision) {
+            finish_joint(*op, JointState::Aborted, JointRefusal::StaleRevision);
+            return JointResult{false, JointRefusal::StaleRevision};
+        }
+        if (!p.offer.has_value()) {
+            finish_joint(*op, JointState::Aborted, JointRefusal::OfferMissing);
+            return JointResult{false, JointRefusal::OfferMissing};
+        }
+        targets.push_back(&record->second);
+    }
+    // THE PROTECTED EXCHANGE. Bus-private records only: a Value swap moves
+    // pointers, three integers are assigned, a flag is set. No participant
+    // code, no gate, no allocation, no observer, no I/O and no lifecycle path
+    // runs between two iterations, and nothing below can throw. The old values
+    // go into the parts and are released together, after the loop.
+    for (std::size_t i = 0; i < op->parts.size(); ++i) {
+        JointPart& p = op->parts[i];
+        ClaimRecord& record = *targets[i];
+        std::swap(record.value, *p.offer);
+        record.author = p.claimant.who;
+        record.author_life = p.claimant.life;
+        record.author_incarnation = p.claimant.incarnation;
+        ++record.revision;
+        // PUBLISHED, NOT YET APPLIED: the claimant is owed a showing, and what it
+        // comes to is recorded here and on the part, attributed to this operation
+        // and this revision.
+        record.application = JointApplication::Pending;
+        record.published_by = op->id;
+        record.published_revision = record.revision;
+        p.application = JointApplication::Pending;
+    }
+    finish_joint(*op, JointState::Committed, JointRefusal::None); // releases the old values
+    return JointResult{true, JointRefusal::None};
+}
+
+JointResult Switchboard::cancel_joint_as(WeaveId caller, const JointAuthority& authority,
+                                         std::uint64_t op_id) {
+    if (const JointRefusal why = joint_authority_check(caller, authority);
+        why != JointRefusal::None) {
+        return JointResult{false, why};
+    }
+    JointOp* op = find_joint(op_id);
+    if (op == nullptr) {
+        return JointResult{false, JointRefusal::NoSuchOperation};
+    }
+    if (!(op->operator_.who == caller)) {
+        return JointResult{false, JointRefusal::NotOperator};
+    }
+    if (op->state != JointState::Preparing) {
+        return JointResult{false, JointRefusal::WrongState};
+    }
+    // CANCELLED IS TERMINAL, NOT RELEASED: the record stays readable (Aborted,
+    // Cancelled) until this operator releases it, like every other terminal record.
+    finish_joint(*op, JointState::Aborted, JointRefusal::Cancelled);
+    return JointResult{true, JointRefusal::None};
+}
+
+JointResult Switchboard::release_joint_as(WeaveId caller, const JointAuthority& authority,
+                                          std::uint64_t op_id) {
+    if (const JointRefusal why = joint_authority_check(caller, authority);
+        why != JointRefusal::None) {
+        return JointResult{false, why};
+    }
+    JointOp* op = find_joint(op_id);
+    if (op == nullptr) {
+        return JointResult{false, JointRefusal::NoSuchOperation}; // never begun, or released
+    }
+    if (!(op->operator_.who == caller)) {
+        return JointResult{false, JointRefusal::NotOperator};
+    }
+    if (op->state == JointState::Preparing) {
+        return JointResult{false, JointRefusal::WrongState}; // live: cancel it, do not lose it
+    }
+    // THE OPERATOR'S OWN RETIREMENT OF A RECORD IT HAS CONSUMED (SENSE-07).
+    // Committed with its application settled, or still owed --
+    // the operator's choice, and after it no re-settlement is told to anybody, because
+    // the record that would carry the word is gone; Aborted with its reason. The slot
+    // is free from here and the id names nothing. What stays is on the claim records:
+    // a held claimant is still held, still repaired by a reload, and its next ordinary
+    // claim still replaces the published value.
+    retire_joint(*op);
+    return JointResult{true, JointRefusal::None};
+}
+
+void Switchboard::retire_joint(JointOp& op) noexcept {
+    op = JointOp{}; // Missing, id 0, parts and offers gone; the id is never handed out again
+}
+
+JointStatus Switchboard::joint_status_as(WeaveId caller, const JointAuthority& authority,
+                                         std::uint64_t op_id) {
+    if (const JointRefusal why = joint_authority_check(caller, authority);
+        why != JointRefusal::None) {
+        return JointStatus{JointState::Missing, why};
+    }
+    const JointOp* op = find_joint(op_id);
+    if (op == nullptr) {
+        return JointStatus{JointState::Missing, JointRefusal::NoSuchOperation};
+    }
+    if (!(op->operator_.who == caller)) {
+        return JointStatus{JointState::Missing, JointRefusal::NotOperator};
+    }
+    return status_of(*op);
+}
+
+JointStatus Switchboard::joint_status(std::uint64_t op_id) const noexcept {
+    const JointOp* op = find_joint(op_id);
+    if (op == nullptr) {
+        return JointStatus{JointState::Missing, JointRefusal::NoSuchOperation};
+    }
+    return status_of(*op);
+}
+
+JointStatus Switchboard::status_of(const JointOp& op) const {
+    JointStatus out;
+    out.state = op.state;
+    out.reason = op.reason;
+    if (op.state != JointState::Committed) {
+        return out; // nothing was published, so nothing is owed
+    }
+    // THE WORST PART DECIDES, and it is named: Failed over Lost over Declined over
+    // Pending over Applied. A non-application is about ONE participant, and the
+    // operator's words to a requester need to say which.
+    out.application = JointApplication::Applied;
+    const JointPart* about = nullptr;
+    for (const JointPart& p : op.parts) {
+        if (rank_of(p.application) > rank_of(out.application)) {
+            out.application = p.application;
+            about = (p.application == JointApplication::Failed ||
+                     p.application == JointApplication::Lost ||
+                     p.application == JointApplication::Declined)
+                        ? &p
+                        : nullptr;
+        }
+    }
+    if (about != nullptr) {
+        out.failed = about->key.claimant;
+        out.failed_role = about->bound_role;
+    }
+    return out;
+}
+
+std::size_t Switchboard::joint_pending() const noexcept {
+    std::size_t n = 0;
+    for (const JointOp& op : joint_ops_) {
+        n += op.state == JointState::Preparing ? 1 : 0;
+    }
+    return n;
+}
+
+std::size_t Switchboard::joint_records() const noexcept {
+    std::size_t n = 0;
+    for (const JointOp& op : joint_ops_) {
+        n += op.state != JointState::Missing ? 1 : 0; // live, or terminal and unreleased
+    }
+    return n;
+}
+
+std::size_t Switchboard::joint_retained_bytes() const noexcept {
+    std::size_t n = 0;
+    for (const JointOp& op : joint_ops_) {
+        for (const JointPart& p : op.parts) {
+            n += p.offer.has_value() ? p.offer_bytes : 0;
+        }
+    }
+    return n;
+}
+
+bool Switchboard::has_unobserved_publication(WeaveId id) const noexcept {
+    for (const auto& entry : personal_claims_) {
+        if (std::get<0>(entry.first) == id.value &&
+            entry.second.application == JointApplication::Pending) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Switchboard::has_failed_application(WeaveId id) const noexcept {
+    for (const auto& entry : personal_claims_) {
+        if (std::get<0>(entry.first) == id.value &&
+            entry.second.application == JointApplication::Failed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+JointApplication Switchboard::application_of(WeaveId id) const noexcept {
+    JointApplication worst = JointApplication::None;
+    for (const auto& entry : personal_claims_) {
+        if (std::get<0>(entry.first) == id.value &&
+            rank_of(entry.second.application) > rank_of(worst)) {
+            worst = entry.second.application;
+        }
+    }
+    return worst;
+}
+
+void Switchboard::invalidate_joint_for(WeaveId changed) {
+    // SELECTIVE, exactly as `invalidate_transactions_for` is: only operations
+    // that BIND `changed`, and only when the fact they captured no longer holds.
+    // A live operation is ended; an operation the bus had already ended (a
+    // bound claim moved) is not touched -- but its operator is told now, if it
+    // was not told yet, because the reply it may be waiting on from this
+    // participant can no longer come.
+    for (JointOp& op : joint_ops_) {
+        if (op.state == JointState::Missing) {
+            continue;
+        }
+        if (op.operator_.who == changed && !still(op.operator_)) {
+            // THE OPERATOR IS REPLACED, REMOVED, DEAD OR REVIVED (SENSE-07):
+            // nobody is left to consume this record -- a
+            // successor at the same address inherits nothing, exactly as it inherits
+            // no authority -- so the record is retired now, whatever its state: a live
+            // one ends with its offers, a committed one stops owing a notice, an
+            // aborted one stops waiting to be read. The claimants lose nothing by it:
+            // their per-key facts live on their claim records, so a hold, a repair and
+            // an owner's next ordinary claim are exactly what they were.
+            retire_joint(op);
+            continue;
+        }
+        if (op.state != JointState::Preparing && op.state != JointState::Aborted) {
+            continue;
+        }
+        for (const JointPart& p : op.parts) {
+            if (p.key.claimant == changed && !still(p.claimant)) {
+                if (op.state == JointState::Preparing) {
+                    finish_joint(op, JointState::Aborted, JointRefusal::ParticipantChanged);
+                }
+                notify_joint_ended(op);
+                break;
+            }
+        }
+    }
+    // COMMITTED OPERATIONS: a claimant
+    // REMOVED before it was shown its published value -- its claim record is gone
+    // with it -- is Lost, and the operator is told. A claimant merely reloaded
+    // (alive, new incarnation) keeps its record and its successor is shown, so a
+    // swap changes nothing here; a death keeps the record too, and the revived
+    // life is shown at its first delivery. A part already Failed keeps that word:
+    // its failure was told, and removal is the repair that ends the hold.
+    if (find(changed) != nullptr) {
+        return;
+    }
+    for (JointOp& op : joint_ops_) {
+        if (op.state != JointState::Committed) {
+            continue;
+        }
+        bool moved = false;
+        for (JointPart& p : op.parts) {
+            if (p.key.claimant == changed && p.application == JointApplication::Pending) {
+                p.application = JointApplication::Lost;
+                moved = true;
+            }
+        }
+        if (moved) {
+            settle_application(op);
+        }
+    }
+}
+
+void Switchboard::notify_joint_ended(JointOp& op) {
+    // TO THE EXACT OPERATOR THAT BEGAN IT, ONCE, and only if it accepts the shape: an
+    // ordinary ungated delivery from the bus (no sender life to stamp), refused
+    // NotAccepted otherwise and seeding no refusal traffic because it has no weave sender.
+    if (op.notified) {
+        return;
+    }
+    op.notified = true;
+    const WeaveRecord* who = find(op.operator_.who);
+    if (who == nullptr || !who->alive || !still(op.operator_) ||
+        !accept_match(*who, JointEnded::zen_name, JointEnded::zen_version)) {
+        return;
+    }
+    JointEnded notice;
+    notice.op = std::to_string(op.id);
+    notice.reason = name_of(op.reason);
+    const std::uint64_t seq = allocate_sequence();
+    Message msg(to_value(notice), WeaveId{}, WeaveId{}, 0);
+    Envelope env{std::move(msg), op.operator_.who, seq, false, {}, 0};
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
+    queue_.push_back(std::move(env));
+}
+
+void Switchboard::abort_joint_on_claim(const PersonalKey& key) {
+    for (JointOp& op : joint_ops_) {
+        if (op.state != JointState::Preparing) {
+            continue;
+        }
+        for (const JointPart& p : op.parts) {
+            if (p.key.claimant.value == std::get<0>(key) &&
+                p.key.schema_name == std::get<1>(key) &&
+                p.key.schema_version == std::get<2>(key)) {
+                finish_joint(op, JointState::Aborted, JointRefusal::StaleRevision);
+                break; // the owner that moved it is alive: it answers, in its own words
+            }
+        }
+    }
+}
+
+Switchboard::Showing Switchboard::observe_published_claims(WeaveRecord& rec) {
+    Showing out;
+    // ALREADY HELD: nothing is shown again. Re-running a hook that did not complete
+    // would retry whatever it half-did, on every read; the hold ends with a reload
+    // (the successor is shown) or a removal, and with nothing else.
+    for (const auto& entry : personal_claims_) {
+        if (std::get<0>(entry.first) == rec.id.value &&
+            entry.second.application == JointApplication::Failed) {
+            out.failed = true;
+            out.held = true;
+            out.op = entry.second.published_by;
+            return out;
+        }
+    }
+    // COLLECT THE KEYS FIRST, in a fixed order -- the publishing operation, then the
+    // key -- because the hook runs weave code, and the iteration must not depend on
+    // what that code does. The value each hook is shown is a COPY: no reach into
+    // the record, exactly as an observer gets none.
+    std::vector<std::pair<std::uint64_t, PersonalKey>> pending;
+    for (const auto& entry : personal_claims_) {
+        if (std::get<0>(entry.first) == rec.id.value &&
+            entry.second.application == JointApplication::Pending) {
+            pending.emplace_back(entry.second.published_by, entry.first);
+        }
+    }
+    std::sort(pending.begin(), pending.end());
+    for (const auto& [published_by, key] : pending) {
+        auto it = personal_claims_.find(key);
+        if (it == personal_claims_.end() || it->second.application != JointApplication::Pending) {
+            continue;
+        }
+        const Value shown = it->second.value;
+        Weave::PublishedClaim answer = Weave::PublishedClaim::Failed;
+        std::exception_ptr error;
+        try {
+            answer = rec.weave->claim_published(shown);
+        } catch (...) {
+            error = std::current_exception();
+        }
+        it = personal_claims_.find(key); // weave code ran: look again before writing
+        if (it == personal_claims_.end()) {
+            continue;
+        }
+        if (!error && answer == Weave::PublishedClaim::Applied) {
+            note_application(key, it->second, JointApplication::Applied);
+            continue;
+        }
+        if (!error && answer == Weave::PublishedClaim::Declined) {
+            // DECLINED IS AN ANSWER, NOT A FAILURE:
+            // the owner is functioning and keeps state of its own; it is not held, the
+            // showing goes on to its next key, and the published value stands on this
+            // record -- attributed Declined -- until the owner's next ordinary claim
+            // replaces it. What a successor says when shown what its predecessor
+            // prepared; what a snapshot or a delivery then finds is the owner's own truth.
+            note_application(key, it->second, JointApplication::Declined);
+            continue;
+        }
+        // THE FIRST FAILURE STOPS THE SHOWING. This key is Failed -- the weave is
+        // held from here -- and every key after it stays Pending: never attempted,
+        // so nothing of it is partial, and the successor of a reload is shown all
+        // of them. The native exception, if there was one, goes back to the caller
+        // AFTER the record says what happened, so nothing is swallowed and nothing
+        // is lost with it.
+        note_application(key, it->second, JointApplication::Failed);
+        out.failed = true;
+        out.op = published_by;
+        out.error = error;
+        break;
+    }
+    return out;
+}
+
+void Switchboard::note_application(const PersonalKey& key, ClaimRecord& record,
+                                   JointApplication what) {
+    record.application = what;
+    JointOp* op = find_joint(record.published_by);
+    if (op == nullptr) {
+        // RELEASED SINCE -- by its operator, or by the bus when that operator changed.
+        // The claim record alone keeps the fact, which is all the hold, the repair and
+        // the owner's next claim ever read; nothing is owed to anybody about it.
+        return;
+    }
+    for (JointPart& p : op->parts) {
+        if (p.key.claimant.value == std::get<0>(key) && p.key.schema_name == std::get<1>(key) &&
+            p.key.schema_version == std::get<2>(key)) {
+            p.application = what;
+            break;
+        }
+    }
+    settle_application(*op);
+}
+
+void Switchboard::settle_application(JointOp& op) {
+    const JointStatus now = status_of(op);
+    if (now.application == JointApplication::Pending || now.application == JointApplication::None) {
+        return; // still Pending somewhere: not settled
+    }
+    if (now.application == op.applied_told) {
+        return; // said once
+    }
+    op.applied_told = now.application;
+    const JointPart* about = nullptr;
+    for (const JointPart& p : op.parts) {
+        if (p.key.claimant == now.failed && p.application == now.application) {
+            about = &p;
+            break;
+        }
+    }
+    notify_joint_applied(op, now.application, about);
+}
+
+void Switchboard::notify_joint_applied(JointOp& op, JointApplication what, const JointPart* about) {
+    // TO THE EXACT OPERATOR THAT BEGAN IT, and only if it accepts the shape: the
+    // same ungated bus notice `zen.JointEnded` is (no sender life to stamp, no
+    // refusal traffic seeded). The record is the fact; this is the wake-up.
+    const WeaveRecord* who = find(op.operator_.who);
+    if (who == nullptr || !who->alive || !still(op.operator_) ||
+        !accept_match(*who, JointApplied::zen_name, JointApplied::zen_version)) {
+        return;
+    }
+    JointApplied notice;
+    notice.op = std::to_string(op.id);
+    notice.applied = what == JointApplication::Applied;
+    notice.claimant = about == nullptr ? std::string() : std::to_string(about->key.claimant.value);
+    notice.role = about == nullptr ? std::string() : about->bound_role;
+    notice.reason = name_of(what);
+    const std::uint64_t seq = allocate_sequence();
+    Message msg(to_value(notice), WeaveId{}, WeaveId{}, 0);
+    Envelope env{std::move(msg), op.operator_.who, seq, false, {}, 0};
+    journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
+    queue_.push_back(std::move(env));
+}
+
+void Switchboard::reset_failed_application_for_successor(WeaveId id) noexcept {
+    for (auto& entry : personal_claims_) {
+        if (std::get<0>(entry.first) != id.value ||
+            entry.second.application != JointApplication::Failed) {
+            continue;
+        }
+        entry.second.application = JointApplication::Pending;
+        if (JointOp* op = find_joint(entry.second.published_by)) {
+            for (JointPart& p : op->parts) {
+                if (p.key.claimant == id && p.application == JointApplication::Failed) {
+                    p.application = JointApplication::Pending;
+                }
+            }
+            op->applied_told = JointApplication::None; // the successor's settlement is news
+        }
     }
 }
 
@@ -1737,6 +2520,28 @@ void Switchboard::deliver_one(Envelope env) {
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    // SHOWN BEFORE IT RUNS, OR NOT RUN (SENSE-06). A weave standing behind a value
+    // the bus published under its own key is shown it here, before its handler, so
+    // nothing it does in
+    // this delivery proceeds from a self it no longer is. A showing that does not
+    // complete -- or a weave already held by one that did not -- REFUSES this
+    // delivery: the handler is not run as if the application had happened, the
+    // journal and the tap say `ApplicationFailed`, a sender that accepts
+    // `zen.DispatchRefused` hears it by exact attempt, and a native hook's own
+    // exception is re-raised to the host afterwards, exactly as a handler's would be
+    // (MSG-10: recorded, then never swallowed). Outside the delivery scope, because
+    // the hook is not a delivery: there is no Mail and no answer right in it.
+    {
+        const Showing shown = observe_published_claims(*rec);
+        if (shown.failed) {
+            const Refusal r{RefusalReason::ApplicationFailed, {}};
+            refuse(r);
+            if (shown.error) {
+                std::rethrow_exception(shown.error);
+            }
+            return;
+        }
+    }
     // WHETHER THE HANDLER COMPLETES IS A FACT ABOUT THIS DELIVERY, so the bit is
     // cleared here rather than trusted to have been cleared by the last one.
     handler_reported_failure_ = false;
@@ -1915,11 +2720,41 @@ void Switchboard::remove_observer(ObserverId id) {
     }
 }
 
-std::string Switchboard::snapshot_bytes(WeaveId id) const {
-    const WeaveRecord* rec = find(id);
+std::string Switchboard::snapshot_bytes(WeaveId id) {
+    return snapshot_bytes(id, SnapshotAccess::Ordinary);
+}
+
+std::string Switchboard::snapshot_bytes(WeaveId id, SnapshotAccess access) {
+    WeaveRecord* rec = find(id);
     if (rec == nullptr) {
         throw std::invalid_argument("snapshot_bytes: no such weave");
     }
+    if (access == SnapshotAccess::Diagnostic) {
+        // EXPLICITLY AS IT IS: nothing shown, nothing recorded, nothing refused. The
+        // one door that reads a held weave, and it says so in its name.
+        return loom::serialize(rec->weave->snapshot());
+    }
+    // Joint publication: the bytes a reload carries must agree with what the bus
+    // has already published about this weave, so it is shown any joint-published
+    // claim of its own first.
+    const Showing shown = observe_published_claims(*rec);
+    if (shown.failed && access == SnapshotAccess::Ordinary) {
+        // NOT SERVED AS A NORMAL SNAPSHOT of a state the weave no longer stands
+        // behind. The native hook's own exception is re-raised (the record already
+        // says Failed); a held weave, or a loaded one whose status said no, is
+        // refused in the bus's words.
+        if (shown.error) {
+            std::rethrow_exception(shown.error);
+        }
+        throw ApplicationFailedError(
+            "snapshot_bytes: weave " + std::to_string(id.value) +
+            " could not apply the value a joint operation published under its claim" +
+            (shown.op != 0 ? " (operation " + std::to_string(shown.op) + ")" : std::string()) +
+            "; it is held until it is reloaded or removed -- SnapshotAccess::Diagnostic reads "
+            "it as it is");
+    }
+    // Reload: a failed showing is on the record (the successor will be shown again)
+    // and the bytes are returned as they are.
     return loom::serialize(rec->weave->snapshot());
 }
 
@@ -2286,6 +3121,21 @@ void Switchboard::deliver_admission(Envelope env) {
     // Ordinary sends are unaffected — they never consulted this.
     Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    // SHOWN BEFORE ITS FIRST BREATH, OR NOT BREATHED -- see deliver_one. A candidate is
+    // sealed and offers nothing, so a pending publication here is unreachable by the
+    // mechanism; the discipline is kept in one shape at both doors regardless. The
+    // topology has already moved (PR-08); what is refused is the activation's
+    // delivery, said as such.
+    {
+        const Showing shown = observe_published_claims(*cand);
+        if (shown.failed) {
+            refuse(RefusalReason::ApplicationFailed);
+            if (shown.error) {
+                std::rethrow_exception(shown.error);
+            }
+            return;
+        }
+    }
     handler_reported_failure_ = false;
     std::exception_ptr failure;
     {
@@ -2461,6 +3311,10 @@ void Switchboard::invalidate_transactions_for(WeaveId changed) {
             }
         }
     }
+    // Joint publication: the same transition ends every joint operation that
+    // bound `changed` as operator or claimant. Every lifecycle path — removal,
+    // death, revival, reload, swap — already comes through here.
+    invalidate_joint_for(changed);
 }
 
 TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinator,
@@ -2940,6 +3794,16 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     Value state = std::move(admitted).value();
     rec->weave->revive(state);
     rec->last_known_good = state;
+    // Joint publication: the snapshot a swap revives from was taken through
+    // `snapshot_bytes`, which showed the predecessor every pending publication
+    // first -- one it applied is on the
+    // record as Applied and in these bytes, so the successor is not shown it again
+    // as if it were news. One the predecessor COULD NOT apply is the other case:
+    // these bytes do not carry it, so it returns to Pending and the successor is
+    // shown it at its first delivery or snapshot -- new code's own attempt, never a
+    // retry by the incarnation that failed. That is what makes a reload the repair
+    // of a held weave.
+    reset_failed_application_for_successor(id);
     // A SWAP CAN ALSO BE A REVIVAL: this path marks the weave alive whatever it was
     // before, so if it was dead, this is a new life as well as new code. If it was
     // alive, the life continues — a live code reload is not a death, and speech

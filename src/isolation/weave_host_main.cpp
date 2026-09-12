@@ -242,7 +242,11 @@ int main(int argc, char** argv) {
                    .sense_claim          = nullptr,
                    .sense_office_claim   = nullptr,
                    .sense_observe        = nullptr,
-                   .sense_observe_office = nullptr};
+                   .sense_observe_office = nullptr,
+                   // v8: the isolated pipe supplies no offer door, exactly as it
+                   // supplies no claim or observe door -- a child cannot present
+                   // the exact identity a joint operation binds.
+                   .sense_offer          = nullptr};
 
     for (;;) {
         Op op = Op::Hello;

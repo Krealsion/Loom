@@ -103,6 +103,53 @@ public:
     /// door nor a message.
     virtual std::vector<std::shared_ptr<const Schema>> claimed_schemas() const { return {}; }
 
+    /// WHAT A SHOWING CAME TO AT THIS WEAVE: the three answers `claim_published`
+    /// can give, and what the bus does with each (SENSE-06;
+    /// docs/reference/joint-publication.md#the-showing-and-its-three-answers).
+    enum class PublishedClaim : std::uint8_t {
+        /// The weave applied the value and stands behind it. Nothing is owed.
+        Applied,
+        /// The weave, functioning, deliberately did NOT apply it: it keeps or
+        /// reconciles state of its own and re-claims that truth at its next delivery.
+        /// Recorded Declined against this participant and publication; not held;
+        /// the operator is told. Expected non-application, said as an answer.
+        Declined,
+        /// The weave could not complete the showing. Recorded Failed; HELD until it
+        /// is reloaded or removed; the operator is told. A native weave says this by
+        /// throwing (recorded, then re-raised) or by returning it (recorded, with no
+        /// exception to re-raise); a loaded weave's non-OK status crosses back as it.
+        Failed,
+    };
+
+    /// ONE OF THIS WEAVE'S OWN LATEST CLAIMS WAS PUBLISHED BY A JOINT OPERATION,
+    /// and this weave has not run since.
+    ///
+    /// The bus calls it BEFORE the weave's next delivery and BEFORE its next
+    /// snapshot, outside any dispatch: there is no Mail, no answer right and no
+    /// send. The weave folds the published value into whatever native state it
+    /// derives from its claims, so that no reader — a poke, a snapshot, a message
+    /// handler — can observe the weave standing behind its own published claim.
+    /// A weave that never offers into a joint operation never hears this; the
+    /// default is the honest nothing. See zen/switchboard/sense.hpp.
+    ///
+    /// WHAT IT ANSWERS: `PublishedClaim`. Applied means the
+    /// weave now stands behind the published value. Declined means it does NOT and
+    /// is not broken: a functioning owner shown a value it will not or cannot make
+    /// its own -- a successor shown what its predecessor prepared -- keeps or
+    /// reconciles state of its own and re-claims that truth at its next delivery;
+    /// the bus records Declined against exactly this participant and publication,
+    /// holds nothing, and tells the operator. Failed -- returned, or an exception,
+    /// which the bus records the same way and re-raises afterwards for native code
+    /// (MSG-10's discipline) -- means the showing did not complete: the bus records
+    /// a FAILED application, holds the weave (no delivery, no ordinary snapshot, no
+    /// re-run of this hook) until it is reloaded or removed, and tells the operator.
+    /// A loaded weave answers through its ABI status, which the host does not
+    /// discard. The default applies nothing and owes nothing, truthfully.
+    virtual PublishedClaim claim_published(const Value& value) {
+        (void)value;
+        return PublishedClaim::Applied;
+    }
+
 protected:
     Weave() = default;
 };
