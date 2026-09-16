@@ -21,6 +21,7 @@
 #include <zen/switchboard/switchboard.hpp>
 #include <zen/terminal/composer.hpp>
 #include <zen/value.hpp>
+#include <zen/weave/ask_book.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,17 @@ namespace loom {
 /// can no longer name.
 inline constexpr std::size_t kConsoleTapCapacity = 1024;
 
+/// Conversations this console will track at once — the bound on its own ask book.
+///
+/// It is not the reply window's number and must not become it. The reply buffer is HISTORY,
+/// where discarding the oldest entry loses an operator's view; the ask book is a record of
+/// what this participant is still WAITING ON, where discarding the oldest would make the
+/// console forget a question it asked (`loom::AskBook` refuses at capacity for exactly that
+/// reason). Thirty-two is an operator's number: a person driving a console by hand does not
+/// hold dozens of open questions, and a host that somehow does is told so in a sentence
+/// naming the command that lists them, rather than silently losing one.
+inline constexpr std::size_t kConsoleAskCapacity = 32;
+
 /// Received reply Values retained in the m1/m2/... buffer. Sixteen times smaller than the tap
 /// because the UNIT is far heavier: a TapEvent is a few short strings, while a wire-arrived Value
 /// is bounded only by the decode materialization budget (kMaxDecodedCells — megabytes, worst
@@ -97,13 +109,47 @@ struct SendOutcome {
     std::string reason; ///< the gate's verdict / routing refusal, on refusal
 };
 
-/// A buffered reply (m1, m2, …): its label, shape, and the received Value (read fields by
-/// name off `value`). The Stage-2 `$m1.field` reference syntax reads from this.
+/// WHAT SUBMITTING PRODUCED: the queued send, and the conversation it opened.
+///
+/// `ask` is the local handle in the console's own ask book — the thing a caller holds to
+/// find out later whether an arrival was entitled to answer THIS question. It is 0 when the
+/// message could not be composed at all, and also when the book was full: the send still
+/// happened, and only the tracking was refused, which a caller that cares must notice
+/// rather than read as "no answer yet".
+struct Submitted {
+    loom::Ticket ticket{};
+    std::uint64_t ask = 0;
+    bool sent() const noexcept { return ticket.valid(); }
+};
+
+/// A buffered reply (m1, m2, …): its label, shape, the received Value (read fields by
+/// name off `value`), and WHO SAID IT ABOUT WHAT. The Stage-2 `$m1.field` reference syntax
+/// reads from `value`.
+///
+/// THE LAST THREE FIELDS ARE THE ENTRY'S ATTRIBUTION, and the window used to drop them on
+/// the floor. A console is registered `AcceptMode::AnyRegistered`, so anything the registry
+/// can resolve lands in this buffer — including a `zen.Result` any admitted weave may send
+/// under the ordinary poke-answer baseline. Without `sender` and `correlation` there is no
+/// way to tell that `zen.Result` apart from the one the operator's own question earned, and a
+/// host that read "the newest entry" as "the answer" administered whatever the newest entry
+/// happened to name. The two are a PAIR and neither alone is enough (`loom::AskBook`):
+/// a correlation identifies a conversation and authenticates nothing; a bus-stamped sender
+/// says who spoke and not what about.
 struct BufferEntry {
     std::string label;
     std::string name;
     std::uint32_t version;
     loom::Value value;
+    /// Stamped by Loom at delivery — never read from a payload, never chooseable by a sender.
+    loom::WeaveId sender{};
+    /// The conversation the sender named. 0 means "named none", which is what an
+    /// unsolicited notification looks like and is never a settlement.
+    std::uint64_t correlation = 0;
+    /// Did Loom itself attest this as THE one authorized answer to a request this console
+    /// sent (`Provenance::answers_ask`)? Stronger than the pair above and strictly rarer: a
+    /// middleman relaying somebody else's answer (`loom::relay`) sends an ordinary message,
+    /// so a true, correctly attributed answer can arrive with this false.
+    bool answers_ask = false;
 };
 
 /// The result of running the assumption ladder AND gate-sending.
@@ -114,6 +160,10 @@ struct Composed {
     std::string error;                   ///< Error: the compose-time verdict
     std::vector<FieldDesc> open_fields;  ///< NeedsInput: the still-unfilled fields
     std::vector<std::string> unplaced;   ///< NeedsInput: args (rendered) the ladder could not place
+    /// Ready: the conversation this send opened in the engine's own ask book, or 0 when the
+    /// book was full (the send still went; only the tracking was refused). Ask
+    /// `ConsoleEngine::settled(ask)` which arrival, if any, is entitled to answer it.
+    std::uint64_t ask = 0;
 };
 
 /// A copied bus event for the operator's window on the live bus (the tap).
@@ -128,7 +178,24 @@ struct TapEvent {
     std::string refusal; ///< the refusal reason (empty unless Refused)
 };
 
-class ConsoleWeave; // the console's own raw Weave (buffers received Values); defined in the .cpp
+class ConsoleWeave; // the console's own raw Weave (buffers arrivals); defined in the .cpp
+
+/// ONE ARRIVAL, AS THE REPLY WINDOW KEEPS IT: the delivered Value and the routing facts
+/// that say whose it is.
+///
+/// The window used to keep the Value alone, and a Value cannot answer "who said this,
+/// about which question" — which is why a host reading the newest one could not tell an
+/// answer it had earned from an unsolicited message any loaded weave may author. The
+/// label is deliberately NOT stored: a label is a function of position in the stable
+/// sequence (see `Evicted::buffer`), and storing it would be a second, driftable answer
+/// to which entry this is. `BufferEntry` is this plus that computed label, which is the
+/// shape a caller reads.
+struct ConsoleArrival {
+    loom::Value payload;
+    loom::WeaveId sender{};
+    std::uint64_t correlation = 0;
+    bool answers_ask = false;
+};
 
 /// Per-region change flags for message-driven partial redraw (the retained-mode / Zengine point): a
 /// UI repaints only the regions whose data changed, and the change signal is bus messages. A
@@ -255,12 +322,47 @@ public:
     std::optional<ShapeDesc> describe(std::string_view name, std::uint32_t version) const override;
 
     // ---- Compose + gated send ----
-    /// One-shot: set fields by name, assemble, and gate-send to `target`. Returns the send
-    /// Ticket (the send is enqueued — pump(), then read outcome()). On a compose-time error
-    /// (no such shape/field, or a type mismatch) returns an invalid Ticket and sets *error.
-    loom::Ticket submit(loom::WeaveId target, std::string_view name, std::uint32_t version,
-                           const std::map<std::string, FieldValue>& fields,
-                           std::string* error = nullptr);
+    /// One-shot: set fields by name, assemble, and gate-send to `target`. The send is
+    /// enqueued — turn the bus, then read `outcome()` for its fate and `settled()` for its
+    /// answer. On a compose-time error (no such shape/field, or a type mismatch) the ticket
+    /// is invalid, `ask` is 0, and *error says why.
+    Submitted submit(loom::WeaveId target, std::string_view name, std::uint32_t version,
+                     const std::map<std::string, FieldValue>& fields,
+                     std::string* error = nullptr);
+
+    // ---- The ask book: WHICH ARRIVAL IS ENTITLED TO ANSWER WHICH QUESTION ----
+    //
+    // The console is a participant that asks, so it keeps the asker's record
+    // (`loom::AskBook`) rather than reading its own presentation history as a result. Every
+    // correlation this console stamps is drawn from that one book — a second counter beside
+    // it could stamp an ordinary send with a number an open conversation is already using,
+    // and an answer to that send would then settle the conversation.
+    //
+    // Settlement happens AT ARRIVAL, inside the console weave's own delivery, so a bounded
+    // reply window cannot evict an answer before a caller asks about it.
+
+    /// The arrival that settled `ask`, or nullopt while the conversation is still open.
+    ///
+    /// NULLOPT IS A REAL ANSWER — "still pending" — and this never invents a completion to
+    /// avoid returning it. A settled conversation is remembered here until the caller
+    /// `forget_ask`s it, so a duplicate or late copy of the same answer is inert.
+    std::optional<BufferEntry> settled(std::uint64_t ask) const;
+
+    /// Is `ask` still open? False for one that settled, one that was forgotten, and one that
+    /// never existed — the caller's own record says which.
+    bool awaiting(std::uint64_t ask) const noexcept;
+
+    /// Every conversation this console is still waiting on, oldest first.
+    std::vector<loom::PendingAsk> open_asks() const;
+
+    /// Stop tracking one conversation — LOCALLY. Nothing at the far end is told anything;
+    /// a later answer to a forgotten ask matches nothing and settles nothing. Also drops a
+    /// settled answer that has been read. True if there was anything to forget.
+    bool forget_ask(std::uint64_t ask);
+
+    /// How many conversations this console will track at once, and how many it is using.
+    std::size_t ask_capacity() const noexcept;
+    std::size_t asks_outstanding() const noexcept;
 
     /// The fate of a previously-submitted Ticket (after pump()).
     SendOutcome outcome(loom::Ticket t) const;
@@ -312,13 +414,25 @@ private:
     void record_tap(const loom::BusEvent& e);
     /// The reply window the console's own Weave holds. Defined in the .cpp, where ConsoleWeave is
     /// complete — the type is opaque here, which is exactly why buffer_at cannot reach it inline.
-    const BoundedHistory<loom::Value, kConsoleBufferCapacity>& reply_history() const;
+    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& reply_history() const;
+
+    /// Settle an arrival against the book, from inside the console weave's own delivery.
+    void record_arrival(const loom::Message& in);
 
     loom::Switchboard& bus_;
     ConsoleWeave* weave_ = nullptr; // owned by the bus; non-owning here
     loom::WeaveId console_id_{};
     loom::ObserverId tap_obs_ = 0;
-    std::uint64_t correlation_ = 0;
+    /// THE ONE CORRELATION SEQUENCE THIS PARTICIPANT HAS. Every send stamps a number from
+    /// this book — tracked when it opened a conversation, `mint_correlation()` when the book
+    /// was full — so no ordinary send can ever carry a number an open conversation is using.
+    loom::AskBook book_{kConsoleAskCapacity};
+    /// Answers that settled a conversation, held until the caller reads and forgets them, so
+    /// a settlement survives the reply window evicting the entry that carried it.
+    std::map<std::uint64_t, BufferEntry> settled_;
+    /// The conversation the last assemble_and_send opened; read immediately by submit() and
+    /// compose(), which are the only callers and are single-threaded with it.
+    std::uint64_t last_ask_ = 0;
     BoundedHistory<TapEvent, kConsoleTapCapacity> tap_; // history: bounded window, oldest evicted
     Dirty dirty_; // accumulated by record_tap; drained by take_dirty
 };

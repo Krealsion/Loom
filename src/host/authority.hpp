@@ -88,6 +88,22 @@ bool apply_rule(const std::string& text, LiveAuthority* into, std::string* error
 /// the person believes they granted.
 bool to_live_authority(const AuthorityRule& rule, LiveAuthority* out, std::string* error);
 
+/// THE ONE SPELLING A STORED RULE HAS. An observe entry may be written with or without
+/// its verb (`observe Tick v1` / `Tick v1`), and `render_rule` prints the first — so this
+/// is what the file keeps, and two entries that mean one permission stop being two
+/// strings that compare unequal.
+std::string canonical_rule(const std::string& raw, bool observe);
+
+/// COLLAPSE REPEATED PERMISSIONS, KEEPING THE PERSON'S ORDER (first occurrence wins).
+///
+/// A permission list is a SET and was stored as a sequence, so `authority allow X` typed
+/// twice stored X twice — and one `authority revoke X` then removed one copy, reported a
+/// revocation, and left the permission installed and remembered. Repeating an approval
+/// must not be a way to make it unrevocable. Applied when a decision is written AND when
+/// a hand-edited file is read, because the file is a surface a person edits directly.
+/// Returns how many entries it removed.
+std::size_t collapse_duplicates(AuthorityRule* rule);
+
 /// A decision the admission policy could not make and is waiting on. Recorded when a
 /// load is refused for want of a rule (or because the bytes changed), so the console
 /// can show a person exactly what to approve, with the facts in front of them.
@@ -123,11 +139,20 @@ public:
     /// Replace one decision and write the file. The write is where "remember this"
     /// actually happens, so it is not deferred to shutdown: a host that is killed
     /// between an approval and its next boot must come back with the approval.
+    ///
+    /// DURABLE FIRST, AND THAT ORDER IS THE WHOLE POINT. The change is applied to a
+    /// CANDIDATE copy, the candidate is written, and only a successful write becomes the
+    /// live policy. It used to mutate the map and then try to write, which meant an
+    /// unwritable store printed `cannot write` and changed what this host permitted
+    /// anyway: `authority trust x` failed, `start x` then succeeded under the failed
+    /// approval, and a restart lost the decision nobody was told had not been made. A
+    /// failed command now changes nothing at all, which is the only version of
+    /// "remembered" that a person can act on.
     bool put(AuthorityRule rule, std::string* error);
 
-    /// Drop one decision entirely and write the file. Does NOT touch a running
-    /// weave — the caller is responsible for revoking its live authority too, and
-    /// the console does both so a person's single "revoke" means both.
+    /// Drop one decision entirely and write the file — durable first, exactly as `put`.
+    /// Does NOT touch a running weave: the caller is responsible for revoking its live
+    /// authority too, and the console does both so a person's single "revoke" means both.
     bool forget(const std::string& artifact, std::string* error);
 
     /// THE ADMISSION POLICY THIS STORE IMPLEMENTS — the thing the Kernel asks.
@@ -156,7 +181,12 @@ public:
     const std::vector<std::string>& notes() const noexcept { return notes_; }
 
 private:
-    bool write(std::string* error) const;
+    /// Serialize and replace the file from `rules` — never from `rules_`, so a caller can
+    /// try a candidate before adopting it.
+    bool write(const std::map<std::string, AuthorityRule>& rules, std::string* error) const;
+    /// Apply a change to a candidate copy, write it, and adopt it only if the write
+    /// landed. The one path `put` and `forget` share.
+    bool commit(std::map<std::string, AuthorityRule> candidate, std::string* error);
     void note_pending(PendingDecision d);
 
     std::string path_;

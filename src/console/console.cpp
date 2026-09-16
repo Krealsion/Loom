@@ -5,6 +5,7 @@
 
 #include <zen/kind.hpp>
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -87,8 +88,9 @@ std::shared_ptr<const loom::Schema> console_state_schema() {
 // ---- the console's own Weave: accepts anything (via AcceptMode), buffers it -----------
 class ConsoleWeave final : public loom::Weave {
 public:
-    explicit ConsoleWeave(std::vector<std::shared_ptr<const loom::Schema>> vocabulary)
-        : vocabulary_(std::move(vocabulary)) {}
+    ConsoleWeave(std::vector<std::shared_ptr<const loom::Schema>> vocabulary,
+                 std::function<void(const loom::Message&)> on_arrival)
+        : vocabulary_(std::move(vocabulary)), on_arrival_(std::move(on_arrival)) {}
 
     std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
         // Usually EMPTY: AcceptMode::AnyRegistered widens the door set at delivery, so the
@@ -111,7 +113,17 @@ public:
         // buffer (handle() discharges the delivery here and now), so evicting the oldest retained
         // reply drops no obligation — only the operator's oldest referenceable value, whose label
         // then refuses honestly instead of re-binding.
-        received_.push(in.payload);
+        //
+        // WITH ITS ROUTING FACTS. `sender` is Loom's stamp and `correlation` is what the sender
+        // named; keeping the payload alone is what left a host unable to tell an answer from an
+        // unrelated message of the same shape.
+        received_.push(ConsoleArrival{in.payload, in.sender, in.correlation,
+                                      in.provenance.answers_ask()});
+        // SETTLED HERE, INSIDE THE DELIVERY, not later off the window. The window is bounded
+        // history and may evict; a settlement is not history and must not be evictable.
+        if (on_arrival_) {
+            on_arrival_(in);
+        }
     }
     loom::Value snapshot() const override {
         loom::Value v(console_state_schema());
@@ -128,19 +140,21 @@ public:
         return v;
     }
     void revive(const loom::Value&) override {}
-    const BoundedHistory<loom::Value, kConsoleBufferCapacity>& received() const noexcept {
+    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& received() const noexcept {
         return received_;
     }
 
 private:
-    BoundedHistory<loom::Value, kConsoleBufferCapacity> received_;
+    BoundedHistory<ConsoleArrival, kConsoleBufferCapacity> received_;
     std::vector<std::shared_ptr<const loom::Schema>> vocabulary_;
+    std::function<void(const loom::Message&)> on_arrival_;
 };
 
 ConsoleEngine::ConsoleEngine(loom::Switchboard& bus,
                              std::vector<std::shared_ptr<const loom::Schema>> vocabulary)
     : bus_(bus) {
-    auto weave = std::make_unique<ConsoleWeave>(std::move(vocabulary));
+    auto weave = std::make_unique<ConsoleWeave>(
+        std::move(vocabulary), [this](const loom::Message& in) { record_arrival(in); });
     weave_ = weave.get();
     // The most-granted participant — broad send (drive any Weave with any shape) — but a
     // GRANT, not host root authority. Reply-receipt is AcceptMode::AnyRegistered; the tap +
@@ -209,6 +223,47 @@ std::optional<ShapeDesc> ConsoleEngine::describe(std::string_view name,
     return describe_schema(*schema);
 }
 
+void ConsoleEngine::record_arrival(const loom::Message& in) {
+    // THE WALL, APPLIED ONCE, FOR EVERY ARRIVAL. `AskBook::settle` requires the pair — the
+    // correlation this console minted, AND Loom's own stamp of who spoke — so a perfectly
+    // shaped message from a participant that was not asked settles nothing, and neither does
+    // a genuine respondent talking about a different conversation.
+    const std::optional<loom::PendingAsk> mine = book_.settle(in.correlation, in.sender);
+    if (!mine) {
+        return;
+    }
+    // The label this arrival is also readable under, so an operator reading `buffer` and a
+    // command reading its own answer are naming the same thing. The push has already
+    // happened, so the newest retained label is base + size.
+    BufferEntry e{"m" + std::to_string(reply_history().evicted() + reply_history().size()),
+                  in.payload.schema().name(),
+                  in.payload.schema().version(),
+                  in.payload,
+                  in.sender,
+                  in.correlation,
+                  in.provenance.answers_ask()};
+    settled_.erase(mine->id); // a settled id is never reopened, so this can only be a no-op
+    settled_.emplace(mine->id, std::move(e));
+}
+
+std::optional<BufferEntry> ConsoleEngine::settled(std::uint64_t ask) const {
+    auto it = settled_.find(ask);
+    return it == settled_.end() ? std::nullopt : std::optional<BufferEntry>(it->second);
+}
+
+bool ConsoleEngine::awaiting(std::uint64_t ask) const noexcept { return book_.waiting_on(ask); }
+
+std::vector<loom::PendingAsk> ConsoleEngine::open_asks() const { return book_.entries(); }
+
+bool ConsoleEngine::forget_ask(std::uint64_t ask) {
+    const bool had_answer = settled_.erase(ask) != 0;
+    return book_.forget(ask).has_value() || had_answer;
+}
+
+std::size_t ConsoleEngine::ask_capacity() const noexcept { return book_.capacity(); }
+
+std::size_t ConsoleEngine::asks_outstanding() const noexcept { return book_.outstanding(); }
+
 loom::Ticket ConsoleEngine::assemble_and_send(
     loom::WeaveId target, const std::shared_ptr<const loom::Schema>& schema,
     const std::map<std::string, loom::Cell>& cells) {
@@ -222,23 +277,35 @@ loom::Ticket ConsoleEngine::assemble_and_send(
             }
             return it->second;
         });
+    // OPEN THE CONVERSATION FIRST, so the number on the wire is the number the book is
+    // watching for. A full book still SENDS — refusing the send would turn a bookkeeping
+    // limit into a messaging limit — but it stamps an untracked number from the same
+    // sequence and reports `ask == 0`, so a caller that needs attribution knows it has none
+    // rather than being handed a handle that can never settle.
+    const loom::AskOpened opened = book_.open(target, schema->name(), schema->version());
+    last_ask_ = opened ? opened.id : 0;
+    const std::uint64_t correlation = opened ? opened.correlation : book_.mint_correlation();
     // Gated send AS the console: send_as stamps the console as sender and authorizes against
     // the console's grant; reply_to is the console so replies route back; the gate admits
     // against the target's accept-set at delivery.
-    return bus_.send_as(
+    const loom::Ticket t = bus_.send_as(
         console_id_, target,
-        loom::Message(std::move(v), loom::WeaveId{}, console_id_, ++correlation_));
+        loom::Message(std::move(v), loom::WeaveId{}, console_id_, correlation));
+    if (opened) {
+        (void)book_.bind_attempt(opened.id, t.seq); // the queued attempt, for diagnostics
+    }
+    return t;
 }
 
-loom::Ticket ConsoleEngine::submit(loom::WeaveId target, std::string_view name,
-                                      std::uint32_t version,
-                                      const std::map<std::string, FieldValue>& fields,
-                                      std::string* error) {
+Submitted ConsoleEngine::submit(loom::WeaveId target, std::string_view name,
+                                std::uint32_t version,
+                                const std::map<std::string, FieldValue>& fields,
+                                std::string* error) {
     const auto fail = [&](const std::string& m) {
         if (error != nullptr) {
             *error = m;
         }
-        return loom::Ticket{};
+        return Submitted{};
     };
     std::shared_ptr<const loom::Schema> schema = bus_.resolve_schema(name, version);
     if (!schema) {
@@ -258,7 +325,8 @@ loom::Ticket ConsoleEngine::submit(loom::WeaveId target, std::string_view name,
         }
         cells.insert_or_assign(fname, std::move(*cell));
     }
-    return assemble_and_send(target, schema, cells);
+    const loom::Ticket t = assemble_and_send(target, schema, cells);
+    return Submitted{t, last_ask_};
 }
 
 SendOutcome ConsoleEngine::outcome(loom::Ticket t) const {
@@ -272,7 +340,7 @@ SendOutcome ConsoleEngine::outcome(loom::Ticket t) const {
     return s;
 }
 
-const BoundedHistory<loom::Value, kConsoleBufferCapacity>& ConsoleEngine::reply_history() const {
+const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& ConsoleEngine::reply_history() const {
     return weave_->received();
 }
 
@@ -292,14 +360,19 @@ std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t label_number) co
     // and the identity is the one worth keeping (an operator's `$m7.count` must never quietly
     // become a different reply). Outside the retained range this refuses, exactly as it always did
     // for a label that never arrived.
-    const BoundedHistory<loom::Value, kConsoleBufferCapacity>& buf = reply_history();
+    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& buf = reply_history();
     const std::uint64_t base = buf.evicted(); // labels m(base+1) .. m(base+size) are retained
     if (label_number <= base || label_number > base + buf.size()) {
         return std::nullopt;
     }
-    const loom::Value& v = buf.at(static_cast<std::size_t>(label_number - base - 1));
-    BufferEntry e{"m" + std::to_string(label_number), v.schema().name(), v.schema().version(), v};
-    return e;
+    const ConsoleArrival& a = buf.at(static_cast<std::size_t>(label_number - base - 1));
+    return BufferEntry{"m" + std::to_string(label_number),
+                       a.payload.schema().name(),
+                       a.payload.schema().version(),
+                       a.payload,
+                       a.sender,
+                       a.correlation,
+                       a.answers_ask};
 }
 
 void ConsoleEngine::pump() { bus_.drain_until_idle(); }
@@ -363,7 +436,12 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
                                 std::uint32_t version, const std::vector<Arg>& args) {
     // This engine IS the LadderHost; the ladder logic is shared with the remote console so the
     // ~150 lines of placement intricacy are not duplicated across transports.
-    return run_compose_ladder(*this, target, name, version, args);
+    last_ask_ = 0;
+    Composed c = run_compose_ladder(*this, target, name, version, args);
+    // The ladder sends through assemble_and_send above, which is where the conversation was
+    // opened; carry its handle out so an operator one-liner is attributable too.
+    c.ask = (c.status == Composed::Status::Ready) ? last_ask_ : 0;
+    return c;
 }
 
 Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,

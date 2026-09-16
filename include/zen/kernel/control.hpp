@@ -72,6 +72,7 @@
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -181,6 +182,52 @@ inline constexpr const char* kActivationExhausted =
 inline constexpr const char* kActivationInvalid =
     "activation sequence state is invalid; lifecycle operation refused";
 
+/// WHAT THE HOST DOES ABOUT A LIFECYCLE CHANGE THIS DOOR JUST MADE — host-supplied
+/// wiring, exactly like the `LifecycleAuthority` beside it, and for the same reason.
+///
+/// IT EXISTS BECAUSE THERE IS EXACTLY ONE WINDOW, and a host cannot reach it from
+/// anywhere else. A host that keeps standing decisions about what a loaded artifact
+/// may SAY has to install them as delegated live authority, and delegated authority
+/// can only be installed from inside a live delivery
+/// (`Switchboard::delegate_authority_as` is private to the bus's own adapter). The
+/// only delivery that sits between "this incarnation is committed" and "this
+/// incarnation has been told it is live" is THIS handler: everything the door queues
+/// afterwards is FIFO, and the asker is always last to hear. So a host that adopted
+/// on the operation's ANSWER installed the person's approved authority strictly
+/// after the weave's own first breath, and a weave that spoke on activation was
+/// refused `CapabilityDenied` under a permission the person had already granted.
+///
+/// WHAT IT IS NOT. It is not a policy hook and it decides nothing: the door has
+/// already committed the operation when it calls, the callback's outcome cannot
+/// refuse it, and nothing here is consulted about whether to admit anything — that
+/// question belongs to `AdmissionPolicy`, two stages earlier, and stays there. It is
+/// not a notification bus either: it is one host's own wiring, handed over at mount,
+/// with no message that can add one.
+///
+/// THE `Mail&` IS THE POINT. The callback runs INSIDE this door's delivery and is
+/// handed that delivery's Mail, which is the standing a host's `main()` does not
+/// have. `delegate_authority` records the door as the caller for diagnostics and is
+/// authorized by possession of the capability, never by being anybody in particular
+/// (GATE-05) — so the host's administrator keeps being the single writer of a
+/// subject's delegated authority; what it gains is a moment early enough to matter.
+///
+/// Both halves are optional. A default-constructed one is the behaviour every host
+/// had before this existed.
+struct LifecycleAdoption {
+    /// A freshly committed incarnation, named and identified by the KERNEL — never
+    /// by a message payload — before `zen.Activated` is queued for it. Called for a
+    /// load and for a reload-in-place; a reload keeps its WeaveId, so a host that
+    /// re-installs the same authority is doing the right thing rather than a
+    /// redundant one (new code behind a stable id is still new code).
+    std::function<void(loom::Mail&, const std::string& name, loom::WeaveId id)> admitted;
+
+    /// `name` has left: unregistered, its library released. Called after the door's
+    /// own success, for `UnloadLibrary` and for `UnloadRole` alike — the second
+    /// resolves the artifact name from the role first, because a host's records are
+    /// kept under the name a person types.
+    std::function<void(loom::Mail&, const std::string& name)> retired;
+};
+
 /// A Weave whose handlers drive a Kernel. Its authority to *reach* the kernel is
 /// its accept-set being reachable, gated by the *sender's* load capability; its
 /// authority to *answer* is the ordinary Emit<...> grant any weave gets.
@@ -197,8 +244,9 @@ public:
     /// implied by the grant, and not constructible by any weave — so "who may
     /// attest an activation" is a decision the host makes once and visibly,
     /// rather than a property anyone can acquire by learning a shape.
-    ControlWeave(Kernel& kernel, loom::LifecycleAuthority authority)
-        : kernel_(&kernel), authority_(authority) {}
+    ControlWeave(Kernel& kernel, loom::LifecycleAuthority authority,
+                 LifecycleAdoption adoption = {})
+        : kernel_(&kernel), authority_(authority), adoption_(std::move(adoption)) {}
 
     /// THE MESSAGE-DRIVEN LOAD, AND WHERE ITS AUTHORITY COMES FROM. This spends the
     /// Kernel's POLICY-MEDIATED `load` deliberately: a load that arrived as a message
@@ -223,6 +271,11 @@ public:
             // initial state admitted — the incarnation is committed, so the fact
             // is now true and may be said. Said BEFORE the asker's answer, so the
             // activation is already queued when the operator hears "loaded".
+            //
+            // AND THE HOST GETS ITS ONE MOMENT FIRST. See LifecycleAdoption: this is
+            // the only point at which a host can install what a person already
+            // approved and have it be in force for the incarnation's first breath.
+            adopt(mail, m.name, r.id);
             announce_activation(mail, r.id);
             answer(mail, loom::Result{std::to_string(r.id.value)});
         } else {
@@ -246,7 +299,9 @@ public:
             // incarnation, so it earns its own, newer, activation. The id is
             // resolved from the loaded name after success — the door does not
             // have to have been told it.
-            announce_activation(mail, kernel_->weave_id(m.name));
+            const loom::WeaveId id = kernel_->weave_id(m.name);
+            adopt(mail, m.name, id); // same window, same reason (see LifecycleAdoption)
+            announce_activation(mail, id);
             answer(mail, loom::Ack{});
         } else {
             answer(mail, loom::Refused{r.error});
@@ -256,6 +311,7 @@ public:
     void on(const UnloadLibrary& m, loom::Mail& mail) {
         ++state_.ops;
         if (kernel_->unload(m.name)) {
+            retire(mail, m.name); // the host's records are kept under this same name
             answer(mail, loom::Ack{});
         } else {
             answer(mail, loom::Refused{"not loaded: " + m.name});
@@ -264,7 +320,15 @@ public:
 
     void on(const UnloadRole& m, loom::Mail& mail) {
         ++state_.ops;
+        // ASKED BEFORE THE UNLOAD, because afterwards there is nothing to ask. A host
+        // keeps its records under the artifact NAME a person typed, and the only thing
+        // that can map this role back to that name is the kernel, while the holder is
+        // still loaded.
+        const std::string name = artifact_holding(m.role);
         if (kernel_->unload_role(m.role)) {
+            if (!name.empty()) {
+                retire(mail, name);
+            }
             answer(mail, loom::Ack{});
         } else {
             answer(mail, loom::Refused{"no loaded library holds role '" + m.role + "'"});
@@ -385,6 +449,36 @@ private:
         mail.announce_lifecycle(authority_, target, loom::Activated{*sequence}, *sequence);
     }
 
+    /// Hand the host its one moment (LifecycleAdoption). Guarded rather than
+    /// required: the overwhelming majority of hosts in this tree wire none, and a
+    /// door that insisted on one would make an optional facility mandatory.
+    void adopt(loom::Mail& mail, const std::string& name, loom::WeaveId id) {
+        if (adoption_.admitted && id.valid()) {
+            adoption_.admitted(mail, name, id);
+        }
+    }
+
+    void retire(loom::Mail& mail, const std::string& name) {
+        if (adoption_.retired) {
+            adoption_.retired(mail, name);
+        }
+    }
+
+    /// Which loaded artifact currently holds `role`, or empty. Derived from the
+    /// kernel's own live answers (`loaded()` + `role_of()`), so it cannot disagree
+    /// with what `unload_role` is about to do.
+    std::string artifact_holding(const std::string& role) const {
+        if (role.empty()) {
+            return {};
+        }
+        for (const std::string& n : kernel_->loaded()) {
+            if (kernel_->role_of(n) == role) {
+                return n;
+            }
+        }
+        return {};
+    }
+
     /// Answer the asker: reply_to if given, else the bus-stamped sender, echoing
     /// the request's correlation. A request with neither (a root fire-and-forget)
     /// has nowhere to answer — the asker chose not to listen. Mirrors the poke
@@ -400,6 +494,7 @@ private:
 
     Kernel* kernel_;
     loom::LifecycleAuthority authority_; ///< host-supplied; the right to attest, not to send
+    LifecycleAdoption adoption_;         ///< host-supplied; may be empty (see the type)
 };
 
 /// Register the control Weave on `bus` and return its id. mount() derives its
@@ -410,8 +505,10 @@ private:
 /// the host is choosing which weave sits on the kernel's operations. A different
 /// operator wired by a different host would need the host to hand it one too;
 /// nothing about accepting the control shapes confers it.
-inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus) {
-    return loom::mount<ControlWeave>(bus, kernel, loom::host_lifecycle_authority(bus));
+inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus,
+                                   LifecycleAdoption adoption = {}) {
+    return loom::mount<ControlWeave>(bus, kernel, loom::host_lifecycle_authority(bus),
+                                     std::move(adoption));
 }
 
 /// The grant that lets a Weave drive the kernel: permission to send the six

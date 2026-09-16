@@ -148,7 +148,7 @@ TEST_CASE("the full participant loop, with NO terminal: discover, gate-send, rep
 
     // Compose + gate-send Ping{seq=7}; one pump drives the send AND the reply (FIFO drain).
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
 
@@ -170,7 +170,7 @@ TEST_CASE("gated-send backstop: a malformed command is cleanly refused, no mis-s
 
     // Ping{seq} with `seq` (required) left unset — slips compose-time, caught at the gate.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err); // compose-time allows an incomplete message
 
     engine.pump();
@@ -206,7 +206,7 @@ TEST_CASE("discovery + drive on a shape the console code has never seen") {
 
     // compose a valid message to it and receive its reply — all without baked-in knowledge.
     std::string err;
-    Ticket t = engine.submit(svc.id, "Widget", 1, {{"w", std::int64_t{41}}}, &err);
+    Ticket t = engine.submit(svc.id, "Widget", 1, {{"w", std::int64_t{41}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     CHECK(engine.outcome(t).delivered);
@@ -228,7 +228,7 @@ TEST_CASE("wildcard-accept buffers a non-pre-declared shape (gated); an unregist
     // The console never pre-declared Pong (its accept-set is empty) — yet the reply lands,
     // gated against Pong's registry-resolved schema.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -285,7 +285,7 @@ TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW m
 
     // m1 ← Pong{seq=7}.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -397,7 +397,7 @@ TEST_CASE("gate-backstop: a wrong-typed reference is caught at compose, never mi
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -432,7 +432,7 @@ TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, m
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -462,7 +462,7 @@ TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO render
     };
     // A reply in the buffer (m1) and a partial compose command.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -585,7 +585,7 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
 
     // A reply delivered to the console marks the buffer region dirty and grows the buffer list.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err);
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     const Dirty d1 = engine.take_dirty();
@@ -598,7 +598,7 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
     CHECK(any_item_contains(*buffer, "m1"));
 
     // A refused send (missing required field) dirties the tap but NOT the buffer — no reply grew.
-    Ticket bad = engine.submit(responder.id, "Ping", 1, {}, &err);
+    Ticket bad = engine.submit(responder.id, "Ping", 1, {}, &err).ticket;
     REQUIRE(bad.valid());
     engine.pump();
     const Dirty d2 = engine.take_dirty();
@@ -843,7 +843,7 @@ TEST_CASE("C-1: the reply buffer retains a bounded window, and mN stays a stable
     };
     const auto deliver = [&](std::int64_t seq) {
         std::string err;
-        const Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", seq}}, &err);
+        const Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", seq}}, &err).ticket;
         REQUIRE_MESSAGE(t.valid(), err);
         engine.pump();
     };
@@ -1021,6 +1021,202 @@ TEST_CASE("C-1: the operator can SEE that older evidence was discarded") {
     REQUIRE(tap != nullptr);
     CHECK(tap->title == "Tap");                 // still under capacity here: no claim of eviction
     CHECK(engine.evicted().tap == 0);
+}
+
+// ---- ATTRIBUTION: which arrival is entitled to answer which question ---------------------------
+//
+// The console accepts `AcceptMode::AnyRegistered`, so anything the registry can resolve lands in
+// its window — including a reply shape that every participant is ordinarily permitted to send.
+// "The newest entry after a pump" is therefore a value other participants can author, and a host
+// that read it as its own answer administered whatever the newest entry named. These cases pin the
+// wall: a conversation is settled by the correlation this console minted AND Loom's own stamp of
+// who spoke, and by nothing else.
+
+namespace {
+
+/// A responder that answers properly: same shape back, to `reply_to`, echoing the correlation.
+void answer_pongs(Registered& r) {
+    r.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Ping") {
+            b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int()), WeaveId{}, WeaveId{},
+                                        in.correlation));
+        }
+    };
+}
+
+} // namespace
+
+TEST_CASE("a perfectly shaped reply from the wrong weave settles nothing") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered honest = register_probe(bus, {ping_schema(), pong_schema()});
+    answer_pongs(honest);
+
+    // The stranger is granted broadly on purpose: this is not a capability test. A loaded
+    // artifact's ordinary baseline already permits it to send reply shapes anywhere, so the
+    // question is never "could it speak" but "is what it said an answer to anything".
+    Registered stranger = register_probe(bus, {ping_schema(), pong_schema()});
+    const WeaveId console = engine.console_id();
+    stranger.weave->on_handle = [console](const Message& in, Bus& b, ProbeWeave&) {
+        // Correlation 1 is the number every first conversation of every fresh book uses, and
+        // it is guessable by design (ANS-05). Guessing it must not be enough.
+        b.send(console, Message(pong(in.payload.get("seq")->as_int()), WeaveId{}, WeaveId{}, 1));
+    };
+
+    // THE STRANGER IS PRODDED FIRST, AND THAT ORDERING IS THE TEST. The bus is FIFO, so
+    // the forgery is authored before the honest answer and is delivered before it — which
+    // is the only arrangement in which "settle on the correlation alone" and "settle on the
+    // pair" give different results. Prodded as the HOST, so the console has no conversation
+    // with the stranger at all.
+    std::string err;
+    bus.send(stranger.id, Message(ping(99)));
+    const Submitted mine = engine.submit(honest.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(mine.sent(), err);
+    REQUIRE(mine.ask == 1);       // the first conversation of a fresh book
+    engine.pump();
+
+    // Both arrived; only one of them was an answer.
+    REQUIRE(engine.buffer_size() == 2);
+    const std::optional<BufferEntry> settled = engine.settled(mine.ask);
+    REQUIRE(settled.has_value());
+    CHECK(settled->sender == honest.id);
+    CHECK(settled->value.get("seq")->as_int() == 7);   // ...and not the stranger's 99
+    CHECK_FALSE(engine.awaiting(mine.ask));            // settled exactly once
+}
+
+TEST_CASE("the right weave talking about a different conversation settles nothing") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    const WeaveId console = engine.console_id();
+    // Answers, but always naming conversation 4096 — a stale or invented number from exactly
+    // the weave this console is waiting on. The sender half of the pair is satisfied and the
+    // correlation half is not, which is the failure direction a sender check alone cannot see.
+    responder.weave->on_handle = [console](const Message& in, Bus& b, ProbeWeave&) {
+        b.send(console, Message(pong(in.payload.get("seq")->as_int()), WeaveId{}, WeaveId{}, 4096));
+    };
+
+    std::string err;
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(mine.sent(), err);
+    engine.pump();
+
+    REQUIRE(engine.buffer_size() == 1);          // it did arrive and is readable
+    CHECK_FALSE(engine.settled(mine.ask).has_value());
+    CHECK(engine.awaiting(mine.ask));            // still open, which is the honest state
+}
+
+TEST_CASE("an unsolicited message names no conversation and can never settle one") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    const WeaveId console = engine.console_id();
+    // Correlation 0 is the "no conversation" sentinel. A weave that simply announces
+    // something is not answering anybody, however well-shaped its announcement is.
+    responder.weave->on_handle = [console](const Message&, Bus& b, ProbeWeave&) {
+        b.send(console, Message(pong(1)));
+    };
+
+    std::string err;
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(mine.sent(), err);
+    engine.pump();
+
+    REQUIRE(engine.buffer_size() == 1);
+    CHECK_FALSE(engine.settled(mine.ask).has_value());
+    CHECK(engine.awaiting(mine.ask));
+}
+
+TEST_CASE("a settled conversation stays settled, and a second copy of the answer is inert") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    const WeaveId console = engine.console_id();
+    // Answers TWICE with the same correlation — a duplicate or a late retransmission.
+    responder.weave->on_handle = [console](const Message& in, Bus& b, ProbeWeave&) {
+        b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int()), WeaveId{}, WeaveId{},
+                                    in.correlation));
+        b.send(console, Message(pong(555), WeaveId{}, WeaveId{}, in.correlation));
+    };
+
+    std::string err;
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(mine.sent(), err);
+    engine.pump();
+
+    REQUIRE(engine.buffer_size() == 2);
+    const std::optional<BufferEntry> settled = engine.settled(mine.ask);
+    REQUIRE(settled.has_value());
+    // The FIRST one settled it; the second found a closed conversation and changed nothing.
+    CHECK(settled->value.get("seq")->as_int() == 7);
+    CHECK_FALSE(engine.awaiting(mine.ask));
+}
+
+TEST_CASE("every buffered arrival carries who sent it and which conversation it named") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    answer_pongs(responder);
+
+    std::string err;
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err);
+    REQUIRE_MESSAGE(mine.sent(), err);
+    engine.pump();
+
+    auto m1 = engine.buffer_at(1);
+    REQUIRE(m1.has_value());
+    // The two facts the window used to discard. Without them an operator reading `buffer`
+    // cannot tell an answer they earned from a message somebody volunteered.
+    CHECK(m1->sender == responder.id);
+    CHECK(m1->correlation != 0);
+    // This reply came back as an ordinary send, so Loom attests nothing about it — which is
+    // the common case and the reason `answers_ask` is reported rather than required.
+    CHECK_FALSE(m1->answers_ask);
+}
+
+TEST_CASE("forgetting a conversation makes its later answer inert, and never cancels anything") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    answer_pongs(responder);
+
+    std::string err;
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    REQUIRE_MESSAGE(mine.sent(), err);
+    CHECK(engine.forget_ask(mine.ask));
+    engine.pump();
+
+    // The answer still ARRIVED — nothing at the far end was told anything, which is why the
+    // operation is called forget and not cancel — and it settles nothing.
+    CHECK(engine.buffer_size() == 1);
+    CHECK_FALSE(engine.settled(mine.ask).has_value());
+    CHECK_FALSE(engine.awaiting(mine.ask));
+}
+
+TEST_CASE("the ask book is bounded, and a send past the bound is sent and says it is untracked") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered silent = register_probe(bus, {ping_schema(), pong_schema()});
+    silent.weave->on_handle = [](const Message&, Bus&, ProbeWeave&) {}; // answers nothing
+
+    std::string err;
+    for (std::size_t i = 0; i < kConsoleAskCapacity; ++i) {
+        const Submitted s = engine.submit(silent.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err);
+        REQUIRE_MESSAGE(s.sent(), err);
+        CHECK(s.ask != 0);
+    }
+    CHECK(engine.asks_outstanding() == kConsoleAskCapacity);
+
+    // A BOOKKEEPING LIMIT IS NOT A MESSAGING LIMIT. The send still happens; what it loses is
+    // the ability to be attributed, and it says so with ask == 0 rather than handing back a
+    // handle that can never settle.
+    const Submitted past = engine.submit(silent.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err);
+    CHECK(past.sent());
+    CHECK(past.ask == 0);
+    // The outstanding conversations were NOT displaced to make room: an asker that forgot its
+    // own question to accept a new one would be worse than one that refuses the new one.
+    CHECK(engine.asks_outstanding() == kConsoleAskCapacity);
+    CHECK(engine.open_asks().size() == kConsoleAskCapacity);
 }
 
 } // TEST_SUITE

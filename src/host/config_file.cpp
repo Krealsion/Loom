@@ -10,6 +10,20 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef _WIN32
+// For MoveFileExA. The whole reason this file needs a platform branch at all is that
+// `std::rename` REFUSES to replace an existing file on Windows, and the workaround the
+// host shipped with — delete, then rename — is not a replacement: it has a window in
+// which neither the old record nor the new one is on disk.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace loom::host {
 
 namespace {
@@ -80,6 +94,38 @@ std::optional<loom::Value> read_gated_file(const std::string& path,
     return std::nullopt;
 }
 
+namespace {
+
+/// REPLACE `from` WITH `to` IN ONE OPERATION — the only kind of replacement that can
+/// honestly be called atomic.
+///
+/// POSIX `rename(2)` replaces an existing destination as one step: a reader sees either
+/// the old file or the new one, never neither. Windows `std::rename` refuses when the
+/// destination exists, and the obvious workaround — `remove` then `rename` — is exactly
+/// the thing this function exists NOT to do: between the two calls the last good record
+/// is gone, and a process that dies there (or a rename that then fails) leaves a person
+/// with no decisions at all. `MoveFileExA` with `MOVEFILE_REPLACE_EXISTING` is Windows'
+/// own single-operation replace, so both platforms make the same promise by the same
+/// shape rather than one of them faking it.
+bool replace_file(const std::string& from, const std::string& to, std::string* error) {
+#ifdef _WIN32
+    if (MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING) != 0) {
+        return true;
+    }
+    *error = "cannot replace '" + to + "' (Windows error " +
+             std::to_string(static_cast<unsigned long>(GetLastError())) + ")";
+    return false;
+#else
+    if (std::rename(from.c_str(), to.c_str()) == 0) {
+        return true;
+    }
+    *error = "cannot replace '" + to + "'";
+    return false;
+#endif
+}
+
+} // namespace
+
 bool write_gated_file(const std::string& path, const loom::Value& value, std::string* error) {
     const std::string tmp = path + ".tmp";
     {
@@ -89,14 +135,17 @@ bool write_gated_file(const std::string& path, const loom::Value& value, std::st
             return false;
         }
         out << loom::compat::serialize(value) << '\n';
+        out.flush();
         if (!out) {
             *error = "failed writing '" + tmp + "'";
             return false;
         }
     }
-    std::remove(path.c_str()); // Windows rename does not replace an existing file
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-        *error = "cannot replace '" + path + "'";
+    if (!replace_file(tmp, path, error)) {
+        // The replacement did not happen, so the PREVIOUS record is still the record —
+        // which is the promise. Take the half-written candidate away so a later reader
+        // cannot mistake it for one, and leave the failure to the caller to report.
+        std::remove(tmp.c_str());
         return false;
     }
     return true;

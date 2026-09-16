@@ -680,7 +680,7 @@ TEST_CASE("driven from the console, end to end: inspect, manipulate, and honest 
 
     // ...while the weave's own front door still serves it, computed.
     std::string err;
-    Ticket q = engine.submit(metrics, "MetricsQuery", 1, {}, &err);
+    Ticket q = engine.submit(metrics, "MetricsQuery", 1, {}, &err).ticket;
     engine.pump();
     CHECK(engine.outcome(q).delivered);
     REQUIRE(engine.buffer_size() == 5);

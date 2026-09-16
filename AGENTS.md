@@ -15,6 +15,32 @@ default assembled from ordinary participants — `ConsoleEngine`, `WeaveManager`
 package does not export. Human route: `docs/guides/running-loom.md`; prerequisites
 `docs/guides/tools.md`.
 
+**Three rules the host is built around, each replacing a defect a green lane could
+not see.** (1) An ANSWER is something Loom attributed — the correlation the console
+minted plus the bus-stamped sender (`loom::AskBook`) — never the newest entry in the
+reply window, which is a value any admitted artifact can author under the ordinary
+poke-answer baseline. (2) A loaded artifact is ADOPTED INSIDE THE LOAD, through
+`loom::LifecycleAdoption` (`zen/kernel/control.hpp`): the one window between an
+incarnation being committed and being told it is live. Because it lives in the door,
+the boot walk, `start`, `reload` and an ordinary `zen.LoadWeave` all produce the same
+governed participant, and no host call site adopts anything. (3) The loop is
+`pump_pending()` plus a line read with a deadline (`src/host/line_input.hpp`), never
+`drain_until_idle()` — one approved self-addressed message used to make `stop` and
+`quit` unreadable forever. A conversation that has not settled is reported PENDING and
+stays open; the host never invents a completion.
+
+**One host owns one decision store while it runs** (`src/host/store_lock.hpp`): the
+store is written whole, so a second writer restores what the first one revoked. A
+second host naming the same file exits **4** and says how to proceed. Exit codes: 0 ok,
+2 bad command line, 3 a file would not parse, 4 store in use.
+
+**Two CTest entries drive the real process**, because none of the above is visible to a
+test of the deciding half: `host_console` (portable — recovery route, two real hosts on
+one store, repeated approval, a failed write that must change nothing) and
+`host_process_weaves` (kernel gate — attribution, activation, adoption by every route,
+responsiveness). `tests/host_process/run.cmake` asserts identities, counts and effective
+authority, never whole sentences, and runs a canary on its own check harness first.
+
 **`Kernel::load` no longer mints a grant.** The three-argument overload used to
 bind `Grant{}.allow_any()` to every library it opened, through three doors (direct
 load, the message-driven control door, `load_candidate`). Now a `Kernel` asks its
