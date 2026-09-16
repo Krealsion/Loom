@@ -26,20 +26,28 @@ the boot walk, `start`, `reload` and an ordinary `zen.LoadWeave` all produce the
 governed participant, and no host call site adopts anything. (3) The loop is
 `pump_pending()` plus a line read with a deadline (`src/host/line_input.hpp`), never
 `drain_until_idle()` — one approved self-addressed message used to make `stop` and
-`quit` unreadable forever. A conversation that has not settled is reported PENDING and
-stays open; the host never invents a completion.
+`quit` unreadable forever. The deadline holds while a line is HALF TYPED: a Windows
+console cannot be asked whether a line is finished, so it is read on its own thread. A
+conversation that has not settled is reported PENDING and stays open; the host never
+invents a completion. The console holds a conversation only for a caller that asks
+(`ConsoleTracking::Tracked`), until that caller takes or forgets it.
 
 **One host owns one decision store while it runs** (`src/host/store_lock.hpp`): the
 store is written whole, so a second writer restores what the first one revoked. A
 second host naming the same file exits **4** and says how to proceed. Exit codes: 0 ok,
 2 bad command line, 3 a file would not parse, 4 store in use.
 
-**Two CTest entries drive the real process**, because none of the above is visible to a
-test of the deciding half: `host_console` (portable — recovery route, two real hosts on
-one store, repeated approval, a failed write that must change nothing) and
-`host_process_weaves` (kernel gate — attribution, activation, adoption by every route,
-responsiveness). `tests/host_process/run.cmake` asserts identities, counts and effective
-authority, never whole sentences, and runs a canary on its own check harness first.
+**Four CTest entries drive the real thing**, because none of the above is visible to a
+test of the deciding half. Two feed the host through a FILE (`tests/host_process/run.cmake`:
+identities, counts and effective authority, never whole sentences, a canary first):
+`host_console` (portable — recovery route, two real hosts on one store, repeated approval, a
+failed write that must change nothing) and `host_process_weaves` (kernel gate —
+attribution, activation, adoption by every route, responsiveness, a pin that cannot be
+written, every late answer collected). Two TYPE into a real terminal — a hidden native
+console on Windows, a pseudo-terminal on POSIX (`tests/host_terminal/witness.cpp`):
+`host_line_input` (portable) and `host_terminal_weaves` (kernel). **Redirected stdin is not
+evidence about a console**: the Windows reader blocked on a half-typed line under a green
+file-fed lane.
 
 **`Kernel::load` no longer mints a grant.** The three-argument overload used to
 bind `Grant{}.allow_any()` to every library it opened, through three doors (direct

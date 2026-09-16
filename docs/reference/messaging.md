@@ -323,6 +323,13 @@ conversation, `mint_correlation()` for an ordinary send — because a second
 counter beside it could stamp a send with a number an open conversation is
 already using.
 
+The console opens a conversation only for a caller that asks it to
+(`ConsoleTracking::Tracked`), and that caller owns it: its slot stays spent until
+the caller takes the answer or forgets the conversation, including after the
+answer has arrived, so what the console holds is bounded by the book rather than
+by how much traffic it has served ([bounds](bounds.md#console-operator-history)).
+A send through the frontend `Console` interface opens nothing.
+
 `loom::relay` ([`weave/relay.hpp`](../../include/zen/weave/relay.hpp)) is the same
 wall for the opposite role: a **middleman** forwarding somebody else's request and
 relaying the answer back. The two are deliberately separate — a relay's record is

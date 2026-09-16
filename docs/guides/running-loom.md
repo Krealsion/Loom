@@ -381,13 +381,31 @@ Start the host again:
 An artifact is pinned by the **bytes** of the build you approved, not by its path or its
 name. A rebuild is new code, and the default is to ask.
 
+The pin is recorded the first time an approved artifact loads, and recording it is part of
+letting that build run. If the host cannot write it — a read-only directory, a full disk —
+the build is **refused** rather than run unrecorded, because an approval with no pin could
+not tell the next, different build from this one:
+
+```text
+loom> start counter /home/you/tally/build/libcounter.so
+  refused: admission refused at open: 'counter' is approved, but this host could not record
+  which build of it runs (cannot write 'loom-authority.json.tmp'). You chose to be asked again
+  when it changes, and without that record a different build would not be noticed, so build
+  5ce05df9 was not started. Your decision is unchanged: make the decision store writable and
+  start it again.
+```
+
+Nothing about your approval changed and nothing is waiting in `authority pending`: once the
+file can be written, `start` it again and the build is pinned as usual.
+
 While you are the one writing it, say so once:
 
 ```text
 loom> authority trust counter --rebuilds
 ```
 
-Now every rebuild comes up without a question — and never silently:
+Now every rebuild comes up without a question — and never silently. The note is printed
+with the boot report, and straight after the `start` or `reload` that caused it:
 
 ```text
   started    counter  (weave 6)
@@ -396,7 +414,9 @@ Now every rebuild comes up without a question — and never silently:
 
 `--rebuilds` widens nothing. The rules you approved are unchanged; all it decides is
 whether *new bytes* may run under authority you already granted. `authority trust <name>
---ask-again` turns it back off.
+--ask-again` turns it back off. It is also the one case where a pin that cannot be written
+does not refuse the build: you have already said any build may run, so the host notes that
+it could not record which one did.
 
 It covers a changed **request** too, without a second mechanism to understand. A weave's
 declared ask (`ZEN_ASK`) is compiled into it, so an artifact that starts asking for
@@ -478,6 +498,12 @@ at a time, so the console is never taken away from you. Type during it and you a
 `stop`, `authority revoke`, `tap` and `quit` all still work while a weave is talking to
 itself as fast as it can.
 
+And the bus keeps turning **while** you type. A command you have half written, or stopped
+in the middle of, holds nothing up: the host waits only for lines you have finished. Your
+terminal's own editing — echo, backspace, history — is untouched, because the host never
+changes its mode. (On Windows a console cannot be asked whether a line is finished, so the
+host reads it on a thread of its own and hands each finished line to the loop.)
+
 The other side of that bound: an answer may not have arrived by the time the host would
 like to print one. It says so, and does not invent one:
 
@@ -494,6 +520,10 @@ loom>
 `asks forget <n>` stops waiting on one. It is called *forget* rather than *cancel* because
 nothing at the far end is told anything: whatever you asked for may still be happening, and
 this console simply stops recognising the answer.
+
+The console holds each of these conversations for the host until the host has its answer —
+and the host takes every answer as soon as it lands, printing the late ones. So thousands
+of commands later it is holding exactly what `asks` lists, and never runs out of the 32.
 
 **An answer is something Loom attributed**, never the newest thing in the window. Every
 question this host asks is settled by two facts together — the conversation number it

@@ -664,6 +664,24 @@ add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
     -DZEN_GROUP=console
     -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
 
+# ---- The supplied host's input, through a REAL terminal --------------------------------
+#
+# The two host_process entries feed the host through a FILE, and on Windows a file is the one
+# kind of stdin whose reader was never wrong: the console reader blocked in a cooked read the
+# moment a person typed a character, so pausing halfway through a command stopped every weave
+# in the host, and a finished line behind 32 non-character records was never read. Neither is
+# visible through redirected input. `tests/host_terminal/witness.cpp` builds the terminal a
+# person types into — its own hidden console on Windows, a pseudo-terminal on POSIX — and types.
+#
+#   host_line_input       (portable) LineInput itself, on that terminal.
+#   host_terminal_weaves  (kernel)   a real loom-host with the probe booted, typed at.
+find_package(Threads REQUIRED)
+add_executable(zen-host-terminal-witness host_terminal/witness.cpp)
+target_link_libraries(zen-host-terminal-witness
+    PRIVATE zen-host-policy Threads::Threads zen-warnings zen-sanitize)
+add_test(NAME host_line_input COMMAND zen-host-terminal-witness reader)
+set_tests_properties(host_line_input PROPERTIES TIMEOUT 240)
+
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #
 # What the `population` entry does for the test population, these do for the loadable
@@ -786,4 +804,13 @@ if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_cont
         -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/weaves
         -DZEN_GROUP=weaves
         -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
+
+    # The same host, typed at through a real terminal: a delayed answer reported while a command
+    # is half typed, work that continues through a pause mid-command, and inspection, authority,
+    # stop and quit reachable across pauses and non-character input (witness.cpp's header).
+    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/host-process-work/terminal)
+    add_test(NAME host_terminal_weaves COMMAND zen-host-terminal-witness host
+        $<TARGET_FILE:loom-host> $<TARGET_FILE:zen_host_probe>
+        ${CMAKE_BINARY_DIR}/host-process-work/terminal)
+    set_tests_properties(host_terminal_weaves PROPERTIES TIMEOUT 240)
 endif()

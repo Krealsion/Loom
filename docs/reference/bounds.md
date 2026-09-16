@@ -89,18 +89,33 @@ type, so the local and remote operator see the same horizon.
 |---|---|---|---|---|
 | `kConsoleTapCapacity` | 1024 | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
 | `kConsoleBufferCapacity` | 64 | received arrivals | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
-| `kConsoleAskCapacity` | 32 | open conversations | the in-process engine's own `loom::AskBook` | **refuses**, never evicts — see below |
+| `kConsoleAskCapacity` | 32 | conversations held for a caller | the in-process engine's tracked conversations: still open, plus answered and not yet taken | **refuses** a new tracked conversation, never evicts — see below |
 
 **A third bound, and it is deliberately not a window.** `kConsoleAskCapacity`
-bounds what the console is still *waiting on*, not what it has *seen*. Nothing is
-owed on history, so evicting its oldest entry is legitimate; an asker's own record
-is the opposite — losing its oldest entry means forgetting a question it asked, so
-`loom::AskBook` **refuses a new conversation at capacity and leaves every
-outstanding one untouched** ([ANS-05](messaging.md#the-askers-own-book)). The send
+bounds what the console is *holding for a caller* — conversations still open, and
+answers that have settled but have not been taken — not what it has *seen*. Nothing
+is owed on history, so evicting its oldest entry is legitimate; a held conversation
+is the opposite — dropping one loses a question somebody asked or an answer they
+have not read — so a new tracked conversation is **refused at capacity and every
+held one is left untouched** ([ANS-05](messaging.md#the-askers-own-book)). The send
 still happens; what it loses is attribution, and `Submitted::ask == 0` says so
 rather than handing back a handle that can never settle. Thirty-two is an
 operator's number: a person driving a console by hand does not hold dozens of open
 questions, and `asks` lists them when they do.
+
+**Holding is something a caller asks for, and then owes back.** A send holds
+nothing unless its caller says `ConsoleTracking::Tracked`, and every send through
+the frontend `Console` interface — `ConsoleUi`, `RemoteConsole` — is untracked: its
+replies are history, and nothing accumulates however long it runs. A tracked
+conversation spends its slot when it is opened and gets it back when the caller
+takes the answer (`take_settled`) or forgets the conversation (`forget_ask`, which
+cancels nothing at the far end). The bound is applied **when a conversation is
+opened** because that is the only moment anything can still be refused honestly: an
+arrival cannot be turned away without losing an answer, and evicting a held answer
+would erase it before it was read. It once counted open conversations only, and an
+answer leaves the book when it settles — so a frontend that composed and pumped kept
+every answer it was ever sent (measured: 1,000 sends, 64 replies in history, 1,000
+answers retained).
 
 **An arrival is kept with its routing facts**, not just its payload:
 `BufferEntry` carries the bus-stamped `sender`, the `correlation` the sender

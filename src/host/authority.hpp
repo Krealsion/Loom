@@ -53,6 +53,10 @@ struct AuthorityRule {
     /// The build this decision was made about: `loom::file_content_id`. Empty means
     /// "not pinned yet" — the state a rule is in between a person approving an
     /// artifact and that artifact first loading, when its bytes get recorded.
+    ///
+    /// Recording it is part of admitting that first load, not a courtesy after it: unless
+    /// `trust_rebuilds` is on, a build whose identity cannot be written is REFUSED, because
+    /// an unpinned rule cannot tell the next, different build from this one.
     std::string content_id;
     /// May its native code run in this process at all?
     bool may_run = false;
@@ -160,6 +164,11 @@ public:
     /// It may WRITE the store, and that is the remembering: the first successful load
     /// under an unpinned rule records which build it was, and a rebuild admitted under
     /// `trust_rebuilds` re-pins. Nothing else in it mutates anything.
+    ///
+    /// A RECORD IT CANNOT WRITE NEVER WIDENS WHAT RUNS. A first pin that fails refuses the
+    /// load unless the rule already accepts any build (`trust_rebuilds`); a re-pin that
+    /// fails under `trust_rebuilds` admits — the person consented to new builds — and says
+    /// the pin still names the old one.
     ///
     /// It never blocks on a person. A decision it cannot make is a refusal now, with
     /// the facts recorded in `pending()` and the console command to resolve it named

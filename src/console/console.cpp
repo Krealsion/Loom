@@ -75,6 +75,17 @@ const char* event_kind_name(loom::EventKind k) {
     return "?";
 }
 
+/// The tracking choice for exactly one send, put back to Untracked however that send ends —
+/// so a throw inside the ladder cannot leave the NEXT send holding a conversation nobody
+/// asked for.
+struct TrackingForOneSend {
+    ConsoleTracking& slot;
+    TrackingForOneSend(ConsoleTracking& s, ConsoleTracking choice) : slot(s) { slot = choice; }
+    ~TrackingForOneSend() { slot = ConsoleTracking::Untracked; }
+    TrackingForOneSend(const TrackingForOneSend&) = delete;
+    TrackingForOneSend& operator=(const TrackingForOneSend&) = delete;
+};
+
 // The console's trivial state (it is in-process and not crash-revived; the reply buffer is
 // in-memory). A 1-field count keeps register_weave's snapshot-seeding happy.
 std::shared_ptr<const loom::Schema> console_state_schema() {
@@ -251,9 +262,28 @@ std::optional<BufferEntry> ConsoleEngine::settled(std::uint64_t ask) const {
     return it == settled_.end() ? std::nullopt : std::optional<BufferEntry>(it->second);
 }
 
+std::optional<BufferEntry> ConsoleEngine::take_settled(std::uint64_t ask) {
+    auto it = settled_.find(ask);
+    if (it == settled_.end()) {
+        return std::nullopt; // still open, never held, or already taken: nothing to hand over
+    }
+    BufferEntry answer = std::move(it->second);
+    settled_.erase(it); // the slot this conversation was opened with comes back here
+    return answer;
+}
+
 bool ConsoleEngine::awaiting(std::uint64_t ask) const noexcept { return book_.waiting_on(ask); }
 
 std::vector<loom::PendingAsk> ConsoleEngine::open_asks() const { return book_.entries(); }
+
+std::vector<std::uint64_t> ConsoleEngine::answered_asks() const {
+    std::vector<std::uint64_t> ids;
+    ids.reserve(settled_.size());
+    for (const auto& [id, answer] : settled_) {
+        ids.push_back(id);
+    }
+    return ids;
+}
 
 bool ConsoleEngine::forget_ask(std::uint64_t ask) {
     const bool had_answer = settled_.erase(ask) != 0;
@@ -263,6 +293,10 @@ bool ConsoleEngine::forget_ask(std::uint64_t ask) {
 std::size_t ConsoleEngine::ask_capacity() const noexcept { return book_.capacity(); }
 
 std::size_t ConsoleEngine::asks_outstanding() const noexcept { return book_.outstanding(); }
+
+std::size_t ConsoleEngine::asks_held() const noexcept {
+    return book_.outstanding() + settled_.size();
+}
 
 loom::Ticket ConsoleEngine::assemble_and_send(
     loom::WeaveId target, const std::shared_ptr<const loom::Schema>& schema,
@@ -278,11 +312,19 @@ loom::Ticket ConsoleEngine::assemble_and_send(
             return it->second;
         });
     // OPEN THE CONVERSATION FIRST, so the number on the wire is the number the book is
-    // watching for. A full book still SENDS — refusing the send would turn a bookkeeping
-    // limit into a messaging limit — but it stamps an untracked number from the same
-    // sequence and reports `ask == 0`, so a caller that needs attribution knows it has none
-    // rather than being handed a handle that can never settle.
-    const loom::AskOpened opened = book_.open(target, schema->name(), schema->version());
+    // watching for — but only when the caller asked to hold one. An untracked send stamps a
+    // number from the same sequence and holds nothing: its replies are history.
+    //
+    // THE SLOT COUNT INCLUDES ANSWERS NOT YET TAKEN. The book itself counts only open
+    // conversations, and an answer leaves it at settlement; bounding that alone bounded the
+    // questions and let every answer nobody collected accumulate. With every slot held the
+    // send still GOES — refusing it would turn a bookkeeping limit into a messaging limit —
+    // and reports `ask == 0`, so a caller that needs attribution knows it has none rather
+    // than being handed a handle that can never settle.
+    loom::AskOpened opened;
+    if (next_tracking_ == ConsoleTracking::Tracked && asks_held() < kConsoleAskCapacity) {
+        opened = book_.open(target, schema->name(), schema->version());
+    }
     last_ask_ = opened ? opened.id : 0;
     const std::uint64_t correlation = opened ? opened.correlation : book_.mint_correlation();
     // Gated send AS the console: send_as stamps the console as sender and authorizes against
@@ -300,7 +342,7 @@ loom::Ticket ConsoleEngine::assemble_and_send(
 Submitted ConsoleEngine::submit(loom::WeaveId target, std::string_view name,
                                 std::uint32_t version,
                                 const std::map<std::string, FieldValue>& fields,
-                                std::string* error) {
+                                ConsoleTracking tracking, std::string* error) {
     const auto fail = [&](const std::string& m) {
         if (error != nullptr) {
             *error = m;
@@ -325,6 +367,7 @@ Submitted ConsoleEngine::submit(loom::WeaveId target, std::string_view name,
         }
         cells.insert_or_assign(fname, std::move(*cell));
     }
+    const TrackingForOneSend scope(next_tracking_, tracking);
     const loom::Ticket t = assemble_and_send(target, schema, cells);
     return Submitted{t, last_ask_};
 }
@@ -434,10 +477,21 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
 
 Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
                                 std::uint32_t version, const std::vector<Arg>& args) {
+    // The `Console` form: untracked, exactly as a remote console's is (see Console::compose).
+    return compose(target, name, version, args, ConsoleTracking::Untracked);
+}
+
+Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
+                                std::uint32_t version, const std::vector<Arg>& args,
+                                ConsoleTracking tracking) {
     // This engine IS the LadderHost; the ladder logic is shared with the remote console so the
     // ~150 lines of placement intricacy are not duplicated across transports.
     last_ask_ = 0;
-    Composed c = run_compose_ladder(*this, target, name, version, args);
+    Composed c;
+    {
+        const TrackingForOneSend scope(next_tracking_, tracking);
+        c = run_compose_ladder(*this, target, name, version, args);
+    }
     // The ladder sends through assemble_and_send above, which is where the conversation was
     // opened; carry its handle out so an operator one-liner is attributable too.
     c.ask = (c.status == Composed::Status::Ready) ? last_ask_ : 0;

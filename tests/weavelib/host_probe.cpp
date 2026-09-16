@@ -25,6 +25,12 @@
 //                responsiveness probe: a cooperative handler that always returns and
 //                still keeps the bus non-empty forever.
 //
+// AND ONE CONVERSATION IT ANSWERS LATE. `Countdown{turns}` is answered only after that many
+// more bus turns, by an ordinary send carrying the asker's correlation — so the answer is
+// attributable (the bus stamps this weave as its author) and arrives after the host has
+// stopped waiting for it. It is what "the host kept turning while a person was typing" is
+// measured with, and what makes a held answer DELAYED rather than immediate.
+//
 // TWO VARIANTS, ONE SOURCE.
 //
 //   (default)        honest: announces itself on activation and answers when asked.
@@ -68,6 +74,21 @@ struct Startup {
     ZEN_SHAPE(Startup, 1);
 };
 
+/// "Answer me after this many turns."
+struct Countdown {
+    std::int64_t turns = 0;
+    ZEN_SHAPE(Countdown, 1, ZEN_FIELD(turns));
+};
+
+/// One turn of a countdown, addressed to this weave's own office, carrying who asked and the
+/// conversation they named. The person approves `Tock v1 -> role probe` for it to run.
+struct Tock {
+    std::int64_t remaining = 0;
+    std::int64_t asker = 0;
+    std::int64_t correlation = 0;
+    ZEN_SHAPE(Tock, 1, ZEN_FIELD(remaining), ZEN_FIELD(asker), ZEN_FIELD(correlation));
+};
+
 struct ProbeState {
     std::int64_t activations = 0;
     std::int64_t startups = 0;
@@ -79,8 +100,9 @@ struct ProbeState {
 
 class HostProbe
     : public WeaveBase<HostProbe, ProbeState,
-                       Accept<Activated, Inspect, Spin, Startup, DispatchRefused, Result>,
-                       Emit<Result, Spin, Startup>> {
+                       Accept<Activated, Inspect, Spin, Startup, Countdown, Tock, DispatchRefused,
+                              Result>,
+                       Emit<Result, Spin, Startup, Tock>> {
 public:
     void on(const Activated&, Mail& mail) {
         // ATTESTED ONLY. Any weave granted the shape could send a `zen.Activated`; only
@@ -122,6 +144,26 @@ public:
         // non-empty, which is precisely the case an unbounded drain cannot survive and a
         // bounded turn handles without noticing.
         (void)mail.send_to_role("probe", Spin{});
+    }
+
+    void on(const Countdown& c, Mail& mail) {
+        // Not answered here: the asker and its conversation travel with the countdown, and the
+        // answer is authored when it reaches zero.
+        (void)mail.send_to_role("probe",
+                                Tock{c.turns, static_cast<std::int64_t>(mail.reply_to().value),
+                                     static_cast<std::int64_t>(mail.correlation())});
+    }
+
+    void on(const Tock& t, Mail& mail) {
+        if (t.remaining > 0) {
+            (void)mail.send_to_role("probe", Tock{t.remaining - 1, t.asker, t.correlation});
+            return;
+        }
+        // An ORDINARY send naming the asker's conversation — `zen.Result` is in the baseline
+        // every admitted artifact gets. The bus stamps this weave as the sender, which is the
+        // other half of what lets the console attribute it.
+        (void)mail.send(WeaveId{static_cast<std::uint64_t>(t.asker)}, Result{"counted down"},
+                        static_cast<std::uint64_t>(t.correlation));
     }
 
     void on(const Result&, Mail& mail) {
