@@ -4,11 +4,11 @@
 #include <zen/isolation/grant_record.hpp>
 
 #include <zen/admission.hpp>
+#include <zen/content_id.hpp>
 #include <zen/schema.hpp>
 #include <zen/serialize.hpp>
 #include <zen/value.hpp>
 
-#include "detail/sha256.hpp" // the grant-key digest (audit F-1); no external crypto dep
 
 #include <cstdint>
 #include <cstdio>
@@ -129,20 +129,17 @@ void fsync_parent_dir(const std::string& path) {
 } // namespace
 
 std::string so_content_hash(const std::string& so_path) {
-    std::string bytes;
+    // ONE IMPLEMENTATION, in the core (`zen/content_id.hpp`), because the in-process
+    // admission policy keys artifacts by exactly this identity too — and two answers
+    // to "is this the build I approved" is one answer too many. The reasoning behind
+    // the digest choice (audit F-1: collision resistance, not speed) lives with the
+    // implementation; this name stays because the isolation ledger's own record, its
+    // tests and its documentation all speak of a .so content hash.
     try {
-        bytes = read_file(so_path);
+        return loom::file_content_id(so_path);
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("so_content_hash: ") + e.what());
     }
-    // SHA-256 truncated to 128 bits (32 lowercase-hex chars) — deterministic across
-    // runs and machines. This keys a security-relevant identity (an above-floor grant),
-    // so it must be COLLISION-RESISTANT, not merely a fast name: FNV-1a (the prior key)
-    // offered only ~2^32 birthday resistance, cheap for a determined attacker to forge a
-    // second .so onto an existing grant (audit F-1). Truncated SHA-256 raises that to
-    // ~2^128 second-preimage / ~2^64 collision. Still content-addressing, not
-    // authentication — a *signed* author identity remains the identity phase's job.
-    return loom::detail::sha256_hex_prefix(bytes, 16);
 }
 
 void GrantRecord::load(std::string path) {

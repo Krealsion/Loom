@@ -200,6 +200,17 @@ public:
     ControlWeave(Kernel& kernel, loom::LifecycleAuthority authority)
         : kernel_(&kernel), authority_(authority) {}
 
+    /// THE MESSAGE-DRIVEN LOAD, AND WHERE ITS AUTHORITY COMES FROM. This spends the
+    /// Kernel's POLICY-MEDIATED `load` deliberately: a load that arrived as a message
+    /// is precisely a load the host did not individually author, so the host's
+    /// admission policy is what decides it (`zen/kernel/admission.hpp`). Before that
+    /// policy existed, this line minted `Grant{}.allow_any()` for anything anyone
+    /// with the load capability could name a path to — the whole of P-WORK-18.
+    ///
+    /// The refusal needs no help from here. `LoadResult::error` already carries the
+    /// policy's own sentence, and it goes back as `zen.Refused` to the asker, by the
+    /// asker's own correlation — so whoever asked learns why, about the request they
+    /// made, and a person reading the console sees the same words the policy wrote.
     void on(const LoadLibrary& m, loom::Mail& mail) {
         ++state_.ops;
         if (const char* blocked = activation_block()) {

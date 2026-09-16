@@ -164,6 +164,52 @@ by the stamped sender; a **NetworkBroker** (role `"net"`) does allow-listed
 TCP for weaves that themselves hold no OS network capability. The ask
 (`zen.CapabilityAsk`, `ZEN_ASK`) is advice, never authority.
 
+## Admitting a loaded artifact
+
+The same rule, one layer up, for the **in-process** kernel: a `dlopen`ed weave's
+baseline comes from the host's **admission policy**
+([`zen/kernel/admission.hpp`](../../include/zen/kernel/admission.hpp)), and a
+`Kernel` on which no host has called `admit_with(...)` admits nothing at all. There
+is no default grant any more — the three-argument `Kernel::load` used to mint
+`Grant{}.allow_any()` for anything it could open, and the control door and
+`load_candidate` both spent it, so the permissive default had three doors and could
+not be closed at any one of them. It is closed at the artifact door, where all three
+pass.
+
+A policy is asked **twice**, and the two questions are different:
+
+| stage | when | what a refusal means | the verdict's grant |
+|---|---|---|---|
+| `Open` | before the library is opened | no code from that file ran in this process | ignored |
+| `Speak` | after the manifest crossed the gate, before registration | it ran, and may say nothing | becomes the **baseline** |
+
+`AdmissionKind` says which door is asking — `Load`, `Candidate` (a prepared
+replacement's successor, PR-01) or `Reload`. A **reload asks about the new bytes**
+and cannot re-grant: it keeps the incumbent's `WeaveId` and therefore its baseline,
+which [GATE-05](../laws/admission-laws.md) freezes, so only its yes-or-no is
+consulted. A host that wants reloaded code to hold different authority refuses the
+reload and replaces the artifact instead.
+
+Two things this is **not**:
+
+- **Not containment.** Refusing at `Open` is a decision about a *file*; it is the
+  only containment an in-process kernel has, and it is not a sandbox. What a policy
+  grants at `Speak` bounds **speech** and nothing else — the loaded image still
+  shares this address space ([what loading it in-process
+  means](../guides/dynamic-weaves.md#what-loading-it-in-process-means)).
+- **Not derived from the artifact.** `AdmissionRequest::declared` carries the
+  manifest's `zen.CapabilityAsk` so a host can *show* a person what was asked for.
+  Nothing consults it to produce a grant. (It also cannot describe sends: the
+  manifest has no emit section, so send authority comes from the host's own
+  knowledge — see [known seams](known-seams.md).)
+
+A host that genuinely wants the old behaviour asks for it by name —
+`trust_every_artifact("why")` — and the `why` comes back in every verdict, so a
+reader can grep for who decided to trust everything and find their reason beside it.
+The supplied host (`loom-host`) instead reads a per-install file of the person's
+standing decisions; see [from nothing to a running
+weave](../guides/running-loom.md).
+
 ## OS containment (out-of-process, Linux/WSL)
 
 A weave may instead run in a child process (`zen-weave-host`),

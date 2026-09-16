@@ -122,7 +122,7 @@ TEST_CASE("publish only reaches the accepters the sender is permitted to send to
 TEST_CASE("the kernel door is driven by message only with the load capability") {
     using namespace loom;
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     WeaveId control = mount_control(kernel, bus);
 
     // Holding the load capability, a loader drives the kernel by message.

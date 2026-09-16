@@ -201,7 +201,7 @@ TEST_SUITE("isolation") {
 
 TEST_CASE("out-of-process delivery and reply are indistinguishable from in-process") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     IsolationHost host(bus, kHostExe);
 
     Registered rec_in = register_probe(bus, {pong_schema()});
