@@ -92,6 +92,7 @@ capabilities       kernel    4
 isolation          posix     39
 policy             posix     23
 
+host_policy        portable  26
 dispatch_refusal   portable  15
 dispatch_loaded    kernel    5
 admission          kernel    16

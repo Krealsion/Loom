@@ -391,13 +391,26 @@ target_link_libraries(zen-console-tui
 # that opted into the unsandboxed backend. ZEN_HOST_HAS_KERNEL is that fact as a compile
 # definition rather than as an assumption: a host without one still runs, still consoles,
 # and says in one sentence why it can host nothing loadable.
-add_executable(loom-host
-    src/host/host_main.cpp
+# The host's DECIDING half, as a library, so the test suite can reach it. The two files a
+# person writes are parsed here -- a rule grammar and two schemas over hand-edited text --
+# and a parser nothing tests is a parser that will eventually accept the wrong thing
+# quietly. `main()` stays in the executable: a REPL is driven by hand, a grammar is not.
+add_library(zen-host-policy STATIC
     src/host/authority.cpp
     src/host/boot_plan.cpp
     src/host/config_file.cpp)
+target_include_directories(zen-host-policy
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/host>)
+target_compile_features(zen-host-policy PUBLIC cxx_std_20)
+target_link_libraries(zen-host-policy
+    PUBLIC  loom zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+
+add_executable(loom-host src/host/host_main.cpp)
 target_link_libraries(loom-host
-    PRIVATE zen-console zen-terminal zen-switchboard loom zen-warnings zen-sanitize)
+    PRIVATE zen-host-policy zen-console zen-terminal zen-switchboard loom
+            zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(loom-host PRIVATE zen-kernel)
     target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=1)
