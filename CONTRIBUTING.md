@@ -1,5 +1,17 @@
 # Contributing
 
+## Getting a Loom you can work with
+
+Before anything else: [the tools you need](docs/guides/tools.md) — a C++20 compiler and
+CMake, which are real prerequisites and not assumed knowledge — and then
+[from nothing to a running weave](docs/guides/running-loom.md), which installs Loom,
+starts the supplied host and builds something against the installed package. Do that
+first even if you intend to change Loom itself: the shortest way to understand what a
+change breaks is to have used the thing it breaks.
+
+The build and the official test lane are in [the README](README.md#build--test); the
+build rules a machine collaborator needs are in [AGENTS.md](AGENTS.md).
+
 ## Code contributions
 
 Issues, testing, design discussion, reproductions, and feedback are welcome.

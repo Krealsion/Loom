@@ -136,7 +136,7 @@ public:
 /// The garden: a bus, a kernel, the three artifacts, a coordinator and a client.
 struct Garden {
     Switchboard bus;
-    Kernel kernel{bus};
+    Kernel kernel{bus, sbfx::fixture_admission()};
     Coordinator* coordinator = nullptr;
     Client* client = nullptr;
     WeaveId coordinator_id{};

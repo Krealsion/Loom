@@ -608,7 +608,7 @@ TEST_CASE("J6: every unauthorized or mistaken act is refused by name and changes
 
 TEST_CASE("J7: a loaded claimant offers across the seam and is shown its published claim back across it") {
     Rig rig;
-    Kernel kernel(rig.bus);
+    Kernel kernel(rig.bus, sbfx::fixture_admission());
     // The loaded image replaces the native document owner in the ceiling.
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
@@ -1023,7 +1023,7 @@ ProbeState probe_state(Switchboard& bus, WeaveId who,
 
 TEST_CASE("J11: a loaded participant whose showing fails through the ABI is held, attributable, told once, and repaired by a reload") {
     Rig rig;
-    Kernel kernel(rig.bus);
+    Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
@@ -1469,7 +1469,7 @@ TEST_CASE("J15: a substrate mutation door that changed exposed state reaches the
 
 TEST_CASE("J16: the same doors through the ABI -- a loaded participant's performed write reaches its claim, and its reads and refused writes do not") {
     Rig rig;
-    Kernel kernel(rig.bus);
+    Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
@@ -1880,7 +1880,7 @@ TEST_CASE("J20: a native owner that DECLINES a published value is recorded Decli
 
 TEST_CASE("J21: a loaded owner's declined showing crosses the seam as its own status -- recorded Declined, not held, its next claim replacing the value") {
     Rig rig;
-    Kernel kernel(rig.bus);
+    Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
@@ -1948,7 +1948,7 @@ TEST_CASE("J22: a refused replacement runs nothing of the incumbent's -- a v7 ca
     // The observable is the showing: a snapshot SHOWS the weave its pending publication,
     // so a refused candidate that had been judged after it would leave a showing behind.
     Rig rig;
-    Kernel kernel(rig.bus);
+    Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});

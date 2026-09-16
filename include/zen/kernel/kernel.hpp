@@ -5,6 +5,7 @@
 #define ZEN_KERNEL_KERNEL_HPP
 
 #include <zen/kernel/abi.h>
+#include <zen/kernel/admission.hpp>
 #include <zen/registry.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
@@ -170,24 +171,67 @@ public:
     Kernel(const Kernel&) = delete;
     Kernel& operator=(const Kernel&) = delete;
 
-    /// Load `path`, mount its Weave on the bus under `name`, and return its id.
+    /// As the one-argument constructor, with the host's admission policy named at
+    /// the same moment the Kernel is. A host that already knows its policy should
+    /// not have to exist for a statement in a state where it admits nothing — and a
+    /// Kernel that is a MEMBER of something cannot call `admit_with` from a member
+    /// initializer at all, which is the concrete reason this overload exists.
+    Kernel(loom::Switchboard& bus, AdmissionPolicy policy);
+
+    /// INSTALL THE HOST'S ADMISSION POLICY — who decides what a loaded artifact
+    /// may do (`zen/kernel/admission.hpp`).
+    ///
+    /// Until a host calls this, every policy-mediated load REFUSES and says that
+    /// nobody has decided. That is the retirement of the old permissive default
+    /// (P-WORK-18): the Kernel used to mint `Grant{}.allow_any()` for anything it
+    /// could open, through three separate doors, and a host could not close any of
+    /// them. Now there is one door and it is shut until a host opens it.
+    ///
+    /// An empty policy resets to `admit_nothing()` rather than to anything
+    /// permissive, so "clear the policy" and "trust everything" cannot be spelled
+    /// the same way by accident.
+    void admit_with(AdmissionPolicy policy);
+
+    /// The policy currently installed, for a host that wants to hand the same one
+    /// to a second Kernel. Never null.
+    const AdmissionPolicy& admission_policy() const noexcept { return admit_; }
+
+    /// Load `path`, mount its Weave on the bus under `name`, and return its id,
+    /// ASKING THE INSTALLED ADMISSION POLICY what this artifact may do.
     /// A non-empty `role` binds the loaded Weave to that role slot — load is the
     /// only moment a role CAN be bound (Switchboard::register_weave is the sole
     /// binder, and roles are singletons), so a role-addressed consumer's reach
     /// across a replacement is decided here. Binding a role already held is a
     /// clean LoadResult failure, not a throw: the incumbent keeps it.
+    ///
+    /// The policy is asked TWICE and the two questions are different: once before
+    /// the library is opened at all (`AdmissionStage::Open` — may this file's code
+    /// run here?) and once after its manifest has crossed the gate and before it is
+    /// registered (`AdmissionStage::Speak` — what may it say?). Either refusal is a
+    /// clean `LoadResult` failure carrying the policy's own reason, and an `Open`
+    /// refusal means no code from the file ever ran. See admission.hpp for what
+    /// that does and does not contain.
+    ///
+    /// This overload is where a MESSAGE-DRIVEN load lands: the control door
+    /// (`zen/kernel/control.hpp`) spends it, so a participant that asks the Manager
+    /// to load something is asking the host's policy, not the Kernel's good nature.
     LoadResult load(const std::string& name, const std::string& path,
                     const std::string& role = "");
 
-    /// As `load`, with the host naming the artifact's grant explicitly.
+    /// As `load`, with the host naming the artifact's grant explicitly AND
+    /// BYPASSING THE POLICY.
     ///
-    /// The default `load` gives a loaded weave permissive bus SENDS and no
-    /// Sense read authority, because Grant's floor is empty and Senses did not
-    /// change it: reading a claim is a deliberate host decision, not something a
-    /// weave acquires by being loadable. A host that wants a loaded renderer,
-    /// inspector or status panel to observe says so here — at the same moment it
-    /// decides to load the thing at all, which is the moment it is already
-    /// deciding how much to trust it.
+    /// That bypass is the point, not a hole: a host writing this line has already
+    /// made the decision the policy exists to make, at a call site a reviewer can
+    /// read, in code the host itself owns. There is nothing implicit left to remove.
+    /// The policy governs the loads a host did NOT individually author — which is
+    /// every load that arrived as a message.
+    ///
+    /// `Grant`'s floor is empty, and Senses did not change it: reading a claim is a
+    /// deliberate host decision, not something a weave acquires by being loadable. A
+    /// host that wants a loaded renderer, inspector or status panel to observe says
+    /// so here — at the same moment it decides to load the thing at all, which is
+    /// the moment it is already deciding how much to trust it.
     LoadResult load(const std::string& name, const std::string& path, const std::string& role,
                     Grant grant);
 
@@ -239,6 +283,15 @@ public:
     /// undone by the discard, so it reports `reloaded == false` with the reason
     /// rather than claiming a success whose subject no longer exists. Nothing is
     /// left behind: the record is released and the library closed on the way out.
+    ///
+    /// THE ADMISSION POLICY IS ASKED ABOUT THE NEW BYTES, and it is asked at both
+    /// stages with `AdmissionKind::Reload`, before the incumbent is touched. What it
+    /// CANNOT do is change the authority: a reload keeps the incumbent's WeaveId and
+    /// therefore its baseline, which GATE-05 says never changes, so a Reload
+    /// verdict's `grant` is ignored and only its yes-or-no is consulted. That is the
+    /// honest shape of "this artifact was rebuilt": a policy may say the new code may
+    /// not run under the authority the old code was given — and then the host's
+    /// answer is to replace the artifact, not to reload it.
     ReloadResult reload_from(const std::string& name, const std::string& new_path);
 
     /// Load an artifact as a PREPARED CANDIDATE (PR-01): opened, constructed,
@@ -254,8 +307,20 @@ public:
     ///
     /// It holds no role by construction. A role can only ever reach it through
     /// `commit_candidate`.
+    ///
+    /// It is the ordinary load, then the seal — so it asks the installed admission
+    /// policy exactly as `load` does, with `AdmissionKind::Candidate`. A successor
+    /// arriving through a replacement transaction is admitted by the same door as one
+    /// arriving through the front, which is the whole reason this is built on `load`
+    /// rather than beside it.
     LoadResult load_candidate(const std::string& name, const std::string& path,
                               loom::WeaveId coordinator);
+
+    /// As `load_candidate`, with the host naming the grant explicitly and bypassing
+    /// the policy — the same bargain the four-argument `load` makes, for the same
+    /// reason.
+    LoadResult load_candidate(const std::string& name, const std::string& path,
+                              loom::WeaveId coordinator, Grant grant);
 
     /// THE COMMIT (PR-07): unseal `candidate_name` and move `role` to it from
     /// whoever holds it now, as one indivisible change to what ordinary delivery
@@ -380,6 +445,12 @@ private:
         /// The declared claim-set (SENSE-04; ABI v6) — the Senses this artifact says it
         /// can claim. Empty when it declares none.
         std::vector<std::shared_ptr<const Schema>> claims;
+        /// The manifest's `requests` section — the artifact's CapabilityAsk, if it
+        /// emitted one. Carried so the admission policy can be SHOWN what the
+        /// artifact asked for; it is advice and nothing here consults it to decide
+        /// anything (admission.hpp).
+        bool declared_present = false;
+        CapabilityAsk declared{};
         /// WHAT KEEPS THE THREE ABOVE RESOLVABLE, AND FOR HOW LONG (LIFE-08).
     /// docs/laws/lifecycle-laws.md
         /// `reconstruct` is the only thing that publishes a candidate's
@@ -410,9 +481,36 @@ private:
     /// and `unload_role` both need.
     const Loaded* record_for(loom::WeaveId id) const;
 
+    /// The one loading machine. `explicit_grant == nullptr` means "ask the installed
+    /// policy" (both stages); non-null means the host named it and the policy is not
+    /// consulted at all. Two entry points rather than two implementations, so a
+    /// policy-mediated load and a host-authored one cannot come to differ in
+    /// anything except who chose the grant.
+    LoadResult load_impl(const std::string& name, const std::string& path,
+                         const std::string& role, AdmissionKind kind,
+                         const Grant* explicit_grant);
+
+    /// `load_impl` plus the seal. Same split, same reason.
+    LoadResult candidate_impl(const std::string& name, const std::string& path,
+                              loom::WeaveId coordinator, const Grant* explicit_grant);
+
+    /// Put the admission question to the installed policy and normalize the answer.
+    /// One place, so the three doors (load, candidate, reload) cannot come to ask
+    /// slightly different questions. Returns true when admitted; on a refusal it
+    /// writes the sentence a caller should report into `*why`. `build` is the ONE
+    /// identity of the operation asking, shared by both of its stages and read only if
+    /// the policy asks for it (admission.hpp).
+    bool ask_admission(AdmissionStage stage, AdmissionKind kind, const std::string& name,
+                       const std::string& path, const std::string& role,
+                       const BuildIdentity& build, const CapabilityAsk* declared,
+                       Grant* granted, std::string* why) const;
+
     loom::Switchboard& bus_;
     loom::Registry registry_; ///< union of loaded Weaves' schemas, for callback resolution
     std::map<std::string, Loaded> libs_;
+    /// The host's decision procedure. Never null — it starts as `admit_nothing()`,
+    /// so a Kernel nobody has configured admits nothing rather than everything.
+    AdmissionPolicy admit_;
 };
 
 } // namespace loom

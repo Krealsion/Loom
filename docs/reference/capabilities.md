@@ -57,6 +57,43 @@ when it was authored. And the administrator never becomes the sender — no
 message is queued at all, so the governed subject retries its own action and
 the target sees the subject.
 
+### When delegated authority can first be installed
+
+A capability names a subject, and a subject does not exist until the Kernel has
+registered the weave. So the earliest moment a host can install what a person
+already approved is **after registration**, and the latest moment that is still
+useful is **before the new incarnation is told it is live** — because a weave
+that begins working on `zen.Activated` uses its authority in that very handler.
+
+Those two moments have exactly one window between them, and it is inside
+`ControlWeave`'s own delivery (`kernel/control.hpp`): everything the door queues
+afterwards is FIFO, and the asker always hears last. A host that installs
+authority when the *load operation answers* is therefore necessarily one turn
+late — its subject's first breath is refused `CapabilityDenied` under a
+permission the person had already granted, and the tap shows the activation, the
+refusal, and the installation, in that order.
+
+`loom::LifecycleAdoption` is that window offered to the host, as host-supplied
+wiring handed to `mount_control` beside the `LifecycleAuthority`:
+
+| | |
+|---|---|
+| `admitted(mail, name, id)` | a committed incarnation, before `zen.Activated` is queued for it. `id` is the **Kernel's** fact about what it registered, never a payload |
+| `retired(mail, name)` | after an unload, by name, for `UnloadLibrary` and `UnloadRole` alike |
+
+It decides nothing: the operation has already committed when it is called, and
+the callback's outcome cannot refuse it. Admission — *may this code run, and what
+is its baseline* — is a different question, two stages earlier, and stays with
+[`AdmissionPolicy`](#admitting-a-loaded-artifact). What this adds is only that a
+host with standing decisions can make them effective in time.
+
+Because the window belongs to the **door**, every route that can load anything
+passes through it: a host's own boot walk, an operator command, and an ordinary
+`zen.LoadWeave` a weave sends to the Manager of its own accord. A host that
+adopted at one of its own call sites governed only the artifacts that arrived
+that way. The supplied host is the first consumer
+([running Loom](../guides/running-loom.md)).
+
 This is **message authority only**. It is not "grants are now mutable": an
 isolated child's namespace, mount view and cgroup leaf were built before it
 ran, and no write in this process moves them.
@@ -163,6 +200,71 @@ out-of-process **StorageBroker** (role `"storage"`) scopes each mod's keyspace
 by the stamped sender; a **NetworkBroker** (role `"net"`) does allow-listed
 TCP for weaves that themselves hold no OS network capability. The ask
 (`zen.CapabilityAsk`, `ZEN_ASK`) is advice, never authority.
+
+## Admitting a loaded artifact
+
+The same rule, one layer up, for the **in-process** kernel: a `dlopen`ed weave's
+baseline comes from the host's **admission policy**
+([`zen/kernel/admission.hpp`](../../include/zen/kernel/admission.hpp)), and a
+`Kernel` on which no host has called `admit_with(...)` admits nothing at all. There
+is no default grant any more — the three-argument `Kernel::load` used to mint
+`Grant{}.allow_any()` for anything it could open, and the control door and
+`load_candidate` both spent it, so the permissive default had three doors and could
+not be closed at any one of them. It is closed at the artifact door, where all three
+pass.
+
+A policy is asked **twice**, and the two questions are different:
+
+| stage | when | what a refusal means | the verdict's grant |
+|---|---|---|---|
+| `Open` | before the library is opened | no code from that file ran in this process | ignored |
+| `Speak` | after the manifest crossed the gate, before registration | it ran, and may say nothing | becomes the **baseline** |
+
+`AdmissionKind` says which door is asking — `Load`, `Candidate` (a prepared
+replacement's successor, PR-01) or `Reload`. A **reload asks about the new bytes**
+and cannot re-grant: it keeps the incumbent's `WeaveId` and therefore its baseline,
+which [GATE-05](../laws/admission-laws.md) freezes, so only its yes-or-no is
+consulted. A host that wants reloaded code to hold different authority refuses the
+reload and replaces the artifact instead.
+
+**Which build it is — known only if the policy asks.** `AdmissionRequest::build` names the
+artifact by its bytes: `build.content_id()` is the same truncated SHA-256 the isolation
+ledger keys by. It is worked out the first time a policy asks, by reading and hashing the
+whole file — for a multi-megabyte Debug image, a large fraction of a second — and never
+otherwise, so a policy that decides without the bytes (`trust_every_artifact`,
+`admit_nothing`, a decision by name) makes the Kernel read nothing. The Kernel makes **one**
+identity per operation — a load, a candidate, a reload — and both stages share it: a policy
+that asks twice, at both stages or through a copy of the request it kept, gets one reading,
+and every answer describes it. The next operation reads again; an earlier attempt's answer
+is never taken as proof of the current bytes, and neither is a path, a size or a
+modification time. A pin belongs at `Open`, where the identity describes the file before its
+code has run; first asked at `Speak`, it describes the file after. A file that cannot be read
+answers `identified() == false`, with `failure()` saying why — there is no way to see an
+identity nobody asked for, so none can pass for a build or for a failure.
+`loom::file_content_id_scans()` counts every reading, which is how the `admission` suite
+tells whether an operation did identity work at all, rather than timing it. (It was once
+computed for every policy-mediated load, whether the policy read it or not, and that alone
+failed Zengine's replacement-timing tests under `trust_every_artifact`.)
+
+Two things this is **not**:
+
+- **Not containment.** Refusing at `Open` is a decision about a *file*; it is the
+  only containment an in-process kernel has, and it is not a sandbox. What a policy
+  grants at `Speak` bounds **speech** and nothing else — the loaded image still
+  shares this address space ([what loading it in-process
+  means](../guides/dynamic-weaves.md#what-loading-it-in-process-means)).
+- **Not derived from the artifact.** `AdmissionRequest::declared` carries the
+  manifest's `zen.CapabilityAsk` so a host can *show* a person what was asked for.
+  Nothing consults it to produce a grant. (It also cannot describe sends: the
+  manifest has no emit section, so send authority comes from the host's own
+  knowledge — see [known seams](known-seams.md).)
+
+A host that genuinely wants the old behaviour asks for it by name —
+`trust_every_artifact("why")` — and the `why` comes back in every verdict, so a
+reader can grep for who decided to trust everything and find their reason beside it.
+The supplied host (`loom-host`) instead reads a per-install file of the person's
+standing decisions; see [from nothing to a running
+weave](../guides/running-loom.md).
 
 ## OS containment (out-of-process, Linux/WSL)
 

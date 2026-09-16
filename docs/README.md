@@ -1,5 +1,10 @@
 # Loom documentation
 
+**I want to run it.** [From nothing to a running weave](guides/running-loom.md) —
+install Loom, start the supplied host, build a weave of your own and run it under
+authority you chose. The prerequisites are [a compiler and CMake](guides/tools.md),
+and that page says which ones and where to get them.
+
 **I am new.** Start with the [mental model](guides/mental-model.md), then
 [write your first weave](guides/writing-a-weave.md) — working code in two
 pages, no history required.
