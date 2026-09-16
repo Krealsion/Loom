@@ -3,7 +3,9 @@
 
 #include "line_input.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -17,14 +19,13 @@
 #include <windows.h>
 #include <process.h> // _beginthreadex: a real thread HANDLE on MinGW and MSVC alike
 
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <mutex>
 #else
 #include <cerrno>
+#include <chrono>
 #include <poll.h>
 #include <unistd.h>
 #endif
@@ -33,37 +34,159 @@ namespace loom::host {
 
 namespace {
 
-/// Take one complete line out of `buf` if there is one. The newline goes with it; a
-/// trailing CR goes too, so a CRLF script piped into a POSIX host does not leave every
-/// command with an invisible character on the end (which is how `quit\r` became an
-/// unknown command) — and so a Windows console's `\r\n` reads as one line ending.
-bool take_line(std::string& buf, std::string* out) {
-    const std::size_t nl = buf.find('\n');
-    if (nl == std::string::npos) {
-        return false;
+/// How much one read asks for. Not a limit anybody can see — a read never adds more than the
+/// waiting area has room for — only how the platform readers take bytes from the OS.
+constexpr std::size_t kReadChunkBytes = 4096;
+
+// A FULL READ ALWAYS FITS ONCE THE FINISHED LINES ARE TAKEN. What the area can hold unfinished
+// is at most one command and a `\r` (anything longer is refused and released), so this is what
+// guarantees a reader waiting for room is never waiting for a newline it has no room to read.
+static_assert(kMaxCommandBytes + 1 + kReadChunkBytes <= kHeldInputBytes,
+              "the waiting area must hold the longest unfinished command and one read");
+
+/// The length of the command in `bytes[from, to)`: a `\r` before the newline (or before the end
+/// of input) is part of the line's ending, not of the command.
+std::size_t command_length(const std::string& bytes, std::size_t from, std::size_t to) {
+    std::size_t len = to - from;
+    if (len > 0 && bytes[to - 1] == '\r') {
+        --len;
     }
-    std::string line = buf.substr(0, nl);
-    buf.erase(0, nl + 1);
-    if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-    }
-    *out = std::move(line);
-    return true;
+    return len;
 }
 
-/// A stream that ended with a last line and no newline still runs that command once.
-std::string last_line(std::string rest) {
-    if (!rest.empty() && rest.back() == '\r') {
-        rest.pop_back();
+LineInput::Status status_of(HeldInput::Taken taken, std::string* out) {
+    switch (taken) {
+    case HeldInput::Taken::Line:
+        return LineInput::Status::Line;
+    case HeldInput::Taken::TooLong:
+        out->clear(); // none of a refused line is handed out, not even by accident
+        return LineInput::Status::TooLong;
+    case HeldInput::Taken::Nothing:
+        return LineInput::Status::Idle;
+    case HeldInput::Taken::Ended:
+        return LineInput::Status::Closed;
     }
-    return rest;
+    return LineInput::Status::Closed;
 }
 
 } // namespace
 
+// ---- the waiting area, the same on every platform -------------------------------
+
+std::size_t HeldInput::held() const noexcept { return bytes_.size() - head_; }
+
+std::size_t HeldInput::peak() const noexcept { return peak_; }
+
+std::size_t HeldInput::room() const noexcept {
+    const std::size_t h = held();
+    return h >= kHeldInputBytes ? 0 : kHeldInputBytes - h;
+}
+
+void HeldInput::add(const char* data, std::size_t n) {
+    if (ended_ || n == 0) {
+        return;
+    }
+    std::size_t from = 0;
+    if (discarding_) {
+        // THE REST OF A REFUSED LINE, dropped as it arrives: it was never going to be a command,
+        // and holding it until its newline turned up is how a line that never ends would pin
+        // the reader.
+        const void* nl = std::memchr(data, '\n', n);
+        if (nl == nullptr) {
+            return;
+        }
+        from = static_cast<std::size_t>(static_cast<const char*>(nl) - data) + 1;
+        discarding_ = false;
+    }
+    if (from == n) {
+        return;
+    }
+    // What was taken is released before anything is added, so the buffer never grows past what
+    // it holds plus one read. Reserved once at the limit, so it does not reallocate either.
+    if (head_ != 0) {
+        bytes_.erase(0, head_);
+        scanned_ -= head_;
+        head_ = 0;
+    }
+    if (bytes_.capacity() < kHeldInputBytes) {
+        bytes_.reserve(kHeldInputBytes);
+    }
+    bytes_.append(data + from, n - from);
+    peak_ = std::max(peak_, held());
+}
+
+void HeldInput::end() noexcept { ended_ = true; }
+
+std::size_t HeldInput::newline() const {
+    const std::size_t at = bytes_.find('\n', std::max(scanned_, head_));
+    // Every byte is searched once, however many times the host asks while a line is unfinished.
+    scanned_ = (at == std::string::npos) ? bytes_.size() : at;
+    return at;
+}
+
+bool HeldInput::tail_too_long() const noexcept {
+    // Asked only when no newline is held, so everything held is one unfinished line. It may hold
+    // one byte more than a command, if that byte is the `\r` of a `\r\n` still arriving.
+    const std::size_t tail = held();
+    return tail > kMaxCommandBytes + 1 || (tail == kMaxCommandBytes + 1 && bytes_.back() != '\r');
+}
+
+bool HeldInput::ready() const {
+    return newline() != std::string::npos || tail_too_long() || ended_;
+}
+
+void HeldInput::refuse(TooLongLine* refused) const {
+    refused->line = line_;
+    refused->beginning.assign(bytes_, head_, std::min(kTooLongShownBytes, held()));
+}
+
+void HeldInput::consume_to(std::size_t end) {
+    head_ = end;
+    scanned_ = end;
+    ++line_;
+    if (head_ == bytes_.size()) {
+        bytes_.clear(); // keeps its capacity
+        head_ = 0;
+        scanned_ = 0;
+    }
+}
+
+HeldInput::Taken HeldInput::take(std::string* line, TooLongLine* refused) {
+    const std::size_t nl = newline();
+    if (nl != std::string::npos) {
+        const std::size_t len = command_length(bytes_, head_, nl);
+        if (len > kMaxCommandBytes) {
+            refuse(refused);
+            consume_to(nl + 1);
+            return Taken::TooLong;
+        }
+        line->assign(bytes_, head_, len);
+        consume_to(nl + 1);
+        return Taken::Line;
+    }
+    if (tail_too_long()) {
+        // REFUSED BEFORE IT ENDS. Everything held is this one line, and it is already longer
+        // than any command: release it now and discard the rest as it arrives.
+        refuse(refused);
+        consume_to(bytes_.size());
+        discarding_ = !ended_;
+        return Taken::TooLong;
+    }
+    if (ended_) {
+        if (held() == 0) {
+            return Taken::Ended;
+        }
+        // A stream that ended with a last line and no newline still runs that command once.
+        line->assign(bytes_, head_, command_length(bytes_, head_, bytes_.size()));
+        consume_to(bytes_.size());
+        return Taken::Line;
+    }
+    return Taken::Nothing;
+}
+
 #ifdef _WIN32
 
-// ---- Windows: a reader thread and a queue of finished lines --------------------
+// ---- Windows: a reader thread and the waiting area -----------------------------
 //
 // See the header for why. What is here is the mechanics, and the three facts they rest on,
 // each measured on a real console before it was relied on:
@@ -83,11 +206,11 @@ constexpr int kStopAttempts = 200; // x 10 ms
 /// `shared_ptr`, so a reader left to process exit never touches freed memory.
 struct Shared {
     std::mutex m;
-    std::condition_variable ready;
-    std::deque<std::string> lines; ///< finished lines, oldest first
-    bool closed = false;           ///< the reader will add nothing more
-    std::atomic<bool> stop{false};
-    HANDLE handle = nullptr; ///< the reader's own; closed once the thread has left it
+    std::condition_variable for_host;   ///< a line, a refusal or the end can be taken
+    std::condition_variable for_reader; ///< room was made, or the reader must stop
+    HeldInput held;                     ///< under `m`
+    bool stop = false;                  ///< under `m`
+    HANDLE handle = nullptr;            ///< the reader's own; closed once the thread has left it
 };
 
 unsigned __stdcall read_lines(void* arg) {
@@ -95,39 +218,39 @@ unsigned __stdcall read_lines(void* arg) {
     std::shared_ptr<Shared> s = std::move(*static_cast<std::shared_ptr<Shared>*>(arg));
     delete static_cast<std::shared_ptr<Shared>*>(arg);
 
-    std::string pending; // bytes read but not yet a line; the thread's alone
-    char buf[512];
-    while (!s->stop.load()) {
+    char buf[kReadChunkBytes];
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(s->m);
+            // THE BOUND ON READ-AHEAD. The thread reads only while a whole read fits in the
+            // waiting area, and otherwise waits for the host to take a line. It used to read
+            // whatever a pipe or a file held, as fast as it could, into a queue with no limit.
+            s->for_reader.wait(lock, [&s] { return s->stop || s->held.room() >= kReadChunkBytes; });
+            if (s->stop) {
+                break;
+            }
+        }
         DWORD got = 0;
         // THE BLOCKING READ, where blocking stops nobody. For a console this is the cooked read:
-        // it returns a finished line and nothing sooner. For a pipe it returns what is there.
+        // it returns a finished line (or the next part of a long one) and nothing sooner. For a
+        // pipe it returns what is there.
         if (ReadFile(s->handle, buf, static_cast<DWORD>(sizeof buf), &got, nullptr) == 0 ||
             got == 0) {
             // End of file, a broken pipe, Ctrl+Z at the start of a console line — or a
-            // cancellation, which `stop` distinguishes below.
+            // cancellation, after which nobody reads what is held.
             break;
         }
-        pending.append(buf, static_cast<std::size_t>(got));
-        bool any = false;
         {
             std::lock_guard<std::mutex> lock(s->m);
-            for (std::string line; take_line(pending, &line);) {
-                s->lines.push_back(std::move(line));
-                any = true;
-            }
+            s->held.add(buf, static_cast<std::size_t>(got));
         }
-        if (any) {
-            s->ready.notify_all();
-        }
+        s->for_host.notify_all();
     }
     {
         std::lock_guard<std::mutex> lock(s->m);
-        if (!s->stop.load() && !pending.empty()) {
-            s->lines.push_back(last_line(std::move(pending)));
-        }
-        s->closed = true;
+        s->held.end();
     }
-    s->ready.notify_all();
+    s->for_host.notify_all();
     return 0;
 }
 
@@ -137,6 +260,7 @@ struct LineInput::Impl {
     std::shared_ptr<Shared> shared = std::make_shared<Shared>();
     HANDLE thread = nullptr;
     bool started = false;
+    TooLongLine too_long; ///< the host thread's alone
 
     /// Open the reader's own handle and start it. Anything that fails here is stdin being
     /// unusable, which is `Closed` — the same answer a missing stdin always got.
@@ -164,7 +288,7 @@ struct LineInput::Impl {
         }
         if (own == nullptr) {
             std::lock_guard<std::mutex> lock(shared->m);
-            shared->closed = true;
+            shared->held.end();
             return;
         }
         shared->handle = own;
@@ -175,7 +299,7 @@ struct LineInput::Impl {
             CloseHandle(own);
             shared->handle = nullptr;
             std::lock_guard<std::mutex> lock(shared->m);
-            shared->closed = true;
+            shared->held.end();
             return;
         }
         thread = reinterpret_cast<HANDLE>(t);
@@ -185,9 +309,15 @@ struct LineInput::Impl {
         if (thread == nullptr) {
             return;
         }
-        shared->stop.store(true);
-        // REPEATED, because a cancel that lands between two reads finds nothing to cancel and
-        // the next read would then wait for a line nobody is going to type.
+        {
+            std::lock_guard<std::mutex> lock(shared->m);
+            shared->stop = true;
+        }
+        // A thread waiting for room wakes and leaves without reading again...
+        shared->for_reader.notify_all();
+        // ...and one inside a read is cancelled — REPEATEDLY, because a cancel that lands
+        // between two reads finds nothing to cancel and the next read would then wait for a
+        // line nobody is going to type.
         for (int i = 0; i < kStopAttempts && WaitForSingleObject(thread, 10) == WAIT_TIMEOUT;
              ++i) {
             (void)CancelSynchronousIo(thread);
@@ -211,32 +341,35 @@ LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
         impl_->start();
     }
     Shared& s = *impl_->shared;
-    std::unique_lock<std::mutex> lock(s.m);
-    if (timeout_ms > 0) {
-        // THE DEADLINE, and it is a real one: nothing on this thread is inside a read.
-        (void)s.ready.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                               [&s] { return !s.lines.empty() || s.closed; });
+    HeldInput::Taken taken = HeldInput::Taken::Nothing;
+    {
+        std::unique_lock<std::mutex> lock(s.m);
+        if (timeout_ms > 0) {
+            // THE DEADLINE, and it is a real one: nothing on this thread is inside a read.
+            (void)s.for_host.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                                      [&s] { return s.held.ready(); });
+        }
+        taken = s.held.take(out, &impl_->too_long);
     }
-    if (!s.lines.empty()) {
-        *out = std::move(s.lines.front());
-        s.lines.pop_front();
-        return Status::Line;
+    if (taken == HeldInput::Taken::Line || taken == HeldInput::Taken::TooLong) {
+        s.for_reader.notify_one(); // room was made
     }
-    return s.closed ? Status::Closed : Status::Idle;
+    return status_of(taken, out);
+}
+
+LineInput::Held LineInput::held() const {
+    std::lock_guard<std::mutex> lock(impl_->shared->m);
+    return Held{impl_->shared->held.held(), impl_->shared->held.peak()};
 }
 
 #else // POSIX
 
-// ---- POSIX: poll, then read what poll promised ---------------------------------
+// ---- POSIX: poll, then read what poll promised, into the waiting area ------------
 
 struct LineInput::Impl {
-    /// Bytes read but not yet forming a complete line. A pipe hands over whatever happens
-    /// to be in it, which is regularly half a line, and a reader that dropped the remainder
-    /// would eat commands from a script.
-    std::string partial;
-    bool closed = false;
-    /// Set once the stream's newline-less last line has been handed out.
-    bool flushed = false;
+    HeldInput held;
+    TooLongLine too_long;
+    char buf[kReadChunkBytes];
 };
 
 LineInput::LineInput() : impl_(std::make_unique<Impl>()) {}
@@ -245,55 +378,73 @@ LineInput::~LineInput() = default;
 
 LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
     Impl& in = *impl_;
-    // A line already buffered is answered without consulting the OS at all: a pipe hands
-    // over several commands in one go, and a caller that went back to waiting between
-    // them would serve a script one line per timeout.
-    if (take_line(in.partial, out)) {
-        return Status::Line;
-    }
-    if (in.closed) {
-        if (!in.flushed && !in.partial.empty()) {
-            in.flushed = true;
-            *out = last_line(std::move(in.partial));
-            in.partial.clear();
-            return Status::Line;
-        }
-        return Status::Closed;
+    // A line already held is answered without consulting the OS at all: a pipe hands over
+    // several commands in one go, and a caller that went back to waiting between them would
+    // serve a script one line per timeout.
+    HeldInput::Taken taken = in.held.take(out, &in.too_long);
+    if (taken != HeldInput::Taken::Nothing) {
+        return status_of(taken, out);
     }
 
-    struct pollfd p {};
-    p.fd = STDIN_FILENO;
-    p.events = POLLIN;
-    // A canonical-mode terminal is readable only at a finished line, so a half-typed
-    // command is `0` here and the caller goes back to the bus.
-    const int ready_fds = ::poll(&p, 1, timeout_ms > 0 ? timeout_ms : 0);
-    if (ready_fds == 0) {
-        return Status::Idle;
-    }
-    if (ready_fds < 0) {
-        if (errno == EINTR) {
-            return Status::Idle; // a signal is not end of input
-        }
-        in.closed = true;
-        return Status::Closed;
-    }
-    char buf[512];
-    const ssize_t got = ::read(STDIN_FILENO, buf, sizeof buf);
-    if (got < 0) {
-        if (errno == EINTR || errno == EAGAIN) {
+    // NOTHING IS FINISHED, so what is held is one unfinished line no longer than a command, and
+    // a whole read fits. The reader reads only now, and only until a line is ready — which is its
+    // whole bound on read-ahead: with finished lines waiting, it leaves the rest with the OS.
+    //
+    // UNTIL THE DEADLINE, not for one read. A read can complete nothing — part of a line, or part
+    // of a refused one being discarded — while more is already there to read, and "Idle" means
+    // nothing was ready in time, on every platform.
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point deadline =
+        Clock::now() + std::chrono::milliseconds(timeout_ms > 0 ? timeout_ms : 0);
+    for (;;) {
+        const auto left =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+        struct pollfd p {};
+        p.fd = STDIN_FILENO;
+        p.events = POLLIN;
+        // A canonical-mode terminal is readable only at a finished line, so a half-typed
+        // command is `0` here and the caller goes back to the bus.
+        const int ready_fds = ::poll(&p, 1, left.count() > 0 ? static_cast<int>(left.count()) : 0);
+        if (ready_fds == 0) {
             return Status::Idle;
         }
-        in.closed = true;
-        return Status::Closed;
+        if (ready_fds < 0) {
+            if (errno == EINTR) {
+                return Status::Idle; // a signal is not end of input
+            }
+            in.held.end();
+            return status_of(in.held.take(out, &in.too_long), out);
+        }
+        const std::size_t want = std::min(sizeof in.buf, in.held.room());
+        if (want == 0) {
+            // Unreachable while the static_assert above holds — and a zero-byte read would come
+            // back as 0, which is end of input. No room is never the end.
+            return Status::Idle;
+        }
+        const ssize_t got = ::read(STDIN_FILENO, in.buf, want);
+        if (got < 0) {
+            if (errno == EINTR || errno == EAGAIN) {
+                return Status::Idle;
+            }
+            in.held.end();
+            return status_of(in.held.take(out, &in.too_long), out);
+        }
+        if (got == 0) {
+            in.held.end(); // and the pass below flushes a newline-less last line
+            return status_of(in.held.take(out, &in.too_long), out);
+        }
+        in.held.add(in.buf, static_cast<std::size_t>(got));
+        taken = in.held.take(out, &in.too_long);
+        if (taken != HeldInput::Taken::Nothing || Clock::now() >= deadline) {
+            return status_of(taken, out);
+        }
     }
-    if (got == 0) {
-        in.closed = true;
-        return read(out, 0); // one more pass, to flush a newline-less last line
-    }
-    in.partial.append(buf, static_cast<std::size_t>(got));
-    return take_line(in.partial, out) ? Status::Line : Status::Idle;
 }
 
+LineInput::Held LineInput::held() const { return Held{impl_->held.held(), impl_->held.peak()}; }
+
 #endif
+
+const TooLongLine& LineInput::too_long() const noexcept { return impl_->too_long; }
 
 } // namespace loom::host

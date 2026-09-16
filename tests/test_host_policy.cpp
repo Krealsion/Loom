@@ -28,6 +28,7 @@
 #include <zen/kernel/admission.hpp>
 #include <zen/switchboard/grant.hpp>
 
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -80,6 +81,9 @@ AuthorityRule rule_for(const char* name, bool may_run = true) {
     return r;
 }
 
+/// A question about a build whose identity is already known — the store's decisions are about
+/// that identity, not about how the Kernel read it. An empty `content_id` stands for a file that
+/// could not be read, which is exactly what the Kernel's own identity reports for one.
 AdmissionRequest open_of(const char* name, const std::string& content_id,
                          const char* path = "/somewhere/x.so") {
     AdmissionRequest q;
@@ -87,7 +91,8 @@ AdmissionRequest open_of(const char* name, const std::string& content_id,
     q.kind = AdmissionKind::Load;
     q.name = name;
     q.path = path;
-    q.content_id = content_id;
+    q.build = content_id.empty() ? BuildIdentity(std::string("/no/such/dir/") + name + ".so")
+                                 : BuildIdentity::known(content_id);
     return q;
 }
 
@@ -471,6 +476,44 @@ TEST_CASE("an artifact the host could not identify is refused, not guessed at") 
     CHECK(s.find("counter")->content_id.empty()); // and nothing was pinned to nothing
 }
 
+TEST_CASE("the store reads the build at open and only there, and names what it cannot read") {
+    // THE COST IS THE STORE'S, BECAUSE THE PIN IS. The Kernel works the identity out only when
+    // a policy asks (zen/kernel/admission.hpp); this policy asks before the file is opened,
+    // because that is where a pin means "no other build's code ran" — and never at speak,
+    // where it decides the baseline without the bytes.
+    Scratch f("identity-at-open");
+    AuthorityStore s;
+    std::string why;
+    REQUIRE(s.open(f.path, &why));
+    REQUIRE(s.put(rule_for("counter"), &why));
+    Scratch build("identity-at-open-build");
+    build.write("the bytes of the build that turned up");
+
+    AdmissionRequest speak;
+    speak.stage = AdmissionStage::Speak;
+    speak.name = "counter";
+    speak.path = build.path;
+    speak.build = BuildIdentity(build.path);
+    const std::uint64_t scans = loom::file_content_id_scans();
+    REQUIRE(s.policy()(speak).admitted);
+    CHECK(loom::file_content_id_scans() - scans == 0);
+
+    AdmissionRequest open = speak;
+    open.stage = AdmissionStage::Open;
+    open.build = BuildIdentity(build.path);
+    REQUIRE(s.policy()(open).admitted);
+    CHECK(loom::file_content_id_scans() - scans == 1);
+    CHECK(s.find("counter")->content_id == loom::file_content_id(build.path));
+
+    AdmissionRequest gone = open;
+    gone.path = "/no/such/dir/counter.so";
+    gone.build = BuildIdentity(gone.path);
+    const AdmissionVerdict v = s.policy()(gone);
+    CHECK_FALSE(v.admitted);
+    CHECK(v.reason.find("could not be identified") != std::string::npos);
+    CHECK(v.reason.find("/no/such/dir/counter.so") != std::string::npos); // what it could not read
+}
+
 TEST_CASE("the baseline a policy mints is the small one, deliberately") {
     Scratch f("baseline");
     AuthorityStore s;
@@ -669,7 +712,7 @@ TEST_CASE("a build whose pin cannot be written does not run, because the pin is 
     b.write("build B, which is different code");
     const AdmissionRequest build_a = open_of("probe", loom::file_content_id(a.path), a.path.c_str());
     const AdmissionRequest build_b = open_of("probe", loom::file_content_id(b.path), b.path.c_str());
-    REQUIRE(build_a.content_id != build_b.content_id);
+    REQUIRE(build_a.build.content_id() != build_b.build.content_id());
 
     {
         BlockedTemp blocked(f.path);
@@ -695,7 +738,7 @@ TEST_CASE("a build whose pin cannot be written does not run, because the pin is 
     // records the build that runs...
     const AdmissionVerdict recovered = store.policy()(build_a);
     CHECK(recovered.admitted);
-    CHECK(store.find("probe")->content_id == build_a.content_id);
+    CHECK(store.find("probe")->content_id == build_a.build.content_id());
     // ...and a changed build asks again, which is what the person chose.
     CHECK_FALSE(store.policy()(build_b).admitted);
 

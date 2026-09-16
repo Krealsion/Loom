@@ -1103,7 +1103,7 @@ void Kernel::admit_with(AdmissionPolicy policy) {
 
 bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::string& name,
                            const std::string& path, const std::string& role,
-                           const std::string& content_id, const CapabilityAsk* declared,
+                           const BuildIdentity& build, const CapabilityAsk* declared,
                            Grant* granted, std::string* why) const {
     AdmissionRequest req;
     req.stage = stage;
@@ -1111,7 +1111,7 @@ bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::
     req.name = name;
     req.path = path;
     req.role = role;
-    req.content_id = content_id;
+    req.build = build; // a copy SHARES the one reading; it does not start another
     if (declared != nullptr) {
         req.declared = *declared;
         req.declared_present = true;
@@ -1154,14 +1154,20 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
     // containment an in-process kernel has (admission.hpp).
     //
     // A host that named the grant at its call site has already decided; it is not
-    // asked. Which is also why the identity is not computed for it: hashing a
-    // multi-megabyte image is real work, and nobody is going to read the answer.
+    // asked.
+    //
+    // WHICH BUILD THIS IS, AND ONLY IF THE POLICY WANTS TO KNOW. Hashing a multi-megabyte
+    // image is real work, so it is not done here: `build` reads the file the first time the
+    // policy asks, and a policy that decides without the bytes — trusting everything,
+    // refusing everything, deciding by name — costs nothing. It used to be computed here for
+    // every policy-mediated load, and that alone failed Zengine's replacement-timing tests
+    // under a policy that never read it. ONE identity for this whole operation, shared by
+    // both questions below; the next operation makes its own.
     Grant grant = (explicit_grant != nullptr) ? *explicit_grant : Grant{};
-    std::string content_id;
+    const BuildIdentity build(path);
     if (explicit_grant == nullptr) {
-        content_id = file_content_id_or_empty(path);
         std::string why;
-        if (!ask_admission(AdmissionStage::Open, kind, name, path, role, content_id,
+        if (!ask_admission(AdmissionStage::Open, kind, name, path, role, build,
                            /*declared=*/nullptr, &grant, &why)) {
             return {false, {}, why};
         }
@@ -1198,7 +1204,7 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         // second unwinding written for this case.
         if (explicit_grant == nullptr) {
             std::string why;
-            if (!ask_admission(AdmissionStage::Speak, kind, name, path, role, content_id,
+            if (!ask_admission(AdmissionStage::Speak, kind, name, path, role, build,
                                mf.declared_present ? &mf.declared : nullptr, &grant, &why)) {
                 throw DllBoundaryError(why);
             }
@@ -1309,12 +1315,15 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // consulted and `ask_admission` drops the verdict's grant on the floor for
     // `Reload`. A policy that wants different authority refuses, and the host
     // replaces the artifact instead of reloading it.
-    const std::string new_content_id = file_content_id_or_empty(new_path);
+    //
+    // The new bytes are identified only if the policy asks, once for this reload, and
+    // never from the identity the incumbent was loaded under (see `load_impl`).
+    const BuildIdentity new_build(new_path);
     {
         Grant ignored;
         std::string why;
         if (!ask_admission(AdmissionStage::Open, AdmissionKind::Reload, name, new_path,
-                           /*role=*/std::string{}, new_content_id, /*declared=*/nullptr, &ignored,
+                           /*role=*/std::string{}, new_build, /*declared=*/nullptr, &ignored,
                            &why)) {
             return {false, false, false, why};
         }
@@ -1359,7 +1368,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         Grant ignored;
         std::string why;
         if (!ask_admission(AdmissionStage::Speak, AdmissionKind::Reload, name, new_path,
-                           /*role=*/std::string{}, new_content_id,
+                           /*role=*/std::string{}, new_build,
                            cand.declared_present ? &cand.declared : nullptr, &ignored, &why)) {
             destroy_instance(new_abi, new_inst);
             return {false, false, false, why};

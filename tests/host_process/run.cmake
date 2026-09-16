@@ -289,6 +289,31 @@ quit
                  "--no-boot;--authority;${dir}/decisions.json" text code)
     zen_check("a restarted host still has it" text MATCHES "run +probe")
 
+    # 6. A LINE LONGER THAN ANY COMMAND IS REFUSED WHERE IT STANDS, AND NONE OF IT RUNS.
+    #
+    # Both over-long lines are built so that running any PART of one would show: the first is
+    # `quit` and spaces, which a reader that cut it down to the limit would execute; the second
+    # is spaces and then `quit`, which a reader that split it would execute as a command of its
+    # own. Either way the host would exit before the commands after them. A command of exactly
+    # the limit (`status` and its trailing spaces) runs. The limit is 4000 bytes
+    # (src/host/line_input.hpp); the lengths below are written against it.
+    message(STATUS "host_process/console: over-long lines are refused, and the host reads on")
+    zen_scenario_dir(long-lines dir)
+    string(REPEAT " " 4000 zen_pad_4000)
+    string(REPEAT " " 3994 zen_pad_3994)
+    zen_run_host("${dir}"
+                 "quit${zen_pad_4000}\n${zen_pad_4000}quit\nstatus${zen_pad_3994}\nauthority trust probe\nauthority\nquit\n"
+                 "--no-boot;--authority;${dir}/decisions.json" text code)
+    zen_check("a host fed over-long lines exits 0" code EQUAL 0)
+    zen_check("the line cut short would have been `quit`: refused by its line number"
+              text MATCHES "refused: input line 1 ")
+    zen_check("the line split in two would have ended in `quit`: refused by its line number"
+              text MATCHES "refused: input line 2 ")
+    # `(owned by this host)` is `status`'s own line; the boot report also names the boot plan.
+    zen_check("a command of exactly the limit runs" text MATCHES "owned by this host")
+    zen_check("neither over-long line ran in part: every command after them ran"
+              text MATCHES "run +probe")
+
 endif()
 
 # ---- the weaves group --------------------------------------------------------

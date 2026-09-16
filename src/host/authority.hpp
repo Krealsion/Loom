@@ -170,6 +170,11 @@ public:
     /// fails under `trust_rebuilds` admits — the person consented to new builds — and says
     /// the pin still names the old one.
     ///
+    /// IT ASKS WHICH BUILD, AT `Open`, AND PAYS FOR THE ANSWER. The identity it pins and
+    /// compares is `AdmissionRequest::build`, which the Kernel works out only when a policy
+    /// asks; this one asks before the file is opened, and only there. A build that cannot be
+    /// identified is refused.
+    ///
     /// It never blocks on a person. A decision it cannot make is a refusal now, with
     /// the facts recorded in `pending()` and the console command to resolve it named
     /// in the refusal itself — so the asker hears a real answer about the request it

@@ -497,10 +497,12 @@ private:
     /// Put the admission question to the installed policy and normalize the answer.
     /// One place, so the three doors (load, candidate, reload) cannot come to ask
     /// slightly different questions. Returns true when admitted; on a refusal it
-    /// writes the sentence a caller should report into `*why`.
+    /// writes the sentence a caller should report into `*why`. `build` is the ONE
+    /// identity of the operation asking, shared by both of its stages and read only if
+    /// the policy asks for it (admission.hpp).
     bool ask_admission(AdmissionStage stage, AdmissionKind kind, const std::string& name,
                        const std::string& path, const std::string& role,
-                       const std::string& content_id, const CapabilityAsk* declared,
+                       const BuildIdentity& build, const CapabilityAsk* declared,
                        Grant* granted, std::string* why) const;
 
     loom::Switchboard& bus_;

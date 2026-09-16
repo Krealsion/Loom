@@ -649,6 +649,23 @@ void print_new_notes(const loom::host::AuthorityStore& store, std::size_t* shown
     *shown = all.size();
 }
 
+/// A LINE REFUSED FOR ITS LENGTH, said at the point in the input where it stood. None of it
+/// ran: not a shortened command, and not its remainder as a second one (host/line_input.hpp).
+/// The next line is read as usual, so the way back is to send the command again, shorter —
+/// and the line number and its first bytes are how a person or a script's author finds it.
+void print_too_long(const loom::host::TooLongLine& refused) {
+    std::string shown;
+    for (const char c : refused.beginning) {
+        const auto u = static_cast<unsigned char>(c);
+        shown.push_back(u >= 0x20 && u < 0x7f ? c : '?');
+    }
+    std::cout << "  refused: input line " << refused.line << " is longer than "
+              << loom::host::kMaxCommandBytes
+              << " bytes, the longest command this host reads, so none of it was run. It began: "
+              << shown << "...\n"
+              << "  send it again, shorter; the lines after it are read as usual.\n";
+}
+
 /// The boot plan's own state, for `status`. A plan that did not parse is not the same
 /// thing as a plan with no rows, and `--no-boot` now comes up over the first one.
 struct PlanSource {
@@ -1445,6 +1462,10 @@ int main(int argc, char** argv) {
             continue;
         }
         prompt_shown = false;
+        if (got == loom::host::LineInput::Status::TooLong) {
+            print_too_long(input.too_long());
+            continue;
+        }
         running = dispatch(line, session, plan, plan_source, store, lock);
         // What the policy decided during the command, said with the command's own output.
         print_new_notes(store, &notes_shown);

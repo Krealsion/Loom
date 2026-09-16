@@ -28,10 +28,13 @@
 #include <zen/kernel/manager.hpp>
 #include <zen/switchboard.hpp>
 
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace loom;
@@ -52,9 +55,22 @@ struct Recorder {
     Grant baseline{};
     std::string why = "the test said no";
 
+    /// How many times to ask for the build's identity during each question — the policy's
+    /// own choice, which is the whole point: 0 is a policy that decides without the bytes.
+    int build_asks = 0;
+    /// What each ask answered, in order, and how many libraries had been opened by then.
+    std::vector<std::string> builds;
+    std::vector<std::string> failures;
+    std::vector<std::uint64_t> opened_when_asked;
+
     AdmissionPolicy policy() {
         return [this](const AdmissionRequest& req) {
             seen.push_back(req);
+            for (int i = 0; i < build_asks; ++i) {
+                builds.push_back(req.build.content_id());
+                failures.push_back(req.build.failure());
+                opened_when_asked.push_back(kernel_lifetime_counts().libraries_opened);
+            }
             const bool yes = (req.stage == AdmissionStage::Open) ? admit_open : admit_speak;
             if (!yes) {
                 return AdmissionVerdict::refuse(why);
@@ -144,8 +160,10 @@ TEST_CASE("the policy is asked twice, and the first ask is before the file is op
     Switchboard bus;
     Recorder rec;
     rec.admit_open = false;
+    rec.build_asks = 1;
     Kernel kernel(bus, rec.policy());
 
+    const std::uint64_t opened_before = kernel_lifetime_counts().libraries_opened;
     const LoadResult lr = kernel.load("t", ZEN_SO_WEAVE, "some.office");
 
     CHECK_FALSE(lr.ok);
@@ -162,9 +180,12 @@ TEST_CASE("the policy is asked twice, and the first ask is before the file is op
     CHECK(q.path == ZEN_SO_WEAVE);
     CHECK(q.role == "some.office");
     // The identity is the file's bytes, and it is the SAME identity the isolation
-    // ledger keys by — one answer to "is this the build I approved", not two.
-    CHECK(q.content_id == loom::file_content_id(ZEN_SO_WEAVE));
-    CHECK(q.content_id.size() == 32);
+    // ledger keys by — one answer to "is this the build I approved", not two. It was
+    // in the policy's hands at `open`, before any library had been opened.
+    REQUIRE(rec.builds.size() == 1);
+    CHECK(rec.builds[0] == loom::file_content_id(ZEN_SO_WEAVE));
+    CHECK(rec.builds[0].size() == 32);
+    CHECK(rec.opened_when_asked[0] == opened_before);
     // Nothing is declared yet, because no manifest exists yet.
     CHECK_FALSE(q.declared_present);
 
@@ -297,6 +318,7 @@ TEST_CASE("the candidate door also takes an explicit grant, and then does not as
 TEST_CASE("a reload asks about the NEW bytes, and a refusal leaves the incumbent untouched") {
     Switchboard bus;
     Recorder rec;
+    rec.build_asks = 1;
     Kernel kernel(bus, rec.policy());
     REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
     const WeaveId before = kernel.weave_id("t");
@@ -308,6 +330,7 @@ TEST_CASE("a reload asks about the NEW bytes, and a refusal leaves the incumbent
     REQUIRE_FALSE(copy_artifact(ZEN_SO_WEAVE, copy).empty());
 
     rec.admit_open = false;
+    rec.builds.clear();
     const ReloadResult r = kernel.reload_from("t", copy);
 
     CHECK_FALSE(r.ok);
@@ -316,7 +339,8 @@ TEST_CASE("a reload asks about the NEW bytes, and a refusal leaves the incumbent
     REQUIRE(rec.seen.size() == 1);
     CHECK(rec.seen[0].kind == AdmissionKind::Reload);
     CHECK(rec.seen[0].path == copy);
-    CHECK(rec.seen[0].content_id == loom::file_content_id(copy));
+    REQUIRE(rec.builds.size() == 1);
+    CHECK(rec.builds[0] == loom::file_content_id(copy));
     // The incumbent kept its life and its id.
     CHECK(kernel.is_loaded("t"));
     CHECK(kernel.weave_id("t") == before);
@@ -410,15 +434,213 @@ TEST_CASE("two different files have two different identities, and the same file 
 TEST_CASE("an unreadable file still reaches the policy, named as unidentifiable") {
     Switchboard bus;
     Recorder rec;
+    rec.build_asks = 2;
     Kernel kernel(bus, rec.policy());
 
+    const std::uint64_t scans = file_content_id_scans();
     const LoadResult lr = kernel.load("gone", "/nonexistent/not-a-weave.so");
 
     CHECK_FALSE(lr.ok);
-    // Asked, not skipped: a policy is entitled to refuse a thing it cannot identify,
-    // and an empty content id is how it learns that it cannot.
+    // Asked, not skipped: a policy is entitled to refuse a thing it cannot identify, and
+    // the identity says that it cannot — never an id, and never silence.
     REQUIRE(rec.asked(AdmissionStage::Open) == 1);
-    CHECK(rec.seen[0].content_id.empty());
+    REQUIRE(rec.builds.size() == 2);
+    CHECK(rec.builds[0].empty());
+    CHECK_FALSE(rec.seen[0].build.identified());
+    CHECK(rec.failures[0].find("/nonexistent/not-a-weave.so") != std::string::npos);
+    // A FAILED READING IS STILL ONE READING: the second ask did not try the file again.
+    CHECK(rec.failures[1] == rec.failures[0]);
+    CHECK(file_content_id_scans() - scans == 1);
+}
+
+// ---- the cost of identity: paid by the policy that asks, once per operation ---------
+//
+// The Kernel used to hash the whole image before asking any policy — including one that never
+// read the answer — at every door, and Zengine's replacement-timing tests went red under
+// `trust_every_artifact` for that work alone. These cases count the work itself
+// (`file_content_id_scans()`, the one place a file is hashed) rather than a stopwatch, so they
+// say whether identity work HAPPENED, on any machine.
+
+namespace {
+
+/// Copy `from` to `to` and give the copy `from`'s modification time.
+bool copy_with_time(const std::string& from, const std::string& to) {
+    if (copy_artifact(from, to).empty()) {
+        return false;
+    }
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(from, ec);
+    if (ec) {
+        return false;
+    }
+    std::filesystem::last_write_time(to, t, ec);
+    return !ec;
+}
+
+} // namespace
+
+TEST_CASE("a policy that never asks which build it is makes no door read the file") {
+    Switchboard bus;
+    Kernel kernel(bus, trust_every_artifact("this case counts identity work, and wants none"));
+    Registered coordinator = register_probe(bus, {sbfx::pong_schema()});
+    const WeaveId control = mount_control(kernel, bus);
+    const WeaveId manager = mount_manager(control, bus);
+    const std::string copy = std::string(ZEN_SO_WEAVE) + ".admission-noscan.so";
+    REQUIRE_FALSE(copy_artifact(ZEN_SO_WEAVE, copy).empty());
+
+    const std::uint64_t scans = file_content_id_scans();
+
+    // The direct door, the candidate door and a reload — every door a policy is asked at...
+    REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+    REQUIRE(kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id).ok);
+    REQUIRE(kernel.reload_from("t", copy).reloaded);
+    // ...and the message-driven door, which spends the same load.
+    Registered asker =
+        register_probe(bus, {schema_of<Refused>()}, 2, true,
+                       Grant{}.allow(LoadWeave::zen_name, LoadWeave::zen_version, manager));
+    Value ask(schema_of<LoadWeave>());
+    ask.set("name", Cell::text("by-message"));
+    ask.set("path", Cell::text(ZEN_SO_WEAVE_B));
+    ask.set("role", Cell::text(""));
+    bus.send_as(asker.id, manager, Message(std::move(ask), WeaveId{}, asker.id, 1));
+    bus.drain_until_idle();
+    REQUIRE(kernel.is_loaded("by-message"));
+    // A Kernel nobody configured refuses without reading anything either.
+    Switchboard other_bus;
+    Kernel unconfigured(other_bus);
+    CHECK_FALSE(unconfigured.load("u", ZEN_SO_WEAVE).ok);
+
+    CHECK(file_content_id_scans() - scans == 0);
+    std::remove(copy.c_str());
+}
+
+TEST_CASE("a policy that asks gets the bytes before the file is opened, read once per operation") {
+    Switchboard bus;
+    Recorder rec;
+    rec.build_asks = 2; // twice at each stage: four asks, one reading
+    Kernel kernel(bus, rec.policy());
+
+    const std::uint64_t opened_before = kernel_lifetime_counts().libraries_opened;
+    const std::uint64_t scans = file_content_id_scans();
+    REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+    CHECK(file_content_id_scans() - scans == 1);
+
+    REQUIRE(rec.asked(AdmissionStage::Open) == 1);
+    REQUIRE(rec.asked(AdmissionStage::Speak) == 1);
+    REQUIRE(rec.builds.size() == 4);
+    // Every answer describes the one reading — at both stages, and through the copy of the
+    // request the recorder kept.
+    const std::string expected = loom::file_content_id(ZEN_SO_WEAVE);
+    for (const std::string& b : rec.builds) {
+        CHECK(b == expected);
+    }
+    CHECK(rec.seen[0].build.content_id() == expected);
+    CHECK(file_content_id_scans() - scans == 2); // the reference above; the kept copy read nothing
+    // The `open` answers were in hand before any library had been opened.
+    CHECK(rec.opened_when_asked[0] == opened_before);
+    CHECK(rec.opened_when_asked[1] == opened_before);
+}
+
+TEST_CASE("the candidate door and a reload each read their own bytes, once") {
+    Switchboard bus;
+    Registered coordinator = register_probe(bus, {sbfx::pong_schema()});
+    Recorder rec;
+    rec.build_asks = 1;
+    Kernel kernel(bus, rec.policy());
+    REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
+    const std::string copy = std::string(ZEN_SO_WEAVE) + ".admission-once.so";
+    REQUIRE_FALSE(copy_artifact(ZEN_SO_WEAVE, copy).empty());
+
+    rec.builds.clear();
+    std::uint64_t scans = file_content_id_scans();
+    REQUIRE(kernel.load_candidate("cand", ZEN_SO_WEAVE_B, coordinator.id).ok);
+    CHECK(file_content_id_scans() - scans == 1);
+    REQUIRE(rec.builds.size() == 2);
+    CHECK(rec.builds[0] == rec.builds[1]);
+
+    rec.builds.clear();
+    scans = file_content_id_scans();
+    REQUIRE(kernel.reload_from("t", copy).reloaded);
+    CHECK(file_content_id_scans() - scans == 1);
+    REQUIRE(rec.builds.size() == 2);
+    CHECK(rec.builds[0] == rec.builds[1]);
+    CHECK(rec.builds[0] == loom::file_content_id(copy));
+    CHECK(rec.builds[0] != loom::file_content_id(ZEN_SO_WEAVE_B)); // not the candidate's reading
+
+    std::remove(copy.c_str());
+}
+
+TEST_CASE("each attempt reads the bytes again: a changed build of the same size and time is new") {
+    // THE PIN'S WHOLE PREMISE. A cache keyed by path, size or modification time — or an
+    // earlier attempt's reading reused — would call this the same build. The policy refuses
+    // at `open`, so the altered file is never opened and may be any bytes at all.
+    Switchboard bus;
+    Recorder rec;
+    rec.build_asks = 1;
+    rec.admit_open = false;
+    Kernel kernel(bus, rec.policy());
+    const std::string copy = std::string(ZEN_SO_WEAVE) + ".admission-retry.so";
+    REQUIRE(copy_with_time(ZEN_SO_WEAVE, copy));
+    const auto size_before = std::filesystem::file_size(copy);
+    const auto time_before = std::filesystem::last_write_time(copy);
+
+    std::uint64_t scans = file_content_id_scans();
+    CHECK_FALSE(kernel.load("t", copy).ok);
+    CHECK(file_content_id_scans() - scans == 1);
+
+    {
+        std::fstream f(copy, std::ios::in | std::ios::out | std::ios::binary);
+        REQUIRE(f);
+        const auto middle = static_cast<std::streamoff>(size_before / 2);
+        f.seekg(middle);
+        const int c = f.get();
+        f.seekp(middle);
+        f.put(static_cast<char>(c ^ 0x5a));
+    }
+    std::filesystem::last_write_time(copy, time_before);
+    REQUIRE(std::filesystem::file_size(copy) == size_before);
+    REQUIRE(std::filesystem::last_write_time(copy) == time_before);
+
+    scans = file_content_id_scans();
+    CHECK_FALSE(kernel.load("t", copy).ok);
+    CHECK(file_content_id_scans() - scans == 1);
+
+    REQUIRE(rec.builds.size() == 2);
+    CHECK(rec.builds[0] != rec.builds[1]);
+    CHECK(rec.builds[1] == loom::file_content_id(copy));
+    std::remove(copy.c_str());
+}
+
+TEST_CASE("a build identity nobody asks for is never read, and copies share one reading") {
+    const std::string copy = std::string(ZEN_SO_WEAVE) + ".admission-identity-object.so";
+    REQUIRE_FALSE(copy_artifact(ZEN_SO_WEAVE, copy).empty());
+    const std::uint64_t scans = file_content_id_scans();
+
+    const BuildIdentity original(copy);
+    const BuildIdentity kept = original;
+    CHECK(file_content_id_scans() - scans == 0); // made and copied, never asked
+
+    const std::string first = kept.content_id();
+    CHECK(file_content_id_scans() - scans == 1);
+    CHECK(original.identified());
+    CHECK(original.content_id() == first); // the copy's reading, not a second one
+    CHECK(original.failure().empty());
+    CHECK(file_content_id_scans() - scans == 1);
+
+    // Once read, the answer IS that reading, whatever happens to the file afterwards.
+    std::remove(copy.c_str());
+    CHECK(original.content_id() == first);
+    CHECK(file_content_id_scans() - scans == 1);
+
+    // Naming no file, or supplied whole: answered without touching a disk, and never confused.
+    const BuildIdentity nothing;
+    CHECK_FALSE(nothing.identified());
+    CHECK_FALSE(nothing.failure().empty());
+    const BuildIdentity known = BuildIdentity::known(first);
+    CHECK(known.identified());
+    CHECK(known.content_id() == first);
+    CHECK_FALSE(BuildIdentity::known("").identified());
+    CHECK(file_content_id_scans() - scans == 1);
 }
 
 TEST_CASE("the explicit permissive policy has to be asked for by name, and carries its reason") {
