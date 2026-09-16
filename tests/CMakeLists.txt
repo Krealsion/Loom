@@ -61,7 +61,8 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_history_logger.cpp
     test_component.cpp
     test_pixel.cpp
-    test_bridge.cpp)
+    test_bridge.cpp
+    test_host_policy.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
@@ -106,7 +107,7 @@ target_include_directories(zen-tests PRIVATE
 
 target_link_libraries(zen-tests
     PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-history zen-bridge zen-tui
-            zen-warnings zen-sanitize)
+            zen-host-policy zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(zen-tests PRIVATE zen-kernel)
 endif()
