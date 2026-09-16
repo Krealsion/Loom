@@ -208,6 +208,10 @@ struct Answer {
         Pending,    ///< no attributed answer yet; the conversation is still open
         Refused,    ///< the SEND was refused by the gate; nobody was ever asked
         Unsendable, ///< it could not even be composed (a wrong shape name, say)
+        /// It WAS sent, and this console has no room left to track its answer. A distinct
+        /// state because "it never went" and "it went and cannot be attributed" are
+        /// different facts, and only one of them is fixed by typing the command again.
+        Untracked,
     };
     State state = State::Unsendable;
     std::uint64_t ask = 0;
@@ -371,11 +375,14 @@ public:
         }
         a.ask = sent.ask;
         if (sent.ask == 0) {
-            a.state = Answer::State::Unsendable;
-            a.trouble = "this console is already waiting on " +
+            // THE MESSAGE WENT. What was refused is the bookkeeping, so this says that
+            // rather than implying the send failed — a caller that retried would send a
+            // second copy of something that already arrived.
+            a.state = Answer::State::Untracked;
+            a.trouble = "sent, but this console is already waiting on " +
                         std::to_string(console_->asks_outstanding()) +
-                        " conversations, which is all it tracks; 'asks' lists them and "
-                        "'asks forget <n>' stops waiting on one";
+                        " conversations, which is all it tracks — so its answer cannot be "
+                        "attributed. 'asks' lists them; 'asks forget <n>' makes room.";
             return a;
         }
         service(sent.ask, turns);
@@ -1159,13 +1166,17 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
             return true;
         }
         std::cout << "  sent.";
-        if (auto reply = session.console().settled(c.ask)) {
+        if (c.ask == 0) {
+            std::cout << "  (untracked: this console is waiting on "
+                      << session.console().asks_outstanding()
+                      << " conversations already, so this one's answer cannot be attributed)";
+        } else if (auto reply = session.console().settled(c.ask)) {
             // ATTRIBUTED, not "whatever arrived last". The label names the reply to THIS
             // send, from the weave this send named.
             std::cout << "  reply -> " << reply->label << "  "
                       << HostSession::describe_reply(*reply);
             (void)session.console().forget_ask(c.ask);
-        } else if (c.ask != 0) {
+        } else {
             std::cout << "  no answer yet (ask " << c.ask << "; 'asks' to see it)";
         }
         std::cout << '\n';
