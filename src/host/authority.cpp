@@ -390,25 +390,34 @@ AdmissionPolicy AuthorityStore::policy() {
                                            "baseline: inspectable, and silent until granted");
         }
 
+        // THE BYTES, ASKED FOR HERE AND ONLY HERE. Every branch below names, pins or compares
+        // the build, and asking at `Open` is what makes a pin mean "no other build's code ran":
+        // the file has not been opened yet. The Kernel reads the file on this first ask and
+        // not before, so this policy pays for identity because it uses it; `Speak`, above,
+        // never asks.
+        const std::string& build = req.build.content_id();
+
         const AuthorityRule* rule = find(req.name);
         if (rule == nullptr || !rule->may_run) {
+            // The build is named even in a refusal, so the person approving sees which bytes
+            // they were asked about.
             PendingDecision d;
             d.artifact = req.name;
             d.path = req.path;
-            d.content_id = req.content_id;
+            d.content_id = build;
             d.why = (rule == nullptr)
                         ? "no standing decision for '" + req.name + "'"
                         : "'" + req.name + "' is denied by a standing decision";
             note_pending(d);
             return AdmissionVerdict::refuse(
-                d.why + " (build " + brief(req.content_id) + ", " + req.path +
+                d.why + " (build " + brief(build) + ", " + req.path +
                 "); approve it at the console with:  authority trust " + req.name);
         }
 
-        if (req.content_id.empty()) {
+        if (!req.build.identified()) {
             return AdmissionVerdict::refuse(
-                "'" + req.name + "' could not be identified: its file at " + req.path +
-                " could not be read, so there is no build to check against the decision");
+                "'" + req.name + "' could not be identified (" + req.build.failure() +
+                "), so there is no build to check against the decision");
         }
 
         if (rule->content_id.empty()) {
@@ -419,10 +428,10 @@ AdmissionPolicy AuthorityStore::policy() {
             // Copied out before `put`, which replaces the entry `rule` points into.
             const bool any_build = rule->trust_rebuilds;
             AuthorityRule pinned = *rule;
-            pinned.content_id = req.content_id;
+            pinned.content_id = build;
             std::string why;
             if (put(std::move(pinned), &why)) {
-                notes_.push_back(req.name + ": approved; pinned build " + brief(req.content_id));
+                notes_.push_back(req.name + ": approved; pinned build " + brief(build));
                 return AdmissionVerdict::admit(Grant{}, notes_.back());
             }
             if (any_build) {
@@ -430,7 +439,7 @@ AdmissionPolicy AuthorityStore::policy() {
                 // person said any build of this may run, so not knowing which one did
                 // withdraws nothing they granted. The missing record is said, not hidden.
                 notes_.push_back(req.name + ": admitted because trust_rebuilds is on; build " +
-                                 brief(req.content_id) + " could not be recorded (" + why + ")");
+                                 brief(build) + " could not be recorded (" + why + ")");
                 return AdmissionVerdict::admit(Grant{}, notes_.back());
             }
             // REFUSED, BECAUSE THE PIN IS THE APPROVAL'S BOUNDARY. Without `--rebuilds` the
@@ -445,12 +454,12 @@ AdmissionPolicy AuthorityStore::policy() {
                 "'" + req.name + "' is approved, but this host could not record which build of it "
                 "runs (" + why + "). You chose to be asked again when it changes, and without that "
                 "record a different build would not be noticed, so build " +
-                brief(req.content_id) + " was not started. Your decision is unchanged: make the "
+                brief(build) + " was not started. Your decision is unchanged: make the "
                 "decision store writable and start it again.");
         }
 
-        if (rule->content_id == req.content_id) {
-            return AdmissionVerdict::admit(Grant{}, "approved build " + brief(req.content_id));
+        if (rule->content_id == build) {
+            return AdmissionVerdict::admit(Grant{}, "approved build " + brief(build));
         }
 
         if (rule->trust_rebuilds) {
@@ -460,7 +469,7 @@ AdmissionPolicy AuthorityStore::policy() {
             // Found by reading the note it printed.
             const std::string was = rule->content_id;
             AuthorityRule repinned = *rule;
-            repinned.content_id = req.content_id;
+            repinned.content_id = build;
             std::string why;
             const bool repinned_ok = put(std::move(repinned), &why);
             // Said out loud rather than passed over. "Nothing changed" and "you are
@@ -469,7 +478,7 @@ AdmissionPolicy AuthorityStore::policy() {
             // this lands in notes(), which the host prints with the boot report and straight
             // after the command that caused it.
             notes_.push_back(req.name + ": REBUILT since you approved it (" + brief(was) + " -> " +
-                             brief(req.content_id) + "), admitted because trust_rebuilds is on" +
+                             brief(build) + "), admitted because trust_rebuilds is on" +
                              (repinned_ok ? std::string()
                                           : std::string("; the new build could NOT be recorded (") +
                                                 why + "), so the pin still names " + brief(was)));
@@ -479,13 +488,13 @@ AdmissionPolicy AuthorityStore::policy() {
         PendingDecision d;
         d.artifact = req.name;
         d.path = req.path;
-        d.content_id = req.content_id;
+        d.content_id = build;
         d.pinned = rule->content_id;
         d.why = "the file changed since it was approved";
         note_pending(d);
         return AdmissionVerdict::refuse(
             "'" + req.name + "' changed since it was approved (approved " + brief(rule->content_id) +
-            ", now " + brief(req.content_id) +
+            ", now " + brief(build) +
             "); its speech authority is unchanged, but the code is not the code that was "
             "approved. Re-approve this build with:  authority trust " + req.name +
             "    or, if you are developing it:  authority trust " + req.name + " --rebuilds");

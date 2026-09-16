@@ -59,6 +59,7 @@
 // for in OS terms, not in message terms. Widening CapabilityAsk to carry a send-ask is
 // an ABI change and is deliberately not made here.
 
+#include <zen/content_id.hpp>           // BuildIdentity
 #include <zen/kernel/schema_codec.hpp> // CapabilityAsk
 #include <zen/switchboard/grant.hpp>
 
@@ -107,17 +108,33 @@ struct AdmissionRequest {
     /// so a policy that cares which office an artifact may take has to care here.
     std::string role;
 
-    /// SHA-256 of the file's bytes, truncated to 128 bits, lowercase hex — the same
-    /// identity `so_content_hash` computes for the isolation ledger, so one host can
-    /// key one record by both. Empty when the file could not be read at all (the
-    /// Kernel will then fail the open anyway; a policy shown an empty id is being
-    /// asked about something it cannot identify, and should say no).
+    /// WHICH BUILD THIS IS, BY ITS BYTES — computed only if the policy asks.
+    ///
+    /// `build.content_id()` is SHA-256 of the file's bytes, truncated to 128 bits,
+    /// lowercase hex — the same identity `so_content_hash` computes for the isolation
+    /// ledger, so one host can key one record by both. `build.identified()` is false when
+    /// the file could not be read, and `build.failure()` then says so: a policy asked
+    /// about something it cannot identify should say no.
+    ///
+    /// ASKING IS THE COST, AND NOT ASKING COSTS NOTHING. The first ask reads and hashes
+    /// the whole file; a policy that never asks — `trust_every_artifact`, `admit_nothing`,
+    /// a policy that decides by name — makes the Kernel read nothing. The Kernel makes ONE
+    /// identity per operation (one load, one candidate, one reload) and hands the same one
+    /// to both stages, so however often and at whichever stage a policy asks, the file is
+    /// read once and every answer describes that one reading; the next operation reads
+    /// again, and never reuses this one's answer as proof of its bytes. A policy may keep a
+    /// copy of the request: the copy shares the reading and keeps it alive.
+    ///
+    /// A PIN IS CHECKED AT `Open`. Asked there, the identity is the bytes on disk before
+    /// the library is opened, so a refusal still means no code from the file ran. First
+    /// asked at `Speak`, it describes the file as it is after the open, and the code that
+    /// file contained has already run.
     ///
     /// IT NAMES A BUILD BY ITS BYTES AND VOUCHES FOR NOBODY. A rebuild is a new
     /// identity — the honest default, and the reason a policy needs an answer to "the
     /// bytes changed" that is not merely "ask again". Authorship is the identity
     /// phase's; nothing here is a signature.
-    std::string content_id;
+    BuildIdentity build;
 
     /// The manifest's ask — ADVICE, never authority (see the header note). Only
     /// populated at Speak, because it does not exist until the artifact has been

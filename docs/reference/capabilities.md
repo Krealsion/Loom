@@ -227,6 +227,25 @@ which [GATE-05](../laws/admission-laws.md) freezes, so only its yes-or-no is
 consulted. A host that wants reloaded code to hold different authority refuses the
 reload and replaces the artifact instead.
 
+**Which build it is — known only if the policy asks.** `AdmissionRequest::build` names the
+artifact by its bytes: `build.content_id()` is the same truncated SHA-256 the isolation
+ledger keys by. It is worked out the first time a policy asks, by reading and hashing the
+whole file — for a multi-megabyte Debug image, a large fraction of a second — and never
+otherwise, so a policy that decides without the bytes (`trust_every_artifact`,
+`admit_nothing`, a decision by name) makes the Kernel read nothing. The Kernel makes **one**
+identity per operation — a load, a candidate, a reload — and both stages share it: a policy
+that asks twice, at both stages or through a copy of the request it kept, gets one reading,
+and every answer describes it. The next operation reads again; an earlier attempt's answer
+is never taken as proof of the current bytes, and neither is a path, a size or a
+modification time. A pin belongs at `Open`, where the identity describes the file before its
+code has run; first asked at `Speak`, it describes the file after. A file that cannot be read
+answers `identified() == false`, with `failure()` saying why — there is no way to see an
+identity nobody asked for, so none can pass for a build or for a failure.
+`loom::file_content_id_scans()` counts every reading, which is how the `admission` suite
+tells whether an operation did identity work at all, rather than timing it. (It was once
+computed for every policy-mediated load, whether the policy read it or not, and that alone
+failed Zengine's replacement-timing tests under `trust_every_artifact`.)
+
 Two things this is **not**:
 
 - **Not containment.** Refusing at `Open` is a decision about a *file*; it is the

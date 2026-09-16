@@ -62,7 +62,8 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_component.cpp
     test_pixel.cpp
     test_bridge.cpp
-    test_host_policy.cpp)
+    test_host_policy.cpp
+    test_host_input.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
@@ -674,6 +675,11 @@ add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
 # person types into — its own hidden console on Windows, a pseudo-terminal on POSIX — and types.
 #
 #   host_line_input       (portable) LineInput itself, on that terminal.
+#   host_line_streams     (portable) LineInput on a pipe and a file: the input limits, with the
+#                         same assertions on every platform — a producer held back while the host
+#                         takes nothing, every line then exact and in order, commands at and over
+#                         the limit, a line that never ends, the end, and stopping a reader while
+#                         its producer waits for room. Not a terminal, and not evidence about one.
 #   host_terminal_weaves  (kernel)   a real loom-host with the probe booted, typed at.
 find_package(Threads REQUIRED)
 add_executable(zen-host-terminal-witness host_terminal/witness.cpp)
@@ -681,6 +687,10 @@ target_link_libraries(zen-host-terminal-witness
     PRIVATE zen-host-policy Threads::Threads zen-warnings zen-sanitize)
 add_test(NAME host_line_input COMMAND zen-host-terminal-witness reader)
 set_tests_properties(host_line_input PROPERTIES TIMEOUT 240)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/host-process-work/streams)
+add_test(NAME host_line_streams COMMAND zen-host-terminal-witness streams
+    ${CMAKE_BINARY_DIR}/host-process-work/streams)
+set_tests_properties(host_line_streams PROPERTIES TIMEOUT 240)
 
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #

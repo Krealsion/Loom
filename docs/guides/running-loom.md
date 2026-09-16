@@ -504,6 +504,23 @@ terminal's own editing — echo, backspace, history — is untouched, because th
 changes its mode. (On Windows a console cannot be asked whether a line is finished, so the
 host reads it on a thread of its own and hands each finished line to the loop.)
 
+A command is one line of at most **4000 bytes**. A longer line is refused where it stands,
+and none of it runs — not a shortened version, and not its end as a second command. Say it
+again, shorter; what you type next is read as usual:
+
+```text
+loom> send 6 Bump 1 what="aaaaaaaaaaaa…"
+  refused: input line 12 is longer than 4000 bytes, the longest command this host reads, so none of it was run. It began: send 6 Bump 1 what="aaaaaaaaaaaa...
+  send it again, shorter; the lines after it are read as usual.
+```
+
+The same rules hold for a script you pipe in (`loom-host < commands.txt`). The
+host reads it as fast as it runs the commands, however long it is, and holds at most 64 KiB
+of it at a time; a line that is too long is refused by its line number, and the rest of
+the script still runs. A Linux terminal itself keeps only the first 4095 bytes of a typed
+line, which is why the limit sits below that: a line the terminal cut short is refused,
+never run as the shorter command it became.
+
 The other side of that bound: an answer may not have arrived by the time the host would
 like to print one. It says so, and does not invent one:
 
@@ -550,6 +567,7 @@ what debugging this is:
 | `error: expected ';' before …` from `cmake --build` | **your compiler.** Loom is not involved and never ran | your source |
 | `Could not find a package configuration file provided by "loom"` | **CMake**, at configure time | `CMAKE_PREFIX_PATH` — the prefix, not `lib/cmake/loom` |
 | `open failed: …cannot open shared object file` | **the loader.** The path in your boot plan is wrong, or you have not built | the path, or `cmake --build` |
+| `refused: input line N is longer than 4000 bytes` | **the line's length.** None of it ran | say it again shorter, or split it into several commands |
 | `admission refused at open: …` | **your own policy.** Nothing about the artifact is wrong | `authority trust <name>` at the console |
 | `admission refused at speak: …` | your policy again, but the code already ran — see [admission](../reference/capabilities.md#admitting-a-loaded-artifact) | the console |
 | `Refused … [CapabilityDenied]` on the tap | **authority.** The weave tried to say something it may not | `authority allow <name> <rule>` |
