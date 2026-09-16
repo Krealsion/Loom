@@ -99,6 +99,17 @@ struct WardenState {
     ZEN_SHAPE(WardenState, 1, ZEN_FIELD(syncs), ZEN_FIELD(installs));
 };
 
+/// WHAT ONE INSTALL DID, in words the caller can print or answer with.
+///
+/// `report` is rendered from the SNAPSHOT the bus handed back, never from what the store
+/// said — so it cannot claim a permission the bus did not take. If the two ever disagreed,
+/// this line would be the lie.
+struct Installed {
+    bool ok = false;
+    WeaveId subject{};
+    std::string report;
+};
+
 class HostWarden final
     : public WeaveBase<HostWarden, WardenState, Accept<HostAuthoritySync, HostDescribeAuthority>,
                        Emit<Result, Refused, AuthorityDescription>> {
@@ -108,20 +119,46 @@ public:
     /// either.
     HostWarden(const AuthorityStore& store, WeaveId seat) : store_(&store), seat_(seat) {}
 
-    /// Hand the warden the capability to administer one loaded artifact. Called by the
-    /// host right after a successful load, and by nothing else. A second call for the
-    /// same name replaces the capability, which is what a reload or a replacement
-    /// needs — the old one names a subject that may no longer exist.
+    /// Hand the warden the capability to administer one loaded artifact. A second call
+    /// for the same name replaces the capability, which is what a reload or a
+    /// replacement needs — the old one names a subject that may no longer exist.
     void govern(const std::string& artifact, GrantAuthority authority) {
         governed_.insert_or_assign(artifact, std::move(authority));
     }
 
+    /// PUT A FRESHLY COMMITTED INCARNATION UNDER ADMINISTRATION AND MAKE THE BUS AGREE
+    /// WITH THE FILE — in one act, inside the delivery that committed it.
+    ///
+    /// The host wires this into the kernel door's `loom::LifecycleAdoption`, which is
+    /// the only moment early enough: everything after it is queue order, and the
+    /// weave's own `zen.Activated` is queued before the operation's answer reaches
+    /// anyone. So an approval a person already made is in force for the incarnation's
+    /// first breath rather than one turn too late.
+    ///
+    /// `mail` belongs to the door, not to this warden, and that is not a second writer:
+    /// `delegate_authority` is authorized by possession of the capability and records
+    /// the caller only for diagnostics (GATE-05), and the capability, the rules and the
+    /// decision of what to install are all still this object's. The write path below is
+    /// literally the same function the operator's own `AuthoritySync` runs.
+    Installed adopt(Mail& mail, const std::string& artifact, GrantAuthority authority) {
+        govern(artifact, std::move(authority));
+        return install(mail, artifact);
+    }
+
     /// Forget an artifact's capability — after an unload, when there is nothing left
     /// to administer. Dropping it is not a revocation: an unloaded weave's authority
-    /// went with it.
+    /// went with it, and the person's standing decision in the file is untouched.
     void release(const std::string& artifact) { governed_.erase(artifact); }
 
     bool governs(const std::string& artifact) const { return governed_.count(artifact) != 0; }
+
+    /// The subject this warden currently administers under `artifact`, or an invalid id.
+    /// A FACT ABOUT THE CAPABILITY, never about a payload — it is what the host prints
+    /// when it says which weave it just put under administration.
+    WeaveId subject_of(const std::string& artifact) const {
+        auto it = governed_.find(artifact);
+        return it == governed_.end() ? WeaveId{} : it->second.subject();
+    }
 
     /// A warden does not reload: a revived one would come back governing nobody while
     /// the host still believed it governed everything. Same argument the Weaver makes.
@@ -134,44 +171,12 @@ public:
                                       "seat only"});
             return;
         }
-        auto it = governed_.find(s.artifact);
-        if (it == governed_.end()) {
-            (void)mail.answer(
-                Refused{"this host holds no authority over '" + s.artifact +
-                        "': nothing by that name is loaded, so there is nothing to administer"});
-            return;
+        const Installed done = install(mail, s.artifact);
+        if (done.ok) {
+            (void)mail.answer(Result{done.report});
+        } else {
+            (void)mail.answer(Refused{done.report});
         }
-        // THE FILE IS THE REQUEST. A forgotten artifact yields `nothing()`, so removing
-        // a decision and revoking it are the same act with the same code path — there
-        // is no separate revoke to get wrong.
-        LiveAuthority next;
-        std::string why;
-        if (const AuthorityRule* rule = store_->find(s.artifact)) {
-            if (!to_live_authority(*rule, &next, &why)) {
-                (void)mail.answer(Refused{why});
-                return;
-            }
-        }
-        const GrantChange change = mail.delegate_authority(it->second, std::move(next));
-        if (change.outcome != GrantOutcome::Installed) {
-            (void)mail.answer(Refused{std::string("could not administer '") + s.artifact +
-                                      "': " + name_of(change.outcome)});
-            return;
-        }
-        ++state_.installs;
-        // Rendered from the SNAPSHOT the bus handed back, never from what the store
-        // said — so this line cannot claim a permission the bus did not take. The
-        // Weaver's rule, and its reason: if the two ever disagreed, this line would be
-        // the lie.
-        std::string report = "weave " + std::to_string(change.subject.value) + " may now say: ";
-        const std::vector<std::string> rendered = render_authority(change.installed);
-        if (rendered.empty()) {
-            report += "nothing";
-        }
-        for (std::size_t i = 0; i < rendered.size(); ++i) {
-            report += (i == 0 ? "" : "; ") + rendered[i];
-        }
-        (void)mail.answer(Result{report});
     }
 
     /// The read half, through the same capability and with the same scope. Reading an
@@ -198,6 +203,46 @@ public:
     }
 
 private:
+    /// THE ONE WRITE PATH, and the reason there is only one. Two entry points reach it —
+    /// the operator's `AuthoritySync` and the host's adoption of a freshly loaded
+    /// artifact — and if each installed authority its own way, "what did I approve" would
+    /// have two answers that could drift. Everything policy-shaped is here; the entry
+    /// points decide only who may ask.
+    Installed install(Mail& mail, const std::string& artifact) {
+        auto it = governed_.find(artifact);
+        if (it == governed_.end()) {
+            return {false, WeaveId{},
+                    "this host holds no authority over '" + artifact +
+                        "': nothing by that name is loaded, so there is nothing to administer"};
+        }
+        // THE FILE IS THE REQUEST. A forgotten artifact yields `nothing()`, so removing
+        // a decision and revoking it are the same act with the same code path — there
+        // is no separate revoke to get wrong.
+        LiveAuthority next;
+        std::string why;
+        if (const AuthorityRule* rule = store_->find(artifact)) {
+            if (!to_live_authority(*rule, &next, &why)) {
+                return {false, it->second.subject(), why};
+            }
+        }
+        const GrantChange change = mail.delegate_authority(it->second, std::move(next));
+        if (change.outcome != GrantOutcome::Installed) {
+            return {false, change.subject,
+                    std::string("could not administer '") + artifact + "': " +
+                        name_of(change.outcome)};
+        }
+        ++state_.installs;
+        std::string report = "weave " + std::to_string(change.subject.value) + " may now say: ";
+        const std::vector<std::string> rendered = render_authority(change.installed);
+        if (rendered.empty()) {
+            report += "nothing";
+        }
+        for (std::size_t i = 0; i < rendered.size(); ++i) {
+            report += (i == 0 ? "" : "; ") + rendered[i];
+        }
+        return {true, change.subject, report};
+    }
+
     const AuthorityStore* store_;
     WeaveId seat_;
     /// Host-supplied wiring, not state: capabilities are not values and never cross

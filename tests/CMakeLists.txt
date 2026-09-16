@@ -257,6 +257,20 @@ target_link_libraries(zen_test_joint PRIVATE loom zen-switchboard zen-warnings z
 loom_weave_build_contract(zen_test_joint)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_JOINT=\"$<TARGET_FILE:zen_test_joint>\"")
 
+# The supplied host's probe, in two variants from one source. It is the fixture the
+# `host_process` lane drives a REAL loom-host against: it counts authenticated
+# activations, sends itself a message on activation (the send an approved permission must
+# already cover), re-arms a Spin forever (the cooperative busy weave), and — in the FORGE
+# variant — authors an unasked `zen.Result` at the console, which is the value that once
+# became the subject of a host-minted administration capability.
+add_library(zen_host_probe SHARED weavelib/host_probe.cpp)
+target_link_libraries(zen_host_probe PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_host_probe)
+add_library(zen_host_probe_forge SHARED weavelib/host_probe.cpp)
+target_link_libraries(zen_host_probe_forge PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+target_compile_definitions(zen_host_probe_forge PRIVATE ZEN_PROBE_FORGE)
+loom_weave_build_contract(zen_host_probe_forge)
+
 # R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
 # under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
 # where the pipe's fail-closed law is the thing under test.
@@ -308,6 +322,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
     zen_test_office_worker zen_test_dispatch zen_test_joint
+    zen_host_probe zen_host_probe_forge
     zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
@@ -627,6 +642,28 @@ add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
     "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
 
+# ---- The supplied host, as a real process (FRIC-1 / GATE-05 / LIFE-04) ----------------
+#
+# Loom's one INSTALLED executable had a suite for its grammar and none for its glue, and
+# every defect it shipped was in the glue: which arriving message answered which question,
+# when an approved permission became effective, whether the operator could still be heard
+# while a loaded weave kept the bus busy. None of those is visible to a test of the
+# deciding half, and all of them are visible in one console transcript.
+#
+# TWO ENTRIES, because two configurations can answer different parts. `host_console` needs
+# no kernel at all -- the broken-plan recovery route, decision-store ownership between two
+# REAL processes, repeated approval, and a failed write that must change nothing -- so it
+# runs in every configuration including a kernel-less Windows build. `host_process_weaves`
+# rides the kernel gate because its subject is loaded artifacts.
+#
+# The scenarios assert identities, counts and effective authority, never whole sentences:
+# see the header of tests/host_process/run.cmake for what that buys and what it gives up.
+add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
+    -DZEN_HOST_EXE=$<TARGET_FILE:loom-host>
+    -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/console
+    -DZEN_GROUP=console
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
+
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #
 # What the `population` entry does for the test population, these do for the loadable
@@ -738,4 +775,15 @@ if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_cont
         -DZEN_REQUIRED=${CMAKE_CURRENT_BINARY_DIR}/weave_population_required.txt
         -DZEN_CONTRACTED=${CMAKE_CURRENT_BINARY_DIR}/weave_contract_manifest.txt
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_population.cmake)
+
+    # The half of the host-process lane that needs loadable artifacts: attribution,
+    # activation, adoption by every route that can load anything, and responsiveness while
+    # a cooperative weave keeps the bus non-empty forever.
+    add_test(NAME host_process_weaves COMMAND ${CMAKE_COMMAND}
+        -DZEN_HOST_EXE=$<TARGET_FILE:loom-host>
+        -DZEN_PROBE_LIB=$<TARGET_FILE:zen_host_probe>
+        -DZEN_PROBE_FORGE_LIB=$<TARGET_FILE:zen_host_probe_forge>
+        -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/weaves
+        -DZEN_GROUP=weaves
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
 endif()

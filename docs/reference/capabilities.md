@@ -57,6 +57,43 @@ when it was authored. And the administrator never becomes the sender — no
 message is queued at all, so the governed subject retries its own action and
 the target sees the subject.
 
+### When delegated authority can first be installed
+
+A capability names a subject, and a subject does not exist until the Kernel has
+registered the weave. So the earliest moment a host can install what a person
+already approved is **after registration**, and the latest moment that is still
+useful is **before the new incarnation is told it is live** — because a weave
+that begins working on `zen.Activated` uses its authority in that very handler.
+
+Those two moments have exactly one window between them, and it is inside
+`ControlWeave`'s own delivery (`kernel/control.hpp`): everything the door queues
+afterwards is FIFO, and the asker always hears last. A host that installs
+authority when the *load operation answers* is therefore necessarily one turn
+late — its subject's first breath is refused `CapabilityDenied` under a
+permission the person had already granted, and the tap shows the activation, the
+refusal, and the installation, in that order.
+
+`loom::LifecycleAdoption` is that window offered to the host, as host-supplied
+wiring handed to `mount_control` beside the `LifecycleAuthority`:
+
+| | |
+|---|---|
+| `admitted(mail, name, id)` | a committed incarnation, before `zen.Activated` is queued for it. `id` is the **Kernel's** fact about what it registered, never a payload |
+| `retired(mail, name)` | after an unload, by name, for `UnloadLibrary` and `UnloadRole` alike |
+
+It decides nothing: the operation has already committed when it is called, and
+the callback's outcome cannot refuse it. Admission — *may this code run, and what
+is its baseline* — is a different question, two stages earlier, and stays with
+[`AdmissionPolicy`](#admitting-a-loaded-artifact). What this adds is only that a
+host with standing decisions can make them effective in time.
+
+Because the window belongs to the **door**, every route that can load anything
+passes through it: a host's own boot walk, an operator command, and an ordinary
+`zen.LoadWeave` a weave sends to the Manager of its own accord. A host that
+adopted at one of its own call sites governed only the artifacts that arrived
+that way. The supplied host is the first consumer
+([running Loom](../guides/running-loom.md)).
+
 This is **message authority only**. It is not "grants are now mutable": an
 isolated child's namespace, mount view and cgroup leaf were built before it
 ran, and no write in this process moves them.

@@ -11,9 +11,12 @@
 #include <zen/value.hpp>
 #include <zen/weave/poke.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace loom::host {
 
@@ -170,6 +173,44 @@ bool apply_rule(const std::string& raw, LiveAuthority* into, std::string* error)
     return false;
 }
 
+std::string canonical_rule(const std::string& raw, bool observe) {
+    const std::string text = trim(raw);
+    if (!observe) {
+        return text;
+    }
+    return (text.rfind("observe ", 0) == 0) ? text : ("observe " + text);
+}
+
+std::size_t collapse_duplicates(AuthorityRule* rule) {
+    std::size_t removed = 0;
+    const auto once = [&removed](std::vector<std::string>& v, bool observe) {
+        std::vector<std::string> kept;
+        for (const std::string& r : v) {
+            const std::string text = canonical_rule(r, observe);
+            if (text.empty()) {
+                ++removed;
+                continue;
+            }
+            bool seen = false;
+            for (const std::string& k : kept) {
+                if (k == text) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen) {
+                ++removed;
+            } else {
+                kept.push_back(text);
+            }
+        }
+        v = std::move(kept);
+    };
+    once(rule->send, /*observe=*/false);
+    once(rule->observe, /*observe=*/true);
+    return removed;
+}
+
 bool to_live_authority(const AuthorityRule& rule, LiveAuthority* out, std::string* error) {
     for (const std::string& r : rule.send) {
         if (!apply_rule(r, out, error)) {
@@ -232,6 +273,16 @@ bool AuthorityStore::open(const std::string& path, std::string* error) {
             *error = "authority store '" + path + "': " + why;
             return false;
         }
+        // AND A HAND-EDITED FILE GETS THE SAME COLLAPSE A CONSOLE APPROVAL DOES. A file
+        // is a surface a person edits directly, so "I wrote this permission twice" has
+        // to mean the same thing here as it does at the console: one permission, one
+        // revoke that takes it back. Said out loud rather than silently tidied.
+        const std::size_t dropped = collapse_duplicates(&r);
+        if (dropped != 0) {
+            notes_.push_back(r.artifact + ": " + std::to_string(dropped) +
+                             " repeated permission(s) in the store read as one each; a single "
+                             "'authority revoke' now takes each of them back");
+        }
         rules_[r.artifact] = std::move(r);
     }
     return true;
@@ -256,27 +307,43 @@ bool AuthorityStore::put(AuthorityRule rule, std::string* error) {
     if (!to_live_authority(rule, &probe, error)) {
         return false; // never write a decision the host could not carry out
     }
+    (void)collapse_duplicates(&rule); // one permission, one revoke that takes it back
+    std::map<std::string, AuthorityRule> candidate = rules_;
     const std::string key = rule.artifact;
-    rules_[key] = std::move(rule);
-    return write(error);
+    candidate[key] = std::move(rule);
+    return commit(std::move(candidate), error);
 }
 
 bool AuthorityStore::forget(const std::string& artifact, std::string* error) {
-    if (rules_.erase(artifact) == 0) {
+    std::map<std::string, AuthorityRule> candidate = rules_;
+    if (candidate.erase(artifact) == 0) {
         *error = "no standing decision for '" + artifact + "'";
         return false;
     }
-    return write(error);
+    return commit(std::move(candidate), error);
 }
 
-bool AuthorityStore::write(std::string* error) const {
+bool AuthorityStore::commit(std::map<std::string, AuthorityRule> candidate, std::string* error) {
+    // THE FILE IS WRITTEN BEFORE THE POLICY CHANGES, not after. A failed write leaves
+    // this host permitting exactly what it permitted before the command — and the
+    // command says so. The reverse order is how an unwritable store came to grant an
+    // approval for one session that the next boot had never heard of.
+    if (!write(candidate, error)) {
+        return false;
+    }
+    rules_ = std::move(candidate);
+    return true;
+}
+
+bool AuthorityStore::write(const std::map<std::string, AuthorityRule>& rules,
+                           std::string* error) const {
     if (path_.empty()) {
         return true; // in-memory only (no --authority given)
     }
     loom::Value v(store_schema());
     std::vector<loom::Cell> entries;
-    entries.reserve(rules_.size());
-    for (const auto& [name, r] : rules_) {
+    entries.reserve(rules.size());
+    for (const auto& [name, r] : rules) {
         loom::Value e(rule_schema());
         e.set("artifact", loom::Cell::text(r.artifact));
         e.set("content_id", loom::Cell::text(r.content_id));
@@ -351,8 +418,18 @@ AdmissionPolicy AuthorityStore::policy() {
             AuthorityRule pinned = *rule;
             pinned.content_id = req.content_id;
             std::string why;
-            (void)put(std::move(pinned), &why); // a failed write loses the pin, not the decision
-            notes_.push_back(req.name + ": approved; pinned build " + brief(req.content_id));
+            if (put(std::move(pinned), &why)) {
+                notes_.push_back(req.name + ": approved; pinned build " + brief(req.content_id));
+            } else {
+                // SAID, NOT SWALLOWED. The decision to RUN is the person's and is
+                // already durable; what failed is the record of WHICH BUILD ran under
+                // it, and the consequence is concrete — the next load of a different
+                // build will be admitted silently instead of asking. A note that a
+                // person reads after every boot is the honest place for that.
+                notes_.push_back(req.name + ": approved, but the build could not be pinned (" +
+                                 why + "); until this store is writable a CHANGED build of '" +
+                                 req.name + "' will be admitted without asking");
+            }
             return AdmissionVerdict::admit(Grant{}, notes_.back());
         }
 
@@ -369,13 +446,16 @@ AdmissionPolicy AuthorityStore::policy() {
             AuthorityRule repinned = *rule;
             repinned.content_id = req.content_id;
             std::string why;
-            (void)put(std::move(repinned), &why);
+            const bool repinned_ok = put(std::move(repinned), &why);
             // Said out loud rather than passed over. "Nothing changed" and "you are
             // running code you have not seen before, under authority you granted
             // earlier" are different facts and a person should be able to tell — so
             // this lands in notes(), which the host prints after every boot.
             notes_.push_back(req.name + ": REBUILT since you approved it (" + brief(was) + " -> " +
-                             brief(req.content_id) + "), admitted because trust_rebuilds is on");
+                             brief(req.content_id) + "), admitted because trust_rebuilds is on" +
+                             (repinned_ok ? std::string()
+                                          : std::string("; the new build could NOT be recorded (") +
+                                                why + "), so the pin still names " + brief(was)));
             return AdmissionVerdict::admit(Grant{}, notes_.back());
         }
 

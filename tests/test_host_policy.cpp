@@ -22,14 +22,18 @@
 #include "authority.hpp"
 #include "boot_plan.hpp"
 #include "config_file.hpp"
+#include "store_lock.hpp"
 
 #include <zen/content_id.hpp>
 #include <zen/kernel/admission.hpp>
 #include <zen/switchboard/grant.hpp>
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace loom;
@@ -60,6 +64,13 @@ struct Scratch {
 /// gets to fall into it once.
 bool permits_anyone(const LiveAuthority& a, const char* shape, std::uint32_t version) {
     return a.permits(shape, version, WeaveId{9999});
+}
+
+std::string read_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
 }
 
 AuthorityRule rule_for(const char* name, bool may_run = true) {
@@ -564,6 +575,270 @@ TEST_CASE("the identity a decision is pinned to is the file's bytes, and says so
 
     // And the non-throwing form answers empty rather than losing the caller's own error.
     CHECK(loom::file_content_id_or_empty("/no/such/file/anywhere.so").empty());
+}
+
+
+// ---- durability: a failed write must change NOTHING -------------------------
+//
+// The store used to change its map and then try to write it, so an unwritable file
+// printed `cannot write` and changed what the host permitted anyway: `authority trust x`
+// failed, `start x` then succeeded under the failed approval, and a restart lost the
+// decision nobody had been told was not made. The candidate is written first now.
+//
+// THE INJECTION: the temp path is a DIRECTORY, which no open-for-write and no rename can
+// replace. It is a real filesystem refusal on both platforms rather than a seam a caller
+// could be given to stub out — this store's whole job is to be believed about the disk.
+
+namespace {
+
+/// Make `<path>.tmp` an unusable destination, and clean it up again.
+struct BlockedTemp {
+    std::string tmp;
+    explicit BlockedTemp(const std::string& path) : tmp(path + ".tmp") {
+        std::filesystem::remove(tmp);
+        std::filesystem::create_directory(tmp);
+    }
+    ~BlockedTemp() {
+        std::error_code ignored;
+        std::filesystem::remove_all(tmp, ignored);
+    }
+};
+
+} // namespace
+
+TEST_CASE("a decision that could not be written did not happen, live or remembered") {
+    Scratch f("failed-write");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+
+    BlockedTemp blocked(f.path);
+    REQUIRE_FALSE(store.put(rule_for("probe"), &error));
+    CHECK(error.find("cannot write") != std::string::npos);
+
+    // THE LIVE HALF. This is the assertion the old order could not make: the policy the
+    // running host is deciding by must not have changed.
+    CHECK(store.find("probe") == nullptr);
+    CHECK(store.rules().empty());
+    // ...and the durable half: nothing was created at all.
+    CHECK_FALSE(std::filesystem::exists(f.path));
+
+    // And the positive control, in the same case so "nothing was remembered" above is a
+    // distinction rather than a store that never remembers anything.
+    std::filesystem::remove_all(blocked.tmp);
+    REQUIRE(store.put(rule_for("probe"), &error));
+    REQUIRE(store.find("probe") != nullptr);
+    CHECK(store.find("probe")->may_run);
+}
+
+TEST_CASE("a forget that could not be written leaves the decision in force") {
+    Scratch f("failed-forget");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+    REQUIRE(store.put(rule_for("probe"), &error));
+
+    BlockedTemp blocked(f.path);
+    REQUIRE_FALSE(store.forget("probe", &error));
+    // Still permitted, here and after a restart — which is the only honest reading of a
+    // command that reported it could not write.
+    REQUIRE(store.find("probe") != nullptr);
+    CHECK(store.find("probe")->may_run);
+
+    AuthorityStore reread;
+    REQUIRE(reread.open(f.path, &error));
+    REQUIRE(reread.find("probe") != nullptr);
+}
+
+TEST_CASE("the policy says so when a build could not be pinned, and does not pretend") {
+    Scratch f("failed-pin");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+    REQUIRE(store.put(rule_for("probe"), &error)); // approved, unpinned
+
+    Scratch artifact("failed-pin-artifact");
+    artifact.write("some bytes");
+    AdmissionRequest q = open_of("probe", loom::file_content_id(artifact.path), artifact.path.c_str());
+
+    BlockedTemp blocked(f.path);
+    const AdmissionVerdict v = store.policy()(q);
+    // ADMITTED: the person's decision to let it RUN is already durable, and refusing here
+    // would punish them for a disk they cannot see. What failed is the record of WHICH
+    // BUILD ran, and the consequence of that is concrete and is said.
+    CHECK(v.admitted);
+    REQUIRE_FALSE(store.notes().empty());
+    const std::string& note = store.notes().back();
+    CHECK(note.find("could not be pinned") != std::string::npos);
+    CHECK(note.find("without asking") != std::string::npos);
+    // ...and the pin really is absent, rather than recorded in memory only.
+    REQUIRE(store.find("probe") != nullptr);
+    CHECK(store.find("probe")->content_id.empty());
+}
+
+TEST_CASE("replacement preserves the previous record when it cannot happen") {
+    // `write_gated_file` removed the destination and THEN renamed, so an interruption or a
+    // failed rename between the two lost the last good record. The header claimed atomic
+    // replacement; the code did not implement one. Both platforms replace in ONE operation
+    // now, and this is the observable consequence: a failed write leaves the old file
+    // exactly as it was, byte for byte.
+    Scratch f("atomic-replace");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+    REQUIRE(store.put(rule_for("first"), &error));
+    REQUIRE(std::filesystem::exists(f.path));
+    const std::string before = read_file(f.path);
+    REQUIRE(before.find("first") != std::string::npos);
+
+    {
+        BlockedTemp blocked(f.path);
+        REQUIRE_FALSE(store.put(rule_for("second"), &error));
+    }
+    CHECK(read_file(f.path) == before); // untouched, not deleted and not half-written
+
+    AuthorityStore reread;
+    REQUIRE(reread.open(f.path, &error));
+    CHECK(reread.find("first") != nullptr);
+    CHECK(reread.find("second") == nullptr);
+}
+
+
+TEST_CASE("replacement never removes the destination as a separate step") {
+    // THE PROPERTY, NOT A STORY ABOUT A CRASH. `write_gated_file` used to `remove()` the
+    // destination and then `rename()` onto it, which is two operations with a gap between
+    // them: a process that died in the gap, or a rename that then failed, left NO record at
+    // all. The header called that atomic replacement. Both platforms replace in one
+    // operation now -- POSIX rename(2), Windows MoveFileEx(MOVEFILE_REPLACE_EXISTING).
+    //
+    // A gap cannot be observed by racing it, so the test observes the DELETE instead. The
+    // destination here is something a single-operation replace cannot replace (a
+    // directory), so:
+    //   one operation  -> it fails, and whatever was at the destination is still there;
+    //   remove + rename -> the remove succeeds, the rename then succeeds onto the freed
+    //                      name, and the thing that was there is gone.
+    // The second is reported as SUCCESS by the old code, which is the sharper half of it.
+    Scratch f("replace-destination");
+    std::filesystem::remove(f.path);
+    std::filesystem::create_directory(f.path);
+
+    const auto schema =
+        loom::SchemaBuilder("zen.HostTestDoc", 1).field("x", loom::Kind::Text).build();
+    loom::Value doc(schema);
+    doc.set("x", loom::Cell::text("the new record"));
+
+    std::string error;
+    CHECK_FALSE(write_gated_file(f.path, doc, &error));
+    CHECK_FALSE(error.empty());
+    // Still exactly what was there before, not removed and not replaced by a file.
+    CHECK(std::filesystem::exists(f.path));
+    CHECK(std::filesystem::is_directory(f.path));
+    // ...and the candidate was not left lying about for a later reader to mistake for one.
+    CHECK_FALSE(std::filesystem::exists(f.path + ".tmp"));
+
+    std::error_code ignored;
+    std::filesystem::remove_all(f.path, ignored);
+}
+
+// ---- repeated approval -------------------------------------------------------
+
+TEST_CASE("one permission written twice is one permission, and one revoke takes it back") {
+    AuthorityRule r = rule_for("probe");
+    r.send.push_back("Greet v1 -> any target");
+    r.send.push_back("Greet v1 -> any target");
+    // An observe rule written both ways it may legally be written: the same permission,
+    // spelled twice, which a naive string compare would keep as two.
+    r.observe.push_back("Tick v1");
+    r.observe.push_back("observe Tick v1");
+
+    CHECK(collapse_duplicates(&r) == 2);
+    REQUIRE(r.send.size() == 1);
+    REQUIRE(r.observe.size() == 1);
+    CHECK(r.observe[0] == "observe Tick v1"); // one stored spelling, the one show prints
+
+    // ...and the store applies it on the way in, so a decision cannot be stored doubled.
+    Scratch f("duplicates");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+    AuthorityRule doubled = rule_for("probe");
+    doubled.send.push_back("Greet v1 -> any target");
+    doubled.send.push_back("Greet v1 -> any target");
+    REQUIRE(store.put(std::move(doubled), &error));
+    REQUIRE(store.find("probe") != nullptr);
+    CHECK(store.find("probe")->send.size() == 1);
+}
+
+TEST_CASE("a hand-edited store with a repeated permission reads as one, and says so") {
+    Scratch f("duplicates-file");
+    f.write(R"({"rules":[{"artifact":"probe","content_id":"","may_run":true,
+                "trust_rebuilds":false,
+                "send":["Greet v1 -> any target","Greet v1 -> any target"],
+                "observe":[],"note":""}]})");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+    REQUIRE(store.find("probe") != nullptr);
+    CHECK(store.find("probe")->send.size() == 1);
+    // Collapsed, and NOT silently: a person who wrote it twice is told which reading they
+    // got, because the alternative reading (two things, needing two revokes) is the one
+    // the file's shape suggests.
+    bool said = false;
+    for (const std::string& n : store.notes()) {
+        said = said || n.find("repeated permission") != std::string::npos;
+    }
+    CHECK(said);
+}
+
+TEST_CASE("canonical_rule is the spelling `authority show` prints") {
+    CHECK(canonical_rule("Greet v1 -> any target", /*observe=*/false) == "Greet v1 -> any target");
+    CHECK(canonical_rule("Tick v1", /*observe=*/true) == "observe Tick v1");
+    CHECK(canonical_rule("observe Tick v1", /*observe=*/true) == "observe Tick v1");
+    CHECK(canonical_rule("  observe Tick v1  ", /*observe=*/true) == "observe Tick v1");
+}
+
+// ---- ownership of a decision store -------------------------------------------
+
+TEST_CASE("a decision store has one owner at a time, and the claim is released with it") {
+    // Two hosts writing one store do not merely lose an approval: the second one's stale
+    // whole-file write RESTORES what the first one revoked. The mechanism is an OS claim
+    // rather than a PID file precisely so nothing has to be cleaned up after a host that
+    // died — and a claim taken through a SECOND open of the same path conflicts with the
+    // first whether the two opens are in one process or two (flock binds to the open file
+    // description; a Windows share-mode-0 handle excludes every other open).
+    Scratch f("owned-store");
+    std::string error;
+    {
+        StoreLock first;
+        REQUIRE(first.claim(f.path, &error));
+        CHECK(first.held());
+
+        StoreLock second;
+        bool taken = false;
+        REQUIRE_FALSE(second.claim(f.path, &error, &taken));
+        CHECK(taken);
+        CHECK(error.find("already owns the decision store") != std::string::npos);
+        CHECK_FALSE(second.held());
+    }
+    // ...and once the owner is gone the store is free again.
+    StoreLock later;
+    CHECK(later.claim(f.path, &error));
+    CHECK(later.held());
+    // Released before the sidecar is removed: Windows refuses to delete a file that an
+    // open handle still names, which is the same fact that makes the claim work at all.
+    later.release();
+    CHECK_FALSE(later.held());
+    std::error_code ignored;
+    std::filesystem::remove(StoreLock::lock_path_for(f.path), ignored);
+}
+
+TEST_CASE("an in-memory store has nothing to own") {
+    // No --authority means no file, so there is no store to race over and refusing to
+    // start would be refusing over nothing.
+    StoreLock lock;
+    std::string error;
+    CHECK(lock.claim("", &error));
+    CHECK_FALSE(lock.held());
 }
 
 } // TEST_SUITE("host_policy")

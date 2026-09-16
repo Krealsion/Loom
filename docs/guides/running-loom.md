@@ -64,10 +64,31 @@ Neither is required to start, and the host writes the second one for you as you 
 decisions. `--boot` and `--authority` point at other paths; `--check` reads both, says
 what they contain, and exits without starting anything.
 
-**Run two hosts from one directory and they share one authority file**, each holding its
-own copy and replacing the whole thing when it writes — so an approval made in one is lost
-the next time the other writes. There is no lock. Give a second host its own
-`--authority <file>`.
+**One host owns one decision file while it runs.** A second host that names the same file
+is refused, by name, and says what to do about it:
+
+```text
+loom-host: another loom-host already owns the decision store 'loom-authority.json'
+loom-host: decisions are written whole, so a second host sharing this file would put back
+           what the first one revoked. Either quit the other host, or give this one its
+           own file:
+             loom-host --authority <other-file>
+```
+
+That is not tidiness. Every decision replaces the **whole** file from the writer's own
+copy, so two hosts do not merely lose each other's approvals: the second one to write puts
+back what the first one **revoked**. One person with two terminals is enough. The claim is
+an OS-level lock on `<file>.lock`, so a host that is killed leaves nothing to clean up and
+the next host starts normally.
+
+The host's exit codes, because a script will want them:
+
+| | |
+|---|---|
+| `0` | it ran and you quit it |
+| `2` | the command line was wrong |
+| `3` | a file would not parse |
+| `4` | another host owns the decision store |
 
 ## 3. Write a weave of your own
 
@@ -313,6 +334,31 @@ loom> authority revoke counter
 One word, both halves: the running weave stops being able to say it, and the file stops
 remembering. Restart and it is still revoked.
 
+Three things about taking something back, each of which is a way it could have been a
+promise half kept:
+
+- **Approving the same thing twice does not make it twice as hard to revoke.** A repeated
+  `authority allow` says so and stores nothing new, and one `authority revoke` takes the
+  permission away for good — including when the duplicate came from you editing the file
+  by hand, which the host collapses when it reads it and tells you it did.
+- **A narrow rule taken back under a broad one you still hold has changed nothing about
+  what the weave may do**, and the host says which you got:
+  ```text
+  loom> authority revoke counter Noted v1 -> role logbook
+    revoked, for this run and the next. weave 6 may now say: any shape -> any target
+    NOTE: 'Noted v1 -> role logbook' is STILL PERMITTED by another rule you have granted
+          'counter'. See 'authority show counter'.
+  ```
+- **A decision that could not be written did not happen.** The file is written before the
+  live policy changes, so a full disk or a read-only directory gets you a refusal and a
+  host that permits exactly what it permitted a moment ago — not an approval good until the
+  next restart that nobody told you about:
+  ```text
+  loom> authority trust counter
+    cannot write 'loom-authority.json.tmp'
+    'counter' is unchanged: it still may NOT run, here and after a restart.
+  ```
+
 ## 8. Change it, rebuild it, run it again
 
 Edit `counter.cpp`, then:
@@ -384,11 +430,85 @@ loom> stop counter
   'counter' stopped. This host is still running.
 loom> start counter /home/you/tally/build/libcounter.so
   7
-  now under administration; weave 7 may now say: Noted v1 -> role logbook
+  weave 7 may now say: Noted v1 -> role logbook
 ```
+
+The second line is not this command's doing. Your decisions were installed **while** the
+artifact was being loaded — by the same door, for every route that can load anything — so
+a boot row, `start`, `reload` and a `zen.LoadWeave` that another weave sends all produce
+the same governed participant. There is no route that loads something and leaves it
+ungoverned, and nothing here picks a subject out of a message.
 
 `stop` ends **an application**. `quit` ends **the host**. Your standing decisions survive
 both, which is why a restarted artifact came back with the authority you had approved.
+
+## 9. Work that starts by itself, and work that never stops
+
+Two things a weave does on its own, and the host has one answer to each.
+
+### It is told when it is live
+
+A weave that declares `zen.Activated` is told, by Loom, the moment its incarnation is
+committed — on a boot row, on `start`, on `reload`, and on a `zen.LoadWeave` that some
+other weave sent. Whatever it does with that is its own business, and the usual thing is
+to start working:
+
+```cpp
+void on(const loom::Activated&, loom::Mail& mail) {
+    if (mail.lifecycle_attested()) { ++state_.activations; }   // Loom's own word, not a shape
+    mail.send_to_role(kLogbookRole, Noted{"opened", 0});       // ...and it begins
+}
+```
+
+**The authority you approved is already in force when that runs.** That is the whole point
+of the order: your decisions are installed while the artifact is being loaded, before it is
+told it is live, so a weave whose first act needs a permission you granted gets it rather
+than a refusal. Ask it afterwards and it will tell you:
+
+```text
+loom> send 6 Bump 1 what=first
+  sent.  reply -> m3  total=1 activations=1 opened=1
+```
+
+### It keeps the bus busy
+
+A weave whose handler queues its own next message never lets the bus go idle. That is
+legitimate — a clock does it, a poller does it — and the host serves it a **bounded turn**
+at a time, so the console is never taken away from you. Type during it and you are heard:
+`stop`, `authority revoke`, `tap` and `quit` all still work while a weave is talking to
+itself as fast as it can.
+
+The other side of that bound: an answer may not have arrived by the time the host would
+like to print one. It says so, and does not invent one:
+
+```text
+loom> send 6 SlowThing 1
+  sent.  no answer yet (ask 4; 'asks' to see it)
+loom> asks
+  4  SlowThing v1  waiting on weave 6
+  1 of 32 tracked.
+loom> 
+  [ask 4 settled] zen.Result v1  from weave 6  done
+```
+
+`asks forget <n>` stops waiting on one. It is called *forget* rather than *cancel* because
+nothing at the far end is told anything: whatever you asked for may still be happening, and
+this console simply stops recognising the answer.
+
+**An answer is something Loom attributed**, never the newest thing in the window. Every
+question this host asks is settled by two facts together — the conversation number it
+minted, and the bus's own stamp of who spoke — so a message that merely *looks* like an
+answer settles nothing. It matters because a loaded artifact may legitimately send
+`zen.Result` to anyone: that is in the baseline every admitted artifact gets. `show <mN>`
+prints both facts for any entry:
+
+```text
+loom> show m2
+  m2 : zen.Result v1  1
+    from weave 5, conversation 0
+```
+
+Conversation `0` means "named none" — an announcement, not an answer to anything.
 
 ## When something goes wrong
 
@@ -410,8 +530,23 @@ what debugging this is:
 it was asked about and the path it came from — but not what the artifact asks for, for the
 reason above: it was refused before it could say.
 
-If a boot plan is what is broken, `loom-host --no-boot` comes up with the console and
-starts nothing, and `--check` validates both files without running anything at all.
+If a boot plan is what is broken, **`loom-host --no-boot` comes up with the console and
+starts nothing — including when the file does not parse at all**:
+
+```text
+$ loom-host --no-boot
+loom-host 0.1.0   containment: in-process; …
+the boot plan was NOT run: boot plan 'loom-boot.json' refused: <value>: MalformedBytes — not valid JSON: expected string key in object
+  nothing from it was started. Fix loom-boot.json and restart, or start things by hand here.
+loom> status
+  boot plan:   loom-boot.json  COULD NOT BE READ, NOT RUN
+               boot plan 'loom-boot.json' refused: …
+```
+
+Without `--no-boot` the same file is fatal (exit 3), and `--check` still refuses it — that
+is what `--check` is for. A broken **authority** file is fatal either way and deliberately
+so: it is the record of what you decided, and a host that came up ignoring it would be a
+host running under decisions nobody made.
 
 ## What this host is not
 

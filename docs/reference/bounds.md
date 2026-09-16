@@ -88,7 +88,25 @@ type, so the local and remote operator see the same horizon.
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
 | `kConsoleTapCapacity` | 1024 | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
-| `kConsoleBufferCapacity` | 64 | received `Value`s | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+| `kConsoleBufferCapacity` | 64 | received arrivals | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+| `kConsoleAskCapacity` | 32 | open conversations | the in-process engine's own `loom::AskBook` | **refuses**, never evicts — see below |
+
+**A third bound, and it is deliberately not a window.** `kConsoleAskCapacity`
+bounds what the console is still *waiting on*, not what it has *seen*. Nothing is
+owed on history, so evicting its oldest entry is legitimate; an asker's own record
+is the opposite — losing its oldest entry means forgetting a question it asked, so
+`loom::AskBook` **refuses a new conversation at capacity and leaves every
+outstanding one untouched** ([ANS-05](messaging.md#the-askers-own-book)). The send
+still happens; what it loses is attribution, and `Submitted::ask == 0` says so
+rather than handing back a handle that can never settle. Thirty-two is an
+operator's number: a person driving a console by hand does not hold dozens of open
+questions, and `asks` lists them when they do.
+
+**An arrival is kept with its routing facts**, not just its payload:
+`BufferEntry` carries the bus-stamped `sender`, the `correlation` the sender
+named, and whether Loom attested it as an answer. The window used to keep the
+`Value` alone, which left every consumer unable to tell an answer it had earned
+from a reply-shaped message any participant may send.
 
 **Why those two numbers.** The tap matches `kJournalCapacity` deliberately: one
 tap entry is roughly one journal entry, so an operator who can still *see* an

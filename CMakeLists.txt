@@ -394,11 +394,24 @@ target_link_libraries(zen-console-tui
 # The host's DECIDING half, as a library, so the test suite can reach it. The two files a
 # person writes are parsed here -- a rule grammar and two schemas over hand-edited text --
 # and a parser nothing tests is a parser that will eventually accept the wrong thing
-# quietly. `main()` stays in the executable: a REPL is driven by hand, a grammar is not.
+# quietly.
+#
+# It also carries the two pieces of PLATFORM the host's loop and its ownership rest on:
+# `line_input` (can I read a command without stopping the bus?) and `store_lock` (does
+# anybody else own these decisions?). Both are here rather than in `main()` for the same
+# reason the grammar is: each one has a wrong answer that is invisible until a person is
+# already stuck, and each is reachable from the suite this way.
+#
+# `main()` stays in the executable, and is now driven by a REAL PROCESS from the suite
+# (`tests/host_process/`) rather than only by hand: the defects this host shipped were in
+# its glue -- which reply answers which question, when authority is installed, whether the
+# console can still be reached -- and no test of the deciding half can see any of them.
 add_library(zen-host-policy STATIC
     src/host/authority.cpp
     src/host/boot_plan.cpp
-    src/host/config_file.cpp)
+    src/host/config_file.cpp
+    src/host/line_input.cpp
+    src/host/store_lock.cpp)
 target_include_directories(zen-host-policy
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/host>)

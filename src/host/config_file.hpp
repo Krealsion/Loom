@@ -47,22 +47,32 @@ std::optional<loom::Value> read_gated_file(const std::string& path,
                                            const std::shared_ptr<const loom::Schema>& schema,
                                            bool* missing, std::string* error);
 
-/// Write `value` to `path` by way of a temp file and a rename, so a host killed
-/// mid-write leaves the previous contents rather than a half-file.
+/// Write `value` to `path` by way of a temp file and a SINGLE-OPERATION replace, so an
+/// interrupted write leaves the previous contents rather than a half-file or no file.
 ///
-/// The durability claimed is ATOMIC REPLACEMENT, not a write barrier: there is no fsync
-/// here, because this host runs on Windows too and the isolation ledger's POSIX
-/// fsync+fsync-parent path is not portable. A crash of the machine (as opposed to the
-/// process) can therefore still lose the most recent decision. Said out loud rather
-/// than implied by the word "atomic".
+/// WHAT "ATOMIC REPLACEMENT" IS PROMISED TO MEAN HERE, exactly:
 ///
-/// AND IT IS LAST-WRITER-WINS ACROSS PROCESSES. Two hosts run from one directory share
-/// one authority file, each holding its own copy in memory, and each write replaces the
-/// whole file — so an approval made in one is lost the next time the other writes. There
-/// is no lock, and there deliberately is not one yet: a per-install decision file is a
-/// single-operator thing, and a lock would be a mechanism claiming to solve a problem
-/// (two people deciding at once) that it does not solve. Give a second host its own
-/// `--authority` file.
+///   a reader of `path` sees the previous complete record or the new complete
+///   record, and there is no instant at which it sees neither.
+///
+/// The implementation earns that on both platforms in the same shape — POSIX `rename(2)`,
+/// Windows `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`. It did NOT before: it removed the
+/// destination first and then renamed, so a process interrupted between the two, or a
+/// rename that then failed, lost the last good record. The word was in this comment
+/// before the mechanism was in the code.
+///
+/// WHAT IS STILL NOT PROMISED: a write barrier. There is no fsync, because this host runs
+/// on Windows too and the isolation ledger's POSIX fsync+fsync-parent path is not
+/// portable. A crash of the MACHINE (as opposed to the process) can still lose the most
+/// recent decision, and can in principle leave the directory entry without the data. Said
+/// out loud rather than implied by the word "atomic".
+///
+/// ONE WRITER AT A TIME IS THE CALLER'S BUSINESS, and the supplied host takes it
+/// seriously: whole-store replacement means a second process holding a stale copy would
+/// restore permissions the person had just revoked, so `loom::host::StoreLock` gives one
+/// host exclusive ownership of a decision store for as long as it runs (see
+/// `host/store_lock.hpp`). This function is not the place for that check — it is called
+/// once per decision, and ownership is a property of the whole session.
 bool write_gated_file(const std::string& path, const loom::Value& value, std::string* error);
 
 } // namespace loom::host
