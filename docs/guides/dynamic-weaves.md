@@ -110,11 +110,22 @@ that sits on the kernel's operations, and it is the one thing that announces
 `zen.Activated` to a freshly loaded weave ([LIFE-01](../laws/lifecycle-laws.md)),
 so a weave loaded by a bare `Kernel::load` is registered and never activated.
 
+**Decide what it may do first.** A `Kernel` admits nothing until a host installs an
+admission policy, and the policy is what mints a loaded artifact's baseline — there is
+no default grant ([admitting a loaded
+artifact](../reference/capabilities.md#admitting-a-loaded-artifact)). A host whose
+artifacts are all its own build output can say so in one named line; anything reading a
+person's configuration writes a real policy. If you just want to run a weave without
+writing a host at all, `loom-host` already is one: [from nothing to a running
+weave](running-loom.md).
+
 ```cpp
+#include <zen/kernel/admission.hpp>
 #include <zen/kernel/control.hpp>
 
 loom::Switchboard bus;
-loom::Kernel kernel(bus);
+// This host trusts what it loads, and says so by name rather than by omission.
+loom::Kernel kernel(bus, loom::trust_every_artifact("my own build output"));
 const loom::WeaveId control = loom::mount_control(kernel, bus);
 
 // The host holds root: Switchboard::send is ungated. A weave that loads on the

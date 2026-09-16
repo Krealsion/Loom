@@ -74,6 +74,11 @@
 # as a string terminator and would silently split the line around it.
 #
 # entry                      gate
+host_console                 portable
+host_process_weaves          kernel
+host_line_input              portable
+host_line_streams            portable
+host_terminal_weaves         kernel
 empty_population_refused     portable
 empty_population_says_so     portable
 population                   portable

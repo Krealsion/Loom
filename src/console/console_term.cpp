@@ -172,8 +172,11 @@ void cmd_send(loom::ConsoleEngine& engine, const std::vector<Token>& tok) {
     }
 
     // Total OBSERVED, not retained: once the bounded buffer saturates the retained count stops
-    // moving, so "did a reply arrive?" has to be asked of the label that advances.
+    // moving, so "did anything arrive?" has to be asked of the label that advances.
     const std::uint64_t before = engine.evicted().buffer + engine.buffer_size();
+    // UNTRACKED, like every `Console` send: this demo shows the reply window and holds no
+    // conversation it would then owe back. So it reports what ARRIVED during the send — which
+    // may include messages from anyone — and never names one of them as the answer.
     const loom::Composed c =
         engine.compose(loom::WeaveId{id}, tok[2].text, static_cast<std::uint32_t>(ver), args);
 
@@ -196,8 +199,10 @@ void cmd_send(loom::ConsoleEngine& engine, const std::vector<Token>& tok) {
         std::cout << "  refused: " << o.reason; // the gate's verdict — the backstop spoke
     }
     const std::uint64_t after = engine.evicted().buffer + engine.buffer_size();
-    if (after > before) {
-        std::cout << "  reply -> m" << after; // the newest LABEL, past everything evicted
+    if (after == before + 1) {
+        std::cout << "  arrived: m" << after; // a LABEL, past everything evicted
+    } else if (after > before + 1) {
+        std::cout << "  arrived: m" << (before + 1) << " .. m" << after;
     }
     std::cout << '\n';
 }

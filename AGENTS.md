@@ -5,6 +5,68 @@ tests). Human docs: `docs/README.md`. Normative truth is `docs/reference/` +
 `docs/laws/` only; `docs/history/` is frozen record; `docs/evidence/` is not
 the API contract.
 
+## The supplied host, and who decides what a loaded artifact may do
+
+`loom-host` (`src/host/`) is the one executable this project INSTALLS: a boot walk
+from a file the person wrote, an operator console with authority in it, and two
+per-install files (`loom-boot.json`, `loom-authority.json`). It is a replaceable
+default assembled from ordinary participants — `ConsoleEngine`, `WeaveManager`,
+`ControlWeave`, plus `loom::host::HostWarden` — and it holds no privilege the
+package does not export. Human route: `docs/guides/running-loom.md`; prerequisites
+`docs/guides/tools.md`.
+
+**Three rules the host is built around, each replacing a defect a green lane could
+not see.** (1) An ANSWER is something Loom attributed — the correlation the console
+minted plus the bus-stamped sender (`loom::AskBook`) — never the newest entry in the
+reply window, which is a value any admitted artifact can author under the ordinary
+poke-answer baseline. (2) A loaded artifact is ADOPTED INSIDE THE LOAD, through
+`loom::LifecycleAdoption` (`zen/kernel/control.hpp`): the one window between an
+incarnation being committed and being told it is live. Because it lives in the door,
+the boot walk, `start`, `reload` and an ordinary `zen.LoadWeave` all produce the same
+governed participant, and no host call site adopts anything. (3) The loop is
+`pump_pending()` plus a line read with a deadline (`src/host/line_input.hpp`), never
+`drain_until_idle()` — one approved self-addressed message used to make `stop` and
+`quit` unreadable forever. The deadline holds while a line is HALF TYPED: a Windows
+console cannot be asked whether a line is finished, so it is read on its own thread.
+What the reader holds and refuses is ONE rule on every platform (`loom::host::HeldInput`):
+at most 64 KiB waiting — it waits for the host rather than reading a stream into memory —
+and a line over 4000 bytes refused whole, never run shortened or split
+(`docs/reference/bounds.md`). A
+conversation that has not settled is reported PENDING and stays open; the host never
+invents a completion. The console holds a conversation only for a caller that asks
+(`ConsoleTracking::Tracked`), until that caller takes or forgets it.
+
+**One host owns one decision store while it runs** (`src/host/store_lock.hpp`): the
+store is written whole, so a second writer restores what the first one revoked. A
+second host naming the same file exits **4** and says how to proceed. Exit codes: 0 ok,
+2 bad command line, 3 a file would not parse, 4 store in use.
+
+**Five CTest entries drive the real thing**, because none of the above is visible to a
+test of the deciding half. Two feed the host through a FILE (`tests/host_process/run.cmake`:
+identities, counts and effective authority, never whole sentences, a canary first):
+`host_console` (portable — recovery route, two real hosts on one store, repeated approval, a
+failed write that must change nothing) and `host_process_weaves` (kernel gate —
+attribution, activation, adoption by every route, responsiveness, a pin that cannot be
+written, every late answer collected). Two TYPE into a real terminal — a hidden native
+console on Windows, a pseudo-terminal on POSIX (`tests/host_terminal/witness.cpp`):
+`host_line_input` (portable) and `host_terminal_weaves` (kernel). One feeds the reader a
+PIPE and a FILE with a producer held back (`host_line_streams`, portable): the input limits,
+asserted identically on every platform. **Redirected stdin is not evidence about a
+console**: the Windows reader blocked on a half-typed line under a green file-fed lane.
+
+**`Kernel::load` no longer mints a grant.** The three-argument overload used to
+bind `Grant{}.allow_any()` to every library it opened, through three doors (direct
+load, the message-driven control door, `load_candidate`). Now a `Kernel` asks its
+installed `AdmissionPolicy` (`zen/kernel/admission.hpp`), and a Kernel on which
+nobody called `admit_with(...)` **admits nothing and says so**. A host that wants
+the old authority asks for it by name — `trust_every_artifact("why")` — and the
+`why` rides every verdict. The four-argument `load(..., Grant)` still bypasses the
+policy, deliberately: naming the grant at the call site *is* the decision. Which BUILD it
+is (`AdmissionRequest::build`) is read from the file only when a policy asks, once per
+operation — never eagerly: hashing every image for a policy that never looked failed
+Zengine's `timer` suite. Count the work (`file_content_id_scans()`), not the clock.
+`docs/reference/capabilities.md#admitting-a-loaded-artifact`; suite `admission`.
+
 ## Intent, evidence, and architectural fit
 
 Approved purpose, requirements, and architectural contracts determine whether a change is right.

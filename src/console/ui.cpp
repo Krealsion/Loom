@@ -205,6 +205,9 @@ void ConsoleUi::submit_command() {
     for (std::size_t i = 3; i < toks.size(); ++i) {
         args.push_back(lex_arg(toks[i]));
     }
+    // Through `Console`, so UNTRACKED on either transport: this frontend shows arrivals in the
+    // bounded reply window and holds no conversation, so however long it runs, nothing
+    // accumulates on its behalf.
     Composed c =
         engine_.compose(loom::WeaveId{id}, toks[1].text, static_cast<std::uint32_t>(ver), args);
     const bool ready = c.status == Composed::Status::Ready;

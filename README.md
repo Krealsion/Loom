@@ -58,6 +58,27 @@ Runnable versions live in [`examples/`](examples/) — `quickstart.cpp` (the
 value-and-gate core), `heartbeat_woven.cpp` (the above), `answering.cpp`
 (immediate and deferred answers).
 
+## Run it
+
+Loom ships a host. Install it and you have a program — not a library you have to
+write a host around first:
+
+```sh
+cmake -B build -DCMAKE_INSTALL_PREFIX=$HOME/loom && cmake --build build && cmake --install build
+$HOME/loom/bin/loom-host
+```
+
+`loom-host` boots the weaves you chose, in the order you wrote, and gives you a
+console with **authority** in it: what may run, what it may say, approve, refuse,
+inspect, revoke — remembered across restarts and revocable afterwards. Nothing is
+loaded because a file named it; a participant gets authority because your policy
+permits it.
+
+Start at **[from nothing to a running weave](docs/guides/running-loom.md)** — install,
+start, write a weave of your own, run it, change it. It needs
+[a compiler and CMake](docs/guides/tools.md) and nothing else: no Zengine, no
+Workshop, no already-hosted tool.
+
 ## Documentation
 
 **[docs/README.md](docs/README.md)** routes everything: start with the

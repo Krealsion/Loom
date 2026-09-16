@@ -15,6 +15,7 @@
 #include "witness_protocol.hpp"
 
 #include <zen/gate.hpp>
+#include <zen/kernel/admission.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/registry.hpp>
 #include <zen/serialize.hpp>
@@ -175,7 +176,15 @@ int main() {
     std::printf("  containment: %s\n", loom::Kernel::containment_note());
 
     loom::Switchboard bus;
-    loom::Kernel kernel(bus);
+    // A STRANGER HOST HAS TO DECIDE, and this is part of what the package must carry:
+    // `zen/kernel/admission.hpp` and `trust_every_artifact` reach a consumer through
+    // `find_package(loom)` alone, and a Kernel with no policy would refuse this load
+    // rather than fall back to anything permissive. This witness loads exactly one
+    // artifact, which its own build produced two directories away, so "trust it" is a
+    // true sentence here and the string says why.
+    loom::Kernel kernel(bus,
+                        loom::trust_every_artifact("the package witness loads only the "
+                                                   "weave its own build just produced"));
 
     const loom::WeaveId collector_id = loom::mount<Collector>(bus);
 

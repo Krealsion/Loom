@@ -309,6 +309,27 @@ if (const std::optional<loom::PendingAsk> closed = asks.settle(mail.correlation(
   stays outstanding until the asker locally `forget`s it — which cancels nothing
   at the far end, because there is no cancellation vocabulary to cancel it with.
 
+**Who keeps one.** `loom::TerminalSession`, and — since the supplied host's
+corrections — `loom::ConsoleEngine`, which is the operator's own asking
+participant. The console's case is the sharpest illustration of why the pair is
+needed: it is registered `AcceptMode::AnyRegistered`, and every artifact a host
+admits may send `zen.Result` to anyone under the ordinary poke-answer baseline
+([capabilities](capabilities.md#admitting-a-loaded-artifact)), so "the newest
+entry in the reply window" is a value other participants can author at will. A
+host that read it as its own answer chose the subject of an administration
+capability from a message a loaded artifact had volunteered. Every correlation
+the console stamps now comes from that one book — `open()` for a tracked
+conversation, `mint_correlation()` for an ordinary send — because a second
+counter beside it could stamp a send with a number an open conversation is
+already using.
+
+The console opens a conversation only for a caller that asks it to
+(`ConsoleTracking::Tracked`), and that caller owns it: its slot stays spent until
+the caller takes the answer or forgets the conversation, including after the
+answer has arrived, so what the console holds is bounded by the book rather than
+by how much traffic it has served ([bounds](bounds.md#console-operator-history)).
+A send through the frontend `Console` interface opens nothing.
+
 `loom::relay` ([`weave/relay.hpp`](../../include/zen/weave/relay.hpp)) is the same
 wall for the opposite role: a **middleman** forwarding somebody else's request and
 relaying the answer back. The two are deliberately separate — a relay's record is

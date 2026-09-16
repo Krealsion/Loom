@@ -3,6 +3,7 @@
 
 #include <zen/kernel/kernel.hpp>
 
+#include <zen/content_id.hpp>
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/serialize.hpp>
 #include <zen/value.hpp>
@@ -970,7 +971,11 @@ const char* name_of(ArtifactStatus s) noexcept {
 
 KernelLifetimeCounts kernel_lifetime_counts() noexcept { return ledger(); }
 
-Kernel::Kernel(loom::Switchboard& bus) : bus_(bus) {}
+Kernel::Kernel(loom::Switchboard& bus) : bus_(bus), admit_(admit_nothing()) {}
+
+Kernel::Kernel(loom::Switchboard& bus, AdmissionPolicy policy) : Kernel(bus) {
+    admit_with(std::move(policy));
+}
 
 Kernel::~Kernel() {
     // The names are copied first because unloading one artifact can release
@@ -1073,6 +1078,15 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
             result.claims.push_back(std::move(s));
         }
     }
+    // The ask, if the artifact emitted one. READ AND CARRIED, NEVER CONSULTED: it
+    // travels to the admission policy so a host can show a person what it was asked
+    // for, and no line anywhere derives a grant from it (admission.hpp). It comes
+    // through the same gate as every other section, so a malformed one is a refused
+    // load rather than a surprise later.
+    if (const loom::Cell* requests = manifest.get("requests")) {
+        result.declared = decode_capability_ask(*requests->as_message());
+        result.declared_present = true;
+    }
     // One transaction, one publication: a disagreement about the last door
     // leaves none of the earlier ones claimed. (The `referenced` chain above is
     // the exception it has to be — see the overload's note.)
@@ -1080,18 +1094,83 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     return result;
 }
 
+void Kernel::admit_with(AdmissionPolicy policy) {
+    // An empty std::function is not "no opinion", it is a crash waiting for the next
+    // load. Clearing the policy means going back to deciding nothing, which is
+    // refusing — never to anything permissive.
+    admit_ = policy ? std::move(policy) : admit_nothing();
+}
+
+bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::string& name,
+                           const std::string& path, const std::string& role,
+                           const BuildIdentity& build, const CapabilityAsk* declared,
+                           Grant* granted, std::string* why) const {
+    AdmissionRequest req;
+    req.stage = stage;
+    req.kind = kind;
+    req.name = name;
+    req.path = path;
+    req.role = role;
+    req.build = build; // a copy SHARES the one reading; it does not start another
+    if (declared != nullptr) {
+        req.declared = *declared;
+        req.declared_present = true;
+    }
+    AdmissionVerdict v = admit_(req);
+    if (!v.admitted) {
+        // The stage is named in the refusal because the two mean very different
+        // things to whoever reads it: refused at `open` means no code from that file
+        // ran, refused at `speak` means it ran and was then not allowed to say
+        // anything. An operator triaging a refusal needs to know which.
+        *why = std::string("admission refused at ") + name_of(stage) + ": " + v.reason;
+        return false;
+    }
+    if (stage == AdmissionStage::Speak && kind != AdmissionKind::Reload) {
+        *granted = std::move(v.grant);
+    }
+    return true;
+}
+
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::string& role) {
-    // The kernel's default: permissive bus sends, and no Sense read authority.
-    // Grant's floor is empty and stays empty — observing another
-    // participant's claims is a decision, not a consequence of being loadable.
-    return load(name, path, role, loom::Grant{}.allow_any());
+    return load_impl(name, path, role, AdmissionKind::Load, nullptr);
 }
 
 LoadResult Kernel::load(const std::string& name, const std::string& path, const std::string& role,
                         Grant grant) {
+    return load_impl(name, path, role, AdmissionKind::Load, &grant);
+}
+
+LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
+                             const std::string& role, AdmissionKind kind,
+                             const Grant* explicit_grant) {
     if (libs_.count(name) != 0) {
         return {false, {}, "already loaded: " + name};
+    }
+    // THE FIRST QUESTION, ASKED BEFORE THE FILE IS OPENED. Nothing below this point
+    // is reversible in the way this is: `open_library` runs the image's static
+    // initializers, so by the time the manifest exists, the artifact's code has
+    // already executed in this process. A policy that refuses here refuses the only
+    // containment an in-process kernel has (admission.hpp).
+    //
+    // A host that named the grant at its call site has already decided; it is not
+    // asked.
+    //
+    // WHICH BUILD THIS IS, AND ONLY IF THE POLICY WANTS TO KNOW. Hashing a multi-megabyte
+    // image is real work, so it is not done here: `build` reads the file the first time the
+    // policy asks, and a policy that decides without the bytes — trusting everything,
+    // refusing everything, deciding by name — costs nothing. It used to be computed here for
+    // every policy-mediated load, and that alone failed Zengine's replacement-timing tests
+    // under a policy that never read it. ONE identity for this whole operation, shared by
+    // both questions below; the next operation makes its own.
+    Grant grant = (explicit_grant != nullptr) ? *explicit_grant : Grant{};
+    const BuildIdentity build(path);
+    if (explicit_grant == nullptr) {
+        std::string why;
+        if (!ask_admission(AdmissionStage::Open, kind, name, path, role, build,
+                           /*declared=*/nullptr, &grant, &why)) {
+            return {false, {}, why};
+        }
     }
     std::string error;
     // OWNED FROM THE FIRST MOMENT IT IS OPEN. Every refusal below simply returns:
@@ -1114,6 +1193,22 @@ LoadResult Kernel::load(const std::string& name, const std::string& path, const 
     bool adapter_built = false;
     try {
         Manifest mf = reconstruct(abi, instance);
+        // THE SECOND QUESTION: what may it say? The manifest has crossed the gate, so
+        // the artifact's declared ask exists and can be SHOWN to the policy — as
+        // advice, never as authority (admission.hpp). The verdict's grant becomes the
+        // baseline, which GATE-05 freezes for this weave's whole life.
+        //
+        // A refusal here throws into the catch below, which is the point: that is the
+        // same path a bad manifest or a held role takes, so the instance is destroyed
+        // and the library closed by machinery that already exists rather than by a
+        // second unwinding written for this case.
+        if (explicit_grant == nullptr) {
+            std::string why;
+            if (!ask_admission(AdmissionStage::Speak, kind, name, path, role, build,
+                               mf.declared_present ? &mf.declared : nullptr, &grant, &why)) {
+                throw DllBoundaryError(why);
+            }
+        }
         adapter = std::make_unique<HostAdapter>(abi, instance, lib, std::move(mf.accepted),
                                                 std::move(mf.state), &bus_, std::move(mf.claims));
         adapter_built = true;
@@ -1122,9 +1217,8 @@ LoadResult Kernel::load(const std::string& name, const std::string& path, const 
         // so a restrictive *bus* grant on it is not containment: the grant bounds
         // what it may SAY, never what it may TOUCH. Real containment is the
         // out-of-process OS sandbox, which the grant's OS-capability fields drive.
-        // In-process loading therefore grants permissive bus sends and puts the
-        // gate on the *door* — the load capability — which is fully checked
-        // against native Weaves.
+        // The grant below therefore decides SPEECH, and the decision belongs to
+        // whoever loaded this: a host that named it, or the host's admission policy.
         // docs/reference/capabilities.md#the-grant-in-process
         // docs/guides/dynamic-weaves.md#what-loading-it-in-process-means
         // A non-empty role binds the slot here, at the only moment it can be
@@ -1160,6 +1254,16 @@ LoadResult Kernel::load(const std::string& name, const std::string& path, const 
 
 LoadResult Kernel::load_candidate(const std::string& name, const std::string& path,
                                   loom::WeaveId coordinator) {
+    return candidate_impl(name, path, coordinator, nullptr);
+}
+
+LoadResult Kernel::load_candidate(const std::string& name, const std::string& path,
+                                  loom::WeaveId coordinator, Grant grant) {
+    return candidate_impl(name, path, coordinator, &grant);
+}
+
+LoadResult Kernel::candidate_impl(const std::string& name, const std::string& path,
+                                  loom::WeaveId coordinator, const Grant* explicit_grant) {
     // Deliberately the ordinary load, then the seal — rather than a second,
     // simpler loading path that would drift from it. The prepared artifact MUST be
     // the artifact that becomes live, so it is built by the same code that builds
@@ -1170,7 +1274,8 @@ LoadResult Kernel::load_candidate(const std::string& name, const std::string& pa
     // recipients at ENQUEUE time, so a publication already in the queue never
     // named this weave; a publication enqueued later finds it sealed and skips it.
     // And no delivery can run in between, because this is host code, not a handler.
-    LoadResult lr = load(name, path, /*role=*/std::string{});
+    LoadResult lr =
+        load_impl(name, path, /*role=*/std::string{}, AdmissionKind::Candidate, explicit_grant);
     if (!lr.ok) {
         return lr;
     }
@@ -1203,6 +1308,27 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
     Loaded& rec = it->second;
 
+    // THE NEW BYTES ARE PUT TO THE POLICY BEFORE THEY ARE OPENED. This is the
+    // changed-artifact question: the host approved a build, and this is a different
+    // one. What a policy CANNOT do here is re-grant — a reload keeps the incumbent's
+    // WeaveId and therefore its baseline (GATE-05), so only the yes-or-no is
+    // consulted and `ask_admission` drops the verdict's grant on the floor for
+    // `Reload`. A policy that wants different authority refuses, and the host
+    // replaces the artifact instead of reloading it.
+    //
+    // The new bytes are identified only if the policy asks, once for this reload, and
+    // never from the identity the incumbent was loaded under (see `load_impl`).
+    const BuildIdentity new_build(new_path);
+    {
+        Grant ignored;
+        std::string why;
+        if (!ask_admission(AdmissionStage::Open, AdmissionKind::Reload, name, new_path,
+                           /*role=*/std::string{}, new_build, /*declared=*/nullptr, &ignored,
+                           &why)) {
+            return {false, false, false, why};
+        }
+    }
+
     std::string error;
     // THE CANDIDATE IS JUDGED BEFORE THE INCUMBENT IS TOUCHED. Its ABI version
     // (KERN-04), its descriptor and its manifest are all checked below before the
@@ -1232,6 +1358,21 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     } catch (const std::exception& e) {
         destroy_instance(new_abi, new_inst);
         return {false, false, false, std::string("new library refused: ") + e.what()};
+    }
+
+    // THE CHANGED REQUEST. The bytes were approved above; this is the second half —
+    // the rebuilt artifact may now be asking for something the approved one did not.
+    // Asked at `Speak` so a policy sees the new declaration, and still refused
+    // before the incumbent is touched.
+    {
+        Grant ignored;
+        std::string why;
+        if (!ask_admission(AdmissionStage::Speak, AdmissionKind::Reload, name, new_path,
+                           /*role=*/std::string{}, new_build,
+                           cand.declared_present ? &cand.declared : nullptr, &ignored, &why)) {
+            destroy_instance(new_abi, new_inst);
+            return {false, false, false, why};
+        }
     }
 
     const std::shared_ptr<const Schema>& old_state = rec.adapter->state_schema();

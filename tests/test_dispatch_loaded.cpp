@@ -24,7 +24,7 @@ TEST_SUITE("dispatch_loaded") {
         for (const std::string mode : {"role", "office-publish", "publish", "direct", "office-denied"}) {
             CAPTURE(mode);
             Switchboard sb;
-            Kernel kernel(sb);
+            Kernel kernel(sb, sbfx::fixture_admission());
             const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
             REQUIRE_MESSAGE(loaded.ok, loaded.error);
             const auto first = register_probe(sb, {schema_of<dispatch_test::Payload>()});
@@ -88,7 +88,7 @@ TEST_SUITE("dispatch_loaded") {
               "attempts") {
         for (const std::string mode : {"direct", "role", "office-direct", "office-role"}) {
             Switchboard sb;
-            Kernel kernel(sb);
+            Kernel kernel(sb, sbfx::fixture_admission());
             auto target = register_probe(sb, {schema_of<dispatch_test::Payload>()});
             const auto loaded =
                 kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author", Grant{});
@@ -124,7 +124,7 @@ TEST_SUITE("dispatch_loaded") {
 
     TEST_CASE("loaded delivery and synchronous seam rejection do not manufacture later refusal") {
         Switchboard sb;
-        Kernel kernel(sb);
+        Kernel kernel(sb, sbfx::fixture_admission());
         auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
         REQUIRE(loaded.ok);
         auto target = register_probe(sb, {schema_of<dispatch_test::Payload>()});
@@ -155,7 +155,7 @@ TEST_SUITE("dispatch_loaded") {
 
     TEST_CASE("loaded forgery and native copied provenance remain ordinary at a loaded recipient") {
         Switchboard sb;
-        Kernel kernel(sb);
+        Kernel kernel(sb, sbfx::fixture_admission());
         auto a = kernel.load("a", ZEN_SO_DISPATCH, "dispatch.author");
         REQUIRE(a.ok);
         auto b = kernel.load("b", ZEN_SO_DISPATCH);
@@ -178,7 +178,7 @@ TEST_SUITE("dispatch_loaded") {
         "actual loaded code replacement at either queue boundary cannot inherit an old refusal") {
         for (bool queued : {false, true}) {
             Switchboard sb;
-            Kernel kernel(sb);
+            Kernel kernel(sb, sbfx::fixture_admission());
             auto a = kernel.load("a", ZEN_SO_DISPATCH, "dispatch.author", Grant{});
             REQUIRE(a.ok);
             sb.send(a.id,

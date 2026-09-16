@@ -8,6 +8,7 @@
 // Switchboard tests. As always, these domain types live only in the tests; the
 // bus and the kernel hard-code none of them.
 
+#include <zen/kernel/admission.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>
 
@@ -29,6 +30,28 @@ using loom::RefusalReason;
 using loom::Weave;
 using loom::WeaveId;
 using loom::Switchboard;
+
+// ---- the harness's admission posture, said once ---------------------------
+//
+// A TEST HARNESS IS A HOST. It holds the Switchboard, so it is inside the authority
+// boundary by construction rather than by exemption (zen/host/grant_wiring.hpp says
+// so about minting a GrantAuthority; the same sentence is true here). These suites
+// test KERNEL MECHANICS — opening, the ABI, roles, reload, replacement — not the
+// question of who should be trusted, and every artifact they load is this tree's own
+// build output, produced by the same CMake run as the test binary.
+//
+// So the posture is stated once, here, instead of ninety times at the call sites: this
+// host trusts what it loads. That is exactly the authority the Kernel used to mint
+// invisibly for every library it could open (P-WORK-18) — the difference, and the whole
+// point, is that a HOST now asks for it by name and a reader can grep for who did.
+//
+// A suite that wants to exercise a REAL policy — a refusal, a narrowed grant, a
+// rebuild — installs its own instead. tests/test_admission.cpp does exactly that, and
+// nothing here is in its way.
+inline loom::AdmissionPolicy fixture_admission() {
+    return loom::trust_every_artifact("Loom's own test harness: every artifact it loads "
+                                      "is this build tree's output");
+}
 
 // ---- message schemas ------------------------------------------------------
 

@@ -104,7 +104,7 @@ TEST_CASE("the containment note tells the truth for this platform's hosting mode
 
 TEST_CASE("a loaded DLL Weave mounts and is indistinguishable; both directions are gated") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
 
     LoadResult lr = kernel.load("test", ZEN_SO_WEAVE);
@@ -133,7 +133,7 @@ TEST_CASE("RTH-1: a loaded handler that throws is reported, not announced as del
     // see a handler that returned, record `Delivered`, and tell every observer
     // the delivery succeeded. Same fact, two seams, and only one of them said so.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     std::vector<std::pair<EventKind, std::uint64_t>> seen;
     bus.add_observer([&seen](const BusEvent& e) { seen.emplace_back(e.kind, e.seq); });
 
@@ -162,7 +162,7 @@ TEST_CASE("RTH-1: a loaded handler that throws is reported, not announced as del
 
 TEST_CASE("a DLL that emits a malformed message is refused by the host gate, never routed") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
 
     LoadResult lr = kernel.load("bad", ZEN_SO_BADMSG);
@@ -178,7 +178,7 @@ TEST_CASE("a DLL that emits a malformed message is refused by the host gate, nev
 
 TEST_CASE("a DLL whose snapshot is malformed is refused at load by the host gate") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("bs", ZEN_SO_BADSNAP);
     CHECK_FALSE(lr.ok);
     CHECK_FALSE(lr.error.empty());
@@ -187,7 +187,7 @@ TEST_CASE("a DLL whose snapshot is malformed is refused at load by the host gate
 
 TEST_CASE("a descriptor with an unsupported abi_version is rejected cleanly") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("ba", ZEN_SO_BADABI);
     CHECK_FALSE(lr.ok);
     CHECK(lr.error.find("abi_version") != std::string::npos);
@@ -218,7 +218,7 @@ TEST_CASE("BL-4: the descriptor's three same-signature doors each answer for the
     // per-door assertions after it are the positive statement of which door is
     // which — they would be what catches a future miswire that survived load.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("doors", ZEN_SO_WEAVE);
     REQUIRE_MESSAGE(lr.ok, lr.error);
 
@@ -245,7 +245,7 @@ TEST_CASE("BL-4: the descriptor's three same-signature doors each answer for the
 
 TEST_CASE("hot-reload swaps the library and the state survives the swap") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
 
     LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
@@ -278,7 +278,7 @@ TEST_CASE("hot-reload swaps the library and the state survives the swap") {
 
 TEST_CASE("intentional hot-reload spends no crash-revival budget: it never exhausts") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
 
     LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
@@ -307,7 +307,7 @@ TEST_CASE("intentional hot-reload spends no crash-revival budget: it never exhau
 
 TEST_CASE("a reload to a newer state-schema version is a clean refusal; the old library runs on") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
 
     LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
@@ -331,7 +331,7 @@ TEST_CASE("a reload to a newer state-schema version is a clean refusal; the old 
 
 TEST_CASE("the accept-set query answers from the bus's published set, and nowhere else") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
     REQUIRE_MESSAGE(lr.ok, lr.error);
 
@@ -360,7 +360,7 @@ TEST_CASE("the accept-set query answers from the bus's published set, and nowher
 
 TEST_CASE("reload refuses a drifted door contract before commit; the incumbent keeps everything") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
 
     LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
@@ -410,7 +410,7 @@ TEST_CASE("the agreement wall follows LIVE claims, not the history of registrati
     // while something live claims Greet v1, a library that disagrees about it is
     // still refused. Reclaiming vocabulary must not weaken the wall.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     REQUIRE_MESSAGE(kernel.load("t", ZEN_SO_ACTIVATES_DRIFT).ok, "drift must load on its own");
     LoadResult blocked = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
     CHECK_FALSE(blocked.ok);
@@ -439,7 +439,7 @@ TEST_CASE("a rejected candidate leaves no schema residue (BL-0 closes the R2A-1a
     // It is unchanged now. reconstruct() claims into the Manifest it returns, so
     // the refusal below destroys the only claim those schemas ever had.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
     REQUIRE_MESSAGE(lr.ok, lr.error);
 
@@ -473,7 +473,7 @@ TEST_CASE("many rejected candidates leave no accumulation (BL-0 boundedness)") {
     // Repeated because one refusal leaving nothing behind is also what a
     // one-shot fluke looks like; the wall is asked again at the end.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     REQUIRE(kernel.load("t", ZEN_SO_ACTIVATES).ok);
     for (int i = 0; i < 64; ++i) {
         ReloadResult rr = kernel.reload_from("t", ZEN_SO_ACTIVATES_DRIFT);
@@ -497,7 +497,7 @@ TEST_CASE("many rejected candidates leave no accumulation (BL-0 boundedness)") {
 
 TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only once") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
     REQUIRE_MESSAGE(lr.ok, lr.error);
@@ -565,7 +565,7 @@ TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused —
     // genuinely believes it holds one. Nothing library-side says no. The board
     // does.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
     REQUIRE_MESSAGE(lr.ok, lr.error);
@@ -612,7 +612,7 @@ TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused —
 TEST_CASE("R2B-2: the requester dying strands a loaded steward's answer rather than misdelivering "
           "it") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
     REQUIRE_MESSAGE(lr.ok, lr.error);
@@ -651,7 +651,7 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
     // is not secrecy: it is that the record names its respondent AT AN
     // INCARNATION, so a token only ever spends a right its holder already had.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     LoadResult first = kernel.load("steward", ZEN_SO_DEFERS);
     REQUIRE_MESSAGE(first.ok, first.error);
@@ -731,7 +731,7 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
 
 TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT in the world") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     // A coordinator: an ordinary weave, and the only one the candidate may talk to.
     Registered coordinator = register_probe(bus, {pong_schema(), tick_schema()});
@@ -792,7 +792,7 @@ TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every atte
     // gets — the prepared artifact is the artifact that becomes live, so its real
     // contract is not stripped — and it still cannot reach anything.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered victim = register_probe(bus, {pong_schema()});
     LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
@@ -831,7 +831,7 @@ TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every atte
 TEST_CASE("R2B-3: commit is ONE visible change — no observer sees a gap, two holders, or a "
           "role pointing at a sealed weave") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
     REQUIRE(incumbent.ok);
@@ -897,7 +897,7 @@ TEST_CASE("R2B-3: commit is ONE visible change — no observer sees a gap, two h
 TEST_CASE("R2B-3: a refused commit changes NOTHING — it is observationally identical to never "
           "having tried") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
     REQUIRE(incumbent.ok);
@@ -927,7 +927,7 @@ TEST_CASE("R2B-3: an artifact that cannot load never becomes a candidate, and th
     // already unloaded when a broken successor is discovered; here the discovery
     // happens with the incumbent untouched, because nothing has been touched yet.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
     REQUIRE(incumbent.ok);
@@ -955,7 +955,7 @@ TEST_CASE("R2B-3: an artifact that cannot load never becomes a candidate, and th
 TEST_CASE("R2B-3: abandoning a prepared candidate leaves the world as it was, and its speech "
           "cannot leak afterwards") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered victim = register_probe(bus, {pong_schema()});
     LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
@@ -998,7 +998,7 @@ TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor it
     SUBCASE("the coordinator's code is replaced while alive") { by_death = false; }
 
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema(), tick_schema()});
     LoadResult incumbent = kernel.load("live", ZEN_SO_WEAVE, "worker");
     REQUIRE(incumbent.ok);
@@ -1056,7 +1056,7 @@ TEST_CASE("R2B-3b: at admission the candidate's FIRST live delivery is its activ
     // activation at the tail would let ordinary production reach a weave that has
     // not yet been told it is alive.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered incumbent = register_probe(bus, {ping_schema()});
     // The candidate is a probe here because the claim is about ORDER, and a probe
@@ -1097,7 +1097,7 @@ TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no
     // Moving the role alone would leave the incumbent publicly direct-addressable:
     // a second live service that merely lost its name.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered outsider = register_probe(bus, {pong_schema()});
     const WeaveId incumbent = bus.register_weave(
@@ -1145,7 +1145,7 @@ TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no
 TEST_CASE("R2B-3b: admission refuses without Loom's own authority, and a refusal changes nothing") {
     Switchboard bus;
     Switchboard decoy; // a real board, and a real authority — issued elsewhere
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     const WeaveId incumbent = bus.register_weave(
         std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
@@ -1478,7 +1478,7 @@ TEST_CASE("R2B-3b-1a: mail.answer() means the same thing natively and dynamicall
     // THE PARITY PROOF. One ask each, the same public call, and the two results
     // compared field by field rather than each asserted against a wish.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     Registered native_asker = register_probe(bus, {pong_schema(), tick_schema()});
     Registered dynamic_asker = register_probe(bus, {pong_schema(), tick_schema()});
@@ -1520,7 +1520,7 @@ TEST_CASE("R2B-3b-1a: mail.answer() means the same thing natively and dynamicall
 TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY ROLE, and a "
           "forged ordinary reply is not") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
     Heard heard;
     heard.arm(*asker.weave);
@@ -1546,7 +1546,7 @@ TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY RO
 TEST_CASE("R2B-3b-1a: one delivery authorizes one dynamic answer, and the second is refused "
           "rather than silently dropped") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
     Heard heard;
     heard.arm(*asker.weave);
@@ -1575,7 +1575,7 @@ TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer cap
     // routes the immediate answer through defer-then-spend stayed green. The
     // instrument has to HOLD the registry full.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
     Heard heard;
     heard.arm(*asker.weave);
@@ -1630,7 +1630,7 @@ TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle 
     SUBCASE("the responder dies after queueing the answer") { requester_changes = false; }
 
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
     Heard heard;
     heard.arm(*asker.weave);
@@ -1666,7 +1666,7 @@ TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle 
 TEST_CASE("R2B-3b-1a: an artifact built against the previous ABI is refused, naming both "
           "versions") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(stale.ok);
     CHECK(stale.error.find("abi_version") != std::string::npos);
@@ -1688,7 +1688,7 @@ TEST_CASE("KERN-04 / v8: an image built against the previous ABI cannot replace 
     // header supplies the mixed-artifact evidence; this fixture is the ordering control
     // (docs/reference/dynamic-abi.md#compatibility-discipline).
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
     // A rebuilt v8 image that never offers into anything loads as ever: the appended
     // slots cost a nonparticipant nothing.
@@ -3496,7 +3496,7 @@ void announce_activation(Switchboard& bus, WeaveId target, std::int64_t sequence
 TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answers for itself, "
           "and only then becomes the service") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     // Every refusal the sealed candidate earns, counted at the source.
     std::vector<std::string> sealed_speech;
@@ -3586,7 +3586,7 @@ TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answ
 
 TEST_CASE("R2B-3b-3: the same readiness, answered inside the preparation handler") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
@@ -3612,7 +3612,7 @@ TEST_CASE("R2B-3b-3: the same readiness, answered inside the preparation handler
 TEST_CASE("R2B-3b-3: queued production waiting on the role reaches the new service only after "
           "its activation") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     CandidateTap tap;
     const WeaveId watch = d.candidate;
@@ -3653,7 +3653,7 @@ TEST_CASE("R2B-3b-3: queued production waiting on the role reaches the new servi
 
 TEST_CASE("R2B-3b-3: a real candidate's refusal ends it, and v1 never notices") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     const char* plan = "refuse";
     SUBCASE("refused immediately") { plan = "refuse"; }
@@ -3698,7 +3698,7 @@ TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidat
     SUBCASE("the incumbent's code is replaced") { how = 7; }
 
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
@@ -3774,7 +3774,7 @@ TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidat
 
 TEST_CASE("R2B-3b-3: a candidate artifact that cannot load never becomes a candidate") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -3796,7 +3796,7 @@ TEST_CASE("R2B-3b-3: a candidate artifact that cannot load never becomes a candi
 TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothing about the "
           "new service") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
@@ -3835,7 +3835,7 @@ TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothi
 
 TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation and at commit") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
 
     // What the bus PUBLISHED for each artifact — the same list delivery is matched
@@ -3954,7 +3954,7 @@ TEST_CASE("R2B-3b-3a: a lifecycle-driven abort releases the candidate's artifact
     SUBCASE("the operator aborts explicitly") { route = 7; }
 
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const WeaveId doomed = d.candidate;
@@ -4036,7 +4036,7 @@ TEST_CASE("R2B-3b-3a: shutdown after a lifecycle-driven abort repeats no destruc
     LifetimeDelta ledger;
     WeaveId doomed{};
     {
-        Kernel kernel(bus);
+        Kernel kernel(bus, sbfx::fixture_admission());
         DynCast d = load_pair(bus, kernel);
         doomed = d.candidate;
         const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
@@ -4066,7 +4066,7 @@ TEST_CASE("R2B-3b-3a: shutdown after a lifecycle-driven abort repeats no destruc
 TEST_CASE("R2B-3b-3a: a released candidate name is reusable, and nothing of the old artifact "
           "comes back with it") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -4129,7 +4129,7 @@ TEST_CASE("R2B-3b-3a: a released candidate name is reusable, and nothing of the 
 TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's books as well as "
           "the Switchboard's") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LifetimeDelta ledger;
     // 1-2. The incumbent, and a sealed candidate beside it.
     DynCast d = load_pair(bus, kernel);
@@ -4215,7 +4215,7 @@ TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's bo
 
 TEST_CASE("R2B-3b-3a: unloading the retired incumbent does not disturb the new service") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
@@ -4243,7 +4243,7 @@ TEST_CASE("R2B-3b-3a: unloading the retired incumbent does not disturb the new s
 TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all — is seen by the "
           "Kernel immediately") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     REQUIRE(service_query(kernel).holder == d.incumbent);
@@ -4289,7 +4289,7 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
 
 TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -4315,7 +4315,7 @@ TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up
 TEST_CASE("R2B-3b-3a: reloading a weave a transaction bound as its candidate releases the "
           "artifact, and the reload says so") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const WeaveId doomed = d.candidate;
@@ -4353,7 +4353,7 @@ TEST_CASE("R2B-3b-3a: an adapter a host keeps holds its library open, and the Ke
     Switchboard bus;
     LifetimeDelta ledger;
     {
-        Kernel kernel(bus);
+        Kernel kernel(bus, sbfx::fixture_admission());
         REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
         const WeaveId id = kernel.weave_id("t");
         CHECK(kernel.status("t") == ArtifactStatus::Live);
@@ -4388,7 +4388,7 @@ TEST_CASE("R2B-3b-3a: unloading an artifact whose adapter a host still holds doe
     LifetimeDelta ledger;
     std::unique_ptr<Weave> held;
     {
-        Kernel kernel(bus);
+        Kernel kernel(bus, sbfx::fixture_admission());
         REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
         held = bus.unregister_weave(kernel.weave_id("t"));
         REQUIRE(held != nullptr);
@@ -4407,7 +4407,7 @@ TEST_CASE("R2B-3b-3a: unloading an artifact whose adapter a host still holds doe
 
 TEST_CASE("R2B-3b-3a: every artifact status is reachable, and aliveness outranks the seal") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
 
     // The four states an artifact on the bus can be in, each reached by the
@@ -4447,7 +4447,7 @@ TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter
     LifetimeDelta ledger;
     std::unique_ptr<Weave> held;
     {
-        Kernel kernel(bus);
+        Kernel kernel(bus, sbfx::fixture_admission());
         REQUIRE(kernel.load("t", ZEN_SO_WEAVE).ok);
         held = bus.unregister_weave(kernel.weave_id("t")); // a host takes the adapter
         REQUIRE(held != nullptr);
@@ -4480,7 +4480,7 @@ TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter
 
 TEST_CASE("R2B-3b-3a: a candidate that loads but cannot be sealed leaves no artifact behind") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -4633,7 +4633,7 @@ TxnId dyn_ready(Switchboard& bus, DynCast& d) {
 TEST_CASE("R2B-3d: admission and first breath are one event — v2 is never publicly the service "
           "without having been told") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     auto log = watch(bus, d.candidate);
 
@@ -4718,7 +4718,7 @@ TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated g
     // grant is not consulted — and this proves both halves of that: the admission
     // is whole, and the ordinary door is exactly as narrow as it was.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, preparation_only());
     auto log = watch(bus, d.candidate);
 
@@ -4771,7 +4771,7 @@ TEST_CASE("R2B-3d: an ordinary weave holding the grant sends a perfect zen.Activ
     // to emit it produces a delivered, well-formed, correctly-stamped message
     // carrying no attestation, and the consumer ignores it.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     Registered impostor = register_probe(bus, {pong_schema()});
 
@@ -5165,7 +5165,7 @@ TEST_CASE("R2B-3d: a lifecycle change during a pending admission ends the transa
     // actually happened — not `AdmissionRefused`, which would blame the admission
     // for a coordinator that died — and the envelope then finds nothing to do.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
     const TxnId t = dyn_ready(bus, d);
@@ -5219,7 +5219,7 @@ TEST_CASE("R2B-3d: a lifecycle change during a pending admission ends the transa
 TEST_CASE("R2B-3d: a stale queued admission cannot land on a namesake artifact loaded in the "
           "candidate's place") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -5499,7 +5499,7 @@ TEST_CASE("R2B-3d-1: an ORDINARY zen.Activated-shaped message is still answerabl
 
 TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library seam") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     auto log = watch(bus, d.candidate);
     REQUIRE(d.ask(bus) == "v1");
@@ -5610,7 +5610,7 @@ WeaveId native_candidate(Switchboard& bus, WeaveId coordinator, ProbeWeave** raw
 TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement drives only the "
           "handle, and the substrate underneath is unchanged") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
 
     // 1. v1 is the live service.
@@ -5702,7 +5702,7 @@ TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement
 
 TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's side") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -5757,7 +5757,7 @@ TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's si
 TEST_CASE("R2B-4a: the candidate's refusal arrives whole — reason, cleanup, and a serving "
           "incumbent, with no facade interpretation on top") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -5801,7 +5801,7 @@ TEST_CASE("R2B-4a: the candidate's refusal arrives whole — reason, cleanup, an
 
 TEST_CASE("R2B-4a: the start-failure ladder — every rung leaves the world exactly as it was") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     SUBCASE("nobody holds the role: refused before anything loads") {
         Registered coordinator = register_probe(bus, {pong_schema()});
@@ -5968,7 +5968,7 @@ TEST_CASE("R2B-4a: a delivery offered to the wrong handle refuses, consumes noth
 
 TEST_CASE("R2B-4a: two handles, one operator — each collects exactly its own outcome") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered op = register_probe(bus, {pong_schema()});
     (void)bus.register_weave(
@@ -6005,7 +6005,7 @@ TEST_CASE("R2B-4a: two handles, one operator — each collects exactly its own o
 
 TEST_CASE("R2B-4a: dropping a live handle changes nothing — a scope is not a lifecycle decision") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -6052,7 +6052,7 @@ TEST_CASE("R2B-4a: dropping a live handle changes nothing — a scope is not a l
 TEST_CASE("R2B-4a: the handle's state is the Switchboard's, under every mutation the facade "
           "never saw coming") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
@@ -6104,7 +6104,7 @@ TEST_CASE("R2B-4a: the handle's state is the Switchboard's, under every mutation
 TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exactly — and gaps "
           "obey the existing law") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     REQUIRE(d.ask(bus) == "v1");
 
@@ -6203,7 +6203,7 @@ TEST_CASE("R2B-4a: the budget is the author's, one unit per tick, and nothing ti
 
 TEST_CASE("R2B-4a: every refusal keeps the substrate's own words") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered op = register_probe(bus, {pong_schema()});
     (void)bus.register_weave(
@@ -6257,7 +6257,7 @@ TEST_CASE("R2B-4a: every refusal keeps the substrate's own words") {
 
 TEST_CASE("unload tears down cleanly: instance destroyed before the library closes") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
     REQUIRE(lr.ok);
     const WeaveId id = lr.id;
@@ -6275,7 +6275,7 @@ TEST_CASE("unload tears down cleanly: instance destroyed before the library clos
 TEST_CASE("the kernel unloads everything it still holds at destruction") {
     Switchboard bus;
     {
-        Kernel kernel(bus);
+        Kernel kernel(bus, sbfx::fixture_admission());
         REQUIRE(kernel.load("a", ZEN_SO_WEAVE).ok);
         REQUIRE(kernel.load("b", ZEN_SO_WEAVE_B).ok);
         CHECK(kernel.loaded().size() == 2);
@@ -6345,7 +6345,7 @@ std::vector<OfficeHeard> news_of(const std::vector<OfficeHeard>& log) {
 
 struct OfficeStage {
     Switchboard bus;
-    Kernel kernel{bus};
+    Kernel kernel{bus, sbfx::fixture_admission()};
     std::shared_ptr<std::vector<OfficeHeard>> commander_log =
         std::make_shared<std::vector<OfficeHeard>>();
     std::shared_ptr<std::vector<OfficeHeard>> dispatcher_log =
@@ -6487,7 +6487,7 @@ TEST_CASE("R2D-0/v5: inbound office provenance crosses the seam — authored_fro
 TEST_CASE("R2D-0/v5: the previous-ABI artifact refuses at load by version — no instance becomes "
           "live, no capability goes silently missing") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(stale.ok);
     CHECK(stale.error.find("abi_version") != std::string::npos);
@@ -6684,7 +6684,7 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
 TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, and reads its own "
           "claim back synchronously — the same four verbs, the same meanings") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult dyn = kernel.load("sensor", ZEN_SO_SENSES, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
@@ -6797,7 +6797,7 @@ Value sense_probe(const std::string& role) {
 TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office identity — a "
           "name past the old buffer bound crosses whole, not as a plausible prefix") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     const std::string role_a = long_role('A');
     REQUIRE(role_a.size() > 128); // the case is meaningless if it fits the old buffer
@@ -6840,7 +6840,7 @@ TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office id
 TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the life stood — the "
           "two generation facts cross the seam separately") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     // A short role on purpose: what this pins is the generation facts, not name
     // length (that is the pair of cases above).
@@ -6900,7 +6900,7 @@ TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the li
 TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay distinguishable "
           "across the seam — truncation would report them as the same office") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
 
     const std::string role_a = long_role('A');
     const std::string role_b = long_role('B');
@@ -6940,7 +6940,7 @@ TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay di
 TEST_CASE("R2E-0/v6: a loaded weave without observe authority is refused a read, and its claim "
           "of an undeclared shape is refused — the seam carries the distinct reasons") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     // Full SEND authority, no observe rule: a send rule answers a different
     // question and does not become a read.
     LoadResult dyn = kernel.load("sensor", ZEN_SO_SENSES, "", Grant{}.allow_any());
@@ -6987,7 +6987,7 @@ struct RefusalTap {
 TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-owned fact, "
           "naming the sender, the claimed shape and the seam that refused it") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
     seam.arm(bus, RefusalReason::SeamUnresolved);
     std::size_t all_refusals = 0;
@@ -7030,7 +7030,7 @@ TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-o
 TEST_CASE("R2E-0/P-011: the comparable NATIVE reach is still observable, and now the two tiers "
           "report at the same altitude") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     std::size_t native_refusals = 0;
     RefusalTap seam;
     seam.arm(bus, RefusalReason::SeamUnresolved);
@@ -7056,7 +7056,7 @@ TEST_CASE("R2E-0/P-011: the comparable NATIVE reach is still observable, and now
 TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam refusal — the "
           "diagnostic fires on rejection only") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
     seam.arm(bus, RefusalReason::SeamUnresolved);
 
@@ -7094,7 +7094,7 @@ inline std::shared_ptr<const Schema> seamonly_schema() {
 TEST_CASE("FRIC-0: an unresolvable PUBLICATION from a loaded weave leaves no refusal, because "
           "an unresolvable shape has no accepter and the publication reached nobody") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
     seam.arm(bus, RefusalReason::SeamUnresolved);
 
@@ -7131,7 +7131,7 @@ TEST_CASE("FRIC-0: an unresolvable PUBLICATION from a loaded weave leaves no ref
 TEST_CASE("FRIC-0: a PUBLICATION whose shape resolves and whose bytes fail the gate is still "
           "refused — the delivery that should have happened did not") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap gate;
     gate.arm(bus, RefusalReason::GateRefused);
     RefusalTap seam;
@@ -7161,7 +7161,7 @@ TEST_CASE("FRIC-0: a PUBLICATION whose shape resolves and whose bytes fail the g
 TEST_CASE("FRIC-0: taking the address away is the ONLY difference — the same shape, from the "
           "same seam, addressed to a role is still refused") {
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
     seam.arm(bus, RefusalReason::SeamUnresolved);
 

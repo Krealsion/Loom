@@ -88,7 +88,40 @@ type, so the local and remote operator see the same horizon.
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
 | `kConsoleTapCapacity` | 1024 | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
-| `kConsoleBufferCapacity` | 64 | received `Value`s | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+| `kConsoleBufferCapacity` | 64 | received arrivals | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+| `kConsoleAskCapacity` | 32 | conversations held for a caller | the in-process engine's tracked conversations: still open, plus answered and not yet taken | **refuses** a new tracked conversation, never evicts — see below |
+
+**A third bound, and it is deliberately not a window.** `kConsoleAskCapacity`
+bounds what the console is *holding for a caller* — conversations still open, and
+answers that have settled but have not been taken — not what it has *seen*. Nothing
+is owed on history, so evicting its oldest entry is legitimate; a held conversation
+is the opposite — dropping one loses a question somebody asked or an answer they
+have not read — so a new tracked conversation is **refused at capacity and every
+held one is left untouched** ([ANS-05](messaging.md#the-askers-own-book)). The send
+still happens; what it loses is attribution, and `Submitted::ask == 0` says so
+rather than handing back a handle that can never settle. Thirty-two is an
+operator's number: a person driving a console by hand does not hold dozens of open
+questions, and `asks` lists them when they do.
+
+**Holding is something a caller asks for, and then owes back.** A send holds
+nothing unless its caller says `ConsoleTracking::Tracked`, and every send through
+the frontend `Console` interface — `ConsoleUi`, `RemoteConsole` — is untracked: its
+replies are history, and nothing accumulates however long it runs. A tracked
+conversation spends its slot when it is opened and gets it back when the caller
+takes the answer (`take_settled`) or forgets the conversation (`forget_ask`, which
+cancels nothing at the far end). The bound is applied **when a conversation is
+opened** because that is the only moment anything can still be refused honestly: an
+arrival cannot be turned away without losing an answer, and evicting a held answer
+would erase it before it was read. It once counted open conversations only, and an
+answer leaves the book when it settles — so a frontend that composed and pumped kept
+every answer it was ever sent (measured: 1,000 sends, 64 replies in history, 1,000
+answers retained).
+
+**An arrival is kept with its routing facts**, not just its payload:
+`BufferEntry` carries the bus-stamped `sender`, the `correlation` the sender
+named, and whether Loom attested it as an answer. The window used to keep the
+`Value` alone, which left every consumer unable to tell an answer it had earned
+from a reply-shaped message any participant may send.
 
 **Why those two numbers.** The tap matches `kJournalCapacity` deliberately: one
 tap entry is roughly one journal entry, so an operator who can still *see* an
@@ -110,6 +143,61 @@ evicted label refuses and says it was evicted -- it never re-binds to whatever
 reply now occupies that slot, so a reference an operator wrote down either
 still means what it meant or fails loudly. Eviction is visible without asking:
 the tap and buffer panes carry it in their headings.
+
+## Supplied host input (what `loom-host` reads before a command exists)
+
+The console above keeps what the bus did; this is the step before it — the bytes of a
+person's or a script's commands, read from stdin before any of them becomes a message. The
+values, and the rules that apply them, live in
+[`src/host/line_input.hpp`](../../src/host/line_input.hpp). They are **the same on every
+platform**, by construction rather than by care: one platform-neutral waiting area,
+`loom::host::HeldInput`, decides what a line is, what is too long, how much may wait and
+what the end of input means, and the two platform readers (POSIX `poll`, the Windows reader
+thread) only move bytes into it.
+
+| Bound | Value | Unit | What it bounds | Overflow behavior |
+|---|---|---|---|---|
+| `kMaxCommandBytes` | 4000 | bytes, line ending excluded | one command | **refused** where it stands (`LineInput::Status::TooLong`, with its input line number and first bytes): none of it runs — not shortened, not split — the rest of that line is discarded as it arrives, and the next line is read as usual |
+| `kHeldInputBytes` | 64 KiB | bytes | everything the reader holds for the host at once: finished lines not yet taken **and** the line still arriving | the reader **waits**, and resumes as the host takes lines; nothing is dropped, reordered, or counted against a lifetime total |
+
+**A backlog, so bounded by waiting, never by discarding.** Every command a producer wrote is
+owed to the host, in order, so the bound is applied by not reading: what the host has not
+reached stays with its producer — a pipe's writer waits, a file stays on disk, a terminal
+keeps what was typed — and a script of any length is read as fast as the host runs it. The
+Windows reader once did the opposite and moved everything into memory as fast as it arrived:
+a 25.6 MB file of commands took about 37 MB before the host had run one.
+
+**The only thing dropped is a line that was refused**, and it is dropped whole. Its rest is
+discarded as it arrives instead of being held until its newline, which is what lets a line
+that never ends cost nothing: the reader keeps reading and discarding, and the host keeps
+serving the bus. Nothing of a refused line is ever handed out, so no shortened command and
+no second half of one can run.
+
+**Why 4000.** A Linux terminal in its ordinary (canonical) mode keeps only the first 4095
+bytes of a typed line and drops the rest without a sign; a Windows console delivers a long
+typed line whole (both measured: WSL2 kernel 6.6, Windows 11 26200 console, lines to 100,000
+characters). A limit below 4095 means a line that terminal cut short is always refused and
+never run, and one number on both platforms means a command either works everywhere or is
+refused everywhere. It is still far above any command the host has — a `start` with a long
+path is a few hundred bytes.
+
+**Why 64 KiB.** It must hold the longest unfinished command plus one read (4 KiB), so a
+reader waiting for room can never be waiting for a newline it has no room to read; that is a
+compile-time assertion beside the constants. Beyond that it only sets how much of a burst is
+taken per wake-up, and one Linux pipe's worth is plenty. It counts bytes in one buffer, not
+lines in a queue, so a flood of empty lines cannot hold more than its bytes say.
+
+**How full it gets is not the contract.** A POSIX reader reads only when the host asks and
+nothing is finished, so it rarely holds more than one read; the Windows thread reads ahead
+until the area is full. Both stay within the limit, and `LineInput::held()` reports the
+bytes held now and the most ever held, which is how `host_line_streams` and
+`host_line_input` prove it on each platform with the same assertions.
+
+**Ownership / reset.** Host-owned and automatic: not a parameter, not configurable. The
+reset is the reader's lifetime. A reader that is replaced takes what it held with it — at
+most `kHeldInputBytes` — and on a pipe or a file that can include part of a line, whose rest
+the next reader then receives as a line of its own; the supplied host reads stdin with one
+reader for its whole life.
 
 ## Terminal session (one participant's own record)
 

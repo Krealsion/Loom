@@ -61,10 +61,13 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_history_logger.cpp
     test_component.cpp
     test_pixel.cpp
-    test_bridge.cpp)
+    test_bridge.cpp
+    test_host_policy.cpp
+    test_host_input.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
+    test_admission.cpp
     test_dispatch_loaded.cpp
     test_handoff.cpp
     test_manager.cpp
@@ -105,7 +108,7 @@ target_include_directories(zen-tests PRIVATE
 
 target_link_libraries(zen-tests
     PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-history zen-bridge zen-tui
-            zen-warnings zen-sanitize)
+            zen-host-policy zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(zen-tests PRIVATE zen-kernel)
 endif()
@@ -255,6 +258,20 @@ target_link_libraries(zen_test_joint PRIVATE loom zen-switchboard zen-warnings z
 loom_weave_build_contract(zen_test_joint)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_JOINT=\"$<TARGET_FILE:zen_test_joint>\"")
 
+# The supplied host's probe, in two variants from one source. It is the fixture the
+# `host_process` lane drives a REAL loom-host against: it counts authenticated
+# activations, sends itself a message on activation (the send an approved permission must
+# already cover), re-arms a Spin forever (the cooperative busy weave), and — in the FORGE
+# variant — authors an unasked `zen.Result` at the console, which is the value that once
+# became the subject of a host-minted administration capability.
+add_library(zen_host_probe SHARED weavelib/host_probe.cpp)
+target_link_libraries(zen_host_probe PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_host_probe)
+add_library(zen_host_probe_forge SHARED weavelib/host_probe.cpp)
+target_link_libraries(zen_host_probe_forge PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+target_compile_definitions(zen_host_probe_forge PRIVATE ZEN_PROBE_FORGE)
+loom_weave_build_contract(zen_host_probe_forge)
+
 # R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
 # under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
 # where the pipe's fail-closed law is the thing under test.
@@ -306,13 +323,15 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
     zen_test_office_worker zen_test_dispatch zen_test_joint
-    zen_test_contract_applied zen_test_contract_bypass)
+    zen_host_probe zen_host_probe_forge
+    zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
 target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_WEAVE=\"$<TARGET_FILE:zen_test_weave>\""
     "ZEN_SO_WEAVE_B=\"$<TARGET_FILE:zen_test_weave_b>\""
+    "ZEN_SO_ASKS=\"$<TARGET_FILE:zen_test_weave_asks>\""
     "ZEN_SO_BADSNAP=\"$<TARGET_FILE:zen_test_weave_badsnap>\""
     "ZEN_SO_BADMSG=\"$<TARGET_FILE:zen_test_weave_badmsg>\""
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_weave_v2>\""
@@ -340,6 +359,12 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_HANDOFF_V2=\"$<TARGET_FILE:zen_test_handoff_v2>\""
     "ZEN_SO_HANDOFF_MIGRATOR=\"$<TARGET_FILE:zen_test_handoff_migrator>\""
     "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\"")
+
+# The admission suite's declaring artifact: the same fixture, with a CapabilityAsk in
+# its manifest. It rides the kernel gate rather than the posix one, because what it
+# proves -- that a declaration reaches the host's policy and grants nothing -- is true
+# of the in-process kernel on every platform that has one.
+zen_add_test_weave(zen_test_weave_asks ZEN_WEAVE_ASKS)
 
 endif() # TARGET zen-kernel (portable fixtures)
 
@@ -618,6 +643,55 @@ add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
     "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
 
+# ---- The supplied host, as a real process (FRIC-1 / GATE-05 / LIFE-04) ----------------
+#
+# Loom's one INSTALLED executable had a suite for its grammar and none for its glue, and
+# every defect it shipped was in the glue: which arriving message answered which question,
+# when an approved permission became effective, whether the operator could still be heard
+# while a loaded weave kept the bus busy. None of those is visible to a test of the
+# deciding half, and all of them are visible in one console transcript.
+#
+# TWO ENTRIES, because two configurations can answer different parts. `host_console` needs
+# no kernel at all -- the broken-plan recovery route, decision-store ownership between two
+# REAL processes, repeated approval, and a failed write that must change nothing -- so it
+# runs in every configuration including a kernel-less Windows build. `host_process_weaves`
+# rides the kernel gate because its subject is loaded artifacts.
+#
+# The scenarios assert identities, counts and effective authority, never whole sentences:
+# see the header of tests/host_process/run.cmake for what that buys and what it gives up.
+add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
+    -DZEN_HOST_EXE=$<TARGET_FILE:loom-host>
+    -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/console
+    -DZEN_GROUP=console
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
+
+# ---- The supplied host's input, through a REAL terminal --------------------------------
+#
+# The two host_process entries feed the host through a FILE, and on Windows a file is the one
+# kind of stdin whose reader was never wrong: the console reader blocked in a cooked read the
+# moment a person typed a character, so pausing halfway through a command stopped every weave
+# in the host, and a finished line behind 32 non-character records was never read. Neither is
+# visible through redirected input. `tests/host_terminal/witness.cpp` builds the terminal a
+# person types into — its own hidden console on Windows, a pseudo-terminal on POSIX — and types.
+#
+#   host_line_input       (portable) LineInput itself, on that terminal.
+#   host_line_streams     (portable) LineInput on a pipe and a file: the input limits, with the
+#                         same assertions on every platform — a producer held back while the host
+#                         takes nothing, every line then exact and in order, commands at and over
+#                         the limit, a line that never ends, the end, and stopping a reader while
+#                         its producer waits for room. Not a terminal, and not evidence about one.
+#   host_terminal_weaves  (kernel)   a real loom-host with the probe booted, typed at.
+find_package(Threads REQUIRED)
+add_executable(zen-host-terminal-witness host_terminal/witness.cpp)
+target_link_libraries(zen-host-terminal-witness
+    PRIVATE zen-host-policy Threads::Threads zen-warnings zen-sanitize)
+add_test(NAME host_line_input COMMAND zen-host-terminal-witness reader)
+set_tests_properties(host_line_input PROPERTIES TIMEOUT 240)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/host-process-work/streams)
+add_test(NAME host_line_streams COMMAND zen-host-terminal-witness streams
+    ${CMAKE_BINARY_DIR}/host-process-work/streams)
+set_tests_properties(host_line_streams PROPERTIES TIMEOUT 240)
+
 # ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
 #
 # What the `population` entry does for the test population, these do for the loadable
@@ -729,4 +803,24 @@ if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_cont
         -DZEN_REQUIRED=${CMAKE_CURRENT_BINARY_DIR}/weave_population_required.txt
         -DZEN_CONTRACTED=${CMAKE_CURRENT_BINARY_DIR}/weave_contract_manifest.txt
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_population.cmake)
+
+    # The half of the host-process lane that needs loadable artifacts: attribution,
+    # activation, adoption by every route that can load anything, and responsiveness while
+    # a cooperative weave keeps the bus non-empty forever.
+    add_test(NAME host_process_weaves COMMAND ${CMAKE_COMMAND}
+        -DZEN_HOST_EXE=$<TARGET_FILE:loom-host>
+        -DZEN_PROBE_LIB=$<TARGET_FILE:zen_host_probe>
+        -DZEN_PROBE_FORGE_LIB=$<TARGET_FILE:zen_host_probe_forge>
+        -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/weaves
+        -DZEN_GROUP=weaves
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
+
+    # The same host, typed at through a real terminal: a delayed answer reported while a command
+    # is half typed, work that continues through a pause mid-command, and inspection, authority,
+    # stop and quit reachable across pauses and non-character input (witness.cpp's header).
+    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/host-process-work/terminal)
+    add_test(NAME host_terminal_weaves COMMAND zen-host-terminal-witness host
+        $<TARGET_FILE:loom-host> $<TARGET_FILE:zen_host_probe>
+        ${CMAKE_BINARY_DIR}/host-process-work/terminal)
+    set_tests_properties(host_terminal_weaves PROPERTIES TIMEOUT 240)
 endif()
