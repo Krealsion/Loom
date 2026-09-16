@@ -215,9 +215,9 @@ names the build it was asked about and the command that answers it.
 
 ```text
 loom> authority trust logbook
-  'logbook' may run. It may still say nothing until you allow something.
+  'logbook' may run; a rebuild of it will ask again. It may still say nothing until you allow something.
 loom> authority trust counter
-  'counter' may run. It may still say nothing until you allow something.
+  'counter' may run; a rebuild of it will ask again. It may still say nothing until you allow something.
 loom> quit
 ```
 
@@ -349,7 +349,8 @@ Now every rebuild comes up without a question — and never silently:
 ```
 
 `--rebuilds` widens nothing. The rules you approved are unchanged; all it decides is
-whether *new bytes* may run under authority you already granted.
+whether *new bytes* may run under authority you already granted. `authority trust <name>
+--ask-again` turns it back off.
 
 It covers a changed **request** too, without a second mechanism to understand. A weave's
 declared ask (`ZEN_ASK`) is compiled into it, so an artifact that starts asking for

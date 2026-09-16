@@ -411,7 +411,9 @@ void print_help() {
   authority                     your standing decisions
   authority show <name>         one decision, and what the bus actually permits now
   authority pending             what the policy refused and is waiting on
-  authority trust <name> [--rebuilds]   it may run; pin this build (--rebuilds: any build)
+  authority trust <name> [--rebuilds|--ask-again]
+                                it may run, pinned to this build; --rebuilds accepts any
+                                rebuild of it, --ask-again turns that back off
   authority deny <name>         it may not run
   authority allow <name> <rule> it may say one more thing, e.g.  Greet v1 -> any target
   authority revoke <name> [rule]   take one back, or all of them; live and remembered
@@ -560,6 +562,11 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
         for (std::size_t i = 3; i < tok.size(); ++i) {
             if (tok[i].text == "--rebuilds") {
                 rule.trust_rebuilds = true;
+            } else if (tok[i].text == "--ask-again") {
+                // THE WAY BACK. Without it, turning `--rebuilds` off meant hand-editing
+                // the file — a poor answer for the one switch here that lets new code run
+                // without asking.
+                rule.trust_rebuilds = false;
             } else {
                 std::cout << "  unknown option '" << tok[i].text << "'\n";
                 return;
@@ -574,12 +581,17 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
                 rule.content_id = p.content_id;
             }
         }
+        const bool trusts_rebuilds = rule.trust_rebuilds;
         if (!store.put(std::move(rule), &error)) {
             std::cout << "  " << error << '\n';
             return;
         }
+        // BOTH HALVES OF WHAT WAS JUST DECIDED, because a person who typed one word is
+        // owed the other: this grants the right to RUN and nothing else, and whether a
+        // later rebuild will ask again is exactly what the flag changed.
         std::cout << "  '" << name << "' may run"
-                  << (existing != nullptr && existing->trust_rebuilds ? "" : "")
+                  << (trusts_rebuilds ? ", and so will any rebuild of it"
+                                      : "; a rebuild of it will ask again")
                   << ". It may still say nothing until you allow something.\n";
         return;
     }
