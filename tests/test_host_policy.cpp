@@ -650,30 +650,88 @@ TEST_CASE("a forget that could not be written leaves the decision in force") {
     REQUIRE(reread.find("probe") != nullptr);
 }
 
-TEST_CASE("the policy says so when a build could not be pinned, and does not pretend") {
+TEST_CASE("a build whose pin cannot be written does not run, because the pin is the approval") {
+    // THE SEQUENCE THAT EXPOSED IT, not just its first step. An approval made without
+    // `--rebuilds` means "this build, and ask me again when it changes", and the record of
+    // WHICH build is the only thing that can notice a change. This store used to admit the
+    // first build when that record could not be written, leave the rule unpinned, and then
+    // admit a DIFFERENT build the same way — so a disk the person could not see turned their
+    // "ask me again" into "run anything", announced in a note. A warning is not consent.
     Scratch f("failed-pin");
     AuthorityStore store;
     std::string error;
     REQUIRE(store.open(f.path, &error));
-    REQUIRE(store.put(rule_for("probe"), &error)); // approved, unpinned
+    REQUIRE(store.put(rule_for("probe"), &error)); // approved, unpinned, rebuilds re-ask
 
-    Scratch artifact("failed-pin-artifact");
-    artifact.write("some bytes");
-    AdmissionRequest q = open_of("probe", loom::file_content_id(artifact.path), artifact.path.c_str());
+    Scratch a("failed-pin-build-a");
+    a.write("build A");
+    Scratch b("failed-pin-build-b");
+    b.write("build B, which is different code");
+    const AdmissionRequest build_a = open_of("probe", loom::file_content_id(a.path), a.path.c_str());
+    const AdmissionRequest build_b = open_of("probe", loom::file_content_id(b.path), b.path.c_str());
+    REQUIRE(build_a.content_id != build_b.content_id);
+
+    {
+        BlockedTemp blocked(f.path);
+        const AdmissionVerdict first = store.policy()(build_a);
+        CHECK_FALSE(first.admitted);
+        // WHY, and what to do — storage, not a decision. Nothing about the approval is
+        // wrong, so the refusal must not send the person to approve anything again.
+        CHECK(first.reason.find("could not record") != std::string::npos);
+        CHECK(first.reason.find("cannot write") != std::string::npos);
+        CHECK(first.reason.find("writable") != std::string::npos);
+        // A RETRY is the same answer, and so is the different build that used to walk in.
+        CHECK_FALSE(store.policy()(build_a).admitted);
+        CHECK_FALSE(store.policy()(build_b).admitted);
+        // Nothing was invented: no pin in memory, no widened posture, and no "decision
+        // waiting on you" — the person's decision stands; the disk is what is waiting.
+        REQUIRE(store.find("probe") != nullptr);
+        CHECK(store.find("probe")->content_id.empty());
+        CHECK_FALSE(store.find("probe")->trust_rebuilds);
+        CHECK(store.pending().empty());
+    }
+
+    // THE RECOVERY PATH is the ordinary one: once the store can be written, the same approval
+    // records the build that runs...
+    const AdmissionVerdict recovered = store.policy()(build_a);
+    CHECK(recovered.admitted);
+    CHECK(store.find("probe")->content_id == build_a.content_id);
+    // ...and a changed build asks again, which is what the person chose.
+    CHECK_FALSE(store.policy()(build_b).admitted);
+
+    // ...and so does a restarted host, which reads the pin from the file rather than memory.
+    AuthorityStore restarted;
+    REQUIRE(restarted.open(f.path, &error));
+    CHECK(restarted.policy()(build_a).admitted);
+    CHECK_FALSE(restarted.policy()(build_b).admitted);
+}
+
+TEST_CASE("`--rebuilds` is consent to any build, so a pin that cannot be written withdraws nothing") {
+    // THE DISTINCTION the refusal above must not blur: a person who said `--rebuilds` has
+    // already answered "may a different build of this run?" with yes. Not knowing WHICH build
+    // ran changes nothing they asked for — so it runs, and the record that could not be made
+    // is said, rather than presented as a failure of their consent.
+    Scratch f("failed-pin-rebuilds");
+    AuthorityStore store;
+    std::string error;
+    REQUIRE(store.open(f.path, &error));
+    AuthorityRule r = rule_for("probe");
+    r.trust_rebuilds = true;
+    REQUIRE(store.put(std::move(r), &error));
+
+    Scratch a("failed-pin-rebuilds-a");
+    a.write("build A");
+    Scratch b("failed-pin-rebuilds-b");
+    b.write("build B");
 
     BlockedTemp blocked(f.path);
-    const AdmissionVerdict v = store.policy()(q);
-    // ADMITTED: the person's decision to let it RUN is already durable, and refusing here
-    // would punish them for a disk they cannot see. What failed is the record of WHICH
-    // BUILD ran, and the consequence of that is concrete and is said.
-    CHECK(v.admitted);
+    CHECK(store.policy()(open_of("probe", loom::file_content_id(a.path), a.path.c_str())).admitted);
+    CHECK(store.policy()(open_of("probe", loom::file_content_id(b.path), b.path.c_str())).admitted);
     REQUIRE_FALSE(store.notes().empty());
     const std::string& note = store.notes().back();
-    CHECK(note.find("could not be pinned") != std::string::npos);
-    CHECK(note.find("without asking") != std::string::npos);
-    // ...and the pin really is absent, rather than recorded in memory only.
-    REQUIRE(store.find("probe") != nullptr);
-    CHECK(store.find("probe")->content_id.empty());
+    CHECK(note.find("trust_rebuilds") != std::string::npos);
+    CHECK(note.find("could not be recorded") != std::string::npos);
+    CHECK(store.find("probe")->content_id.empty()); // said, not pretended
 }
 
 TEST_CASE("replacement preserves the previous record when it cannot happen") {

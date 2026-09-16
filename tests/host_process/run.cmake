@@ -71,7 +71,10 @@ function(zen_run_host dir script args out_text out_code)
         TIMEOUT 60)
     set(${out_text} "${out}${err}" PARENT_SCOPE)
     set(${out_code} "${code}" PARENT_SCOPE)
-    file(WRITE "${dir}/output.txt" "${out}${err}\n--- exit: ${code}\n")
+    # APPENDED, so a scenario that runs the host several times keeps every transcript; the
+    # scenario directory is emptied when the scenario starts.
+    file(APPEND "${dir}/output.txt"
+         "--- stdin:\n${script}--- output:\n${out}${err}\n--- exit: ${code}\n\n")
 endfunction()
 
 # The condition is taken as ARGN and handed to if() as separate arguments. Written the
@@ -491,6 +494,115 @@ quit
     zen_check("a revoke reaches the bus" text MATCHES "may now say: nothing")
     zen_check("the revoked send is refused on the next activation"
               text MATCHES "startups=1 refusals=1")
+
+    # 8. A BUILD WHOSE PIN CANNOT BE WRITTEN IS REFUSED, AND SO IS EVERY OTHER BUILD.
+    #
+    # An approval without `--rebuilds` means "this build; ask me again when it changes", and
+    # the pin is the only record that can notice a change. With the store's temp path blocked
+    # the host used to admit build A with a note nobody saw until `status`, leave the rule
+    # unpinned, and then admit a DIFFERENT build B the same way. The two builds are the two
+    # probe variants: one artifact name, different bytes. The approval is made at the console,
+    # which is the person's route and the one that leaves the rule unpinned.
+    message(STATUS "host_process/weaves: a pin that cannot be written refuses the build")
+    zen_scenario_dir(failed-pin dir)
+    zen_run_host("${dir}" "authority trust probe\nquit\n"
+                 "--no-boot;--authority;${dir}/decisions.json" text code)
+    zen_check("the approval is remembered, and a rebuild will ask again"
+              text MATCHES "a rebuild of it will ask again")
+    file(MAKE_DIRECTORY "${dir}/decisions.json.tmp")
+    zen_run_host("${dir}"
+                 "start probe ${ZEN_PROBE_LIB} probe
+start probe ${ZEN_PROBE_LIB} probe
+start probe ${ZEN_PROBE_FORGE_LIB} probe
+authority show probe
+quit
+" "--no-boot;--authority;${dir}/decisions.json" text code)
+    zen_check("the host comes back" code EQUAL 0)
+    string(REGEX MATCHALL "could not record which build" pin_refusals "${text}")
+    list(LENGTH pin_refusals pin_refusal_count)
+    zen_check("build A, a retry of A, and a different build B are each refused"
+              pin_refusal_count EQUAL 3)
+    zen_check("...naming the storage failure" text MATCHES "cannot write")
+    zen_check("...so nothing was loaded or administered"
+              text MATCHES "nothing is loaded under 'probe'")
+    zen_check("...no pin was invented" text MATCHES "build pinned: .not yet.")
+    zen_check("...and the approval did not widen to any rebuild"
+              NOT text MATCHES "any rebuild is accepted")
+
+    # The recovery route is the ordinary one: make the store writable and start it again.
+    file(REMOVE_RECURSE "${dir}/decisions.json.tmp")
+    zen_run_host("${dir}"
+                 "start probe ${ZEN_PROBE_LIB} probe
+authority show probe
+stop probe
+start probe ${ZEN_PROBE_FORGE_LIB} probe
+quit
+" "--no-boot;--authority;${dir}/decisions.json" text code)
+    zen_check("once the store is writable the approved build runs" text MATCHES "LIVE, weave")
+    zen_check("...pinned by its bytes" text MATCHES "build pinned: [0-9a-f]+")
+    zen_check("...and a different build asks again, as the person chose"
+              text MATCHES "changed since it was approved")
+    zen_run_host("${dir}"
+                 "start probe ${ZEN_PROBE_FORGE_LIB} probe
+start probe ${ZEN_PROBE_LIB} probe
+authority show probe
+quit
+" "--no-boot;--authority;${dir}/decisions.json" text code)
+    zen_check("a restarted host still refuses the different build"
+              text MATCHES "changed since it was approved")
+    zen_check("...and runs the pinned one" text MATCHES "LIVE, weave")
+
+    # ...AND `--rebuilds` IS CONSENT TO ANY BUILD, SO A DISK DOES NOT WITHDRAW IT. The missing
+    # record is said when the start happens, not only when `status` is asked.
+    message(STATUS "host_process/weaves: --rebuilds is not withdrawn by an unwritable pin")
+    zen_scenario_dir(failed-pin-rebuilds dir)
+    zen_run_host("${dir}" "authority trust probe --rebuilds\nquit\n"
+                 "--no-boot;--authority;${dir}/decisions.json" text code)
+    file(MAKE_DIRECTORY "${dir}/decisions.json.tmp")
+    zen_run_host("${dir}"
+                 "start probe ${ZEN_PROBE_LIB} probe
+stop probe
+start probe ${ZEN_PROBE_FORGE_LIB} probe
+authority show probe
+quit
+" "--no-boot;--authority;${dir}/decisions.json" text code)
+    zen_check("under --rebuilds the first build runs" text MATCHES "'probe' stopped")
+    zen_check("...and so does a different one" text MATCHES "LIVE, weave")
+    zen_check("...and the record that could not be made is said as the start happens"
+              text MATCHES "note: probe: admitted because trust_rebuilds is on")
+    zen_check("...naming what could not be written" text MATCHES "could not be recorded")
+
+    # 9. EVERY ANSWER THE HOST WAS OWED IS COLLECTED, INCLUDING LATE ONES, AND NOTHING PILES UP.
+    #
+    # The console holds a slot for each conversation from the ask until its answer is TAKEN.
+    # Forty conversations answered only after the host has stopped waiting (`Countdown` answers
+    # 64 turns later), then three hundred ordinary ones: a host that left a single late answer
+    # untaken would run out of its 32 slots, and its later sends would say "untracked".
+    message(STATUS "host_process/weaves: sustained and delayed answers are all collected")
+    zen_scenario_dir(sustained dir)
+    zen_write_decisions("${dir}/decisions.json"
+                        "\"Startup v1 -> role probe\",\"Tock v1 -> role probe\"")
+    zen_write_plan("${dir}/plan.json" "${ZEN_PROBE_LIB}")
+    set(script "")
+    foreach(i RANGE 1 40)
+        string(APPEND script "send 5 Countdown 1 turns=64\n")
+    endforeach()
+    foreach(i RANGE 1 300)
+        string(APPEND script "send 5 Inspect 1\n")
+    endforeach()
+    string(APPEND script "asks\nquit\n")
+    zen_run_host("${dir}" "${script}"
+                 "--boot;${dir}/plan.json;--authority;${dir}/decisions.json" text code)
+    zen_check("the host comes back" code EQUAL 0)
+    string(REGEX MATCHALL "counted down" late "${text}")
+    list(LENGTH late late_count)
+    zen_check("every one of forty delayed answers was reported when it landed"
+              late_count EQUAL 40)
+    string(REGEX MATCHALL "reply -> m[0-9]+  activations=" replies "${text}")
+    list(LENGTH replies reply_count)
+    zen_check("all three hundred ordinary answers were attributed" reply_count EQUAL 300)
+    zen_check("no send ever ran out of slots" NOT text MATCHES "untracked")
+    zen_check("and nothing is left held at the end" text MATCHES "no open conversations")
 
 endif()
 

@@ -63,15 +63,22 @@ namespace loom {
 /// can no longer name.
 inline constexpr std::size_t kConsoleTapCapacity = 1024;
 
-/// Conversations this console will track at once — the bound on its own ask book.
+/// Conversations this console HOLDS for its callers at once: the ones still open, AND the
+/// answered ones whose answer the caller has not yet taken.
 ///
 /// It is not the reply window's number and must not become it. The reply buffer is HISTORY,
-/// where discarding the oldest entry loses an operator's view; the ask book is a record of
-/// what this participant is still WAITING ON, where discarding the oldest would make the
-/// console forget a question it asked (`loom::AskBook` refuses at capacity for exactly that
-/// reason). Thirty-two is an operator's number: a person driving a console by hand does not
-/// hold dozens of open questions, and a host that somehow does is told so in a sentence
-/// naming the command that lists them, rather than silently losing one.
+/// where discarding the oldest entry loses an operator's view; a held conversation is
+/// something a caller is OWED, where discarding one would lose a question it asked or an
+/// answer it has not read (`loom::AskBook` refuses at capacity for exactly that reason).
+///
+/// WHY AN ANSWER KEEPS ITS SLOT UNTIL IT IS TAKEN. The bound has to be applied when a
+/// conversation is OPENED, because that is the only moment anything can still be refused
+/// honestly: an arrival cannot be turned away without losing an answer, and evicting a held
+/// answer would erase it before its caller collected it. So a slot is spent at the ask and
+/// returned at `take_settled` or `forget_ask` — and retained answers are bounded by this
+/// number rather than by lifetime traffic, which is what an open-asks-only count once failed
+/// to be. Thirty-two is an operator's number: a person driving a console by hand does not hold
+/// dozens of questions, and a host that somehow does is told so rather than silently losing one.
 inline constexpr std::size_t kConsoleAskCapacity = 32;
 
 /// Received reply Values retained in the m1/m2/... buffer. Sixteen times smaller than the tap
@@ -109,13 +116,30 @@ struct SendOutcome {
     std::string reason; ///< the gate's verdict / routing refusal, on refusal
 };
 
-/// WHAT SUBMITTING PRODUCED: the queued send, and the conversation it opened.
+/// WHETHER A SEND OPENS A CONVERSATION THE CONSOLE HOLDS FOR ITS CALLER. Said at every
+/// in-process send, because the two are different ownership, not a detail:
+///
+///   Untracked   the message goes and nothing is held. Whatever comes back is HISTORY — the
+///               bounded reply window — and nothing is owed to anybody. A frontend that shows
+///               arrivals as they come wants this.
+///   Tracked     the message goes AND one slot of `kConsoleAskCapacity` is held until the
+///               caller takes the answer (`take_settled`) or forgets the conversation
+///               (`forget_ask`). Asking for a handle is taking on that duty; a caller that
+///               never collects runs out of slots and is told so (`ask == 0`), rather than
+///               growing without bound.
+///
+/// It used to be implicit: every send opened a conversation, and callers that never meant
+/// to read an attributed answer — a UI showing the reply window — accumulated every answer
+/// they were sent.
+enum class ConsoleTracking : std::uint8_t { Untracked, Tracked };
+
+/// WHAT SUBMITTING PRODUCED: the queued send, and the conversation it opened, if any.
 ///
 /// `ask` is the local handle in the console's own ask book — the thing a caller holds to
 /// find out later whether an arrival was entitled to answer THIS question. It is 0 when the
-/// message could not be composed at all, and also when the book was full: the send still
-/// happened, and only the tracking was refused, which a caller that cares must notice
-/// rather than read as "no answer yet".
+/// message could not be composed at all, when the send was `Untracked`, and when every slot
+/// was already held: in the last case the send still happened and only the tracking was
+/// refused, which a caller that cares must notice rather than read as "no answer yet".
 struct Submitted {
     loom::Ticket ticket{};
     std::uint64_t ask = 0;
@@ -160,9 +184,11 @@ struct Composed {
     std::string error;                   ///< Error: the compose-time verdict
     std::vector<FieldDesc> open_fields;  ///< NeedsInput: the still-unfilled fields
     std::vector<std::string> unplaced;   ///< NeedsInput: args (rendered) the ladder could not place
-    /// Ready: the conversation this send opened in the engine's own ask book, or 0 when the
-    /// book was full (the send still went; only the tracking was refused). Ask
-    /// `ConsoleEngine::settled(ask)` which arrival, if any, is entitled to answer it.
+    /// Ready: the conversation this send opened in the engine's own ask book when it was sent
+    /// `ConsoleTracking::Tracked`; 0 when it was untracked — which every send through the
+    /// `Console` interface is — or when every slot was held (the send still went; only the
+    /// tracking was refused). Ask `ConsoleEngine::settled(ask)` which arrival, if any, is
+    /// entitled to answer it.
     std::uint64_t ask = 0;
 };
 
@@ -243,6 +269,15 @@ public:
     virtual std::optional<ShapeDesc> describe(std::string_view name, std::uint32_t version) const = 0;
 
     // Compose + gated send via the assumption ladder (named -> positional -> type-directed -> prompt).
+    //
+    // UNTRACKED, ON EVERY IMPLEMENTATION: a send through this interface holds nothing, and
+    // what comes back is the bounded reply window's to show (`Composed::ask` is 0). A frontend
+    // written against `Console` therefore cannot open a conversation it has no verb here to
+    // collect or forget. Attributed conversations are `ConsoleEngine`'s — the in-process
+    // participant that holds the bus-stamped facts and the book — through its
+    // `ConsoleTracking` overloads; `RemoteConsole` keeps no book at all. A frontend that needs
+    // attributed answers through THIS interface is the trigger to add the whole lifecycle here
+    // (ask, take, forget, list), and for the remote side to say honestly what it cannot track.
     virtual Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                              const std::vector<Arg>& args) = 0;
 
@@ -323,11 +358,14 @@ public:
 
     // ---- Compose + gated send ----
     /// One-shot: set fields by name, assemble, and gate-send to `target`. The send is
-    /// enqueued — turn the bus, then read `outcome()` for its fate and `settled()` for its
-    /// answer. On a compose-time error (no such shape/field, or a type mismatch) the ticket
-    /// is invalid, `ask` is 0, and *error says why.
+    /// enqueued — turn the bus, then read `outcome()` for its fate and, when it was sent
+    /// `Tracked`, `settled()` for its answer. On a compose-time error (no such shape/field, or
+    /// a type mismatch) the ticket is invalid, `ask` is 0, and *error says why.
+    ///
+    /// The tracking choice has no default on purpose: holding a conversation is a duty to
+    /// collect it, and a call site should say whether it took one on (see `ConsoleTracking`).
     Submitted submit(loom::WeaveId target, std::string_view name, std::uint32_t version,
-                     const std::map<std::string, FieldValue>& fields,
+                     const std::map<std::string, FieldValue>& fields, ConsoleTracking tracking,
                      std::string* error = nullptr);
 
     // ---- The ask book: WHICH ARRIVAL IS ENTITLED TO ANSWER WHICH QUESTION ----
@@ -340,13 +378,23 @@ public:
     //
     // Settlement happens AT ARRIVAL, inside the console weave's own delivery, so a bounded
     // reply window cannot evict an answer before a caller asks about it.
+    //
+    // WHO OWNS A HELD CONVERSATION: the caller that asked for it (`ConsoleTracking::Tracked`).
+    // It holds one slot from the send until it takes the answer or forgets the conversation;
+    // nothing here expires, sheds or evicts one on its behalf, and nothing but the pair the
+    // book checks can settle one.
 
     /// The arrival that settled `ask`, or nullopt while the conversation is still open.
     ///
     /// NULLOPT IS A REAL ANSWER — "still pending" — and this never invents a completion to
-    /// avoid returning it. A settled conversation is remembered here until the caller
-    /// `forget_ask`s it, so a duplicate or late copy of the same answer is inert.
+    /// avoid returning it. A READ, not a collection: the answer stays held (and keeps its
+    /// slot) until `take_settled` or `forget_ask`, and a duplicate or late copy of the same
+    /// answer is inert either way, because the conversation closed when it settled.
     std::optional<BufferEntry> settled(std::uint64_t ask) const;
+
+    /// COLLECT an answer: hand it over and release its slot. nullopt, and nothing released,
+    /// while the conversation is still open or for an ask this console is not holding.
+    std::optional<BufferEntry> take_settled(std::uint64_t ask);
 
     /// Is `ask` still open? False for one that settled, one that was forgotten, and one that
     /// never existed — the caller's own record says which.
@@ -355,14 +403,24 @@ public:
     /// Every conversation this console is still waiting on, oldest first.
     std::vector<loom::PendingAsk> open_asks() const;
 
-    /// Stop tracking one conversation — LOCALLY. Nothing at the far end is told anything;
-    /// a later answer to a forgotten ask matches nothing and settles nothing. Also drops a
-    /// settled answer that has been read. True if there was anything to forget.
+    /// Every conversation that has an answer waiting to be taken, oldest first — so a caller
+    /// can always find, and free, every slot it holds.
+    std::vector<std::uint64_t> answered_asks() const;
+
+    /// Stop holding one conversation — LOCALLY. For an open one, nothing at the far end is
+    /// told anything: whatever was asked may still be happening, and a later answer matches
+    /// nothing and settles nothing (this is `forget`, not `cancel`, because Loom has no
+    /// cancellation vocabulary). For an answered one, the unread answer is discarded. Either
+    /// way the slot is released. True if there was anything to forget.
     bool forget_ask(std::uint64_t ask);
 
-    /// How many conversations this console will track at once, and how many it is using.
+    /// The bound, and what is spent against it.
     std::size_t ask_capacity() const noexcept;
+    /// Conversations still open (no answer has settled them).
     std::size_t asks_outstanding() const noexcept;
+    /// Everything this console holds for its callers: open conversations plus answers not yet
+    /// taken. This is the number compared with `ask_capacity()`.
+    std::size_t asks_held() const noexcept;
 
     /// The fate of a previously-submitted Ticket (after pump()).
     SendOutcome outcome(loom::Ticket t) const;
@@ -385,8 +443,13 @@ public:
     /// mis-send). On Ready it assembles and gate-sends (the gate is the unconditional
     /// backstop). A wrong-typed named arg or a bad reference is a clean Error. Delegates to the
     /// shared run_compose_ladder (this engine IS the LadderHost).
+    ///
+    /// The `Console` override is untracked, as it is on every implementation of that interface.
     Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                      const std::vector<Arg>& args) override;
+    /// ...and this is the in-process form that may hold the conversation it opens.
+    Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
+                     const std::vector<Arg>& args, ConsoleTracking tracking);
 
     // ---- Reply buffer (m1, m2, …) ----
     std::size_t buffer_size() const override;
@@ -427,11 +490,14 @@ private:
     /// this book — tracked when it opened a conversation, `mint_correlation()` when the book
     /// was full — so no ordinary send can ever carry a number an open conversation is using.
     loom::AskBook book_{kConsoleAskCapacity};
-    /// Answers that settled a conversation, held until the caller reads and forgets them, so
-    /// a settlement survives the reply window evicting the entry that carried it.
+    /// Answers that settled a conversation, held until the caller takes or forgets them, so a
+    /// settlement survives the reply window evicting the entry that carried it. Each one still
+    /// occupies the slot its conversation was opened with, so `book_.outstanding() +
+    /// settled_.size()` never exceeds `kConsoleAskCapacity`.
     std::map<std::uint64_t, BufferEntry> settled_;
-    /// The conversation the last assemble_and_send opened; read immediately by submit() and
-    /// compose(), which are the only callers and are single-threaded with it.
+    /// What the next assemble_and_send is to do about tracking, and the conversation it opened.
+    /// Set and read by submit() and compose() around the one send, single-threaded with it.
+    ConsoleTracking next_tracking_ = ConsoleTracking::Untracked;
     std::uint64_t last_ask_ = 0;
     BoundedHistory<TapEvent, kConsoleTapCapacity> tap_; // history: bounded window, oldest evicted
     Dirty dirty_; // accumulated by record_tap; drained by take_dirty

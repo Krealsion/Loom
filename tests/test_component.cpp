@@ -213,7 +213,8 @@ TEST_CASE("ONE tree, not two: the console's own emitted tree crosses the wire as
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
 

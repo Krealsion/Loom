@@ -415,22 +415,38 @@ AdmissionPolicy AuthorityStore::policy() {
             // First load under a fresh approval: pin what actually turned up. The
             // person approved an artifact; this records which build that was, so the
             // NEXT different build is a question rather than a silent substitution.
+            //
+            // Copied out before `put`, which replaces the entry `rule` points into.
+            const bool any_build = rule->trust_rebuilds;
             AuthorityRule pinned = *rule;
             pinned.content_id = req.content_id;
             std::string why;
             if (put(std::move(pinned), &why)) {
                 notes_.push_back(req.name + ": approved; pinned build " + brief(req.content_id));
-            } else {
-                // SAID, NOT SWALLOWED. The decision to RUN is the person's and is
-                // already durable; what failed is the record of WHICH BUILD ran under
-                // it, and the consequence is concrete — the next load of a different
-                // build will be admitted silently instead of asking. A note that a
-                // person reads after every boot is the honest place for that.
-                notes_.push_back(req.name + ": approved, but the build could not be pinned (" +
-                                 why + "); until this store is writable a CHANGED build of '" +
-                                 req.name + "' will be admitted without asking");
+                return AdmissionVerdict::admit(Grant{}, notes_.back());
             }
-            return AdmissionVerdict::admit(Grant{}, notes_.back());
+            if (any_build) {
+                // `--rebuilds` ALREADY ANSWERED THE QUESTION THE PIN EXISTS TO ASK. The
+                // person said any build of this may run, so not knowing which one did
+                // withdraws nothing they granted. The missing record is said, not hidden.
+                notes_.push_back(req.name + ": admitted because trust_rebuilds is on; build " +
+                                 brief(req.content_id) + " could not be recorded (" + why + ")");
+                return AdmissionVerdict::admit(Grant{}, notes_.back());
+            }
+            // REFUSED, BECAUSE THE PIN IS THE APPROVAL'S BOUNDARY. Without `--rebuilds` the
+            // person approved THIS build and asked to be asked again when it changes, and
+            // the record of which build ran is the only thing that can notice a change. It
+            // used to admit here with a note, leaving the rule unpinned — so the next,
+            // DIFFERENT build took the same path and ran too. A note is not consent.
+            //
+            // Nothing is recorded as pending: no decision is waiting on the person, whose
+            // approval stands unchanged. What is waiting is the disk, and the reason says so.
+            return AdmissionVerdict::refuse(
+                "'" + req.name + "' is approved, but this host could not record which build of it "
+                "runs (" + why + "). You chose to be asked again when it changes, and without that "
+                "record a different build would not be noticed, so build " +
+                brief(req.content_id) + " was not started. Your decision is unchanged: make the "
+                "decision store writable and start it again.");
         }
 
         if (rule->content_id == req.content_id) {
@@ -450,7 +466,8 @@ AdmissionPolicy AuthorityStore::policy() {
             // Said out loud rather than passed over. "Nothing changed" and "you are
             // running code you have not seen before, under authority you granted
             // earlier" are different facts and a person should be able to tell — so
-            // this lands in notes(), which the host prints after every boot.
+            // this lands in notes(), which the host prints with the boot report and straight
+            // after the command that caused it.
             notes_.push_back(req.name + ": REBUILT since you approved it (" + brief(was) + " -> " +
                              brief(req.content_id) + "), admitted because trust_rebuilds is on" +
                              (repinned_ok ? std::string()

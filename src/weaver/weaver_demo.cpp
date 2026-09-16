@@ -218,6 +218,8 @@ void cmd_send(loom::ConsoleEngine& engine, const std::vector<Token>& tok) {
         args.push_back(lex_arg(tok[i]));
     }
     const std::uint64_t before = engine.evicted().buffer + engine.buffer_size();
+    // Untracked: the demo reports the range of arrivals, never "the answer", so it holds no
+    // conversation it would have to collect.
     const loom::Composed c =
         engine.compose(loom::WeaveId{id}, tok[2].text, static_cast<std::uint32_t>(ver), args);
     if (c.status == loom::Composed::Status::Error) {

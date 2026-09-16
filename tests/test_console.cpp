@@ -31,6 +31,21 @@ struct ConsoleHistoryProbe {
     static std::size_t buffer_slots(const ConsoleEngine& e) {
         return e.reply_history().ring_.capacity();
     }
+    /// The answers the engine is actually HOLDING, read from their own storage — so "nothing is
+    /// retained" is a statement about the map, not an inference from a count of open asks
+    /// (which is the inference that let every settled answer accumulate unseen).
+    static std::size_t held_answers(const ConsoleEngine& e) { return e.settled_.size(); }
+    /// Bytes of payload text those held answers keep alive. Not process memory: the size of
+    /// what a caller could still read back.
+    static std::size_t held_text_bytes(const ConsoleEngine& e) {
+        std::size_t bytes = 0;
+        for (const auto& [id, answer] : e.settled_) {
+            if (const Cell* body = answer.value.get("body")) {
+                bytes += body->as_text().size();
+            }
+        }
+        return bytes;
+    }
 };
 } // namespace loom
 
@@ -148,7 +163,8 @@ TEST_CASE("the full participant loop, with NO terminal: discover, gate-send, rep
 
     // Compose + gate-send Ping{seq=7}; one pump drives the send AND the reply (FIFO drain).
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
 
@@ -170,7 +186,7 @@ TEST_CASE("gated-send backstop: a malformed command is cleanly refused, no mis-s
 
     // Ping{seq} with `seq` (required) left unset — slips compose-time, caught at the gate.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {}, ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err); // compose-time allows an incomplete message
 
     engine.pump();
@@ -206,7 +222,8 @@ TEST_CASE("discovery + drive on a shape the console code has never seen") {
 
     // compose a valid message to it and receive its reply — all without baked-in knowledge.
     std::string err;
-    Ticket t = engine.submit(svc.id, "Widget", 1, {{"w", std::int64_t{41}}}, &err).ticket;
+    Ticket t = engine.submit(svc.id, "Widget", 1, {{"w", std::int64_t{41}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     CHECK(engine.outcome(t).delivered);
@@ -228,7 +245,8 @@ TEST_CASE("wildcard-accept buffers a non-pre-declared shape (gated); an unregist
     // The console never pre-declared Pong (its accept-set is empty) — yet the reply lands,
     // gated against Pong's registry-resolved schema.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{1}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -285,7 +303,8 @@ TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW m
 
     // m1 ← Pong{seq=7}.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -397,7 +416,8 @@ TEST_CASE("gate-backstop: a wrong-typed reference is caught at compose, never mi
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -432,7 +452,8 @@ TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, m
         b.send(in.reply_to, Message(pong(in.payload.get("seq")->as_int())));
     };
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -462,7 +483,8 @@ TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO render
     };
     // A reply in the buffer (m1) and a partial compose command.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     REQUIRE(engine.buffer_size() == 1);
@@ -585,7 +607,8 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
 
     // A reply delivered to the console marks the buffer region dirty and grows the buffer list.
     std::string err;
-    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err).ticket;
+    Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}},
+                             ConsoleTracking::Untracked, &err).ticket;
     REQUIRE_MESSAGE(t.valid(), err);
     engine.pump();
     const Dirty d1 = engine.take_dirty();
@@ -598,7 +621,8 @@ TEST_CASE("message-driven: a delivered reply dirties + grows the buffer; a refus
     CHECK(any_item_contains(*buffer, "m1"));
 
     // A refused send (missing required field) dirties the tap but NOT the buffer — no reply grew.
-    Ticket bad = engine.submit(responder.id, "Ping", 1, {}, &err).ticket;
+    Ticket bad = engine.submit(responder.id, "Ping", 1, {},
+                               ConsoleTracking::Untracked, &err).ticket;
     REQUIRE(bad.valid());
     engine.pump();
     const Dirty d2 = engine.take_dirty();
@@ -843,7 +867,8 @@ TEST_CASE("C-1: the reply buffer retains a bounded window, and mN stays a stable
     };
     const auto deliver = [&](std::int64_t seq) {
         std::string err;
-        const Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", seq}}, &err).ticket;
+        const Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", seq}},
+                                       ConsoleTracking::Untracked, &err).ticket;
         REQUIRE_MESSAGE(t.valid(), err);
         engine.pump();
     };
@@ -903,7 +928,8 @@ TEST_CASE("C-1: a reference to an evicted reply refuses and SAYS SO; a retained 
     };
     const auto deliver = [&](std::int64_t seq) {
         std::string err;
-        (void)engine.submit(responder.id, "Ping", 1, {{"seq", seq}}, &err);
+        (void)engine.submit(responder.id, "Ping", 1, {{"seq", seq}},
+                            ConsoleTracking::Untracked, &err);
         engine.pump();
     };
 
@@ -1000,7 +1026,8 @@ TEST_CASE("C-1: the operator can SEE that older evidence was discarded") {
 
     for (std::size_t i = 1; i <= kConsoleBufferCapacity + 3; ++i) {
         std::string err;
-        (void)engine.submit(responder.id, "Ping", 1, {{"seq", static_cast<std::int64_t>(i)}}, &err);
+        (void)engine.submit(responder.id, "Ping", 1, {{"seq", static_cast<std::int64_t>(i)}},
+                            ConsoleTracking::Untracked, &err);
         engine.pump();
     }
     REQUIRE(engine.evicted().buffer == 3);
@@ -1070,7 +1097,8 @@ TEST_CASE("a perfectly shaped reply from the wrong weave settles nothing") {
     // with the stranger at all.
     std::string err;
     bus.send(stranger.id, Message(ping(99)));
-    const Submitted mine = engine.submit(honest.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    const Submitted mine = engine.submit(honest.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                                         ConsoleTracking::Tracked, &err);
     REQUIRE_MESSAGE(mine.sent(), err);
     REQUIRE(mine.ask == 1);       // the first conversation of a fresh book
     engine.pump();
@@ -1097,7 +1125,8 @@ TEST_CASE("the right weave talking about a different conversation settles nothin
     };
 
     std::string err;
-    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                                         ConsoleTracking::Tracked, &err);
     REQUIRE_MESSAGE(mine.sent(), err);
     engine.pump();
 
@@ -1118,7 +1147,8 @@ TEST_CASE("an unsolicited message names no conversation and can never settle one
     };
 
     std::string err;
-    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                                         ConsoleTracking::Tracked, &err);
     REQUIRE_MESSAGE(mine.sent(), err);
     engine.pump();
 
@@ -1140,7 +1170,8 @@ TEST_CASE("a settled conversation stays settled, and a second copy of the answer
     };
 
     std::string err;
-    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                                         ConsoleTracking::Tracked, &err);
     REQUIRE_MESSAGE(mine.sent(), err);
     engine.pump();
 
@@ -1159,7 +1190,8 @@ TEST_CASE("every buffered arrival carries who sent it and which conversation it 
     answer_pongs(responder);
 
     std::string err;
-    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}}, &err);
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{3}}},
+                                         ConsoleTracking::Tracked, &err);
     REQUIRE_MESSAGE(mine.sent(), err);
     engine.pump();
 
@@ -1181,7 +1213,8 @@ TEST_CASE("forgetting a conversation makes its later answer inert, and never can
     answer_pongs(responder);
 
     std::string err;
-    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}}, &err);
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{7}}},
+                                         ConsoleTracking::Tracked, &err);
     REQUIRE_MESSAGE(mine.sent(), err);
     CHECK(engine.forget_ask(mine.ask));
     engine.pump();
@@ -1201,7 +1234,8 @@ TEST_CASE("the ask book is bounded, and a send past the bound is sent and says i
 
     std::string err;
     for (std::size_t i = 0; i < kConsoleAskCapacity; ++i) {
-        const Submitted s = engine.submit(silent.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err);
+        const Submitted s = engine.submit(silent.id, "Ping", 1, {{"seq", std::int64_t{1}}},
+                                          ConsoleTracking::Tracked, &err);
         REQUIRE_MESSAGE(s.sent(), err);
         CHECK(s.ask != 0);
     }
@@ -1210,13 +1244,277 @@ TEST_CASE("the ask book is bounded, and a send past the bound is sent and says i
     // A BOOKKEEPING LIMIT IS NOT A MESSAGING LIMIT. The send still happens; what it loses is
     // the ability to be attributed, and it says so with ask == 0 rather than handing back a
     // handle that can never settle.
-    const Submitted past = engine.submit(silent.id, "Ping", 1, {{"seq", std::int64_t{1}}}, &err);
+    const Submitted past = engine.submit(silent.id, "Ping", 1, {{"seq", std::int64_t{1}}},
+                                         ConsoleTracking::Tracked, &err);
     CHECK(past.sent());
     CHECK(past.ask == 0);
     // The outstanding conversations were NOT displaced to make room: an asker that forgot its
     // own question to accept a new one would be worse than one that refuses the new one.
     CHECK(engine.asks_outstanding() == kConsoleAskCapacity);
     CHECK(engine.open_asks().size() == kConsoleAskCapacity);
+}
+
+// ---- OWNERSHIP: what the console HOLDS for a caller, and for how long -----------------------
+//
+// Every send used to open a conversation, and every answer that settled one was kept until
+// somebody forgot it. The bound (32) counted only OPEN conversations, and an answer leaves the
+// book when it settles — so a caller that pumped and read the reply window, which is what every
+// frontend does, kept every answer it was ever sent. These cases pin the ownership that
+// replaced it: a send holds nothing unless its caller asks to hold it; a held conversation
+// keeps its slot from the ask until the caller takes or forgets it; and nothing — not a flood
+// of arrivals, not a full reply window — releases one on the caller's behalf.
+
+namespace {
+
+std::shared_ptr<const Schema> blob_schema() {
+    static const auto s = SchemaBuilder("Blob", 1).field("body", Kind::Text).build();
+    return s;
+}
+
+/// A responder whose every answer is 4 KiB of text, so retained answers have a size.
+void answer_with_blobs(Registered& r) {
+    r.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() != "Ping") {
+            return;
+        }
+        Value v(blob_schema());
+        v.set("body", Cell::text(std::string(4096, 'x')));
+        b.send(in.reply_to, Message(std::move(v), WeaveId{}, WeaveId{}, in.correlation));
+    };
+}
+
+} // namespace
+
+TEST_CASE("an untracked send holds nothing, however much completed traffic comes back") {
+    // THE REPORTED PATTERN, maintained: compose, pump, repeat — an ordinary answering weave, a
+    // thousand times, with nobody collecting anything.
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), blob_schema()});
+    answer_with_blobs(responder);
+
+    constexpr std::size_t kSends = 1000;
+    for (std::size_t i = 0; i < kSends; ++i) {
+        const Composed c = engine.compose(responder.id, "Ping", 1, {lit(std::int64_t{1})});
+        REQUIRE(c.status == Composed::Status::Ready);
+        CHECK(c.ask == 0); // nothing was opened on this caller's behalf
+        engine.pump();
+    }
+    // Every answer ARRIVED — this is completed traffic, not refused traffic...
+    CHECK(engine.evicted().buffer + engine.buffer_size() == kSends);
+    // ...and what is retained is history's bound, and nothing else.
+    CHECK(engine.buffer_size() == kConsoleBufferCapacity);
+    CHECK(engine.asks_held() == 0);
+    CHECK(engine.answered_asks().empty());
+    CHECK(ConsoleHistoryProbe::held_answers(engine) == 0);
+    CHECK(ConsoleHistoryProbe::held_text_bytes(engine) == 0);
+}
+
+TEST_CASE("sustained completed traffic through the UI frontend holds nothing") {
+    // An EXISTING frontend path, end to end: the controller a TUI drives, typing a command and
+    // submitting it, a thousand times. It reaches the engine through `Console`, whose sends
+    // are untracked on every implementation.
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), blob_schema()});
+    answer_with_blobs(responder);
+    ConsoleUi ui(engine);
+
+    const std::string command = std::to_string(responder.id.value) + " Ping 1 seq=1";
+    constexpr std::size_t kSubmits = 1000;
+    for (std::size_t i = 0; i < kSubmits; ++i) {
+        for (char ch : command) {
+            ui.dispatch({Action::Edit, ch});
+        }
+        ui.dispatch({Action::Submit, 0});
+        REQUIRE(ui.state().partial_input.empty()); // Ready: composed, sent, and pumped
+    }
+    CHECK(engine.evicted().buffer + engine.buffer_size() == kSubmits);
+    CHECK(engine.buffer_size() == kConsoleBufferCapacity);
+    CHECK(engine.asks_held() == 0);
+    CHECK(ConsoleHistoryProbe::held_answers(engine) == 0);
+    CHECK(ConsoleHistoryProbe::held_text_bytes(engine) == 0);
+}
+
+TEST_CASE("a caller that never takes its answers holds at most the capacity, and is told so") {
+    // A TRACKING caller that forgets its duty. Its retention is bounded by the slots it holds,
+    // not by its traffic, and the moment it runs out every later send says so (`ask == 0`)
+    // while still being sent.
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), blob_schema()});
+    answer_with_blobs(responder);
+
+    constexpr std::size_t kSends = 1000;
+    std::size_t tracked = 0;
+    std::size_t sent = 0;
+    std::string err;
+    for (std::size_t i = 0; i < kSends; ++i) {
+        const Submitted s = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{1}}},
+                                          ConsoleTracking::Tracked, &err);
+        REQUIRE_MESSAGE(s.sent(), err);
+        sent += s.sent() ? std::size_t{1} : std::size_t{0};
+        tracked += s.ask != 0 ? std::size_t{1} : std::size_t{0};
+        engine.pump();
+    }
+    CHECK(sent == kSends);
+    CHECK(engine.evicted().buffer + engine.buffer_size() == kSends); // every answer arrived
+    CHECK(tracked == kConsoleAskCapacity);                           // ...and 32 were held
+    CHECK(engine.asks_outstanding() == 0);
+    CHECK(engine.asks_held() == kConsoleAskCapacity);
+    CHECK(engine.answered_asks().size() == kConsoleAskCapacity);
+    CHECK(ConsoleHistoryProbe::held_answers(engine) == kConsoleAskCapacity);
+    CHECK(ConsoleHistoryProbe::held_text_bytes(engine) == kConsoleAskCapacity * 4096);
+
+    // Taking one returns exactly one slot.
+    const std::vector<std::uint64_t> held = engine.answered_asks();
+    REQUIRE_FALSE(held.empty());
+    REQUIRE(engine.take_settled(held.front()).has_value());
+    CHECK(engine.asks_held() == kConsoleAskCapacity - 1);
+    const Submitted again = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{1}}},
+                                          ConsoleTracking::Tracked, &err);
+    CHECK(again.ask != 0);
+}
+
+TEST_CASE("a caller that takes its answers can ask indefinitely, and each answer is its own") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    answer_pongs(responder);
+
+    constexpr std::int64_t kSends = 1000;
+    std::string err;
+    for (std::int64_t seq = 1; seq <= kSends; ++seq) {
+        const Submitted s = engine.submit(responder.id, "Ping", 1, {{"seq", seq}},
+                                          ConsoleTracking::Tracked, &err);
+        REQUIRE_MESSAGE(s.ask != 0, err); // never runs out: every slot comes back
+        engine.pump();
+        CHECK(engine.settled(s.ask).has_value()); // a read is not a collection...
+        CHECK(engine.asks_held() == 1);           // ...so the slot is still spent
+        const std::optional<BufferEntry> answer = engine.take_settled(s.ask);
+        REQUIRE(answer.has_value());
+        CHECK(answer->value.get("seq")->as_int() == seq);
+        CHECK(answer->sender == responder.id);
+        CHECK_FALSE(engine.take_settled(s.ask).has_value()); // taken once
+    }
+    CHECK(engine.asks_held() == 0);
+    CHECK(ConsoleHistoryProbe::held_answers(engine) == 0);
+}
+
+TEST_CASE("a delayed answer keeps its slot and outlives the reply window until it is taken") {
+    // DELAYED COMPLETION, and the two ways a fix could have been wrong: letting history
+    // eviction erase an answer before its caller collected it, or letting an unrelated arrival
+    // release a slot. The responder parks every request and answers only when released.
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered delayed = register_probe(bus, {ping_schema(), pong_schema(), tick_schema()});
+    struct Parked {
+        WeaveId reply_to;
+        std::uint64_t correlation;
+        std::int64_t seq;
+    };
+    std::vector<Parked> parked;
+    delayed.weave->on_handle = [&parked](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == "Ping") {
+            parked.push_back({in.reply_to, in.correlation, in.payload.get("seq")->as_int()});
+        } else if (in.payload.schema().name() == "Tick") {
+            for (const Parked& p : parked) {
+                b.send(p.reply_to, Message(pong(p.seq), WeaveId{}, WeaveId{}, p.correlation));
+            }
+            parked.clear();
+        }
+    };
+    // Somebody else who talks to the console a lot, naming no conversation at all.
+    Registered chatter = register_probe(bus, {ping_schema(), pong_schema()});
+    const WeaveId console = engine.console_id();
+    chatter.weave->on_handle = [console](const Message& in, Bus& b, ProbeWeave&) {
+        b.send(console, Message(pong(in.payload.get("seq")->as_int())));
+    };
+
+    std::string err;
+    std::vector<std::uint64_t> asks;
+    for (std::int64_t seq = 0; seq < static_cast<std::int64_t>(kConsoleAskCapacity); ++seq) {
+        const Submitted s = engine.submit(delayed.id, "Ping", 1, {{"seq", seq}},
+                                          ConsoleTracking::Tracked, &err);
+        REQUIRE(s.ask != 0);
+        asks.push_back(s.ask);
+    }
+    engine.pump();
+    CHECK(engine.asks_outstanding() == kConsoleAskCapacity);
+
+    // FORGETTING IS LOCAL, AND RETURNS A SLOT: the first conversation is forgotten, nothing is
+    // told to the responder (its request stays parked), and the slot goes to a new question.
+    CHECK(engine.forget_ask(asks.front()));
+    const Submitted replacement = engine.submit(delayed.id, "Ping", 1, {{"seq", std::int64_t{99}}},
+                                                ConsoleTracking::Tracked, &err);
+    REQUIRE(replacement.ask != 0);
+    const Submitted over = engine.submit(delayed.id, "Ping", 1, {{"seq", std::int64_t{100}}},
+                                         ConsoleTracking::Tracked, &err);
+    CHECK(over.sent());
+    CHECK(over.ask == 0); // every slot is held by an open conversation
+    engine.pump();
+    REQUIRE(parked.size() == kConsoleAskCapacity + 2); // 32 originals + replacement + over
+
+    // The answers are released and ARRIVE. The forgotten conversation's answer and the
+    // untracked one's settle nothing; every held conversation settles into its own slot.
+    (void)bus.send(delayed.id, Message(tick(1)));
+    engine.pump();
+    CHECK(engine.asks_outstanding() == 0);
+    CHECK(engine.answered_asks().size() == kConsoleAskCapacity);
+    CHECK(engine.asks_held() == kConsoleAskCapacity);
+    CHECK_FALSE(engine.settled(asks.front()).has_value()); // forgotten stays forgotten
+
+    // AN ANSWER KEEPS ITS SLOT UNTIL IT IS TAKEN: a new question still has no room.
+    CHECK(engine.submit(delayed.id, "Ping", 1, {{"seq", std::int64_t{101}}},
+                        ConsoleTracking::Tracked, &err).ask == 0);
+
+    // Unrelated traffic floods the reply window far past its capacity. Nothing it says is an
+    // answer, and the entries that carried the real answers are evicted from history.
+    const std::uint64_t first_answer_label = engine.evicted().buffer + 1;
+    for (std::int64_t i = 0; i < 4 * static_cast<std::int64_t>(kConsoleBufferCapacity); ++i) {
+        (void)bus.send(chatter.id, Message(ping(i)));
+    }
+    engine.pump();
+    CHECK_FALSE(engine.buffer_at(first_answer_label).has_value()); // gone from history
+    CHECK(engine.asks_held() == kConsoleAskCapacity);              // ...and from nothing else
+
+    // Every held answer is still there to be collected, and is the answer to its own question.
+    std::size_t collected = 0;
+    for (std::size_t i = 1; i < asks.size(); ++i) {
+        const std::optional<BufferEntry> answer = engine.take_settled(asks[i]);
+        REQUIRE(answer.has_value());
+        CHECK(answer->value.get("seq")->as_int() == static_cast<std::int64_t>(i));
+        CHECK(answer->sender == delayed.id);
+        ++collected;
+    }
+    const std::optional<BufferEntry> late = engine.take_settled(replacement.ask);
+    REQUIRE(late.has_value());
+    CHECK(late->value.get("seq")->as_int() == 99);
+    CHECK(collected + 1 == kConsoleAskCapacity);
+    CHECK(engine.asks_held() == 0);
+    CHECK(ConsoleHistoryProbe::held_answers(engine) == 0);
+    CHECK(engine.submit(delayed.id, "Ping", 1, {{"seq", std::int64_t{102}}},
+                        ConsoleTracking::Tracked, &err).ask != 0);
+}
+
+TEST_CASE("an unread answer can be forgotten, which discards it and returns its slot") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
+    answer_pongs(responder);
+
+    std::string err;
+    const Submitted mine = engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{5}}},
+                                         ConsoleTracking::Tracked, &err);
+    REQUIRE(mine.ask != 0);
+    engine.pump();
+    REQUIRE(engine.settled(mine.ask).has_value());
+    CHECK(engine.asks_held() == 1);
+    CHECK(engine.forget_ask(mine.ask));
+    CHECK_FALSE(engine.settled(mine.ask).has_value());
+    CHECK_FALSE(engine.take_settled(mine.ask).has_value());
+    CHECK(engine.asks_held() == 0);
+    CHECK_FALSE(engine.forget_ask(mine.ask)); // nothing left to forget
 }
 
 } // TEST_SUITE

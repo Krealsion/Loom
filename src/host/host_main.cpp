@@ -365,7 +365,11 @@ public:
                const std::map<std::string, loom::FieldValue>& fields, int turns = kSettleTurns) {
         Answer a;
         std::string error;
-        const loom::Submitted sent = console_->submit(target, shape, version, fields, &error);
+        // TRACKED, AND THEREFORE OWED: this host holds a slot for every conversation it opens
+        // and returns it by taking the answer here, by taking it in `report_late_answers`
+        // when it lands later, or by forgetting it at the person's word.
+        const loom::Submitted sent = console_->submit(target, shape, version, fields,
+                                                      loom::ConsoleTracking::Tracked, &error);
         if (!error.empty()) {
             // A shape this console could not even compose and a weave that chose not to
             // answer looked identical once; they are completely different problems.
@@ -379,18 +383,19 @@ public:
             // rather than implying the send failed — a caller that retried would send a
             // second copy of something that already arrived.
             a.state = Answer::State::Untracked;
-            a.trouble = "sent, but this console is already waiting on " +
-                        std::to_string(console_->asks_outstanding()) +
+            a.trouble = "sent, but this console is already holding " +
+                        std::to_string(console_->asks_held()) +
                         " conversations, which is all it tracks — so its answer cannot be "
                         "attributed. 'asks' lists them; 'asks forget <n>' makes room.";
             return a;
         }
         service(sent.ask, turns);
         const loom::SendOutcome o = console_->outcome(sent.ticket);
-        if (auto reply = console_->settled(sent.ask)) {
+        if (auto reply = console_->take_settled(sent.ask)) {
+            // COLLECTED, which returns the slot. A late copy of the same answer is inert: the
+            // conversation closed when it settled.
             a.state = Answer::State::Settled;
             a.reply = std::move(reply);
-            (void)console_->forget_ask(sent.ask); // settled once; a late copy is inert
             return a;
         }
         if (o.refused) {
@@ -622,14 +627,26 @@ void print_help() {
 )";
 }
 
-/// What the policy did that nobody asked about. Printed after every boot and from
-/// `status`, because an admission the person did not have to answer is still something
-/// they are entitled to know happened — above all that an artifact came up on REBUILT
-/// code under authority they granted for an earlier build.
+/// What the policy did that nobody asked about. Printed after every boot, from `status`,
+/// and as it happens (`print_new_notes`), because an admission the person did not have to
+/// answer is still something they are entitled to know happened — above all that an
+/// artifact came up on REBUILT code under authority they granted for an earlier build.
 void print_notes(const loom::host::AuthorityStore& store) {
     for (const std::string& n : store.notes()) {
         std::cout << "  note: " << n << '\n';
     }
+}
+
+/// ...AND SAID WHEN IT HAPPENS, not only when somebody thinks to type `status`. A `start`
+/// that came up on rebuilt code, or whose build could not be recorded, used to print only
+/// the steward's answer; the note waited for a `status` the person had no reason to ask
+/// for. `*shown` is how many notes this console has already printed.
+void print_new_notes(const loom::host::AuthorityStore& store, std::size_t* shown) {
+    const std::vector<std::string>& all = store.notes();
+    for (std::size_t i = *shown; i < all.size(); ++i) {
+        std::cout << "  note: " << all[i] << '\n';
+    }
+    *shown = all.size();
 }
 
 /// The boot plan's own state, for `status`. A plan that did not parse is not the same
@@ -969,8 +986,13 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
 void cmd_asks(HostSession& s, const std::vector<Token>& tok) {
     if (tok.size() >= 3 && tok[1].text == "forget") {
         std::uint64_t n = 0;
-        if (!parse_u64(tok[2].text, n) || !s.console().forget_ask(n)) {
+        const bool was_open = parse_u64(tok[2].text, n) && s.console().awaiting(n);
+        if (n == 0 || !s.console().forget_ask(n)) {
             std::cout << "  no open conversation numbered '" << tok[2].text << "' (see 'asks')\n";
+            return;
+        }
+        if (!was_open) {
+            std::cout << "  dropped the unread answer to " << n << ".\n";
             return;
         }
         // Named `forget` rather than `cancel` because the shorter word would be the lie:
@@ -981,10 +1003,16 @@ void cmd_asks(HostSession& s, const std::vector<Token>& tok) {
         return;
     }
     const std::vector<loom::PendingAsk> open = s.console().open_asks();
-    if (open.empty()) {
+    const std::vector<std::uint64_t> answered = s.console().answered_asks();
+    if (open.empty() && answered.empty()) {
         std::cout << "  no open conversations (" << s.console().ask_capacity()
                   << " trackable at once).\n";
         return;
+    }
+    // An answer the loop has not printed yet holds its slot exactly as an open conversation
+    // does, so it is listed with them. The loop prints and releases it at its next turn.
+    for (std::uint64_t id : answered) {
+        std::cout << "  " << id << "  answered; printed at the next prompt\n";
     }
     for (const loom::PendingAsk& p : open) {
         std::cout << "  " << p.id << "  " << (p.shape.empty() ? "(unnamed shape)" : p.shape)
@@ -996,7 +1024,8 @@ void cmd_asks(HostSession& s, const std::vector<Token>& tok) {
         }
         std::cout << '\n';
     }
-    std::cout << "  " << open.size() << " of " << s.console().ask_capacity() << " tracked.\n";
+    std::cout << "  " << s.console().asks_held() << " of " << s.console().ask_capacity()
+              << " tracked.\n";
 }
 
 #if ZEN_HOST_HAS_KERNEL
@@ -1142,8 +1171,12 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
         for (std::size_t i = 4; i < tok.size(); ++i) {
             args.push_back(lex_arg(tok[i]));
         }
-        const loom::Composed c = session.console().compose(
-            loom::WeaveId{id}, tok[2].text, static_cast<std::uint32_t>(v), args);
+        // TRACKED: this command reports the attributed answer, so it holds the conversation
+        // and owes it back — taken below, or taken when it lands later, or forgotten.
+        const loom::Composed c =
+            session.console().compose(loom::WeaveId{id}, tok[2].text,
+                                      static_cast<std::uint32_t>(v), args,
+                                      loom::ConsoleTracking::Tracked);
         if (c.status == loom::Composed::Status::Error) {
             std::cout << "  compose error: " << c.error << '\n';
             return true;
@@ -1167,15 +1200,14 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
         }
         std::cout << "  sent.";
         if (c.ask == 0) {
-            std::cout << "  (untracked: this console is waiting on "
-                      << session.console().asks_outstanding()
+            std::cout << "  (untracked: this console is holding "
+                      << session.console().asks_held()
                       << " conversations already, so this one's answer cannot be attributed)";
-        } else if (auto reply = session.console().settled(c.ask)) {
+        } else if (auto reply = session.console().take_settled(c.ask)) {
             // ATTRIBUTED, not "whatever arrived last". The label names the reply to THIS
-            // send, from the weave this send named.
+            // send, from the weave this send named — and taking it returns the slot.
             std::cout << "  reply -> " << reply->label << "  "
                       << HostSession::describe_reply(*reply);
-            (void)session.console().forget_ask(c.ask);
         } else {
             std::cout << "  no answer yet (ask " << c.ask << "; 'asks' to see it)";
         }
@@ -1245,33 +1277,30 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
     return true;
 }
 
-/// Print any conversation that settled between commands. This is what makes PENDING an
-/// honest answer rather than a dropped one: a load, a send or a sync that took longer
-/// than the host's patience still reports, in the order the answers arrived.
-void report_late_answers(HostSession& session, std::vector<std::uint64_t>& watching,
-                         bool& prompt_shown) {
-    for (auto it = watching.begin(); it != watching.end();) {
-        auto reply = session.console().settled(*it);
+/// Print, and COLLECT, every conversation that settled between commands. This is what makes
+/// PENDING an honest answer rather than a dropped one: a load, a send or a sync that took
+/// longer than the host's patience still reports, in the order the conversations were opened.
+///
+/// Every command takes the answer it can take before it returns, so an answer still held
+/// when the loop turns is by definition a late one, and this host's to report — including a
+/// boot row's, left pending before anybody typed anything. Taking it returns its slot, which
+/// is why a host that has served a million commands holds exactly what is still open.
+void report_late_answers(HostSession& session, bool& prompt_shown) {
+    for (std::uint64_t id : session.console().answered_asks()) {
+        std::optional<loom::BufferEntry> reply = session.console().take_settled(id);
         if (!reply) {
-            if (!session.console().awaiting(*it)) {
-                it = watching.erase(it); // forgotten by hand; stop watching it
-            } else {
-                ++it;
-            }
             continue;
         }
         if (prompt_shown) {
             std::cout << '\n'; // do not write over the prompt the person is typing at
             prompt_shown = false;
         }
-        std::cout << "  [ask " << *it << " settled] " << reply->name << " v" << reply->version
+        std::cout << "  [ask " << id << " settled] " << reply->name << " v" << reply->version
                   << "  from weave " << reply->sender.value << "  "
                   << HostSession::describe_reply(*reply) << '\n';
         for (const std::string& line : session.take_adoption_log()) {
             std::cout << line << '\n';
         }
-        (void)session.console().forget_ask(*it);
-        it = watching.erase(it);
     }
 }
 
@@ -1371,6 +1400,7 @@ int main(int argc, char** argv) {
         std::cout << line << '\n';
     }
     print_notes(store);
+    std::size_t notes_shown = store.notes().size();
     if (!session.report().complete() || !plan_source.parse_error.empty()) {
         // The console is the recovery surface, so say that it is one. A host that
         // exited here would leave a person with nothing to diagnose from.
@@ -1383,14 +1413,21 @@ int main(int argc, char** argv) {
     //
     // Both parties get served, every pass: one bounded bus turn, then the person, with a
     // wait only when there is nothing else to do. There is no call in here that can fail
-    // to return because a participant decided to keep talking.
+    // to return because a participant decided to keep talking — and the wait itself is a
+    // real deadline even while the person has typed half a command (host/line_input.hpp).
     loom::host::LineInput input;
-    std::vector<std::uint64_t> watching;
     bool prompt_shown = false;
     bool running = true;
     while (running) {
         session.turn();
-        report_late_answers(session, watching, prompt_shown);
+        report_late_answers(session, prompt_shown);
+        if (store.notes().size() != notes_shown) {
+            if (prompt_shown) {
+                std::cout << '\n';
+                prompt_shown = false;
+            }
+            print_new_notes(store, &notes_shown);
+        }
 
         if (!prompt_shown) {
             std::cout << "loom> " << std::flush;
@@ -1409,17 +1446,8 @@ int main(int argc, char** argv) {
         }
         prompt_shown = false;
         running = dispatch(line, session, plan, plan_source, store, lock);
-        // Anything the command left open is watched, so a PENDING answer is reported
-        // when it lands instead of being quietly lost.
-        for (const loom::PendingAsk& p : session.console().open_asks()) {
-            bool known = false;
-            for (std::uint64_t id : watching) {
-                known = known || id == p.id;
-            }
-            if (!known) {
-                watching.push_back(p.id);
-            }
-        }
+        // What the policy decided during the command, said with the command's own output.
+        print_new_notes(store, &notes_shown);
     }
     return 0;
 }
