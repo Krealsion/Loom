@@ -100,7 +100,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #ifdef ZEN_WEAVE_NET_PROBE
@@ -913,6 +915,22 @@ public:
         v.set("revive_from_last_good", Cell::boolean(true));
         return v;
     }
+
+#ifdef ZEN_WEAVE_ASKS
+    // ZEN_WEAVE_ASKS — a variant that DECLARES a capability ask, so the admission suite
+    // can pin that the in-process kernel carries the declaration to the host's policy,
+    // and that the policy grants nothing because of it. `ZEN_ASK` belongs to the
+    // WeaveBase layer and this fixture is a raw `loom::Weave`, so the hook the exporter
+    // actually looks for (`zen_requested_capabilities`, kernel/export.hpp) is written
+    // out by hand. Not an override: the exporter finds it by `requires`, not by vtable.
+    std::optional<loom::CapabilityAsk> zen_requested_capabilities() const {
+        loom::CapabilityAsk a;
+        a.network = true;
+        a.filesystem = "write-scoped";
+        a.roles = {"storage"};
+        return a;
+    }
+#endif
 
     void revive(const Value& state) override {
 #ifdef ZEN_WEAVE_CRASH_ON_REVIVE

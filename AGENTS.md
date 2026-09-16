@@ -5,6 +5,26 @@ tests). Human docs: `docs/README.md`. Normative truth is `docs/reference/` +
 `docs/laws/` only; `docs/history/` is frozen record; `docs/evidence/` is not
 the API contract.
 
+## The supplied host, and who decides what a loaded artifact may do
+
+`loom-host` (`src/host/`) is the one executable this project INSTALLS: a boot walk
+from a file the person wrote, an operator console with authority in it, and two
+per-install files (`loom-boot.json`, `loom-authority.json`). It is a replaceable
+default assembled from ordinary participants — `ConsoleEngine`, `WeaveManager`,
+`ControlWeave`, plus `loom::host::HostWarden` — and it holds no privilege the
+package does not export. Human route: `docs/guides/running-loom.md`; prerequisites
+`docs/guides/tools.md`.
+
+**`Kernel::load` no longer mints a grant.** The three-argument overload used to
+bind `Grant{}.allow_any()` to every library it opened, through three doors (direct
+load, the message-driven control door, `load_candidate`). Now a `Kernel` asks its
+installed `AdmissionPolicy` (`zen/kernel/admission.hpp`), and a Kernel on which
+nobody called `admit_with(...)` **admits nothing and says so**. A host that wants
+the old authority asks for it by name — `trust_every_artifact("why")` — and the
+`why` rides every verdict. The four-argument `load(..., Grant)` still bypasses the
+policy, deliberately: naming the grant at the call site *is* the decision.
+`docs/reference/capabilities.md#admitting-a-loaded-artifact`; suite `admission`.
+
 ## Intent, evidence, and architectural fit
 
 Approved purpose, requirements, and architectural contracts determine whether a change is right.

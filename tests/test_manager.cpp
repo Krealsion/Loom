@@ -221,7 +221,7 @@ struct GoState {
 struct Rig {
     Switchboard bus;
     ConsoleEngine engine{bus};
-    Kernel kernel{bus};
+    Kernel kernel{bus, sbfx::fixture_admission()};
     WeaveId control = mount_control(kernel, bus);
     WeaveId manager = mount_manager(control, bus);
 };
@@ -1659,7 +1659,7 @@ TEST_CASE("R2B-1 D: an artifact built against the previous ABI is refused at loa
     // loads, runs, and is silently unable to accept a lifecycle fact for the
     // rest of its life.
     Switchboard bus;
-    Kernel kernel(bus);
+    Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(lr.ok);
     CHECK(lr.error.find("abi_version") != std::string::npos);

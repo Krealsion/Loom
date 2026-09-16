@@ -62,6 +62,7 @@ add_library(loom
     src/gate.cpp
     src/registry.cpp
     src/serialize.cpp
+    src/content_id.cpp
     src/detail/json.cpp
     src/detail/base64.cpp
     src/detail/binary.cpp)
@@ -160,7 +161,8 @@ if(NOT WIN32 OR LOOM_ENABLE_WINDOWS_KERNEL)
 
 # The kernel (dynamic library loading + the C ABI + hot-reload).
 add_library(zen-kernel
-    src/kernel/kernel.cpp)
+    src/kernel/kernel.cpp
+    src/kernel/admission.cpp)
 
 target_include_directories(zen-kernel
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
@@ -377,6 +379,32 @@ add_executable(zen-console-tui src/console/console_tui.cpp)
 target_link_libraries(zen-console-tui
     PRIVATE zen-tui zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
+# ---- loom-host: THE SUPPLIED HOST, and the only executable this project installs -----
+#
+# Everything else with a main() in this tree is a demo with a fixed cast, useful from the
+# build directory and nowhere else. This one is the answer to "I installed Loom, now
+# what?": it reads a boot plan the person wrote, starts what that plan names in the
+# order it names them, and gives them a console with authority in it.
+#
+# It links the console engine and the terminal core (both already home-grown substrate)
+# and, WHERE THERE IS ONE, the kernel — which is every Linux build and a Windows build
+# that opted into the unsandboxed backend. ZEN_HOST_HAS_KERNEL is that fact as a compile
+# definition rather than as an assumption: a host without one still runs, still consoles,
+# and says in one sentence why it can host nothing loadable.
+add_executable(loom-host
+    src/host/host_main.cpp
+    src/host/authority.cpp
+    src/host/boot_plan.cpp
+    src/host/config_file.cpp)
+target_link_libraries(loom-host
+    PRIVATE zen-console zen-terminal zen-switchboard loom zen-warnings zen-sanitize)
+if(TARGET zen-kernel)
+    target_link_libraries(loom-host PRIVATE zen-kernel)
+    target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=1)
+else()
+    target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=0)
+endif()
+
 # ---- The remote-operator bridge (operator-protocol transport; server + remote console land here) --
 #
 # PORTABLE on purpose: the operator-protocol crosses the host boundary, so the transport builds on
@@ -532,6 +560,15 @@ if(LOOM_INSTALL)
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    # THE ONE INSTALLED EXECUTABLE, and deliberately not part of the export set: a
+    # consumer links libraries, it does not link a host. It installs so that a person
+    # who has installed Loom has something to RUN -- which, before it, they did not.
+    #
+    # The libraries it links but Loom does not export (zen-console, zen-ui) stay
+    # unexported, exactly as before. Nothing about the package boundary moved: a static
+    # host binary carries its own copy and a stranger still cannot reach those headers.
+    install(TARGETS loom-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     # The kernel joins the export wherever it was built: always on Linux; on Windows only
     # under LOOM_ENABLE_WINDOWS_KERNEL (the opt-in development/demo backend — no isolation).

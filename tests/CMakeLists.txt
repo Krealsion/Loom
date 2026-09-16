@@ -65,6 +65,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
+    test_admission.cpp
     test_dispatch_loaded.cpp
     test_handoff.cpp
     test_manager.cpp
@@ -306,13 +307,14 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
     zen_test_office_worker zen_test_dispatch zen_test_joint
-    zen_test_contract_applied zen_test_contract_bypass)
+    zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
 target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_WEAVE=\"$<TARGET_FILE:zen_test_weave>\""
     "ZEN_SO_WEAVE_B=\"$<TARGET_FILE:zen_test_weave_b>\""
+    "ZEN_SO_ASKS=\"$<TARGET_FILE:zen_test_weave_asks>\""
     "ZEN_SO_BADSNAP=\"$<TARGET_FILE:zen_test_weave_badsnap>\""
     "ZEN_SO_BADMSG=\"$<TARGET_FILE:zen_test_weave_badmsg>\""
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_weave_v2>\""
@@ -366,6 +368,12 @@ zen_add_test_weave(zen_test_weave_envprobe ZEN_WEAVE_ENV_PROBE)
 # it quarantines) and one that fork-bombs (bounded by pids.max).
 zen_add_test_weave(zen_test_weave_membomb ZEN_WEAVE_MEM_BOMB ZEN_WEAVE_LOW_RELOADS)
 zen_add_test_weave(zen_test_weave_forkbomb ZEN_WEAVE_FORK_BOMB)
+
+# The admission suite's declaring artifact: the same fixture, with a CapabilityAsk in
+# its manifest. It rides the kernel gate rather than the posix one, because what it
+# proves -- that a declaration reaches the host's policy and grants nothing -- is true
+# of the in-process kernel on every platform that has one.
+zen_add_test_weave(zen_test_weave_asks ZEN_WEAVE_ASKS)
 
 # Policy phase (P1): a woven mod that *asks* for network + filesystem write (via
 # ZEN_ASK), used to prove the ask is not a grant — it still lands on the floor.

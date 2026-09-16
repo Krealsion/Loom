@@ -265,6 +265,44 @@ returns authenticated refusal to an opted-in native or loaded sender and carries
 the real attempt ticket across ABI v7. It does not turn seam rejection into a
 queued attempt or supply general delivery/success knowledge.
 
+## A manifest says what a weave accepts, never what it wants to send
+
+**Status: OPEN, and named by the standalone-hosting phase. An ABI change would
+close it; nothing depends on that yet.**
+
+`encode_manifest` (`zen/kernel/schema_codec.hpp`) publishes `referenced`,
+`accepted`, `state`, `requests` and `claims`. There is no emit section, and
+`requests` is a `zen.CapabilityAsk` — network, filesystem, roles — which has no
+word for a shape. So a host reading a loaded artifact can discover everything it
+will *receive* and nothing it will *say*. Two consequences, and the first is the
+one people meet:
+
+**A shape nobody accepts cannot be sent.** The registry learns shapes from
+weaves' accept-sets, so a reply shape that only ever travels *to* a generic
+operator console has no registrar, and the send is refused `SeamUnresolved`
+(above) before it reaches any door. It is not an authority failure and the
+message does not mention one, which is why it reads as a mystery the first time.
+The two ways out are both ordinary: answer with a standard reply shape
+(`zen.Result` / `zen.Ack` / `zen.Refused`, which the substrate's own participants
+declare), or have the receiving side declare the shape — a console does that
+through `ConsoleEngine`'s `vocabulary` parameter, which exists for exactly this.
+
+**And a host cannot show a person what an artifact is asking to say.** The
+admission policy ([admitting a loaded
+artifact](capabilities.md#admitting-a-loaded-artifact)) is handed the declared
+`CapabilityAsk` as advice, and a person approving speech has to name the shapes
+themselves from the artifact's documentation. That is *correct* on the authority
+question — a declaration must never become a grant, and the source of send
+authority is the person's own policy either way — but it is worse ergonomics
+than it needs to be: "this weave would like to say `Noted v1` to role `logbook`,
+allow it?" is a better prompt than a blank one.
+
+Closing it is a send-side section in the manifest and therefore an ABI bump
+(`zen.CapabilityAsk v2`, or a sibling section), which rebuilds every artifact in
+every consumer. **Trigger:** an operator surface that wants to offer a
+one-click approval of what an artifact asked for, or a second consumer hitting
+the reply-shape wall.
+
 ## Event-loop composition
 
 **Status: CLOSED (R2E-0, corrected R2E-0a) — current, law-backed
