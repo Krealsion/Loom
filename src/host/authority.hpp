@@ -65,6 +65,13 @@ struct AuthorityRule {
     /// all this decides is whether new bytes may run under the authority the person
     /// already granted. That distinction is the whole reason it can be a default-off
     /// per-artifact switch rather than a global one.
+    ///
+    /// AND IT COVERS A CHANGED *REQUEST* TOO, without a second mechanism. An
+    /// artifact's declared `CapabilityAsk` is compiled into it, so an artifact that
+    /// starts asking for something new is an artifact whose bytes changed — the same
+    /// question, reached by the same door. What a person turns on here is "I am the one
+    /// rebuilding this"; leaving it off is how they see every change, including that
+    /// one.
     bool trust_rebuilds = false;
     std::vector<std::string> send;    ///< rendered send rules (see the header note)
     std::vector<std::string> observe; ///< rendered observe rules
@@ -84,16 +91,19 @@ bool to_live_authority(const AuthorityRule& rule, LiveAuthority* out, std::strin
 /// A decision the admission policy could not make and is waiting on. Recorded when a
 /// load is refused for want of a rule (or because the bytes changed), so the console
 /// can show a person exactly what to approve, with the facts in front of them.
+///
+/// WHAT IT CANNOT CARRY, AND WHY THAT IS THE RIGHT ANSWER. There is no declared ask
+/// here. A manifest exists only after the artifact has been opened and its code has
+/// run, and everything this store refuses, it refuses at `AdmissionStage::Open` —
+/// before that. So the price of not running unapproved code is that a person cannot be
+/// shown what that code says it wants, and the two cannot both be had. A field here
+/// holding an ask nobody could have read would be worse than its absence.
 struct PendingDecision {
     std::string artifact;
     std::string path;
-    std::string content_id;   ///< the build that was actually presented
-    std::string pinned;       ///< the build the rule pinned, when there is one
-    std::string why;          ///< the refusal, in the policy's own words
-    /// The manifest's ask, if the artifact got far enough to publish one. Advice,
-    /// shown to the person, never consulted — the same rule that holds everywhere else.
-    bool declared_present = false;
-    CapabilityAsk declared{};
+    std::string content_id; ///< the build that was actually presented
+    std::string pinned;     ///< the build the rule pinned, when there is one
+    std::string why;        ///< the refusal, in the policy's own words
 };
 
 /// The persisted store, and the admission policy over it.

@@ -346,6 +346,19 @@ Now every rebuild comes up without a question — and never silently:
 `--rebuilds` widens nothing. The rules you approved are unchanged; all it decides is
 whether *new bytes* may run under authority you already granted.
 
+It covers a changed **request** too, without a second mechanism to understand. A weave's
+declared ask (`ZEN_ASK`) is compiled into it, so an artifact that starts asking for
+something new is an artifact whose bytes changed — the same question, reached by the same
+door. What `--rebuilds` turns on is "I am the one rebuilding this"; leave it off and you
+see every change, including that one.
+
+What the host **cannot** show you is the ask itself. A manifest exists only once the
+artifact has been opened and its code has run, and everything the policy refuses, it
+refuses before that. Not running unapproved code and being told what unapproved code wants
+cannot both be had, and this host chooses the first. So `authority pending` shows you the
+build ids and the path, and the artifact's documentation is where you learn what it wants
+to say.
+
 ### Without restarting
 
 ```text
@@ -388,8 +401,8 @@ what debugging this is:
 | `Refused … [SeamUnresolved]` | **vocabulary.** Nothing has ever declared that shape | have some weave accept it |
 
 `authority pending` lists everything the policy refused and is waiting on, with the build
-it was asked about and the artifact's own declared ask beside it. A declared ask is
-advice — the host shows it to you and grants nothing because of it.
+it was asked about and the path it came from — but not what the artifact asks for, for the
+reason above: it was refused before it could say.
 
 If a boot plan is what is broken, `loom-host --no-boot` comes up with the console and
 starts nothing, and `--check` validates both files without running anything at all.
