@@ -489,13 +489,6 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
             if (!p.pinned.empty()) {
                 std::cout << "    build approved:  " << p.pinned << '\n';
             }
-            if (p.declared_present) {
-                // ADVICE, LABELLED AS ADVICE. It is what the artifact said it wanted;
-                // nothing derived a permission from it and nothing will.
-                std::cout << "    it asked for (advice only, granted nothing): network="
-                          << (p.declared.network ? "yes" : "no")
-                          << " filesystem='" << p.declared.filesystem << "'\n";
-            }
         }
         return;
     }
