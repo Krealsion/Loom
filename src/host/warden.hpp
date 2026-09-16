@@ -12,10 +12,20 @@
 // IT EXISTS BECAUSE THE INSTALL IS A DELIVERY-TIME ACT, not because the host wanted a
 // middleman. `delegate_authority` is reachable only from a live participating Bus — a
 // host's `main()` holds a Switchboard, which mints capabilities, but has no standing to
-// spend one. So the host's administration is an ordinary participant, and the pleasant
-// consequence is that every authority change is a message: it shows on the tap, in
-// order, next to the traffic it affects. An invisible host-side mutation would have
-// been simpler to write and impossible to watch.
+// spend one. So the host's administration is an ordinary participant, and an operator's
+// authority change is a message: it shows on the tap, in order, next to the traffic it
+// affects. An invisible host-side mutation would have been simpler to write and
+// impossible to watch.
+//
+// TWO ENTRY POINTS, ONE WRITE PATH (`install`). The operator's `zen.host.AuthoritySync`
+// is one; `adopt()` is the other, called from the kernel door's `LifecycleAdoption`
+// inside the delivery that committed a new incarnation, because that is the only moment
+// early enough for an approved permission to be in force for the weave's first breath.
+// That second one is NOT a message and does not appear on the tap on its own — the LOAD
+// it rides does. It is not a second writer either: the capability, the rules and the
+// decision of what to install are this object's in both cases, and `delegate_authority`
+// is authorized by possession of the capability rather than by who presented it
+// (GATE-05), so the door's Mail spends this warden's authority and nothing else.
 //
 // WHAT IT IS NOT. It is not a Weaver. `loom::Weaver` answers a SUBJECT'S request — one
 // subject, one seat, one pending ask at a time, approve-or-refuse — and the supplied
@@ -32,8 +42,11 @@
 //   - exceed what a person wrote. It reads the store and installs exactly that; the
 //     payload carries no rules, so a well-formed forged message can at most re-apply
 //     the file.
-//   - be driven by anyone but the operator seat. Checked against the bus stamp, like
-//     the Weaver checks its own.
+//   - be driven BY A MESSAGE from anyone but the operator seat. Checked against the bus
+//     stamp, like the Weaver checks its own. (`adopt()` is not a message and carries no
+//     seat check: it is host wiring, reachable only from the object the host handed to
+//     `mount_control`, and its subject is the Kernel's own fact about what it just
+//     registered.)
 //   - perform anything on a subject's behalf. It changes what a subject MAY say and
 //     never says anything as one — which is the prompt's rule that an approval must not
 //     silently act as a more powerful identity, kept by having no way to break it.
