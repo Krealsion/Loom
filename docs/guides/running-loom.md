@@ -64,6 +64,11 @@ Neither is required to start, and the host writes the second one for you as you 
 decisions. `--boot` and `--authority` point at other paths; `--check` reads both, says
 what they contain, and exits without starting anything.
 
+**Run two hosts from one directory and they share one authority file**, each holding its
+own copy and replacing the whole thing when it writes — so an approval made in one is lost
+the next time the other writes. There is no lock. Give a second host its own
+`--authority <file>`.
+
 ## 3. Write a weave of your own
 
 A new directory, three files, nothing from Loom's source tree.

@@ -55,6 +55,14 @@ std::optional<loom::Value> read_gated_file(const std::string& path,
 /// fsync+fsync-parent path is not portable. A crash of the machine (as opposed to the
 /// process) can therefore still lose the most recent decision. Said out loud rather
 /// than implied by the word "atomic".
+///
+/// AND IT IS LAST-WRITER-WINS ACROSS PROCESSES. Two hosts run from one directory share
+/// one authority file, each holding its own copy in memory, and each write replaces the
+/// whole file — so an approval made in one is lost the next time the other writes. There
+/// is no lock, and there deliberately is not one yet: a per-install decision file is a
+/// single-operator thing, and a lock would be a mechanism claiming to solve a problem
+/// (two people deciding at once) that it does not solve. Give a second host its own
+/// `--authority` file.
 bool write_gated_file(const std::string& path, const loom::Value& value, std::string* error);
 
 } // namespace loom::host
