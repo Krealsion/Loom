@@ -42,7 +42,31 @@ extern "C" {
  * happily and left them silently unable to accept an activation, i.e. loaded and
  * permanently inert. A refusal that names its cause beats a weave that never
  * speaks. */
-#define ZEN_ABI_VERSION 8u
+#define ZEN_ABI_VERSION 9u
+/* v9: THE DECLARED EMIT-SET CROSSES THE SEAM, BY DEFINITION. No slot changes in
+ * either table; what changes is what the descriptor's manifest carries
+ * (zen.Manifest v5 adds the optional `emits` list, zen/kernel/schema_codec.hpp)
+ * and what the host does with it: the emitted shapes are claimed into the host's
+ * agreement wall beside the accept-set, with every component they nest, so a
+ * loaded emitter of `Pong v1 {a, b}` and any acceptor of `Pong v1 {a}` refuse at
+ * load in either order -- where an image that could not say what it emits was
+ * admitted and the disagreement surfaced as the first refused delivery
+ * (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
+ *
+ * A DECLARATION IS VOCABULARY, NOT AUTHORITY. The host derives no send rule from
+ * the section: what a loaded artifact may say is still the grant its admission
+ * attached (docs/reference/capabilities.md#admitting-a-loaded-artifact), and the
+ * list is not exhaustive -- an emission of an undeclared shape meets the seam and
+ * the grant exactly as before.
+ *
+ * Paid as a break although the tables are unchanged, and deliberately: a v8
+ * image's manifest (v4) would pass a v5 meta-schema whose new section is optional,
+ * and load with its emit-set silently ABSENT -- "declared nothing" and "could not
+ * declare" would be the same bytes, the same-word-two-meanings failure every
+ * earlier bump refused. An image built against v8 is refused at load with both
+ * versions named, at load and as a replacement for a live participant, and the
+ * incumbent stands. Rebuild hosts, libraries and images together
+ * (docs/reference/dynamic-abi.md). */
 /* v8: JOINT PUBLICATION crosses the seam for a CLAIMANT. Two slots are appended,
  * one to each table: ZenHostApi::sense_offer (the claimant offers the next value
  * of its own latest claim for an exact operation) and ZenWeaveAbi::claim_published

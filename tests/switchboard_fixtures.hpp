@@ -121,8 +121,20 @@ public:
     /// A retained answer right, for hooks that defer. Move-only, so it lives here
     /// rather than being returned out of the hook.
     loom::DeferredAnswer pending{};
+    /// The declared claim-set and emit-set a test wants this raw weave to carry
+    /// (SENSE-04, and the schema-admission phase's emit registration). Set before
+    /// registration; both are read through the `loom::Weave` virtuals exactly as
+    /// the bus reads a WeaveBase's, so a probe can play a declared emitter.
+    std::vector<std::shared_ptr<const Schema>> declared_claims;
+    std::vector<std::shared_ptr<const Schema>> declared_emits;
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override { return accept_; }
+    std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
+        return declared_claims;
+    }
+    std::vector<std::shared_ptr<const Schema>> emitted_schemas() const override {
+        return declared_emits;
+    }
 
     void handle(const Message& in, Bus& bus) override {
         handled_names.push_back(in.payload.schema().name());

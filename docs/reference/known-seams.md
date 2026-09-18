@@ -265,43 +265,54 @@ returns authenticated refusal to an opted-in native or loaded sender and carries
 the real attempt ticket across ABI v7. It does not turn seam rejection into a
 queued attempt or supply general delivery/success knowledge.
 
-## A manifest says what a weave accepts, never what it wants to send
+## A manifest says what a weave accepts, and since ABI v9 what it declares it says — never what it asks leave to send where
 
-**Status: OPEN, and named by the standalone-hosting phase. An ABI change would
-close it; nothing depends on that yet.**
+**Status: the descriptive half CLOSED on 2026-09-18 (ABI v9, `zen.Manifest` v5;
+[declared vocabulary is agreed at
+admission](../decisions/declared-vocabulary-is-agreed-at-admission.md)); the
+authority-request half OPEN, and named by the standalone-hosting phase.**
 
 `encode_manifest` (`zen/kernel/schema_codec.hpp`) publishes `referenced`,
-`accepted`, `state`, `requests` and `claims`. There is no emit section, and
-`requests` is a `zen.CapabilityAsk` — network, filesystem, roles — which has no
-word for a shape. So a host reading a loaded artifact can discover everything it
-will *receive* and nothing it will *say*. Two consequences, and the first is the
-one people meet:
+`accepted`, `state`, `requests`, `claims` and, since v5, `emits`: the shapes the
+weave declares it may send, by definition. A host reading a loaded artifact can
+now discover what it will *receive* and what it *says* it will say — the same
+two lists a native weave declares — and `Switchboard::emitted_schemas(id)`
+answers the second question for any live participant. What closed with it:
 
-**A shape nobody accepts cannot be sent.** The registry learns shapes from
-weaves' accept-sets, so a reply shape that only ever travels *to* a generic
-operator console has no registrar, and the send is refused `SeamUnresolved`
-(above) before it reaches any door. It is not an authority failure and the
-message does not mention one, which is why it reads as a mystery the first time.
-The two ways out are both ordinary: answer with a standard reply shape
-(`zen.Result` / `zen.Ack` / `zen.Refused`, which the substrate's own participants
-declare), or have the receiving side declare the shape — a console does that
-through `ConsoleEngine`'s `vocabulary` parameter, which exists for exactly this.
+**A shape only its emitter knows now has a registrar.** The registry used to
+learn shapes from accept-sets alone, so a reply shape that only ever travelled
+*to* a generic operator console had no registrar and the send was refused
+`SeamUnresolved` (above) before it reached any door. An emitter's declaration
+now publishes that shape's definition for as long as the emitter lives, so a
+directed send of it to an `AcceptMode::AnyRegistered` console is admitted
+against the emitter's own definition. The two older ways out — a standard reply
+shape (`zen.Result` / `zen.Ack` / `zen.Refused`), or the receiving side declaring
+the shape through `ConsoleEngine`'s `vocabulary` parameter — remain ordinary and
+remain necessary for a shape the sender never declared, because `Emit<...>` is
+not an exhaustive send list and a runtime-chosen shape still meets the seam.
 
-**And a host cannot show a person what an artifact is asking to say.** The
+What stays open, and why the closed half does not close it:
+
+**A schema list is not a request for authority to a destination.** `emits`
+says what `Noted v1` means; `requests` is still a `zen.CapabilityAsk` — network,
+filesystem, roles — with no word for "shape `Noted v1` to role `logbook`". The
 admission policy ([admitting a loaded
-artifact](capabilities.md#admitting-a-loaded-artifact)) is handed the declared
-`CapabilityAsk` as advice, and a person approving speech has to name the shapes
-themselves from the artifact's documentation. That is *correct* on the authority
-question — a declaration must never become a grant, and the source of send
-authority is the person's own policy either way — but it is worse ergonomics
-than it needs to be: "this weave would like to say `Noted v1` to role `logbook`,
-allow it?" is a better prompt than a blank one.
+artifact](capabilities.md#admitting-a-loaded-artifact)) is handed the ask as
+advice and can now also read the artifact's declared vocabulary from its manifest,
+but a person approving speech still has to name the *destinations* themselves.
+That is *correct* on the authority question — a declaration never becomes a
+grant, and the source of send authority is the person's own policy either way —
+and it is still worse ergonomics than it needs to be.
 
-Closing it is a send-side section in the manifest and therefore an ABI bump
-(`zen.CapabilityAsk v2`, or a sibling section), which rebuilds every artifact in
-every consumer. **Trigger:** an operator surface that wants to offer a
-one-click approval of what an artifact asked for, or a second consumer hitting
-the reply-shape wall.
+**And metadata alone is not an approval interface.** "This weave would like to
+say `Noted v1` to role `logbook`, allow it?" needs a destination-bearing ask and
+an operator surface that puts the question; the emit-set supplies the shape's
+name and definition and nothing more.
+
+Closing the rest is a destination-bearing ask (`zen.CapabilityAsk v2`, or a
+sibling section) — another manifest and ABI bump, rebuilding every artifact in
+every consumer — plus the surface that asks. **Trigger:** an operator surface
+that wants to offer a one-click approval of what an artifact asked for.
 
 ## Event-loop composition
 

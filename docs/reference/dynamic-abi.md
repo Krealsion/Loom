@@ -1,11 +1,28 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v8**
+The C seam a weave library and the host agree on. Current version: **v9**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
+[GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v9 carries the declared emit-set, by definition** ([declared vocabulary is
+agreed at admission](../decisions/declared-vocabulary-is-agreed-at-admission.md)).
+No slot changes in either table; the descriptor's manifest is `zen.Manifest`
+**v5**, which adds the optional `emits` list beside `referenced`, `accepted`,
+`state`, `requests` and `claims`, and the host claims those definitions — with
+every component they nest — into its agreement wall at load, beside the
+accept-set. A loaded emitter of `Pong v1 {a, b}` and an acceptor of `Pong v1 {a}`
+now refuse at load in either order, where a v8 image, unable to say what it
+emitted, was admitted and the disagreement surfaced as its first refused
+delivery. The section is descriptive vocabulary: the host reads no grant from it,
+and it is not an exhaustive send list. Paid as a break although the tables are
+unchanged, because a v8 manifest would pass a v5 meta-schema whose new section is
+optional and load with its emit-set silently absent — "declared nothing" and
+"could not declare" as the same bytes. An image built against v8 is refused at
+load and at reload with both versions named, and the incumbent stands.
 
 **v8 carries a joint publication's claimant surface** ([joint
 publication](joint-publication.md#what-crosses-the-abi)). Two slots are
@@ -306,7 +323,13 @@ one.
 Suite `kernel` (descriptor gate, byte-sink ownership, dynamic answer parity,
 provenance across the seam, office-authorship parity + the previous-ABI
 refusal at load and at reload — the fixture always declares
-`ZEN_ABI_VERSION - 1`, so those cases never name a frozen number); suite
-`joint` (the v8 claimant doors: offer across the seam, and the showing's
-three statuses); suite `isolation` (the fail-closed pipe, both directions);
-Night Lab `repro_answer_seam.cpp` as the application-shaped witness.
+`ZEN_ABI_VERSION - 1`, so those cases never name a frozen number; the "schema
+admission" cases: a loaded emitter's definition meeting acceptors at load, in
+both orders); suite `schema_codec` (`zen.Manifest` v5 carries the emit-set and
+its components; a v4 manifest does not pass the v5 door; a manifest carrying two
+definitions of one component is refused at the second); suite `joint` (the v8
+claimant doors: offer across the seam, and the showing's three statuses); suite
+`isolation` (the fail-closed pipe, both directions; a child's emit-set); Night
+Lab `repro_answer_seam.cpp` as the application-shaped witness. The v9 landing
+record (`loom-schema-admission-implementation` in the Zen workspace) carries the
+retained v8 image refused by a v9 host with both versions named.

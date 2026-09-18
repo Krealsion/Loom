@@ -260,6 +260,14 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
   that capability's ceiling; its admission **baseline** never changes, and its
   OS/filesystem/resource containment was consumed into kernel state before the
   child ran — `LiveAuthority` has no word for any of it.
+- That `Emit<...>` is informational, or that declaring a shape anywhere grants
+  anything. Every list a weave declares — accepted, claimed, emitted, persisted —
+  and every component those shapes nest is claimed through one agreement wall at
+  registration (natively) and at load (`zen.Manifest` v5, ABI v9), so a divergent
+  definition refuses at the door in either order and a self-contradicting
+  declaration never registers; and none of it is authority — a declared emitter
+  with no send rule is still `CapabilityDenied`, and `Emit` is not an exhaustive
+  send list (`docs/decisions/declared-vocabulary-is-agreed-at-admission.md`).
 - Green means correct — a regression test pins an assertion under its arranged
   conditions, not the fitness of the whole architecture. Check the population too.
 - A discrepancy means prose is automatically wrong. Code and tests establish

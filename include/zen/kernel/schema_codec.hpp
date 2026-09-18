@@ -99,13 +99,25 @@ inline std::shared_ptr<const Schema> manifest_schema() {
     // weave's contract IS — so one manifest still means one decode and one gate
     // crossing. Optional, so a weave that claims nothing stays lean; its nested
     // shapes are collected into `referenced` exactly as the accept-set's are.
-    static const auto s = SchemaBuilder("zen.Manifest", 4)
+    // v5 adds the optional `emits` list: the shapes this weave DECLARES IT MAY
+    // SEND (its Emit<...>), by definition. Until v5 an emitter's definition never
+    // crossed the seam, so a loaded emitter and a divergent acceptor of one
+    // (name, version) both admitted and the disagreement surfaced only when a
+    // value met a door (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
+    // Descriptive VOCABULARY, never authority: the host claims these definitions
+    // into its agreement wall and derives no send rule from them. Optional, so
+    // a weave that declares no emits stays lean; nested shapes join `referenced`.
+    // An artifact whose manifest predates this section is an ABI v8 image, and
+    // the descriptor version gate refuses it before the manifest is ever read.
+    static const auto s = SchemaBuilder("zen.Manifest", 5)
                               .list("referenced", type_message(schema_desc_schema()),
                                     /*required=*/false)
                               .list("accepted", type_message(schema_desc_schema()))
                               .message("state", schema_desc_schema())
                               .message("requests", capability_ask_schema(), /*required=*/false)
                               .list("claims", type_message(schema_desc_schema()),
+                                    /*required=*/false)
+                              .list("emits", type_message(schema_desc_schema()),
                                     /*required=*/false)
                               .build();
     return s;
@@ -171,56 +183,38 @@ inline Value encode_capability_ask(const CapabilityAsk& ask) {
     return v;
 }
 
-// Collect every schema `s` transitively references through its field types, in
-// POST-ORDER (a schema's own references precede it), deduplicated by
-// (name, version). Post-order is what lets the decoder resolve a manifest's
-// `referenced` list front to back with no second pass. Cycles are impossible by
-// construction — a Schema is immutable and built before anything can reference
-// it — so the recursion is bounded by the schema DAG's depth.
-inline void collect_referenced(const TypeRef& t,
-                               std::vector<std::shared_ptr<const Schema>>& out);
-
-inline void collect_referenced(const Schema& s,
-                               std::vector<std::shared_ptr<const Schema>>& out) {
-    for (const Field& f : s.fields()) {
-        collect_referenced(f.type, out);
-    }
-}
-
-inline void collect_referenced(const TypeRef& t,
-                               std::vector<std::shared_ptr<const Schema>>& out) {
-    if (t.kind == Kind::List && t.element) {
-        collect_referenced(*t.element, out);
-        return;
-    }
-    if (t.kind != Kind::Message || !t.message) {
-        return;
-    }
-    collect_referenced(*t.message, out); // dependencies first (post-order)
-    for (const auto& seen : out) {
-        if (seen->name() == t.message->name() && seen->version() == t.message->version()) {
-            return;
-        }
-    }
-    out.push_back(t.message);
-}
+// THE `referenced` SECTION IS THE COMPONENT CLOSURE, walked by `loom::collect_referenced`
+// (zen/schema.hpp — the traversal lives with the schemas, one layer down, because
+// every declaration in the system walks the same closure: a weave's registration,
+// this manifest, a described accept-set, a consumer's own descriptors). Post-order,
+// so the decoder resolves the list front to back with no second pass; deduplicated
+// by IDENTITY, so two definitions of one (name, version) both travel and the
+// loader's registry refuses the manifest instead of a substituted shape loading.
 
 // `ask` is optional: a null ask emits no requests section (the floor), which admits
 // because the manifest's requests field is optional. The `referenced` section is
-// likewise emitted only when the accept-set or state actually nests something.
+// likewise emitted only when some declared shape actually nests something, and
+// `emits` only when the weave declares an emit-set.
 inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& accepted,
                              const Schema& state, const CapabilityAsk* ask = nullptr,
-                             const std::vector<std::shared_ptr<const Schema>>* claims = nullptr) {
+                             const std::vector<std::shared_ptr<const Schema>>* claims = nullptr,
+                             const std::vector<std::shared_ptr<const Schema>>* emits = nullptr) {
     Value m(manifest_schema());
     std::vector<std::shared_ptr<const Schema>> referenced;
     for (const auto& s : accepted) {
         collect_referenced(*s, referenced);
     }
     collect_referenced(state, referenced);
-    // A claimed shape may nest others exactly as an accepted one may, so its
-    // dependencies join the same section — the manifest stays self-contained.
+    // A claimed or emitted shape may nest others exactly as an accepted one may,
+    // so their dependencies join the same section — the manifest stays
+    // self-contained, whichever list a shape was declared in.
     if (claims != nullptr) {
         for (const auto& s : *claims) {
+            collect_referenced(*s, referenced);
+        }
+    }
+    if (emits != nullptr) {
+        for (const auto& s : *emits) {
             collect_referenced(*s, referenced);
         }
     }
@@ -249,6 +243,14 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
             cl.push_back(Cell::message(encode_schema(*s)));
         }
         m.set("claims", Cell::list(std::move(cl)));
+    }
+    if (emits != nullptr && !emits->empty()) {
+        std::vector<Cell> em;
+        em.reserve(emits->size());
+        for (const auto& s : *emits) {
+            em.push_back(Cell::message(encode_schema(*s)));
+        }
+        m.set("emits", Cell::list(std::move(em)));
     }
     return m;
 }
@@ -367,6 +369,14 @@ inline void decode_referenced(const Value& manifest, Registry& deps) {
 /// are resolved against `deps`, so entry N has to be discoverable before N+1 can
 /// be decoded at all. Batching would mean decoding against something other than
 /// the registry, which is a different (and larger) change than this one.
+///
+/// A CONTRADICTORY MANIFEST IS REFUSED HERE, whoever wrote it. Two entries
+/// naming one (name, version) with different content — what a weave declaring
+/// `Box { Part {a} }` beside `Box2 { Part {a, b} }` honestly encodes, or what a
+/// hand-built manifest may carry — meet the registry's wall at the second entry
+/// and throw `SchemaConflict`. The entries already claimed stay in `scope`, so
+/// the caller that owns the scope (a `Kernel::Manifest`, an isolation `Link`)
+/// releases them by going out of scope: a refused manifest leaves nothing.
 inline void decode_referenced(const Value& manifest, Registry& deps, SchemaClaimScope& scope) {
     const Cell* refs = manifest.get("referenced");
     if (refs == nullptr) {

@@ -211,6 +211,20 @@ zen_add_test_weave(zen_test_weave_seam_publish ZEN_WEAVE_SEAM_PUBLISH)
 # R2E-0/v6: the Sense parity fixture — claims, forged-office refusal, and a
 # synchronous read-back, all from the far side of the seam.
 zen_add_test_weave(zen_test_weave_senses ZEN_WEAVE_SENSES)
+# Schema admission (P-LOOM-07 / ABI v9): the declared EMITTER and its divergent twin —
+# the loaded half of the case that admitted a stale desktop against a newer Workshop.
+zen_add_test_weave(zen_test_weave_emits ZEN_WEAVE_EMITS_GREET)
+zen_add_test_weave(zen_test_weave_emits_conflict ZEN_WEAVE_EMITS_GREET ZEN_WEAVE_GREET_CONFLICT)
+# ...the nested-component cases: a disagreement only the component closure can see
+# (Box vs Box2 over two Part v1 definitions), one artifact contradicting itself in both
+# declaration orders, and the agreeing control that shares one Part.
+zen_add_test_weave(zen_test_weave_nest_old ZEN_WEAVE_NEST_OLD)
+zen_add_test_weave(zen_test_weave_nest_new ZEN_WEAVE_NEST_NEW)
+zen_add_test_weave(zen_test_weave_nest_mixed ZEN_WEAVE_NEST_MIXED)
+zen_add_test_weave(zen_test_weave_nest_mixed_rev ZEN_WEAVE_NEST_MIXED ZEN_WEAVE_NEST_MIXED_REVERSED)
+zen_add_test_weave(zen_test_weave_nest_agree ZEN_WEAVE_NEST_OLD ZEN_WEAVE_NEST_AGREE)
+# ...and the guide's copied weave that kept `Ping v1`'s name and added a field.
+zen_add_test_weave(zen_test_weave_ping_drift ZEN_WEAVE_PING_DRIFT)
 
 # R2B-3b-3: the `versioned.service` pair — ONE source, two real artifacts. v1 is
 # the incumbent that answers "v1" throughout; v2 (ZEN_VERSIONED_CANDIDATE) is the
@@ -320,6 +334,9 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
     zen_test_weave_answers_twice zen_test_weave_seam_emit zen_test_weave_seam_publish
     zen_test_weave_senses
+    zen_test_weave_emits zen_test_weave_emits_conflict
+    zen_test_weave_nest_old zen_test_weave_nest_new zen_test_weave_nest_mixed
+    zen_test_weave_nest_mixed_rev zen_test_weave_nest_agree zen_test_weave_ping_drift
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
     zen_test_office_worker zen_test_dispatch zen_test_joint
@@ -358,7 +375,15 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_HANDOFF_V1=\"$<TARGET_FILE:zen_test_handoff_v1>\""
     "ZEN_SO_HANDOFF_V2=\"$<TARGET_FILE:zen_test_handoff_v2>\""
     "ZEN_SO_HANDOFF_MIGRATOR=\"$<TARGET_FILE:zen_test_handoff_migrator>\""
-    "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\"")
+    "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\""
+    "ZEN_SO_EMITS=\"$<TARGET_FILE:zen_test_weave_emits>\""
+    "ZEN_SO_EMITS_CONFLICT=\"$<TARGET_FILE:zen_test_weave_emits_conflict>\""
+    "ZEN_SO_NEST_OLD=\"$<TARGET_FILE:zen_test_weave_nest_old>\""
+    "ZEN_SO_NEST_NEW=\"$<TARGET_FILE:zen_test_weave_nest_new>\""
+    "ZEN_SO_NEST_MIXED=\"$<TARGET_FILE:zen_test_weave_nest_mixed>\""
+    "ZEN_SO_NEST_MIXED_REV=\"$<TARGET_FILE:zen_test_weave_nest_mixed_rev>\""
+    "ZEN_SO_NEST_AGREE=\"$<TARGET_FILE:zen_test_weave_nest_agree>\""
+    "ZEN_SO_PING_DRIFT=\"$<TARGET_FILE:zen_test_weave_ping_drift>\"")
 
 # The admission suite's declaring artifact: the same fixture, with a CapabilityAsk in
 # its manifest. It rides the kernel gate rather than the posix one, because what it

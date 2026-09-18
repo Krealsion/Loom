@@ -145,4 +145,32 @@ std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t versio
     return std::make_shared<const Schema>(std::move(name), version, std::move(fields));
 }
 
+// ---- the component closure ---------------------------------------------------
+
+void collect_referenced(const Schema& root, std::vector<std::shared_ptr<const Schema>>& out) {
+    for (const Field& f : root.fields()) {
+        collect_referenced(f.type, out);
+    }
+}
+
+void collect_referenced(const TypeRef& type, std::vector<std::shared_ptr<const Schema>>& out) {
+    if (type.kind == Kind::List && type.element) {
+        collect_referenced(*type.element, out);
+        return;
+    }
+    if (type.kind != Kind::Message || !type.message) {
+        return;
+    }
+    collect_referenced(*type.message, out); // components first (post-order)
+    // Identity, not name: the same definition reached twice is carried once, and a
+    // DIFFERENT definition under a name already carried is kept beside it for the
+    // agreement check downstream to refuse — never dropped on the strength of its name.
+    for (const auto& seen : out) {
+        if (same_identity(*seen, *type.message)) {
+            return;
+        }
+    }
+    out.push_back(type.message);
+}
+
 } // namespace loom

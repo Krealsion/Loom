@@ -199,6 +199,64 @@ std::shared_ptr<const Schema> fdresult_schema() {
 
 TEST_SUITE("isolation") {
 
+TEST_CASE("schema admission: an isolated child's declared emit-set meets the same walls — the "
+          "bus's against a native acceptor, and this host's against another mount") {
+    // ABI v9 across the pipe: the child's manifest carries `emits`, the host decodes
+    // them as it decodes the doors (top-level, this pipe's flat contract), claims them
+    // with the mount, and the proxy declares them on the bus. No OS enforcement is
+    // asked of this case; it is about vocabulary, and it runs wherever a child can.
+    static const auto greet_msg = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
+    static const auto greet_text = SchemaBuilder("Greet", 1).field("text", Kind::Text).build();
+    const std::string conflict =
+        "is already published with a different shape (published schemas are immutable)";
+
+    SUBCASE("against a NATIVE acceptor: refused at the bus's door, nothing mounted") {
+        Switchboard bus;
+        IsolationHost host(bus, kHostExe);
+        Registered hears = register_probe(bus, {greet_msg});
+        Grant g;
+        g.allow("Greet", 1, hears.id);
+        OutOfProcessResult out = host.mount("out", ZEN_SO_EMITS_CONFLICT, std::move(g));
+        CHECK_FALSE(out.ok);
+        CHECK(out.error.find("register refused: schema 'Greet' v1") != std::string::npos);
+        CHECK(out.error.find(conflict) != std::string::npos);
+        CHECK(bus.list_weaves().size() == 1);
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg->content_id());
+    }
+    SUBCASE("against ANOTHER MOUNT: refused at this host's own wall, before the bus") {
+        Switchboard bus;
+        IsolationHost host(bus, kHostExe);
+        OutOfProcessResult first = host.mount("first", ZEN_SO_EMITS, Grant{});
+        REQUIRE_MESSAGE(first.ok, first.error);
+        REQUIRE(bus.resolve_schema("Greet", 1) != nullptr); // declared through the proxy
+        OutOfProcessResult second = host.mount("second", ZEN_SO_EMITS_CONFLICT, Grant{});
+        CHECK_FALSE(second.ok);
+        CHECK(second.error.find("handshake refused by the gate: schema 'Greet' v1") !=
+              std::string::npos);
+        CHECK(second.error.find(conflict) != std::string::npos);
+        CHECK(bus.list_weaves().size() == 1);
+        CHECK(bus.alive(first.id));
+    }
+    SUBCASE("the agreeing child: mounted, discoverable, and heard") {
+        Switchboard bus;
+        IsolationHost host(bus, kHostExe);
+        Registered hears = register_probe(bus, {greet_msg});
+        Grant g;
+        g.allow("Greet", 1, hears.id);
+        OutOfProcessResult out = host.mount("out", ZEN_SO_EMITS, std::move(g));
+        REQUIRE_MESSAGE(out.ok, out.error);
+        const auto declared = bus.emitted_schemas(out.id);
+        REQUIRE(declared.size() == 1);
+        CHECK(declared[0]->name() == "Greet");
+        bus.send(out.id, Message(ping(9), WeaveId{}, hears.id));
+        const bool done =
+            host.run_until([&] { return !hears.weave->handled_names.empty(); }, 2000);
+        REQUIRE(done);
+        CHECK(hears.weave->handled_names[0] == "Greet");
+        (void)greet_text;
+    }
+}
+
 TEST_CASE("out-of-process delivery and reply are indistinguishable from in-process") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());

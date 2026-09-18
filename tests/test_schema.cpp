@@ -103,4 +103,65 @@ TEST_CASE("list element types nest and contribute to identity") {
     CHECK(list_of_int->content_id() != list_of_list->content_id());
 }
 
+// ---- the component closure (collect_referenced) ---------------------------------
+//
+// The one traversal every declaration shares: a weave's registration, a library's
+// manifest, a described accept-set. It lives here, with the schemas, and its dedup
+// rule is the whole point — by identity, never by name alone.
+// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+
+TEST_CASE("collect_referenced walks the closure in post-order, carrying a shared component "
+          "once, whichever root reaches it and however deep") {
+    auto leaf = SchemaBuilder("Leaf", 1).field("v", Kind::Int).build();
+    auto mid = SchemaBuilder("Mid", 1).message("leaf", leaf).build();
+    auto outer = SchemaBuilder("Outer", 1).message("mid", mid).build();
+    auto listy = SchemaBuilder("Listy", 1)
+                     .list("rows", type_list(type_message(mid))) // List<List<Mid>>
+                     .build();
+
+    std::vector<std::shared_ptr<const Schema>> out;
+    collect_referenced(*outer, out);
+    collect_referenced(*listy, out);
+    REQUIRE(out.size() == 2); // Leaf, Mid — once each, roots not included
+    CHECK(out[0]->name() == "Leaf");
+    CHECK(out[1]->name() == "Mid");
+
+    // A flat schema references nothing.
+    std::vector<std::shared_ptr<const Schema>> none;
+    collect_referenced(*leaf, none);
+    CHECK(none.empty());
+}
+
+TEST_CASE("collect_referenced deduplicates by IDENTITY: an equal definition from a second "
+          "object is carried once, a different definition under a kept name is carried too") {
+    auto part_a = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    auto part_a_twin = SchemaBuilder("Part", 1).field("a", Kind::Int).build(); // equal content
+    auto part_b = SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
+    auto box = SchemaBuilder("Box", 1).message("part", part_a).build();
+    auto crate = SchemaBuilder("Crate", 1).message("part", part_a_twin).build();
+    auto box2 = SchemaBuilder("Box2", 1).message("part", part_b).build();
+
+    SUBCASE("two objects, one identity: one entry") {
+        std::vector<std::shared_ptr<const Schema>> out;
+        collect_referenced(*box, out);
+        collect_referenced(*crate, out);
+        REQUIRE(out.size() == 1);
+        CHECK(out[0].get() == part_a.get()); // the first object seen stands for both
+    }
+    SUBCASE("two definitions under one (name, version): BOTH survive, in order") {
+        // This is the entry the old name-keyed walk dropped, which let a weave load
+        // advertising a Box2 whose Part was silently the first one's. Whoever reads
+        // the result — a Registry claim, a manifest's loader — now sees the
+        // contradiction and refuses it.
+        std::vector<std::shared_ptr<const Schema>> out;
+        collect_referenced(*box, out);
+        collect_referenced(*box2, out);
+        REQUIRE(out.size() == 2);
+        CHECK(out[0]->content_id() == part_a->content_id());
+        CHECK(out[1]->content_id() == part_b->content_id());
+        CHECK(out[0]->name() == out[1]->name());
+        CHECK(out[0]->version() == out[1]->version());
+    }
+}
+
 } // TEST_SUITE
