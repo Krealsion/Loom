@@ -118,6 +118,36 @@ private:
 std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t version,
                                           std::vector<Field> fields);
 
+/// THE COMPONENT CLOSURE OF A SCHEMA — every schema `root` transitively references
+/// through its field types (a Message field, a List of Messages, however deep),
+/// appended to `out` in POST-ORDER: a component precedes whatever references it,
+/// so a reader that must resolve entry N+1 against entries 0..N (a manifest's
+/// `referenced` list, a self-description package) needs one forward pass.
+/// `root` itself is NOT appended; the caller lists roots where roots belong.
+///
+/// DEDUPLICATED BY IDENTITY, NEVER BY NAME ALONE. A component already present in
+/// `out` with the same (name, version) AND the same content-id is not appended
+/// again — two roots sharing one `Pos v1` carry it once. A component with the
+/// same (name, version) and DIFFERENT content IS appended, so a contradiction
+/// inside one declaration (`Box v1 { Part v1 {a} }` beside `Box2 v1 { Part v1
+/// {a, b} }`) survives to meet whatever agreement check reads the result: a
+/// `Registry` claim refuses it with `SchemaConflict`, and a manifest carries both
+/// definitions for its loader to refuse. Suppressing the second by name is what
+/// once let such a weave load advertising a `Box2` it never declared
+/// (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
+///
+/// This is the one traversal every declaration shares — a weave's registration
+/// on the bus, a library's manifest, a described accept-set, a consumer's own
+/// descriptors — and it lives here, at the layer that owns schemas, so that no
+/// layer has to reach up into another's codec to walk a shape it already holds.
+///
+/// Cycles are impossible by construction: a `Schema` is immutable and built from
+/// components that already exist, so nothing can reference itself and the walk is
+/// bounded by the schema DAG. Cost is linear in the closure's size.
+void collect_referenced(const Schema& root, std::vector<std::shared_ptr<const Schema>>& out);
+/// The same walk from a single type reference (a field's type, a list's element).
+void collect_referenced(const TypeRef& type, std::vector<std::shared_ptr<const Schema>>& out);
+
 } // namespace loom
 
 #endif // ZEN_SCHEMA_HPP

@@ -217,9 +217,12 @@ MEANS
   is not disturbed;
 - **acquisition is transactional.** A multi-schema claim validates the complete
   set before publishing any of it, so a disagreement about the last schema
-  leaves no claim on the first. `register_weave` takes its accept-set, claim-set
-  and state shape as one such transaction, and a Kernel takes a whole manifest
-  as another;
+  leaves no claim on the first. `register_weave` takes its accept-set, claim-set,
+  emit-set and state shape — **with every component those shapes nest** — as one
+  such transaction, and a Kernel takes a whole manifest as another. The same
+  transaction refuses a declaration that contradicts itself, since two
+  definitions of one `(name, version)` inside one request are one conflict
+  ([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md));
 - **the owners are the objects whose lifetimes already mean it.** A
   `WeaveRecord` holds the claim for what its weave hears, may say and persists;
   a Kernel's loaded-artifact record holds its manifest's; an isolation `Link`
@@ -227,10 +230,13 @@ MEANS
   names or mounts — it counts claims, and the layer that owns a lifetime is the
   layer that owns the claim;
 - **a producer claims what it may speak.** A weave's accept-set is what it will
-  hear; its grant's *named* send rules are what it may say, and those shapes are
-  claimed by key (`claim_known`) so an authorized sender keeps its vocabulary
-  after the weave that defined it is gone. A wildcard rule names no shape and
-  therefore claims none;
+  hear; its emit-set is what it says it will say, claimed **by definition** like
+  the accept-set, so an emitter's `Pong v1` and an acceptor's `Pong v1` are
+  compared at the door; its grant's *named* send rules are what it may say, and
+  a shape a grant names without a declaration is claimed **by key**
+  (`claim_known`) so an authorized sender keeps its vocabulary after the weave
+  that defined it is gone. A wildcard rule names no shape and therefore claims
+  none. Neither kind of claim is authority — the grant alone is;
 - **a handoff has no gap.** A successor's claim is acquired before the
   predecessor's is released, so a shape both require is doubly claimed for the
   length of the swap and never falls to zero. A refused replacement releases the
@@ -270,9 +276,13 @@ PROVEN BY — the claim/release pair in `detail::RegistryCore`
 `Kernel::Loaded`/`Kernel::Manifest` and `IsolationHost::Link`. Suites `registry`
 (the lifetime, shared-claim, conflict, transactionality, permanence, producer,
 move/overlap, surviving-value, orphan-scope, boundedness and
-concurrent-churn cases), `switchboard` (arrival/departure, shared shapes,
-refused-removal, code swap, producer claim and its wildcard control, refused
-mid-accept-set registration, 300-weave churn), `kernel` (the agreement wall
-following live claims, no residue from a rejected candidate, 64 rejected
-candidates), `isolation` (mount-scoped claim, repeated mount/unmount) and
-`policy` (a broker unmounted under an authorized client).
+concurrent-churn cases, a contradiction inside one request), `switchboard`
+(arrival/departure, shared shapes, refused-removal, code swap, producer claim
+and its wildcard control, refused mid-accept-set registration, 300-weave churn,
+the "schema admission" cases: an emit-set's declaration, its re-claim across a
+swap and its reclamation), `kernel` (the agreement wall following live claims,
+no residue from a rejected candidate, 64 rejected candidates, the "schema
+admission" cases: a refused load's cleanup, reclamation after the last holder,
+a reload candidate judged against the bus before rebind), `isolation`
+(mount-scoped claim, repeated mount/unmount, a child's emit-set) and `policy`
+(a broker unmounted under an authorized client).

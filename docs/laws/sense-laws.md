@@ -122,8 +122,11 @@ MEANS
   discoverable **before** it has claimed anything, rather than after a runtime
   claim accidentally reveals a shape;
 - `Claims<...>` is a third list because a claim is neither an accepted message
-  nor an emitted one. Reusing `Emit<...>` was rejected twice over: a Sense is
-  not an emitted message, and `Emit` is informational and does not register.
+  nor an emitted one. Reusing `Emit<...>` was rejected: a Sense is not an emitted
+  message, and a shape declared as sendable says nothing about what may be
+  claimed. All three lists register at mount, by definition
+  ([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md)); what
+  is particular to this one is that it is enforced at the claim doors.
 
 DOES NOT MEAN
 - that the claim-set widens anything — it is a declaration, not a grant;

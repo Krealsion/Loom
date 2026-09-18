@@ -283,4 +283,147 @@ TEST_CASE("a descriptor that lies about its shape is refused by the meta-schema 
     CHECK(a.first_error().kind == ErrorKind::MissingField);
 }
 
+// ---- zen.Manifest v5: the emit-set crosses, and a contradiction cannot ----------------
+// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+
+TEST_CASE("a manifest (v5) carries the declared emit-set and the components it nests, and "
+          "a weave declaring no emits sends no section") {
+    auto ping = SchemaBuilder("Ping", 1).field("seq", Kind::Int).build();
+    auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+    auto greet = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
+    auto part = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    auto whole = SchemaBuilder("Whole", 1).list("parts", type_message(part)).build();
+
+    const std::vector<std::shared_ptr<const Schema>> accepted{ping};
+    const std::vector<std::shared_ptr<const Schema>> emits{greet, whole};
+    const std::string bytes =
+        serialize(encode_manifest(accepted, *counter, nullptr, nullptr, &emits));
+    Unverified u = parse(bytes);
+    REQUIRE(u.well_formed());
+    Admission a = admit(u, manifest_schema());
+    REQUIRE_MESSAGE(a.ok(), (a.ok() ? "" : a.first_error().message()));
+    const Value& manifest = a.value();
+    REQUIRE(manifest.get("emits") != nullptr);
+    CHECK(manifest.get("emits")->as_list().size() == 2);
+    // The emitted shape's component travels in `referenced` like a door's would.
+    REQUIRE(manifest.get("referenced") != nullptr);
+    REQUIRE(manifest.get("referenced")->as_list().size() == 1);
+
+    // The reconstruct sequence, against an EMPTY registry: every emitted shape
+    // arrives with the identity it was declared with.
+    Registry deps;
+    SchemaClaimScope scope;
+    decode_referenced(manifest, deps, scope);
+    std::vector<std::shared_ptr<const Schema>> rebuilt;
+    for (const Cell& c : manifest.get("emits")->as_list()) {
+        rebuilt.push_back(decode_schema(*c.as_message(), deps));
+    }
+    REQUIRE(rebuilt.size() == 2);
+    CHECK(rebuilt[0]->content_id() == greet->content_id());
+    CHECK(rebuilt[1]->content_id() == whole->content_id());
+
+    // No emit-set, no section: the lean manifest of a weave that declares none.
+    const std::vector<std::shared_ptr<const Schema>> none;
+    Unverified lean = parse(serialize(encode_manifest(accepted, *counter, nullptr, nullptr, &none)));
+    Admission la = admit(lean, manifest_schema());
+    REQUIRE(la.ok());
+    CHECK(la.value().get("emits") == nullptr);
+    CHECK(la.value().get("referenced") == nullptr);
+}
+
+TEST_CASE("a manifest whose declaration carries two definitions of one component travels "
+          "with both, is refused at the second, and leaves nothing claimed") {
+    // The independent review's Box/Box2 finding. The encoder once deduplicated
+    // `referenced` by name: the second Part was dropped, Box2 was reconstructed over
+    // the first Part, and the artifact loaded advertising a Box2 it never declared.
+    auto part_a = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    auto part_b = SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
+    auto box = SchemaBuilder("Box", 1).message("part", part_a).build();
+    auto box2 = SchemaBuilder("Box2", 1).message("part", part_b).build();
+    auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+
+    for (const auto& accepted : {std::vector<std::shared_ptr<const Schema>>{box, box2},
+                                 std::vector<std::shared_ptr<const Schema>>{box2, box}}) {
+        Unverified u = parse(serialize(encode_manifest(accepted, *counter)));
+        Admission a = admit(u, manifest_schema());
+        REQUIRE(a.ok()); // the meta-schema cannot know; the registry can
+        const Value& manifest = a.value();
+        // BOTH definitions crossed: the manifest says what the weave said.
+        REQUIRE(manifest.get("referenced") != nullptr);
+        REQUIRE(manifest.get("referenced")->as_list().size() == 2);
+
+        Registry deps;
+        {
+            SchemaClaimScope scope;
+            CHECK_THROWS_AS(decode_referenced(manifest, deps, scope), SchemaConflict);
+            CHECK(deps.size() == 1); // the first Part, held by the scope until it goes
+        }
+        CHECK(deps.size() == 0); // ...and it went: a refused manifest leaves nothing
+        Registry forever;
+        CHECK_THROWS_AS(decode_referenced(manifest, forever), SchemaConflict);
+    }
+
+    // The agreeing shape of the same declaration: two doors sharing ONE Part.
+    auto whole = SchemaBuilder("Whole", 1).list("parts", type_message(part_a)).build();
+    const std::vector<std::shared_ptr<const Schema>> agree{box, whole};
+    Unverified u = parse(serialize(encode_manifest(agree, *counter)));
+    Admission a = admit(u, manifest_schema());
+    REQUIRE(a.ok());
+    REQUIRE(a.value().get("referenced")->as_list().size() == 1);
+    Registry deps;
+    SchemaClaimScope scope;
+    decode_referenced(a.value(), deps, scope);
+    CHECK(deps.lookup("Part", 1)->content_id() == part_a->content_id());
+    const Cell::Array& doors = a.value().get("accepted")->as_list();
+    CHECK(decode_schema(*doors[0].as_message(), deps)->content_id() == box->content_id());
+    CHECK(decode_schema(*doors[1].as_message(), deps)->content_id() == whole->content_id());
+}
+
+TEST_CASE("an externally supplied manifest is held to the same rules: an emitted shape "
+          "whose component never travelled is refused cleanly, and a v4 manifest does not "
+          "pass the v5 door") {
+    SUBCASE("an `emits` entry over an unresolved component") {
+        // Hand-built, not SDK output: `emits` names a shape nesting `Missing v1`, and no
+        // `referenced` section brings it. Reconstruction throws exactly as an accepted
+        // door's would, and the load refuses cleanly instead of guessing.
+        auto missing = SchemaBuilder("Missing", 1).field("x", Kind::Int).build();
+        auto carrier = SchemaBuilder("Carrier", 1).message("m", missing).build();
+        auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+        Value m(manifest_schema());
+        m.set("accepted", Cell::list({}));
+        m.set("state", Cell::message(encode_schema(*counter)));
+        m.set("emits", Cell::list({Cell::message(encode_schema(*carrier))}));
+        Unverified u = parse(serialize(m));
+        Admission a = admit(u, manifest_schema());
+        REQUIRE(a.ok());
+        Registry deps;
+        CHECK_THROWS_AS(decode_schema(*a.value().get("emits")->as_list()[0].as_message(), deps),
+                        std::runtime_error);
+        CHECK(deps.size() == 0);
+    }
+    SUBCASE("the previous manifest version is a different shape at this door") {
+        // zen.Manifest v4, spelled as it was: the same sections minus `emits`. A v8
+        // image's descriptor produces exactly this; the ABI version gate refuses that
+        // image before its manifest is read, and this pins that the manifest door
+        // would not silently pass it either.
+        auto v4 = SchemaBuilder("zen.Manifest", 4)
+                      .list("referenced", type_message(schema_desc_schema()), /*required=*/false)
+                      .list("accepted", type_message(schema_desc_schema()))
+                      .message("state", schema_desc_schema())
+                      .message("requests", capability_ask_schema(), /*required=*/false)
+                      .list("claims", type_message(schema_desc_schema()), /*required=*/false)
+                      .build();
+        CHECK(v4->content_id() != manifest_schema()->content_id());
+        auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+        Value old(v4);
+        old.set("accepted", Cell::list({}));
+        old.set("state", Cell::message(encode_schema(*counter)));
+        Unverified u = parse(serialize(old));
+        REQUIRE(u.well_formed());
+        Admission a = admit(u, manifest_schema());
+        CHECK_FALSE(a.ok());
+        CHECK(a.first_error().kind == ErrorKind::SchemaMismatch);
+    }
+}
+
 } // TEST_SUITE

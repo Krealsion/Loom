@@ -1355,6 +1355,281 @@ TEST_CASE("BL-0: a registration refused mid-accept-set publishes nothing") {
     CHECK(bus.weave(incumbent.id) != nullptr);
 }
 
+// ---- declared vocabulary is agreed at admission (P-LOOM-07) ---------------------------
+//
+// Native half of the case a stale desktop opened: every shape a weave DECLARES —
+// accepted, claimed, emitted, persisted — and every component those shapes nest is
+// claimed in the one registration transaction, so two participants that disagree about
+// a (name, version) refuse at the door in either order, whichever list each declared it
+// in, and a weave whose own declaration contradicts itself never registers at all.
+// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+namespace sa {
+inline std::shared_ptr<const Schema> greet_msg() {
+    static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> greet_text() {
+    static const auto s = SchemaBuilder("Greet", 1).field("text", Kind::Text).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> part_old() {
+    static const auto s = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> part_new() {
+    static const auto s =
+        SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> box() { // Box v1 { part: Part {a} }
+    static const auto s = SchemaBuilder("Box", 1).message("part", part_old()).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> box2() { // Box2 v1 { part: Part {a, b} }
+    static const auto s = SchemaBuilder("Box2", 1).message("part", part_new()).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> whole() { // Whole v1 { parts: List<Part {a}> }
+    static const auto s =
+        SchemaBuilder("Whole", 1).list("parts", type_message(part_old())).build();
+    return s;
+}
+// A probe that DECLARES an emit-set and/or a claim-set, registered under `grant`.
+inline Registered declare(Switchboard& bus, std::vector<std::shared_ptr<const Schema>> accept,
+                          std::vector<std::shared_ptr<const Schema>> emits,
+                          std::vector<std::shared_ptr<const Schema>> claims = {},
+                          Grant grant = Grant{}.allow_any()) {
+    auto owned = std::make_unique<ProbeWeave>(std::move(accept));
+    owned->declared_emits = std::move(emits);
+    owned->declared_claims = std::move(claims);
+    ProbeWeave* raw = owned.get();
+    WeaveId id = bus.register_weave(std::move(owned), std::move(grant));
+    return {id, raw};
+}
+// A raw weave whose STATE nests Part {a}: `Keep v1 { part: Part }`. The state route
+// into the same wall, which the fixtures' Counter cannot exercise.
+class KeepsPart final : public Weave {
+public:
+    static std::shared_ptr<const Schema> keep_schema() {
+        static const auto s = SchemaBuilder("Keep", 1).message("part", part_old()).build();
+        return s;
+    }
+    std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
+        return {ping_schema()};
+    }
+    void handle(const Message&, Bus&) override {}
+    Value snapshot() const override {
+        Value part(part_old());
+        part.set("a", Cell::integer(1));
+        Value v(keep_schema());
+        v.set("part", Cell::message(std::move(part)));
+        return v;
+    }
+    Value policy() const override {
+        Value v(loom::lifecycle_policy_schema());
+        v.set("max_reloads", Cell::integer(2));
+        v.set("revive_from_last_good", Cell::boolean(true));
+        return v;
+    }
+    void revive(const Value&) override {}
+};
+} // namespace sa
+
+TEST_CASE("schema admission: an emitter's definition meets an acceptor's at the door, in "
+          "both orders; identical definitions share one entry; a new version coexists") {
+    using namespace sa;
+    SUBCASE("emitter first") {
+        Switchboard bus;
+        Registered emitter = declare(bus, {}, {greet_text()});
+        REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+        CHECK_THROWS_AS(reg(bus, {greet_msg()}), SchemaConflict);
+        CHECK(bus.list_weaves().size() == 1);
+        CHECK(bus.weave(emitter.id) != nullptr);
+    }
+    SUBCASE("acceptor first") {
+        Switchboard bus;
+        Registered acceptor = reg(bus, {greet_msg()});
+        CHECK_THROWS_AS(declare(bus, {}, {greet_text()}), SchemaConflict);
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+        CHECK(bus.list_weaves().size() == 1);
+        CHECK(bus.weave(acceptor.id) != nullptr);
+    }
+    SUBCASE("identical definitions, however declared, are one published entry") {
+        Switchboard bus;
+        Registered acceptor = reg(bus, {greet_msg()});
+        auto twin = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build(); // same content
+        Registered emitter = declare(bus, {}, {twin});
+        const Schema* canonical = bus.resolve_schema("Greet", 1).get();
+        CHECK(canonical == bus.emitted_schemas(emitter.id).at(0).get()); // adopted the owner
+        REQUIRE(bus.unregister_weave(acceptor.id) != nullptr);
+        CHECK(bus.resolve_schema("Greet", 1).get() == canonical); // still the same one
+    }
+    SUBCASE("a genuinely distinct version is a different shape and coexists") {
+        Switchboard bus;
+        Registered v1 = reg(bus, {greet_msg()});
+        auto v2 = SchemaBuilder("Greet", 2).field("text", Kind::Text).build();
+        Registered emitter = declare(bus, {}, {v2});
+        CHECK(bus.resolve_schema("Greet", 1) != nullptr);
+        CHECK(bus.resolve_schema("Greet", 2) != nullptr);
+        CHECK(bus.weave(v1.id) != nullptr);
+        CHECK(bus.weave(emitter.id) != nullptr);
+    }
+}
+
+TEST_CASE("schema admission: the component closure is claimed, so a disagreement nested "
+          "under DIFFERENT outer names refuses — through the accept, claim and state routes") {
+    using namespace sa;
+    SUBCASE("accept against accept, both orders") {
+        Switchboard bus;
+        Registered a = reg(bus, {box()});
+        REQUIRE(bus.resolve_schema("Part", 1) != nullptr); // the component, by definition
+        CHECK_THROWS_AS(reg(bus, {box2()}), SchemaConflict);
+        CHECK(bus.resolve_schema("Box2", 1) == nullptr);
+        CHECK(bus.weave(a.id) != nullptr);
+
+        Switchboard other;
+        Registered b = reg(other, {box2()});
+        CHECK_THROWS_AS(reg(other, {box()}), SchemaConflict);
+        CHECK(other.resolve_schema("Part", 1)->content_id() == part_new()->content_id());
+        CHECK(other.weave(b.id) != nullptr);
+    }
+    SUBCASE("a CLAIMED shape's component against an accepted one's") {
+        Switchboard bus;
+        Registered claimant = declare(bus, {ping_schema()}, {}, {box2()});
+        REQUIRE(bus.resolve_schema("Part", 1) != nullptr);
+        CHECK_THROWS_AS(reg(bus, {box()}), SchemaConflict);
+        CHECK(bus.weave(claimant.id) != nullptr);
+    }
+    SUBCASE("an EMITTED shape's component against an accepted one's") {
+        Switchboard bus;
+        Registered emitter = declare(bus, {}, {whole()}); // List<Part {a}>
+        CHECK_THROWS_AS(reg(bus, {box2()}), SchemaConflict);
+        CHECK(bus.weave(emitter.id) != nullptr);
+    }
+    SUBCASE("a STATE's component against an accepted one's, both orders") {
+        Switchboard bus;
+        WeaveId keeper = bus.register_weave(std::make_unique<KeepsPart>(), Grant{});
+        REQUIRE(bus.resolve_schema("Keep", 1) != nullptr);
+        REQUIRE(bus.resolve_schema("Part", 1) != nullptr);
+        CHECK_THROWS_AS(reg(bus, {box2()}), SchemaConflict);
+        CHECK(bus.weave(keeper) != nullptr);
+
+        Switchboard other;
+        Registered first = reg(other, {box2()});
+        CHECK_THROWS_AS(other.register_weave(std::make_unique<KeepsPart>(), Grant{}),
+                        SchemaConflict);
+        CHECK(other.resolve_schema("Keep", 1) == nullptr);
+        CHECK(other.weave(first.id) != nullptr);
+    }
+}
+
+TEST_CASE("schema admission: a declaration that contradicts itself never registers, "
+          "publishes nothing, and leaves the incumbent and the next registration untouched") {
+    using namespace sa;
+    Switchboard bus;
+    Registered incumbent = reg(bus, {ping_schema()});
+    const std::size_t before = bus.list_weaves().size();
+
+    // Box nests Part {a}; Box2 nests Part {a, b}: one accept-set, two Parts.
+    CHECK_THROWS_AS(reg(bus, {box(), box2()}), SchemaConflict);
+    CHECK_THROWS_AS(reg(bus, {box2(), box()}), SchemaConflict); // and the other order
+    // ...and split across lists it is the same contradiction.
+    CHECK_THROWS_AS(declare(bus, {box()}, {box2()}), SchemaConflict);
+    CHECK_THROWS_AS(declare(bus, {box()}, {}, {box2()}), SchemaConflict);
+
+    CHECK(bus.resolve_schema("Box", 1) == nullptr);
+    CHECK(bus.resolve_schema("Box2", 1) == nullptr);
+    CHECK(bus.resolve_schema("Part", 1) == nullptr);
+    CHECK(bus.list_weaves().size() == before);
+    CHECK(bus.weave(incumbent.id) != nullptr);
+    // A consistent declaration follows, with the identity it declared.
+    Registered fine = reg(bus, {box(), whole()});
+    CHECK(bus.resolve_schema("Part", 1)->content_id() == part_old()->content_id());
+    CHECK(bus.weave(fine.id) != nullptr);
+}
+
+TEST_CASE("schema admission: the emit-set is discoverable, re-claimed across a code swap, and "
+          "reclaimed with its declarer") {
+    using namespace sa;
+    Switchboard bus;
+    CHECK(bus.emitted_schemas(WeaveId{99}).empty()); // an unknown id declares nothing
+    Registered emitter = declare(bus, {ping_schema()}, {greet_msg()});
+    const auto declared = bus.emitted_schemas(emitter.id);
+    REQUIRE(declared.size() == 1);
+    CHECK(declared[0]->name() == "Greet");
+    REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
+
+    Value snap(counter_schema());
+    snap.set("count", Cell::integer(7));
+    ReviveOutcome ro = bus.swap_state(emitter.id, loom::serialize(snap));
+    CHECK(ro.revived);
+    CHECK(bus.resolve_schema("Greet", 1) != nullptr); // the successor re-declared it
+    CHECK(bus.emitted_schemas(emitter.id).size() == 1);
+
+    REQUIRE(bus.unregister_weave(emitter.id) != nullptr);
+    CHECK(bus.resolve_schema("Greet", 1) == nullptr);
+    CHECK(bus.emitted_schemas(emitter.id).empty());
+    // With the declarer gone a different definition may publish (LIFE-08).
+    Registered other = reg(bus, {greet_text()});
+    CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+    CHECK(bus.weave(other.id) != nullptr);
+}
+
+TEST_CASE("schema admission: an emitted-only shape is offered to a wildcard acceptor, "
+          "publication still reaches no wildcard, and a declaration grants no authority") {
+    using namespace sa;
+    Switchboard bus;
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+
+    // The console's shape: AcceptMode::AnyRegistered, accepting any shape the bus
+    // can resolve. Before this phase an emitted-only shape resolved to nothing, so
+    // a directed send of it was refused NotAccepted; now the emitter's declaration
+    // is what makes it resolvable — a deliberate widening of discovery.
+    auto console = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
+    ProbeWeave* console_raw = console.get();
+    const WeaveId console_id =
+        bus.register_weave(std::move(console), Grant{}, AcceptMode::AnyRegistered);
+
+    Value greet(greet_msg());
+    greet.set("msg", Cell::text("hello"));
+    bus.send(console_id, Message(greet)); // nobody has declared Greet yet
+    bus.drain_until_idle();
+    REQUIRE(tap.size() == 1);
+    CHECK(tap[0].kind == EventKind::Refused);
+    CHECK(tap[0].reason == RefusalReason::NotAccepted);
+
+    Registered emitter = declare(bus, {ping_schema()}, {greet_msg()});
+    tap.clear();
+    bus.send(console_id, Message(greet));
+    bus.drain_until_idle();
+    REQUIRE(tap.size() == 1);
+    CHECK(tap[0].kind == EventKind::Delivered);
+    CHECK(console_raw->handled_names == std::vector<std::string>{"Greet"});
+
+    // A PUBLICATION fans out to listed doors only, exactly as before: a wildcard
+    // acceptor is not a listener, and discovery widened nothing here.
+    CHECK(bus.publish(Message(greet)) == 0);
+
+    // THE DENIED-SEND CONTROL: a weave that DECLARES Greet under a grant with no
+    // rule for it is refused CapabilityDenied when it speaks — declaring a shape
+    // says what it means, never that this weave may say it.
+    Registered restricted = declare(bus, {ping_schema()}, {greet_msg()}, {}, Grant{});
+    restricted.weave->on_handle = [&](const Message&, Bus& gated, ProbeWeave&) {
+        gated.send(console_id, Message(greet));
+    };
+    tap.clear();
+    bus.send(restricted.id, Message(ping(1)));
+    bus.drain_until_idle();
+    REQUIRE(tap.size() == 2); // the Ping delivered, the Greet refused
+    CHECK(tap[0].kind == EventKind::Delivered);
+    CHECK(tap[1].kind == EventKind::Refused);
+    CHECK(tap[1].reason == RefusalReason::CapabilityDenied);
+    CHECK(console_raw->handled_names.size() == 1); // the first Greet only
+    (void)emitter;
+}
+
 TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabulary") {
     // Load, unload, repeat — the shape in which unbounded retention was first
     // observed, where all 300 shapes stayed resolvable to the end.

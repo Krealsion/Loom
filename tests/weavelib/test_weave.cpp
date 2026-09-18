@@ -91,6 +91,27 @@
 //                                   bytes fail the gate. One artifact, two publications,
 //                                   the two halves of MSG-08's publication rule
 //                                   (FRIC-0): unheard is not refused, undelivered is.
+//   ZEN_WEAVE_EMITS_GREET         — DECLARES Greet v1 {msg} in its emit-set (a raw
+//                                   `emitted_schemas()` override, so the manifest's
+//                                   `emits` section rides ABI v9) and sends one on Ping.
+//                                   The loaded EMITTER whose definition must meet every
+//                                   acceptor's at load, not at the first delivery.
+//   ZEN_WEAVE_GREET_CONFLICT      — with EMITS_GREET: the emitter declares Greet v1
+//                                   {text} instead — the divergent emitter, both orders.
+//   ZEN_WEAVE_NEST_OLD            — accepts Box v1 { part: Part v1 {a} }.
+//   ZEN_WEAVE_NEST_NEW            — accepts Box2 v1 { part: Part v1 {a, b} }: a
+//                                   nested-only disagreement with NEST_OLD, whose outer
+//                                   names differ, so only the component closure sees it.
+//   ZEN_WEAVE_NEST_MIXED          — accepts BOTH Box and Box2: ONE artifact whose own
+//                                   declaration carries two Part v1 definitions. Must be
+//                                   refused, never loaded advertising a substituted Box2.
+//   ZEN_WEAVE_NEST_MIXED_REVERSED — the same two doors declared in the other order.
+//   ZEN_WEAVE_NEST_AGREE          — accepts Box and Whole v1 { List<Part v1 {a}> }: two
+//                                   doors sharing ONE Part definition — the agreeing
+//                                   control, which loads and keeps its identity.
+//   ZEN_WEAVE_PING_DRIFT          — Ping v1 {seq, extra}: the guide's copied weave that
+//                                   kept a shape's name and added a field (P-LOOM-06's
+//                                   witness at the loaded altitude).
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
@@ -213,8 +234,18 @@ std::int64_t detonate() {
 /// logical sequence, a TCP port on loopback, a parked descriptor number, the
 /// magic crash value, or a sentinel outcome. It is never a Loom delivery seq.
 /// Read the variant's own handler before assuming which one you are looking at.
-std::shared_ptr<const Schema> ping_schema() {
+[[maybe_unused]] std::shared_ptr<const Schema> ping_schema() { // unused by the nested variants
+#if defined(ZEN_WEAVE_PING_DRIFT)
+    // THE COPIED WEAVE THAT KEPT A SHAPE'S NAME (docs/guides/writing-a-weave.md): the
+    // same `Ping v1`, one field richer. Loaded beside the plain fixture it must be
+    // refused at load with the registry's sentence, never admitted to disagree later.
+    static const auto s = SchemaBuilder("Ping", 1)
+                              .field("seq", Kind::Int)
+                              .field("extra", Kind::Int)
+                              .build();
+#else
     static const auto s = SchemaBuilder("Ping", 1).field("seq", Kind::Int).build();
+#endif
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> pong_schema() { // unused by the silent variant
@@ -277,18 +308,50 @@ std::shared_ptr<const Schema> ping_schema() {
                               .build();
     return s;
 }
-[[maybe_unused]] std::shared_ptr<const Schema> greet_schema() { // only the accepted-drift variants
-#if defined(ZEN_WEAVE_ACTIVATES_CONFLICT)
+[[maybe_unused]] std::shared_ptr<const Schema> greet_schema() { // the drift and emit variants
+#if defined(ZEN_WEAVE_ACTIVATES_CONFLICT) || defined(ZEN_WEAVE_GREET_CONFLICT)
     // The SAME (name, version) carrying DIFFERENT content — a cross-library
     // disagreement, which the registry's agreement wall refuses at load. Used to
     // make the kernel registry's admission of a REJECTED candidate's schemas
-    // observable from outside.
+    // observable from outside, and (ZEN_WEAVE_GREET_CONFLICT) as the shape a
+    // divergent EMITTER declares.
     static const auto s = SchemaBuilder("Greet", 1).field("text", Kind::Text).build();
 #else
     static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
 #endif
     return s;
 }
+#if defined(ZEN_WEAVE_NEST_OLD) || defined(ZEN_WEAVE_NEST_NEW) || defined(ZEN_WEAVE_NEST_MIXED)
+// THE NESTED-COMPONENT SHAPES (the schema-admission phase). TWO DEFINITIONS OF ONE
+// PUBLISHED (name, version) LIVE HERE ON PURPOSE: `part_old()` and `part_new()` both say
+// `Part v1`, exactly as Zengine's `InventoryPane v1` did before and after it gained a
+// field. A correct program compiles one of them; the NEST_MIXED variant declares a door
+// over each so one artifact's own manifest carries the contradiction, and the two
+// single-door variants play the two sides of a cross-artifact disagreement whose outer
+// names differ (`Box` vs `Box2`) — a disagreement only the component closure can see.
+std::shared_ptr<const Schema> part_old() {
+    static const auto s = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    return s;
+}
+std::shared_ptr<const Schema> part_new() {
+    static const auto s =
+        SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
+    return s;
+}
+[[maybe_unused]] std::shared_ptr<const Schema> box_schema() { // nests Part v1 {a}
+    static const auto s = SchemaBuilder("Box", 1).message("part", part_old()).build();
+    return s;
+}
+[[maybe_unused]] std::shared_ptr<const Schema> box2_schema() { // nests Part v1 {a, b}
+    static const auto s = SchemaBuilder("Box2", 1).message("part", part_new()).build();
+    return s;
+}
+[[maybe_unused]] std::shared_ptr<const Schema> whole_schema() { // List<Part v1 {a}>: agrees with Box
+    static const auto s =
+        SchemaBuilder("Whole", 1).list("parts", type_message(part_old())).build();
+    return s;
+}
+#endif
 [[maybe_unused]] std::shared_ptr<const Schema> sensehealth_schema() { // only the senses variant
     // The Sense this artifact declares it can claim. Declared in the manifest's
     // claim-set (v6), so the host registers it at load and a consumer can ask
@@ -407,6 +470,16 @@ public:
         // Ping drives the claim/read-back parity case; SenseProbe asks this
         // artifact to observe a named OFFICE and report the identity verbatim.
         return {ping_schema(), senseprobe_schema()};
+#elif defined(ZEN_WEAVE_NEST_MIXED_REVERSED)
+        return {box2_schema(), box_schema()}; // the contradiction, the other way round
+#elif defined(ZEN_WEAVE_NEST_MIXED)
+        return {box_schema(), box2_schema()}; // ONE declaration, two Part v1 definitions
+#elif defined(ZEN_WEAVE_NEST_AGREE)
+        return {box_schema(), whole_schema()}; // two doors, one shared Part v1
+#elif defined(ZEN_WEAVE_NEST_OLD)
+        return {box_schema()};
+#elif defined(ZEN_WEAVE_NEST_NEW)
+        return {box2_schema()};
 #else
         return {ping_schema()};
 #endif
@@ -418,6 +491,15 @@ public:
     /// Senses does this artifact provide?" before it has claimed anything.
     std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
         return {sensehealth_schema()};
+    }
+#endif
+
+#if defined(ZEN_WEAVE_EMITS_GREET)
+    /// THE DECLARED EMIT-SET (v9), from a raw `loom::Weave`. It rides the manifest's
+    /// `emits` section, so the host claims this artifact's own definition of Greet v1
+    /// into the agreement wall at load — where a divergent acceptor meets it.
+    std::vector<std::shared_ptr<const Schema>> emitted_schemas() const override {
+        return {greet_schema()};
     }
 #endif
 
@@ -558,6 +640,14 @@ public:
             }
             return; // never falls through to the Ping path below ('seq' is absent)
         }
+#endif
+#if defined(ZEN_WEAVE_NEST_OLD) || defined(ZEN_WEAVE_NEST_NEW) || defined(ZEN_WEAVE_NEST_MIXED)
+        // The nested-shape variants hear Box/Box2/Whole, none of which carries `seq`.
+        // What they are for is decided at LOAD, by the agreement wall; a delivery
+        // here is counted and nothing more.
+        (void)bus;
+        ++count_;
+        return;
 #endif
         const std::int64_t seq = in.payload.get("seq")->as_int();
 #ifdef ZEN_WEAVE_CRASH_ON_MAGIC
@@ -865,6 +955,20 @@ public:
             Value res(forkresult_schema());
             res.set("forked", Cell::integer(forked));
             bus.send(in.reply_to, Message(std::move(res)));
+        }
+#elif defined(ZEN_WEAVE_EMITS_GREET)
+        // The declared emitter SAYS what it declared: a Greet built against its own
+        // definition (`msg`, or `text` under GREET_CONFLICT). Whether that reaches a
+        // door is the host's business; that its definition was agreed at load is the
+        // fixture's whole point.
+        {
+            Value greet(greet_schema());
+#if defined(ZEN_WEAVE_GREET_CONFLICT)
+            greet.set("text", Cell::text("greet " + std::to_string(seq)));
+#else
+            greet.set("msg", Cell::text("greet " + std::to_string(seq)));
+#endif
+            bus.send(in.reply_to, Message(std::move(greet)));
         }
 #else
         Value pong(pong_schema());

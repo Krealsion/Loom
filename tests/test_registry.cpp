@@ -207,6 +207,33 @@ TEST_CASE("BL-0: the same shape twice in one request is one claim") {
     CHECK_FALSE(reg.contains("Foo", 1));
 }
 
+TEST_CASE("two definitions of one shape inside ONE request refuse, and publish nothing") {
+    // The wall inside a single declaration: a weave whose own closure carries
+    // `Part v1 {a}` under one door and `Part v1 {a, b}` under another meets it here,
+    // before the current population is even consulted. Nothing in the request is
+    // published — not the innocent shapes beside the pair, and not the first Part.
+    Registry reg;
+    auto part_a = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    auto part_b = SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
+    CHECK_THROWS_AS(reg.claim({shape("Foo"), part_a, shape("Bar"), part_b}), SchemaConflict);
+    CHECK(reg.size() == 0);
+    CHECK_FALSE(reg.contains("Part", 1));
+    CHECK_FALSE(reg.contains("Foo", 1));
+    // The same pair the other way round is the same contradiction.
+    CHECK_THROWS_AS(reg.claim({part_b, part_a}), SchemaConflict);
+    CHECK(reg.size() == 0);
+    // ...and the exception names the shape, with both identities.
+    try {
+        reg.claim({part_a, part_b});
+        FAIL("a contradictory request was accepted");
+    } catch (const SchemaConflict& c) {
+        CHECK(c.schema_name() == "Part");
+        CHECK(c.schema_version() == 1);
+        CHECK(c.existing_id() == part_a->content_id());
+        CHECK(c.incoming_id() == part_b->content_id());
+    }
+}
+
 TEST_CASE("BL-0: a null schema in a claim refuses before anything is published") {
     Registry reg;
     CHECK_THROWS_AS(reg.claim({shape("Foo"), nullptr}), std::invalid_argument);

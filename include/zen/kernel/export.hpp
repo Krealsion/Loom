@@ -395,9 +395,16 @@ ZenStatus do_describe(void* instance, ZenByteSink sink) {
         // artifact's Sense capability is discoverable at load rather than after
         // some runtime claim accidentally reveals a shape.
         const std::vector<std::shared_ptr<const loom::Schema>> claims = s->claimed_schemas();
+        // The declared emit-set (v9, zen.Manifest v5) rides it too, BY DEFINITION:
+        // the host claims these into its agreement wall beside the accept-set, so a
+        // loaded emitter's `Pong v1` and a divergent acceptor's `Pong v1` refuse at
+        // load instead of at the first delivery. Read through the same virtual a
+        // native weave answers, so a raw `loom::Weave` that declares nothing sends
+        // no section. Vocabulary only: the host derives no grant from it.
+        const std::vector<std::shared_ptr<const loom::Schema>> emits = s->emitted_schemas();
         sink_write(sink, loom::serialize(loom::encode_manifest(accepted, state.schema(),
                                                                      ask ? &*ask : nullptr,
-                                                                     &claims)));
+                                                                     &claims, &emits)));
         return ZEN_OK;
     } catch (...) {
         return ZEN_ERR;

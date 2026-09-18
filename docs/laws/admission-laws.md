@@ -70,14 +70,27 @@ the content-id derived from the shape, never the C++ type.
 MEANS
 - evolving a shape means publishing a new version;
 - two parties agree across a `.so` seam iff their content-ids match
-  (`SchemaConflict` otherwise);
+  (`SchemaConflict` otherwise) — and "agree" is checked at the door for **every
+  shape each party declares** (accepted, claimed, emitted, persisted) and every
+  component those shapes nest, natively and across the seam alike, so a divergent
+  emitter refuses at registration or load rather than at its first delivery
+  ([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md));
+- a declaration that contradicts itself — two definitions of one `(name, version)`
+  nested under different doors of one weave, or two entries of one manifest — is
+  refused whole, never admitted with one definition substituted for the other;
 - `same_identity` is the full `(name, version, content_id)` triple.
 
 DOES NOT MEAN
-- that old versions vanish — both stay registered and distinct.
+- that old versions vanish — both stay registered and distinct;
+- that agreeing on a shape grants anything: what a party may *send* is its grant's
+  business alone ([GATE-03](#gate-03--authorization-is-not-conformance),
+  [GATE-05](#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides)).
 
-PROVEN BY — `src/registry.cpp`, `src/schema.cpp`; suites `registry`, `compat`,
-`schema_codec`.
+PROVEN BY — `src/registry.cpp`, `src/schema.cpp` (`collect_referenced`),
+`src/switchboard/switchboard.cpp` (`register_weave`), `src/kernel/kernel.cpp`
+(`reconstruct`, `reload_from`); suites `registry`, `compat`, `schema_codec`,
+`switchboard` and `kernel` (the "schema admission" cases), `weave` (the copied
+weave), `isolation`.
 
 ## GATE-05 — Baseline authority is admission-time; delegated authority is live; effective authority decides
 

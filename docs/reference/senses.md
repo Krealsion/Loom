@@ -40,10 +40,14 @@ class Lamp : public loom::WeaveBase<Lamp, LampState,
 ```
 
 `Claims<T...>` is a third declaration list beside `Accept<...>` and `Emit<...>`,
-because a claim is neither a delivered message nor an emitted one. Unlike
-`Emit<...>` it is **enforced** (an undeclared shape refuses) and it **registers**
-at mount — which is what makes a participant's Sense capability discoverable
-before it has claimed anything.
+because a claim is neither a delivered message nor an emitted one. Like the
+other two lists it **registers** at mount, by definition and with every shape it
+nests — which is what makes a participant's Sense capability discoverable before
+it has claimed anything, and what makes two participants that spell one Sense
+differently disagree at the door
+([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md)). Unlike
+`Emit<...>` it is also **enforced**: an undeclared shape refuses at the claim
+doors, where `Emit<...>` gates no send.
 
 `SenseClaimResult{accepted, why, revision}` is the verdict. `why` is one of
 `Undeclared`, `OfficeNotHeld`, `GateRefused`.

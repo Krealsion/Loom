@@ -37,9 +37,20 @@
 
 namespace loom {
 
-/// The shapes a Weave accepts (its doors) and the shapes it emits. Emit is the
-/// reserved hook for completing the wiring silhouette later; it is informational
-/// now and not enforced at publish.
+/// The shapes a Weave accepts (its doors) and the shapes it declares it emits.
+///
+/// BOTH LISTS REGISTER THEIR DEFINITIONS AT MOUNT, with every component they
+/// nest, in one transaction with the state shape and the claim-set: that is how
+/// a producer's `Pong v1` and an acceptor's `Pong v1` are compared at the door
+/// rather than at the first refused delivery, natively and across a library seam
+/// alike (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
+///
+/// What `Emit<...>` does NOT do: it grants nothing (a trusted `mount<>` derives
+/// the weave's send rules from it, `mount_granted` ignores it for authority, and
+/// a loaded artifact's grant is the host's decision either way), and it is not
+/// an exhaustive send list — publishing a shape absent from it is not refused
+/// for that reason, which keeps a router or forwarder that speaks shapes chosen
+/// at runtime authorable. The emit-enforcement seam stays open, see `Mail`.
 template <class... S>
 struct Accept {};
 template <class... S>
@@ -51,14 +62,14 @@ struct Emit {};
 /// what may be DELIVERED here, `Emit<...>` is what may be SENT from here, and
 /// `Claims<...>` is what this weave may say it currently observes to be so.
 /// Reusing `Emit<...>` was the obvious shortcut and was rejected twice over — a
-/// Sense is not an emitted message, and `Emit` is informational and does not
-/// register, so discovery would still have to wait for a runtime claim to
-/// accidentally reveal the shape.
+/// Sense is not an emitted message, and a shape declared as sendable would say
+/// nothing about what this weave may CLAIM.
 ///
-/// Unlike `Emit<...>`, this IS enforced and it DOES register: the schemas are
-/// registered at mount (so the shape resolves and a consumer can ask what this
-/// weave can claim before anything has been claimed), and claiming a shape that
-/// is not in this list is refused (`SenseRefusal::Undeclared`).
+/// All three lists register at mount (so every declared shape resolves, and a
+/// consumer can ask what this weave hears, says and can claim before anything
+/// has happened). What is particular to this one is that it is ENFORCED at the
+/// claim doors: claiming a shape that is not in this list is refused
+/// (`SenseRefusal::Undeclared`), where `Emit<...>` gates no send.
 template <class... S>
 struct Claims {};
 
@@ -79,8 +90,9 @@ struct LifecyclePolicy {
 /// will one day live. It is deliberately NOT enforced now: it is not yet known
 /// whether every Weave's emit-set is statically enumerable (a router/forwarder
 /// may emit shapes chosen at runtime), so closing that gate before its shape is
-/// proven would couple the substrate to a guess. The declaration is kept honest
-/// by test instead; the gate is left off with intent. (The construction layer's
+/// proven would couple the substrate to a guess. The declaration REGISTERS the
+/// shapes it names (vocabulary agreed at mount, see `Emit` above) and is kept
+/// honest by test; the send gate is left off with intent. (The construction layer's
 /// own poke answers go directly through the bus — substrate machinery, not a
 /// maker emission — so a future Mail emit-gate would not, and should not,
 /// govern them; their authority is still the grant, see allow_poke_answers.)
@@ -513,9 +525,14 @@ public:
         return out;
     }
 
-    /// The shapes this Weave declares it emits. Informational (the reserved hook);
-    /// not enforced at publish in this phase.
-    std::vector<std::shared_ptr<const loom::Schema>> emitted_schemas() const {
+    /// The shapes this Weave declares it emits — the maker's `Emit<...>` alone,
+    /// never the construction layer's own answers (those are granted by mount(),
+    /// not declared by the maker). Registered at mount by definition, with the
+    /// accept-set, so a divergent definition under a published (name, version)
+    /// refuses the registration rather than the first delivery. `final` for the
+    /// same reason the accept-set is: a woven weave must not be able to declare
+    /// one emit-set and register another. Not a send gate (see `Emit`).
+    std::vector<std::shared_ptr<const loom::Schema>> emitted_schemas() const final {
         return {schema_of<E>()...};
     }
 
