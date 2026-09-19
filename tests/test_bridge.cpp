@@ -243,12 +243,14 @@ std::shared_ptr<const loom::Schema> unknown_schema() {
     return s;
 }
 
-// Build a raw Send frame: [u8 kind][u64 wire_sender][u64 target][u64 wire_reply_to][u64 corr][payload].
+// Build a raw Send frame: [u8 kind][u8 flags][u64 wire_sender][u64 target][u64 wire_reply_to]
+// [u64 corr][bytes role][payload].
 std::string make_send_frame(std::uint64_t wire_sender, std::uint64_t target,
                             std::uint64_t wire_reply_to, std::uint64_t correlation,
                             std::string_view payload) {
     std::string frame;
     put_u8(frame, kEmitSend);
+    put_u8(frame, 0); // flags
     put_u64(frame, wire_sender);
     put_u64(frame, target);
     put_u64(frame, wire_reply_to);
@@ -1046,6 +1048,7 @@ TEST_CASE("operator-protocol: the sender is stamped from the connection — a FO
     greet.set("msg", loom::Cell::text("forged"));
     std::string frame;
     put_u8(frame, kEmitSend);
+    put_u8(frame, 0);             // flags
     put_u64(frame, kVictim);      // forged wire_sender — the bridge MUST ignore this
     put_u64(frame, h.gid.value);  // target: the greeter
     put_u64(frame, kVictim);      // forged wire_reply_to — the bridge MUST ignore this too
@@ -2618,7 +2621,9 @@ TEST_CASE("identity: a disconnected session's proxy leaves the bus, and a late a
         CHECK(wait_until([&] { return h.bus.list_weaves().size() == 2; }, 2000));
     } // the socket closes here
     CHECK(wait_until([&] { return h.bus.list_weaves().size() == 1; }, 2000));
-    CHECK(h.server->connection_count() == 0);
+    // Two facts the server's reap establishes one after the other, on ITS thread: the proxy
+    // leaves the bus, then the connection leaves the inventory. Wait for each.
+    CHECK(wait_until([&] { return h.server->connection_count() == 0; }, 2000));
     std::unique_ptr<loom::BridgeClient> c2;
     loom::BridgeClient& again = connect_client(c2, h.port, "agent", "");
     REQUIRE(again.await_admission(2000));
@@ -2756,6 +2761,669 @@ TEST_CASE("link: an ordinary weave asks across two buses and settles the far ans
         3000));
     CHECK(asker->outcome_.rfind(loom::link::kOutcomeUnlinked, 0) == 0);
     CHECK(asker->answers() == 1);
+}
+
+// ---- the link keeps each crossing its own, and says which words are answers -------------------
+//
+// Two separate askers each keep a book, and a book's first conversation is 1: two askers
+// asking across one link at once hold the SAME local correlation. The far side must still
+// answer each one its own answer -- in whatever order it answers -- and what reaches an asker
+// must say which words are Loom's answer and which are somebody's ordinary speech.
+
+namespace {
+
+/// A far participant that holds the FIRST ask it hears and answers the second first: the
+/// order a crossing must not depend on.
+class ReverseAnswerer final
+    : public loom::WeaveBase<ReverseAnswerer, EchoState, loom::Accept<Echo>, loom::Emit<loom::Result>> {
+public:
+    void on(const Echo& e, loom::Mail& mail) {
+        ++state_.heard;
+        if (!first_.valid()) {
+            first_ = mail.defer_answer();
+            first_msg_ = e.msg;
+            return;
+        }
+        (void)mail.answer(loom::Result{"echo:" + e.msg});
+        loom::DeferredAnswer due = std::move(first_);
+        first_ = loom::DeferredAnswer{};
+        (void)loom::answer_deferred(due, mail, loom::Result{"echo:" + first_msg_});
+    }
+
+private:
+    loom::DeferredAnswer first_;
+    std::string first_msg_;
+};
+
+/// A far participant that says something ORDINARY to the asking session under the ask's own
+/// correlation before it answers: the word a crossing must not hand over as the answer.
+class ChattyAnswerer final
+    : public loom::WeaveBase<ChattyAnswerer, EchoState, loom::Accept<Echo>, loom::Emit<loom::Result>> {
+public:
+    void on(const Echo& e, loom::Mail& mail) {
+        ++state_.heard;
+        (void)mail.send(mail.sender(), loom::Result{"imposter"}, mail.correlation());
+        (void)mail.answer(loom::Result{"echo:" + e.msg});
+    }
+};
+
+/// A near asker that writes down EVERYTHING it is handed and what Loom said about it, and
+/// settles its own book only on Loom's answer from the link.
+class WitnessAsker final : public loom::WeaveBase<WitnessAsker, AskerState,
+                                                  loom::Accept<loom::Result, loom::link::Outcome, Echo>,
+                                                  loom::Emit<loom::link::Ask>> {
+public:
+    struct Heard {
+        std::string text;
+        loom::WeaveId sender{};
+        std::uint64_t correlation = 0;
+        bool answers_ask = false;
+        bool settled = false;
+    };
+    WitnessAsker(std::string link_role, std::string far_role)
+        : link_role_(std::move(link_role)), far_role_(std::move(far_role)), book_(4) {}
+    /// Ask for settlement too; and, when set, send this envelope instead of the Echo.
+    bool settle = false;
+    std::optional<loom::link::Ask> instead;
+    void on(const Echo& kick, loom::Mail& mail) {
+        const loom::AskOpened opened = book_.open_to_role(link_role_, "Echo", 1);
+        REQUIRE(opened.ok);
+        opened_ = opened.correlation;
+        loom::link::Ask ask =
+            instead ? *instead : loom::link::ask_role(far_role_, Echo{kick.msg}, settle);
+        (void)mail.send_to_role(link_role_, ask, opened.correlation);
+    }
+    void on(const loom::Result& r, loom::Mail& mail) { note(r.value, mail); }
+    void on(const loom::link::Outcome& o, loom::Mail& mail) {
+        last_outcome_ = o;
+        note("outcome:" + o.state, mail);
+    }
+    std::optional<loom::link::Outcome> last_outcome_;
+    /// Everything this asker was handed, in order, as one line a failing case prints.
+    std::string account() const {
+        std::string out;
+        for (const Heard& h : heard_) {
+            out += "[" + h.text + " from #" + std::to_string(h.sender.value) + " corr " +
+                   std::to_string(h.correlation) + (h.answers_ask ? " ANSWER" : " ordinary") +
+                   (h.settled ? " settled] " : "] ");
+        }
+        return out.empty() ? std::string("(nothing)") : out;
+    }
+    /// The one answer this asker's book settled on, or empty.
+    std::string settled() const {
+        for (const Heard& h : heard_) {
+            if (h.settled) {
+                return h.text;
+            }
+        }
+        return {};
+    }
+    const Heard* settled_record() const {
+        for (const Heard& h : heard_) {
+            if (h.settled) {
+                return &h;
+            }
+        }
+        return nullptr;
+    }
+    std::vector<Heard> heard_;
+    std::uint64_t opened_ = 0;
+
+private:
+    void note(std::string text, loom::Mail& mail) {
+        Heard h;
+        h.text = std::move(text);
+        h.sender = mail.sender();
+        h.correlation = mail.correlation();
+        h.answers_ask = mail.answers_ask();
+        // THE ASKER'S OWN WALL: an ask to an office is settled by Loom's answer and nothing less.
+        h.settled = h.answers_ask && book_.settle(mail.correlation(), mail.sender()).has_value();
+        heard_.push_back(std::move(h));
+    }
+    std::string link_role_;
+    std::string far_role_;
+    loom::AskBook book_;
+};
+
+/// The far host, stepped by hand on the test's own thread, with the participants a case names.
+struct FarHost {
+    GuestHost host;
+    explicit FarHost(loom::BridgeAdmission policy) : host(std::move(policy), /*threaded=*/false) {}
+    template <class W, class... A>
+    W* mount(const std::string& role, A&&... args) {
+        auto w = std::make_unique<W>(std::forward<A>(args)...);
+        W* raw = w.get();
+        const loom::WeaveId id = host.bus.register_weave(std::move(w), loom::Grant{}.allow_any(), role);
+        raw->zen_set_self(id);
+        return raw;
+    }
+};
+
+/// The near host: a bus, one link to the far host, and askers.
+struct NearHost {
+    loom::Switchboard bus;
+    loom::host::LinkWeave* link = nullptr;
+    loom::WeaveId link_id{};
+    explicit NearHost(std::uint16_t far_port, const char* identity = "agent",
+                      const char* credential = "open-sesame") {
+        auto l = std::make_unique<loom::host::LinkWeave>(
+            "far", "127.0.0.1:" + std::to_string(far_port), identity, credential);
+        link = l.get();
+        link_id = bus.register_weave(std::move(l), loom::Grant{}.allow_any(), loom::link::role_of("far"));
+        link->zen_set_self(link_id);
+        link->attach(bus);
+    }
+    template <class W, class... A>
+    W* mount(loom::WeaveId* id_out, A&&... args) {
+        loom::Grant may_ask;
+        may_ask.allow_to_role(loom::link::Ask::zen_name, loom::link::Ask::zen_version,
+                              loom::link::role_of("far"));
+        auto w = std::make_unique<W>(std::forward<A>(args)...);
+        W* raw = w.get();
+        *id_out = bus.register_weave(std::move(w), may_ask);
+        raw->zen_set_self(*id_out);
+        return raw;
+    }
+    void kick(loom::WeaveId who, const std::string& msg) {
+        (void)bus.send(who, loom::Message(loom::to_value(Echo{msg})));
+    }
+};
+
+/// Both hosts take turns until `done` holds, or a bounded number of turns pass.
+bool turn_until(FarHost& far, NearHost& near, const std::function<bool()>& done, int timeout_ms = 3000) {
+    return wait_until(
+        [&] {
+            far.host.server->step();
+            near.link->service();
+            near.bus.pump_pending();
+            return done();
+        },
+        timeout_ms);
+}
+
+loom::ConnectionAdmitted echo_roles(std::string name, std::initializer_list<const char*> roles) {
+    loom::ConnectionAdmitted a;
+    for (const char* role : roles) {
+        a.grant.allow_to_role(Echo::zen_name, Echo::zen_version, role);
+    }
+    a.established_name = std::move(name);
+    return a;
+}
+
+} // namespace
+
+TEST_CASE("link: two askers with the same correlation are each answered their own, in any order") {
+    FarHost far([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_roles("agent", {"hold"}));
+    });
+    far.mount<ReverseAnswerer>("hold");
+    NearHost near(far.host.port);
+    std::string why;
+    std::atomic<bool> connected{false};
+    std::thread connecting([&] { connected.store(near.link->connect(3000, &why)); });
+    (void)wait_until([&] { far.host.server->step(); return connected.load(); }, 3000);
+    connecting.join();
+    REQUIRE_MESSAGE(connected.load(), why);
+    loom::WeaveId a_id{};
+    loom::WeaveId b_id{};
+    WitnessAsker* a = near.mount<WitnessAsker>(&a_id, loom::link::role_of("far"), "hold");
+    WitnessAsker* b = near.mount<WitnessAsker>(&b_id, loom::link::role_of("far"), "hold");
+    near.kick(a_id, "A");
+    near.bus.pump_pending(); // A asks first...
+    near.kick(b_id, "B");
+    near.bus.pump_pending(); // ...then B, under the SAME local correlation
+    REQUIRE(a->opened_ == b->opened_);
+    REQUIRE(turn_until(far, near, [&] { return !a->heard_.empty() && !b->heard_.empty(); }));
+    // The far side answered B first. Each asker still has its own answer, and Loom's word on it.
+    INFO("A heard: " << a->account());
+    INFO("B heard: " << b->account());
+    CHECK(a->settled() == "echo:A");
+    CHECK(b->settled() == "echo:B");
+    REQUIRE(a->settled_record() != nullptr);
+    CHECK(a->settled_record()->sender == near.link_id);
+    CHECK(a->settled_record()->correlation == a->opened_);
+    CHECK(near.link->open() == 0);
+}
+
+TEST_CASE("link: a far participant's ordinary word under an ask's correlation is not its answer") {
+    FarHost far([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_roles("agent", {"chatter"}));
+    });
+    far.mount<ChattyAnswerer>("chatter");
+    NearHost near(far.host.port);
+    std::string why;
+    std::atomic<bool> connected{false};
+    std::thread connecting([&] { connected.store(near.link->connect(3000, &why)); });
+    (void)wait_until([&] { far.host.server->step(); return connected.load(); }, 3000);
+    connecting.join();
+    REQUIRE_MESSAGE(connected.load(), why);
+    loom::WeaveId asker_id{};
+    WitnessAsker* asker = near.mount<WitnessAsker>(&asker_id, loom::link::role_of("far"), "chatter");
+    near.kick(asker_id, "x");
+    const bool settled = turn_until(far, near, [&] { return !asker->settled().empty(); });
+    INFO("the asker heard: " << asker->account());
+    REQUIRE(settled);
+    // The ordinary word did not settle the ask, and nothing handed it over as Loom's answer.
+    CHECK(asker->settled() == "echo:x");
+    for (const WitnessAsker::Heard& h : asker->heard_) {
+        if (h.text == "imposter") {
+            CHECK_FALSE(h.answers_ask);
+            CHECK_FALSE(h.settled);
+        }
+    }
+    REQUIRE(asker->settled_record() != nullptr);
+    CHECK(asker->settled_record()->answers_ask);
+}
+
+namespace {
+
+/// A far participant that answers at once and then takes `steps` deliveries of its own -- the
+/// work an ask SETS IN MOTION on the far bus, which its answer does not wait for.
+struct FarStep {
+    std::int64_t left = 0;
+    ZEN_SHAPE(FarStep, 1, ZEN_FIELD(left));
+};
+class BusyAnswerer final : public loom::WeaveBase<BusyAnswerer, EchoState, loom::Accept<Echo, FarStep>,
+                                                  loom::Emit<loom::Result, FarStep>> {
+public:
+    std::int64_t steps = 3;
+    bool done = false;
+    void on(const Echo& e, loom::Mail& mail) {
+        ++state_.heard;
+        done = false;
+        (void)mail.answer(loom::Result{"echo:" + e.msg});
+        (void)mail.send(this->self_, FarStep{steps});
+    }
+    void on(const FarStep& s, loom::Mail& mail) {
+        if (s.left > 0) {
+            (void)mail.send(this->self_, FarStep{s.left - 1});
+        } else {
+            done = true;
+        }
+    }
+};
+
+/// A shape the far host has never heard of.
+struct NearOnly {
+    std::string note;
+    ZEN_SHAPE(NearOnly, 1, ZEN_FIELD(note));
+};
+
+/// A local participant that tells the link a story about a crossing.
+class Storyteller final : public loom::WeaveBase<Storyteller, EchoState, loom::Accept<Echo>,
+                                                 loom::Emit<loom::link::Crossed>> {
+public:
+    loom::WeaveId link{};
+    loom::link::Crossed story;
+    void on(const Echo&, loom::Mail& mail) { (void)mail.send(link, story); }
+};
+
+/// A FAR HOST THAT SAYS EXACTLY WHAT A CASE SCRIPTS -- raw frames on a real socket, for the
+/// replies a well-behaved far bus never produces: a duplicate, a stale attempt, an answer in the
+/// link's own vocabulary, settlement before or after the answer.
+struct ScriptedFar {
+    struct Seen {
+        std::uint64_t correlation = 0;
+        std::uint8_t flags = 0;
+        std::string role;
+    };
+    socket_t listener = kInvalidSocket;
+    std::uint16_t port = 0;
+    std::unique_ptr<BridgeChannel> ch;
+    std::vector<Seen> sends;
+    std::uint64_t session = 40;
+
+    ScriptedFar() {
+        std::string err;
+        listener = bridge_listen_tcp(0, &err);
+        REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+        port = bridge_socket_port(listener);
+    }
+    ~ScriptedFar() {
+        ch.reset();
+        bridge_close(listener);
+    }
+    /// Accept the next connection and welcome it (a fresh session number each time).
+    bool welcome() {
+        return wait_until(
+            [&] {
+                if (!ch) {
+                    bool would_block = false;
+                    std::string err;
+                    const socket_t s = bridge_accept(listener, &would_block, &err);
+                    if (s == kInvalidSocket) {
+                        return false;
+                    }
+                    ch = std::make_unique<BridgeChannel>(s);
+                }
+                std::vector<BridgeIncoming> frames;
+                ch->poll(frames);
+                for (const BridgeIncoming& f : frames) {
+                    if (f.op == BridgeOp::Hello) {
+                        std::string w;
+                        put_u64(w, ++session);
+                        put_u32(w, kBridgeProtocolVersion);
+                        put_bytes(w, "agent");
+                        ch->queue(BridgeOp::Welcome, w);
+                        ch->flush();
+                        return true;
+                    }
+                }
+                return false;
+            },
+            3000);
+    }
+    void poll() {
+        if (!ch) {
+            return;
+        }
+        std::vector<BridgeIncoming> frames;
+        ch->poll(frames);
+        for (const BridgeIncoming& f : frames) {
+            if (f.op != BridgeOp::Send) {
+                continue;
+            }
+            Cursor cur(f.payload);
+            std::uint8_t kind = 0;
+            Seen seen;
+            std::uint64_t ignored = 0;
+            std::string_view role;
+            if (cur.u8(kind) && cur.u8(seen.flags) && cur.u64(ignored) && cur.u64(ignored) &&
+                cur.u64(ignored) && cur.u64(seen.correlation) && cur.bytes(role)) {
+                seen.role = std::string(role);
+                sends.push_back(seen);
+            }
+        }
+    }
+    void deliver(std::uint64_t correlation, std::uint8_t flags, const loom::Value& v) {
+        std::string body;
+        put_u64(body, 77); // the far bus's stamp: a far number, never a local id
+        put_u64(body, correlation);
+        put_u8(body, flags);
+        put_bytes(body, "");
+        body.append(serialize(v));
+        ch->queue(BridgeOp::Delivered, body);
+        ch->flush();
+    }
+    void settled(std::uint64_t correlation) {
+        std::string body;
+        put_u64(body, correlation);
+        ch->queue(BridgeOp::Settled, body);
+        ch->flush();
+    }
+    void drop() { ch.reset(); }
+};
+
+/// Connect the near host's link while the scripted far host welcomes it.
+void link_to(NearHost& near, ScriptedFar& far) {
+    std::string why;
+    std::atomic<bool> connected{false};
+    std::thread connecting([&] { connected.store(near.link->connect(3000, &why)); });
+    const bool welcomed = far.welcome();
+    connecting.join();
+    REQUIRE(welcomed);
+    REQUIRE_MESSAGE(connected.load(), why);
+}
+
+bool turn_until(ScriptedFar& far, NearHost& near, const std::function<bool()>& done,
+                int timeout_ms = 3000) {
+    return wait_until(
+        [&] {
+            far.poll();
+            near.link->service();
+            near.bus.pump_pending();
+            return done();
+        },
+        timeout_ms);
+}
+
+void link_to(NearHost& near, FarHost& far) {
+    std::string why;
+    std::atomic<bool> connected{false};
+    std::thread connecting([&] { connected.store(near.link->connect(3000, &why)); });
+    (void)wait_until([&] { far.host.server->step(); return connected.load(); }, 3000);
+    connecting.join();
+    REQUIRE_MESSAGE(connected.load(), why);
+}
+
+} // namespace
+
+TEST_CASE("link: answers and refusals for askers under one correlation each reach their own asker") {
+    FarHost far([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_roles("agent", {"hold"})); // not "chatter"
+    });
+    far.mount<ChattyAnswerer>("chatter");
+    far.mount<ReverseAnswerer>("hold");
+    NearHost near(far.host.port);
+    link_to(near, far);
+    loom::WeaveId refused_id{};
+    loom::WeaveId answered_id{};
+    loom::WeaveId unknown_id{};
+    WitnessAsker* refused = near.mount<WitnessAsker>(&refused_id, loom::link::role_of("far"), "chatter");
+    WitnessAsker* answered = near.mount<WitnessAsker>(&answered_id, loom::link::role_of("far"), "hold");
+    WitnessAsker* unknown = near.mount<WitnessAsker>(&unknown_id, loom::link::role_of("far"), "hold");
+    unknown->instead = loom::link::ask_role("hold", NearOnly{"a shape the far host never heard of"});
+    near.kick(refused_id, "no");
+    near.kick(answered_id, "yes");
+    near.kick(unknown_id, "?");
+    near.bus.pump_pending();
+    REQUIRE(refused->opened_ == answered->opened_);
+    REQUIRE(answered->opened_ == unknown->opened_);
+    // `hold` answers the second ask first, so hand it one more of its own afterwards.
+    loom::WeaveId second_id{};
+    WitnessAsker* second = near.mount<WitnessAsker>(&second_id, loom::link::role_of("far"), "hold");
+    near.kick(second_id, "second");
+    REQUIRE(turn_until(far, near, [&] {
+        return !refused->settled().empty() && !answered->settled().empty() &&
+               !unknown->settled().empty() && !second->settled().empty();
+    }));
+    INFO("refused: " << refused->account() << " | answered: " << answered->account()
+                     << " | unknown: " << unknown->account());
+    CHECK(refused->settled() == "outcome:dispatch-refused");
+    REQUIRE(refused->last_outcome_.has_value());
+    CHECK(refused->last_outcome_->reason == "CapabilityDenied");
+    CHECK(refused->last_outcome_->attempt != 0);
+    CHECK(answered->settled() == "echo:yes");
+    CHECK(second->settled() == "echo:second");
+    CHECK(unknown->settled() == "outcome:refused");
+    REQUIRE(unknown->last_outcome_.has_value());
+    CHECK(unknown->last_outcome_->reason.find("unknown schema: NearOnly") != std::string::npos);
+    CHECK(near.link->open() == 0);
+}
+
+TEST_CASE("link: a settle-requested ask is answered only once what it set in motion far away is done") {
+    FarHost far([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_roles("agent", {"busy"}));
+    });
+    far.host.server->set_bounded_dispatch(); // one far turn per step, so the far work spans steps
+    BusyAnswerer* busy = far.mount<BusyAnswerer>("busy");
+    NearHost near(far.host.port);
+    link_to(near, far);
+    loom::WeaveId plain_id{};
+    WitnessAsker* plain = near.mount<WitnessAsker>(&plain_id, loom::link::role_of("far"), "busy");
+    near.kick(plain_id, "plain");
+    bool done_when_plain_answered = true;
+    REQUIRE(turn_until(far, near, [&] {
+        if (!plain->settled().empty()) {
+            done_when_plain_answered = busy->done;
+            return true;
+        }
+        return false;
+    }));
+    // Without settlement the answer is the far owner's word alone: it came while its work ran.
+    CHECK_FALSE(done_when_plain_answered);
+    REQUIRE(turn_until(far, near, [&] { return busy->done; }));
+    loom::WeaveId settled_id{};
+    WitnessAsker* settled = near.mount<WitnessAsker>(&settled_id, loom::link::role_of("far"), "busy");
+    settled->settle = true;
+    near.kick(settled_id, "settled");
+    bool done_when_settled_answered = false;
+    REQUIRE(turn_until(far, near, [&] {
+        if (!settled->settled().empty()) {
+            done_when_settled_answered = busy->done;
+            return true;
+        }
+        return false;
+    }));
+    CHECK(settled->settled() == "echo:settled");
+    CHECK(done_when_settled_answered);
+    CHECK(near.link->open() == 0);
+}
+
+TEST_CASE("link: a duplicate, an unknown attempt and a reply for an ended session settle nothing") {
+    ScriptedFar far;
+    NearHost near(far.port);
+    link_to(near, far);
+    loom::WeaveId first_id{};
+    WitnessAsker* first = near.mount<WitnessAsker>(&first_id, loom::link::role_of("far"), "echo");
+    near.kick(first_id, "one");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 1; }));
+    const std::uint64_t attempt = far.sends[0].correlation;
+    far.deliver(attempt, kDeliveredAnswersAsk, to_value(loom::Result{"echo:one"}));
+    far.deliver(attempt, kDeliveredAnswersAsk, to_value(loom::Result{"echo:again"})); // duplicate
+    far.deliver(attempt + 1000, kDeliveredAnswersAsk, to_value(loom::Result{"echo:nobody"}));
+    REQUIRE(turn_until(far, near, [&] { return !first->settled().empty(); }));
+    near.bus.pump_pending();
+    CHECK(first->settled() == "echo:one");
+    CHECK(first->heard_.size() == 1);
+    // A NEW SESSION: whatever is open on the old one is lost, and the old one's numbers name
+    // nothing on the new.
+    loom::WeaveId waiting_id{};
+    WitnessAsker* waiting = near.mount<WitnessAsker>(&waiting_id, loom::link::role_of("far"), "echo");
+    near.kick(waiting_id, "two");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 2; }));
+    const std::uint64_t old_attempt = far.sends[1].correlation;
+    far.drop();
+    link_to(near, far); // the link reconnects: a new epoch
+    REQUIRE(turn_until(far, near, [&] { return !waiting->settled().empty(); }));
+    CHECK(waiting->settled() == "outcome:lost");
+    loom::WeaveId third_id{};
+    WitnessAsker* third = near.mount<WitnessAsker>(&third_id, loom::link::role_of("far"), "echo");
+    near.kick(third_id, "three");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 3; }));
+    const std::uint64_t new_attempt = far.sends[2].correlation;
+    CHECK(new_attempt != old_attempt);
+    far.deliver(old_attempt, kDeliveredAnswersAsk, to_value(loom::Result{"echo:stale"}));
+    far.deliver(new_attempt, kDeliveredAnswersAsk, to_value(loom::Result{"echo:three"}));
+    REQUIRE(turn_until(far, near, [&] { return !third->settled().empty(); }));
+    CHECK(third->settled() == "echo:three");
+    CHECK(waiting->heard_.size() == 1); // the stale answer reached nobody
+}
+
+TEST_CASE("link: settlement and the answer may come in either order; the answer waits for both") {
+    ScriptedFar far;
+    NearHost near(far.port);
+    link_to(near, far);
+    loom::WeaveId a_id{};
+    WitnessAsker* a = near.mount<WitnessAsker>(&a_id, loom::link::role_of("far"), "echo");
+    a->settle = true;
+    near.kick(a_id, "a");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 1; }));
+    CHECK((far.sends[0].flags & kSendSettle) != 0);
+    // The answer first: held.
+    far.deliver(far.sends[0].correlation, kDeliveredAnswersAsk, to_value(loom::Result{"echo:a"}));
+    (void)turn_until(far, near, [] { return false; }, 200);
+    CHECK(a->heard_.empty());
+    far.settled(far.sends[0].correlation);
+    REQUIRE(turn_until(far, near, [&] { return !a->settled().empty(); }));
+    CHECK(a->settled() == "echo:a");
+    // Settlement first -- a far owner that answers later: the answer is handed on when it comes.
+    loom::WeaveId b_id{};
+    WitnessAsker* b = near.mount<WitnessAsker>(&b_id, loom::link::role_of("far"), "echo");
+    b->settle = true;
+    near.kick(b_id, "b");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 2; }));
+    far.settled(far.sends[1].correlation);
+    (void)turn_until(far, near, [] { return false; }, 200);
+    CHECK(b->heard_.empty());
+    far.deliver(far.sends[1].correlation, kDeliveredAnswersAsk, to_value(loom::Result{"echo:b"}));
+    REQUIRE(turn_until(far, near, [&] { return !b->settled().empty(); }));
+    CHECK(b->settled() == "echo:b");
+    // A session that ends while an answer waits on its settlement: lost, and saying so.
+    loom::WeaveId c_id{};
+    WitnessAsker* c = near.mount<WitnessAsker>(&c_id, loom::link::role_of("far"), "echo");
+    c->settle = true;
+    near.kick(c_id, "c");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 3; }));
+    far.deliver(far.sends[2].correlation, kDeliveredAnswersAsk, to_value(loom::Result{"echo:c"}));
+    (void)turn_until(far, near, [] { return false; }, 200);
+    far.drop();
+    REQUIRE(turn_until(far, near, [&] { return !c->settled().empty(); }));
+    CHECK(c->settled() == "outcome:lost");
+    REQUIRE(c->last_outcome_.has_value());
+    CHECK(c->last_outcome_->reason.find("had answered") != std::string::npos);
+}
+
+TEST_CASE("link: an answer in the link's own vocabulary is refused, never spoken in the link's voice") {
+    ScriptedFar far;
+    NearHost near(far.port);
+    link_to(near, far);
+    loom::WeaveId a_id{};
+    WitnessAsker* a = near.mount<WitnessAsker>(&a_id, loom::link::role_of("far"), "echo");
+    near.kick(a_id, "a");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 1; }));
+    loom::link::Outcome fake;
+    fake.state = loom::link::kOutcomeLost;
+    fake.reason = "the far owner pretending to be the link";
+    far.deliver(far.sends[0].correlation, kDeliveredAnswersAsk, to_value(fake));
+    REQUIRE(turn_until(far, near, [&] { return !a->settled().empty(); }));
+    REQUIRE(a->last_outcome_.has_value());
+    CHECK(a->last_outcome_->state == loom::link::kOutcomeRefused);
+    CHECK(a->last_outcome_->reason.find("this link's own vocabulary") != std::string::npos);
+}
+
+TEST_CASE("link: only the link's own account of a crossing acts") {
+    ScriptedFar far;
+    NearHost near(far.port);
+    link_to(near, far);
+    loom::WeaveId a_id{};
+    WitnessAsker* a = near.mount<WitnessAsker>(&a_id, loom::link::role_of("far"), "echo");
+    near.kick(a_id, "a");
+    REQUIRE(turn_until(far, near, [&] { return far.sends.size() == 1; }));
+    // A local participant allowed to speak to the link tells it the far owner answered.
+    loom::Grant may_tell;
+    may_tell.allow(loom::link::Crossed::zen_name, loom::link::Crossed::zen_version, near.link_id);
+    auto teller = std::make_unique<Storyteller>();
+    Storyteller* raw = teller.get();
+    const loom::WeaveId teller_id = near.bus.register_weave(std::move(teller), may_tell);
+    raw->zen_set_self(teller_id);
+    raw->link = near.link_id;
+    raw->story.kind = loom::link::kCrossedAnswer;
+    raw->story.epoch = static_cast<std::int64_t>(near.link->epoch());
+    raw->story.attempt = static_cast<std::int64_t>(far.sends[0].correlation);
+    const std::string forged = serialize(to_value(loom::Result{"forged"}));
+    raw->story.payload.assign(forged.begin(), forged.end());
+    (void)near.bus.send(teller_id, loom::Message(loom::to_value(Echo{"tell"})));
+    (void)turn_until(far, near, [] { return false; }, 200);
+    CHECK(a->heard_.empty());
+    far.deliver(far.sends[0].correlation, kDeliveredAnswersAsk, to_value(loom::Result{"echo:a"}));
+    REQUIRE(turn_until(far, near, [&] { return !a->settled().empty(); }));
+    CHECK(a->settled() == "echo:a");
+}
+
+TEST_CASE("link: an asker replaced before its answer came is answered nothing its predecessor earned") {
+    FarHost far([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_roles("agent", {"hold"}));
+    });
+    far.mount<ReverseAnswerer>("hold");
+    NearHost near(far.host.port);
+    link_to(near, far);
+    loom::WeaveId old_id{};
+    WitnessAsker* old_asker = near.mount<WitnessAsker>(&old_id, loom::link::role_of("far"), "hold");
+    near.kick(old_id, "old");
+    REQUIRE(turn_until(far, near, [&] { return near.link->open() == 1 && far.host.bus.pending() == 0; }));
+    (void)old_asker;
+    // The asker goes away; a new one takes its place and asks under the same correlation.
+    REQUIRE(near.bus.unregister_weave(old_id) != nullptr);
+    loom::WeaveId new_id{};
+    WitnessAsker* fresh = near.mount<WitnessAsker>(&new_id, loom::link::role_of("far"), "hold");
+    near.kick(new_id, "new");
+    // The far side answers the new ask first, then the old one's.
+    REQUIRE(turn_until(far, near, [&] { return !fresh->settled().empty() && near.link->open() == 0; }));
+    near.bus.pump_pending();
+    INFO("the new asker heard: " << fresh->account());
+    CHECK(fresh->settled() == "echo:new");
+    CHECK(fresh->heard_.size() == 1);
 }
 
 // THE DOOR DIES WITH THE BUS. Workshop mounts its guest door AS A WEAVE that owns a

@@ -153,6 +153,9 @@ BridgeServer::BridgeServer(loom::Switchboard& bus, socket_t listener, BridgeAdmi
 BridgeServer::~BridgeServer() {
     bus_.remove_observer(tap_obs_); // stop the callback before our members die
     for (auto& c : conns_) {
+        for (const Conn::Settling& s : c->settling) {
+            bus_.release_fence(s.fence);
+        }
         if (c->proxy != nullptr) {
             c->proxy->detach();
         }
@@ -427,17 +430,18 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
         break;
     }
     case BridgeOp::Send: {
-        // [u8 kind][u64 wire_sender][u64 target][u64 wire_reply_to][u64 correlation][bytes role]
-        // [bytes payload]
+        // [u8 kind][u8 flags][u64 wire_sender][u64 target][u64 wire_reply_to][u64 correlation]
+        // [bytes role][bytes payload]
         Cursor cur(f.payload);
         std::uint8_t kind = 0;
+        std::uint8_t flags = 0;
         std::uint64_t wire_sender = 0;
         std::uint64_t target = 0;
         std::uint64_t wire_reply_to = 0;
         std::uint64_t correlation = 0;
         std::string_view role;
-        if (!cur.u8(kind) || !cur.u64(wire_sender) || !cur.u64(target) || !cur.u64(wire_reply_to) ||
-            !cur.u64(correlation) || !cur.bytes(role)) {
+        if (!cur.u8(kind) || !cur.u8(flags) || !cur.u64(wire_sender) || !cur.u64(target) ||
+            !cur.u64(wire_reply_to) || !cur.u64(correlation) || !cur.bytes(role)) {
             // The header didn't parse far enough to yield a correlation -> 0. No dark drop.
             send_refused(c, 0, "malformed Send header");
             break;
@@ -449,6 +453,22 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
             break;
         }
         const std::string_view payload = cur.rest();
+        const bool settle = (flags & kSendSettle) != 0;
+        if (settle && kind == kEmitPublish) {
+            send_refused(c, correlation,
+                         "a publication cannot be settled: it has no one delivery to follow; send it "
+                         "to one target or office");
+            break;
+        }
+        if (settle && c.settling.size() >= kMaxSettlingPerConnection) {
+            // Refused BEFORE the bus, so the peer knows nothing acted: a settle-requested send is
+            // never quietly downgraded to an unfenced one.
+            send_refused(c, correlation,
+                         "this session already waits on " +
+                             std::to_string(kMaxSettlingPerConnection) +
+                             " settlements; wait for one before asking for another");
+            break;
+        }
 
         // Re-admit the session's output through the ONE gate, host-side, exactly as the kernel does
         // for a loaded library's emitted message and the isolation host does for a child's Emit.
@@ -472,6 +492,24 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
         (void)wire_sender;
         (void)wire_reply_to;
         loom::Message msg(std::move(a).value(), loom::WeaveId{}, c.id, correlation);
+        if (settle) {
+            // FENCED AT THE ENQUEUE: this envelope and what its dispatch sets in motion are the
+            // session's, counted by the bus, and the peer is told once when all of it has been
+            // dispatched (report_settled). The fence bound is the bus's; at it, nothing is queued.
+            loom::Fence fence;
+            const loom::Ticket t =
+                kind == kSendToRole
+                    ? bus_.send_as_to_role_fenced(c.id, role, std::move(msg), &fence)
+                    : bus_.send_as_fenced(c.id, loom::WeaveId{target}, std::move(msg), &fence);
+            if (!t.valid() || !fence.valid()) {
+                send_refused(c, correlation,
+                             "this host is following as many settlements as it can; nothing was "
+                             "sent");
+                break;
+            }
+            c.settling.push_back(Conn::Settling{correlation, fence});
+            break;
+        }
         if (kind == kEmitPublish) {
             (void)bus_.publish_as(c.id, std::move(msg));
         } else if (kind == kSendToRole) {
@@ -490,7 +528,28 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
     case BridgeOp::Tap:
     case BridgeOp::SendRefused:
     case BridgeOp::Denied:
+    case BridgeOp::Settled:
         break;
+    }
+}
+
+void BridgeServer::report_settled() {
+    for (auto& c : conns_) {
+        for (auto it = c->settling.begin(); it != c->settling.end();) {
+            if (bus_.fence_state(it->fence) == loom::FenceState::Open) {
+                ++it;
+                continue;
+            }
+            // Settled: said once, then the fence is forgotten. (Unknown would mean this server
+            // released it already, which only this loop and the reap do.)
+            if (c->ch && !c->ch->done()) {
+                std::string body;
+                put_u64(body, it->correlation);
+                c->ch->queue(BridgeOp::Settled, body);
+            }
+            bus_.release_fence(it->fence);
+            it = c->settling.erase(it);
+        }
     }
 }
 
@@ -554,6 +613,10 @@ void BridgeServer::reap_dead() {
             if (c.proxy != nullptr) {
                 c.proxy->detach();
             }
+            for (const Conn::Settling& s : c.settling) {
+                bus_.release_fence(s.fence); // nobody is left to tell
+            }
+            c.settling.clear();
             if (c.id.value != 0) {
                 std::unique_ptr<loom::Weave> removed = bus_.unregister_weave(c.id);
                 removed.reset();
@@ -595,6 +658,7 @@ void BridgeServer::service() {
         }
         weaves_dirty_ = false;
     }
+    report_settled();
     for (auto& c : conns_) {
         if (c->ch) {
             c->ch->flush();
@@ -634,6 +698,7 @@ void BridgeServer::step() {
         }
         weaves_dirty_ = false;
     }
+    report_settled(); // after the turn, so what the turn settled is told in the same step
     for (auto& c : conns_) {
         if (c->ch) {
             c->ch->flush();

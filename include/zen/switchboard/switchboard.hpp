@@ -163,6 +163,41 @@ struct DeliveryOutcome {
     Refusal refusal{}; ///< populated iff disposition == Refused
 };
 
+/// A FENCE: ONE HOST SEND, AND EVERYTHING THE BUS DISPATCHES SYNCHRONOUSLY BECAUSE OF IT.
+///
+/// A host that injects one message on somebody's behalf sometimes needs to know when the work
+/// that message SET IN MOTION on this bus has been done -- an agent that typed a key and wants a
+/// picture of what the key did, not of the frame before. An answer cannot say it: the owner that
+/// answers is one participant, and the key's consequences run through others, in deliveries the
+/// answer does not wait for. The fence says it from the bus's own record. It names the envelope
+/// the host's send queued, and every envelope queued from inside the dispatch of anything it
+/// already names -- the synchronous dispatch ancestry `BusEvent::dispatch_parent` records, and
+/// NOTHING WIDER. It reads `Open` while any of those is queued or being dispatched, and `Settled`
+/// once every one has been dispatched: its handler returned, threw, or the bus refused it.
+///
+/// WHAT SETTLED DOES NOT SAY. Nothing about answers: a request delivered to a participant that
+/// never answers is dispatched, and settles, and silence stays silence. Nothing about work a
+/// participant deferred -- to a timer, to a deferred answer spent from a later unrelated
+/// delivery, to an out-of-process child read on a later turn, to another host: none of that is
+/// queued from inside the fence, so none of it is waited for. And nothing about the rest of the
+/// bus: unrelated work may be queued before, among and after the fence's envelopes, and a fence
+/// never waits for the bus to empty. A fence whose ancestry never stops (a handler that always
+/// re-sends to itself) reads `Open` for as long as it runs; there is no deadline in it.
+///
+/// Host-held, bounded (`Switchboard::kMaxFences`), and released by the host that opened it.
+/// docs/reference/messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched
+struct Fence {
+    std::uint64_t value = 0;
+    bool valid() const noexcept { return value != 0; }
+};
+
+enum class FenceState : std::uint8_t {
+    Unknown, ///< never opened here, or already released
+    Open,    ///< an envelope it names is queued or being dispatched
+    Settled  ///< every envelope it names has been dispatched
+};
+const char* name_of(FenceState s) noexcept;
+
 /// What an observer/tap is told about. Deliveries (Delivered/Refused/
 /// HandlerFailed) and lifecycle transitions (Died/Revived) flow through the same
 /// hook.
@@ -585,6 +620,37 @@ public:
     /// at delivery (see Grant::permits_role).
     Ticket send_to_role(std::string_view role, Message msg) override;
     Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
+
+    // ---- fences: when what one send set in motion has been dispatched ------------------
+    //
+    // `Fence` (above) says what a fence names and what Settled does and does not mean. These
+    // are HOST verbs, beside `send_as`, for the reason `send_as` is one: a host injects on
+    // somebody's behalf -- a bridge for a guest's send -- and it is the host that asks when
+    // what it injected has finished running here. A weave holds no Switchboard and opens none.
+
+    /// `send_as`, and open a fence rooted at the one envelope it queues. `*fence` receives the
+    /// handle. The envelope and everything later queued from inside the dispatch of anything
+    /// the fence names belong to this fence alone: a send made from inside a delivery that is
+    /// itself fenced begins a NEW fence and is not counted in the enclosing one -- the host is
+    /// speaking for somebody else, not continuing that delivery's work. At `kMaxFences` held,
+    /// NOTHING is queued and an invalid Ticket and Fence come back. A null output pointer
+    /// is refused before allocation or enqueue, so every opened fence has an owner.
+    Ticket send_as_fenced(WeaveId as_sender, WeaveId target, Message msg, Fence* fence);
+    /// The role-addressed form, on `send_as_to_role`'s terms.
+    Ticket send_as_to_role_fenced(WeaveId as_sender, std::string_view role, Message msg,
+                                  Fence* fence);
+    /// Open, Settled, or Unknown (never opened here, or released).
+    FenceState fence_state(Fence fence) const noexcept;
+    /// Forget a fence. Its handle reads Unknown from now on; envelopes it named that are still
+    /// queued are dispatched exactly as before and are simply no longer counted. Releasing an
+    /// unknown fence is a no-op.
+    void release_fence(Fence fence) noexcept;
+    /// How many fences are held (open or settled, not yet released).
+    std::size_t fences_held() const noexcept { return fences_.size(); }
+    /// The most fences one Loom holds at once. A fence is a record a host asks for, so an
+    /// unbounded number would be a hole any host adapter could dig on a peer's behalf; past
+    /// the bound the fenced send is refused before anything is queued.
+    static constexpr std::size_t kMaxFences = 64;
 
     // ---- deliberate office authorship ---------------------------------------
     //
@@ -1496,7 +1562,27 @@ private:
         // notice these two scalars instead bind the exact recipient. Ordinary
         // queued speech still compares life alone (MSG-03).
         std::uint64_t refusal_incarnation = 0;
+        /// WHICH FENCE THIS ENVELOPE BELONGS TO, if any (0 = none). Stamped by the bus from
+        /// `current_dispatch_fence_` at enqueue -- the fence of the delivery this was queued
+        /// from inside -- or, for the one envelope a fenced host send queues, from the fence
+        /// that send opened. Never by a caller, the discipline `dispatch_parent` keeps.
+        std::uint64_t fence = 0;
     };
+
+    /// One fence the bus is counting for a host: how many envelopes it names are queued or
+    /// being dispatched right now. Zero is Settled.
+    struct FenceRecord {
+        std::uint64_t id = 0;
+        std::size_t queued = 0;
+    };
+    FenceRecord* find_fence(std::uint64_t id) noexcept;
+    const FenceRecord* find_fence(std::uint64_t id) const noexcept;
+    /// Every enqueue funnels through here: the envelope's fence (already stamped) counts it.
+    void queue_back(Envelope env);
+    /// The envelope a dispatch just finished with no longer counts toward its fence.
+    void fence_dispatched(std::uint64_t id) noexcept;
+    /// Open a record for a host's fenced send, or 0 at the bound.
+    std::uint64_t begin_fence();
 
     /// THE REPLY AUTHORITY FOR THE DELIVERY BEING DISPATCHED — bus-owned, one at
     /// a time, and gone the moment that delivery returns.
@@ -2222,6 +2308,13 @@ private:
     /// guard, and read by every enqueue path so a message authored inside a
     /// handler carries the delivery it was authored from. 0 outside a dispatch.
     std::uint64_t current_dispatch_seq_ = 0;
+    /// THE FENCE OF THE DELIVERY BEING DISPATCHED (0 = none), for the whole of its dispatch --
+    /// the handler and every refusal, notice and showing its dispatch queues -- so everything
+    /// queued because of it is counted where it is. Set and restored by `deliver_one`; a host's
+    /// fenced send sets it for exactly the one enqueue it makes.
+    std::uint64_t current_dispatch_fence_ = 0;
+    std::vector<FenceRecord> fences_; ///< bounded; see kMaxFences
+    std::uint64_t next_fence_ = 1;    ///< monotonic: a fence id is never reused
     /// ...AND WHETHER THAT DELIVERY'S HANDLER REPORTED FAILURE ACROSS THE ABI
     /// SEAM. Only `note_handler_failure()` sets it; `deliver_one` clears it
     /// before every handler call and reads it after. A native handler needs no
@@ -2285,6 +2378,28 @@ private:
 
     private:
         Switchboard& sb_;
+    };
+
+    /// Hold the FENCE of one envelope for the whole of its dispatch, and count it dispatched on
+    /// the way out by ANY exit -- a handler that throws still consumed its envelope (MSG-10),
+    /// and a fence that kept counting it would never settle.
+    class FenceTurn {
+    public:
+        FenceTurn(Switchboard& sb, std::uint64_t fence) noexcept
+            : sb_(sb), fence_(fence), was_(sb.current_dispatch_fence_) {
+            sb_.current_dispatch_fence_ = fence;
+        }
+        ~FenceTurn() {
+            sb_.current_dispatch_fence_ = was_;
+            sb_.fence_dispatched(fence_);
+        }
+        FenceTurn(const FenceTurn&) = delete;
+        FenceTurn& operator=(const FenceTurn&) = delete;
+
+    private:
+        Switchboard& sb_;
+        std::uint64_t fence_;
+        std::uint64_t was_;
     };
     std::vector<DeferredRecord> deferred_;      ///< bounded; see kMaxDeferredAnswers
     /// Bounded, and small. Slots are reclaimed the moment a transaction ends.
