@@ -772,6 +772,14 @@ public:
     /// than after one accidentally appears. Empty for a weave that declares none.
     std::vector<std::shared_ptr<const Schema>> claimed_schemas(WeaveId id) const;
 
+    /// WHAT THIS PARTICIPANT DECLARES IT MAY SAY — the emit-set it registered, by
+    /// definition, at registration (re-read on a code swap). The same discovery
+    /// question as the two above, asked of the third list; it answers what a
+    /// shape MEANS here and nothing about whether anyone may send it, since
+    /// authority is the grant's alone. Empty for a weave that declares none, and
+    /// for an unknown id.
+    std::vector<std::shared_ptr<const Schema>> emitted_schemas(WeaveId id) const;
+
     /// How many latest claims are retained right now, across both key spaces.
     /// The lifecycle witness reads this: it is bounded by MEANINGFUL CURRENT KEYS
     /// (registered weaves x shapes they declare, plus held roles x shapes), never
@@ -1286,12 +1294,19 @@ private:
         /// successor's contract is its own), registered so the shapes resolve and
         /// are discoverable, and checked by both claim doors.
         std::vector<std::shared_ptr<const Schema>> claims;
+        /// THE DECLARED EMIT-SET — the shapes this weave says it may send, by
+        /// definition. Recorded at registration and re-read on a code swap like
+        /// the claim-set, registered so the shapes resolve and disagree loudly,
+        /// and answerable as discovery. Not consulted by any send: authority is
+        /// `grant` (and `delegated`), never this list.
+        std::vector<std::shared_ptr<const Schema>> emits;
         std::shared_ptr<const Schema> state_schema;
-        /// WHY THE THREE LISTS ABOVE STILL RESOLVE (LIFE-08). One live claim on the
-        /// union of this weave's accept-set, claim-set and state shape. It is
-        /// acquired as a single transaction at registration, re-acquired on a
-        /// code swap, and released by the destruction of this record — which is
-        /// the whole of the cleanup, and why no removal path can forget it.
+        /// WHY THE FOUR LISTS ABOVE STILL RESOLVE (LIFE-08). One live claim on the
+        /// union of this weave's accept-set, claim-set, emit-set and state shape,
+        /// WITH EVERY COMPONENT THOSE SHAPES NEST. It is acquired as a single
+        /// transaction at registration, re-acquired on a code swap, and released
+        /// by the destruction of this record — which is the whole of the cleanup,
+        /// and why no removal path can forget it.
         ///
         /// The Registry is told nothing about WeaveId. It counts claims; the
         /// Switchboard owns weave lifetime, and this member is where the two

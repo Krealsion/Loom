@@ -329,6 +329,12 @@ public:
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
         return link_->accept;
     }
+    /// The child's declared emit-set, so the bus registers what an isolated
+    /// participant says it may send beside what it hears — the same wall a
+    /// native or loaded emitter's definition meets. Its grant is untouched.
+    std::vector<std::shared_ptr<const Schema>> emitted_schemas() const override {
+        return link_->emits;
+    }
     void handle(const loom::Message& in, loom::Bus& /*bus*/) override {
         host_->ship_deliver(*link_, in);
     }
@@ -624,14 +630,28 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
         accept.push_back(std::move(door));
     }
     auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
+    // The declared emit-set (ABI v9), decoded exactly as the doors are: top-level,
+    // against this host's registry. This pipe's supported contract is flat shapes
+    // (no `referenced` section is read here), and an emit is held to that same
+    // contract rather than to a wider one nothing else on this pipe has.
+    std::vector<std::shared_ptr<const Schema>> emits;
+    if (const loom::Cell* declared = mv.get("emits")) {
+        for (const loom::Cell& c : declared->as_list()) {
+            emits.push_back(loom::decode_schema(*c.as_message(), registry_));
+        }
+    }
     // One transaction for the child's whole vocabulary (LIFE-08): cross-mount
     // agreement on (name, version) as before, but a disagreement about the last
     // door now leaves none of the earlier ones claimed — and the claim belongs to
-    // the mount, so a handshake refused below releases it on the way out.
+    // the mount, so a handshake refused below releases it on the way out. The
+    // emit-set joins the same transaction, so a child that says it will send a
+    // shape another mount hears differently is refused here, before it registers.
     std::vector<std::shared_ptr<const Schema>> vocabulary = accept;
+    vocabulary.insert(vocabulary.end(), emits.begin(), emits.end());
     vocabulary.push_back(state);
     registry_.claim(link.schemas, vocabulary);
     link.accept = std::move(accept);
+    link.emits = std::move(emits);
     link.state_schema = state;
 
     // The ask: requested-capabilities is *advice* (conformance data the host reads

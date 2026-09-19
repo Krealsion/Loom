@@ -365,6 +365,24 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
         claims.push_back(std::move(s));
     }
 
+    // Record the declared EMIT-SET the same way. A shape a weave says it will SEND
+    // is a promise about somebody else's door exactly as an accepted shape is a
+    // promise about its own, so its definition meets the same wall below: an
+    // emitter of `Pong v1 {a, b}` and an acceptor of `Pong v1 {a}` disagree HERE,
+    // at registration, and not at the first delivery the gate refuses. Recording
+    // it is also what makes the emit-set discoverable (`emitted_schemas(id)`).
+    // It confers no authority — the grant is checked at every send, unchanged.
+    // docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+    std::vector<std::shared_ptr<const Schema>> emits;
+    auto declared_emits = incoming->emitted_schemas();
+    emits.reserve(declared_emits.size());
+    for (auto& s : declared_emits) {
+        if (!s) {
+            throw std::invalid_argument("register_weave: a declared emit schema is null");
+        }
+        emits.push_back(std::move(s));
+    }
+
     // Seed last-known-good from an initial snapshot, gated against its own schema.
     Value snap = incoming->snapshot();
     std::shared_ptr<const Schema> state_schema = snap.schema_ptr();
@@ -377,11 +395,32 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     // accept-set left the earlier ones published under a weave that never came
     // into existence.
     //
+    // THE WHOLE VOCABULARY IS THE CLOSURE, not the four lists' roots. A shape's
+    // identity is deep (a component's content-id folds into its owner's), so two
+    // weaves that agree about `Box v1` agree about the `Part v1` inside it — but
+    // two that only ever nest `Part v1` under DIFFERENT outer names would never
+    // have compared it, and one weave whose own declaration nests two `Part v1`s
+    // would have registered whichever came first. Every component every declared
+    // shape nests is claimed here beside it, so the registry's one comparison
+    // reaches them all, within this declaration and against every live one.
+    //
     // The claim also outlives nothing: it lives in the record built below, and
     // dies when that record is erased.
-    std::vector<std::shared_ptr<const Schema>> vocabulary = accept;
-    vocabulary.insert(vocabulary.end(), claims.begin(), claims.end());
-    vocabulary.push_back(state_schema);
+    std::vector<std::shared_ptr<const Schema>> vocabulary;
+    auto declare = [&vocabulary](const std::shared_ptr<const Schema>& s) {
+        collect_referenced(*s, vocabulary); // components first; identity-deduplicated
+        vocabulary.push_back(s);
+    };
+    for (const auto& s : accept) {
+        declare(s);
+    }
+    for (const auto& s : claims) {
+        declare(s);
+    }
+    for (const auto& s : emits) {
+        declare(s);
+    }
+    declare(state_schema);
     SchemaClaimScope schemas = registry_.claim(vocabulary);
     // ...AND THE SHAPES THIS WEAVE MAY SPEAK BUT DOES NOT DEFINE (LIFE-08).
     //
@@ -392,11 +431,12 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     // that defined it unmounts, or its next send stops being an honest "nobody
     // holds that role" and becomes "I have never heard of that shape".
     //
-    // Claimed BY KEY, because a producer has no definition to offer: it pins what
-    // the system already knows and skips what it does not, so a shape nobody ever
-    // published stays unpublished and the emission meets the seam (MSG-08). A
-    // wildcard rule names nothing and claims nothing — `allow_any` declares no
-    // vocabulary to depend on.
+    // Claimed BY KEY, because a grant-only producer has no definition to offer: it
+    // pins what the system already knows and skips what it does not, so a shape
+    // nobody ever published stays unpublished and the emission meets the seam
+    // (MSG-08). A producer that DECLARED the shape (Emit<...>) offered its
+    // definition above instead, and needs no pin here. A wildcard rule names
+    // nothing and claims nothing — `allow_any` declares no vocabulary to depend on.
     // docs/laws/lifecycle-laws.md
     registry_.claim_known(schemas, named_send_shapes(grant));
     // Adopt the canonical owners the registry settled on, so every weave that
@@ -415,6 +455,9 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     for (auto& s : claims) {
         canonicalize(s);
     }
+    for (auto& s : emits) {
+        canonicalize(s);
+    }
 
     Admission seeded = loom::admit(std::move(snap), *state_schema);
     if (!seeded.ok()) {
@@ -428,6 +471,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     std::move(incoming),
                     std::move(accept),
                     std::move(claims),
+                    std::move(emits),
                     state_schema,
                     std::move(schemas),
                     std::move(seeded).value(),
@@ -869,6 +913,11 @@ SenseReading Switchboard::observe_office_as(WeaveId reader, std::string_view rol
 std::vector<std::shared_ptr<const Schema>> Switchboard::claimed_schemas(WeaveId id) const {
     auto it = weaves_.find(id.value);
     return it == weaves_.end() ? std::vector<std::shared_ptr<const Schema>>{} : it->second.claims;
+}
+
+std::vector<std::shared_ptr<const Schema>> Switchboard::emitted_schemas(WeaveId id) const {
+    auto it = weaves_.find(id.value);
+    return it == weaves_.end() ? std::vector<std::shared_ptr<const Schema>>{} : it->second.emits;
 }
 
 void Switchboard::forget_personal_claims(WeaveId id) {
@@ -3871,15 +3920,37 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // to zero. There is no instant in a code swap when a shape the weave still
     // accepts stops resolving.
     {
+        // THE EMIT-SET BELONGS TO THE CODE TOO, and is re-read for the same reason.
         std::vector<std::shared_ptr<const Schema>> fresh;
         for (auto& s : rec->weave->claimed_schemas()) {
             if (s) {
                 fresh.push_back(std::move(s));
             }
         }
-        std::vector<std::shared_ptr<const Schema>> vocabulary = rec->accept;
-        vocabulary.insert(vocabulary.end(), fresh.begin(), fresh.end());
-        vocabulary.push_back(rec->state_schema);
+        std::vector<std::shared_ptr<const Schema>> fresh_emits;
+        for (auto& s : rec->weave->emitted_schemas()) {
+            if (s) {
+                fresh_emits.push_back(std::move(s));
+            }
+        }
+        // The successor's whole vocabulary is its CLOSURE, as at registration:
+        // every component every declared shape nests, so the same wall reads the
+        // same set through both doors and a code swap cannot narrow it.
+        std::vector<std::shared_ptr<const Schema>> vocabulary;
+        auto declare = [&vocabulary](const std::shared_ptr<const Schema>& s) {
+            collect_referenced(*s, vocabulary);
+            vocabulary.push_back(s);
+        };
+        for (const auto& s : rec->accept) {
+            declare(s);
+        }
+        for (const auto& s : fresh) {
+            declare(s);
+        }
+        for (const auto& s : fresh_emits) {
+            declare(s);
+        }
+        declare(rec->state_schema);
         SchemaClaimScope next = registry_.claim(vocabulary);
         // The grant did not change under the new code, so its producer claim is
         // re-taken into the successor scope. Forgetting this would let a code
@@ -3890,7 +3961,13 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
                 s = std::move(canon);
             }
         }
+        for (auto& s : fresh_emits) {
+            if (auto canon = registry_.lookup(s->name(), s->version())) {
+                s = std::move(canon);
+            }
+        }
         rec->claims = std::move(fresh);
+        rec->emits = std::move(fresh_emits);
         rec->schemas = std::move(next); // acquire-then-release: the overlap is the point
     }
     forget_deferred_for(id);

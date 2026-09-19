@@ -16,6 +16,7 @@ the full narrative lives in [history](../history/README.md).
 | [a-claim-is-not-a-message](a-claim-is-not-a-message.md) | Senses earn their category by carrying no causality, no history and no default reach |
 | [migration-is-authored-not-inferred](migration-is-authored-not-inferred.md) | supersedes automatic gate migration: an authored transformation before admission, never coercion inside it |
 | [dispatch-refusal-returns-to-its-author](dispatch-refusal-returns-to-its-author.md) | authenticated later refusal, exact attempts, original incarnation and ordinary consumer ownership |
+| [declared-vocabulary-is-agreed-at-admission](declared-vocabulary-is-agreed-at-admission.md) | every declared shape and component — accepted, claimed, emitted, persisted — meets one wall at the door, natively and across the seam; a declaration is never authority |
 | Zengine (separate repo): `docs/decisions/timer-continuity-carries-remaining-duration.md` | durations cross; due times cannot |
 
 Shape of each: context → decision → alternatives considered → why rejected →

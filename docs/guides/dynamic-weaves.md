@@ -180,6 +180,12 @@ seam value or refused office authorship returns an invalid ticket immediately.
 The [contract](../reference/messaging.md#sender-visible-dispatch-refusal) distinguishes
 those boundaries from later dispatch and from unanswered delivery. Isolated
 children cannot request this new attestation; their manifest is refused.
+Since ABI v9 a loaded weave's declared `Emit<...>` crosses the seam by
+definition (`zen.Manifest` v5) and is claimed at load beside its doors, so a
+shape you emit under a name some acceptor spells differently is a refused load
+with the shape named, exactly as it is a refused mount natively — and, exactly
+as natively, declaring it grants nothing
+([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md)).
 
 Platforms: canonical on Linux/WSL; the opt-in Windows backend is
 development-only and says so ([reference/kernel](../reference/kernel.md)).
@@ -187,7 +193,7 @@ development-only and says so ([reference/kernel](../reference/kernel.md)).
 ## Deeper
 
 Reference: [kernel](../reference/kernel.md) ·
-[dynamic-abi](../reference/dynamic-abi.md) (current: **v7**) ·
+[dynamic-abi](../reference/dynamic-abi.md) (current: **v9**) ·
 [capabilities](../reference/capabilities.md#the-grant-in-process) (the
 in-process trust statement above, in its own reference). Real artifacts to
 crib:

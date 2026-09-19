@@ -197,6 +197,19 @@ int main() {
         return 1;
     }
 
+    // ---- its declared vocabulary crossed the installed seam whole (ABI v9) -------
+    // The manifest's `emits` section reached the host: the bus can say this loaded
+    // weave declares Pong, and the component its accepted `Nested` nests (Inner,
+    // which nothing accepts at top level) resolves by definition — the closure was
+    // claimed through the package exactly as a native mount claims it.
+    const auto declared_emits = bus.emitted_schemas(loaded.id);
+    check(declared_emits.size() == 1 && declared_emits[0]->name() == "Pong",
+          "the installed package carried the weave's declared emit-set to the host");
+    const auto inner = bus.resolve_schema("Inner", 1);
+    check(inner != nullptr &&
+              inner->content_id() == loom::schema_of<witness::Inner>()->content_id(),
+          "the nested component of an accepted shape resolves on the bus with its declared identity");
+
     // ---- a live delivery, and a reply back across the seam ------------------------
     bus.send(loaded.id,
              loom::Message(loom::to_value(witness::Ping{41}), loom::WeaveId{}, collector_id));

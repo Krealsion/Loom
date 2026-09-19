@@ -47,11 +47,16 @@ inline constexpr const char* kAcceptedShapesShapeName = "zen.AcceptedShapes";
 /// the bus dispatches through; zen/weave/weave.hpp is the WeaveBase authoring
 /// sugar a maker writes against; zen/weave.hpp is the umbrella include.)
 ///
-/// This is a deliberately minimal, frozen ABI surface (virtual dispatch): the
-/// five methods below are all the Switchboard needs, and they are designed to
-/// survive a future move to per-Weave mailboxes and multi-threaded dispatch
+/// This is a deliberately minimal ABI surface (virtual dispatch): the five pure
+/// methods below are all the Switchboard needs to dispatch, and they are designed
+/// to survive a future move to per-Weave mailboxes and multi-threaded dispatch
 /// unchanged. Lifecycle notifications are delivered to bus *observers*, not via
-/// Weave callbacks, to keep this surface small.
+/// Weave callbacks, to keep this surface small. It has grown by defaulted
+/// virtuals only — `claimed_schemas` (2026-08-02), `claim_published` (ABI v8),
+/// `emitted_schemas` (2026-09-18) — each with the honest empty default, so a raw
+/// Weave that declares nothing still implements the whole contract; but a
+/// consumer compiled against an older copy of this header must rebuild, since
+/// the vtable layout is what changed.
 ///
 /// A Weave never sees an unvalidated message: handle() is invoked only with a
 /// payload that has already passed the gate against one of this Weave's accepted
@@ -102,6 +107,29 @@ public:
     /// `emitted_schemas()` (what may be SENT from here): a claim is neither a
     /// door nor a message.
     virtual std::vector<std::shared_ptr<const Schema>> claimed_schemas() const { return {}; }
+
+    /// THE MESSAGE SHAPES THIS WEAVE DECLARES IT MAY SEND — its emit-set, BY
+    /// DEFINITION. Consulted at registration and claimed in the same transaction
+    /// as the accept-set, the claim-set and the state shape, with every component
+    /// those shapes nest: so a producer's definition of a (name, version) meets
+    /// every acceptor's at the door, and a disagreement refuses the registration
+    /// (`SchemaConflict`) rather than surfacing as the first refused delivery.
+    /// `Emit<...>` on `WeaveBase` writes it; a library's manifest carries it
+    /// (`emits`, zen.Manifest v5); the host adapter answers from that.
+    ///
+    /// VOCABULARY, NOT AUTHORITY. Declaring a shape here registers what the shape
+    /// MEANS and grants no send rule: authority stays with the grant the host
+    /// attached at admission (GATE-03/GATE-05), and a declared emitter with no
+    /// rule for a shape is still refused `CapabilityDenied` at delivery. Nor is
+    /// this an exhaustive send list: a router or forwarder may still speak shapes
+    /// chosen at runtime, which meet the seam and their existing authority rules
+    /// exactly as before (the deliberately open emit-enforcement seam, see
+    /// zen/weave/weave.hpp `Mail`).
+    ///
+    /// Defaulted, like `claimed_schemas`: a raw Weave or an adapter that declares
+    /// nothing claims nothing here, and defines no vocabulary it does not accept.
+    /// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+    virtual std::vector<std::shared_ptr<const Schema>> emitted_schemas() const { return {}; }
 
     /// WHAT A SHOWING CAME TO AT THIS WEAVE: the three answers `claim_published`
     /// can give, and what the bus does with each (SENSE-06;

@@ -467,6 +467,371 @@ TEST_CASE("a rejected candidate leaves no schema residue (BL-0 closes the R2A-1a
     CHECK(kernel.weave_id("t") == lr.id);
 }
 
+// ---- declared vocabulary is agreed at admission (P-LOOM-07, ABI v9) ---------------
+//
+// The case that opened this: a native Workshop declared the newer `PaneInventory v1`
+// only in `Emit<...>`, an older loaded desktop accepted the same name over a different
+// nested `InventoryPane v1`, both admitted, and the first publication was refused at the
+// gate with Pane Manager left waiting. Every shape a participant DECLARES — accepted,
+// claimed, emitted, persisted — and every component those nest is now claimed through
+// the one agreement wall at the door, natively and across the seam, in both orders.
+// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+namespace sa {
+// Greet v1, both ways the fixtures spell it: `msg` (zen_test_weave_emits,
+// zen_test_weave_activates_drift) and `text` (zen_test_weave_emits_conflict,
+// zen_test_weave_activates_conflict).
+inline std::shared_ptr<const Schema> greet_msg() {
+    static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> greet_text() {
+    static const auto s = SchemaBuilder("Greet", 1).field("text", Kind::Text).build();
+    return s;
+}
+// The nested shapes, spelled exactly as tests/weavelib/test_weave.cpp spells them.
+inline std::shared_ptr<const Schema> part_old() {
+    static const auto s = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> part_new() {
+    static const auto s =
+        SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> box() { // Box v1 { part: Part {a} }
+    static const auto s = SchemaBuilder("Box", 1).message("part", part_old()).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> box2() { // Box2 v1 { part: Part {a, b} }
+    static const auto s = SchemaBuilder("Box2", 1).message("part", part_new()).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> whole() { // Whole v1 { parts: List<Part {a}> }
+    static const auto s =
+        SchemaBuilder("Whole", 1).list("parts", type_message(part_old())).build();
+    return s;
+}
+inline const char* kConflict =
+    "is already published with a different shape (published schemas are immutable)";
+inline bool refused_over(const LoadResult& r, const char* shape) {
+    return !r.ok && r.error.find("load refused: schema '") != std::string::npos &&
+           r.error.find(std::string("'") + shape + "' v1") != std::string::npos &&
+           r.error.find(kConflict) != std::string::npos;
+}
+// A native probe that DECLARES an emit-set (a raw loom::Weave playing the emitter).
+inline Registered register_emitter(Switchboard& bus, std::shared_ptr<const Schema> emits,
+                                   Grant grant = Grant{}.allow_any()) {
+    auto owned = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
+    owned->declared_emits = {std::move(emits)};
+    ProbeWeave* raw = owned.get();
+    WeaveId id = bus.register_weave(std::move(owned), std::move(grant));
+    return {id, raw};
+}
+} // namespace sa
+
+TEST_CASE("schema admission: a native emitter and a loaded acceptor that disagree about one "
+          "shape refuse at the door, in both orders") {
+    using namespace sa;
+    SUBCASE("the native emitter first (the Workshop-then-old-desktop order)") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        Registered emitter = register_emitter(bus, greet_text());
+        REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+
+        // zen_test_weave_activates_drift ACCEPTS Greet v1 {msg}: the same name and
+        // version, a different shape. Before this phase it loaded, and the first
+        // Greet the emitter sent it was refused at the gate.
+        LoadResult blocked = kernel.load("old", ZEN_SO_ACTIVATES_DRIFT);
+        CHECK(refused_over(blocked, "Greet"));
+        CHECK_FALSE(kernel.is_loaded("old"));
+        // The emitter's definition still stands, and the emitter still exists.
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+        CHECK(bus.weave(emitter.id) != nullptr);
+    }
+    SUBCASE("the loaded acceptor first") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        LoadResult old = kernel.load("old", ZEN_SO_ACTIVATES_DRIFT);
+        REQUIRE_MESSAGE(old.ok, old.error);
+        REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
+
+        CHECK_THROWS_AS(register_emitter(bus, greet_text()), SchemaConflict);
+        // The acceptor's definition is the one that stands; nothing else registered.
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+        CHECK(bus.list_weaves().size() == 1);
+        CHECK(kernel.is_loaded("old"));
+    }
+}
+
+TEST_CASE("schema admission: a loaded emitter's definition crosses the seam (manifest v5), "
+          "so a divergent acceptor refuses at load in both orders and an agreeing one delivers") {
+    using namespace sa;
+    SUBCASE("emitter first, then the divergent acceptor") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        LoadResult e = kernel.load("e", ZEN_SO_EMITS_CONFLICT); // emits Greet v1 {text}
+        REQUIRE_MESSAGE(e.ok, e.error);
+        // DISCOVERY: an emitted-only shape resolves, from the emitter's own definition,
+        // before any acceptor exists — and the bus can say who declared it.
+        REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+        const auto declared = bus.emitted_schemas(e.id);
+        REQUIRE(declared.size() == 1);
+        CHECK(declared[0]->name() == "Greet");
+
+        LoadResult blocked = kernel.load("old", ZEN_SO_ACTIVATES_DRIFT); // accepts Greet {msg}
+        CHECK(refused_over(blocked, "Greet"));
+        CHECK_FALSE(kernel.is_loaded("old"));
+        CHECK(kernel.is_loaded("e"));
+    }
+    SUBCASE("the divergent acceptor first, then the emitter") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        REQUIRE_MESSAGE(kernel.load("old", ZEN_SO_ACTIVATES_DRIFT).ok, "acceptor must load alone");
+        LoadResult blocked = kernel.load("e", ZEN_SO_EMITS_CONFLICT);
+        CHECK(refused_over(blocked, "Greet"));
+        CHECK_FALSE(kernel.is_loaded("e"));
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+    }
+    SUBCASE("the agreeing pair: one definition, delivered end to end") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        Registered hears = register_probe(bus, {greet_msg()});
+        LoadResult e = kernel.load("e", ZEN_SO_EMITS); // emits Greet v1 {msg}
+        REQUIRE_MESSAGE(e.ok, e.error);
+        REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
+        CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+
+        bus.send(e.id, Message(ping(5), WeaveId{}, hears.id));
+        bus.drain_until_idle();
+        REQUIRE(hears.weave->handled_names.size() == 1);
+        CHECK(hears.weave->handled_names[0] == "Greet");
+    }
+}
+
+TEST_CASE("schema admission: a disagreement only the component closure can see refuses at "
+          "load — loaded against loaded, and loaded against native, both orders") {
+    using namespace sa;
+    // Box v1 nests Part v1 {a}; Box2 v1 nests Part v1 {a, b}. The OUTER names differ, so
+    // no top-level comparison ever met the two Parts; before this phase both admitted
+    // and two definitions of `Part v1` lived in one process.
+    SUBCASE("loaded against loaded") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        REQUIRE_MESSAGE(kernel.load("a", ZEN_SO_NEST_OLD).ok, "nest_old must load alone");
+        CHECK(refused_over(kernel.load("b", ZEN_SO_NEST_NEW), "Part"));
+        CHECK_FALSE(kernel.is_loaded("b"));
+        CHECK(bus.resolve_schema("Box2", 1) == nullptr); // nothing of the refused one
+        REQUIRE(bus.resolve_schema("Part", 1) != nullptr);
+        CHECK(bus.resolve_schema("Part", 1)->content_id() == part_old()->content_id());
+    }
+    SUBCASE("native acceptor of Box2 first, then the loaded acceptor of Box") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        Registered native = register_probe(bus, {box2()});
+        // The component is on the bus, by definition, from the native declaration.
+        REQUIRE(bus.resolve_schema("Part", 1) != nullptr);
+        CHECK(bus.resolve_schema("Part", 1)->content_id() == part_new()->content_id());
+        CHECK(refused_over(kernel.load("a", ZEN_SO_NEST_OLD), "Part"));
+        CHECK_FALSE(kernel.is_loaded("a"));
+        CHECK(bus.resolve_schema("Box", 1) == nullptr);
+        CHECK(bus.weave(native.id) != nullptr);
+    }
+    SUBCASE("loaded acceptor of Box first, then the native acceptor of Box2") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        REQUIRE(kernel.load("a", ZEN_SO_NEST_OLD).ok);
+        CHECK_THROWS_AS(register_probe(bus, {box2()}), SchemaConflict);
+        CHECK(bus.resolve_schema("Box2", 1) == nullptr);
+        CHECK(bus.resolve_schema("Part", 1)->content_id() == part_old()->content_id());
+        CHECK(kernel.is_loaded("a"));
+    }
+}
+
+TEST_CASE("schema admission: one artifact whose own declaration nests two definitions of "
+          "a component is refused in both declaration orders; the agreeing control loads with "
+          "the identity it declared") {
+    using namespace sa;
+    // The independent review's Box/Box2 reproduction: the encoder once deduplicated
+    // `referenced` by name, the second Part was lost before reconstruction, and the
+    // artifact LOADED advertising a Box2 whose content-id was not the one it declared.
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    for (const char* path : {ZEN_SO_NEST_MIXED, ZEN_SO_NEST_MIXED_REV}) {
+        CAPTURE(path);
+        LoadResult mixed = kernel.load("mixed", path);
+        CHECK(refused_over(mixed, "Part"));
+        CHECK_FALSE(kernel.is_loaded("mixed"));
+        // Not a different contract, and not a partial one: nothing it declared is on
+        // the bus, so a later load (below) meets no wall it left behind.
+        CHECK(bus.resolve_schema("Box", 1) == nullptr);
+        CHECK(bus.resolve_schema("Box2", 1) == nullptr);
+        CHECK(bus.resolve_schema("Part", 1) == nullptr);
+        CHECK(bus.list_weaves().empty());
+    }
+    // Two doors, ONE Part: identical definitions share one entry, and every advertised
+    // identity is exactly the declared one.
+    LoadResult agree = kernel.load("agree", ZEN_SO_NEST_AGREE);
+    REQUIRE_MESSAGE(agree.ok, agree.error);
+    REQUIRE(bus.resolve_schema("Whole", 1) != nullptr);
+    CHECK(bus.resolve_schema("Whole", 1)->content_id() == whole()->content_id());
+    REQUIRE(bus.resolve_schema("Box", 1) != nullptr);
+    CHECK(bus.resolve_schema("Box", 1)->content_id() == box()->content_id());
+    REQUIRE(bus.resolve_schema("Part", 1) != nullptr);
+    CHECK(bus.resolve_schema("Part", 1)->content_id() == part_old()->content_id());
+    CHECK(kernel.accepts(agree.id, "Whole", 1));
+    CHECK(kernel.accepts(agree.id, "Box", 1));
+}
+
+TEST_CASE("schema admission: a refused load leaves nothing behind, a valid load follows, the "
+          "incumbent keeps working, and the shape is reclaimed when its last holder leaves") {
+    using namespace sa;
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    Registered hears = register_probe(bus, {greet_msg()}); // a native acceptor of Greet {msg}
+    LoadResult e = kernel.load("e", ZEN_SO_EMITS, "speaker"); // agrees: emits Greet {msg}
+    REQUIRE_MESSAGE(e.ok, e.error);
+    const std::size_t weaves_before = bus.list_weaves().size();
+
+    std::size_t events = 0;
+    const ObserverId tap = bus.add_observer([&](const BusEvent&) { ++events; });
+    LoadResult blocked = kernel.load("late", ZEN_SO_EMITS_CONFLICT, "latecomer");
+    bus.remove_observer(tap);
+    CHECK(refused_over(blocked, "Greet"));
+    CHECK(events == 0);                                   // no bus event for a refusal
+    CHECK(bus.list_weaves().size() == weaves_before);     // no candidate participant
+    CHECK_FALSE(bus.role_holder("latecomer").valid());    // no office
+    CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+
+    // A later valid load into the same role follows...
+    LoadResult later = kernel.load("late", ZEN_SO_ACTIVATES_DRIFT, "latecomer");
+    REQUIRE_MESSAGE(later.ok, later.error);
+    CHECK(bus.role_holder("latecomer") == later.id);
+    // ...and the incumbent emitter is exactly as usable as before the refusal.
+    bus.send(e.id, Message(ping(1), WeaveId{}, hears.id));
+    bus.drain_until_idle();
+    REQUIRE(hears.weave->handled_names.size() == 1);
+    CHECK(hears.weave->handled_names[0] == "Greet");
+
+    // RECLAMATION (LIFE-08): the definition is held by three live claims — the native
+    // acceptor, the emitter and the later acceptor. Each leaving alone changes
+    // nothing; the last leaving lets a different definition publish.
+    REQUIRE(bus.unregister_weave(hears.id) != nullptr);
+    CHECK(bus.resolve_schema("Greet", 1) != nullptr);
+    REQUIRE(kernel.unload("late"));
+    CHECK(bus.resolve_schema("Greet", 1) != nullptr); // the emitter's own claim holds it
+    REQUIRE(kernel.unload("e"));
+    CHECK(bus.resolve_schema("Greet", 1) == nullptr);
+    LoadResult now_free = kernel.load("late", ZEN_SO_EMITS_CONFLICT, "latecomer");
+    CHECK_MESSAGE(now_free.ok, now_free.error);
+    CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+}
+
+TEST_CASE("schema admission: a reload candidate whose declared vocabulary disagrees with a "
+          "definition only a NATIVE weave holds is refused before the incumbent is touched; "
+          "the agreeing rebuild reloads and re-declares its emit-set") {
+    using namespace sa;
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    // The plain fixture: Ping in, Pong out, Counter v1 — the same contract every
+    // zen_test_weave_emits* variant keeps, so the candidates below differ ONLY in
+    // what they declare they emit.
+    LoadResult w = kernel.load("w", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(w.ok, w.error);
+    Registered hears = register_probe(bus, {greet_msg()}); // Greet {msg}, native only
+    Registered pongs = register_probe(bus, {pong_schema()});
+
+    // No LOADED artifact declares Greet, so the Kernel's decoding registry cannot
+    // object; only the bus holds the native definition. The candidate is judged
+    // against it here, read-only, and refused with the registry's own sentence.
+    ReloadResult refused = kernel.reload_from("w", ZEN_SO_EMITS_CONFLICT);
+    CHECK_FALSE(refused.ok);
+    CHECK_FALSE(refused.reloaded);
+    CHECK(refused.error.find("new library refused: schema 'Greet' v1") != std::string::npos);
+    CHECK(refused.error.find(kConflict) != std::string::npos);
+    // Untouched: the same incarnation answers the same way.
+    CHECK(kernel.weave_id("w") == w.id);
+    CHECK(bus.emitted_schemas(w.id).empty());
+    bus.send(w.id, Message(ping(3), WeaveId{}, pongs.id));
+    bus.drain_until_idle();
+    REQUIRE(pongs.weave->handled_names.size() == 1);
+    CHECK(pongs.weave->handled_names[0] == "Pong");
+    CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+
+    // The agreeing rebuild reloads in place, and the successor's declaration is its
+    // own: the bus now says this id emits Greet, from the code that is live.
+    ReloadResult ok = kernel.reload_from("w", ZEN_SO_EMITS);
+    REQUIRE_MESSAGE(ok.ok, ok.error);
+    CHECK(ok.reloaded);
+    CHECK(kernel.weave_id("w") == w.id);
+    const auto declared = bus.emitted_schemas(w.id);
+    REQUIRE(declared.size() == 1);
+    CHECK(declared[0]->name() == "Greet");
+    bus.send(w.id, Message(ping(4), WeaveId{}, hears.id));
+    bus.drain_until_idle();
+    REQUIRE(hears.weave->handled_names.size() == 1);
+    CHECK(hears.weave->handled_names[0] == "Greet");
+
+    // The reloaded artifact's emit claim is a live claim: the native acceptor leaving
+    // does not reclaim Greet; the artifact leaving does.
+    REQUIRE(bus.unregister_weave(hears.id) != nullptr);
+    CHECK(bus.resolve_schema("Greet", 1) != nullptr);
+    REQUIRE(kernel.unload("w"));
+    CHECK(bus.resolve_schema("Greet", 1) == nullptr);
+}
+
+TEST_CASE("schema admission: a prepared candidate whose emit-set disagrees is refused at "
+          "load_candidate with no residue") {
+    using namespace sa;
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    Registered coordinator = register_probe(bus, {greet_msg()});
+    LoadResult cand = kernel.load_candidate("cand", ZEN_SO_EMITS_CONFLICT, coordinator.id);
+    CHECK(refused_over(cand, "Greet"));
+    CHECK_FALSE(kernel.is_loaded("cand"));
+    CHECK(bus.list_weaves().size() == 1);
+    CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
+    // ...and the agreeing candidate seals as before: a candidate is judged, not a decree.
+    LoadResult agreeing = kernel.load_candidate("cand", ZEN_SO_EMITS, coordinator.id);
+    REQUIRE_MESSAGE(agreeing.ok, agreeing.error);
+    CHECK(kernel.is_loaded("cand"));
+}
+
+TEST_CASE("schema admission: the copied weave that kept `Ping v1`'s name is refused at load "
+          "with the guide's sentence, natively hosted or not (P-LOOM-06)") {
+    using namespace sa;
+    // docs/guides/writing-a-weave.md: copy a weave, add a field, leave the shape's
+    // name and version as they were — refused at mount, and "a host that loaded the
+    // copy from a library rather than compiling it in reports that same sentence".
+    const std::string sentence =
+        std::string("load refused: schema 'Ping' v1 ") + kConflict;
+    SUBCASE("beside the original, loaded") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        REQUIRE(kernel.load("original", ZEN_SO_WEAVE).ok);
+        LoadResult copy = kernel.load("copy", ZEN_SO_PING_DRIFT);
+        CHECK_FALSE(copy.ok);
+        CHECK(copy.error == sentence);
+        CHECK_FALSE(kernel.is_loaded("copy"));
+    }
+    SUBCASE("beside a native weave that hears the original Ping") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        Registered native = register_probe(bus, {ping_schema()});
+        LoadResult copy = kernel.load("copy", ZEN_SO_PING_DRIFT);
+        CHECK_FALSE(copy.ok);
+        CHECK(copy.error == sentence);
+        CHECK(bus.weave(native.id) != nullptr);
+    }
+    SUBCASE("alone, the copy is a perfectly good weave — the rule is about divergence") {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        LoadResult copy = kernel.load("copy", ZEN_SO_PING_DRIFT);
+        CHECK_MESSAGE(copy.ok, copy.error);
+    }
+}
+
 TEST_CASE("many rejected candidates leave no accumulation (BL-0 boundedness)") {
     // The C-10 shape at the reload door: a host that keeps being offered
     // candidates it refuses must not grow a vocabulary out of the refusals.

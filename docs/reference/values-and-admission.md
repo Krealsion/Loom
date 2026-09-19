@@ -59,9 +59,17 @@ prior step and never folds into the gate
 
 Immutable `(name, version) → schema` registrations; a conflicting
 re-registration of the same identity throws `SchemaConflict`. The bus takes
-every weave's accept-set, declared claim-set and state schema at registration,
-so all parties agree on what a name means before anything routes. Reads take an
-immutable snapshot and traverse it lock-free.
+every weave's accept-set, declared claim-set, declared emit-set and state schema
+at registration — **with every component those shapes nest**, walked by
+`collect_referenced` (`zen/schema.hpp`) — so every party that declares a name,
+whichever list it declares it in and however deep, agrees on what the name means
+before anything routes, and a declaration that contradicts itself never
+registers ([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md)).
+A loaded artifact's manifest carries the same four lists and the same closure,
+so the wall is one wall for native and loaded participants alike. Agreeing on a
+shape grants nothing: what a weave may *send* is its grant's business
+([capabilities](capabilities.md)). Reads take an immutable snapshot and traverse
+it lock-free.
 
 **A schema is discoverable while something live requires it**
 ([LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered)).
@@ -79,10 +87,10 @@ several schemas is one transaction and one publication — a conflict on the las
 leaves no claim on the first — and releasing a scope removes every shape whose
 last claim it held in one publication too.
 
-Who holds the claims: a `WeaveRecord` for what its weave hears, may say and
-persists; a Kernel's loaded-artifact record for its manifest; an isolation
-`Link` for its mount. The Registry itself knows nothing of weaves, artifacts or
-mounts.
+Who holds the claims: a `WeaveRecord` for what its weave hears, declares it
+says, may say and persists; a Kernel's loaded-artifact record for its manifest;
+an isolation `Link` for its mount. The Registry itself knows nothing of weaves,
+artifacts or mounts.
 
 Reclamation is about **discoverability, not memory**. A `Value` owns its schema
 strongly and `lookup` returns a strong owner, so a schema that has left the

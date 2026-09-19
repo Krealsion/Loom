@@ -188,6 +188,11 @@ private:
         std::unique_ptr<Channel> channel; // null when no live child
         pid_t pid = -1;
         std::vector<std::shared_ptr<const Schema>> accept;
+        /// The child's declared emit-set (its manifest's `emits`, ABI v9), decoded
+        /// the way its doors are — top-level, against this host's registry — and
+        /// declared by the proxy on the bus so the one agreement wall reads it.
+        /// Vocabulary only: the child's grant is decided by the host as before.
+        std::vector<std::shared_ptr<const Schema>> emits;
         std::shared_ptr<const Schema> state_schema;
         /// THE MOUNT'S CLAIM on this host's dependency registry (LIFE-08), and the
         /// mount is the honest scope — wider than the child process, narrower
