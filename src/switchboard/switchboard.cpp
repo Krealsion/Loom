@@ -299,7 +299,17 @@ Switchboard::Switchboard()
     journal_.assign(kJournalCapacity, JournalSlot{});
 }
 
-Switchboard::~Switchboard() = default;
+// A WEAVE MAY REACH BACK INTO THE BUS FROM ITS OWN DESTRUCTOR -- a weave that owns a
+// BridgeServer unregisters that server's proxies and removes its observer when it dies.
+// Were the registry destroyed member-wise, that call would erase from a map already being
+// torn down. So the registry is emptied FIRST, into a local, and the weaves die from there:
+// a re-entrant `unregister_weave` then finds nothing and returns nothing, and every other
+// member (observers, roles, the journal) is still whole for the duration of the body.
+Switchboard::~Switchboard() {
+    std::map<std::uint64_t, WeaveRecord> dying = std::move(weaves_);
+    weaves_.clear();
+    dying.clear();
+}
 
 Switchboard::WeaveRecord* Switchboard::find(WeaveId id) {
     auto it = weaves_.find(id.value);
@@ -639,8 +649,9 @@ void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& e
     Envelope reply{std::move(msg), env.msg.sender, seq, false, {}, env.sender_life};
     reply.refusal_incarnation = env.refusal_incarnation;
     reply.dispatch_parent = env.seq;
+    reply.fence = env.fence; // a consequence of the refused envelope, counted where it is
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
-    queue_.push_back(std::move(reply));
+    queue_back(std::move(reply));
 }
 
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
@@ -661,7 +672,8 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     // bus's own record: it is a fact about the message, so the message never
     // gets to say it. 0 when nothing was being dispatched.
     env.dispatch_parent = current_dispatch_seq_;
-    queue_.push_back(std::move(env));
+    env.fence = current_dispatch_fence_; // ...and which fence that delivery belongs to
+    queue_back(std::move(env));
     return Ticket{seq};
 }
 
@@ -678,7 +690,8 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     Envelope env{std::move(msg), WeaveId{}, seq, gated, std::move(role), life};
     capture_refusal_recipient(env);
     env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from (RTH-1)
-    queue_.push_back(std::move(env));
+    env.fence = current_dispatch_fence_;
+    queue_back(std::move(env));
     return Ticket{seq};
 }
 
@@ -1562,8 +1575,9 @@ void Switchboard::notify_joint_ended(JointOp& op) {
     const std::uint64_t seq = allocate_sequence();
     Message msg(to_value(notice), WeaveId{}, WeaveId{}, 0);
     Envelope env{std::move(msg), op.operator_.who, seq, false, {}, 0};
+    env.fence = current_dispatch_fence_;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
-    queue_.push_back(std::move(env));
+    queue_back(std::move(env));
 }
 
 void Switchboard::abort_joint_on_claim(const PersonalKey& key) {
@@ -1711,8 +1725,9 @@ void Switchboard::notify_joint_applied(JointOp& op, JointApplication what, const
     const std::uint64_t seq = allocate_sequence();
     Message msg(to_value(notice), WeaveId{}, WeaveId{}, 0);
     Envelope env{std::move(msg), op.operator_.who, seq, false, {}, 0};
+    env.fence = current_dispatch_fence_;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
-    queue_.push_back(std::move(env));
+    queue_back(std::move(env));
 }
 
 void Switchboard::reset_failed_application_for_successor(WeaveId id) noexcept {
@@ -1792,7 +1807,10 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     // answer and one deferred across a dozen deliveries prove exactly the same
     // thing — which is why there is one readiness definition rather than two.
     env.preparation = preparation;
-    queue_.push_back(std::move(env));
+    // An answer belongs to the fence of the delivery it is SPENT from, not the ask's: a
+    // deferred answer spent from a later, unrelated delivery is that delivery's work.
+    env.fence = current_dispatch_fence_;
+    queue_back(std::move(env));
     return Ticket{seq};
 }
 
@@ -2176,7 +2194,8 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         // Every recipient's envelope carries the same dispatch parent, because
         // one authorship moment is what produced them all (RTH-1).
         env.dispatch_parent = current_dispatch_seq_;
-        queue_.push_back(std::move(env));
+        env.fence = current_dispatch_fence_; // ...and every one counts in that delivery's fence
+        queue_back(std::move(env));
         ++recipients;
     }
     return recipients;
@@ -2370,6 +2389,10 @@ void Switchboard::emit(const BusEvent& event) {
 }
 
 void Switchboard::deliver_one(Envelope env) {
+    // WHAT THIS DISPATCH QUEUES IS COUNTED IN THIS ENVELOPE'S FENCE -- its handler's sends, and
+    // the refusals, notices and showings its dispatch produces -- and the envelope itself stops
+    // counting when this returns, by any exit.
+    const FenceTurn fenced(*this, env.fence);
     // AN ADMISSION IS ITS OWN DELIVERY (PR-08). It takes the whole turn: it
     // moves production topology and hands the candidate its activation, and it
     // does not travel the ordinary authorization path below — a committed
@@ -2780,6 +2803,148 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
     return dispatched;
 }
 
+// ---- fences: when what one send set in motion has been dispatched --------------------------
+
+const char* name_of(FenceState s) noexcept {
+    switch (s) {
+    case FenceState::Unknown:
+        return "Unknown";
+    case FenceState::Open:
+        return "Open";
+    case FenceState::Settled:
+        return "Settled";
+    }
+    return "?";
+}
+
+Switchboard::FenceRecord* Switchboard::find_fence(std::uint64_t id) noexcept {
+    if (id == 0) {
+        return nullptr;
+    }
+    for (FenceRecord& f : fences_) {
+        if (f.id == id) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+const Switchboard::FenceRecord* Switchboard::find_fence(std::uint64_t id) const noexcept {
+    if (id == 0) {
+        return nullptr;
+    }
+    for (const FenceRecord& f : fences_) {
+        if (f.id == id) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+void Switchboard::queue_back(Envelope env) {
+    if (FenceRecord* f = find_fence(env.fence)) {
+        ++f->queued;
+    }
+    queue_.push_back(std::move(env));
+}
+
+void Switchboard::fence_dispatched(std::uint64_t id) noexcept {
+    if (FenceRecord* f = find_fence(id)) {
+        if (f->queued > 0) {
+            --f->queued;
+        }
+    }
+}
+
+std::uint64_t Switchboard::begin_fence() {
+    if (fences_.size() >= kMaxFences) {
+        return 0;
+    }
+    const std::uint64_t id = next_fence_++;
+    fences_.push_back(FenceRecord{id, 0});
+    return id;
+}
+
+namespace {
+/// The one enqueue a fenced host send makes is counted in the fence it opened, and in no other:
+/// the ambient fence is that fence for exactly the length of the call, and restored after it by
+/// any exit.
+struct AmbientFence {
+    std::uint64_t& slot;
+    std::uint64_t was;
+    AmbientFence(std::uint64_t& s, std::uint64_t fence) noexcept : slot(s), was(s) { slot = fence; }
+    ~AmbientFence() { slot = was; }
+    AmbientFence(const AmbientFence&) = delete;
+    AmbientFence& operator=(const AmbientFence&) = delete;
+};
+} // namespace
+
+Ticket Switchboard::send_as_fenced(WeaveId as_sender, WeaveId target, Message msg, Fence* fence) {
+    if (fence == nullptr) {
+        return Ticket{}; // no owner could retain and release the fence
+    }
+    *fence = Fence{};
+    const std::uint64_t id = begin_fence();
+    if (id == 0) {
+        return Ticket{}; // at the bound: nothing is queued, and the caller is told so
+    }
+    Ticket t;
+    {
+        const AmbientFence ambient(current_dispatch_fence_, id);
+        t = send_as(as_sender, target, std::move(msg));
+    }
+    if (!t.valid()) {
+        release_fence(Fence{id});
+        return t;
+    }
+    if (fence != nullptr) {
+        *fence = Fence{id};
+    }
+    return t;
+}
+
+Ticket Switchboard::send_as_to_role_fenced(WeaveId as_sender, std::string_view role, Message msg,
+                                           Fence* fence) {
+    if (fence == nullptr) {
+        return Ticket{}; // no owner could retain and release the fence
+    }
+    *fence = Fence{};
+    const std::uint64_t id = begin_fence();
+    if (id == 0) {
+        return Ticket{};
+    }
+    Ticket t;
+    {
+        const AmbientFence ambient(current_dispatch_fence_, id);
+        t = send_as_to_role(as_sender, role, std::move(msg));
+    }
+    if (!t.valid()) {
+        release_fence(Fence{id});
+        return t;
+    }
+    if (fence != nullptr) {
+        *fence = Fence{id};
+    }
+    return t;
+}
+
+FenceState Switchboard::fence_state(Fence fence) const noexcept {
+    const FenceRecord* f = find_fence(fence.value);
+    if (f == nullptr) {
+        return FenceState::Unknown;
+    }
+    return f->queued == 0 ? FenceState::Settled : FenceState::Open;
+}
+
+void Switchboard::release_fence(Fence fence) noexcept {
+    for (auto it = fences_.begin(); it != fences_.end(); ++it) {
+        if (it->id == fence.value) {
+            fences_.erase(it);
+            return;
+        }
+    }
+}
+
 DeliveryOutcome Switchboard::outcome(Ticket t) const {
     if (t.seq == 0 || (next_seq_ != 0 && t.seq >= next_seq_)) {
         return DeliveryOutcome{}; // the invalid ticket, or a seq never issued
@@ -3072,11 +3237,15 @@ AdmitResult Switchboard::schedule_admission(WeaveId candidate, WeaveId incumbent
                  /*sender_life=*/0};
     act.admission = PendingAdmission{true, cand_ref, inc_ref, owner, role, txn};
     act.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from (RTH-1)
+    act.fence = current_dispatch_fence_;
     auto at = queue_.begin();
     for (; at != queue_.end(); ++at) {
         if (at->target == candidate || (!at->role.empty() && at->role == role)) {
             break;
         }
+    }
+    if (FenceRecord* f = find_fence(act.fence)) {
+        ++f->queued; // inserted rather than appended, and counted all the same
     }
     queue_.insert(at, std::move(act));
     return {true, AdmitRefusal::None, Ticket{seq}};

@@ -282,7 +282,7 @@ TEST_CASE("the BARE form a person writes is admitted, without the envelope") {
 
 TEST_CASE("the ENVELOPED form the host writes is admitted too") {
     Scratch f("enveloped");
-    f.write(R"({"zen":1,"schema":"zen.HostBootPlan","version":1,)"
+    f.write(R"({"zen":1,"schema":"zen.HostBootPlan","version":2,)"
             R"("fields":{"boot":[{"name":"a","path":"/x/a.so"}]}})");
     BootPlan plan;
     std::string why;
@@ -323,6 +323,69 @@ TEST_CASE("the gate still refuses what it always refused") {
         // about the typo when the host starts, in a sentence naming the rule.
         CHECK_FALSE(s.open(f.path, &why));
         CHECK(why.find("weave #2") != std::string::npos);
+    }
+}
+
+TEST_CASE("a plan's links and history read back whole, and a bare plan has none of either") {
+    Scratch f("links-history");
+    f.write(R"({"boot":[{"name":"probe","path":"/x/probe.so"}],)"
+            R"("links":[{"name":"workshop","connect":"127.0.0.1:7654",)"
+            R"("identity":"agent","credential":"open-sesame"}],)"
+            R"("history":{"log":"run.log","recent":"64","keep_refusals":true,)"
+            R"("retain":[{"shape":"SurfaceCaptured","last_n":"4","in_recent":false,)"
+            R"("retain_payload":true}],)"
+            R"("keep":[{"shape":"InputInjected"},{"shape":"SurfaceCaptureChunk","cap":"2"}]}})");
+    BootPlan plan;
+    std::string why;
+    REQUIRE_MESSAGE(read_boot_plan(f.path, &plan, &why), why);
+    REQUIRE(plan.links.size() == 1);
+    CHECK(plan.links[0].name == "workshop");
+    CHECK(plan.links[0].connect == "127.0.0.1:7654");
+    CHECK(plan.links[0].identity == "agent");
+    CHECK(plan.links[0].credential == "open-sesame");
+    CHECK(plan.history.log == "run.log");
+    CHECK(plan.history.recent == 64);
+    CHECK(plan.history.keep_refusals);
+    REQUIRE(plan.history.retain.size() == 1);
+    CHECK(plan.history.retain[0].shape == "SurfaceCaptured");
+    CHECK(plan.history.retain[0].last_n == 4);
+    CHECK_FALSE(plan.history.retain[0].in_recent);
+    CHECK(plan.history.retain[0].retain_payload);
+    REQUIRE(plan.history.keep.size() == 2);
+    CHECK(plan.history.keep[0].cap == 0);
+    CHECK(plan.history.keep[1].shape == "SurfaceCaptureChunk");
+    CHECK(plan.history.keep[1].cap == 2);
+
+    Scratch bare("bare-no-links");
+    bare.write(R"({"boot":[]})");
+    BootPlan none;
+    REQUIRE_MESSAGE(read_boot_plan(bare.path, &none, &why), why);
+    CHECK(none.links.empty());
+    CHECK(none.history.log.empty());
+    CHECK(none.history.retain.empty());
+    CHECK(none.history.keep.empty());
+}
+
+TEST_CASE("a link without a destination, or two links with one name, is refused by name") {
+    std::string why;
+    BootPlan plan;
+    SUBCASE("no connect") {
+        Scratch f("link-no-connect");
+        f.write(R"({"boot":[],"links":[{"name":"workshop","connect":""}]})");
+        CHECK_FALSE(read_boot_plan(f.path, &plan, &why));
+        CHECK(why.find("link") != std::string::npos);
+    }
+    SUBCASE("two names") {
+        Scratch f("link-twice");
+        f.write(R"({"boot":[],"links":[{"name":"w","connect":"a:1"},{"name":"w","connect":"b:2"}]})");
+        CHECK_FALSE(read_boot_plan(f.path, &plan, &why));
+        CHECK(why.find("'w'") != std::string::npos);
+    }
+    SUBCASE("a negative window") {
+        Scratch f("history-negative");
+        f.write(R"({"boot":[],"history":{"recent":"-1"}})");
+        CHECK_FALSE(read_boot_plan(f.path, &plan, &why));
+        CHECK(why.find("negative") != std::string::npos);
     }
 }
 

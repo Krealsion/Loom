@@ -1,164 +1,225 @@
-# Bridge (the remote operator crossing) — reference
+# Bridge (the crossing between two hosts) — reference
 
-The host side of the remote-operator console: a framed socket, a
-per-connection **proxy-participant** on the bus, and the operator-protocol
-they speak. Laws: [MSG-02](../laws/messaging-laws.md#msg-02--the-bus-stamps-the-sender),
+The host side of a connection from another process: a framed socket, an
+**admission decision** the host makes over every connection, a per-session
+**proxy-participant** on the bus under the grant that decision chose, and the
+protocol the two sides speak. Laws:
+[MSG-02](../laws/messaging-laws.md#msg-02--the-bus-stamps-the-sender),
 [GATE-01](../laws/admission-laws.md#gate-01--one-gate),
 [MSG-09](../laws/messaging-laws.md#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo),
+[MSG-12](../laws/messaging-laws.md),
 [LIFE-07](../laws/lifecycle-laws.md#life-07--consumed-transport-bytes-are-history-not-live-channel-storage).
-Capacities: [bounds](bounds.md#bridge-remote-operator). Console semantics:
-[bounds § console](bounds.md#console-operator-history).
+Capacities: [bounds](bounds.md#bridge-remote-operator). The supplied host's
+use of the connecting side: [running-loom](../guides/running-loom.md#10-link-to-another-host).
 
-**Read the authentication section before you bind a listener anywhere.**
+**Read the admission section before you bind a listener anywhere.**
 
 ## What Bridge is
 
-A **`Switchboard&` cannot cross a socket.** The in-process console holds one;
-a remote console cannot. Bridge is the answer: the console *engine* runs
-client-side (`RemoteConsole`), and its three host interactions — discovery,
-the tap, and sends — cross as framed messages the host answers and streams.
-
-What crosses is therefore not "the bus". It is:
+A **`Switchboard&` cannot cross a socket.** What crosses instead is:
 
 ```text
-discovery      "who is on the bus, and what shapes do they accept?"
-the tap        a COPY of each bus event, streamed as it happens
-a send         serialized message bytes the host re-admits and routes
-a delivery     serialized reply bytes routed to this operator
+a handshake      "here is who I claim to be, and what I present"  -> admitted as X, or refused: why
+discovery        "who is on the bus, and what shapes do they accept?"
+a send           serialized message bytes the host re-admits, stamps and routes
+a delivery       serialized bytes routed to this session, WITH what the bus stamped on them
+a settlement     the host's word that what a send asked to follow has all been dispatched
+the tap          a COPY of each bus event -- only for a session admitted with observation
 ```
 
 The bus itself stays entirely host-side, single-threaded, FIFO.
 
 **The shape is deliberately the out-of-process weave's.** `BridgeServer`
-registers one `OperatorProxy` per connection — an ordinary `Weave` on the bus
-whose `handle()` ships the delivery down its socket — exactly as
+registers one proxy per admitted connection — an ordinary `Weave` on the bus
+whose `handle()` ships each delivery down its socket — exactly as
 `IsolationHost` registers an `OutOfProcessWeave` per mounted child. Same
-proxy-participant pattern, pointed at an operator instead of a hosted weave.
+proxy-participant pattern, pointed at a peer.
 
-**What it is for.** Driving a live Loom from another process or another OS:
-the Windows console (`zen-console-remote`) attached to a WSL-hosted bus, an
-operator attached to a long-running service, a non-interactive crossing proof
-(`zen-bridge-probe`). Transport-agnostic by construction — AF_UNIX for the
-local WSL↔WSL loop, AF_INET `127.0.0.1` for the real Windows→WSL crossing.
+**Two consumers, one crossing.** The *operator's* console
+(`zen-console-remote`, `zen-bridge-probe`) is one principal with the whole bus;
+a *guest* — another Loom host's participant, a Workshop's agent — is admitted
+deliberately and granted narrowly. The crossing serves both through one
+policy seam, and the difference between them is entirely the policy's answer.
 
-**What it is not for.** It is not an RPC surface for applications, not a
-public network service, not a weave-hosting mechanism (that is
-[kernel](kernel.md) in-process and [capabilities](capabilities.md)
-out-of-process), and not an authentication boundary — see below.
+**Where it lives.** `loom::bridge` (`zen-bridge`: the channel, the protocol, the
+server, the console-free client, the link envelope) is **exported** by
+`find_package(loom)` since the two-host crossing: a Loom host that links to
+another host reaches it that way, and Loom's own supplied host does. The
+operator's console over it (`RemoteConsole`, `zen-bridge-console`) stays
+unexported with the console engine it needs. Nothing of the console's
+dependency closure crosses the package boundary.
 
-**Where it lives.** `zen-bridge` (`loom::bridge`) is an in-tree library and is
-**deliberately not exported** by `find_package(loom)`, alongside the console,
-the TUI and the UI trio — those are Zengine-destined and each moves in its own
-port phase. A consumer of the installed package has no Bridge.
+## Admission: who decides, and when
 
-## Connection authority
-
-`authorize_connection(socket_t)` (`include/zen/bridge/server.hpp`) is the one
-chokepoint. Today it returns `OperatorGrant{true}` for every connection —
-**model A: reachability IS authority**. `BridgeServer::accept_new()` sheds a
-connection past the cap first (accept-then-close, counted), and otherwise
-consults the chokepoint before anything else happens on that socket: a
-declined grant closes the socket, registers no proxy, and reads no frame.
-
-An authorized connection is then registered on the bus as
+Reaching the socket is not authority. A connection has **no proxy on the bus —
+and so can act on nothing — until the host's policy has answered its Hello.**
 
 ```cpp
-bus_.register_weave(std::move(proxy), loom::Grant{}.allow_any(),
-                    loom::AcceptMode::AnyRegistered);
+using BridgeAdmission = std::function<ConnectionVerdict(const ConnectionRequest&)>;
+BridgeServer server(bus, listener, policy);
 ```
 
-— the most-granted ordinary participant (broad send authority, accepts a reply
-of any registered shape), and **still a grant, not host root**. An operator
-holds no `Switchboard&`: it cannot mint a `LifecycleAuthority`, cannot
-`send`/`publish` ungated, cannot assign grants. Its every send is authorized
-against that grant at delivery, before role resolution and before the gate,
-exactly like any other weave's.
+The policy sees what the peer **claimed** — a name, a credential, a protocol
+version — and where it came from, and answers one of three things:
 
-That pair — the function and the one `register_weave` call that consumes its
-result — is the entire connect-authority seam. Deferred models change only
-those two lines: **model B** a bearer token (possession-is-authorization, no
-identity), **model C** per-connection graduated grants, where the *weaver*
-concept is born because differential authority is the first place
-authorization needs authentication. The chokepoint is built; the token is not.
+| verdict | what happens |
+|---|---|
+| **Admit** (`ConnectionAdmitted`: a `loom::Grant`, an accept mode, an established name, `observe`) | a proxy is registered under that grant; `Welcome` carries the session id and the established name; sends are stamped and routed |
+| **Refuse** (a reason) | `Denied` carries the reason, the connection is severed, nothing was registered and nothing it sent acted |
+| **Defer** | the connection waits in `AwaitingDecision`: its sends are refused aloud (`SendRefused: not admitted`), never queued; `BridgeServer::decide(connection, verdict)` settles it later |
 
-### Where connection identity comes from
+`Defer` + `decide` is the seam an interactive decision attaches to: a console
+command today, a per-connection popup tomorrow. Nothing downstream of the
+verdict changes for it.
 
-The proxy's `WeaveId` **is** the operator's identity on the bus, and the host
-stamps it from the connection on every send it makes on the operator's behalf.
+`operator_admission()` is the old model stated as a policy: every connection is
+the operator — `allow_any()`, accept-any, observing the whole bus — and its
+established name is whatever it claimed. **Under that policy reachability of
+the socket is authority**, and a listener served with it must not be exposed
+to an untrusted network. It is what the in-tree consoles use.
 
-**Wire `sender` and `reply_to` are read and discarded.** The `Send` frame
-carries `wire_sender` and `wire_reply_to` fields; `BridgeServer::on_frame`
-parses them (so the header's shape is fixed) and then constructs
+A peer speaking another protocol version is refused in words
+(`protocol v3 is not spoken here; this host speaks v4`) before the policy is
+asked. A malformed Hello is refused. Any frame before Hello severs.
 
-```cpp
-loom::Message msg(std::move(a).value(), loom::WeaveId{}, c.id, correlation);
-bus_.send_as(c.id, loom::WeaveId{target}, std::move(msg));
+### Identity
+
+Three facts, kept apart on purpose:
+
+```text
+claimed name        the peer's word about itself          data the policy judges
+established name    the host's word about the session     the policy's answer, on Welcome
+session             the proxy's WeaveId on this bus       minted at admission, never reused
 ```
 
-with `c.id` — the connection's proxy — as both the stamped sender and the
-reply target. An honest client sets both wire fields to 0; a malicious one
-forges them and the bridge stamps over both. A forged `reply_to` therefore
-cannot redirect an operator's replies to a third party (the confused-deputy
-guard), and a forged `sender` cannot impersonate another participant
-([MSG-02](../laws/messaging-laws.md#msg-02--the-bus-stamps-the-sender)).
+The session is the only one of the three that is an identity here. It is what
+the bus stamps as the sender of everything the connection sends, what a target
+sees in `mail.sender()`, and what an answer is delivered to. A reconnect is a
+**new** session; a late answer addressed to an old one reaches nobody
+(`NoSuchTarget` on the tap). A remote integer id is never local authority: the
+policy's grant is, checked at every send, under the proxy's own id.
 
-This is pinned by a test that **forges the hostile frame directly** rather
-than through the honest client API, because the honest API cannot express the
-attack: suite `bridge`, *"the sender is stamped from the connection — a FORGED
-wire sender loses"*.
+**Wire `sender` and `reply_to` are read and discarded.** A forged `reply_to`
+cannot redirect a session's replies to a third party, and a forged `sender`
+cannot impersonate another participant
+([MSG-02](../laws/messaging-laws.md#msg-02--the-bus-stamps-the-sender)); pinned
+by forging the hostile frame directly (suite `bridge`).
 
-`target` and `correlation` are *not* authority and are taken from the wire:
-`target` is a destination the bus resolves and may refuse, `correlation` is an
-opaque echo the operator chose.
+## What a session is told
 
-**Every operator sees the whole-bus tap.** Under model A every connection is
-the same principal, so `on_tap` copies each `BusEvent` to every connection.
-Operator proxies are excluded from the discovery list (`push_weaves`) but are
-still addressable by their small-integer ids — harmless while all operators
-are one principal, and named here as the cross-principal surface model C
-inherits.
+`Delivered` carries what the bus stamped on the delivery beside the payload:
 
-## Authentication posture
+```text
+sender            the bus's stamp of who spoke
+correlation       the number the session put on its ask, echoed by an answer
+answers_ask       Loom's own word that this is THE answer to an ask this session sent (ANS-05)
+dispatch_refused  this is a zen.DispatchRefused notice about one of this session's own sends
+authored_role     the office the sender deliberately spoke as, or empty
+```
 
-**Bridge provides NO authentication.** There is no token, no key, no
-challenge, no peer-credential check, and no TLS. `authorize_connection` does
-not look at the socket it is handed.
+A peer that only got bytes could not tell an attested answer from any admitted
+participant's helpful `zen.Result`; v4's crossing no longer discards the
+difference.
 
-The operational consequence, stated plainly:
+A `Send` may carry `kSendSettle`. The host then opens a
+[fence](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)
+on the envelope it queues and, once everything that envelope set in motion on its bus has
+been dispatched, tells the session `Settled` under the send's correlation — once. That is
+not an answer and is not ordered against one: a far owner may answer first (its answer is
+a delivery the fence itself counts) or later (a deferred answer spent from an unrelated
+delivery is not the fence's). It says nothing about work deferred to a timer or a later
+turn. A connection waits on at most `kMaxSettlingPerConnection` settlements; past that,
+or past the bus's own `kMaxFences`, the Send is refused **before the bus** — never quietly
+sent without one — and a publication, which has no one delivery to follow, cannot ask. The proxy declares `zen.DispatchRefused` among its doors so a
+session hears its own dispatch refusals
+([MSG-12](../laws/messaging-laws.md)), and the construction layer's answer to
+`zen.DescribeAccepted` (`zen.AcceptedShapes`), which no ordinary participant
+declares, so a session allowed to ask what a weave accepts has somewhere for
+the answer to land -- whatever else its accept mode admits.
 
-> **Reachability of the bridge socket is operator authority.** Any party that
-> can connect gets a full operator grant on your bus: it can enumerate every
-> participant and the shapes they accept, read every bus event through the
-> tap, and send any admissible message to any target.
->
-> **Do not bind a bridge listener on an interface an untrusted party can
-> reach.** Securing that reachability is a deployment responsibility, and
-> reachability is this component's current access-control boundary.
+**The outcomes of one send, kept apart** — because they send a peer to
+different places:
 
-`zen-bridge-host` prints that sentence at startup rather than leaving it to
-documentation, and the header says it above the type. Two external reviews
-have reached the same categorical position on a network-exposed Bridge — do
-not — and nothing in the mechanism has moved since.
+| outcome | how the peer learns it |
+|---|---|
+| refused at admission | `Denied`, then severance |
+| dropped before the bus (malformed header, unknown shape, gate refusal, not admitted) | `SendRefused` with the correlation and the reason |
+| refused by the bus (`CapabilityDenied`, `NoSuchTarget`, …) | `Delivered` flagged `dispatch_refused`, carrying the notice |
+| answered | `Delivered` flagged `answers_ask`, under the correlation |
+| what it set in motion has been dispatched (asked with `kSendSettle`) | `Settled`, under the correlation, once |
+| the socket ended after the send | nothing — the outcome is **unknown**, and a peer must not resend on its own |
+| silence | nothing; the ask is still open on the peer's own book |
 
-Two honest facts about the shipped listeners, one mitigating and one not:
+## The tap
 
-- **`bridge_listen_tcp` binds `INADDR_LOOPBACK` unconditionally** — it takes a
-  port and no address, so the shipped helper cannot be pointed at a public
-  interface even by mistake. That is a real mitigation and it is not
-  authentication: `BridgeServer` accepts *any* `socket_t` an embedder hands
-  it, including one bound to `INADDR_ANY`; WSL2 forwards localhost by design
-  (which is the crossing this exists for); and any tunnel, port-forward or
-  proxy in front of it re-exposes the port. Loopback bounds *who can reach it
-  by default*, never *what a reacher may do*.
-- **`bridge_listen_unix` sets no socket-file permissions.** It `unlink`s a
-  stale path and binds; access to the resulting node is whatever the ambient
-  umask produced, and the bridge does not manage it. On a shared host, place
-  it in a directory whose permissions you control.
+A session admitted with `observe` receives a copy of every bus event, as the
+operator always did. A session admitted without it receives **only** what is
+delivered to its proxy. A guest is not given a tap by any policy Loom ships;
+richer observation of a host is that host's to grant through its own owners.
 
-Loom's own sockets set `FD_CLOEXEC` at creation. That is defence in depth so
-Loom's descriptors do not walk into someone else's child; it is explicitly
-**not** the sandbox boundary — see
-[capabilities § the exec boundary](capabilities.md#the-exec-boundary-three-independent-facts).
+## The connecting side
+
+`BridgeClient` (`zen/bridge/client.hpp`) is a socket, a handshake and a frame
+reader, with no console in it: `hello(claimed, credential)`,
+`await_admission(ms)`, `send`/`send_to_role` (optionally asking for settlement)
+and `publish` under a correlation, `describe`, `poll(events)` — every far frame
+decoded to a `BridgeEvent` the caller owns. A send is **queued** until the next
+`poll` or `flush`. It decodes no payload: the shapes belong to the participant
+that asked.
+
+`zen/bridge/link.hpp` is how an ordinary weave asks across a link a host holds
+for it: `loom.link.Ask{role | target, payload bytes, settle}` to the link's
+office, under the asker's own correlation. The link answers each ask **once,
+through Loom's answer door** — a deferred answer Loom binds to the asker's
+incarnation and correlation — so the asker's `mail.answers_ask()` is its own
+bus's word. The answer is either the far owner's (only a delivery the far bus
+attested as the answer to this crossing, re-admitted through the local gate,
+never in the link's own `loom.link.*` vocabulary) or `loom.link.Outcome{refused
+| dispatch-refused | unlinked | lost}`, the link's word for a crossing that did
+not come back that way. A far participant's ordinary speech to the session is
+never an answer. The asker's correlation never crosses: the link puts its own
+`attempt` on the wire — never reused — and a session's `epoch` bounds what a
+reply can reach, so equal correlations from separate askers, replies in any
+order, duplicates and late words from an ended session each land where they
+belong or nowhere. With `settle` the answer is held until the far host's
+`Settled`. Every far frame becomes a `loom.link.Crossed` record the link says
+to itself — far session and established name, far stamp and office, attempt,
+kind, bytes — which is how the host's history holds the crossing, and what the
+link acts on (only its own record acts). The supplied host mounts one such link
+per `links` row of its boot plan
+([running-loom § 10](../guides/running-loom.md#10-link-to-another-host)).
+
+## Servicing
+
+`service()` is the I/O half and only that: accept, read and dispatch every
+complete frame (a Send is one gated `send_as` under the proxy's grant; a Hello
+is one admission decision), push a deferred discovery refresh, flush, reap. It
+takes **no bus turn**, so a host whose loop is a delivery-driven drain services
+the crossing from inside a delivery — Zengine's Workshop does, on its Timer's
+beat. `step()` is `service()` plus one bus turn: drain-to-idle by default, or
+the bounded turn under `set_bounded_dispatch()`
+([MSG-09](../laws/messaging-laws.md#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo)).
+`wait_and_step(ms)` blocks in `poll`/`WSAPoll` over `{listener, connections}`
+first; `run(tick_ms)` loops that until `stop()`.
+
+Registry reads are never done inside the tap observer callback: `on_tap` copies
+event fields and sets a dirty flag; the refreshed weave list is pushed after
+dispatch returns.
+
+`on_connection(tell)` reports every state change of every connection — accepted,
+awaiting a decision, admitted, refused, closed — with the connection as it
+stands, so an inventory can show a session and drop it rather than show a dead
+one as live. `connections()` is the same inventory on demand.
+
+A server may be **owned by a weave** -- Workshop's guest door is one -- and die
+with the bus. Two things then hold. The Switchboard's destructor empties its
+registry into a local before any weave is destroyed, so the server's own
+re-entrant unregistration finds nothing to erase from a map being torn down;
+and a proxy, which the bus may destroy *before* the weave that owns the server
+(registry order, not the server's), clears the connection's pointer to it as it
+dies, so the server's destructor finds a null rather than a freed object. The
+bridge suite's `teardown:` case holds both, and the sanitizer lane is where the
+second one showed.
 
 ## Validation: what Bridge checks, and what it deliberately does not
 
@@ -171,134 +232,88 @@ Four layers, in the order a byte meets them. Only the first two are Bridge's.
 | conformance | the one gate (`admit`) | are these bytes a well-formed instance of the shape they claim? |
 | meaning | the receiving weave | is this request *sensible* for my domain? |
 
-**Framing.** Length-prefixed `[u32 payload_len][u8 op][payload]`,
-little-endian, read through a bounds-checked `Cursor` — a truncated or lying
-length is rejected, never over-read. A frame over `kMaxFrameLen`, or an
-undrained backlog over `kMaxBacklog`, fails the channel.
+**Framing.** Length-prefixed `[u32 payload_len][u8 op][payload]`, little-endian,
+read through a bounds-checked `Cursor` — a truncated or lying length is
+rejected, never over-read. A frame over `kMaxFrameLen`, or an undrained backlog
+over `kMaxBacklog`, fails the channel.
 
-**Protocol.** The handshake is load-bearing and anti-Postel: **any frame
-before `Hello` severs the connection.** Host→client opcodes arriving inbound
-are ignored. A malformed `Describe` payload is dropped.
+**Protocol.** The handshake is load-bearing and anti-Postel: **any frame before
+`Hello` severs the connection**, and so does a second Hello. Host→client
+opcodes arriving inbound are ignored. A malformed `Describe` is dropped. A
+Hello's claimed name and credential are bounded (`kMaxHelloFieldBytes`),
+because a peer has earned nothing yet.
 
-**Conformance.** An operator's `Send` payload is re-admitted host-side through
-the **one gate**, exactly as a loaded library's emission and an isolated
-child's `Emit` are ([GATE-01](../laws/admission-laws.md#gate-01--one-gate)).
-Bridge resolves the claimed `(name, version)` against the bus registry, refuses
-if it is unknown, and refuses if `admit` refuses. A bridge frame can therefore
-never register a schema or introduce a shape — it can only name one the host
-already knows.
+**Conformance.** A session's `Send` payload is re-admitted host-side through the
+**one gate**, exactly as a loaded library's emission and an isolated child's
+`Emit` are ([GATE-01](../laws/admission-laws.md#gate-01--one-gate)). Bridge
+resolves the claimed `(name, version)` against the bus registry, refuses if it
+is unknown, and refuses if `admit` refuses. A bridge frame can therefore never
+register a schema or introduce a shape.
 
-**Meaning is not Bridge's, on purpose.** Bridge does not know what any
-application shape means and never validates a range, an invariant or a
-sequence. A structurally valid message that is nonsense for the domain is
-delivered, and the receiving weave refuses it — because collapsing those two
-into one word would make "the bridge accepted it" sound like "the request is
-sound". Application services validate their own semantic ranges; that is
-stated the same way in
-[capabilities](capabilities.md#work-the-host-does-on-behalf-of-a-contained-participant).
+**Meaning is not Bridge's, on purpose.** A structurally valid message that is
+nonsense for the domain is delivered, and the receiving weave refuses it.
 
-**One consequence worth naming.** An operator's bytes are decoded host-side,
-so they spend the host's shared `kMaxDecodedCells` allowance — a compact frame
-cannot command unbounded host materialization
-([bounds](bounds.md#the-decode-materialization-bound); suite `bridge`, the
-R2F-A end-to-end case).
+An operator's bytes are decoded host-side, so they spend the host's shared
+`kMaxDecodedCells` allowance — a compact frame cannot command unbounded host
+materialization ([bounds](bounds.md#the-decode-materialization-bound)).
 
-## Bounds
+## Authentication posture
 
-`bounds.md` is the capacity authority; the numbers are not repeated here.
+**Bridge authenticates a credential exactly as far as the host's policy does,
+and provides no transport security.** There is no TLS and no peer-credential
+check in the mechanism; a credential in a Hello is bytes the policy compares
+to something it holds. That is enough for a maker's own two processes on one
+machine, and it is what it is: a shared secret, as private as the file it lives
+in.
 
-- connections, and the client's pending/absent-schema caches:
-  [bounds § Bridge](bounds.md#bridge-remote-operator);
-- per-frame and per-backlog transport caps, and the live-storage invariant
-  that keeps a busy channel from growing by session volume:
-  [bounds § transport channels](bounds.md#transport-channels-framed-byte-channels);
-- what a remote operator *retains* — the tap window and the `m1/m2/...` reply
-  buffer, both bounded histories with stable labels and visible eviction:
-  [bounds § console](bounds.md#console-operator-history). The client-side
-  windows are the same two constants as the in-process console, so a local and
-  a remote operator see the same horizon.
+> **Do not bind a listener on an interface an untrusted party can reach.**
+> Under the operator policy, reachability is operator authority; under any
+> policy, a credential crosses in the clear.
 
-Past the connection cap the server **accepts then closes**, and counts it in
-`declined_count()` — a reconnecting fd-hog is contained (greedy is inside the
-threat tier) and the shedding is observable, never silent.
+Two facts about the shipped listeners: `bridge_listen_tcp` binds
+`INADDR_LOOPBACK` unconditionally (a mitigation, not authentication — WSL2
+forwards localhost by design, and any forward re-exposes the port);
+`bridge_listen_unix` sets no socket-file permissions.
 
 ## Trust and threat posture
-
-Six things that are **not** one thing. Collapsing them into "secure" is the
-error this section exists to prevent.
 
 | | Current state |
 |---|---|
 | **transport boundary** | a framed stream socket, bounded and non-blocking; a misbehaving peer is contained, never allowed to block, hang or exhaust the host |
-| **connection authority** | one chokepoint, `authorize_connection`; today full operator grant for every connection |
-| **conformance validation** | the one gate, host-side, on every operator send; unknown shapes refused |
+| **connection authority** | the host's `BridgeAdmission`: a grant of the policy's choosing per session, or refusal, or a deferred decision |
+| **conformance validation** | the one gate, host-side, on every send; unknown shapes refused |
 | **application semantics** | **absent by design** — the receiving weave's job |
-| **authentication** | **absent** — reachability is authority |
-| **sandbox containment** | **not applicable** — Bridge does not sandbox anything; OS containment is [capabilities](capabilities.md), and no binary in this tree composes `BridgeServer` with `IsolationHost` |
+| **authentication** | a credential the policy judges; no transport security |
+| **sandbox containment** | **not applicable** — Bridge does not sandbox anything |
 
-An operator is the *most-granted ordinary participant*, and that is a real
-ceiling: no lifecycle authority, no ungated send, no grant assignment, and
-**no Sense read authority at all** — `allow_any()` adds a send rule, and
-observing a claim needs its own observe rule, which nothing here adds
-([SENSE-05](../laws/sense-laws.md)). It is not host root. It is also not
-nothing — treat an operator connection as you would treat a shell on the box.
+An admitted session is an ordinary participant with the grant it was given: no
+lifecycle authority, no ungated send, no grant assignment, no Sense read
+authority, and — unless the policy says `observe` — no tap. Threat tier:
+**abuse, not escape**.
 
-Threat tier: **abuse, not escape**, the same as the rest of Loom.
+## Bounds
 
-## Failure and refusal — what an operator actually sees
-
-Two kinds, kept distinct because they send an operator to different places.
-
-**Per-frame, non-fatal — the connection survives.** A `Send` that dies before
-it reaches the bus produces a `SendRefused` frame carrying the correlation and
-a reason, which the client surfaces on its tap as a `BridgeRefused` line
-(honestly labelled: it is *not* a bus event, because no bus event exists).
-Three causes: a malformed `Send` header (correlation 0 — the header did not
-parse far enough to yield one), an unknown schema, and a gate refusal carrying
-the gate's own first error. **No fate is dark**: a send is either taken by the
-bus (and then observable on the tap like any other) or refused aloud.
-
-**Fatal — the connection is torn down.** A frame before `Hello`; a frame or
-backlog over cap; a transport error; peer EOF. All of them mark the channel
-`done()`, and `reap_dead()` unregisters the proxy before destroying it, so no
-further delivery can land on a dead connection. Disconnect is handled as an
-**event**, never as a hang — which is why the loop is a `poll`/`WSAPoll`
-multiplexer rather than a blocking read.
-
-Refusals *after* the bus are ordinary bus refusals — `CapabilityDenied`,
-`NoSuchTarget`, a gate refusal at delivery — and they reach the operator
-through the tap like every other participant's, with their structured reason
-([MSG-05](../laws/messaging-laws.md#msg-05--refusals-are-structured-and-observable),
-[guides/diagnostics](../guides/diagnostics.md)).
-
-## Composing it
-
-`step()` is one non-blocking iteration: accept → drain and dispatch inbound
-frames → take a bus dispatch turn → push a deferred discovery refresh → flush →
-reap.
-`wait_and_step(timeout_ms)` blocks in `poll` over `{listener, connections}`
-first; `run(tick_ms)` loops that until `stop()`.
-
-**A host that also runs a perpetual in-process service must call
-`set_bounded_dispatch()`.** By default `step()` calls `drain_until_idle()` — and a self-re-arming service (a repeating Timer) never lets the
-queue empty, so `step()` never returns to poll its sockets and operators
-freeze. With it set, `step()` dispatches the backlog present at entry and
-moves on. It takes **no number**, deliberately: the numeric version was
-shipped, measured 17× slower by a real consumer, and withdrawn
-([MSG-09](../laws/messaging-laws.md#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo),
-[known-seams § event-loop composition](known-seams.md#event-loop-composition)).
-
-Registry reads (`list_weaves`, `accepted_schemas`) are deliberately **not**
-done from inside the tap observer callback: `on_tap` copies event fields only
-and sets a dirty flag, and `step()` pushes the refreshed weave list after the
-dispatch turn returns. The bridge does not lean on an unstated bus property.
+`bounds.md` is the capacity authority. Past the connection cap the server
+**accepts then closes** and counts it (`declined_count()`); refusals are counted
+too (`refused_count()`).
 
 ## Tests
 
 Suite `bridge` — transport round-trip and EOF-as-an-event (both AF_INET and
 AF_UNIX), the forged-wire-sender pin, the connection cap, the pre-`Hello`
 severance, hostile-`Send` refusal, malformed framing, the client's bounded
-pending/absent caches, a SIGKILLed operator reaped across two real processes,
-the bounded-dispatch cases, and the C-1 remote-window cases. `zen-bridge-probe`
-is the non-interactive end-to-end crossing proof against a live
-`zen-bridge-host`.
+caches, a SIGKILLed peer reaped across two real processes, the bounded-dispatch
+cases, the C-1 remote-window cases — and the crossing's: a refused connection
+registers no proxy and its sends act on nothing; the established name is the
+policy's word; a guest's send is stamped from the session and answered with
+Loom's attestation; what the grant does not cover is refused at the bus and the
+guest is told; a deferred connection acts on nothing until decided; a version
+mismatch is refused in words; a guest gets no tap and an operator still does; a
+disconnected session's proxy leaves and a late answer settles nothing; and the
+link, end to end across two buses — two askers under one correlation answered
+in reverse order, answers and refusals each reaching their own asker, a far
+participant's ordinary word under an ask's correlation, duplicates, unknown
+attempts and a reply for an ended session, a forged local record, an answer in
+the link's own vocabulary, a replaced asker, and settlement in either order and
+against real far work. `tests/package/stranger_bridge.cpp` reaches the server,
+the client and the link envelope through `find_package(loom)` alone.

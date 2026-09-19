@@ -50,6 +50,14 @@ target_link_libraries(witness-terminal PRIVATE loom::terminal loom::switchboard 
 add_executable(witness-history stranger_history.cpp)
 target_link_libraries(witness-history PRIVATE loom::history loom::switchboard loom::core)
 
+# ---- 2c. the crossing, reached the way a linking host reaches it -------------------
+#
+# The two-host crossing exported `loom::bridge` on the strength of a second HOST: a Loom host
+# that links to a running Workshop. Links loom::bridge + loom::switchboard + loom::core and
+# nothing else -- no console and no remote console, neither of which is exported.
+add_executable(witness-bridge stranger_bridge.cpp)
+target_link_libraries(witness-bridge PRIVATE loom::bridge loom::switchboard loom::core)
+
 if(NOT TARGET loom::kernel)
     # Honest, and not a skip-in-disguise: on a build of Loom with no kernel there is no
     # dynamic-weave path to witness, and saying so beats silently proving half of this.

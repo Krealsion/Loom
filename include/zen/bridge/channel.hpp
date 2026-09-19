@@ -122,6 +122,10 @@ socket_t bridge_connect_unix(const std::string& path, std::string* err);
 /// Returns a connected, non-blocking socket or kInvalidSocket (+ sets *err).
 socket_t bridge_connect_tcp(const std::string& host, std::uint16_t port, std::string* err);
 
+/// The far end of a connected socket as text ("127.0.0.1:51234", "unix"), or empty when the
+/// platform will not say. A fact about the socket for an inventory to show; never an identity.
+std::string bridge_peer_name(socket_t sock);
+
 /// Close a socket (platform close/closesocket). Safe on kInvalidSocket.
 void bridge_close(socket_t sock);
 
