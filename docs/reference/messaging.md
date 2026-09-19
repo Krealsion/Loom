@@ -536,7 +536,53 @@ early and the return value reports what actually happened.
 `BridgeServer::set_bounded_dispatch()` exposes the policy, defaulting to
 drain-to-empty.
 
+## Fences: when what one send set in motion has been dispatched
+
+An answer says what ONE participant decided. A host that injects a message on somebody's behalf
+sometimes needs a different fact: that the work the message **set in motion** here has run — an
+agent that typed a key and wants a picture of what the key did, when the key's consumer paints
+only after several deliveries of its own. The answer to the injection cannot say that (the
+owner answers before its consumers run), and a later request cannot be relied on to queue behind
+it (a consumer's follow-ups are queued *as they happen*, so a request that arrives in the middle
+of them is dispatched in the middle of them).
+
+A **fence** is the bus's own record of it. A host opens one with the send:
+
+```cpp
+loom::Fence fence;
+bus.send_as_fenced(session, input_holder, std::move(msg), &fence);   // or send_as_to_role_fenced
+// ...turns...
+bus.fence_state(fence);    // Open, then Settled -- never back
+bus.release_fence(fence);  // Unknown from now on
+```
+
+It names the envelope that send queued and **every envelope queued from inside the dispatch of
+anything it already names** — the handler's sends and publications, the refusals and
+dispatch-refusal notices that dispatch produces — which is the synchronous dispatch ancestry
+`BusEvent::dispatch_parent` records ([history](history.md)), and nothing wider. It reads `Open`
+while any of those is queued or being dispatched and `Settled` once every one has been: its
+handler returned or threw ([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)),
+or the bus refused it.
+
+**What `Settled` does not say.** Nothing about answers: a request delivered to a participant
+that never answers is dispatched, and settles, and silence stays silence. Nothing about work a
+participant deferred — a timer's later firing, a deferred answer spent from an unrelated later
+delivery (an answer belongs to the fence of the delivery it is *spent* from), an out-of-process
+child read on a later turn, another host. And nothing about the rest of the bus: unrelated work
+is queued before, among and after the fence's envelopes and is never waited for, so a fence
+settles on a bus that never empties. A fence whose ancestry never stops — a handler that always
+re-sends to itself — stays `Open` for as long as it runs; there is no deadline in it.
+
+**Host-held and bounded.** A weave holds no `Switchboard` and opens no fence; the verbs sit
+beside `send_as` because a host speaking for somebody else is the one that asks. At
+`Switchboard::kMaxFences` held, a fenced send queues **nothing** and returns an invalid ticket —
+never an unfenced send in its place. The output handle pointer must be non-null; a null
+pointer is refused before allocating a record or queuing work. A fenced send made from inside a delivery that is itself
+fenced begins its own fence and is not counted in the enclosing one: the host is speaking for
+somebody else, not continuing that delivery's work. Ids are never reused. The bridge's
+`Settled` is this, across a socket ([bridge](bridge.md#what-a-session-is-told)).
+
 ## Tests
 
-Suites `switchboard`, `provenance`, `capabilities`, `poke`, `describe`; the
-bridge suite for the operator protocol.
+Suites `switchboard` (the `fence:` cases among them), `provenance`, `capabilities`, `poke`,
+`describe`; the bridge suite for the operator protocol and the crossing's settlement.

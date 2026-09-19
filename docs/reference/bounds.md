@@ -21,6 +21,7 @@ than as the contract. The names are grep-able for exactly that reason.
 | `kMaxJointOperations` | 8 | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its operator releases it, so an operator that never releases meets this bound and never another operator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |
 | `kMaxJointKeys` | 4 | keys one operation binds; `Exhausted` at `begin` |
 | `kMaxJointOfferBytes` | 64 KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
+| `kMaxFences` | 64 | fences held (open or settled, not yet released) per bus; a fenced send past it queues **nothing** and returns an invalid ticket — never an unfenced send in its place ([fences](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)). Ids are monotonic and never reused |
 | activation sequence | `INT64_MAX` | the door refuses further activations, naming the boundary; it does not brick |
 | deferred-answer tokens | 2^64, monotonic | deliberately unguarded: process-local, never persisted, +1 per deferral |
 
@@ -254,7 +255,8 @@ What the component *is*, and what it trusts: [bridge](bridge.md).
 |---|---|---|
 | `kMaxOperatorConnections` | 32 | accept-then-shed, `declined_count()` visible |
 | `kMaxHelloFieldBytes` | 256 | the longest claimed name or credential a Hello may carry; over it the connection is refused before the policy is asked -- a peer has earned nothing yet |
-| `LinkWeave::kMaxOpenAsks` (the supplied host) | 64 | asks one link holds open at once; a new one past it is told `refused` and every open one is untouched |
+| `kMaxSettlingPerConnection` | 8 | settle-requested sends one connection may have waiting on their settlement; past it the Send is refused before the bus (`SendRefused`), and so is one the bus's `kMaxFences` cannot fence |
+| `LinkWeave::kMaxOpenAsks` (the supplied host) | 16 | crossings one link holds open at once; a new ask past it is told `refused` and every open one is untouched. Each open crossing holds a deferred answer, which counts against the Loom-wide `kMaxDeferredAnswers`, so a link keeps well inside it |
 | `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
 | `kMaxAbsentSchemas` (client) | 64 | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 

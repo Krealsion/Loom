@@ -291,6 +291,9 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         }
         break;
     }
+    // The operator asks for no settlement, so none is owed it; a stray one is ignored.
+    case BridgeOp::Settled:
+        break;
     // client->host opcodes never arrive at the client; ignore.
     case BridgeOp::Hello:
     case BridgeOp::ListWeaves:
@@ -360,6 +363,7 @@ loom::Ticket RemoteConsole::assemble_and_send(loom::WeaveId target,
         });
     std::string frame;
     put_u8(frame, kEmitSend);
+    put_u8(frame, 0); // flags: the operator asks for no settlement
     put_u64(frame, 0);            // wire_sender: the honest client sets 0 — the bridge stamps c.id
     put_u64(frame, target.value);
     put_u64(frame, 0);            // wire_reply_to: the honest client sets 0 — the bridge stamps c.id

@@ -36,6 +36,8 @@ struct BridgeEvent {
         Delivered,   ///< a delivery to this session: `sender`, `correlation`, `answers_ask`,
                      ///< `dispatch_refused`, `authored_role`, `payload` (serialized value bytes)
         SendRefused, ///< a send dropped before the far bus: `correlation`, `reason`
+        Settled,     ///< what a settle-requested send set in motion on the far bus has all been
+                     ///< dispatched: `correlation`. Not an answer; see protocol.hpp
         Weaves,      ///< the far weave set: `weaves`
         Schema,      ///< an encoded schema: `payload`
         SchemaNone,  ///< no such far schema: `shape`, `version`
@@ -92,11 +94,15 @@ public:
 
     /// Queue a Send to a far WeaveId. `payload` is serialized value bytes. The far host stamps
     /// the sender and reply target from this connection; `correlation` is echoed on the answer.
-    /// QUEUED, NOT WRITTEN: the bytes leave on the next `poll` or `flush`, which is where a
-    /// caller that expects an answer must go anyway.
-    void send(std::uint64_t target, std::uint64_t correlation, std::string_view payload);
+    /// `settle` asks the far host to say `Settled` under `correlation`, once, when everything the
+    /// send set in motion on its bus has been dispatched (or `SendRefused` when it cannot follow
+    /// one more). QUEUED, NOT WRITTEN: the bytes leave on the next `poll` or `flush`, which is
+    /// where a caller that expects an answer must go anyway.
+    void send(std::uint64_t target, std::uint64_t correlation, std::string_view payload,
+              bool settle = false);
     /// Queue a Send to whoever holds `role` on the far bus at delivery.
-    void send_to_role(std::string_view role, std::uint64_t correlation, std::string_view payload);
+    void send_to_role(std::string_view role, std::uint64_t correlation, std::string_view payload,
+                      bool settle = false);
     /// Queue a publication on the far bus.
     void publish(std::uint64_t correlation, std::string_view payload);
     /// Ask the far host to describe a shape (answered by a Schema or SchemaNone event).
@@ -111,8 +117,8 @@ public:
     void flush();
 
 private:
-    void send_frame(std::uint8_t kind, std::uint64_t target, std::string_view role,
-                    std::uint64_t correlation, std::string_view payload);
+    void send_frame(std::uint8_t kind, std::uint8_t flags, std::uint64_t target,
+                    std::string_view role, std::uint64_t correlation, std::string_view payload);
     static bool decode(const BridgeIncoming& f, BridgeEvent& out);
 
     std::unique_ptr<BridgeChannel> ch_;

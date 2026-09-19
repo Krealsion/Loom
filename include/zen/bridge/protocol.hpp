@@ -35,12 +35,18 @@
 //              host's policy ESTABLISHED for this connection (empty when the policy
 //              established none).
 //   Send       may address an OFFICE (`role`) as well as a WeaveId, so a guest can speak to
-//              "whoever holds zengine.input" without learning a small integer first.
+//              "whoever holds zengine.input" without learning a small integer first; and may
+//              ask to be told when what it SET IN MOTION on the host's bus has been dispatched.
 //   Delivered  carries what Loom stamped on the delivery beside the payload: the bus-stamped
 //              sender, the correlation, whether Loom attests it as THE answer to an ask this
 //              connection sent (`answers_ask`), whether it is a dispatch-refusal notice, and
 //              the office the sender spoke as. A richer client cannot recover a fact the
 //              crossing discarded, so the crossing no longer discards them.
+//   Settled    the host's word, once, that everything a settle-requested Send set in motion on
+//              its bus has been dispatched (`loom::Fence`): the send and every delivery queued
+//              from inside the dispatch of anything it caused. Not an answer, and not a claim
+//              that nothing else is pending -- a request delivered to a silent participant is
+//              dispatched, and work deferred to a timer or a later turn is not waited for.
 //   Tap        is copied only to a connection whose admission verdict grants observation.
 //
 // Zen's serialized values are still the currency: a Send crosses as serialized message bytes the
@@ -63,8 +69,10 @@ enum class BridgeOp : std::uint8_t {
     ListWeaves = 2, ///< (empty) -- explicit discovery refresh; the host replies Weaves
     Describe = 3,   ///< [bytes name][u32 version] -- the host replies Schema (encoded) or SchemaNone
     Send = 4,       ///< the connection's send (an assembled message, like Op::Emit):
-                    ///<   [u8 kind][u64 wire_sender][u64 target][u64 wire_reply_to]
+                    ///<   [u8 kind][u8 flags][u64 wire_sender][u64 target][u64 wire_reply_to]
                     ///<   [u64 correlation][bytes role][bytes payload]
+                    ///< `flags`: kSendSettle asks for one Settled under `correlation` once what
+                    ///< the send set in motion has been dispatched.
                     ///< The host re-admits `payload` through the gate and STAMPS sender + reply_to
                     ///< from the CONNECTION (the proxy's id), IGNORING wire_sender and wire_reply_to.
                     ///< An honest client sets those to 0; a malicious one forges them and the bridge
@@ -90,11 +98,19 @@ enum class BridgeOp : std::uint8_t {
     Denied = 23,      ///< [bytes reason] -- admission refused this connection. Sent once, flushed,
                       ///< and the connection is severed; nothing it sent acted and nothing it
                       ///< sends afterwards can.
+    Settled = 24,     ///< [u64 correlation] -- everything the settle-requested Send under this
+                      ///< correlation set in motion on the host's bus has been dispatched. Once
+                      ///< per such Send that reached the bus; a Send refused before the bus
+                      ///< (SendRefused) has nothing to settle and is told nothing more.
 };
 
 /// Send kinds on the wire. The first two are the isolation protocol's own (kEmitSend = 0,
 /// kEmitPublish = 1); the third is this crossing's addition.
 inline constexpr std::uint8_t kSendToRole = 2;
+
+/// `Send` flags. A publication cannot ask for settlement (it has no one envelope to fence), and
+/// a host refuses the Send before the bus when it cannot track one more.
+inline constexpr std::uint8_t kSendSettle = 1u << 0;
 
 /// `Delivered` flags.
 inline constexpr std::uint8_t kDeliveredAnswersAsk = 1u << 0;
@@ -112,7 +128,7 @@ inline constexpr std::uint8_t kTapHandlerFailed = 4;
 /// The crossing's protocol version (bumped on any wire change -- shape OR vocabulary; Hello and
 /// Welcome carry it). v2 added SendRefused; v3 added the HandlerFailed tap kind; v4 is the
 /// two-host crossing above: Hello's identity, Denied, Welcome's established name, Send's role
-/// address and Delivered's stamped context. A host refuses a peer whose version it does not
+/// address and settle flag, Delivered's stamped context, and Settled. A host refuses a peer whose version it does not
 /// speak, in words, before anything else happens on that connection.
 inline constexpr std::uint32_t kBridgeProtocolVersion = 4;
 

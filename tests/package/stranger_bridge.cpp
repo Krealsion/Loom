@@ -161,9 +161,41 @@ int main() {
             ok(loom::parse(delivered->payload).claimed_name() == loom::Result::zen_name,
                "...carrying the answerer's own shape");
         }
-        // The link envelope is reachable too: a stranger's weave can compose one.
-        const loom::link::Ask ask = loom::link::ask_role("echo", Echo{"across"});
-        ok(ask.role == "echo" && !ask.payload.empty(), "the link envelope composes from a shape");
+        // SETTLEMENT, through the package: a settle-requested send is told, once, when what it
+        // set in motion on the host's bus has been dispatched -- after its answer, which is one
+        // of the deliveries the host's fence counted.
+        client.send_to_role("echo", 10, loom::serialize(loom::to_value(Echo{"settle"})),
+                            /*settle=*/true);
+        bool answered = false;
+        bool settled = false;
+        bool answered_first = false;
+        (void)until(
+            [&] {
+                server.step();
+                std::vector<loom::BridgeEvent> got;
+                client.poll(got);
+                for (const loom::BridgeEvent& e : got) {
+                    if (e.kind == loom::BridgeEvent::Kind::Delivered && e.correlation == 10) {
+                        answered = true;
+                    }
+                    if (e.kind == loom::BridgeEvent::Kind::Settled && e.correlation == 10) {
+                        settled = true;
+                        answered_first = answered;
+                    }
+                }
+                return settled;
+            },
+            3000);
+        ok(settled, "a settle-requested send is told Settled under its correlation");
+        ok(answered_first, "...after its answer, which the settlement counted");
+        ok(bus.fences_held() == 0, "...and the host's fence is released once told");
+        // The link envelope and the link's crossing record are reachable too.
+        const loom::link::Ask ask = loom::link::ask_role("echo", Echo{"across"}, /*settle=*/true);
+        ok(ask.role == "echo" && !ask.payload.empty() && ask.settle,
+           "the link envelope composes from a shape, asking for settlement");
+        loom::link::Crossed crossed;
+        crossed.kind = loom::link::kCrossedSettled;
+        ok(!loom::serialize(loom::to_value(crossed)).empty(), "the link's crossing record composes");
     }
 
     std::printf("%s (%d failure%s)\n", failures == 0 ? "PASS" : "FAIL", failures,

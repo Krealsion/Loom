@@ -23,6 +23,7 @@ a handshake      "here is who I claim to be, and what I present"  -> admitted as
 discovery        "who is on the bus, and what shapes do they accept?"
 a send           serialized message bytes the host re-admits, stamps and routes
 a delivery       serialized bytes routed to this session, WITH what the bus stamped on them
+a settlement     the host's word that what a send asked to follow has all been dispatched
 the tap          a COPY of each bus event -- only for a session admitted with observation
 ```
 
@@ -118,7 +119,18 @@ authored_role     the office the sender deliberately spoke as, or empty
 
 A peer that only got bytes could not tell an attested answer from any admitted
 participant's helpful `zen.Result`; v4's crossing no longer discards the
-difference. The proxy declares `zen.DispatchRefused` among its doors so a
+difference.
+
+A `Send` may carry `kSendSettle`. The host then opens a
+[fence](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)
+on the envelope it queues and, once everything that envelope set in motion on its bus has
+been dispatched, tells the session `Settled` under the send's correlation — once. That is
+not an answer and is not ordered against one: a far owner may answer first (its answer is
+a delivery the fence itself counts) or later (a deferred answer spent from an unrelated
+delivery is not the fence's). It says nothing about work deferred to a timer or a later
+turn. A connection waits on at most `kMaxSettlingPerConnection` settlements; past that,
+or past the bus's own `kMaxFences`, the Send is refused **before the bus** — never quietly
+sent without one — and a publication, which has no one delivery to follow, cannot ask. The proxy declares `zen.DispatchRefused` among its doors so a
 session hears its own dispatch refusals
 ([MSG-12](../laws/messaging-laws.md)), and the construction layer's answer to
 `zen.DescribeAccepted` (`zen.AcceptedShapes`), which no ordinary participant
@@ -134,6 +146,7 @@ different places:
 | dropped before the bus (malformed header, unknown shape, gate refusal, not admitted) | `SendRefused` with the correlation and the reason |
 | refused by the bus (`CapabilityDenied`, `NoSuchTarget`, …) | `Delivered` flagged `dispatch_refused`, carrying the notice |
 | answered | `Delivered` flagged `answers_ask`, under the correlation |
+| what it set in motion has been dispatched (asked with `kSendSettle`) | `Settled`, under the correlation, once |
 | the socket ended after the send | nothing — the outcome is **unknown**, and a peer must not resend on its own |
 | silence | nothing; the ask is still open on the peer's own book |
 
@@ -148,18 +161,32 @@ richer observation of a host is that host's to grant through its own owners.
 
 `BridgeClient` (`zen/bridge/client.hpp`) is a socket, a handshake and a frame
 reader, with no console in it: `hello(claimed, credential)`,
-`await_admission(ms)`, `send`/`send_to_role`/`publish` under a correlation,
-`describe`, `poll(events)` — every far frame decoded to a `BridgeEvent` the
-caller owns. A send is **queued** until the next `poll` or `flush`. It decodes
-no payload: the shapes belong to the participant that asked.
+`await_admission(ms)`, `send`/`send_to_role` (optionally asking for settlement)
+and `publish` under a correlation, `describe`, `poll(events)` — every far frame
+decoded to a `BridgeEvent` the caller owns. A send is **queued** until the next
+`poll` or `flush`. It decodes no payload: the shapes belong to the participant
+that asked.
 
 `zen/bridge/link.hpp` is how an ordinary weave asks across a link a host holds
-for it: `loom.link.Ask{role | target, payload bytes}` to the link's office,
-under the asker's own correlation; the far answer comes back re-admitted
-through the local gate as an ordinary message under that correlation, stamped
-as the link's speech; `loom.link.Outcome{refused | dispatch-refused | unlinked |
-lost}` is the link's own word for a crossing that did not. The supplied host
-mounts one such link per `links` row of its boot plan
+for it: `loom.link.Ask{role | target, payload bytes, settle}` to the link's
+office, under the asker's own correlation. The link answers each ask **once,
+through Loom's answer door** — a deferred answer Loom binds to the asker's
+incarnation and correlation — so the asker's `mail.answers_ask()` is its own
+bus's word. The answer is either the far owner's (only a delivery the far bus
+attested as the answer to this crossing, re-admitted through the local gate,
+never in the link's own `loom.link.*` vocabulary) or `loom.link.Outcome{refused
+| dispatch-refused | unlinked | lost}`, the link's word for a crossing that did
+not come back that way. A far participant's ordinary speech to the session is
+never an answer. The asker's correlation never crosses: the link puts its own
+`attempt` on the wire — never reused — and a session's `epoch` bounds what a
+reply can reach, so equal correlations from separate askers, replies in any
+order, duplicates and late words from an ended session each land where they
+belong or nowhere. With `settle` the answer is held until the far host's
+`Settled`. Every far frame becomes a `loom.link.Crossed` record the link says
+to itself — far session and established name, far stamp and office, attempt,
+kind, bytes — which is how the host's history holds the crossing, and what the
+link acts on (only its own record acts). The supplied host mounts one such link
+per `links` row of its boot plan
 ([running-loom § 10](../guides/running-loom.md#10-link-to-another-host)).
 
 ## Servicing
@@ -283,6 +310,10 @@ Loom's attestation; what the grant does not cover is refused at the bus and the
 guest is told; a deferred connection acts on nothing until decided; a version
 mismatch is refused in words; a guest gets no tap and an operator still does; a
 disconnected session's proxy leaves and a late answer settles nothing; and the
-link, end to end across two buses. `tests/package/stranger_bridge.cpp` reaches
-the server, the client and the link envelope through `find_package(loom)`
-alone.
+link, end to end across two buses — two askers under one correlation answered
+in reverse order, answers and refusals each reaching their own asker, a far
+participant's ordinary word under an ask's correlation, duplicates, unknown
+attempts and a reply for an ended session, a forged local record, an answer in
+the link's own vocabulary, a replaced asker, and settlement in either order and
+against real far work. `tests/package/stranger_bridge.cpp` reaches the server,
+the client and the link envelope through `find_package(loom)` alone.

@@ -53,13 +53,15 @@ bool BridgeClient::await_admission(int timeout_ms) {
     }
 }
 
-void BridgeClient::send_frame(std::uint8_t kind, std::uint64_t target, std::string_view role,
-                              std::uint64_t correlation, std::string_view payload) {
+void BridgeClient::send_frame(std::uint8_t kind, std::uint8_t flags, std::uint64_t target,
+                              std::string_view role, std::uint64_t correlation,
+                              std::string_view payload) {
     if (!ch_ || ch_->done()) {
         return;
     }
     std::string frame;
     put_u8(frame, kind);
+    put_u8(frame, flags);
     put_u64(frame, 0); // wire_sender: the honest client sets 0 -- the host stamps the session
     put_u64(frame, target);
     put_u64(frame, 0); // wire_reply_to: likewise
@@ -69,18 +71,18 @@ void BridgeClient::send_frame(std::uint8_t kind, std::uint64_t target, std::stri
     ch_->queue(BridgeOp::Send, frame);
 }
 
-void BridgeClient::send(std::uint64_t target, std::uint64_t correlation,
-                        std::string_view payload) {
-    send_frame(kEmitSend, target, {}, correlation, payload);
+void BridgeClient::send(std::uint64_t target, std::uint64_t correlation, std::string_view payload,
+                        bool settle) {
+    send_frame(kEmitSend, settle ? kSendSettle : 0, target, {}, correlation, payload);
 }
 
 void BridgeClient::send_to_role(std::string_view role, std::uint64_t correlation,
-                                std::string_view payload) {
-    send_frame(kSendToRole, 0, role, correlation, payload);
+                                std::string_view payload, bool settle) {
+    send_frame(kSendToRole, settle ? kSendSettle : 0, 0, role, correlation, payload);
 }
 
 void BridgeClient::publish(std::uint64_t correlation, std::string_view payload) {
-    send_frame(kEmitPublish, 0, {}, correlation, payload);
+    send_frame(kEmitPublish, 0, 0, {}, correlation, payload);
 }
 
 void BridgeClient::describe(std::string_view name, std::uint32_t version) {
@@ -155,6 +157,15 @@ bool BridgeClient::decode(const BridgeIncoming& f, BridgeEvent& out) {
         out.kind = BridgeEvent::Kind::SendRefused;
         out.correlation = correlation;
         out.reason = std::string(why);
+        return true;
+    }
+    case BridgeOp::Settled: {
+        std::uint64_t correlation = 0;
+        if (!cur.u64(correlation)) {
+            return false;
+        }
+        out.kind = BridgeEvent::Kind::Settled;
+        out.correlation = correlation;
         return true;
     }
     case BridgeOp::Weaves: {

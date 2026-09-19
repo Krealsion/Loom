@@ -157,10 +157,11 @@ public:
     BridgeServer& operator=(const BridgeServer&) = delete;
 
     /// THE I/O HALF, AND ONLY THAT: accept pending connections, read and dispatch every complete
-    /// inbound frame (a Send is one gated `send_as` under the proxy's grant; a Hello is one
-    /// admission decision), push a deferred discovery refresh, flush every connection, then reap
-    /// any that finished. It takes NO bus turn, so it may be called from inside a delivery by a
-    /// host whose loop is a drain -- the crossing is then serviced on that host's own beat.
+    /// inbound frame (a Send is one gated `send_as` under the proxy's grant -- fenced when it asks
+    /// to be told its settlement; a Hello is one admission decision), push a deferred discovery
+    /// refresh, tell each connection the settlements it is owed, flush every connection, then
+    /// reap any that finished. It takes NO bus turn, so it may be called from inside a delivery by
+    /// a host whose loop is a drain -- the crossing is then serviced on that host's own beat.
     void service();
 
     /// One server iteration: `service()` plus one bus turn. Drain-to-idle by default, which keeps
@@ -217,6 +218,9 @@ public:
 
     /// The most connections served at once. A stated, pinned bound far below every platform limit.
     static constexpr std::size_t kMaxOperatorConnections = 32;
+    /// The most settle-requested sends one connection may have waiting on their settlement. Past
+    /// it a settle-requested Send is refused before the bus (SendRefused), never queued unfenced.
+    static constexpr std::size_t kMaxSettlingPerConnection = 8;
 
 private:
     struct Conn {
@@ -232,6 +236,13 @@ private:
         loom::WeaveId id{};             ///< the proxy's bus id == the session's STAMPED sender
         OperatorProxy* proxy = nullptr; ///< owned by the bus; non-owning here
         bool told_closed = false;
+        /// Settle-requested sends that reached the bus, each waiting on its fence (bounded by
+        /// kMaxSettlingPerConnection). Released when told, and when the connection ends.
+        struct Settling {
+            std::uint64_t correlation = 0;
+            loom::Fence fence{};
+        };
+        std::vector<Settling> settling;
     };
 
     void accept_new();
@@ -243,6 +254,8 @@ private:
     void send_refused(Conn& c, std::uint64_t correlation, const std::string& reason);
     void push_weaves(Conn& c);
     void on_tap(const loom::BusEvent& e);
+    /// Tell each connection, once, every settle-requested send whose fence has settled.
+    void report_settled();
     void reap_dead();
     void tell(const Conn& c);
     Connection view(const Conn& c) const;

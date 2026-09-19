@@ -232,6 +232,10 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
   it is unbounded by contract (MSG-09, FRIC-1). Do not reintroduce either as a
   synonym, and do not give the drain a turn or time cap.
 - A transaction id, a correlation, or a payload field is ever authority.
+- That a request queued after an answer is dispatched after the work that answer's sender set
+  in motion. FIFO orders envelopes as they are QUEUED, and a consumer's follow-ups are queued as
+  they happen; the bus's own record of what one send set in motion is a fence
+  (`Switchboard::send_as_fenced`, `docs/reference/messaging.md`), and across a link, `settle`.
 - `Committed` at commit-call time — commit *schedules*; `AdmissionPending` is
   real (PR-07).
 - Prepared replacement preserves incumbent state — it does not (PR-09).
