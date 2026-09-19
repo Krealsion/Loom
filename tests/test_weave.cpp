@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace loom;
@@ -300,6 +301,107 @@ TEST_CASE("the accept-set is the typed handlers plus the universal substrate doo
     auto emitted = r->emitted_schemas();
     REQUIRE(emitted.size() == 1);
     CHECK(emitted[0]->name() == "Pong");
+}
+
+// ---- the copied weave that kept a shape's name (docs/guides/writing-a-weave.md) ------
+//
+// The guide's own scenario, at the guide's altitude: copy Responder to make a second
+// participant, rename the class and its doors, give the copy's state a field of its own,
+// and leave the state's `ZEN_SHAPE(CounterState, 1, ...)` spelled as it was. Mounting it
+// beside the original throws SchemaConflict with the sentence the guide quotes. The same
+// rule reaches a shape the copy only EMITS: an emitted `Pong v1` that grew a field is a
+// promise about somebody else's door, and it is refused at mount, not at delivery.
+namespace copied {
+struct Ping2 {
+    std::int64_t seq;
+    ZEN_SHAPE(Ping2, 1, ZEN_FIELD(seq));
+};
+struct Pong2 {
+    std::int64_t seq;
+    ZEN_SHAPE(Pong2, 1, ZEN_FIELD(seq));
+};
+// `CounterState v1`, kept by name, with a field of its own — the copier's mistake.
+struct CounterStateCopy {
+    std::int64_t count;
+    std::int64_t extra;
+    static constexpr const char* zen_name = "CounterState";
+    static constexpr std::uint32_t zen_version = 1;
+    using ZenSelf = CounterStateCopy;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(count), ZEN_FIELD(extra)); }
+};
+// `Pong v1`, kept by name, with a field of its own — the same mistake on the emit list.
+struct PongCopy {
+    std::int64_t seq;
+    std::int64_t extra;
+    static constexpr const char* zen_name = "Pong";
+    static constexpr std::uint32_t zen_version = 1;
+    using ZenSelf = PongCopy;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(seq), ZEN_FIELD(extra)); }
+};
+struct CounterStateRenamed {
+    std::int64_t count;
+    std::int64_t extra;
+    ZEN_SHAPE(CounterStateRenamed, 1, ZEN_FIELD(count), ZEN_FIELD(extra));
+};
+class KeptStateName
+    : public au::WeaveBase<KeptStateName, CounterStateCopy, au::Accept<Ping2>, au::Emit<Pong2>> {
+public:
+    void on(const Ping2& p, au::Mail& mail) { mail.reply(Pong2{p.seq}); }
+};
+class KeptEmitName
+    : public au::WeaveBase<KeptEmitName, CounterStateRenamed, au::Accept<Ping2>, au::Emit<PongCopy>> {
+public:
+    void on(const Ping2& p, au::Mail& mail) { mail.reply(PongCopy{p.seq, 0}); }
+};
+class RenamedToo
+    : public au::WeaveBase<RenamedToo, CounterStateRenamed, au::Accept<Ping2>, au::Emit<Pong2>> {
+public:
+    void on(const Ping2& p, au::Mail& mail) { mail.reply(Pong2{p.seq}); }
+};
+} // namespace copied
+
+TEST_CASE("a copied weave that kept a shape's name is refused at mount, not at delivery — "
+          "for its state and for what it emits; renamed too, both mount") {
+    const std::string sentence =
+        "is already published with a different shape (published schemas are immutable)";
+    SUBCASE("the kept STATE name, beside the original") {
+        Switchboard bus;
+        au::mount<Responder>(bus);
+        try {
+            au::mount<copied::KeptStateName>(bus);
+            FAIL("the copy mounted");
+        } catch (const SchemaConflict& c) {
+            CHECK(std::string(c.what()) == "schema 'CounterState' v1 " + sentence);
+        }
+        CHECK(bus.list_weaves().size() == 1);
+        CHECK(bus.resolve_schema("Ping2", 1) == nullptr); // nothing of the copy registered
+    }
+    SUBCASE("the kept EMITTED name, beside the original — and the original second") {
+        Switchboard bus;
+        au::mount<Responder>(bus);
+        try {
+            au::mount<copied::KeptEmitName>(bus);
+            FAIL("the copy mounted");
+        } catch (const SchemaConflict& c) {
+            CHECK(std::string(c.what()) == "schema 'Pong' v1 " + sentence);
+        }
+        CHECK(bus.list_weaves().size() == 1);
+
+        Switchboard other;
+        au::mount<copied::KeptEmitName>(other);
+        CHECK_THROWS_AS(au::mount<Responder>(other), SchemaConflict);
+        CHECK(other.resolve_schema("Pong", 1)->content_id() ==
+              au::schema_of<copied::PongCopy>()->content_id());
+    }
+    SUBCASE("renamed too: both mount, and identical shapes share one entry") {
+        Switchboard bus;
+        WeaveId original = au::mount<Responder>(bus);
+        WeaveId copy = au::mount<copied::RenamedToo>(bus);
+        CHECK(bus.weave(original) != nullptr);
+        CHECK(bus.weave(copy) != nullptr);
+        CHECK(bus.resolve_schema("CounterStateRenamed", 1) != nullptr);
+        CHECK(bus.resolve_schema("Pong2", 1) != nullptr);
+    }
 }
 
 TEST_CASE("snapshot/revive are derived; state round-trips through the gate") {

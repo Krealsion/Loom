@@ -84,10 +84,13 @@ would have quietly built.
 ### A third declaration list
 
 `Claims<...>` is not `Emit<...>`, twice over: a Sense is not an emitted message,
-and `Emit` is informational and does not register — so discovery would still have
-had to wait for a runtime claim to accidentally reveal a shape (the Rule Garden
-already hit exactly that with response-only shapes). `Claims<...>` registers at
-mount and is enforced at claim time.
+and `Emit` was, when this was decided, informational and did not register — so
+discovery would still have had to wait for a runtime claim to accidentally reveal
+a shape (the Rule Garden already hit exactly that with response-only shapes).
+`Claims<...>` registers at mount and is enforced at claim time. (Since
+[declared vocabulary is agreed at admission](declared-vocabulary-is-agreed-at-admission.md)
+`Emit<...>` registers too; the first reason stands on its own, and enforcement at
+the claim doors is what still sets `Claims<...>` apart.)
 
 ## The honest answer to the risk
 

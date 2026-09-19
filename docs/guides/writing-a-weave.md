@@ -89,9 +89,11 @@ event — the usual first three:
 See [diagnostics](diagnostics.md) for reading the tap and the journal.
 
 **A copied weave that kept a shape's name is refused at mount, not at delivery.**
-A `(name, version)` publishes once per process, and every shape a weave touches —
-its `Accept` doors, what it emits, and its state struct — is registered when the
-weave is mounted. So copy `Responder` to make a second participant, rename the
+A `(name, version)` publishes once per Registry — a kernel host's bus has one, and
+it holds one definition of every shape every live participant has declared — and
+every shape a weave declares — its `Accept` doors, its `Emit` list, its `Claims`,
+and its state struct — together with every shape those nest, is registered when
+the weave is mounted. So copy `Responder` to make a second participant, rename the
 class and rename its doors, give the copy's `Count` a field of its own, and leave
 `ZEN_SHAPE(Count, 1, ...)` spelled as it was: mounting it throws
 `loom::SchemaConflict`, saying
@@ -101,11 +103,17 @@ schema 'Count' v1 is already published with a different shape (published schemas
 ```
 
 and a host that loaded the copy from a library rather than compiling it in reports
-that same sentence back to you. Rename the shape too and both mount. The condition
-is exact and worth knowing: two weaves that register the *identical* shape share
-one published entry and neither is refused — that is the rule working, not a
-loophole. What is refused is divergence under a name that was kept, because the
-name is already a promise about somebody else's fields
+that same sentence back to you, prefixed `load refused: `. The same holds for a
+`Pong` you only emit and for a `Pos` that only ever sits inside some other shape —
+the name is the promise, wherever you made it. Rename the shape too and both
+mount. The condition is exact and worth knowing: two weaves that register the
+*identical* shape share one published entry and neither is refused — that is the
+rule working, not a loophole; and a published definition is held only while a
+weave that declared it lives, so once the last one leaves, a different definition
+may publish under that name
+([LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered)).
+What is refused is divergence under a name that was kept, because the name is
+already a promise about somebody else's fields
 ([GATE-04](../laws/admission-laws.md)).
 
 **If your handler throws**, the exception travels out to whoever asked for the

@@ -723,9 +723,11 @@ public:
     HostAdapter(const ZenWeaveAbi* abi, void* instance, std::shared_ptr<LoadedLibrary> lib,
                 std::vector<std::shared_ptr<const Schema>> accepted,
                 std::shared_ptr<const Schema> state_schema, loom::Switchboard* bus,
-                std::vector<std::shared_ptr<const Schema>> claims = {})
+                std::vector<std::shared_ptr<const Schema>> claims = {},
+                std::vector<std::shared_ptr<const Schema>> emits = {})
         : abi_(abi), instance_(instance), lib_(std::move(lib)), accepted_(std::move(accepted)),
-          claims_(std::move(claims)), state_schema_(std::move(state_schema)), bus_(bus) {}
+          claims_(std::move(claims)), emits_(std::move(emits)),
+          state_schema_(std::move(state_schema)), bus_(bus) {}
 
     /// THE ONE PLACE A LIVE DYNAMIC ARTIFACT ENDS — whoever caused it.
     ///
@@ -763,11 +765,20 @@ public:
     // instance while the old library is still open — which the argument order
     // guarantees: `lib_` is not reassigned until after the destroy above it.
     void rebind(const ZenWeaveAbi* new_abi, void* new_instance,
-                std::shared_ptr<LoadedLibrary> new_lib) {
+                std::shared_ptr<LoadedLibrary> new_lib,
+                std::vector<std::shared_ptr<const Schema>> new_claims,
+                std::vector<std::shared_ptr<const Schema>> new_emits) {
         destroy_instance(abi_, instance_);
         abi_ = new_abi;
         instance_ = new_instance;
         lib_ = std::move(new_lib);
+        // THE SUCCESSOR'S DECLARED SETS ARE ITS OWN. The accept-set was required
+        // equal before this ran; the claim-set and emit-set may differ, and the
+        // bus re-reads both from this adapter at `swap_state` (SENSE-04's "the
+        // claim-set belongs to the code"). Keeping the predecessor's lists here
+        // would have the bus describe code that is gone.
+        claims_ = std::move(new_claims);
+        emits_ = std::move(new_emits);
         // A successor reloaded over a predecessor that could not apply a published
         // value is SHOWN that value again (`Switchboard::swap_state` returns it to
         // Pending). Nothing is inherited here for that to work: every image this
@@ -815,6 +826,14 @@ public:
     /// weave does — at load, before it has claimed anything.
     std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
         return claims_;
+    }
+
+    /// The declared emit-set the library published in its manifest (v9), so the
+    /// bus claims a loaded emitter's definitions beside its accept-set exactly as
+    /// it does a native weave's — the same door, the same wall, the same
+    /// discovery answer. What the artifact may SEND is still its grant's alone.
+    std::vector<std::shared_ptr<const Schema>> emitted_schemas() const override {
+        return emits_;
     }
 
     void handle(const loom::Message& in, loom::Bus& bus) override {
@@ -941,6 +960,7 @@ private:
     std::shared_ptr<LoadedLibrary> lib_;
     std::vector<std::shared_ptr<const Schema>> accepted_;
     std::vector<std::shared_ptr<const Schema>> claims_; ///< the declared claim-set (v6)
+    std::vector<std::shared_ptr<const Schema>> emits_;  ///< the declared emit-set (v9)
     std::shared_ptr<const Schema> state_schema_;
     loom::Switchboard* bus_;
     loom::WeaveId self_{};
@@ -1054,10 +1074,16 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     // vocabulary the refused candidate introduced disappears with it.
     //
     // Referenced (nested component) schemas first — the manifest is
-    // self-contained, so a library whose doors or state nest a shape (a
-    // List<Pos>, a Pos field) brings that shape with it. Same registry, same
-    // agreement wall: a component conflicting with what another LIVE library
-    // claims refuses the load.
+    // self-contained, so a library whose doors, state, claims or emits nest a
+    // shape (a List<Pos>, a Pos field) brings that shape with it. Same registry,
+    // same agreement wall: a component conflicting with what another LIVE
+    // library claims refuses the load — and so does a manifest that carries two
+    // definitions of one component itself (`Box { Part {a} }` beside `Box2
+    // { Part {a, b} }`): the second `Part v1` meets the first at this door and
+    // the artifact is refused with the shape named, rather than loading with
+    // whichever definition came first substituted into the other's owner.
+    // A native weave's declaration meets the same rule on the bus, in
+    // `register_weave`; this registry is where LOADED manifests are decoded.
     decode_referenced(manifest, registry_, result.schemas);
     std::vector<std::shared_ptr<const Schema>> vocabulary;
     for (const loom::Cell& c : manifest.get("accepted")->as_list()) {
@@ -1076,6 +1102,18 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
             auto s = decode_schema(*c.as_message(), registry_);
             vocabulary.push_back(s);
             result.claims.push_back(std::move(s));
+        }
+    }
+    // The declared emit-set (v9). Optional for the same reason, and claimed
+    // through the same wall for the same reason: a shape this artifact says it
+    // will SEND is a promise about somebody else's door, so its definition is
+    // compared at load, not at the first delivery. It is carried to the adapter
+    // for the bus's own registration and for discovery; no grant is read from it.
+    if (const loom::Cell* emits = manifest.get("emits")) {
+        for (const loom::Cell& c : emits->as_list()) {
+            auto s = decode_schema(*c.as_message(), registry_);
+            vocabulary.push_back(s);
+            result.emits.push_back(std::move(s));
         }
     }
     // The ask, if the artifact emitted one. READ AND CARRIED, NEVER CONSULTED: it
@@ -1210,7 +1248,8 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
             }
         }
         adapter = std::make_unique<HostAdapter>(abi, instance, lib, std::move(mf.accepted),
-                                                std::move(mf.state), &bus_, std::move(mf.claims));
+                                                std::move(mf.state), &bus_, std::move(mf.claims),
+                                                std::move(mf.emits));
         adapter_built = true;
         HostAdapter* raw = adapter.get();
         // A loaded .so shares this address space and can reach syscalls directly,
@@ -1375,6 +1414,45 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         }
     }
 
+    // THE CANDIDATE'S WHOLE VOCABULARY AGAINST THE BUS'S LIVE ONE, BEFORE THE
+    // INCUMBENT IS TOUCHED. `reconstruct` put the candidate's closure through this
+    // Kernel's decoding registry, which every LOADED artifact enters — but a
+    // definition only a NATIVE weave holds lives only in the Switchboard's
+    // registry, the one wall every participant registers into. The bus re-claims
+    // the successor's closure inside `swap_state`, after the rebind below; a
+    // disagreement discovered there would refuse a replacement that had already
+    // happened. So it is asked here, read-only, with the registry's own sentence:
+    // nothing runs between this check and the swap (dispatch is single-threaded),
+    // so an answer here is the answer the re-claim will get.
+    {
+        std::vector<std::shared_ptr<const Schema>> closure;
+        auto declare = [&closure](const std::shared_ptr<const Schema>& s) {
+            collect_referenced(*s, closure);
+            closure.push_back(s);
+        };
+        for (const auto& s : cand.accepted) {
+            declare(s);
+        }
+        for (const auto& s : cand.claims) {
+            declare(s);
+        }
+        for (const auto& s : cand.emits) {
+            declare(s);
+        }
+        declare(cand.state);
+        for (const auto& s : closure) {
+            const std::shared_ptr<const Schema> live = bus_.resolve_schema(s->name(), s->version());
+            if (live && live->content_id() != s->content_id()) {
+                destroy_instance(new_abi, new_inst);
+                return {false, false, false,
+                        std::string("new library refused: ") +
+                            loom::SchemaConflict(s->name(), s->version(), live->content_id(),
+                                                 s->content_id())
+                                .what()};
+            }
+        }
+    }
+
     const std::shared_ptr<const Schema>& old_state = rec.adapter->state_schema();
     if (cand.state->name() != old_state->name() ||
         cand.state->version() != old_state->version() ||
@@ -1424,7 +1502,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // unavailable rather than rolling back (the honest edge named in the header).
     const std::shared_ptr<LoadedLibrary> old_lib = rec.lib;
     const loom::WeaveId id = rec.id;
-    rec.adapter->rebind(new_abi, new_inst, new_lib);
+    rec.adapter->rebind(new_abi, new_inst, new_lib, std::move(cand.claims), std::move(cand.emits));
     rec.abi = new_abi;
     rec.lib = new_lib;
     // THE CLAIM CROSSES WITH THE CODE, AND IT CROSSES WITHOUT A GAP (LIFE-08). The

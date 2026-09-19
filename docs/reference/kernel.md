@@ -8,12 +8,17 @@ ABI. Laws: [KERN-01..04](../laws/kernel-laws.md). ABI detail:
 ## Loading
 
 `Kernel::load(name, path[, role])` — open the library, fetch and version-check
-the descriptor, construct the instance, reconstruct its manifest (accept-set +
-state schema, crossing as gated values), register a **host adapter** on the
-bus (optionally bound to a role). The adapter *is* a `Weave`; on the bus a
-loaded weave is indistinguishable from a native one. Grants: loaded weaves
-currently receive permissive bus-send authority (B1's demonstrated door is the
-kernel's own gated `LoadLibrary` capability).
+the descriptor, construct the instance, reconstruct its manifest (`zen.Manifest`
+v5: the nested components it `referenced`, its accept-set, its state schema, its
+optional `requests`, `claims` and `emits`, all crossing as gated values and all
+claimed through the agreement wall — a divergent or self-contradictory
+declaration is a refused load, with the shape named), register a **host
+adapter** on the bus (optionally bound to a role). The adapter *is* a `Weave`;
+on the bus a loaded weave is indistinguishable from a native one, declaring the
+same four lists a native one declares. Grants: the admission policy's verdict,
+or the grant a four-argument `load` named at its call site
+([admitting a loaded artifact](capabilities.md#admitting-a-loaded-artifact));
+nothing in the manifest becomes authority.
 
 `load_candidate(name, path, coordinator)` — the ordinary load **then the
 seal**: every artifact-level refusal happens before the live world is touched,

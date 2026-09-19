@@ -260,15 +260,20 @@ public:
     /// published routing contract**: the incumbent's instance, library, WeaveId,
     /// role, state and published accepted-message set are all untouched, the
     /// candidate's behavior is never installed, and no activation is emitted.
-    /// It does NOT mean "the Loom is unchanged". Reconstructing the candidate's
-    /// manifest is what *produces* the schemas being compared, and reconstruct()
-    /// admits them into this Kernel's dependency registry on the way — so a
-    /// rejected candidate may already have monotonically admitted schemas there,
-    /// observable through the cross-library agreement wall on a later load.
-    /// (The Switchboard's own registry is untouched: only register_weave writes
-    /// it, and a rejected candidate never registers.) Whether schema admission
-    /// should participate in a future replacement transaction, or is
-    /// intentionally monotonic, is a design decision this does not make.
+    /// It also means the Loom's VOCABULARY is unchanged. Reconstructing the
+    /// candidate's manifest is what *produces* the schemas being compared, and
+    /// reconstruct() claims them into the Manifest it returns (LIFE-08) — so a
+    /// rejected candidate's shapes leave with it, and this Kernel's dependency
+    /// registry holds nothing a weave that never came to exist put there. The
+    /// Switchboard's registry — the ONE agreement wall every participant, native
+    /// or loaded, registers its whole declared closure into — is untouched by a
+    /// refused candidate: the candidate's closure is checked against the bus's
+    /// live vocabulary BEFORE the incumbent is touched, and a disagreement with a
+    /// definition only a native weave holds refuses here, with the registry's
+    /// own sentence, exactly as one with another loaded artifact refuses in
+    /// reconstruct(). The two registries are not two walls with two answers:
+    /// the Kernel's is the decoding registry a manifest's nested references are
+    /// resolved against, and it compares content the same way.
     ///
     /// HONEST REMAINING EDGE, not fixed here: this is validate-then-commit, not
     /// transactional. The incumbent's instance is destroyed and the adapter
@@ -445,6 +450,13 @@ private:
         /// The declared claim-set (SENSE-04; ABI v6) — the Senses this artifact says it
         /// can claim. Empty when it declares none.
         std::vector<std::shared_ptr<const Schema>> claims;
+        /// The declared emit-set (ABI v9; zen.Manifest v5) — the shapes this artifact
+        /// says it may send, by definition. Claimed through the same wall as the
+        /// accept-set so a divergent emitter refuses at load; handed to the adapter
+        /// so the bus registers it with the accept-set and answers discovery from it.
+        /// Vocabulary, never authority: no grant is derived from it. Empty when the
+        /// artifact declares none.
+        std::vector<std::shared_ptr<const Schema>> emits;
         /// The manifest's `requests` section — the artifact's CapabilityAsk, if it
         /// emitted one. Carried so the admission policy can be SHOWN what the
         /// artifact asked for; it is advice and nothing here consults it to decide
@@ -506,7 +518,14 @@ private:
                        Grant* granted, std::string* why) const;
 
     loom::Switchboard& bus_;
-    loom::Registry registry_; ///< union of loaded Weaves' schemas, for callback resolution
+    /// THE DECODING REGISTRY: the union of loaded artifacts' manifests, which a
+    /// manifest's nested (name, version) references are resolved against and a
+    /// library's emitted bytes are decoded through. It compares content like any
+    /// Registry, so two loaded artifacts disagree here first — but the ONE
+    /// agreement wall every participant registers its whole declared closure
+    /// into is the Switchboard's, at `register_weave`; native weaves never enter
+    /// this one, and nothing here decides what anybody may say.
+    loom::Registry registry_;
     std::map<std::string, Loaded> libs_;
     /// The host's decision procedure. Never null — it starts as `admit_nothing()`,
     /// so a Kernel nobody has configured admits nothing rather than everything.
