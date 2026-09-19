@@ -1660,30 +1660,35 @@ TEST_CASE("schema admission: registering a declaration whose closure is a deep s
         bool swapped = false;
         std::size_t resolvable = 0; // how many of the depth+1 identities resolve after both
     };
-    Switchboard bus;
+    // THE WORKER OWNS WHAT IT TOUCHES. On the guard's failure path the worker is detached
+    // and the case leaves; a bus that lived on this frame would be destroyed under a
+    // registration still walking it. So the bus is shared: the worker's reference keeps it
+    // alive until the worker finishes (or the process ends), and the case's reference is
+    // dropped on either path. Nothing else the worker uses outlives it by reference.
+    auto bus = std::make_shared<Switchboard>();
     std::promise<Outcome> done;
     std::future<Outcome> result = done.get_future();
-    std::thread worker([&bus, root, done = std::move(done)]() mutable {
+    std::thread worker([bus, root, done = std::move(done)]() mutable {
         Outcome o;
         auto emitter = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
         emitter->declared_emits = {root};
-        o.id = bus.register_weave(std::move(emitter), Grant{});
+        o.id = bus->register_weave(std::move(emitter), Grant{});
         // A code swap re-walks the same closure to re-claim it (LIFE-08's handoff).
         Value snap(counter_schema());
         snap.set("count", Cell::integer(1));
-        o.swapped = bus.swap_state(o.id, loom::serialize(snap)).revived;
-        if (bus.resolve_schema("Shared.Leaf", 1) != nullptr) {
+        o.swapped = bus->swap_state(o.id, loom::serialize(snap)).revived;
+        if (bus->resolve_schema("Shared.Leaf", 1) != nullptr) {
             ++o.resolvable;
         }
         for (int i = 1; i <= depth; ++i) {
-            if (bus.resolve_schema("Shared.Node" + std::to_string(i), 1) != nullptr) {
+            if (bus->resolve_schema("Shared.Node" + std::to_string(i), 1) != nullptr) {
                 ++o.resolvable;
             }
         }
         done.set_value(o);
     });
     if (result.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
-        worker.detach();
+        worker.detach(); // it keeps its own `bus`; this frame's reference goes with the frame
         FAIL("registering a 201-schema shared-graph declaration did not finish within 30 s: "
              "the closure walk is expanding an already-carried component again");
         return;
@@ -1693,20 +1698,20 @@ TEST_CASE("schema admission: registering a declaration whose closure is a deep s
     CHECK(o.id.valid());
     CHECK(o.swapped);
     CHECK(o.resolvable == static_cast<std::size_t>(depth) + 1); // every identity, by definition
-    CHECK(bus.emitted_schemas(o.id).size() == 1);
-    CHECK(bus.resolve_schema("Shared.Node" + std::to_string(depth), 1)->content_id() ==
+    CHECK(bus->emitted_schemas(o.id).size() == 1);
+    CHECK(bus->resolve_schema("Shared.Node" + std::to_string(depth), 1)->content_id() ==
           root->content_id());
 
     // The wall is intact under the bound: a different `Shared.Leaf v1` is refused while
     // the declarer lives, and publishes once the declarer has gone (reclamation).
     auto other_leaf = SchemaBuilder("Shared.Leaf", 1).field("w", Kind::Text).build();
-    CHECK_THROWS_AS(reg(bus, {other_leaf}), SchemaConflict);
-    REQUIRE(bus.unregister_weave(o.id) != nullptr);
-    CHECK(bus.resolve_schema("Shared.Leaf", 1) == nullptr);
-    CHECK(bus.resolve_schema("Shared.Node" + std::to_string(depth), 1) == nullptr);
-    Registered later = reg(bus, {other_leaf});
-    CHECK(bus.resolve_schema("Shared.Leaf", 1)->content_id() == other_leaf->content_id());
-    CHECK(bus.weave(later.id) != nullptr);
+    CHECK_THROWS_AS(reg(*bus, {other_leaf}), SchemaConflict);
+    REQUIRE(bus->unregister_weave(o.id) != nullptr);
+    CHECK(bus->resolve_schema("Shared.Leaf", 1) == nullptr);
+    CHECK(bus->resolve_schema("Shared.Node" + std::to_string(depth), 1) == nullptr);
+    Registered later = reg(*bus, {other_leaf});
+    CHECK(bus->resolve_schema("Shared.Leaf", 1)->content_id() == other_leaf->content_id());
+    CHECK(bus->weave(later.id) != nullptr);
 }
 
 TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabulary") {
