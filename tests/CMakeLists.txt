@@ -107,7 +107,7 @@ target_include_directories(zen-tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/console) # tui_render.hpp / terminal.hpp for the tui_map_key pin
 
 target_link_libraries(zen-tests
-    PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-history zen-bridge zen-tui
+    PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-history zen-bridge zen-bridge-console zen-tui
             zen-host-policy zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(zen-tests PRIVATE zen-kernel)

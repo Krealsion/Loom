@@ -253,6 +253,8 @@ What the component *is*, and what it trusts: [bridge](bridge.md).
 | Bound | Value | Behavior |
 |---|---|---|
 | `kMaxOperatorConnections` | 32 | accept-then-shed, `declined_count()` visible |
+| `kMaxHelloFieldBytes` | 256 | the longest claimed name or credential a Hello may carry; over it the connection is refused before the policy is asked -- a peer has earned nothing yet |
+| `LinkWeave::kMaxOpenAsks` (the supplied host) | 64 | asks one link holds open at once; a new one past it is told `refused` and every open one is untouched |
 | `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
 | `kMaxAbsentSchemas` (client) | 64 | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 

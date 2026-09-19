@@ -433,6 +433,43 @@ bool bridge_wait_readable(const std::vector<socket_t>& socks, int timeout_ms) {
     return n > 0;
 }
 
+std::string bridge_peer_name(socket_t sock) {
+    // Where the far end is, as text a person can read in an inventory. Best effort and never
+    // trusted: a peer address is a fact about the socket, not an identity.
+    sockaddr_storage ss{};
+#ifdef _WIN32
+    int len = static_cast<int>(sizeof(ss));
+    if (::getpeername(static_cast<SOCKET>(sock), reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
+        return {};
+    }
+#else
+    socklen_t len = static_cast<socklen_t>(sizeof(ss));
+    if (::getpeername(sock, reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
+        return {};
+    }
+    if (ss.ss_family == AF_UNIX) {
+        return "unix";
+    }
+#endif
+    if (ss.ss_family == AF_INET) {
+        const auto* in4 = reinterpret_cast<const sockaddr_in*>(&ss);
+        char buf[INET_ADDRSTRLEN] = {};
+        if (::inet_ntop(AF_INET, &in4->sin_addr, buf, sizeof(buf)) == nullptr) {
+            return {};
+        }
+        return std::string(buf) + ":" + std::to_string(ntohs(in4->sin_port));
+    }
+    if (ss.ss_family == AF_INET6) {
+        const auto* in6 = reinterpret_cast<const sockaddr_in6*>(&ss);
+        char buf[INET6_ADDRSTRLEN] = {};
+        if (::inet_ntop(AF_INET6, &in6->sin6_addr, buf, sizeof(buf)) == nullptr) {
+            return {};
+        }
+        return "[" + std::string(buf) + "]:" + std::to_string(ntohs(in6->sin6_port));
+    }
+    return {};
+}
+
 socket_t bridge_accept(socket_t listener, bool* would_block, std::string* err) {
     if (would_block != nullptr) {
         *would_block = false;

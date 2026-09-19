@@ -21,6 +21,8 @@ RemoteConsole::RemoteConsole(socket_t sock, int handshake_timeout_ms) {
     ch_ = std::make_unique<BridgeChannel>(sock);
     std::string hello;
     put_u32(hello, kBridgeProtocolVersion);
+    put_bytes(hello, "operator"); // the console claims the operator's seat; the host's policy decides
+    put_bytes(hello, "");
     ch_->queue(BridgeOp::Hello, hello);
     ch_->flush();
     // Block (bounded) until Welcome arrives; the initial Weaves push usually rides in the same batch.
@@ -107,6 +109,15 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
             operator_id_ = loom::WeaveId{id};
             connected_ = true;
         }
+        break;
+    }
+    case BridgeOp::Denied: {
+        // Admission refused this console: said on the tap in the host's own words, and the
+        // connection is over. Nothing this console sends afterwards can act.
+        Cursor cur(f.payload);
+        std::string_view why;
+        (void)cur.bytes(why);
+        push_bridge_refused("admission refused: " + std::string(why));
         break;
     }
     case BridgeOp::Weaves: {
@@ -203,9 +214,22 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         break;
     }
     case BridgeOp::Delivered: {
+        // [u64 sender][u64 correlation][u8 flags][bytes authored_role][bytes payload] -- the
+        // stamped context rides ahead of the bytes (v4). This console's buffer keeps the value;
+        // the context is what `show mN` would print, and is read past here.
+        Cursor cur(f.payload);
+        std::uint64_t sender = 0;
+        std::uint64_t correlation = 0;
+        std::uint8_t flags = 0;
+        std::string_view role;
+        if (!cur.u64(sender) || !cur.u64(correlation) || !cur.u8(flags) || !cur.bytes(role)) {
+            push_bridge_refused("dropped a malformed Delivered frame");
+            break;
+        }
+        const std::string bytes(cur.rest());
         // The payload IS a serialized reply Value. Admit it if its schema is known; otherwise fetch
         // the schema (async) and stash the bytes to admit once the Schema reply lands.
-        loom::Unverified u = loom::parse(f.payload);
+        loom::Unverified u = loom::parse(bytes);
         std::shared_ptr<const loom::Schema> schema =
             registry_.lookup(u.claimed_name(), u.claimed_version());
         if (schema) {
@@ -226,7 +250,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
             put_bytes(body, u.claimed_name());
             put_u32(body, u.claimed_version());
             ch_->queue(BridgeOp::Describe, body);
-            pending_delivered_.push_back(f.payload);
+            pending_delivered_.push_back(bytes);
         }
         break;
     }
@@ -340,6 +364,7 @@ loom::Ticket RemoteConsole::assemble_and_send(loom::WeaveId target,
     put_u64(frame, target.value);
     put_u64(frame, 0);            // wire_reply_to: the honest client sets 0 — the bridge stamps c.id
     put_u64(frame, ++correlation_);
+    put_bytes(frame, ""); // v4: no office address -- this console sends to WeaveIds
     try {
         frame.append(loom::serialize(v)); // a Ready compose is complete + type-checked, so this holds
     } catch (...) {

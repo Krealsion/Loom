@@ -96,6 +96,17 @@ if(NOT ZEN_WITNESS_HISTORY)
 endif()
 zen_run("history pair as a stranger sees it" "${ZEN_WITNESS_HISTORY}")
 
+# ---- 1d. the crossing, as a linking host reaches it ---------------------------------
+find_program(ZEN_WITNESS_BRIDGE witness-bridge PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
+             NO_DEFAULT_PATH)
+if(NOT ZEN_WITNESS_BRIDGE)
+    message(FATAL_ERROR
+        "package witness: witness-bridge was not produced in ${ZEN_WORK}. The crossing is "
+        "exported precisely so a host outside this tree can link to another; if it no longer "
+        "configures or compiles from the installed package, that claim is false.")
+endif()
+zen_run("the crossing as a linking host sees it" "${ZEN_WITNESS_BRIDGE}")
+
 # ---- the dynamic-weave half, only where the install has a kernel ---------------------
 file(GLOB weave_artifact
      "${ZEN_WORK}/*witness-weave*.dll" "${ZEN_WORK}/*witness-weave*.so"

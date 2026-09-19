@@ -3,10 +3,16 @@
 
 #include <doctest.h>
 #include "switchboard_fixtures.hpp"
+#include "link.hpp" // the supplied host's LinkWeave, header-only (src/host is on the include path)
 #include <zen/weave/dispatch_refusal.hpp>
 
 #include <zen/bridge/channel.hpp>
+#include <zen/bridge/client.hpp>
+#include <zen/bridge/link.hpp>
 #include <zen/bridge/remote_console.hpp>
+#include <zen/weave/ask_book.hpp>
+#include <zen/weave/standard_shapes.hpp>
+#include <zen/weave.hpp>
 #include <zen/bridge/server.hpp>
 
 #include <zen/console/console.hpp>       // kConsoleTapCapacity / kConsoleBufferCapacity
@@ -26,6 +32,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -246,6 +253,20 @@ std::string make_send_frame(std::uint64_t wire_sender, std::uint64_t target,
     put_u64(frame, target);
     put_u64(frame, wire_reply_to);
     put_u64(frame, correlation);
+    put_bytes(frame, ""); // v4: no office address
+    frame.append(payload);
+    return frame;
+}
+
+// Build a raw host->client Delivered frame as a v4 host ships one: the stamped context ahead of
+// the bytes. A fake host forging a delivery has to speak the same wire an honest one does.
+std::string make_delivered_frame(std::string_view payload, std::uint64_t sender = 7,
+                                 std::uint64_t correlation = 0, std::uint8_t flags = 0) {
+    std::string frame;
+    put_u64(frame, sender);
+    put_u64(frame, correlation);
+    put_u8(frame, flags);
+    put_bytes(frame, "");
     frame.append(payload);
     return frame;
 }
@@ -1029,6 +1050,7 @@ TEST_CASE("operator-protocol: the sender is stamped from the connection — a FO
     put_u64(frame, h.gid.value);  // target: the greeter
     put_u64(frame, kVictim);      // forged wire_reply_to — the bridge MUST ignore this too
     put_u64(frame, 1);            // correlation
+    put_bytes(frame, "");         // v4: no office address
     frame.append(loom::serialize(greet));
     raw.queue(BridgeOp::Send, frame);
     raw.flush();
@@ -1257,7 +1279,7 @@ TEST_CASE("hygiene: a hostile host cannot inject an unbuildable reply — it is 
 
     loom::Value unk(unknown_schema());
     unk.set("x", loom::Cell::integer(9));
-    host.queue(BridgeOp::Delivered, loom::serialize(unk));
+    host.queue(BridgeOp::Delivered, make_delivered_frame(loom::serialize(unk)));
     host.flush();
 
     // The client requests Describe (pending the reply); the fake host answers SchemaNone.
@@ -1320,7 +1342,7 @@ TEST_CASE("hygiene: the client bounds pending replies a hostile host can pile up
     unk.set("x", loom::Cell::integer(1));
     const std::string bytes = loom::serialize(unk);
     for (std::size_t i = 0; i < RemoteConsole::kMaxPendingDelivered + 1; ++i) {
-        host.queue(BridgeOp::Delivered, bytes);
+        host.queue(BridgeOp::Delivered, make_delivered_frame(bytes));
     }
     host.flush();
     for (int i = 0; i < 500; ++i) {
@@ -2046,7 +2068,7 @@ TEST_CASE("C-1 (bridge): the remote tap and reply buffer are bounded windows, wi
     for (std::size_t i = 1; i <= kConsoleBufferCapacity + kExtraReplies; ++i) {
         loom::Value v(mark_schema());
         v.set("n", loom::Cell::integer(static_cast<std::int64_t>(i)));
-        host.queue(BridgeOp::Delivered, loom::serialize(v));
+        host.queue(BridgeOp::Delivered, make_delivered_frame(loom::serialize(v)));
     }
     // ... and more bus events than the tap can hold.
     constexpr std::uint64_t kBase = 5000;
@@ -2107,7 +2129,7 @@ TEST_CASE("C-1 (bridge): the absent-schema memo is bounded — a host cannot gro
             loom::SchemaBuilder(absent_name(k), 1).field("x", loom::Kind::Int).build();
         loom::Value v(schema);
         v.set("x", loom::Cell::integer(static_cast<std::int64_t>(k)));
-        host.queue(BridgeOp::Delivered, loom::serialize(v));
+        host.queue(BridgeOp::Delivered, make_delivered_frame(loom::serialize(v)));
         host.flush();
 
         // Wait for THIS name specifically: once the memo saturates its size stops moving, so a
@@ -2195,4 +2217,601 @@ TEST_CASE("wire-originated refusal-shaped speech cannot acquire Loom attestation
     REQUIRE(attempt.valid());bus.pump_pending();CHECK(trusted==0);bus.pump_pending();
     CHECK(trusted==1);CHECK(ordinary==1);CHECK(bus.pending()==0);
 }
+
+// =================================================================================================
+// THE TWO-HOST CROSSING (v4): admission, identity, stamped context, the link.
+// =================================================================================================
+//
+// Everything above this line proves the crossing at the mechanism altitude for ONE principal --
+// the operator. The cases below are the guest's: a connection that is admitted deliberately,
+// under a grant the host's policy chose, told what it is and what it is not, and given nothing
+// it was not granted. Two of them are the guards the prompt names as the ones that must fail
+// when removed: an unadmitted connection acting, and a claimed name becoming an identity.
+
+
+namespace {
+
+/// A typed shape and a participant that ANSWERS it -- `mail.answer`, so Loom attests the reply
+/// -- the way a real Workshop door answers a guest. The greeter above replies with an ordinary
+/// send, which is exactly the distinction the Delivered flags exist to carry.
+struct Echo {
+    std::string msg;
+    ZEN_SHAPE(Echo, 1, ZEN_FIELD(msg));
+};
+struct EchoState {
+    std::int64_t heard = 0;
+    ZEN_SHAPE(EchoState, 1, ZEN_FIELD(heard));
+};
+class EchoAnswerer final
+    : public loom::WeaveBase<EchoAnswerer, EchoState, loom::Accept<Echo>, loom::Emit<loom::Result>> {
+public:
+    void on(const Echo& e, loom::Mail& mail) {
+        ++state_.heard;
+        last_sender_ = mail.sender();
+        (void)mail.answer(loom::Result{"echo:" + e.msg});
+    }
+    std::int64_t heard() const { return state_.heard; }
+    loom::WeaveId last_sender_{};
+};
+
+/// A host with a POLICY of the test's choosing, stepped on its own thread like `Host`.
+struct GuestHost {
+    loom::Switchboard bus;
+    EchoAnswerer* echo = nullptr;
+    loom::WeaveId echo_id{};
+    socket_t listener = kInvalidSocket;
+    std::uint16_t port = 0;
+    std::unique_ptr<loom::BridgeServer> server;
+    std::atomic<bool> stop{false};
+    std::thread th;
+    std::vector<loom::Connection> told; ///< every state change the server reported
+    std::mutex told_mutex;
+
+    explicit GuestHost(loom::BridgeAdmission policy, bool threaded = true) {
+        auto e = std::make_unique<EchoAnswerer>();
+        echo = e.get();
+        echo_id = bus.register_weave(std::move(e), loom::Grant{}.allow_any(), std::string("echo"));
+        echo->zen_set_self(echo_id);
+        std::string err;
+        listener = bridge_listen_tcp(0, &err);
+        REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+        port = bridge_socket_port(listener);
+        server = std::make_unique<loom::BridgeServer>(bus, listener, std::move(policy));
+        server->on_connection([this](const loom::Connection& c) {
+            const std::lock_guard<std::mutex> lock(told_mutex);
+            told.push_back(c);
+        });
+        if (threaded) {
+            th = std::thread([this] {
+                while (!stop.load()) {
+                    server->wait_and_step(20);
+                }
+            });
+        }
+    }
+    ~GuestHost() {
+        stop.store(true);
+        if (th.joinable()) {
+            th.join();
+        }
+    }
+    std::vector<loom::Connection> reported() {
+        const std::lock_guard<std::mutex> lock(told_mutex);
+        return told;
+    }
+};
+
+/// The narrow grant a Workshop-like policy hands a guest: one shape, to one office.
+loom::ConnectionAdmitted echo_only(std::string name) {
+    loom::ConnectionAdmitted a;
+    a.grant.allow_to_role(Echo::zen_name, Echo::zen_version, "echo");
+    a.established_name = std::move(name);
+    a.observe = false;
+    return a;
 }
+
+loom::BridgeClient& connect_client(std::unique_ptr<loom::BridgeClient>& out, std::uint16_t port,
+                                   const char* name, const char* credential) {
+    std::string err;
+    const socket_t s = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(s != kInvalidSocket, err);
+    out = std::make_unique<loom::BridgeClient>(s);
+    REQUIRE(out->hello(name, credential));
+    return *out;
+}
+
+bool drain_events(loom::BridgeClient& c, std::vector<loom::BridgeEvent>& into,
+                  const std::function<bool()>& done, int timeout_ms) {
+    return wait_until(
+        [&] {
+            std::vector<loom::BridgeEvent> got;
+            c.poll(got);
+            for (loom::BridgeEvent& e : got) {
+                into.push_back(std::move(e));
+            }
+            return done();
+        },
+        timeout_ms);
+}
+
+} // namespace
+
+TEST_CASE("admission: a refused connection is told why, gets no proxy, and its sends act on nothing") {
+    GuestHost h([](const loom::ConnectionRequest& r) {
+        return r.credential == "open-sesame" ? loom::ConnectionVerdict::admit(echo_only("agent"))
+                                             : loom::ConnectionVerdict::refuse("wrong credential");
+    });
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "agent", "nope");
+    CHECK_FALSE(client.await_admission(2000));
+    CHECK(client.denied());
+    CHECK(client.denial() == "wrong credential");
+    // The connection is severed and nothing of it remains on the bus.
+    CHECK(wait_until([&] { return h.server->connection_count() == 0; }, 2000));
+    CHECK(h.server->refused_count() == 1);
+    CHECK(h.bus.list_weaves().size() == 1); // the echo answerer alone; no proxy was ever registered
+    // ...and the refusal was REPORTED, as a state the inventory can show and drop.
+    bool saw_refused = false;
+    bool saw_closed = false;
+    for (const loom::Connection& t : h.reported()) {
+        saw_refused = saw_refused || t.state == loom::ConnectionState::Refused;
+        saw_closed = saw_closed || t.state == loom::ConnectionState::Closed;
+    }
+    CHECK(saw_refused);
+    CHECK(saw_closed);
+    CHECK(h.echo->heard() == 0);
+}
+
+TEST_CASE("admission: the established name is the policy's word, never the peer's claim") {
+    GuestHost h([](const loom::ConnectionRequest& r) {
+        // The policy knows the credential, not the name the peer chose for itself.
+        if (r.credential != "open-sesame") {
+            return loom::ConnectionVerdict::refuse("wrong credential");
+        }
+        return loom::ConnectionVerdict::admit(echo_only("the-agent-on-record"));
+    });
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "root", "open-sesame");
+    REQUIRE(client.await_admission(2000));
+    CHECK(client.established_name() == "the-agent-on-record");
+    CHECK(client.session() != 0);
+    bool inventory_kept_both = false;
+    for (const loom::Connection& t : h.reported()) {
+        if (t.state == loom::ConnectionState::Admitted) {
+            inventory_kept_both = t.claimed_name == "root" &&
+                                  t.established_name == "the-agent-on-record" &&
+                                  t.session.value == client.session();
+        }
+    }
+    CHECK(inventory_kept_both);
+}
+
+TEST_CASE("admission: a guest's send is stamped from the session and answered WITH Loom's attestation") {
+    GuestHost h([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_only("agent"));
+    });
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "agent", "");
+    REQUIRE(client.await_admission(2000));
+    // A role-addressed send, the way a guest that never learned a WeaveId speaks.
+    client.send_to_role("echo", /*correlation=*/42, loom::serialize(loom::to_value(Echo{"hi"})));
+    std::vector<loom::BridgeEvent> events;
+    REQUIRE(drain_events(
+        client, events,
+        [&] {
+            for (const loom::BridgeEvent& e : events) {
+                if (e.kind == loom::BridgeEvent::Kind::Delivered) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+    const loom::BridgeEvent* delivered = nullptr;
+    for (const loom::BridgeEvent& e : events) {
+        if (e.kind == loom::BridgeEvent::Kind::Delivered) {
+            delivered = &e;
+        }
+    }
+    REQUIRE(delivered != nullptr);
+    CHECK(delivered->correlation == 42);
+    CHECK(delivered->sender == h.echo_id.value); // the bus's stamp of who answered
+    CHECK(delivered->answers_ask);               // Loom attests: THE answer to this session's ask
+    CHECK_FALSE(delivered->dispatch_refused);
+    loom::Unverified u = loom::parse(delivered->payload);
+    CHECK(u.claimed_name() == loom::Result::zen_name);
+    // ...and the answerer saw the SESSION as the sender, never anything the wire could claim.
+    CHECK(h.echo->last_sender_.value == client.session());
+}
+
+TEST_CASE("admission: what the grant does not cover is refused at the bus, and the guest is told") {
+    GuestHost h([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_only("agent"));
+    });
+    // A participant that accepts the dispatch-refusal notice, so the shape is registered and the
+    // proxy (accept-any) can receive it -- exactly as Workshop's terminal registers it.
+    auto probe = sbfx::register_probe(h.bus, {schema_of<DispatchRefused>()});
+    (void)probe;
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "agent", "");
+    REQUIRE(client.await_admission(2000));
+    // Echo to a WeaveId the grant does not cover (the probe) -- CapabilityDenied at delivery.
+    client.send(probe.id.value, /*correlation=*/7, loom::serialize(loom::to_value(Echo{"no"})));
+    std::vector<loom::BridgeEvent> events;
+    REQUIRE(drain_events(
+        client, events,
+        [&] {
+            for (const loom::BridgeEvent& e : events) {
+                if (e.kind == loom::BridgeEvent::Kind::Delivered && e.dispatch_refused) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+    bool right = false;
+    for (const loom::BridgeEvent& e : events) {
+        if (e.kind == loom::BridgeEvent::Kind::Delivered && e.dispatch_refused) {
+            loom::Unverified u = loom::parse(e.payload);
+            loom::Admission a = loom::admit(u, schema_of<DispatchRefused>());
+            right = a.ok() && a.value().get("reason")->as_text() == "CapabilityDenied" &&
+                    e.correlation == 7 && !e.answers_ask;
+        }
+    }
+    CHECK(right);
+}
+
+TEST_CASE("admission: a deferred connection can act on nothing until decided; deciding admits or refuses") {
+    // UNTHREADED: the decision is the HOST's act, made on the host's thread between steps --
+    // which is exactly where a console command or a popup would make it.
+    GuestHost h([](const loom::ConnectionRequest&) { return loom::ConnectionVerdict::defer(); },
+                /*threaded=*/false);
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "agent", "");
+    std::vector<loom::BridgeEvent> events;
+    const auto step_until = [&](const std::function<bool()>& done, int timeout_ms) {
+        return wait_until(
+            [&] {
+                h.server->step();
+                std::vector<loom::BridgeEvent> got;
+                client.poll(got);
+                for (loom::BridgeEvent& e : got) {
+                    events.push_back(std::move(e));
+                }
+                return done();
+            },
+            timeout_ms);
+    };
+    std::uint64_t waiting = 0;
+    REQUIRE(step_until(
+        [&] {
+            for (const loom::Connection& t : h.reported()) {
+                if (t.state == loom::ConnectionState::AwaitingDecision) {
+                    waiting = t.connection;
+                }
+            }
+            return waiting != 0;
+        },
+        2000));
+    CHECK_FALSE(client.admitted()); // no verdict yet: neither admitted nor denied
+    CHECK_FALSE(client.denied());
+    CHECK(h.bus.list_weaves().size() == 1); // no proxy while the decision is open
+
+    // A send while waiting is REFUSED ALOUD and reaches nothing.
+    client.send_to_role("echo", 1, loom::serialize(loom::to_value(Echo{"early"})));
+    REQUIRE(step_until(
+        [&] {
+            for (const loom::BridgeEvent& e : events) {
+                if (e.kind == loom::BridgeEvent::Kind::SendRefused) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+    CHECK(h.echo->heard() == 0);
+
+    // THE DECISION, MADE LATER -- where a popup attaches. Deferring again is not a decision.
+    CHECK_FALSE(h.server->decide(waiting, loom::ConnectionVerdict::defer()));
+    CHECK(h.server->decide(waiting, loom::ConnectionVerdict::admit(echo_only("agent"))));
+    CHECK_FALSE(h.server->decide(waiting, loom::ConnectionVerdict::admit(echo_only("twice"))));
+    REQUIRE(step_until([&] { return client.admitted(); }, 2000));
+    CHECK(client.established_name() == "agent");
+    CHECK(h.bus.list_weaves().size() == 2);
+    client.send_to_role("echo", 2, loom::serialize(loom::to_value(Echo{"now"})));
+    REQUIRE(step_until([&] { return h.echo->heard() == 1; }, 2000));
+    CHECK(h.echo->last_sender_.value == client.session());
+}
+
+TEST_CASE("admission: a peer speaking another protocol version is refused in words") {
+    GuestHost h([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_only("agent"));
+    });
+    std::string err;
+    const socket_t s = bridge_connect_tcp("127.0.0.1", h.port, &err);
+    REQUIRE_MESSAGE(s != kInvalidSocket, err);
+    BridgeChannel raw(s);
+    std::string hello;
+    put_u32(hello, 3); // a v3 console
+    raw.queue(BridgeOp::Hello, hello);
+    raw.flush();
+    bool denied = false;
+    std::string why;
+    REQUIRE(wait_until(
+        [&] {
+            std::vector<BridgeIncoming> frames;
+            raw.poll(frames);
+            for (const BridgeIncoming& f : frames) {
+                if (f.op == BridgeOp::Denied) {
+                    Cursor cur(f.payload);
+                    std::string_view w;
+                    (void)cur.bytes(w);
+                    why = std::string(w);
+                    denied = true;
+                }
+            }
+            return denied;
+        },
+        2000));
+    CHECK(why.find("v3") != std::string::npos);
+    CHECK(why.find("v4") != std::string::npos);
+    CHECK(wait_until([&] { return raw.done() || h.server->connection_count() == 0; }, 2000));
+}
+
+TEST_CASE("admission: a guest is given no tap, and an operator still is") {
+    GuestHost h([](const loom::ConnectionRequest& r) {
+        if (r.claimed_name == "operator") {
+            return loom::operator_admission()(r);
+        }
+        return loom::ConnectionVerdict::admit(echo_only("agent"));
+    });
+    std::unique_ptr<loom::BridgeClient> g;
+    std::unique_ptr<loom::BridgeClient> o;
+    loom::BridgeClient& guest = connect_client(g, h.port, "agent", "");
+    loom::BridgeClient& op = connect_client(o, h.port, "operator", "");
+    REQUIRE(guest.await_admission(2000));
+    REQUIRE(op.await_admission(2000));
+    guest.send_to_role("echo", 5, loom::serialize(loom::to_value(Echo{"tapped?"})));
+    std::vector<loom::BridgeEvent> guest_events;
+    std::vector<loom::BridgeEvent> op_events;
+    REQUIRE(drain_events(
+        guest, guest_events,
+        [&] {
+            for (const loom::BridgeEvent& e : guest_events) {
+                if (e.kind == loom::BridgeEvent::Kind::Delivered) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000));
+    const bool op_saw_echo = drain_events(
+        op, op_events,
+        [&] {
+            for (const loom::BridgeEvent& e : op_events) {
+                if (e.kind == loom::BridgeEvent::Kind::Tap && e.shape == "Echo") {
+                    return true;
+                }
+            }
+            return false;
+        },
+        2000);
+    REQUIRE(op_saw_echo);
+    (void)drain_events(guest, guest_events, [] { return false; }, 200);
+    bool guest_saw_tap = false;
+    for (const loom::BridgeEvent& e : guest_events) {
+        guest_saw_tap = guest_saw_tap || e.kind == loom::BridgeEvent::Kind::Tap;
+    }
+    CHECK_FALSE(guest_saw_tap);
+}
+
+TEST_CASE("identity: a disconnected session's proxy leaves the bus, and a late answer settles nothing") {
+    GuestHost h([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_only("agent"));
+    });
+    std::uint64_t first = 0;
+    {
+        std::unique_ptr<loom::BridgeClient> c;
+        loom::BridgeClient& client = connect_client(c, h.port, "agent", "");
+        REQUIRE(client.await_admission(2000));
+        first = client.session();
+        CHECK(wait_until([&] { return h.bus.list_weaves().size() == 2; }, 2000));
+    } // the socket closes here
+    CHECK(wait_until([&] { return h.bus.list_weaves().size() == 1; }, 2000));
+    CHECK(h.server->connection_count() == 0);
+    std::unique_ptr<loom::BridgeClient> c2;
+    loom::BridgeClient& again = connect_client(c2, h.port, "agent", "");
+    REQUIRE(again.await_admission(2000));
+    CHECK(again.session() != first); // a reconnect is a NEW session
+    // A message aimed at the old session reaches nobody: the id is gone from the bus.
+    std::atomic<bool> refused{false};
+    const loom::ObserverId obs = h.bus.add_observer([&](const loom::BusEvent& e) {
+        if (e.kind == loom::EventKind::Refused && e.target.value == first) {
+            refused.store(true);
+        }
+    });
+    (void)h.bus.send_as(h.echo_id, loom::WeaveId{first},
+                        loom::Message(loom::to_value(loom::Result{"late"}), h.echo_id, {}, 42));
+    CHECK(wait_until([&] { return refused.load(); }, 2000));
+    h.bus.remove_observer(obs);
+}
+
+// ---- the link: two buses, one crossing, a typed ask and a typed answer ----------------------
+
+namespace {
+
+struct AskerState {
+    std::int64_t answers = 0;
+    ZEN_SHAPE(AskerState, 1, ZEN_FIELD(answers));
+};
+
+/// An ordinary weave on the LINKING host that asks across and settles on its own book.
+class Asker final : public loom::WeaveBase<Asker, AskerState,
+                                           loom::Accept<loom::Result, loom::link::Outcome, Echo>,
+                                           loom::Emit<loom::link::Ask>> {
+public:
+    explicit Asker(std::string link_role) : link_role_(std::move(link_role)), book_(4) {}
+    void on(const Echo&, loom::Mail& mail) {
+        // Kicked by the test: open a conversation and ask across.
+        const loom::AskOpened opened = book_.open_to_role(link_role_, "Echo", 1);
+        REQUIRE(opened.ok);
+        opened_ = opened.correlation;
+        (void)mail.send_to_role(link_role_, loom::link::ask_role("echo", Echo{"across"}),
+                                opened.correlation);
+    }
+    void on(const loom::Result& r, loom::Mail& mail) {
+        const std::optional<loom::PendingAsk> settled =
+            book_.settle(mail.correlation(), mail.sender());
+        if (settled.has_value()) {
+            ++state_.answers;
+            last_ = r.value;
+            link_sender_ = mail.sender();
+        } else {
+            ++unsolicited_;
+        }
+    }
+    void on(const loom::link::Outcome& o, loom::Mail& mail) {
+        (void)book_.settle(mail.correlation(), mail.sender());
+        outcome_ = o.state + ": " + o.reason;
+    }
+    std::int64_t answers() const { return state_.answers; }
+    std::string last_;
+    std::string outcome_;
+    loom::WeaveId link_sender_{};
+    std::uint64_t opened_ = 0;
+    int unsolicited_ = 0;
+
+private:
+    std::string link_role_;
+    loom::AskBook book_;
+};
+
+} // namespace
+
+TEST_CASE("link: an ordinary weave asks across two buses and settles the far answer on its own book") {
+    GuestHost far([](const loom::ConnectionRequest& r) {
+        return r.credential == "open-sesame" ? loom::ConnectionVerdict::admit(echo_only("agent"))
+                                             : loom::ConnectionVerdict::refuse("wrong credential");
+    });
+    // THE LINKING HOST: its own bus, a link mounted as host wiring, and an asker.
+    loom::Switchboard near;
+    auto link = std::make_unique<loom::host::LinkWeave>(
+        "far", "127.0.0.1:" + std::to_string(far.port), "agent", "open-sesame");
+    loom::host::LinkWeave* raw = link.get();
+    const loom::WeaveId link_id =
+        near.register_weave(std::move(link), loom::Grant{}.allow_any(), loom::link::role_of("far"));
+    raw->zen_set_self(link_id);
+    raw->attach(near);
+    std::string why;
+    REQUIRE_MESSAGE(raw->connect(3000, &why), why);
+    CHECK(raw->state() == "admitted");
+    CHECK(raw->established_name() == "agent");
+
+    loom::Grant may_ask;
+    may_ask.allow_to_role(loom::link::Ask::zen_name, loom::link::Ask::zen_version,
+                          loom::link::role_of("far"));
+    Asker* asker = nullptr;
+    loom::WeaveId asker_id{};
+    {
+        auto a = std::make_unique<Asker>(loom::link::role_of("far"));
+        asker = a.get();
+        asker_id = near.register_weave(std::move(a), may_ask);
+        asker->zen_set_self(asker_id);
+        // Kick the asker with a root send; it opens its book and asks across.
+        (void)near.send(asker_id, loom::Message(loom::to_value(Echo{"kick"})));
+    }
+    REQUIRE(wait_until(
+        [&] {
+            raw->service();
+            near.pump_pending();
+            return asker->answers() == 1;
+        },
+        3000));
+    CHECK(asker->last_ == "echo:across");
+    CHECK(asker->link_sender_ == link_id); // settled on the LINK's stamp, never a far id
+    CHECK(asker->unsolicited_ == 0);
+    CHECK(raw->open() == 0);
+    CHECK(far.echo->last_sender_.value == raw->session());
+
+    // A SECOND ASK AFTER THE FAR HOST GOES AWAY IS `unlinked`, and never resent.
+    far.stop.store(true);
+    if (far.th.joinable()) {
+        far.th.join();
+    }
+    far.server.reset(); // closes the listener and every connection
+    REQUIRE(wait_until(
+        [&] {
+            raw->service();
+            near.pump_pending();
+            return raw->state() == "lost";
+        },
+        3000));
+    (void)near.send(asker_id, loom::Message(loom::to_value(Echo{"kick"})));
+    REQUIRE(wait_until(
+        [&] {
+            raw->service();
+            near.pump_pending();
+            return !asker->outcome_.empty();
+        },
+        3000));
+    CHECK(asker->outcome_.rfind(loom::link::kOutcomeUnlinked, 0) == 0);
+    CHECK(asker->answers() == 1);
+}
+
+// THE DOOR DIES WITH THE BUS. Workshop mounts its guest door AS A WEAVE that owns a
+// BridgeServer, so the server's destructor -- which unregisters its proxies and removes its
+// tap observer -- runs from inside the Switchboard's own destructor. Before the registry was
+// emptied first, that was an erase from a map already being torn down (a SIGSEGV in
+// Workshop's guests suite, at teardown, with a guest still admitted). This case is that
+// exact shape: a weave-owned server with one admitted, still-connected guest, destroyed by
+// the bus alone.
+struct DoorWeave final : public loom::WeaveBase<DoorWeave, EchoState, loom::Accept<>, loom::Emit<>> {
+    std::unique_ptr<loom::BridgeServer> server;
+    explicit DoorWeave(std::unique_ptr<loom::BridgeServer> s) : server(std::move(s)) {}
+};
+
+TEST_CASE("teardown: a weave that owns a BridgeServer may die with the bus, guest still connected") {
+    std::unique_ptr<loom::BridgeClient> guest;
+    {
+        loom::Switchboard bus;
+        auto e = std::make_unique<EchoAnswerer>();
+        EchoAnswerer* echo = e.get();
+        const loom::WeaveId echo_id =
+            bus.register_weave(std::move(e), loom::Grant{}.allow_any(), std::string("echo"));
+        echo->zen_set_self(echo_id);
+        std::string err;
+        const socket_t listener = bridge_listen_tcp(0, &err);
+        REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+        const std::uint16_t port = bridge_socket_port(listener);
+        auto server = std::make_unique<loom::BridgeServer>(
+            bus, listener, [](const loom::ConnectionRequest&) {
+                return loom::ConnectionVerdict::admit(echo_only("agent"));
+            });
+        loom::BridgeServer* raw_server = server.get();
+        auto door = std::make_unique<DoorWeave>(std::move(server));
+        DoorWeave* raw_door = door.get();
+        const loom::WeaveId door_id = bus.register_weave(std::move(door), loom::Grant{});
+        raw_door->zen_set_self(door_id);
+
+        (void)connect_client(guest, port, "guest", "any");
+        for (int i = 0; i < 200 && raw_server->connections().empty(); ++i) {
+            raw_server->step();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        for (int i = 0; i < 200; ++i) {
+            raw_server->step();
+            if (!raw_server->connections().empty() &&
+                raw_server->connections().front().state == loom::ConnectionState::Admitted) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(raw_server->connections().size() == 1);
+        CHECK(raw_server->connections().front().state == loom::ConnectionState::Admitted);
+        // ...and the bus goes out of scope with the door, the server and the proxy inside it.
+    }
+    // Reaching here without a crash IS the witness; the guest simply finds its peer gone.
+    CHECK(true);
+}
+
+} // TEST_SUITE("bridge")

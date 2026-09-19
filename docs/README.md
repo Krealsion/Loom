@@ -37,8 +37,8 @@ current-facing file for one.
 **I am about to expose something.** Two pages carry the trust boundaries, and
 both say plainly what they do *not* claim:
 [capabilities](reference/capabilities.md) (in-process trust, the OS sandbox,
-the exec boundary) and [bridge](reference/bridge.md) (the remote-operator
-socket — **it does not authenticate**).
+the exec boundary) and [bridge](reference/bridge.md) (the crossing between two
+hosts — **the host's policy admits, and the transport is plain**).
 
 **I am debugging behavior.** [guides/diagnostics.md](guides/diagnostics.md)
 first; the invariants themselves are the [laws](laws/README.md) — small, named

@@ -17,7 +17,10 @@ loom::Logger      what did Zen choose NOT TO FORGET?     durable, selective, REF
 
 Headers: `zen/history/recorder.hpp`, `zen/history/logger.hpp`, and the shared
 structured fact in `zen/history/record.hpp` (target `loom::history`). The dump
-witness is deliberately somewhere else: `zen/history/dump.hpp`.
+witness is deliberately somewhere else: `zen/history/dump.hpp`. The supplied
+host mounts both, configured from its boot plan's `history` section, and reads
+them back at its console
+([running-loom § 11](../guides/running-loom.md#11-what-this-host-remembers-and-what-it-keeps)).
 
 **They are two owners, not two layers.** `logger.hpp` does not include
 `recorder.hpp`, a `Logger` takes no `Recorder&`, and a `Logger` works in a
