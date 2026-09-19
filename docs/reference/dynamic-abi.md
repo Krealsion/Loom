@@ -19,10 +19,14 @@ now refuse at load in either order, where a v8 image, unable to say what it
 emitted, was admitted and the disagreement surfaced as its first refused
 delivery. The section is descriptive vocabulary: the host reads no grant from it,
 and it is not an exhaustive send list. Paid as a break although the tables are
-unchanged, because a v8 manifest would pass a v5 meta-schema whose new section is
-optional and load with its emit-set silently absent — "declared nothing" and
-"could not declare" as the same bytes. An image built against v8 is refused at
-load and at reload with both versions named, and the incumbent stands.
+unchanged, as the one compatibility boundary this seam declares: a v8 image's
+manifest claims `zen.Manifest` v4, a different identity from the v5 door, and the
+gate would refuse it (`SchemaMismatch`, pinned in suite `schema_codec`) — but only
+in `reconstruct`, after the image's static initializers and `create()` had run,
+with a sentence about a meta-schema. The version gate refuses the image in
+`fetch_abi`, before any callback into it, with both versions named, at load and
+at reload over a live participant, and the incumbent stands. "Declared nothing"
+and "could not declare" are two versions, not two readings of one gate sentence.
 
 **v8 carries a joint publication's claimant surface** ([joint
 publication](joint-publication.md#what-crosses-the-abi)). Two slots are

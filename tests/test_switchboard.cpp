@@ -9,10 +9,14 @@
 #include <zen/serialize.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1628,6 +1632,81 @@ TEST_CASE("schema admission: an emitted-only shape is offered to a wildcard acce
     CHECK(tap[1].reason == RefusalReason::CapabilityDenied);
     CHECK(console_raw->handled_names.size() == 1); // the first Greet only
     (void)emitter;
+}
+
+TEST_CASE("schema admission: registering a declaration whose closure is a deep shared graph "
+          "completes in one pass, publishes every component once, and still refuses a divergent "
+          "one and reclaims with its declarer") {
+    // THE REGISTRATION CONSEQUENCE of the traversal's bound: the closure walk now runs at
+    // every registration and every code swap, so a declaration whose components share a
+    // schema through several fields must register in bounded work — not as the binary
+    // tree of expansions that once stalled a host on a 27-schema emit-set. Node[i] holds
+    // `left` and `right`, both Node[i-1]; depth 200 makes a wrong walk unfinishable and a
+    // right one instant. Computed on a worker thread under a generous guard so a wrong
+    // walk is a named failure rather than a hung lane; asserted on this thread.
+    constexpr int depth = 200;
+    auto leaf = SchemaBuilder("Shared.Leaf", 1).field("v", Kind::Int).build();
+    std::shared_ptr<const Schema> node = leaf;
+    for (int i = 1; i <= depth; ++i) {
+        node = SchemaBuilder("Shared.Node" + std::to_string(i), 1)
+                   .message("left", node, /*required=*/false)
+                   .message("right", node, /*required=*/false)
+                   .build();
+    }
+    const std::shared_ptr<const Schema> root = node;
+
+    struct Outcome {
+        WeaveId id{};
+        bool swapped = false;
+        std::size_t resolvable = 0; // how many of the depth+1 identities resolve after both
+    };
+    Switchboard bus;
+    std::promise<Outcome> done;
+    std::future<Outcome> result = done.get_future();
+    std::thread worker([&bus, root, done = std::move(done)]() mutable {
+        Outcome o;
+        auto emitter = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
+        emitter->declared_emits = {root};
+        o.id = bus.register_weave(std::move(emitter), Grant{});
+        // A code swap re-walks the same closure to re-claim it (LIFE-08's handoff).
+        Value snap(counter_schema());
+        snap.set("count", Cell::integer(1));
+        o.swapped = bus.swap_state(o.id, loom::serialize(snap)).revived;
+        if (bus.resolve_schema("Shared.Leaf", 1) != nullptr) {
+            ++o.resolvable;
+        }
+        for (int i = 1; i <= depth; ++i) {
+            if (bus.resolve_schema("Shared.Node" + std::to_string(i), 1) != nullptr) {
+                ++o.resolvable;
+            }
+        }
+        done.set_value(o);
+    });
+    if (result.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
+        worker.detach();
+        FAIL("registering a 201-schema shared-graph declaration did not finish within 30 s: "
+             "the closure walk is expanding an already-carried component again");
+        return;
+    }
+    worker.join();
+    const Outcome o = result.get();
+    CHECK(o.id.valid());
+    CHECK(o.swapped);
+    CHECK(o.resolvable == static_cast<std::size_t>(depth) + 1); // every identity, by definition
+    CHECK(bus.emitted_schemas(o.id).size() == 1);
+    CHECK(bus.resolve_schema("Shared.Node" + std::to_string(depth), 1)->content_id() ==
+          root->content_id());
+
+    // The wall is intact under the bound: a different `Shared.Leaf v1` is refused while
+    // the declarer lives, and publishes once the declarer has gone (reclamation).
+    auto other_leaf = SchemaBuilder("Shared.Leaf", 1).field("w", Kind::Text).build();
+    CHECK_THROWS_AS(reg(bus, {other_leaf}), SchemaConflict);
+    REQUIRE(bus.unregister_weave(o.id) != nullptr);
+    CHECK(bus.resolve_schema("Shared.Leaf", 1) == nullptr);
+    CHECK(bus.resolve_schema("Shared.Node" + std::to_string(depth), 1) == nullptr);
+    Registered later = reg(bus, {other_leaf});
+    CHECK(bus.resolve_schema("Shared.Leaf", 1)->content_id() == other_leaf->content_id());
+    CHECK(bus.weave(later.id) != nullptr);
 }
 
 TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabulary") {

@@ -59,14 +59,17 @@ extern "C" {
  * list is not exhaustive -- an emission of an undeclared shape meets the seam and
  * the grant exactly as before.
  *
- * Paid as a break although the tables are unchanged, and deliberately: a v8
- * image's manifest (v4) would pass a v5 meta-schema whose new section is optional,
- * and load with its emit-set silently ABSENT -- "declared nothing" and "could not
- * declare" would be the same bytes, the same-word-two-meanings failure every
- * earlier bump refused. An image built against v8 is refused at load with both
- * versions named, at load and as a replacement for a live participant, and the
- * incumbent stands. Rebuild hosts, libraries and images together
- * (docs/reference/dynamic-abi.md). */
+ * Paid as a break although the tables are unchanged, and deliberately, as the one
+ * compatibility boundary the seam declares. A v8 image would not slip past the
+ * manifest gate: its descriptor claims zen.Manifest v4, a different identity from
+ * the v5 door, and the gate refuses that (SchemaMismatch) -- but only in
+ * reconstruct(), after open_library() has run the image's static initializers
+ * and create() has built its instance, with a sentence about a meta-schema. The
+ * version gate refuses it in fetch_abi(), before any callback into the image,
+ * naming both versions, at load and as a replacement for a live participant,
+ * and the incumbent stands. "Declared nothing" and "could not declare" are two
+ * versions, not two readings of one gate sentence. Rebuild hosts, libraries and
+ * images together (docs/reference/dynamic-abi.md). */
 /* v8: JOINT PUBLICATION crosses the seam for a CLAIMANT. Two slots are appended,
  * one to each table: ZenHostApi::sense_offer (the claimant offers the next value
  * of its own latest claim for an exact operation) and ZenWeaveAbi::claim_published
