@@ -414,6 +414,23 @@ needing to pass something the handle cannot reach — and the authored handoff d
 not: the migration result travelled as an ordinary domain message, and the
 transaction handle carried only what it always carried.
 
+## A construction-layer reply is not an attested answer
+
+The substrate doors every woven weave answers without its author writing a handler — the pokes
+and self-description (`zen.DescribeAccepted` → `zen.AcceptedShapes`) — reply with an ordinary
+send to `reply_to` under the request's correlation (`WeaveBase::answer_substrate`), not through
+the answer door. The reply therefore carries no answer attestation (`answers_ask` is false), and
+every asker that settles only on Loom's attested answer cannot settle on it: the link hands a far
+participant's un-attested word to nobody, the supplied host's probe ignores it, and a session's
+Python client treats it as ordinary speech (observed: the answer was delivered and settled
+nothing). By the same construction — traced in source, not yet observed — a Workshop guest's
+`inspect` power reaches the guest door's inventory through a link but would get silence from
+`zen.DescribeAccepted` there. Found by the session work (its example tool was re-pointed at `loom.session.Describe`,
+which answers through the door). **Trigger:** the first consumer that must discover a far
+participant's vocabulary through a link, or a strict local asker that needs self-description.
+Closing it — answering substrate doors through the answer door — changes every weave's reply
+path, loaded ones included, and is its own decision.
+
 ## `reply_to` — low observed use
 
 **Status: CURRENT, evidence-noted.** Ordinary replies exist and work; across

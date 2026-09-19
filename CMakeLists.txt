@@ -434,6 +434,54 @@ else()
     target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=0)
 endif()
 
+# ---- loom-runs: the run manager a session host boots, and the Python session tooling ---------
+#
+# OPTIONAL TOOLING, AND SAID SO. `loom-host --serve` needs none of it: a session host serves
+# clients with or without a run manager. `loom-runs` is an ordinary loadable weave (task policy,
+# replaceable, approved by the operator like any artifact) that starts each run's worker as a
+# Python process; `python/loom_session` is the client library, the human CLI and that worker's
+# runtime. Building needs no Python -- the C++ is the manager, the Python is data it ships --
+# and only RUNNING a tool (or a Python client) needs an interpreter, found at run time and named
+# in the catalog when it is not on PATH (docs/guides/sessions.md). A loadable weave needs a host
+# that can load one, so this rides the kernel exactly as every loadable fixture in tests/ does.
+option(LOOM_BUILD_SESSION_TOOLS
+       "Build the run manager (loom-runs) and install the Python session tooling" ON)
+if(LOOM_BUILD_SESSION_TOOLS AND TARGET zen-kernel)
+    # The manager's own machinery -- the catalog and the worker process -- as a library the suite
+    # reaches too. Its objects land inside the loadable image, so it takes the weave contract.
+    add_library(zen-runs STATIC
+        src/runs/catalog.cpp
+        src/runs/process.cpp)
+    target_include_directories(zen-runs
+        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+               $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/runs>)
+    target_compile_features(zen-runs PUBLIC cxx_std_20)
+    target_link_libraries(zen-runs
+        PUBLIC  loom zen-switchboard zen-sanitize
+        PRIVATE zen-warnings ${CMAKE_DL_LIBS})
+    loom_weave_build_contract(zen-runs)
+
+    add_library(loom-runs MODULE src/runs/runs_weave.cpp)
+    target_link_libraries(loom-runs PRIVATE zen-runs loom zen-switchboard zen-warnings zen-sanitize)
+    loom_weave_build_contract(loom-runs)
+    # One directory holds the artifact and, beside it, the runtime it starts workers with --
+    # `<dir>/python/loom_session` -- in the build tree exactly as in an installed prefix, so the
+    # manager finds it the same way in both.
+    set(loom_session_tools_dir ${CMAKE_BINARY_DIR}/session-tools)
+    set_target_properties(loom-runs PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${loom_session_tools_dir}
+        RUNTIME_OUTPUT_DIRECTORY ${loom_session_tools_dir})
+    # Copied on EVERY build, not only when the artifact relinks: the Python is edited on its own,
+    # and a runtime older than its sources is exactly the stale copy this must never serve.
+    add_custom_target(loom-session-runtime ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/python/loom_session
+                ${loom_session_tools_dir}/python/loom_session
+        COMMENT "Placing the loom_session runtime beside loom-runs")
+    add_dependencies(loom-runs loom-session-runtime)
+endif()
+
 # ---- The remote-operator bridge (operator-protocol transport; server + remote console land here) --
 #
 # PORTABLE on purpose: the operator-protocol crosses the host boundary, so the transport builds on
@@ -625,6 +673,26 @@ if(LOOM_INSTALL)
     # host binary carries its own copy and a stranger still cannot reach those headers.
     install(TARGETS loom-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+    # THE SESSION TOOLING, WHERE IT WAS BUILT: the run manager and, beside it, the Python runtime
+    # it starts workers with (`lib/loom/loom-runs.<so|dll>` and `lib/loom/python/loom_session`),
+    # the human CLI's two launchers, and a small Loom-only tool package. None of it is part of
+    # the export set: a consumer links nothing here, a session host loads the artifact by path.
+    if(TARGET loom-runs)
+        install(TARGETS loom-runs
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/loom
+            RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/loom)
+        install(DIRECTORY python/loom_session
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/loom/python
+            PATTERN "__pycache__" EXCLUDE
+            PATTERN "*.pyc" EXCLUDE)
+        install(PROGRAMS tools/loom-session tools/loom-session.cmd
+            DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(DIRECTORY tools/basics
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/loom/tools
+            PATTERN "__pycache__" EXCLUDE
+            PATTERN "*.pyc" EXCLUDE)
+    endif()
+
     # The kernel joins the export wherever it was built: always on Linux; on Windows only
     # under LOOM_ENABLE_WINDOWS_KERNEL (the opt-in development/demo backend — no isolation).
     # A consumer therefore gates on `if(TARGET loom::kernel)`, which is also the honest
@@ -658,10 +726,19 @@ if(LOOM_INSTALL)
         NAMESPACE loom::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
 
+    # The installed programs the package names (loomConfig.cmake.in says what each one is).
+    set(LOOM_HOST_INSTALL_DIR ${CMAKE_INSTALL_BINDIR})
+    set(LOOM_SESSION_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/loom)
+    if(TARGET loom-runs)
+        set(LOOM_SESSION_TOOLS_INSTALLED TRUE)
+    else()
+        set(LOOM_SESSION_TOOLS_INSTALLED FALSE)
+    endif()
     configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loomConfig.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/loomConfig.cmake
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom
+        PATH_VARS LOOM_HOST_INSTALL_DIR LOOM_SESSION_INSTALL_DIR)
 
     write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/loomConfigVersion.cmake

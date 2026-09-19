@@ -227,6 +227,19 @@ endfunction()
 #   out_exempt  the targets that carried a written exemption, for the same reason
 function(zen_required_weave_population out_rows out_weaves out_exempt)
     get_property(dir_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    # ...AND THE LOADABLE WEAVES LOOM ITSELF SHIPS, declared at the top level (the run manager,
+    # `loom-runs`). A weave built beside the suite is still a weave, and an artifact this project
+    # INSTALLS is the last one that may quietly lose the contract. Its own statics join the
+    # population through the same closure walk below.
+    get_property(top_targets DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
+    set(shipped "")
+    foreach(target IN LISTS top_targets)
+        get_target_property(kind "${target}" TYPE)
+        if(kind STREQUAL "SHARED_LIBRARY" OR kind STREQUAL "MODULE_LIBRARY")
+            list(APPEND dir_targets "${target}")
+            list(APPEND shipped "${target}")
+        endif()
+    endforeach()
 
     set(weaves "")
     set(exempt_targets "")
@@ -253,7 +266,12 @@ function(zen_required_weave_population out_rows out_weaves out_exempt)
 
     set(rows "")
     foreach(weave IN LISTS weaves)
-        list(APPEND rows "REQUIRED|${weave}|loadable weave library declared in tests/")
+        list(FIND shipped "${weave}" is_shipped)
+        if(is_shipped EQUAL -1)
+            list(APPEND rows "REQUIRED|${weave}|loadable weave library declared in tests/")
+        else()
+            list(APPEND rows "REQUIRED|${weave}|loadable weave library Loom builds and installs")
+        endif()
     endforeach()
 
     # The statics, derived from the same weaves rather than named. `linked_by` keeps the

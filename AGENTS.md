@@ -39,7 +39,20 @@ invents a completion. The console holds a conversation only for a caller that as
 **One host owns one decision store while it runs** (`src/host/store_lock.hpp`): the
 store is written whole, so a second writer restores what the first one revoked. A
 second host naming the same file exits **4** and says how to proceed. Exit codes: 0 ok,
-2 bad command line, 3 a file would not parse, 4 store in use.
+2 bad command line, 3 a file would not parse, 4 store (or, serving, session directory) in use,
+5 a session could not be opened.
+
+**`--serve <dir>` keeps the host alive for clients** (`docs/guides/sessions.md`): closed stdin
+closes only the console. One loopback door (`src/host/session_door.hpp`) admits the owner's key
+as a client with exactly the session/runs/history vocabularies, and a run manager's one-time
+worker credential (only its SHA-256 crosses the bus) with no more than that manager's OWN
+approved authority, whole or refused. Every session is compat-encoded. The scoped reader
+(`history_reader.hpp`) reads the Recorder and is blacklisted from it. The run manager `loom-runs`
+(`src/runs/`) is an ordinary loadable weave — task policy, not host root — with its Python
+runtime beside it. **Every delivery is gated, answers included**: host wiring grants its own
+answer shapes; the operator grants a loaded manager its typed answers. Python is optional:
+gate `runs` carries the C++ `runs` suite, gate `python` the process journey `session_journey`
+(DECLARED ABSENT without an interpreter).
 
 **Five CTest entries drive the real thing**, because none of the above is visible to a
 test of the deciding half. Two feed the host through a FILE (`tests/host_process/run.cmake`:

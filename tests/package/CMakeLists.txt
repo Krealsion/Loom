@@ -23,6 +23,39 @@ project(loom-package-witness LANGUAGES CXX)
 
 find_package(loom REQUIRED)
 
+# ---- 0. the programs the package names ---------------------------------------------
+#
+# A consumer's own tests find the installed host -- and, where it was built, the session
+# tooling -- through the package's variables, never by knowing the install layout. The package
+# checks each path as it sets it; this states what it said, and fails on a claim without its
+# thing, or on the tooling claimed where no kernel could host its run manager.
+if(NOT DEFINED LOOM_HOST_PROGRAM OR NOT EXISTS "${LOOM_HOST_PROGRAM}")
+    message(FATAL_ERROR "package witness: the package names no installed host (LOOM_HOST_PROGRAM)")
+endif()
+if(NOT DEFINED LOOM_SESSION_TOOLS)
+    message(FATAL_ERROR
+        "package witness: the package does not say whether it carries the session tooling "
+        "(LOOM_SESSION_TOOLS)")
+endif()
+if(LOOM_SESSION_TOOLS)
+    if(NOT TARGET loom::kernel)
+        message(FATAL_ERROR
+            "package witness: the package claims the session tooling, and has no kernel to host "
+            "its run manager")
+    endif()
+    if(NOT EXISTS "${LOOM_RUNS_ARTIFACT}" OR
+       NOT EXISTS "${LOOM_SESSION_RUNTIME}/loom_session/__init__.py")
+        message(FATAL_ERROR
+            "package witness: the session tooling the package claims is not all there: "
+            "'${LOOM_RUNS_ARTIFACT}', '${LOOM_SESSION_RUNTIME}/loom_session'")
+    endif()
+    message(STATUS "package witness: host ${LOOM_HOST_PROGRAM}; session tooling "
+                   "${LOOM_RUNS_ARTIFACT}, runtime ${LOOM_SESSION_RUNTIME}")
+else()
+    message(STATUS "package witness: host ${LOOM_HOST_PROGRAM}; this install carries no "
+                   "session tooling, and says so")
+endif()
+
 # ---- 1. the public macro surface -------------------------------------------------
 #
 # Links loom::core ONLY. That is the narrowest claim: the shape macros must work for a

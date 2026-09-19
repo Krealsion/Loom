@@ -68,14 +68,36 @@ struct ConnectionRequest {
     std::string peer;             ///< the socket's peer address as text, where the platform reports one
 };
 
-/// What an ADMITTED session is: its grant, its doors, its established name, and whether it may
-/// watch the bus. The grant is the whole of its speech authority -- checked at every send, at the
-/// bus, under the proxy's own id -- and is never host root.
+/// WHICH OF ZEN'S TWO SERIALIZATIONS A SESSION'S VALUES CROSS IN. Both are Zen's own
+/// (`zen/serialize.hpp`) and neither is trusted: a Send's payload is parsed in the session's
+/// encoding and then re-admitted through the ONE gate against the shape this bus resolves, with
+/// the same decode budget either way; a Delivered payload is the admitted value, serialized in
+/// the session's encoding.
+///
+///   Native  the canonical binary (the default, and what every Loom host speaks to another)
+///   Compat  the self-describing JSON envelope (`compat::serialize` / `compat::parse`), for a
+///           peer that is not written in C++ and should not have to reproduce the binary's
+///           positional body or its schema content ids to take part -- a Python client, say
+///
+/// THE HOST CHOOSES, PER SESSION, AS PART OF ADMITTING IT, and the frames do not change: this is
+/// which bytes ride in a Send's and a Delivered's payload, not a new frame. A session is held to
+/// its encoding -- a compat session's native payload is refused before the bus, and a native
+/// session's JSON is refused exactly as any malformed payload always was -- so one connection
+/// never speaks two formats. Nothing about authority depends on it.
+enum class PayloadEncoding : std::uint8_t { Native, Compat };
+
+const char* name_of(PayloadEncoding e) noexcept;
+
+/// What an ADMITTED session is: its grant, its doors, its established name, whether it may watch
+/// the bus, and which serialization its values cross in. The grant is the whole of its speech
+/// authority -- checked at every send, at the bus, under the proxy's own id -- and is never host
+/// root.
 struct ConnectionAdmitted {
     Grant grant;
     AcceptMode accept = AcceptMode::AnyRegistered; ///< what the proxy may be TOLD (replies route here)
     std::string established_name;                  ///< the host's word for this session; may be empty
     bool observe = false;                          ///< copy every bus event to this connection (the operator model)
+    PayloadEncoding encoding = PayloadEncoding::Native; ///< the serialization its payloads cross in
 };
 
 /// The three answers a policy can give.
@@ -138,6 +160,7 @@ struct Connection {
     std::string peer;
     WeaveId session{};
     bool observes = false;
+    PayloadEncoding encoding = PayloadEncoding::Native; ///< as admitted; Native until then
     std::string refusal; ///< why, when Refused
 };
 
@@ -233,6 +256,7 @@ private:
         std::string refusal;
         std::uint32_t protocol = 0;
         bool observes = false;
+        PayloadEncoding encoding = PayloadEncoding::Native; ///< the admission verdict's choice
         loom::WeaveId id{};             ///< the proxy's bus id == the session's STAMPED sender
         OperatorProxy* proxy = nullptr; ///< owned by the bus; non-owning here
         bool told_closed = false;

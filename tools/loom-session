@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2026 Joshua DeMoss
+#
+# loom-session -- the human CLI of a persistent Loom session (docs/guides/sessions.md).
+# Optional tooling: it needs Python 3.8 or newer. Set LOOM_PYTHON to choose the interpreter.
+here=$(cd "$(dirname "$0")" && pwd)
+runtime=""
+for dir in "$here/../lib/loom/python" "$here/../lib64/loom/python"; do
+    if [ -f "$dir/loom_session/__init__.py" ]; then runtime=$dir; break; fi
+done
+if [ -z "$runtime" ]; then
+    echo "loom-session: cannot find lib/loom/python/loom_session beside $here" >&2
+    exit 5
+fi
+py="${LOOM_PYTHON:-}"
+if [ -z "$py" ]; then
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then py=$candidate; break; fi
+    done
+fi
+if [ -z "$py" ]; then
+    echo "loom-session: needs Python 3.8 or newer, and none was found on PATH (set LOOM_PYTHON)" >&2
+    exit 5
+fi
+PYTHONPATH="$runtime${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m loom_session "$@"

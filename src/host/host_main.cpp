@@ -61,8 +61,12 @@
 
 #include "authority.hpp"
 #include "boot_plan.hpp"
+#include "history_reader.hpp"
 #include "line_input.hpp"
 #include "link.hpp"
+#include "secure_random.hpp"
+#include "session_door.hpp"
+#include "session_files.hpp"
 #include "store_lock.hpp"
 #include "warden.hpp"
 
@@ -74,6 +78,7 @@
 #include <zen/kernel/abi.h> // ZEN_ABI_VERSION — text, present on every platform
 #include <zen/switchboard.hpp>
 #include <zen/terminal/input_lex.hpp>
+#include <zen/weave/describe.hpp>
 #include <zen/weave/poke.hpp>
 #include <zen/zen.hpp>
 
@@ -83,13 +88,24 @@
 #include <zen/kernel/manager.hpp>
 #endif
 
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <system_error>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h> // _getpid
+#else
+#include <unistd.h> // getpid
+#endif
 
 namespace {
 
@@ -122,6 +138,11 @@ constexpr int kIdleWaitMs = 100;
 /// answers nothing in this time is reported as such; the link stays mounted and unlinked.
 constexpr int kLinkConnectMs = 3000;
 
+/// SERVE MODE'S IDLE WAIT. A session host answers clients over a socket, and an idle wait is the
+/// longest a client's request can sit unread; the interactive host's 100 ms is a console's
+/// latency, not a service's. Only reached when the bus has nothing to do.
+constexpr int kServeIdleWaitMs = 5;
+
 // ---- launch parameters ------------------------------------------------------
 //
 // Small on purpose. Everything that selects BEHAVIOUR is in the two files; the command
@@ -137,6 +158,12 @@ struct Options {
     bool check_only = false;
     bool ok = true;
     bool done = false; // --help / --version: print and exit 0
+    /// SERVE MODE: the session directory, when this host is a persistent session
+    /// (docs/guides/sessions.md). Empty is the ordinary interactive host, unchanged.
+    std::string serve;
+    std::uint16_t listen = 0; ///< serve mode's loopback port; 0 lets the OS choose
+    bool boot_given = false;  ///< --boot named explicitly (serve mode resolves the default)
+    bool authority_given = false;
 };
 
 void print_usage() {
@@ -160,10 +187,18 @@ usage: loom-host [options]
   --check             read and validate both files, print what they say, and exit
                       without starting anything or opening a console. A file that does
                       not parse is an error here, which is what --check is for.
+  --serve <dir>       run as a PERSISTENT SESSION serving <dir>: the host works from that
+                      directory (its boot plan, decisions and runs live there), listens on
+                      loopback for clients that attach and leave, and does NOT end when its
+                      console closes -- a client's Shutdown, or 'quit' at the console, ends
+                      it. Writes <dir>/session.json (where to attach, and this lifetime's id)
+                      and <dir>/session.key (the owner's client key; keep it private).
+  --listen <port>     serve mode's loopback port (default: one the OS chooses).
   --help, --version
 
 exit codes: 0 ok   2 bad command line   3 a file would not parse   4 another host owns
-the decision store
+the decision store, or already serves that session directory   5 the session could not
+be opened (its directory, its files, its listener or its randomness)
 
 The two files are yours: written here at the console, readable and editable in any
 editor. Neither is required to start — a host with no files comes up empty and says so,
@@ -193,8 +228,21 @@ Options parse_options(int argc, char** argv) {
             return o;
         } else if (a == "--boot") {
             o.boot_plan = value("file");
+            o.boot_given = true;
         } else if (a == "--authority") {
             o.authority = value("file");
+            o.authority_given = true;
+        } else if (a == "--serve") {
+            o.serve = value("directory");
+        } else if (a == "--listen") {
+            const std::string port = value("port");
+            std::uint64_t p = 0;
+            if (!parse_u64(port, p) || p > 65535) {
+                std::cerr << "loom-host: --listen needs a port number, not '" << port << "'\n";
+                o.ok = false;
+            } else {
+                o.listen = static_cast<std::uint16_t>(p);
+            }
         } else if (a == "--log") {
             o.log = value("file");
         } else if (a == "--no-boot") {
@@ -363,6 +411,7 @@ public:
             raw->zen_set_self(id);
             raw->attach(bus_);
             links_.push_back(raw);
+            link_ids_.push_back(id);
             std::string why;
             if (raw->connect(kLinkConnectMs, &why)) {
                 said.push_back("  link " + e.name + " -> " + e.connect + ": admitted as '" +
@@ -376,6 +425,94 @@ public:
             }
         }
         return said;
+    }
+
+    // ---- serve mode: the session door and the scoped history reader ---------------------------
+
+    /// MOUNT THE SESSION'S TWO OFFICES AND OPEN THE LISTENER (serve mode only). Both are host
+    /// wiring beside the warden and the links: `loom.session` owns admission to this host and its
+    /// lifetime (host/session_door.hpp); `loom.history` reads this host's own Recorder for a client
+    /// that is not the console and is given no tap (host/history_reader.hpp). The reader is
+    /// declared to the Recorder's structural blacklist before it can answer anything, so reading
+    /// history never writes history.
+    bool serve(loom::host::SessionFacts facts, std::string client_key, std::uint16_t port,
+               std::string* why) {
+        auto reader = std::make_unique<loom::host::HistoryReader>(*history_);
+        reader_ = reader.get();
+        // EVERY DELIVERY IS GATED, ANSWERS INCLUDED: answering needs an ask to answer AND a grant
+        // for the shape (switchboard.cpp, the delivery check). Everything this reader says is an
+        // answer, so its grant is exactly its two answer shapes.
+        loom::Grant reader_grant;
+        reader_grant.allow_to_any(loom::session::Records::zen_name,
+                                  loom::session::Records::zen_version);
+        reader_grant.allow_to_any(loom::Refused::zen_name, loom::Refused::zen_version);
+        // ...and SELF-DESCRIBING, deliberately: a client that knows only the office may ask it
+        // what it accepts (`zen.DescribeAccepted`). Describing grants nothing to the asker.
+        loom::allow_describe_answers(reader_grant);
+        reader_id_ = bus_.register_weave(std::move(reader), reader_grant,
+                                         std::string(loom::session::kHistoryRole));
+        reader_->zen_set_self(reader_id_);
+        history_->blacklist().declare_participant(reader_id_);
+
+        auto door = std::make_unique<loom::host::SessionDoor>(std::move(facts),
+                                                              std::move(client_key), store_,
+                                                              *warden_);
+        door_ = door.get();
+        // Its answer shapes, and the one thing it SAYS unasked: a run's connection notice to the
+        // registrar that expected it.
+        loom::Grant door_grant;
+        door_grant.allow_to_any(loom::session::Description::zen_name,
+                                loom::session::Description::zen_version);
+        door_grant.allow_to_any(loom::session::RunExpected::zen_name,
+                                loom::session::RunExpected::zen_version);
+        door_grant.allow_to_any(loom::Ack::zen_name, loom::Ack::zen_version);
+        door_grant.allow_to_any(loom::Refused::zen_name, loom::Refused::zen_version);
+        door_grant.allow_to_any(loom::session::RunConnection::zen_name,
+                                loom::session::RunConnection::zen_version);
+        loom::allow_describe_answers(door_grant); // self-describing, like the reader
+        door_id_ = bus_.register_weave(std::move(door), door_grant,
+                                       std::string(loom::session::kSessionRole));
+        door_->zen_set_self(door_id_);
+        door_->describe_links_with([this] {
+            std::vector<loom::session::LinkRow> rows;
+            for (const loom::host::LinkWeave* l : links_) {
+                loom::session::LinkRow r;
+                r.name = l->name();
+                r.endpoint = l->endpoint();
+                r.state = l->state();
+                r.established = l->established_name();
+                r.far_session = static_cast<std::int64_t>(l->session());
+                r.epoch = static_cast<std::int64_t>(l->epoch());
+                r.open = static_cast<std::int64_t>(l->open());
+                r.detail = l->detail();
+                rows.push_back(std::move(r));
+            }
+            return rows;
+        });
+        return door_->listen(bus_, port, why);
+    }
+
+    /// Tell the history reader which participants are this host's links -- the only senders whose
+    /// self-said crossing record is a crossing. Called once the links are mounted.
+    void tell_reader_links() {
+        if (reader_ == nullptr) {
+            return;
+        }
+        std::set<std::uint64_t> ids;
+        for (const loom::WeaveId id : link_ids_) {
+            ids.insert(id.value);
+        }
+        reader_->set_links(std::move(ids));
+    }
+
+    loom::host::SessionDoor* door() { return door_; }
+
+    /// Serve the door without turning the bus: what a host that is ending does so an answer
+    /// already queued on a socket (the Shutdown's own Ack) leaves before the process does.
+    void flush_door() {
+        if (door_ != nullptr) {
+            door_->service();
+        }
     }
 
     const std::vector<loom::host::LinkWeave*>& links() const { return links_; }
@@ -427,9 +564,13 @@ public:
     /// one — which is precisely what a self-re-arming producer cannot get around, and
     /// why this host no longer has a call that can fail to return.
     std::size_t turn() {
-        // THE SOCKETS FIRST, then the bus: a far answer read here is delivered in this turn.
+        // THE SOCKETS FIRST, then the bus: a far answer read here is delivered in this turn --
+        // and so is a client's request the session door read.
         for (loom::host::LinkWeave* l : links_) {
             l->service();
+        }
+        if (door_ != nullptr) {
+            door_->service();
         }
         return bus_.pump_pending();
     }
@@ -682,7 +823,12 @@ private:
     std::unique_ptr<loom::Logger> journal_;
     std::unique_ptr<loom::ConsoleEngine> console_;
     std::vector<loom::host::LinkWeave*> links_; ///< owned by the bus; non-owning here
+    std::vector<loom::WeaveId> link_ids_;       ///< the ids this host registered them under
     loom::host::HostWarden* warden_ = nullptr; ///< owned by the bus; non-owning here
+    loom::host::SessionDoor* door_ = nullptr;     ///< serve mode only; owned by the bus
+    loom::WeaveId door_id_{};
+    loom::host::HistoryReader* reader_ = nullptr; ///< serve mode only; owned by the bus
+    loom::WeaveId reader_id_{};
     loom::WeaveId warden_id_{};
     /// What the adoption seam installed, in the order it installed it. Written from
     /// inside the door's delivery, read by whichever command caused the load.
@@ -796,6 +942,22 @@ void cmd_status(HostSession& s, const loom::host::BootPlan& plan, const PlanSour
     }
     std::cout << "  authority:   " << (store.path().empty() ? "(none)" : store.path())
               << (lock.held() ? "   (owned by this host)" : "   (in memory only)") << '\n';
+    if (s.door() != nullptr) {
+        const loom::session::Description d = s.door()->description();
+        std::size_t clients = 0;
+        std::size_t runs = 0;
+        for (const loom::session::Connection& c : d.connections) {
+            if (c.state == "admitted" && c.kind == "client") {
+                ++clients;
+            } else if (c.state == "admitted" && c.kind == "run") {
+                ++runs;
+            }
+        }
+        std::cout << "  session:     " << d.directory << "   lifetime " << d.lifetime << '\n';
+        std::cout << "               listening on " << d.endpoint << ": " << clients
+                  << " client(s) and " << runs << " run worker(s) attached, " << d.expected
+                  << " run(s) expected\n";
+    }
     if (!s.can_host_weaves()) {
         std::cout << "  NOTE: " << HostSession::no_kernel_note() << '\n';
     }
@@ -1610,12 +1772,70 @@ void report_late_answers(HostSession& session, bool& prompt_shown) {
 } // namespace
 
 int main(int argc, char** argv) {
-    const Options opt = parse_options(argc, argv);
+    Options opt = parse_options(argc, argv);
     if (opt.done) {
         return 0;
     }
     if (!opt.ok) {
         return 2;
+    }
+    if (opt.listen != 0 && opt.serve.empty()) {
+        std::cerr << "loom-host: --listen is serve mode's; name the session directory with "
+                     "--serve <dir>\n";
+        return 2;
+    }
+
+    // SERVE MODE WORKS FROM ITS SESSION DIRECTORY. The boot plan, the decision store and every
+    // run a run manager starts live there by default, and relative paths inside the plan mean
+    // paths inside it -- so the directory, not wherever the host happened to be started, is the
+    // session. A path the person named on the command line keeps meaning what it meant where
+    // they typed it. ONE HOST SERVES ONE DIRECTORY: a second is refused, exactly as a second
+    // owner of a decision store is.
+    std::filesystem::path session_dir;
+    loom::host::StoreLock session_lock;
+    if (!opt.serve.empty()) {
+        std::error_code ec;
+        session_dir = std::filesystem::absolute(opt.serve, ec);
+        if (!ec) {
+            std::filesystem::create_directories(session_dir, ec);
+        }
+        if (ec || !std::filesystem::is_directory(session_dir)) {
+            std::cerr << "loom-host: cannot use '" << opt.serve << "' as a session directory"
+                      << (ec ? ": " + ec.message() : std::string()) << '\n';
+            return 5;
+        }
+        session_dir = std::filesystem::weakly_canonical(session_dir, ec);
+        if (opt.boot_given) {
+            opt.boot_plan = std::filesystem::absolute(opt.boot_plan, ec).string();
+        }
+        if (opt.authority_given) {
+            opt.authority = std::filesystem::absolute(opt.authority, ec).string();
+        }
+        if (!opt.log.empty()) {
+            opt.log = std::filesystem::absolute(opt.log, ec).string();
+        }
+        std::filesystem::current_path(session_dir, ec);
+        if (ec) {
+            std::cerr << "loom-host: cannot work from '" << session_dir.string()
+                      << "': " << ec.message() << '\n';
+            return 5;
+        }
+        if (!opt.check_only) {
+            std::string why;
+            bool taken = false;
+            if (!session_lock.claim("loom-session", &why, &taken)) {
+                std::cerr << "loom-host: "
+                          << (taken ? "another loom-host already serves the session directory '" +
+                                          session_dir.string() + "'"
+                                    : why)
+                          << '\n';
+                if (taken) {
+                    std::cerr << "loom-host: attach to it (its session.json says where), or end "
+                                 "it, or serve another directory.\n";
+                }
+                return taken ? 4 : 5;
+            }
+        }
     }
 
     // ONE HOST OWNS ONE DECISION STORE. Claimed before the store is even read, because
@@ -1704,6 +1924,65 @@ int main(int argc, char** argv) {
     if (!session.can_host_weaves()) {
         std::cout << "NOTE: " << HostSession::no_kernel_note() << '\n';
     }
+    // THE SESSION'S IDENTITY AND ITS DOOR, before anything boots: a run manager in the plan finds
+    // `loom.session` already held when it is told it is live. The lifetime is minted here and
+    // never reused -- a host started again over the same directory is a different lifetime, and
+    // says so in every answer and every run handle.
+    const bool serving = !opt.serve.empty();
+    std::string lifetime;
+    if (serving) {
+        lifetime = loom::host::secure_random_hex(16);
+        std::string client_key = loom::host::secure_random_hex(32);
+        if (lifetime.empty() || client_key.empty()) {
+            std::cerr << "loom-host: the operating system would not supply randomness for this "
+                         "session's identity and key; not serving\n";
+            return 5;
+        }
+        loom::host::SessionFacts facts;
+        facts.lifetime = lifetime;
+        facts.host = kVersion;
+        facts.abi = ZEN_ABI_VERSION;
+        facts.started_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
+#ifdef _WIN32
+        facts.pid = static_cast<std::int64_t>(_getpid());
+#else
+        facts.pid = static_cast<std::int64_t>(getpid());
+#endif
+        facts.directory = session_dir.string();
+        facts.containment = HostSession::containment_note();
+        loom::host::SessionFileFacts file;
+        file.lifetime = facts.lifetime;
+        file.pid = facts.pid;
+        file.host = facts.host;
+        file.abi = facts.abi;
+        file.started_ms = facts.started_ms;
+        file.directory = facts.directory;
+        std::string why;
+        if (!session.serve(facts, client_key, opt.listen, &why)) {
+            std::cerr << "loom-host: " << why << '\n';
+            return 5;
+        }
+        file.endpoint = session.door()->endpoint();
+        // The KEY FIRST, then the file that says where to use it: a client that finds
+        // session.json always finds the key beside it.
+        if (!loom::host::write_session_text(session_dir / loom::host::kSessionKeyFile,
+                                            client_key + "\n", /*owner_only=*/true, &why) ||
+            !loom::host::write_session_text(session_dir / loom::host::kSessionFile,
+                                            loom::host::session_json(file), false, &why)) {
+            std::cerr << "loom-host: " << why << '\n';
+            loom::host::remove_session_files(session_dir);
+            return 5;
+        }
+        std::cout << "  session: serving " << session_dir.string() << " at " << file.endpoint
+                  << "  (lifetime " << lifetime << ")\n";
+        if (session.journal().open()) {
+            session.journal().info("loom-host", "session started: lifetime " + lifetime + " at " +
+                                                    file.endpoint);
+        }
+    }
     if (!plan_source.parse_error.empty()) {
         std::cout << "the boot plan was NOT run: " << plan_source.parse_error << '\n';
         std::cout << "  nothing from it was started. Fix " << plan_source.path
@@ -1714,6 +1993,7 @@ int main(int argc, char** argv) {
     for (const std::string& line : session.mount_links(plan.links)) {
         std::cout << line << '\n';
     }
+    session.tell_reader_links();
     session.boot(plan);
     if (plan_source.parse_error.empty()) {
         for (const std::string& line : session.report().render()) {
@@ -1742,6 +2022,12 @@ int main(int argc, char** argv) {
     loom::host::LineInput input;
     bool prompt_shown = false;
     bool running = true;
+    // SERVE MODE SEPARATES THE CONSOLE FROM THE HOST'S LIFE. An interactive host ends when its
+    // console closes, as it always has. A session host keeps serving: its console (if it was
+    // started with one) is one more way in, and closing it closes only that way. The session
+    // ends when a client asks it to (`loom.session.Shutdown`) or when someone types `quit`.
+    loom::host::SessionDoor* const door = session.door();
+    bool console_open = true;
     while (running) {
         session.turn();
         report_late_answers(session, prompt_shown);
@@ -1752,6 +2038,15 @@ int main(int argc, char** argv) {
             }
             print_new_notes(store, &notes_shown);
         }
+        if (door != nullptr && door->ending()) {
+            break; // a client ended this lifetime; its answer is flushed below
+        }
+        if (!console_open) {
+            if (!session.busy()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kServeIdleWaitMs));
+            }
+            continue;
+        }
 
         if (!prompt_shown) {
             std::cout << "loom> " << std::flush;
@@ -1760,10 +2055,21 @@ int main(int argc, char** argv) {
         std::string line;
         // Poll while the bus has work; wait only when it does not. An idle host costs
         // nothing and a busy one never stops reading.
-        const int wait = session.busy() ? 0 : kIdleWaitMs;
+        const int wait = session.busy() ? 0 : (door != nullptr ? kServeIdleWaitMs : kIdleWaitMs);
         const loom::host::LineInput::Status got = input.read(&line, wait);
         if (got == loom::host::LineInput::Status::Closed) {
-            break;
+            if (door == nullptr) {
+                break;
+            }
+            console_open = false;
+            if (prompt_shown) {
+                std::cout << '\n';
+                prompt_shown = false;
+            }
+            std::cout << "  console closed; this session keeps serving " << door->endpoint()
+                      << " until a client ends it.\n"
+                      << std::flush;
+            continue;
         }
         if (got == loom::host::LineInput::Status::Idle) {
             continue;
@@ -1776,6 +2082,24 @@ int main(int argc, char** argv) {
         running = dispatch(line, session, plan, plan_source, store, lock);
         // What the policy decided during the command, said with the command's own output.
         print_new_notes(store, &notes_shown);
+    }
+    if (door != nullptr) {
+        // THE LAST ANSWER LEAVES BEFORE THE PROCESS DOES. The Shutdown's Ack was queued in the
+        // turn that saw it; a few more bounded turns deliver it to the client's session and
+        // flush its socket. Bounded: a client that stopped reading does not hold the host open.
+        for (int i = 0; i < 8; ++i) {
+            session.turn();
+            std::this_thread::sleep_for(std::chrono::milliseconds(kServeIdleWaitMs));
+        }
+        const std::string reason = door->ending() ? door->ending_reason()
+                                                  : std::string("ended at its console");
+        if (session.journal().open()) {
+            session.journal().info("loom-host",
+                                   "session ended: lifetime " + lifetime + ": " + reason);
+        }
+        std::cout << "  session ended (lifetime " << lifetime << "): " << reason << '\n'
+                  << std::flush;
+        loom::host::remove_session_files(session_dir);
     }
     return 0;
 }
