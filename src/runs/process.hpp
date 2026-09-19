@@ -84,6 +84,11 @@ private:
 /// manager finds the `python/` runtime installed beside its own artifact.
 std::string image_directory_of(const void* address);
 
+/// ONE ENVIRONMENT VARIABLE, or empty when it is unset. Platform-split for the same reason the
+/// rest of this file is: MSVC deprecates `getenv` (C4996, an error under this build's warnings),
+/// and the Windows API answers the question directly.
+std::string environment_value(const char* name);
+
 } // namespace loom::runs
 
 #endif // ZEN_RUNS_PROCESS_HPP

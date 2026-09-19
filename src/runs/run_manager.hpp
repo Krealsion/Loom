@@ -357,7 +357,7 @@ public:
         spec.cwd = r->view.directory;
         spec.output = r->view.log;
         std::string pythonpath = r->runtime;
-        if (const char* existing = std::getenv("PYTHONPATH"); existing != nullptr && *existing != 0) {
+        if (const std::string existing = environment_value("PYTHONPATH"); !existing.empty()) {
 #ifdef _WIN32
             pythonpath += ";";
 #else

@@ -282,11 +282,10 @@ ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
 }
 
 std::string ChildProcess::find_on_path(const std::string& name) {
-    const char* path = std::getenv("PATH");
-    if (path == nullptr) {
+    const std::string all = environment_value("PATH");
+    if (all.empty()) {
         return {};
     }
-    std::string all(path);
     std::size_t start = 0;
     while (start <= all.size()) {
         const std::size_t end = all.find(';', start);
@@ -461,11 +460,10 @@ ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
 }
 
 std::string ChildProcess::find_on_path(const std::string& name) {
-    const char* path = std::getenv("PATH");
-    if (path == nullptr) {
+    const std::string all = environment_value("PATH");
+    if (all.empty()) {
         return {};
     }
-    std::string all(path);
     std::size_t start = 0;
     while (start <= all.size()) {
         const std::size_t end = all.find(':', start);
@@ -486,6 +484,26 @@ std::string ChildProcess::find_on_path(const std::string& name) {
 }
 
 #endif
+
+std::string environment_value(const char* name) {
+#ifdef _WIN32
+    // Asked twice on purpose: once for the size, once for the bytes, so nothing is guessed.
+    const DWORD needed = ::GetEnvironmentVariableA(name, nullptr, 0);
+    if (needed == 0) {
+        return {};
+    }
+    std::string value(needed, '\0');
+    const DWORD wrote = ::GetEnvironmentVariableA(name, value.data(), needed);
+    if (wrote == 0 || wrote >= needed) {
+        return {};
+    }
+    value.resize(wrote);
+    return value;
+#else
+    const char* value = std::getenv(name);
+    return value == nullptr ? std::string{} : std::string(value);
+#endif
+}
 
 std::string image_directory_of(const void* address) {
 #ifdef _WIN32
