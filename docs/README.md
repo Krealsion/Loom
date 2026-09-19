@@ -5,6 +5,10 @@ install Loom, start the supplied host, build a weave of your own and run it unde
 authority you chose. The prerequisites are [a compiler and CMake](guides/tools.md),
 and that page says which ones and where to get them.
 
+**I want it to keep working while I am away.** [A session that outlives its
+client](guides/sessions.md) — keep a host running, attach and leave from a CLI or
+Python, and start named runs of editable Python tools that you can inspect later.
+
 **I am new.** Start with the [mental model](guides/mental-model.md), then
 [write your first weave](guides/writing-a-weave.md) — working code in two
 pages, no history required.

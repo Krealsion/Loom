@@ -64,7 +64,7 @@ version — and where it came from, and answers one of three things:
 
 | verdict | what happens |
 |---|---|
-| **Admit** (`ConnectionAdmitted`: a `loom::Grant`, an accept mode, an established name, `observe`) | a proxy is registered under that grant; `Welcome` carries the session id and the established name; sends are stamped and routed |
+| **Admit** (`ConnectionAdmitted`: a `loom::Grant`, an accept mode, an established name, `observe`, a payload `encoding`) | a proxy is registered under that grant; `Welcome` carries the session id and the established name; sends are stamped and routed |
 | **Refuse** (a reason) | `Denied` carries the reason, the connection is severed, nothing was registered and nothing it sent acted |
 | **Defer** | the connection waits in `AwaitingDecision`: its sends are refused aloud (`SendRefused: not admitted`), never queued; `BridgeServer::decide(connection, verdict)` settles it later |
 
@@ -150,6 +150,25 @@ different places:
 | the socket ended after the send | nothing — the outcome is **unknown**, and a peer must not resend on its own |
 | silence | nothing; the ask is still open on the peer's own book |
 
+## The payload encoding a session speaks
+
+A payload is one of Zen's two serializations, and the host's policy chooses which, per session,
+when it admits it (`ConnectionAdmitted::encoding`):
+
+| encoding | what crosses | for |
+|---|---|---|
+| `Native` (the default) | the canonical binary: positional, schema-guided, carrying the schema's content id | every Loom host speaking to another; a C++ peer |
+| `Compat` | the self-describing JSON envelope, `{"zen":1,"schema":...,"version":...,"fields":{...}}` (`compat::serialize` / `compat::parse`) | a peer that is not written in C++ — a Python client or worker of a [session](../guides/sessions.md) |
+
+Nothing else changes: the frames are the same v4 frames, a compat Send is parsed as JSON and then
+**re-admitted through the same gate** against the shape this bus resolves (with the same decode
+budget, and the JSON decoder refuses a field the shape does not declare), and a compat session's
+deliveries, and its `Describe` answers, are the admitted values serialized as JSON. One session
+speaks one encoding: a compat session's native payload is refused before the bus in words, and a
+native session's JSON is refused as any malformed payload always was. Authority does not depend on
+the encoding. The supplied host's session door admits every session as `Compat`; Workshop's guest
+door, and every link between hosts, stay `Native`. Suite `bridge`, the `encoding:` cases.
+
 ## The tap
 
 A session admitted with `observe` receives a copy of every bus event, as the
@@ -188,6 +207,14 @@ kind, bytes — which is how the host's history holds the crossing, and what the
 link acts on (only its own record acts). The supplied host mounts one such link
 per `links` row of its boot plan
 ([running-loom § 10](../guides/running-loom.md#10-link-to-another-host)).
+
+**An asker that does not speak the canonical binary** — a Python worker over a compat session —
+may put Zen's JSON envelope in `loom.link.Ask.payload`. The link admits it through **this** bus's
+gate against the shape this host resolves and puts the admitted value's canonical bytes on the
+wire, so the far host receives exactly what a C++ asker's `ask_role` sends. A shape nothing here
+declares cannot be encoded and is refused (`Outcome` `refused`, attempt 0) before anything crosses,
+as is an envelope the gate refuses. That is the same requirement the far ANSWER already had: to
+speak a far vocabulary through a link, some participant of this host must declare it.
 
 ## Servicing
 

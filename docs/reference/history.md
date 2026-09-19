@@ -186,9 +186,11 @@ RECORDER BLACKLIST architecture-controlled what is not a fact about the system a
 `RecorderBlacklist` excludes recorder machinery — a participant or a shape the
 host declares as the recorder's own — from the recordable universe entirely,
 before any rule is consulted. It exists to make recursive history impossible
-rather than unlikely. Today neither owner authors any bus traffic (both are tap
+rather than unlikely. Neither owner authors any bus traffic (both are tap
 consumers; the Logger writes with an ordinary file handle), so a
-default-constructed blacklist is empty and says so.
+default-constructed blacklist is empty and says so. The first host mechanic that
+does speak is the session host's scoped reader (below), and the host declares it
+here before it can answer anything.
 
 **The Logger has none and needs none**: its selection is a whitelist, so
 machinery nobody named is already excluded by construction. The Recorder's
@@ -292,6 +294,28 @@ refused rather than trusted.
 **A selected fact with nowhere to go is counted, never pretended.** A Logger with
 no open stream is a live selection and an empty file; `counters().selected` still
 rises and `counters().appended` does not.
+
+## A reader for a client that is not the console
+
+A [session host](../guides/sessions.md) serves clients that are not its console and are given no
+tap. For them it mounts one participant, office `loom.history`
+(`src/host/history_reader.hpp`, vocabulary `zen/session/vocabulary.hpp`), that answers two
+questions from the Recorder and adds no memory of its own:
+
+```text
+loom.history.DeliveriesTo{participant}   the retained deliveries TO one participant, newest first
+loom.history.Delivery{seq}               what became of one bus delivery (the four honest answers)
+```
+
+Each row is a record as the Recorder holds it — seq, sender, target, shape, correlation, dispatch
+parent, outcome and refusal, payload state — plus what can be said about its dispatch parent:
+its horizon, and, when that parent is a `loom.link.Crossed` record **said by a link this host
+mounted, to itself**, the crossing's fields read back through the gate (the link, its epoch, the
+far session and established name, the far author and office, the attempt). A record anybody else
+sends itself in that shape is ordinary traffic here. The fields need the record's payload; when
+retention declined or evicted it the row says which and names no field. The reader is declared in
+the structural blacklist, so asking never writes history. Who may ask is the grant's business:
+the session door gives its owner's clients these two shapes and run workers neither.
 
 ## What both halves deliberately do not do
 

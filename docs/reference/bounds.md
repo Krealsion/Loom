@@ -260,6 +260,30 @@ What the component *is*, and what it trusts: [bridge](bridge.md).
 | `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
 | `kMaxAbsentSchemas` (client) | 64 | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 
+## Sessions and runs
+
+What a session is, and who owns what in it: [sessions](../guides/sessions.md). Every bound here
+refuses in words at the limit; none evicts anything a client is still owed.
+
+| Bound | Value | Behavior |
+|---|---|---|
+| connections to a session host | 32 | the bridge's `kMaxOperatorConnections`, shared by clients and run workers |
+| `SessionDoor::kMaxExpectations` | 32 | run registrations held at once (expected, or admitted and still connected); past it `ExpectRun` is refused and nothing is registered. A registration leaves when its worker's connection ends, when its registrar forgets it, or when its registrar leaves the bus |
+| `SessionDoor::kMaxRulesPerRun` | 32 | rules one run may ask to be granted |
+| `SessionDoor::kMaxRunNameBytes` | 64 | a run name, of letters, digits, `-`, `_` and `.` only, so an established `run:<name>` is one plain token wherever it is printed |
+| `session::kMaxHistoryRows` | 256 | rows one `loom.history` answer carries; `truncated` says when more matched |
+| `RunManager::kMaxActive` | 8 | runs not yet final; past it Start is refused |
+| `RunManager::kMaxRuns` | 64 | runs held in one lifetime, final or not; past it Start is refused until finished runs are released (their directories stay unless released with `remove`) |
+| `RunManager::kMaxNotes` | 32 | notes kept per run; older ones are dropped and COUNTED (`notes_dropped`) |
+| `RunManager::kMaxAsks` | 128 | a run's own account of its asks; the oldest leaves first and is COUNTED (`asks_dropped`) |
+| `RunManager::kMaxArtifacts` | 32 | artifacts listed per run; one more is noted, not listed |
+| `RunManager::kMaxPast` | 64 | past lifetimes' records one `Past` answer carries, newest first |
+| a run's inputs | 16 KiB of JSON | refused before anything is created |
+| `kMaxPackages` / `kMaxToolsPerPackage` | 64 / 32 | what one catalog and one package may name; the rest is a reported problem |
+| `kMaxPackageFiles` / `kMaxPackageBytes` | 512 / 16 MiB | what a package may hold: a snapshot is a copy |
+| `Connection.MAX_OPEN` (Python client) | 256 | conversations one Python session holds open; one more is refused before anything is sent |
+| serve mode's idle wait | 5 ms | the longest a client's request waits unread on an idle host (the interactive host's is 100 ms, a console's latency) |
+
 ## Transport channels (framed byte channels)
 
 Both framers -- the isolation `Channel` (parent side of an out-of-process Weave

@@ -18,4 +18,25 @@ include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 # target's LOOM_WEAVE_BUILD_CONTRACT property.
 include("${CMAKE_CURRENT_LIST_DIR}/loom-weave.cmake")
 
+# THE PROGRAMS THIS INSTALL CAN RUN, named for a consumer's own tests and tools -- never a link
+# line, and never a path a consumer should rebuild from knowing this package's layout.
+#
+#   LOOM_HOST_PROGRAM     the installed host, `loom-host` (docs/guides/running-loom.md).
+#   LOOM_SESSION_TOOLS    TRUE where the session tooling was built and installed
+#                         (docs/guides/sessions.md); FALSE otherwise -- the honest question, as
+#                         `if(TARGET loom::kernel)` is for hosting.
+#   LOOM_RUNS_ARTIFACT    with the tooling: the run manager a session host boots.
+#   LOOM_SESSION_RUNTIME  with the tooling: the directory holding the `loom_session` Python
+#                         package, which is what PYTHONPATH names.
+#
+# Each path is checked as it is set, so a package missing what it claims fails the consumer's
+# configure in words instead of reaching its tests.
+set_and_check(LOOM_HOST_PROGRAM "@PACKAGE_LOOM_HOST_INSTALL_DIR@/loom-host@CMAKE_EXECUTABLE_SUFFIX@")
+set(LOOM_SESSION_TOOLS @LOOM_SESSION_TOOLS_INSTALLED@)
+if(LOOM_SESSION_TOOLS)
+    set_and_check(LOOM_RUNS_ARTIFACT
+        "@PACKAGE_LOOM_SESSION_INSTALL_DIR@/loom-runs@CMAKE_SHARED_MODULE_SUFFIX@")
+    set_and_check(LOOM_SESSION_RUNTIME "@PACKAGE_LOOM_SESSION_INSTALL_DIR@/python")
+endif()
+
 check_required_components(loom)
