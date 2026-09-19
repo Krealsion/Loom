@@ -7,6 +7,7 @@
 
 #include <zen/gate.hpp>
 #include <zen/serialize.hpp>
+#include <zen/weave/dispatch_refusal.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -1732,6 +1733,189 @@ TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabular
     CHECK(bus.resolve_schema("Churn299", 1) == nullptr);
     CHECK(bus.resolve_schema("Resident", 1) != nullptr);
     CHECK(bus.weave(resident.id) != nullptr);
+}
+
+// ---- fences: when what one send set in motion has been dispatched ---------------------------
+//
+// A host injects one message on somebody's behalf and asks when what it set in motion HERE has
+// been dispatched: that send, and everything queued from inside the dispatch of anything the
+// fence already names -- synchronous dispatch ancestry, and nothing wider. Unrelated work, a
+// deferred answer spent from an unrelated delivery, and silence are none of its business.
+
+TEST_CASE("fence: open while what the send set in motion is queued, settled once it is all dispatched") {
+    Switchboard bus;
+    // THE UNRELATED WORK: a participant that re-sends to itself forever, started first.
+    Registered busy = reg(bus, {greet_schema()});
+    busy.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
+        (void)b.send(busy.id, Message(greet("again")));
+    };
+    // THE FENCED WORK: A hands the ping to B; B takes three deliveries of its own and then
+    // publishes a Pong that two participants accept.
+    Registered a = reg(bus, {ping_schema()});
+    Registered b = reg(bus, {tick_schema()});
+    Registered c = reg(bus, {pong_schema()});
+    Registered d = reg(bus, {pong_schema()});
+    Registered sender = reg(bus, {greet_schema()});
+    a.weave->on_handle = [&](const Message&, Bus& bb, ProbeWeave&) {
+        (void)bb.send(b.id, Message(tick(3)));
+    };
+    b.weave->on_handle = [&](const Message& in, Bus& bb, ProbeWeave&) {
+        const std::int64_t n = in.payload.get("n")->as_int();
+        if (n > 0) {
+            (void)bb.send(b.id, Message(tick(n - 1)));
+        } else {
+            (void)bb.publish(Message(pong(0)));
+        }
+    };
+    (void)bus.send(busy.id, Message(greet("start")));
+    Fence fence;
+    const Ticket t = bus.send_as_fenced(sender.id, a.id, Message(ping(1)), &fence);
+    REQUIRE(t.valid());
+    REQUIRE(fence.valid());
+    CHECK(bus.fence_state(fence) == FenceState::Open);
+    std::vector<std::string> states;
+    int turns = 0;
+    while (bus.fence_state(fence) == FenceState::Open && turns < 20) {
+        (void)bus.pump_pending();
+        ++turns;
+        states.push_back(name_of(bus.fence_state(fence)));
+    }
+    INFO("turns: " << turns);
+    // Ping -> Tick3 -> Tick2 -> Tick1 -> Tick0 -> the two Pongs: six turns, Open after five.
+    CHECK(turns == 6);
+    CHECK(bus.fence_state(fence) == FenceState::Settled);
+    CHECK(c.weave->count == 1);
+    CHECK(d.weave->count == 1);
+    // The unrelated chain is still running, and was never waited for.
+    CHECK(bus.pending() > 0);
+    CHECK(busy.weave->count >= 6);
+    // Settled stays settled while the bus goes on; release forgets it.
+    (void)bus.pump_pending();
+    CHECK(bus.fence_state(fence) == FenceState::Settled);
+    bus.release_fence(fence);
+    CHECK(bus.fence_state(fence) == FenceState::Unknown);
+    CHECK(bus.fences_held() == 0);
+}
+
+TEST_CASE("fence: a refusal the send provokes and its notice are counted; a deferred answer spent later is not") {
+    Switchboard bus;
+    // A answers its asker LATER, and on the way sends somewhere that does not exist -- a
+    // refusal whose notice comes back to A, which asked for such notices.
+    Registered a = reg(bus, {ping_schema(), greet_schema(), schema_of<DispatchRefused>()});
+    Registered asker = reg(bus, {pong_schema()});
+    int answers = 0;
+    asker.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        if (in.provenance.answers_ask()) {
+            ++answers;
+        }
+    };
+    int notices = 0;
+    a.weave->on_handle = [&](const Message& in, Bus& bb, ProbeWeave& self) {
+        const std::string name = in.payload.schema().name();
+        if (name == "Ping") {
+            self.pending = bb.make_deferred_answer();
+            (void)bb.send(WeaveId{999999}, Message(tick(1)));
+        } else if (name == DispatchRefused::zen_name) {
+            if (in.provenance.dispatch_refused()) {
+                ++notices;
+            }
+        } else if (name == "Greet") {
+            (void)bb.spend_deferred(self.pending, Message(pong(7)));
+        }
+    };
+    Fence fence;
+    REQUIRE(bus.send_as_fenced(asker.id, a.id, Message(ping(1)), &fence).valid());
+    int turns = 0;
+    while (bus.fence_state(fence) == FenceState::Open && turns < 20) {
+        (void)bus.pump_pending();
+        ++turns;
+    }
+    CHECK(bus.fence_state(fence) == FenceState::Settled);
+    CHECK(notices == 1);  // the notice was dispatched before the fence settled
+    CHECK(answers == 0);  // ...and the deferred answer has not been spent at all
+    CHECK(bus.pending() == 0);
+    // An unrelated delivery spends it. It is that delivery's work, not the fence's.
+    (void)bus.send(a.id, Message(greet("now")));
+    bus.drain_until_idle();
+    CHECK(answers == 1);
+    CHECK(bus.fence_state(fence) == FenceState::Settled);
+}
+
+TEST_CASE("fence: bounded -- past the bound nothing is queued; a released fence is forgotten") {
+    Switchboard bus;
+    // A missing output handle must not create a fence nobody can release, or queue its send.
+    CHECK_FALSE(bus.send_as_fenced(WeaveId{}, WeaveId{}, Message(ping(1)), nullptr).valid());
+    CHECK_FALSE(bus.send_as_to_role_fenced(WeaveId{}, "nobody", Message(ping(1)), nullptr).valid());
+    CHECK(bus.fences_held() == 0);
+    CHECK(bus.pending() == 0);
+    Registered quiet = reg(bus, {ping_schema()});
+    Registered sender = reg(bus, {greet_schema()});
+    std::vector<Fence> held;
+    for (std::size_t i = 0; i < Switchboard::kMaxFences; ++i) {
+        Fence f;
+        REQUIRE(bus.send_as_fenced(sender.id, quiet.id, Message(ping(1)), &f).valid());
+        held.push_back(f);
+    }
+    CHECK(bus.fences_held() == Switchboard::kMaxFences);
+    const std::size_t queued = bus.pending();
+    Fence over{12345};
+    const Ticket refused = bus.send_as_fenced(sender.id, quiet.id, Message(ping(2)), &over);
+    CHECK_FALSE(refused.valid());
+    CHECK_FALSE(over.valid());
+    CHECK(bus.pending() == queued); // nothing was queued for the send the bound refused
+    bus.release_fence(held.front());
+    CHECK(bus.fence_state(held.front()) == FenceState::Unknown);
+    Fence again;
+    CHECK(bus.send_as_to_role_fenced(sender.id, "nobody-holds-this", Message(ping(3)), &again).valid());
+    CHECK(again.valid());
+    CHECK(again.value != held.front().value); // an id is never reused
+    bus.drain_until_idle();
+    for (std::size_t i = 1; i < held.size(); ++i) {
+        CHECK(bus.fence_state(held[i]) == FenceState::Settled);
+    }
+    CHECK(bus.fence_state(again) == FenceState::Settled); // a refused delivery is dispatched too
+}
+
+TEST_CASE("fence: a handler that throws still consumed its envelope, and the fence settles") {
+    Switchboard bus;
+    Registered thrower = reg(bus, {ping_schema()});
+    Registered sender = reg(bus, {greet_schema()});
+    thrower.weave->on_handle = [](const Message&, Bus&, ProbeWeave&) {
+        throw std::runtime_error("the handler did not finish");
+    };
+    Fence fence;
+    REQUIRE(bus.send_as_fenced(sender.id, thrower.id, Message(ping(1)), &fence).valid());
+    CHECK_THROWS_AS((void)bus.pump_pending(), std::runtime_error);
+    CHECK(bus.fence_state(fence) == FenceState::Settled);
+}
+
+TEST_CASE("fence: a host's fenced send from inside a fenced delivery begins its own fence") {
+    Switchboard bus;
+    Registered inner = reg(bus, {tick_schema()});
+    inner.weave->on_handle = [&](const Message& in, Bus& bb, ProbeWeave&) {
+        const std::int64_t n = in.payload.get("n")->as_int();
+        if (n > 0) {
+            (void)bb.send(inner.id, Message(tick(n - 1)));
+        }
+    };
+    Registered sender = reg(bus, {greet_schema()});
+    // A HOST ADAPTER inside a delivery -- the way a bridge services a guest from inside its
+    // door's beat -- speaking for somebody else.
+    Registered door = reg(bus, {ping_schema()});
+    Fence inner_fence;
+    door.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        (void)bus.send_as_fenced(sender.id, inner.id, Message(tick(4)), &inner_fence);
+    };
+    Fence outer;
+    REQUIRE(bus.send_as_fenced(sender.id, door.id, Message(ping(1)), &outer).valid());
+    (void)bus.pump_pending(); // the door's delivery: it queues the inner, fenced send
+    REQUIRE(inner_fence.valid());
+    // The door's own work is done; the inner send is not the door's, and is not waited for.
+    CHECK(bus.fence_state(outer) == FenceState::Settled);
+    CHECK(bus.fence_state(inner_fence) == FenceState::Open);
+    bus.drain_until_idle();
+    CHECK(bus.fence_state(inner_fence) == FenceState::Settled);
+    CHECK(inner.weave->count == 5);
 }
 
 } // TEST_SUITE

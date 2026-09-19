@@ -209,6 +209,10 @@ public:
     bool open(const std::string& path, std::string* error = nullptr);
     void close();
     bool open() const noexcept;
+    /// Push what has been appended to the file now. Ordinary observations are buffered
+    /// until close (they are frequent, and the stream is closed cleanly); a reader that
+    /// wants the stream as it stands -- the console's `log read`, a test -- flushes first.
+    void flush();
     const std::string& path() const noexcept { return path_; }
 
     // ---- selection ----------------------------------------------------------

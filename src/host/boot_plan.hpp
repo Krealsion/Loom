@@ -44,9 +44,51 @@ struct BootEntry {
     OnFailure on_failure = OnFailure::Continue;
 };
 
+/// A LINK TO ANOTHER RUNNING HOST, as the person wrote it: a name (the office local weaves
+/// address is `loom.link.<name>`), where to connect, and what this host says about itself when
+/// it does. The far host's policy decides what that is worth; nothing here is authority.
+struct LinkEntry {
+    std::string name;
+    std::string connect;    ///< host:port
+    std::string identity;   ///< the name this host CLAIMS; the far host may establish another
+    std::string credential; ///< presented at Hello; a passphrase, a token, or nothing
+};
+
+/// ONE RETENTION RULE FOR THE HOST'S WORKING MEMORY, as `loom::RetentionRule` spells it: how
+/// many of the last observations of a shape to keep, whether it takes recent context, and
+/// whether its bytes are kept.
+struct HistoryRetain {
+    std::string shape;
+    std::int64_t last_n = 1;
+    bool in_recent = true;
+    bool retain_payload = true;
+};
+
+/// ONE DURABLE SELECTION, as `loom::LogRule` spells it: a shape worth keeping for good, and a
+/// per-shape cap (0 = uncapped).
+struct HistoryKeep {
+    std::string shape;
+    std::int64_t cap = 0;
+};
+
+/// WHAT THIS HOST REMEMBERS AND WHAT IT KEEPS -- the `history` section of the boot plan. Both
+/// halves are Loom's own (`zen/history/`); this is only their configuration, written where the
+/// person writes everything else about a run. Absent, the host keeps Loom's defaults: a small
+/// bounded memory of everything, and a durable file of nothing until `log` names one.
+struct HistoryConfig {
+    std::string log;                   ///< the durable stream's path; empty = write nothing
+    std::int64_t recent = 0;           ///< the recent window's capacity; 0 = Loom's default
+    std::int64_t payload_budget = 0;   ///< bytes of payload held at once; 0 = Loom's default
+    bool keep_refusals = false;        ///< durable: every refusal (measured noisy; off by default)
+    std::vector<HistoryRetain> retain; ///< per-shape working-memory rules
+    std::vector<HistoryKeep> keep;     ///< per-shape durable selection, beside Loom's default
+};
+
 /// A boot plan, in the person's stated order.
 struct BootPlan {
     std::vector<BootEntry> entries;
+    std::vector<LinkEntry> links;
+    HistoryConfig history;
     /// Where it came from, for the console to be able to say so. Empty when no file
     /// was read (the host booted with nothing, which is a legitimate and useful state).
     std::string source;

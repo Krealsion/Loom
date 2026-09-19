@@ -557,6 +557,132 @@ loom> show m2
 
 Conversation `0` means "named none" — an announcement, not an answer to anything.
 
+## 10. Link to another host
+
+A host can hold a connection to **another running Loom** — a Workshop, another
+`loom-host` — and put an office in front of it that your own weaves ask through. That is a
+`links` row in the boot plan:
+
+```json
+{
+  "boot":  [ { "name": "probe", "path": "/home/you/probe/build/zengine-workshop-probe.so" } ],
+  "links": [ { "name": "workshop", "connect": "127.0.0.1:7654",
+               "identity": "agent", "credential": "open-sesame" } ]
+}
+```
+
+At boot the host connects, says who it claims to be and what it presents, and reports what
+the far host decided:
+
+```text
+  link workshop -> 127.0.0.1:7654: admitted as 'agent' (session 9; office loom.link.workshop, weave 3)
+```
+
+**The far host decides.** `identity` is what this host *claims*; the far host's own policy —
+a Workshop's guests file, say — establishes a name (printed above) and a grant, or refuses
+in its own words, or keeps the connection waiting for a person to decide. A refused or
+unreachable link is still mounted: it answers `unlinked` to every ask, and `links connect
+<name>` tries again (a new session; nothing from the old one carries over).
+
+**Asking across.** A weave of yours sends the link's office one `loom.link.Ask` — the far
+office it means and its message as bytes — under a correlation of its own
+(`zen/bridge/link.hpp` has the one-line composer). The link answers that ask **exactly once,
+through Loom's own answer door**, so what comes back is attested by *your* bus as the answer
+to your ask (`mail.answers_ask()`), under your correlation, from the link:
+
+- the far owner's answer — only a delivery the far bus itself attested as the answer to this
+  crossing — re-admitted through your bus's gate as the shape your weave declared it accepts;
+- or `loom.link.Outcome`, the link's own word: `refused` (nothing was submitted: the link
+  refused the ask, or the far host dropped it before its bus), `dispatch-refused` (the far bus
+  said no), `unlinked` (no session to send on) or `lost` (the session ended after the send: the
+  outcome is **unknown**, and nothing is resent).
+
+Settle on that and nothing less: correlation, the link's stamp **and** `mail.answers_ask()`
+([the asker's own book](../reference/messaging.md#the-askers-own-book)). A far participant's
+ordinary word to the link's session — even under your conversation's number, even in the
+shape you expect — is never handed to you; neither is a message from anyone on your own bus
+that merely looks like an answer. Silence is the fifth outcome and has no shape.
+
+Your correlation never crosses. The link puts its own number on the wire — the crossing's
+`attempt` — and translates the far reply back to the ask it belongs to, so two weaves whose
+books both start at 1 are each answered their own. A reconnect is a new session: whatever was
+still open on the old one is told `lost`, and nothing that arrives for it later can answer
+anything on the new one.
+
+**Waiting for what the ask set in motion.** An ask with `settle` is answered only once the far
+host has also said that everything the ask set in motion on its bus has been dispatched — the
+far owner's handler and every delivery it caused synchronously, however many turns they took.
+That is what an agent wants between typing a key and taking a picture: inject with `settle`,
+then ask for the picture. It does not wait for work the far side deferred to a timer or a later
+turn ([fences](../reference/messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)).
+
+What your weave may say to the link is your decision, like everything else:
+
+```text
+loom> authority allow probe loom.link.Ask v1 -> role loom.link.workshop
+```
+
+What the link's session may say on the far bus is the far host's.
+
+```text
+loom> links
+  workshop  127.0.0.1:7654  admitted  as 'agent', session 9  (0 open)
+```
+
+**What the history keeps of a crossing.** Every frame the far host ships to the link's session
+becomes a `loom.link.Crossed` record the link says to itself before it acts on it: the far
+session and the name the far host established, the far bus's stamp and office, the crossing's
+attempt, what kind of frame it was (`answer`, `dispatch-refused`, `message`, `send-refused`,
+`settled`, `ended`) and the bytes. Your Recorder and Logger hold it as the ordinary delivery it
+is — the link's account of what arrived, never an observation of the far execution — and the
+answer the link then hands your weave names that record as its dispatch parent.
+
+## 11. What this host remembers, and what it keeps
+
+`loom-host` mounts Loom's own two history lenses ([history](../reference/history.md)):
+a bounded working memory of everything the bus did, and a durable stream of what you chose
+not to forget. Both are configured in the boot plan's `history` section; neither costs a
+message on the bus.
+
+```json
+{
+  "history": {
+    "log": "run.log",
+    "recent": "256",
+    "retain": [ { "shape": "SurfaceCaptureChunk", "last_n": "1", "in_recent": false,
+                  "retain_payload": false },
+                { "shape": "loom.link.Crossed", "last_n": "8", "retain_payload": false } ],
+    "keep":   [ { "shape": "InputInjected" }, { "shape": "SurfaceCaptured" },
+                { "shape": "loom.link.Outcome", "cap": "64" },
+                { "shape": "loom.link.Crossed", "cap": "256" } ]
+  }
+}
+```
+
+`retain` rows are the recorder's per-shape rules (how many of the last observations to keep,
+whether they take recent context, whether their bytes are kept); `keep` rows are the logger's
+durable selection beside Loom's default (what code is loaded, who may speak, every failed
+handler and every death), each with an optional per-shape cap. Numbers are written as
+strings, as every integer in these files is. `--log <file>` names the stream from the
+command line and wins over `history.log`.
+
+Reading it back at the console:
+
+```text
+loom> history                      what memory holds now, and what it has forgotten
+loom> history last InputInjected   the last observation of one shape, if any
+loom> history recent 20            what happened around now
+loom> history find 41              what became of bus delivery 41: retained, forgotten,
+                                   not recorded, or unobserved
+loom> history payload 17           the retained bytes of record 17, decoded
+loom> log read 10                  the durable stream, read back through the gate
+```
+
+A durable record says where it came from — the bus, this host's own diagnostic, or the
+logger's own selection change — and a fact the memory has released is reported as forgotten,
+never as "nothing happened". `log read` flushes the stream first, so it reads what stands,
+not what was last closed: ordinary observations are otherwise buffered until the host quits.
+
 ## When something goes wrong
 
 Four different failures, four different places to look. Telling them apart is most of

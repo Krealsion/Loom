@@ -428,6 +428,12 @@ bool Logger::append(const LogRecord& rec) {
     return true;
 }
 
+void Logger::flush() {
+    if (out_) {
+        out_->out.flush();
+    }
+}
+
 void Logger::note(std::string text) {
     LogRecord rec;
     rec.origin = LogOrigin::PolicyChange;

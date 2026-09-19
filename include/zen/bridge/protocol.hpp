@@ -4,60 +4,117 @@
 #ifndef ZEN_BRIDGE_PROTOCOL_HPP
 #define ZEN_BRIDGE_PROTOCOL_HPP
 
-// The OPERATOR-PROTOCOL: the client<->host wire for the remote-operator console. A remote console
-// cannot hold a Switchboard& across a socket, so the engine runs CLIENT-side and its three host
-// interactions — discovery, the tap, and sends — cross as framed messages the host answers and
-// streams. This is the decision-#2 "discovery-and-tap-as-messages" purification, and it makes a
-// remote operator the SAME pattern as an out-of-process weave (a proxy-participant bridging a socket
-// to the bus), pointed at an operator instead of a hosted weave.
+// THE CROSSING'S WIRE: what one Loom host says to another over a framed socket.
 //
-// Frames are length-prefixed exactly as the out-of-process-weave protocol: [u32 payload_len][u8 op]
-// [payload], little-endian, read through the bounds-checked Cursor — so a hostile or truncated frame
-// is rejected, never over-read. We REUSE the wire primitives (put_u*, Cursor, kMaxFrameLen) from the
-// out-of-process-weave protocol header: they are portable, header-only, POSIX-free byte helpers that
-// happen to live there. (A neutral wire.hpp the two protocols share is a clean future factoring —
-// a noted seam, not built, to avoid touching the proven isolation header.)
+// A `Switchboard&` cannot cross a socket. What crosses instead is a small fixed vocabulary of
+// frames: a HANDSHAKE the host answers with admission or refusal, DISCOVERY the host answers,
+// a SEND the host re-admits through the one gate and stamps from the connection, a DELIVERY the
+// host ships to the connection with the facts Loom stamped on it, and -- for a connection the
+// host's policy lets OBSERVE -- a copy of each bus event.
 //
-// Zen's serialized values are the IPC currency here too: the operator's send crosses as serialized
-// message bytes the host re-admits through the ONE gate, exactly as a child's Emit is re-admitted —
-// and the host stamps the sender from the CONNECTION, never the wire (the anti-spoof).
+// Frames are length-prefixed exactly as the out-of-process-weave protocol: [u32 payload_len]
+// [u8 op][payload], little-endian, read through the bounds-checked Cursor -- so a hostile or
+// truncated frame is rejected, never over-read. The wire primitives (put_u*, Cursor,
+// kMaxFrameLen) are the portable, header-only helpers of <zen/wire.hpp>, shared with the
+// isolation protocol.
+//
+// ---- v4: a crossing between two hosts, not only an operator's console ------------------
+//
+// v3 was written for ONE principal: every connection was the operator, so `Hello` carried a
+// version and nothing else, `Delivered` carried payload bytes and nothing else, and every
+// connection received the whole-bus tap. v4 is written for a GUEST -- another host's
+// participant, admitted deliberately and granted narrowly -- and changes exactly what that
+// needs:
+//
+//   Hello      carries a CLAIMED name and a credential. What the peer says about itself is
+//              data the host's admission policy judges; it is never the identity the host
+//              establishes, which comes back on Welcome.
+//   Denied     the host's refusal, with its reason, before the connection is severed.
+//              A refused connection has no proxy on the bus and can act on nothing.
+//   Welcome    the session identity the host minted (the proxy's WeaveId) and the name the
+//              host's policy ESTABLISHED for this connection (empty when the policy
+//              established none).
+//   Send       may address an OFFICE (`role`) as well as a WeaveId, so a guest can speak to
+//              "whoever holds zengine.input" without learning a small integer first; and may
+//              ask to be told when what it SET IN MOTION on the host's bus has been dispatched.
+//   Delivered  carries what Loom stamped on the delivery beside the payload: the bus-stamped
+//              sender, the correlation, whether Loom attests it as THE answer to an ask this
+//              connection sent (`answers_ask`), whether it is a dispatch-refusal notice, and
+//              the office the sender spoke as. A richer client cannot recover a fact the
+//              crossing discarded, so the crossing no longer discards them.
+//   Settled    the host's word, once, that everything a settle-requested Send set in motion on
+//              its bus has been dispatched (`loom::Fence`): the send and every delivery queued
+//              from inside the dispatch of anything it caused. Not an answer, and not a claim
+//              that nothing else is pending -- a request delivered to a silent participant is
+//              dispatched, and work deferred to a timer or a later turn is not waited for.
+//   Tap        is copied only to a connection whose admission verdict grants observation.
+//
+// Zen's serialized values are still the currency: a Send crosses as serialized message bytes the
+// host re-admits through the ONE gate, exactly as a child's Emit is -- and the host stamps the
+// sender from the CONNECTION, never the wire (the anti-spoof).
 
-#include <zen/isolation/protocol.hpp> // put_u8/u32/u64, put_bytes, Cursor, kMaxFrameLen (portable)
+#include <zen/wire.hpp> // put_u8/u32/u64, put_bytes, Cursor, kMaxFrameLen, kEmitSend/kEmitPublish
 
 #include <cstdint>
 
 namespace loom {
 
-/// The operator-protocol opcodes. client->host requests/sends; host->client replies/streams.
+/// The crossing's opcodes. client->host requests/sends; host->client replies/streams.
 enum class BridgeOp : std::uint8_t {
     // ---- client -> host ----
-    Hello = 1,      ///< [u32 proto_version] — handshake; the host replies Welcome
-    ListWeaves = 2, ///< (empty) — explicit discovery refresh; the host replies Weaves
-    Describe = 3,   ///< [bytes name][u32 version] — the host replies Schema (encoded) or SchemaNone
-    Send = 4,       ///< the operator's send (an assembled message, like Op::Emit):
-                    ///<   [u8 kind][u64 wire_sender][u64 target][u64 wire_reply_to][u64 correlation][bytes payload]
+    Hello = 1,      ///< [u32 proto_version][bytes claimed_name][bytes credential] -- the handshake.
+                    ///< The two trailing fields are read as empty when absent, so a v3-shaped
+                    ///< Hello still identifies itself; the VERSION is what a host judges.
+                    ///< The host answers Welcome, or Denied and severs.
+    ListWeaves = 2, ///< (empty) -- explicit discovery refresh; the host replies Weaves
+    Describe = 3,   ///< [bytes name][u32 version] -- the host replies Schema (encoded) or SchemaNone
+    Send = 4,       ///< the connection's send (an assembled message, like Op::Emit):
+                    ///<   [u8 kind][u8 flags][u64 wire_sender][u64 target][u64 wire_reply_to]
+                    ///<   [u64 correlation][bytes role][bytes payload]
+                    ///< `flags`: kSendSettle asks for one Settled under `correlation` once what
+                    ///< the send set in motion has been dispatched.
                     ///< The host re-admits `payload` through the gate and STAMPS sender + reply_to
                     ///< from the CONNECTION (the proxy's id), IGNORING wire_sender and wire_reply_to.
                     ///< An honest client sets those to 0; a malicious one forges them and the bridge
-                    ///< stamps over them (the forge-the-hostile-frame pin). kind: kEmitSend/kEmitPublish.
+                    ///< stamps over them (the forge-the-hostile-frame pin). kind: kEmitSend to
+                    ///< `target`, kEmitPublish, or kSendToRole to whoever holds `role` at delivery.
 
     // ---- host -> client ----
-    Welcome = 16,    ///< [u64 operator_id][u32 proto_version] — the operator's stamped bus id
-    Weaves = 17,     ///< [u32 n]{[u64 id][u32 m]{[bytes name][u32 version]}} — the live weave set
-    Schema = 18,     ///< [bytes encoded_schema] (schema_codec) — reply to Describe (found)
-    SchemaNone = 19, ///< [bytes name][u32 version] — reply to Describe (no such registered shape)
-    Delivered = 20,  ///< [bytes payload] — a reply Value delivered to the operator (fills the buffer).
-                     ///< Deliberately does NOT echo a correlation: no consumer correlates a reply to a
-                     ///< send yet (a reply's own reply_to already routed it here). Reserved, not
-                     ///< forgotten — SendRefused DOES carry one because its pin consumes it.
-    Tap = 21,        ///< a copied bus event for the operator's window on the live bus:
+    Welcome = 16,    ///< [u64 session_id][u32 proto_version][bytes established_name]
+    Weaves = 17,     ///< [u32 n]{[u64 id][u32 m]{[bytes name][u32 version]}} -- the live weave set
+    Schema = 18,     ///< [bytes encoded_schema] (schema_codec) -- reply to Describe (found)
+    SchemaNone = 19, ///< [bytes name][u32 version] -- reply to Describe (no such registered shape)
+    Delivered = 20,  ///< [u64 sender][u64 correlation][u8 flags][bytes authored_role][bytes payload]
+                     ///< -- a message the bus delivered to this connection's proxy. `flags`:
+                     ///< kDeliveredAnswersAsk (Loom attests this as THE answer to an ask this
+                     ///< connection sent), kDeliveredDispatchRefused (a `zen.DispatchRefused`
+                     ///< notice about one of this connection's own sends).
+    Tap = 21,        ///< a copied bus event, for a connection admitted WITH observation:
                      ///<   [u8 kind][u64 target][u64 sender][bytes schema][u32 version][bytes refusal]
-    SendRefused = 22, ///< [u64 correlation][bytes reason] — the operator's Send was dropped BEFORE the
-                      ///< bus (malformed header / unknown schema / gate-refused), so no tap event
-                      ///< exists for it. Per-frame and NON-fatal (distinct from a pre-Hello severance);
-                      ///< correlation is 0 when the header did not parse far enough to yield one. The
-                      ///< client surfaces it as a "BridgeRefused" tap kind — honestly NOT a bus event.
+    SendRefused = 22, ///< [u64 correlation][bytes reason] -- the connection's Send was dropped
+                      ///< BEFORE the bus (malformed header / unknown schema / gate-refused / not
+                      ///< admitted), so no bus event exists for it. Per-frame and NON-fatal;
+                      ///< correlation is 0 when the header did not parse far enough to yield one.
+    Denied = 23,      ///< [bytes reason] -- admission refused this connection. Sent once, flushed,
+                      ///< and the connection is severed; nothing it sent acted and nothing it
+                      ///< sends afterwards can.
+    Settled = 24,     ///< [u64 correlation] -- everything the settle-requested Send under this
+                      ///< correlation set in motion on the host's bus has been dispatched. Once
+                      ///< per such Send that reached the bus; a Send refused before the bus
+                      ///< (SendRefused) has nothing to settle and is told nothing more.
 };
+
+/// Send kinds on the wire. The first two are the isolation protocol's own (kEmitSend = 0,
+/// kEmitPublish = 1); the third is this crossing's addition.
+inline constexpr std::uint8_t kSendToRole = 2;
+
+/// `Send` flags. A publication cannot ask for settlement (it has no one envelope to fence), and
+/// a host refuses the Send before the bus when it cannot track one more.
+inline constexpr std::uint8_t kSendSettle = 1u << 0;
+
+/// `Delivered` flags.
+inline constexpr std::uint8_t kDeliveredAnswersAsk = 1u << 0;
+inline constexpr std::uint8_t kDeliveredDispatchRefused = 1u << 1;
 
 /// Tap event kinds on the wire (mirrors loom::EventKind, fixed so the client need not link the bus).
 inline constexpr std::uint8_t kTapDelivered = 0;
@@ -68,10 +125,16 @@ inline constexpr std::uint8_t kTapRevived = 3;
 /// Loom declined nothing, and carries no reason to send - see loom::EventKind.
 inline constexpr std::uint8_t kTapHandlerFailed = 4;
 
-/// The operator-protocol version (bumped on any wire change — shape OR vocabulary; Hello/Welcome
-/// carry it). v2 added SendRefused; v3 added the HandlerFailed tap kind. Both additions are
-/// compatible in both directions, but the bump is policy literalism while nothing is deployed.
-inline constexpr std::uint32_t kBridgeProtocolVersion = 3;
+/// The crossing's protocol version (bumped on any wire change -- shape OR vocabulary; Hello and
+/// Welcome carry it). v2 added SendRefused; v3 added the HandlerFailed tap kind; v4 is the
+/// two-host crossing above: Hello's identity, Denied, Welcome's established name, Send's role
+/// address and settle flag, Delivered's stamped context, and Settled. A host refuses a peer whose version it does not
+/// speak, in words, before anything else happens on that connection.
+inline constexpr std::uint32_t kBridgeProtocolVersion = 4;
+
+/// The longest claimed name or credential a Hello may carry. A bound on what a peer can make a
+/// host hold BEFORE it is admitted, when it has earned nothing yet.
+inline constexpr std::size_t kMaxHelloFieldBytes = 256;
 
 } // namespace loom
 
