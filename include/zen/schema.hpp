@@ -143,7 +143,14 @@ std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t versio
 ///
 /// Cycles are impossible by construction: a `Schema` is immutable and built from
 /// components that already exist, so nothing can reference itself and the walk is
-/// bounded by the schema DAG. Cost is linear in the closure's size.
+/// bounded by the schema DAG. WORK IS BOUNDED BY THE CLOSURE, NOT BY THE PATHS
+/// THROUGH IT: `out` is the visited set, a component already carried is not
+/// descended into again (it was carried after its own components), so each
+/// distinct identity is expanded once however many fields reach it. Each
+/// reference costs one scan of `out`, so the cost is proportional to the number
+/// of message references times the closure's size — small numbers for a
+/// declaration, and never the exponential a shared graph once cost when the
+/// descent came before the scan.
 void collect_referenced(const Schema& root, std::vector<std::shared_ptr<const Schema>>& out);
 /// The same walk from a single type reference (a field's type, a list's element).
 void collect_referenced(const TypeRef& type, std::vector<std::shared_ptr<const Schema>>& out);

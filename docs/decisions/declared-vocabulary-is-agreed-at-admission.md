@@ -50,9 +50,16 @@ through the one wall, natively and across the seam alike.** Concretely:
 - A reload candidate's whole closure is checked against the bus's live vocabulary **before**
   the incumbent is touched, with the registry's own sentence — the one place validate-then-
   commit had a gap once nested components and emits were claimed.
-- The ABI is bumped to **v9** although no table slot changed: a v8 image's manifest would pass
-  a v5 meta-schema whose new section is optional and load with its emit-set silently absent.
-  "Declared nothing" and "could not declare" must not be the same bytes.
+- The ABI is bumped to **v9** although no table slot changed, as the explicit compatibility and
+  deployment boundary. A v8 image would not slip through the manifest gate — its descriptor
+  claims `zen.Manifest` v4, whose identity differs from the v5 door's, and the gate refuses that
+  (`SchemaMismatch`; pinned in the `schema_codec` suite) — but it would be refused only in
+  `reconstruct`, after `open_library` had run its static initializers and `create()` had built
+  its instance, with a sentence about a meta-schema. The version gate refuses it in `fetch_abi`,
+  before any callback into the image, naming both versions, at load and at reload over a live
+  participant — the one number the dynamic-ABI discipline already asks every host, library and
+  image to agree on. "Declared nothing" and "could not declare" are thereby two versions, not
+  two readings of one gate sentence.
 
 ## What it deliberately does not decide
 
@@ -93,8 +100,14 @@ through the one wall, natively and across the seam alike.** Concretely:
 
 ## Consequences
 
-- A stale acceptor is refused at load, in both load orders, with the shape named; the current
-  artifact is never the one refused for a predecessor's drift.
+- A declaration that disagrees with a LIVE definition is refused at the door, in either order,
+  with the shape named: the later declaration loses. Loom compares definitions; it does not
+  decide which is newer or right, and it will refuse a current artifact behind a stale one that
+  registered first. What makes the stale desktop the loser in Workshop is Workshop's own
+  startup order — the host mounts Workshop, whose `Emit<...>` declares the current
+  `PaneInventory`, before its plan loads any pane — measured with the real artifacts in the
+  corrections record (`loom-schema-admission-implementation-corrections`), whichever side of
+  the stale desktop the plan puts the current Info pane.
 - An emitted-only shape resolves from its emitter's declaration: a `AcceptMode::AnyRegistered`
   weave (the console) is now offered it on a directed send, where before the send was refused
   `NotAccepted`; publication still fans out to listed doors only. The known-seams reply-shape

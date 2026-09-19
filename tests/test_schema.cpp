@@ -7,7 +7,15 @@
 
 #include <zen/schema.hpp>
 
+#include <chrono>
+#include <cstddef>
+#include <future>
+#include <memory>
 #include <stdexcept>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 using namespace loom;
 
@@ -162,6 +170,70 @@ TEST_CASE("collect_referenced deduplicates by IDENTITY: an equal definition from
         CHECK(out[0]->name() == out[1]->name());
         CHECK(out[0]->version() == out[1]->version());
     }
+}
+
+TEST_CASE("collect_referenced expands a shared component once, however many paths reach it: a "
+          "deep graph of two-field sharing is walked in one pass, not as a tree") {
+    // THE SHAPE THAT STALLED A HOST. Node[i] holds two message fields, `left` and `right`,
+    // both of Node[i-1]; the closure is a chain of depth+1 distinct schemas, but a walk that
+    // descends BEFORE checking what it has already carried expands it as a binary tree —
+    // 2^depth visits. At depth 26 that was a registration that never returned (an
+    // eight-second timeout, independently measured); at this depth it is astronomically
+    // more, so a wrong walk cannot finish here and a right one finishes at once.
+    constexpr int depth = 200;
+    auto leaf = SchemaBuilder("Shared.Leaf", 1).field("v", Kind::Int).build();
+    std::shared_ptr<const Schema> node = leaf;
+    for (int i = 1; i <= depth; ++i) {
+        node = SchemaBuilder("Shared.Node" + std::to_string(i), 1)
+                   .message("left", node, /*required=*/false)
+                   .message("right", node, /*required=*/false)
+                   .build();
+    }
+    const std::shared_ptr<const Schema> root = node;
+
+    // THE BOUNDED-COMPLETION GUARD, generous by orders of magnitude: the corrected walk
+    // takes microseconds; the old one would take longer than the machine will exist. A
+    // walk that has not returned in 30 seconds is not slow, it is the exponential — and
+    // its thread is left to the process's exit rather than joined, since it never would.
+    std::promise<std::vector<std::shared_ptr<const Schema>>> done;
+    std::future<std::vector<std::shared_ptr<const Schema>>> result = done.get_future();
+    std::thread walker([root, done = std::move(done)]() mutable {
+        std::vector<std::shared_ptr<const Schema>> out;
+        collect_referenced(*root, out);
+        done.set_value(std::move(out));
+    });
+    if (result.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
+        walker.detach();
+        FAIL("collect_referenced did not finish a 201-schema shared graph within 30 s: the "
+             "walk is expanding an already-carried component again (2^depth work)");
+        return;
+    }
+    walker.join();
+    const std::vector<std::shared_ptr<const Schema>> out = result.get();
+
+    // THE RIGHT CLOSURE: every distinct identity exactly once, post-order (the leaf first,
+    // each node after the node it nests), the root itself not included.
+    REQUIRE(out.size() == static_cast<std::size_t>(depth)); // Leaf + Node1..Node(depth-1)
+    CHECK(out.front()->name() == "Shared.Leaf");
+    for (int i = 1; i < depth; ++i) {
+        CHECK(out[static_cast<std::size_t>(i)]->name() == "Shared.Node" + std::to_string(i));
+    }
+    // Repeated calls keep using `out` as the visited set: a second root over the same
+    // graph adds only what is new, and a root reached twice is carried once.
+    std::vector<std::shared_ptr<const Schema>> again = out;
+    collect_referenced(*root, again);
+    CHECK(again.size() == out.size());
+    auto sibling = SchemaBuilder("Shared.Sibling", 1).message("a", root).message("b", root).build();
+    collect_referenced(*sibling, again);
+    CHECK(again.size() == out.size() + 1); // exactly the root joined
+    CHECK(again.back().get() == root.get());
+    // ...and identity, not name, is still the rule: a different Leaf under the same key
+    // survives beside the carried one for the registry to refuse.
+    auto other_leaf = SchemaBuilder("Shared.Leaf", 1).field("w", Kind::Text).build();
+    auto carrier = SchemaBuilder("Shared.Carrier", 1).message("l", other_leaf).build();
+    collect_referenced(*carrier, again);
+    CHECK(again.size() == out.size() + 2);
+    CHECK(again.back()->content_id() == other_leaf->content_id());
 }
 
 } // TEST_SUITE
