@@ -299,7 +299,17 @@ Switchboard::Switchboard()
     journal_.assign(kJournalCapacity, JournalSlot{});
 }
 
-Switchboard::~Switchboard() = default;
+// A WEAVE MAY REACH BACK INTO THE BUS FROM ITS OWN DESTRUCTOR -- a weave that owns a
+// BridgeServer unregisters that server's proxies and removes its observer when it dies.
+// Were the registry destroyed member-wise, that call would erase from a map already being
+// torn down. So the registry is emptied FIRST, into a local, and the weaves die from there:
+// a re-entrant `unregister_weave` then finds nothing and returns nothing, and every other
+// member (observers, roles, the journal) is still whole for the duration of the body.
+Switchboard::~Switchboard() {
+    std::map<std::uint64_t, WeaveRecord> dying = std::move(weaves_);
+    weaves_.clear();
+    dying.clear();
+}
 
 Switchboard::WeaveRecord* Switchboard::find(WeaveId id) {
     auto it = weaves_.find(id.value);

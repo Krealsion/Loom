@@ -31,11 +31,65 @@ std::shared_ptr<const loom::Schema> boot_entry_schema() {
     return s;
 }
 
-std::shared_ptr<const loom::Schema> boot_plan_schema() {
-    static const auto s = loom::SchemaBuilder("zen.HostBootPlan", 1)
-                              .list("boot", loom::type_message(boot_entry_schema()))
+std::shared_ptr<const loom::Schema> link_entry_schema() {
+    static const auto s = loom::SchemaBuilder("zen.HostLinkEntry", 1)
+                              .field("name", loom::Kind::Text)
+                              .field("connect", loom::Kind::Text)
+                              .field("identity", loom::Kind::Text, /*required=*/false)
+                              .field("credential", loom::Kind::Text, /*required=*/false)
                               .build();
     return s;
+}
+
+std::shared_ptr<const loom::Schema> history_retain_schema() {
+    static const auto s = loom::SchemaBuilder("zen.HostHistoryRetain", 1)
+                              .field("shape", loom::Kind::Text)
+                              .field("last_n", loom::Kind::Int, /*required=*/false)
+                              .field("in_recent", loom::Kind::Bool, /*required=*/false)
+                              .field("retain_payload", loom::Kind::Bool, /*required=*/false)
+                              .build();
+    return s;
+}
+
+std::shared_ptr<const loom::Schema> history_keep_schema() {
+    static const auto s = loom::SchemaBuilder("zen.HostHistoryKeep", 1)
+                              .field("shape", loom::Kind::Text)
+                              .field("cap", loom::Kind::Int, /*required=*/false)
+                              .build();
+    return s;
+}
+
+std::shared_ptr<const loom::Schema> history_schema() {
+    static const auto s = loom::SchemaBuilder("zen.HostHistory", 1)
+                              .field("log", loom::Kind::Text, /*required=*/false)
+                              .field("recent", loom::Kind::Int, /*required=*/false)
+                              .field("payload_budget", loom::Kind::Int, /*required=*/false)
+                              .field("keep_refusals", loom::Kind::Bool, /*required=*/false)
+                              .list("retain", loom::type_message(history_retain_schema()),
+                                    /*required=*/false)
+                              .list("keep", loom::type_message(history_keep_schema()),
+                                    /*required=*/false)
+                              .build();
+    return s;
+}
+
+// VERSION 2 ADDS TWO OPTIONAL SECTIONS AND CHANGES NOTHING A v1 FILE SAID: `links` (other
+// hosts this one connects to at boot) and `history` (what this host remembers and keeps). A
+// file with only `boot` still reads, because the host admits the person's object against the
+// schema it knows by name and supplies the version itself.
+std::shared_ptr<const loom::Schema> boot_plan_schema() {
+    static const auto s = loom::SchemaBuilder("zen.HostBootPlan", 2)
+                              .list("boot", loom::type_message(boot_entry_schema()))
+                              .list("links", loom::type_message(link_entry_schema()),
+                                    /*required=*/false)
+                              .message("history", history_schema(), /*required=*/false)
+                              .build();
+    return s;
+}
+
+std::int64_t int_or(const loom::Value& v, const char* field, std::int64_t fallback) {
+    const loom::Cell* c = v.get(field);
+    return (c == nullptr) ? fallback : c->as_int();
 }
 
 std::string text_or(const loom::Value& v, const char* field, const char* fallback) {
@@ -102,6 +156,70 @@ bool read_boot_plan(const std::string& path, BootPlan* out, std::string* error) 
             return false;
         }
         out->entries.push_back(std::move(entry));
+    }
+    if (const loom::Cell* links = v->get("links")) {
+        for (const loom::Cell& c : links->as_list()) {
+            const loom::Value& e = *c.as_message();
+            LinkEntry link;
+            link.name = e.get("name")->as_text();
+            link.connect = e.get("connect")->as_text();
+            link.identity = text_or(e, "identity", "");
+            link.credential = text_or(e, "credential", "");
+            if (link.name.empty() || link.connect.empty()) {
+                *error = "boot plan '" + path + "': every link needs a non-empty name and connect";
+                return false;
+            }
+            for (const LinkEntry& other : out->links) {
+                if (other.name == link.name) {
+                    *error = "boot plan '" + path + "': two links are named '" + link.name +
+                             "', and a name is one office";
+                    return false;
+                }
+            }
+            out->links.push_back(std::move(link));
+        }
+    }
+    if (const loom::Cell* h = v->get("history")) {
+        const loom::Value& hv = *h->as_message();
+        out->history.log = text_or(hv, "log", "");
+        out->history.recent = int_or(hv, "recent", 0);
+        out->history.payload_budget = int_or(hv, "payload_budget", 0);
+        out->history.keep_refusals = bool_or(hv, "keep_refusals", false);
+        if (out->history.recent < 0 || out->history.payload_budget < 0) {
+            *error = "boot plan '" + path + "': history.recent and history.payload_budget are "
+                     "sizes and cannot be negative";
+            return false;
+        }
+        if (const loom::Cell* retain = hv.get("retain")) {
+            for (const loom::Cell& c : retain->as_list()) {
+                const loom::Value& r = *c.as_message();
+                HistoryRetain rule;
+                rule.shape = r.get("shape")->as_text();
+                rule.last_n = int_or(r, "last_n", 1);
+                rule.in_recent = bool_or(r, "in_recent", true);
+                rule.retain_payload = bool_or(r, "retain_payload", true);
+                if (rule.shape.empty() || rule.last_n < 0) {
+                    *error = "boot plan '" + path + "': a history.retain row needs a shape and "
+                             "a non-negative last_n";
+                    return false;
+                }
+                out->history.retain.push_back(std::move(rule));
+            }
+        }
+        if (const loom::Cell* keep = hv.get("keep")) {
+            for (const loom::Cell& c : keep->as_list()) {
+                const loom::Value& k = *c.as_message();
+                HistoryKeep rule;
+                rule.shape = k.get("shape")->as_text();
+                rule.cap = int_or(k, "cap", 0);
+                if (rule.shape.empty() || rule.cap < 0) {
+                    *error = "boot plan '" + path + "': a history.keep row needs a shape and a "
+                             "non-negative cap";
+                    return false;
+                }
+                out->history.keep.push_back(std::move(rule));
+            }
+        }
     }
     out->source = path;
     return true;

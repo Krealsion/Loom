@@ -62,10 +62,14 @@
 #include "authority.hpp"
 #include "boot_plan.hpp"
 #include "line_input.hpp"
+#include "link.hpp"
 #include "store_lock.hpp"
 #include "warden.hpp"
 
 #include <zen/console/console.hpp>
+#include <zen/history/dump.hpp>
+#include <zen/history/logger.hpp>
+#include <zen/history/recorder.hpp>
 #include <zen/host/grant_wiring.hpp>
 #include <zen/kernel/abi.h> // ZEN_ABI_VERSION — text, present on every platform
 #include <zen/switchboard.hpp>
@@ -114,6 +118,10 @@ constexpr int kSettleTurns = 16;
 /// weave woken by something outside this loop is still serviced promptly.
 constexpr int kIdleWaitMs = 100;
 
+/// How long a boot waits on a far host's Welcome or Denied for one link. A far host that
+/// answers nothing in this time is reported as such; the link stays mounted and unlinked.
+constexpr int kLinkConnectMs = 3000;
+
 // ---- launch parameters ------------------------------------------------------
 //
 // Small on purpose. Everything that selects BEHAVIOUR is in the two files; the command
@@ -124,6 +132,7 @@ constexpr int kIdleWaitMs = 100;
 struct Options {
     std::string boot_plan = "loom-boot.json";
     std::string authority = "loom-authority.json";
+    std::string log; ///< the durable history stream; overrides the boot plan's `history.log`
     bool no_boot = false;
     bool check_only = false;
     bool ok = true;
@@ -142,6 +151,9 @@ usage: loom-host [options]
                       default: ./loom-authority.json  (absent = nothing may run)
                       One host owns one of these at a time; a second host naming the
                       same file is refused rather than allowed to overwrite it.
+  --log <file>        keep the durable history stream here (what the host chose not to
+                      forget: Loom's default selection plus the plan's `history.keep`
+                      rows). Overrides the plan's `history.log`. Absent = write nothing.
   --no-boot           come up with the console only, starting nothing. The way back in
                       when a boot plan is what is broken — including when it does not
                       parse, which is reported and NOT run.
@@ -183,6 +195,8 @@ Options parse_options(int argc, char** argv) {
             o.boot_plan = value("file");
         } else if (a == "--authority") {
             o.authority = value("file");
+        } else if (a == "--log") {
+            o.log = value("file");
         } else if (a == "--no-boot") {
             o.no_boot = true;
         } else if (a == "--check") {
@@ -228,8 +242,34 @@ struct Answer {
 /// load-bearing and not alphabetical.
 class HostSession {
 public:
-    HostSession(loom::host::AuthorityStore& store, const Options& opt)
+    HostSession(loom::host::AuthorityStore& store, const Options& opt,
+                const loom::host::HistoryConfig& history)
         : store_(store), opt_(opt) {
+        // WHAT THIS HOST REMEMBERS, ATTACHED BEFORE ANYTHING IS ON THE BUS, so the first
+        // record is the first fact. Both halves are Loom's own (`zen/history/`); what is
+        // decided here is only their configuration, read from the plan the person wrote --
+        // the recorder's per-shape rules and windows, the logger's per-shape selection --
+        // and the policy is APPLIED as a change rather than handed over at construction,
+        // so the first thing this run remembers is what it was told to remember.
+        loom::RecorderPolicy policy = loom::default_policy();
+        if (history.recent > 0) {
+            policy.recent_capacity = static_cast<std::size_t>(history.recent);
+        }
+        if (history.payload_budget > 0) {
+            policy.payload_byte_budget = static_cast<std::size_t>(history.payload_budget);
+        }
+        for (const loom::host::HistoryRetain& r : history.retain) {
+            policy.rules.push_back(loom::RetentionRule{r.shape, static_cast<std::size_t>(r.last_n),
+                                                       r.in_recent, r.retain_payload});
+        }
+        history_ = std::make_unique<loom::Recorder>(bus_);
+        history_->apply_policy(std::move(policy));
+        loom::LoggerSelection selection = loom::default_selection();
+        selection.log_refusals = history.keep_refusals;
+        for (const loom::host::HistoryKeep& k : history.keep) {
+            selection.shapes.push_back(loom::LogRule{k.shape, static_cast<std::size_t>(k.cap)});
+        }
+        journal_ = std::make_unique<loom::Logger>(bus_, std::move(selection));
         // The console first: the warden needs its id as the operator seat, and the
         // seat has to exist before anything that obeys it.
         //
@@ -296,6 +336,56 @@ public:
 #if ZEN_HOST_HAS_KERNEL
         kernel_.reset(); // artifacts leave the bus before the bus does
 #endif
+        // The journal closes with the session, after the last fact it could observe.
+        journal_->close();
+    }
+
+    loom::Recorder& history() { return *history_; }
+    loom::Logger& journal() { return *journal_; }
+
+    // ---- links to other hosts ---------------------------------------------------
+
+    /// MOUNT THE LINKS THE PLAN NAMES, each as one ordinary participant holding office
+    /// `loom.link.<name>`, and connect each. A link that cannot connect is still mounted --
+    /// it answers `unlinked` to every ask and `links connect <name>` tries again -- so a
+    /// far host that is not up yet costs the boot one sentence and nothing else.
+    std::vector<std::string> mount_links(const std::vector<loom::host::LinkEntry>& entries) {
+        std::vector<std::string> said;
+        for (const loom::host::LinkEntry& e : entries) {
+            auto link = std::make_unique<loom::host::LinkWeave>(e.name, e.connect, e.identity,
+                                                                e.credential);
+            loom::host::LinkWeave* raw = link.get();
+            // HOST WIRING, LIKE THE WARDEN: trusted native composition, so its grant is the
+            // whole bus -- it delivers far answers to whichever local weave asked. What a
+            // loaded weave may say TO it is that weave's own decision in the store.
+            const loom::WeaveId id = bus_.register_weave(std::move(link), loom::Grant{}.allow_any(),
+                                                         loom::link::role_of(e.name));
+            raw->zen_set_self(id);
+            raw->attach(bus_);
+            links_.push_back(raw);
+            std::string why;
+            if (raw->connect(kLinkConnectMs, &why)) {
+                said.push_back("  link " + e.name + " -> " + e.connect + ": admitted as '" +
+                               raw->established_name() + "' (session " +
+                               std::to_string(raw->session()) + "; office " +
+                               loom::link::role_of(e.name) + ", weave " +
+                               std::to_string(id.value) + ")");
+            } else {
+                said.push_back("  link " + e.name + " -> " + e.connect + ": " + raw->state() +
+                               " -- " + why + " ('links connect " + e.name + "' tries again)");
+            }
+        }
+        return said;
+    }
+
+    const std::vector<loom::host::LinkWeave*>& links() const { return links_; }
+    loom::host::LinkWeave* link(const std::string& name) {
+        for (loom::host::LinkWeave* l : links_) {
+            if (l->name() == name) {
+                return l;
+            }
+        }
+        return nullptr;
     }
 
     loom::ConsoleEngine& console() { return *console_; }
@@ -336,7 +426,13 @@ public:
     /// hands control back, so work a handler queues during the turn waits for the next
     /// one — which is precisely what a self-re-arming producer cannot get around, and
     /// why this host no longer has a call that can fail to return.
-    std::size_t turn() { return bus_.pump_pending(); }
+    std::size_t turn() {
+        // THE SOCKETS FIRST, then the bus: a far answer read here is delivered in this turn.
+        for (loom::host::LinkWeave* l : links_) {
+            l->service();
+        }
+        return bus_.pump_pending();
+    }
 
     bool busy() const { return bus_.pending() != 0; }
 
@@ -581,7 +677,11 @@ private:
     loom::host::AuthorityStore& store_;
     const Options& opt_;
     loom::Switchboard bus_;
+    /// Declared right after the bus so they are the first observers and the last to go.
+    std::unique_ptr<loom::Recorder> history_;
+    std::unique_ptr<loom::Logger> journal_;
     std::unique_ptr<loom::ConsoleEngine> console_;
+    std::vector<loom::host::LinkWeave*> links_; ///< owned by the bus; non-owning here
     loom::host::HostWarden* warden_ = nullptr; ///< owned by the bus; non-owning here
     loom::WeaveId warden_id_{};
     /// What the adoption seam installed, in the order it installed it. Written from
@@ -606,6 +706,17 @@ void print_help() {
   buffer | show <mN>            replies, by their stable labels
   asks | asks forget <n>        conversations still open; stop waiting on one
   tap [n]                       the last n bus events, refusals included
+  history                       what this host remembers right now: its windows and counters
+  history recent [n]            the last n records in recent context
+  history last <Shape>          the last observation of one shape, if any
+  history find <seq>            what became of bus delivery <seq>: retained, forgotten, not
+                                recorded, or unobserved
+  history tallies               every shape observed here, with its traffic
+  history payload <record>      the retained bytes of one record, decoded, if still held
+  log read [n]                  the last n records of the durable stream, read back through
+                                the gate
+  links                         the links this host holds to other hosts, and their state
+  links connect <name>          connect a link again (a new session; open asks were lost)
 
   start <name> <path> [role]    load an artifact (through the steward — policy decides)
   reload <name> <path>          reload it in place, same id, state carried
@@ -1045,6 +1156,175 @@ void cmd_asks(HostSession& s, const std::vector<Token>& tok) {
               << " tracked.\n";
 }
 
+/// THE HOST'S OWN MEMORY, READ AT THE CONSOLE. Records, formatted here; the recorder returns
+/// none of these lines (history/dump.hpp says why formatting is not its API).
+void cmd_history(HostSession& s, const std::vector<Token>& tok) {
+    const loom::Recorder& h = s.history();
+    const std::string sub = tok.size() > 1 ? tok[1].text : "";
+    if (sub.empty()) {
+        const loom::RecorderBounds b = h.bounds();
+        const loom::RecorderCounters c = h.counters();
+        std::cout << "  retained " << b.retained << " (" << b.recent_held << " recent, "
+                  << b.protected_held << " protected, " << b.last_call_held << " last-call over "
+                  << b.shapes_observed << " shapes), forgotten " << b.forgotten << ", observed "
+                  << c.observed << ", declined by policy " << c.declined_by_policy << '\n';
+        std::cout << "  payloads: " << b.payloads_retained << " held (" << b.payload_bytes
+                  << " bytes), " << b.payloads_forgotten << " forgotten\n";
+        std::cout << "  bus seq observed up to " << b.newest_observed_seq << "; oldest retained "
+                  << b.oldest_retained_seq << "; forgotten horizon " << b.forgotten_horizon_seq
+                  << '\n';
+        return;
+    }
+    if (sub == "recent") {
+        std::uint64_t want = 20;
+        if (tok.size() > 2) {
+            (void)parse_u64(tok[2].text, want);
+        }
+        const std::vector<loom::HistoryRecord> recent = h.recent();
+        const std::size_t from = recent.size() > want ? recent.size() - want : 0;
+        for (std::size_t i = from; i < recent.size(); ++i) {
+            std::cout << "  " << loom::render_record(recent[i]) << '\n';
+        }
+        if (recent.empty()) {
+            std::cout << "  (nothing in recent context)\n";
+        }
+        return;
+    }
+    if (sub == "last" && tok.size() > 2) {
+        const loom::Lookup l = h.last_of(tok[2].text);
+        std::cout << "  " << loom::name_of(l.horizon);
+        if (l.record != nullptr) {
+            std::cout << ": " << loom::render_record(*l.record);
+        }
+        std::cout << '\n';
+        return;
+    }
+    if (sub == "find" && tok.size() > 2) {
+        std::uint64_t seq = 0;
+        if (!parse_u64(tok[2].text, seq)) {
+            std::cout << "  usage: history find <bus seq>\n";
+            return;
+        }
+        const loom::Lookup l = h.find(seq);
+        std::cout << "  " << loom::name_of(l.horizon);
+        if (l.record != nullptr) {
+            std::cout << ": " << loom::render_record(*l.record);
+        }
+        std::cout << '\n';
+        return;
+    }
+    if (sub == "tallies") {
+        for (const loom::ShapeTally& t : h.tallies()) {
+            std::cout << "  " << t.shape << "  observed " << t.observed << "  recorded "
+                      << t.recorded << "  declined " << t.declined << "  last-call held "
+                      << t.last_call_held << '\n';
+        }
+        return;
+    }
+    if (sub == "payload" && tok.size() > 2) {
+        std::uint64_t record = 0;
+        if (!parse_u64(tok[2].text, record)) {
+            std::cout << "  usage: history payload <record seq>\n";
+            return;
+        }
+        const loom::PayloadLookup p = h.payload(record);
+        std::cout << "  payload " << loom::name_of(p.state);
+        if (p.state == loom::PayloadState::Retained) {
+            // Decoded through the gate against the shape it claims, and printed as the JSON
+            // a person can read -- the bytes themselves are canonical native and say nothing.
+            loom::Unverified u = loom::parse(p.bytes);
+            std::shared_ptr<const loom::Schema> door =
+                s.bus().resolve_schema(u.claimed_name(), u.claimed_version());
+            if (door) {
+                loom::Admission a = loom::admit(u, door);
+                if (a.ok()) {
+                    std::cout << ": " << loom::compat::serialize(a.value());
+                } else {
+                    std::cout << " (held, but no longer admits: " << a.first_error().message()
+                              << ")";
+                }
+            } else {
+                std::cout << " (held, " << p.bytes.size() << " bytes of " << p.shape << " v"
+                          << p.shape_version << ", whose shape nothing here resolves now)";
+            }
+        }
+        std::cout << '\n';
+        return;
+    }
+    std::cout << "  usage: history [recent [n] | last <Shape> | find <seq> | tallies | payload <n>]\n";
+}
+
+/// THE DURABLE STREAM, READ BACK THROUGH THE GATE. What this host chose not to forget, exactly
+/// as it will read tomorrow: every record re-admitted, a corrupt file refused rather than
+/// trusted, and the ORIGIN printed before the content so a host's own diagnostic is never
+/// mistaken for something the bus said.
+void cmd_log(HostSession& s, const std::vector<Token>& tok) {
+    const loom::Logger& j = s.journal();
+    const std::string sub = tok.size() > 1 ? tok[1].text : "";
+    if (sub != "read") {
+        const loom::LoggerCounters c = j.counters();
+        std::cout << "  " << (j.open() ? j.path() : std::string("(no durable stream)"))
+                  << ": selected " << c.selected << " of " << c.observed << " observed, appended "
+                  << c.appended << ", " << c.bytes << " bytes, " << c.diagnostics
+                  << " diagnostics, " << c.capped << " capped, " << c.unwritable
+                  << " unwritable\n";
+        std::cout << "  'log read [n]' reads it back\n";
+        return;
+    }
+    if (!j.open()) {
+        std::cout << "  no durable stream is open (name one with --log <file> or history.log)\n";
+        return;
+    }
+    std::uint64_t want = 20;
+    if (tok.size() > 2) {
+        (void)parse_u64(tok[2].text, want);
+    }
+    s.journal().flush(); // the stream as it stands, not as it was last closed
+    std::vector<loom::LogRecord> records;
+    std::string why;
+    if (!loom::Logger::read(j.path(), &records, &why)) {
+        std::cout << "  could not read '" << j.path() << "': " << why << '\n';
+        return;
+    }
+    const std::size_t from = records.size() > want ? records.size() - want : 0;
+    for (std::size_t i = from; i < records.size(); ++i) {
+        std::cout << "  " << loom::render_log_record(records[i]) << '\n';
+    }
+    std::cout << "  " << records.size() << " durable record(s) in " << j.path() << '\n';
+}
+
+/// THE LINKS THIS HOST HOLDS. A reading of host wiring, and one verb: connect again.
+void cmd_links(HostSession& s, const std::vector<Token>& tok) {
+    if (tok.size() >= 3 && tok[1].text == "connect") {
+        loom::host::LinkWeave* l = s.link(tok[2].text);
+        if (l == nullptr) {
+            std::cout << "  no link named '" << tok[2].text << "' (see 'links')\n";
+            return;
+        }
+        std::string why;
+        if (l->connect(kLinkConnectMs, &why)) {
+            std::cout << "  " << l->name() << ": admitted as '" << l->established_name()
+                      << "' (session " << l->session() << ")\n";
+        } else {
+            std::cout << "  " << l->name() << ": " << l->state() << " -- " << why << '\n';
+        }
+        return;
+    }
+    if (s.links().empty()) {
+        std::cout << "  no links. A boot plan's `links` rows connect this host to others.\n";
+        return;
+    }
+    for (const loom::host::LinkWeave* l : s.links()) {
+        std::cout << "  " << l->name() << "  " << l->endpoint() << "  " << l->state();
+        if (l->state() == "admitted") {
+            std::cout << "  as '" << l->established_name() << "', session " << l->session();
+        } else if (!l->detail().empty()) {
+            std::cout << "  -- " << l->detail();
+        }
+        std::cout << "  (" << l->open() << " open)\n";
+    }
+}
+
 #if ZEN_HOST_HAS_KERNEL
 void cmd_lifecycle(HostSession& s, const std::vector<Token>& tok) {
     const std::string& cmd = tok[0].text;
@@ -1263,6 +1543,12 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
                   << e->correlation << (e->answers_ask ? "  (Loom attests: an answer to an ask "
                                                          "this console sent)"
                                                        : "") << '\n';
+    } else if (cmd == "history") {
+        cmd_history(session, tok);
+    } else if (cmd == "log") {
+        cmd_log(session, tok);
+    } else if (cmd == "links") {
+        cmd_links(session, tok);
     } else if (cmd == "tap") {
         std::uint64_t want = 20;
         if (tok.size() == 2) {
@@ -1397,8 +1683,24 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    HostSession session(store, opt);
+    HostSession session(store, opt, plan.history);
     std::cout << kVersion << "   containment: " << HostSession::containment_note() << '\n';
+    // THE DURABLE STREAM, opened before the boot walk so the loads it selects by default are in
+    // it. `--log` wins over the plan's `history.log`; neither named means nothing is written,
+    // and the console says so once rather than every time somebody asks.
+    {
+        const std::string log_path = !opt.log.empty() ? opt.log : plan.history.log;
+        if (!log_path.empty()) {
+            if (!session.journal().open(log_path, &error)) {
+                std::cout << "  history: " << error << '\n';
+            } else {
+                std::cout << "  history: durable stream " << log_path << '\n';
+                session.journal().info("loom-host", "session started: boot plan " +
+                                                        (plan.source.empty() ? std::string("(none)")
+                                                                             : plan.source));
+            }
+        }
+    }
     if (!session.can_host_weaves()) {
         std::cout << "NOTE: " << HostSession::no_kernel_note() << '\n';
     }
@@ -1406,6 +1708,11 @@ int main(int argc, char** argv) {
         std::cout << "the boot plan was NOT run: " << plan_source.parse_error << '\n';
         std::cout << "  nothing from it was started. Fix " << plan_source.path
                   << " and restart, or start things by hand here.\n";
+    }
+    // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's office already held
+    // when it is told it is live.
+    for (const std::string& line : session.mount_links(plan.links)) {
+        std::cout << line << '\n';
     }
     session.boot(plan);
     if (plan_source.parse_error.empty()) {

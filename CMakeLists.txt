@@ -421,8 +421,11 @@ target_link_libraries(zen-host-policy
     PRIVATE zen-warnings)
 
 add_executable(loom-host src/host/host_main.cpp)
+# ...AND SINCE THE TWO-HOST CROSSING IT LINKS THE HISTORY PAIR AND THE BRIDGE: the host mounts
+# Loom's own Recorder and Logger (configured from the plan's `history` section) and holds a
+# LinkWeave per `links` row (src/host/link.hpp), which is host wiring over the exported client.
 target_link_libraries(loom-host
-    PRIVATE zen-host-policy zen-console zen-terminal zen-switchboard loom
+    PRIVATE zen-host-policy zen-console zen-terminal zen-history zen-bridge zen-switchboard loom
             zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(loom-host PRIVATE zen-kernel)
@@ -438,20 +441,40 @@ endif()
 # WSL<->WSL inner loop; AF_INET 127.0.0.1 is the real Windows->WSL crossing (WSL2 forwards localhost).
 # The engine runs CLIENT-side (RemoteConsole, a Console impl over the wire); the host registers a
 # proxy-participant per operator and answers discovery / streams the tap / stamps + re-admits sends.
+#
+# TWO LIBRARIES SINCE THE TWO-HOST CROSSING, and the split is the export boundary. `zen-bridge`
+# is the CROSSING: the framed channel, the host side with its admission seam, the console-free
+# client a linking host holds, and the link envelope an ordinary weave asks through. It links the
+# bus and the core and NOTHING ELSE from this tree, which is what makes it exportable: a host that
+# links to another host reaches it through find_package(loom) exactly as Zengine reaches the
+# history pair. `zen-bridge-console` is the OPERATOR'S console over that crossing (RemoteConsole,
+# a `Console`), and it links the console engine -- unexported, with the console it needs. Nothing
+# of the console's dependency closure crosses the package boundary.
 add_library(zen-bridge
     src/bridge/channel.cpp
     src/bridge/server.cpp
-    src/bridge/remote_console.cpp)
+    src/bridge/client.cpp)
 target_include_directories(zen-bridge
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_features(zen-bridge PUBLIC cxx_std_20)
 target_link_libraries(zen-bridge
-    PUBLIC  loom zen-switchboard zen-console zen-sanitize
+    PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings)
 if(WIN32)
     target_link_libraries(zen-bridge PUBLIC ws2_32)
 endif()
 add_library(loom::bridge ALIAS zen-bridge)
+
+add_library(zen-bridge-console
+    src/bridge/remote_console.cpp)
+target_include_directories(zen-bridge-console
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_features(zen-bridge-console PUBLIC cxx_std_20)
+target_link_libraries(zen-bridge-console
+    PUBLIC  zen-bridge zen-console loom zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+add_library(loom::bridge-console ALIAS zen-bridge-console)
 
 # The WSL-side host: a bus + one demo weave + the BridgeServer, listening for remote operators. The
 # WSL end of the Windows->WSL crossing. Portable (it is the bus side, all in-process), but in practice
@@ -463,7 +486,7 @@ target_link_libraries(zen-bridge-host PRIVATE zen-bridge zen-switchboard loom ze
 # crossing proof. PORTABLE on purpose: built via MinGW on Windows, it connects to a WSL-hosted
 # zen-bridge-host across the real boundary (TCP localhost).
 add_executable(zen-bridge-probe src/bridge/bridge_probe_main.cpp)
-target_link_libraries(zen-bridge-probe PRIVATE zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
+target_link_libraries(zen-bridge-probe PRIVATE zen-bridge-console zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
 # The interactive remote-operator console: the SAME ConsoleUi + shared renderer as the in-process
 # TUI, with the engine behind a socket (RemoteConsole) and the loop an event-driven multiplexer over
@@ -471,7 +494,7 @@ target_link_libraries(zen-bridge-probe PRIVATE zen-bridge zen-console zen-switch
 # WSL-hosted bus across the boundary.
 add_executable(zen-console-remote src/console/console_remote.cpp)
 target_link_libraries(zen-console-remote
-    PRIVATE zen-tui zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
+    PRIVATE zen-tui zen-bridge-console zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
 # The child executable: runs one Weave out-of-process via the kernel C ABI. It is a byte shuttler —
 # it deliberately does NOT link loom; it speaks the wire format only through the protocol header
@@ -562,6 +585,7 @@ if(LOOM_INSTALL)
     set_target_properties(zen-switchboard PROPERTIES EXPORT_NAME switchboard)
     set_target_properties(zen-terminal    PROPERTIES EXPORT_NAME terminal)
     set_target_properties(zen-history     PROPERTIES EXPORT_NAME history)
+    set_target_properties(zen-bridge      PROPERTIES EXPORT_NAME bridge)
     set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
     set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
 
@@ -581,7 +605,12 @@ if(LOOM_INSTALL)
     # The UI pair, the console, the TUI and the bridge still stay home for the reasons written
     # at the top of this section; nothing about that changed, and the terminal core
     # deliberately depends on NONE of them.
-    install(TARGETS loom zen-switchboard zen-terminal zen-history zen-sanitize zen-warnings
+    # zen-bridge JOINS THE EXPORT on the strength of a second HOST: a Loom host that links to a
+    # running Workshop reaches the crossing only this way, and a crossing a stranger cannot reach
+    # is a crossing with exactly one peer. It qualifies on its contents -- a framed channel, an
+    # admission seam and a stamped proxy -- with no console, no UI vocabulary and no renderer in
+    # it; the operator's console over it (zen-bridge-console) stays home with the console.
+    install(TARGETS loom zen-switchboard zen-terminal zen-history zen-bridge zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -619,7 +648,7 @@ if(LOOM_INSTALL)
         FILES_MATCHING
             PATTERN "*.hpp"
             PATTERN "*.h"
-            PATTERN "bridge"    EXCLUDE
+            PATTERN "remote_console.hpp" EXCLUDE
             PATTERN "console"   EXCLUDE
             PATTERN "isolation" EXCLUDE
             PATTERN "ui"        EXCLUDE)

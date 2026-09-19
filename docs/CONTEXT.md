@@ -37,7 +37,8 @@ the named laws → the reference page → tests when exactness matters.
 | putting a HUMAN in that loop — the Weaver (the first policy delegate), the operator seat, the authority-request vocabulary, what approval does and deliberately does not do, and why the Weaver keeps no permission store | reference/weaver.md | GATE-05, MSG-02, ANS-01..07 | tests/test_weaver.cpp | WEAVER-1 |
 | giving that human HANDS — a terminal session (an ordinary participant with one identity, a supplied vocabulary and its own transcript), what "submitted" does and does not mean, how several outstanding asks are told apart by Loom's own correlation, why the transcript is not fed by the tap, and how one presentation shows two identities without merging them | reference/terminal.md | MSG-01..07, ANS-01..07, GATE-05 | tests/test_terminal.cpp | TERM-0 |
 | the sandbox exec boundary — what a child inherits vs. what Zen authors: ambient descriptors (a host socket, file, pipe or terminal already open at mount) and the child's environment (`LD_*`, tokens, session addresses) | reference/capabilities.md#the-exec-boundary-three-independent-facts | — | tests/test_isolation.cpp (C-2, C-2a cases) | COLD-2 finding C-2 |
-| the remote-operator bridge — what it trusts, whether a socket may be exposed, where connection identity comes from, what it validates and what it deliberately does not | reference/bridge.md | MSG-02, GATE-01, MSG-09, LIFE-07 | tests/test_bridge.cpp | COLD-1/COLD-2 finding F-4 |
+| the crossing between two hosts — who admits a connection and when (the admission seam: admit under a grant, refuse in words, or DEFER for a later decision), what a claimed name is and is not, what a session is told beside the bytes (`answers_ask`, `dispatch_refused`, the correlation), which outcomes of a send are kept apart, the console-free client and the link envelope an ordinary weave asks through | reference/bridge.md | MSG-02, GATE-01, MSG-09, MSG-12, LIFE-07 | tests/test_bridge.cpp, tests/package/stranger_bridge.cpp | COLD-1/COLD-2 finding F-4; the external-host phase (a Workshop's guest) |
+| the supplied host LINKING to another host (a `links` row, the office `loom.link.<name>`, what a weave asks and how the far answer comes back, the link's four outcomes) and what the supplied host REMEMBERS AND KEEPS (the `history` section, `--log`, the `history`/`log` console words) | guides/running-loom.md#10-link-to-another-host, guides/running-loom.md#11-what-this-host-remembers-and-what-it-keeps, ../src/host/link.hpp | MSG-02, ANS-05, MSG-10 | tests/test_bridge.cpp (the link case), tests/test_host_policy.cpp (the plan's links and history) | the external-host phase |
 | dynamic loading, artifacts | reference/kernel.md, reference/dynamic-abi.md | KERN-01..05 | tests/test_kernel.cpp | evidence/night-lab.md (answer-seam) |
 | WHO DECIDES what a loaded artifact may do (the admission policy; the two stages and why they are two; why a reload cannot re-grant; why a declaration is never authority; the explicit permissive policy and why it has to be named; which build it is, read from its bytes only when a policy asks, once per operation) | reference/capabilities.md#admitting-a-loaded-artifact, ../include/zen/kernel/admission.hpp | GATE-05, KERN-01 | tests/test_admission.cpp | P-WORK-18: the retired `allow_any()` default had three doors |
 | RUNNING Loom without writing a host (the supplied host, the boot plan and the authority store, what the console can do, the two shutdowns, the exit codes, the recovery route over a plan that will not parse) | guides/running-loom.md, guides/tools.md | GATE-05 | tests/test_admission.cpp, tests/test_host_policy.cpp, tests/host_process/run.cmake | the standalone-hosting phase's own journey |
@@ -59,11 +60,12 @@ the named laws → the reference page → tests when exactness matters.
 | known limitations | reference/known-seams.md | MSG-04, ANS-02, PR-09 | — | evidence/night-lab.md |
 | bounds/capacities | reference/bounds.md | — | grep the constant name | — |
 
-**Do-not-assume answers** (each resolvable from the row above): the Bridge
-**does not authenticate** — `authorize_connection` grants full operator
-authority to every reachable connection, so reachability of the socket *is*
-the authority, and a bridge listener must not be exposed to an untrusted
-network ([bridge](reference/bridge.md#authentication-posture)) · an
+**Do-not-assume answers** (each resolvable from the row above): a connection
+to the bridge holds **no authority until the host's admission policy answers
+its Hello** — under `operator_admission()` reachability of the socket *is* the
+authority, and no policy adds transport security, so a bridge listener must
+not be exposed to an untrusted network
+([bridge](reference/bridge.md#admission-who-decides-and-when)) · an
 in-process weave, native or `dlopen`ed, shares the host address space: the
 grant bounds what it may **say**, never what it may **touch**
 ([capabilities](reference/capabilities.md#the-grant-in-process)) · **grants are

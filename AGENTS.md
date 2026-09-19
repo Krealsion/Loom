@@ -239,8 +239,11 @@ and consumes Loom as an installed package (`find_package(loom)`). Night Lab
   speech is its own explicit, verified act (`mail.as_role(...)`, MSG-07), and
   merely holding a role attaches nothing.
 - A committed activation is answerable (LIFE-05).
-- A reachable bridge socket is authenticated — it is not; every connection gets
-  a full operator grant (`docs/reference/bridge.md`).
+- A reachable bridge socket is admitted — it is not; a connection has no proxy
+  and acts on nothing until the host's `BridgeAdmission` policy answers its
+  Hello with a grant, a refusal or a deferred decision. The operator policy
+  admits everything that reaches it, and no policy adds transport security
+  (`docs/reference/bridge.md`).
 - A grant bounds what in-process native code can *touch* — it bounds speech
   only; a `dlopen`ed weave shares this address space
   (`docs/guides/dynamic-weaves.md`).
