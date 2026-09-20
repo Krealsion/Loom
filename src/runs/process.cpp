@@ -20,6 +20,7 @@
 #include <cerrno>
 #include <dlfcn.h>
 #include <csignal>
+#include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -214,6 +215,7 @@ bool ChildProcess::spawn(const SpawnSpec& spec, std::string* why) {
     process_ = pi.hProcess;
     job_ = job;
     pid_ = static_cast<std::int64_t>(pi.dwProcessId);
+    owned_ = true;
     return true;
 }
 
@@ -234,15 +236,43 @@ bool ChildProcess::ended() {
     return true;
 }
 
-bool ChildProcess::terminate() {
-    if (process_ == nullptr || ended()) {
+bool ChildProcess::alive() {
+    if (!owned_) {
         return false;
     }
     if (job_ != nullptr) {
+        // THE JOB ITSELF ANSWERS: how many processes it holds right now. The handle names this
+        // job for as long as it is open, so the count is about this group and no other.
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION acc{};
+        DWORD returned = 0;
+        if (QueryInformationJobObject(job_, JobObjectBasicAccountingInformation, &acc, sizeof(acc),
+                                      &returned)) {
+            return acc.ActiveProcesses != 0;
+        }
+        // The job cannot be asked: fall back to the leader, and say so by answering about it.
+    }
+    return !ended();
+}
+
+bool ChildProcess::terminate() {
+    if (!owned_) {
+        return false;
+    }
+    if (job_ != nullptr) {
+        // THE WHOLE GROUP, whether or not the leader has ended: a leader that exited leaving
+        // children behind still has an execution this manager owns and must be able to stop.
+        if (!alive()) {
+            return false;
+        }
         return TerminateJobObject(job_, 1) != 0;
+    }
+    if (process_ == nullptr || ended()) {
+        return false; // no job was assigned: there is only the leader, and it is gone
     }
     return TerminateProcess(process_, 1) != 0;
 }
+
+bool ChildProcess::group_alive() { return alive(); } // POSIX-only distinction; see the other half
 
 void ChildProcess::release() noexcept {
     if (process_ != nullptr) {
@@ -250,18 +280,20 @@ void ChildProcess::release() noexcept {
         process_ = nullptr;
     }
     if (job_ != nullptr) {
-        CloseHandle(job_); // KILL_ON_JOB_CLOSE: a worker does not outlive the record that owns it
+        CloseHandle(job_); // KILL_ON_JOB_CLOSE: the whole group goes, leader ended or not
         job_ = nullptr;
     }
     pid_ = 0;
+    owned_ = false;
 }
 
 ChildProcess::~ChildProcess() { release(); }
 
 ChildProcess::ChildProcess(ChildProcess&& other) noexcept
-    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_),
+    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_), owned_(other.owned_),
       process_(other.process_), job_(other.job_) {
     other.pid_ = 0;
+    other.owned_ = false;
     other.process_ = nullptr;
     other.job_ = nullptr;
 }
@@ -272,9 +304,11 @@ ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
         pid_ = other.pid_;
         exit_code_ = other.exit_code_;
         ended_ = other.ended_;
+        owned_ = other.owned_;
         process_ = other.process_;
         job_ = other.job_;
         other.pid_ = 0;
+        other.owned_ = false;
         other.process_ = nullptr;
         other.job_ = nullptr;
     }
@@ -395,8 +429,79 @@ bool ChildProcess::spawn(const SpawnSpec& spec, std::string* why) {
     ::close(out);
     ::close(nul);
     pid_ = static_cast<std::int64_t>(pid);
+    owned_ = true;
     return true;
 }
+
+namespace {
+
+#ifdef __linux__
+/// Does any process but `leader` sit in process group `pgid` right now? Read from /proc, which
+/// is the only door on this platform that answers it without signalling anything. The caller
+/// holds `leader` unreaped while it asks, so `pgid` cannot have been recycled underneath.
+bool group_has_other_member(pid_t pgid, pid_t leader) {
+    DIR* proc = ::opendir("/proc");
+    if (proc == nullptr) {
+        return false;
+    }
+    bool found = false;
+    while (const dirent* e = ::readdir(proc)) {
+        const char* name = e->d_name;
+        if (name[0] < '1' || name[0] > '9') {
+            continue;
+        }
+        const long who = std::strtol(name, nullptr, 10);
+        if (who <= 0 || static_cast<pid_t>(who) == leader) {
+            continue;
+        }
+        const std::string stat_path = std::string("/proc/") + name + "/stat";
+        const int fd = ::open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            continue; // it ended between readdir and open: it is not a member now
+        }
+        char buf[512];
+        const ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+        ::close(fd);
+        if (n <= 0) {
+            continue;
+        }
+        buf[n] = '\0';
+        // "pid (comm) state ppid pgrp ..." -- comm may hold spaces and parentheses, so the
+        // fields are counted from the LAST ')' and never from the first space.
+        const char* close_paren = std::strrchr(buf, ')');
+        if (close_paren == nullptr) {
+            continue;
+        }
+        int field = 0;
+        long pgrp = 0;
+        const char* p = close_paren + 1;
+        while (*p != '\0' && field < 3) {
+            while (*p == ' ') {
+                ++p;
+            }
+            if (*p == '\0') {
+                break;
+            }
+            ++field; // 1 = state, 2 = ppid, 3 = pgrp
+            if (field == 3) {
+                pgrp = std::strtol(p, nullptr, 10);
+                break;
+            }
+            while (*p != '\0' && *p != ' ') {
+                ++p;
+            }
+        }
+        if (field == 3 && static_cast<pid_t>(pgrp) == pgid) {
+            found = true;
+            break;
+        }
+    }
+    ::closedir(proc);
+    return found;
+}
+#endif
+
+} // namespace
 
 bool ChildProcess::ended() {
     if (ended_) {
@@ -405,47 +510,96 @@ bool ChildProcess::ended() {
     if (pid_ == 0) {
         return false;
     }
-    int status = 0;
-    const pid_t r = ::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
-    if (r == 0) {
-        return false;
-    }
-    if (r < 0) {
-        // Somebody else reaped it, or it is not ours: it is over, and its code is unknown.
+    // READ THE LEADER'S END WITHOUT REAPING IT. The zombie is what holds this pid -- and so the
+    // group id equal to it -- out of the operating system's reuse pool while descendants of the
+    // worker may still be in that group. `alive()` reaps it the moment the group is empty.
+    siginfo_t info{};
+    info.si_pid = 0;
+    if (::waitid(P_PID, static_cast<id_t>(pid_), &info, WEXITED | WNOHANG | WNOWAIT) != 0) {
+        // Somebody else reaped it, or it is not ours: it is over, its code is unknown, and this
+        // object holds nothing that could name the group any more.
         exit_code_ = -1;
         ended_ = true;
+        reaped_ = true;
+        owned_ = false;
         return true;
     }
-    exit_code_ = WIFEXITED(status) ? WEXITSTATUS(status)
-                                   : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1);
+    if (info.si_pid == 0) {
+        return false;
+    }
+    exit_code_ = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
     ended_ = true;
     return true;
 }
 
-bool ChildProcess::terminate() {
-    if (pid_ == 0 || ended()) {
+bool ChildProcess::group_alive() {
+    if (!owned_ || pid_ == 0) {
         return false;
     }
-    return ::kill(-static_cast<pid_t>(pid_), SIGKILL) == 0 ||
-           ::kill(static_cast<pid_t>(pid_), SIGKILL) == 0;
+#ifdef __linux__
+    if (group_has_other_member(static_cast<pid_t>(pid_), static_cast<pid_t>(pid_))) {
+        return true;
+    }
+#endif
+    // THE GROUP IS EMPTY (or this platform cannot be asked): reap the leader and let the
+    // ownership go, so no later call can aim at a number this object no longer holds.
+    if (!reaped_) {
+        int status = 0;
+        (void)::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
+        reaped_ = true;
+    }
+    owned_ = false;
+    return false;
+}
+
+bool ChildProcess::alive() {
+    if (!owned_ || pid_ == 0) {
+        return false;
+    }
+    if (!ended()) {
+        return true;
+    }
+    return group_alive();
+}
+
+bool ChildProcess::terminate() {
+    if (!owned_ || pid_ == 0) {
+        return false;
+    }
+    if (!alive()) {
+        return false; // nothing of this group is running, and nothing is owned any more
+    }
+    // THE WHOLE GROUP, leader ended or not. The leader's zombie still holds this number, so
+    // `-pid_` is this group and cannot have become somebody else's.
+    const bool signalled = ::kill(-static_cast<pid_t>(pid_), SIGKILL) == 0 ||
+                           (!ended_ && ::kill(static_cast<pid_t>(pid_), SIGKILL) == 0);
+    return signalled;
 }
 
 void ChildProcess::release() noexcept {
-    // A worker does not outlive the record that owns it: end it and reap it, so no zombie stays
-    // behind in the host's process table.
-    if (pid_ != 0 && !ended()) {
+    // THE EXECUTION DOES NOT OUTLIVE THE RECORD THAT OWNS IT: end the whole group, then reap the
+    // leader so no zombie stays behind in the host's process table. Descendants are not this
+    // process's children and cannot be reaped here; SIGKILL is not catchable, so nothing waits.
+    if (owned_ && pid_ != 0) {
         (void)terminate();
-        int status = 0;
-        (void)::waitpid(static_cast<pid_t>(pid_), &status, 0);
+        if (!reaped_) {
+            int status = 0;
+            (void)::waitpid(static_cast<pid_t>(pid_), &status, ended_ ? WNOHANG : 0);
+            reaped_ = true;
+        }
     }
     pid_ = 0;
+    owned_ = false;
 }
 
 ChildProcess::~ChildProcess() { release(); }
 
 ChildProcess::ChildProcess(ChildProcess&& other) noexcept
-    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_) {
+    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_), owned_(other.owned_),
+      reaped_(other.reaped_) {
     other.pid_ = 0;
+    other.owned_ = false;
+    other.reaped_ = true;
 }
 
 ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
@@ -454,7 +608,11 @@ ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
         pid_ = other.pid_;
         exit_code_ = other.exit_code_;
         ended_ = other.ended_;
+        owned_ = other.owned_;
+        reaped_ = other.reaped_;
         other.pid_ = 0;
+        other.owned_ = false;
+        other.reaped_ = true;
     }
     return *this;
 }
@@ -484,6 +642,26 @@ std::string ChildProcess::find_on_path(const std::string& name) {
 }
 
 #endif
+
+bool replace_file(const std::string& from, const std::string& to, std::string* why) {
+#ifdef _WIN32
+    // ONE CALL, and the destination is only unlinked once the source is in place. A plain
+    // rename on this platform refuses an existing destination, and removing it first would put
+    // a window in which the last valid record does not exist at all.
+    if (MoveFileExW(widen(from).c_str(), widen(to).c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+        return true;
+    }
+    *why = "cannot replace " + to + " with " + from + ": " + error_text(GetLastError());
+    return false;
+#else
+    if (::rename(from.c_str(), to.c_str()) == 0) {
+        return true;
+    }
+    *why = "cannot replace " + to + " with " + from + ": " + std::strerror(errno);
+    return false;
+#endif
+}
 
 std::string environment_value(const char* name) {
 #ifdef _WIN32

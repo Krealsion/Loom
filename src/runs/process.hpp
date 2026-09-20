@@ -22,8 +22,27 @@
 // reach as the host. Its bus authority is bounded by its session's grant; its OS authority is not
 // bounded here at all, and the docs say so.
 //
-// ENDING IT. `terminate` ends the whole process tree the worker started: a Windows job object
-// (which also ends every worker when the host process itself ends), a POSIX process group.
+// WHAT IS OWNED, AND UNTIL WHEN. The unit of ownership is the worker's EXECUTION GROUP -- a
+// Windows job object, a POSIX process group -- not the one process that leads it. A leader that
+// exits leaving children behind has not ended the execution: `ended()` says the leader is gone,
+// `alive()` says whether anything this object owns is still running, and `terminate()` ends the
+// whole group in either case. Ownership begins at `spawn` and ends at `release` (the destructor),
+// or earlier when the group drains by itself. It never ends merely because the leader exited,
+// which is what makes a force-stop after a verdict mean something.
+//
+// AND WHY IT CANNOT WANDER. A numeric pid or group id that nothing holds is reused by the
+// operating system, so a kill by remembered number can land on an unrelated later process. This
+// object never does that: Windows holds a job HANDLE, which names that job and no other for as
+// long as it is open; POSIX keeps the leader UNREAPED (a zombie, read with `waitid(WNOWAIT)`)
+// for exactly as long as the group still has members, and a pid with a zombie on it is not
+// recycled -- so the group id it also serves as is this group's and no other. When the group is
+// empty the leader is reaped at once and ownership is given up, so there is nothing left to aim.
+//
+// WHEN THE HOST ITSELF ENDS. On a clean shutdown the manager destroys these objects and every
+// owned group is ended. On Windows that also holds when the host dies ABRUPTLY: the job carries
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and the kernel closes the handle for a dying process, so
+// the group goes with it. On POSIX there is NO such guarantee -- an abruptly killed host leaves
+// its workers running, reparented, with their records unfinished (docs/guides/sessions.md).
 
 #include <cstdint>
 #include <string>
@@ -55,12 +74,20 @@ public:
     bool started() const noexcept { return pid_ != 0; }
     std::int64_t pid() const noexcept { return pid_; }
 
-    /// Has it ended? Never waits. Once it has, `exit_code` is its code (on POSIX a signal ends it
-    /// as 128 + the signal) and every later call answers the same.
+    /// Has the LEADER ended? Never waits. Once it has, `exit_code` is its code (on POSIX a signal
+    /// ends it as 128 + the signal) and every later call answers the same. It says nothing about
+    /// what the leader started: for that, ask `alive`.
     bool ended();
     int exit_code() const noexcept { return exit_code_; }
 
-    /// End it and everything it started, now. Returns false when there was nothing to end.
+    /// Is anything this object owns still running -- the leader, or a descendant it left in the
+    /// execution group? Never waits. False once the group is empty (and then this object owns
+    /// nothing more, so nothing later can be aimed at that group's number).
+    bool alive();
+
+    /// End the whole execution group, now, whether or not the leader has ended. Returns false
+    /// when there was nothing left to end. Not required for an ordinary finish: it is the
+    /// force-stop, and it is the only thing that stops a group whose leader already exited.
     bool terminate();
 
     /// Look a program up the way a shell would, for the one name the manager searches for when
@@ -70,15 +97,26 @@ public:
 private:
     /// End and let go of the worker (the destructor's work, shared with move assignment).
     void release() noexcept;
+    /// POSIX: has the execution group any member but the leader's own zombie? Reaps the leader
+    /// and gives up ownership when it has not.
+    bool group_alive();
 
     std::int64_t pid_ = 0;
     int exit_code_ = -1;
-    bool ended_ = false;
-#ifdef _WIN32
+    bool ended_ = false;   ///< the LEADER has ended and its code is known
+    bool owned_ = false;   ///< this object still owns the execution group (see the header note)
+#ifndef _WIN32
+    bool reaped_ = false;  ///< the leader's zombie is gone; its pid may be recycled from now on
+#else
     void* process_ = nullptr; ///< HANDLE
     void* job_ = nullptr;     ///< HANDLE
 #endif
 };
+
+/// REPLACE `to` WITH `from`, as one step where the platform offers one. False, with the
+/// operating system's own reason, when the replacement did not happen -- and then `to` is
+/// untouched and still whatever it was, which is what lets a caller keep its last valid file.
+bool replace_file(const std::string& from, const std::string& to, std::string* why);
 
 /// Where the loaded image containing `address` lives (a directory), or empty -- how the run
 /// manager finds the `python/` runtime installed beside its own artifact.

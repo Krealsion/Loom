@@ -262,9 +262,19 @@ def _human_run(r):
         print("  waiting on: %s" % p)
     if r["cancel_requested"]:
         print("  cancellation requested: %s" % r["cancel_reason"])
+    # AN EXIT CODE IS ONLY PRINTED ONCE THERE IS ONE: while an execution is still going the
+    # manager has read nothing, and a 0 standing in for that would read as a clean end.
     print("  worker: session %d (%s), pid %d, process %s%s"
           % (r["session"], r["established"] or "-", r["pid"], r["process"],
              ", exit %d" % r["exit_code"] if r["process"] in ("exited", "killed") else ""))
+    if r["process"] == "descendants":
+        print("  the worker exited (%d) and left processes this manager still owns; the run's "
+              "execution is not over. 'cancel' stops them." % r["exit_code"])
+    if r["process"] == "killing":
+        print("  a stop was issued; this run's execution has not ended yet.")
+    if r.get("record") and r["record"] != "saved":
+        print("  record: %s -- %s" % (r["record"], r["record_error"] or
+                                      "no reason was recorded"))
     if r["summary"]:
         print("  summary: %s" % r["summary"])
     if r["failure"]:

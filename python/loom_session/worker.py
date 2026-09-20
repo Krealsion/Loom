@@ -84,6 +84,9 @@ def main():
         outcome = "error"
         failure = "%s: %s\n%s" % (type(err).__name__, err,
                                   "".join(traceback.format_exc(limit=8))[-1500:])
+    # THE CLEANUP PHASE runs after the verdict is decided and does not change it: a tool that
+    # passed still passed if it could not give a far resource back. What it could not finish is
+    # said instead -- in the notes, and on the verdict line, so nobody has to go looking.
     cleanups = ctx._run_cleanups()
     for line in cleanups:
         _say("worker: " + line)
@@ -91,8 +94,12 @@ def main():
             ctx.note(line)
         except Disconnected:
             pass
+    unfinished = [line for line in cleanups if not line.endswith(": done")]
     if cleanups and outcome != "passed":
         failure = failure + ("\n" if failure else "") + "; ".join(cleanups)
+    elif unfinished:
+        summary = "%s [%d of %d cleanup(s) did not finish: %s]" % (
+            summary, len(unfinished), len(cleanups), "; ".join(unfinished))
     _say("worker: %s -- %s" % (outcome, summary or failure))
     try:
         done = conn.ask("loom.runs.Finished", {"outcome": outcome, "summary": summary[:2000],

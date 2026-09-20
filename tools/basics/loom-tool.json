@@ -7,7 +7,7 @@
       "name": "steps",
       "script": "steps.py",
       "summary": "Walk a few named steps, optionally wait at a release gate, and write a report file.",
-      "description": "A tool with no application behind it, for learning the session and for testing it: it names each step it takes, can hold at a gate until a file appears (so a run can be left pending while no client is attached), can fail on purpose at a named step (so failure and cleanup can be seen), and writes report.txt listing what it did.",
+      "description": "A tool with no application behind it, for learning the session and for testing it: it names each step it takes, can hold at a gate until a file appears (so a run can be left pending while no client is attached), can work in a loop that COOPERATES with a cancellation instead of waiting at anything, can fail on purpose at a named step (so failure and cleanup can be seen), and writes report.txt listing what it did.",
       "inputs": [
         {
           "name": "message",
@@ -26,6 +26,12 @@
           "type": "text",
           "default": "",
           "help": "hold after the first step until <run>/release/<hold> exists; empty: never hold"
+        },
+        {
+          "name": "cooperate",
+          "type": "int",
+          "default": 0,
+          "help": "work in a loop for up to this many seconds, checking ctx.cancel_requested each turn and returning early when it is true; 0: never (see steps.py)"
         },
         {
           "name": "fail_at",
@@ -57,10 +63,12 @@
         "hold",
         "gate",
         "failure",
-        "cleanup"
+        "cleanup",
+        "cancellation",
+        "cooperate"
       ],
       "example": "loom-session run <dir> basics/steps --name first --input count=2 --input hold=go",
-      "recovery": "fail_at ends the run 'failed' and crash_at ends it 'error'; both run the tool's cleanup, which writes cleanup.txt. A held run waits until its gate file exists or it is cancelled."
+      "recovery": "fail_at ends the run 'failed' and crash_at ends it 'error'; both run the tool's cleanup, which writes cleanup.txt. A held run waits until its gate file exists or it is cancelled. A run given `cooperate` never waits at anything, so a cancellation reaches it only through ctx.cancel_requested; it returns its own verdict, which is why such a run is `passed` with cancel_requested set rather than `cancelled`."
     },
     {
       "name": "session-report",

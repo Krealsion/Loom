@@ -31,6 +31,22 @@
 // tool's own verdict), `error` (the tool raised), `cancelled` (a cancellation was requested and
 // the worker ended), `crashed` (the process ended without a verdict), `interrupted` (the host is
 // ending). A client that stops waiting has stopped waiting; the run's state is the manager's.
+//
+// A RUN SAYS THREE SEPARATE THINGS, and none of them stands for another:
+//
+//   `state`    THE VERDICT -- what the tool concluded, or what the manager concluded for it.
+//              It is settled once and never rewritten: a run that passed and was then stopped
+//              still passed.
+//   `process`  THE EXECUTION -- `not-started`, `running` (the worker leads it), `descendants`
+//              (the worker has exited and left processes this manager still owns), `killing` (a
+//              stop was issued and the group has not gone yet), `exited`, `killed`, `unknown`.
+//              A verdict does NOT end an execution, and an execution that is still alive still
+//              counts against this manager's active capacity, can still be stopped by `Cancel`,
+//              and blocks `Release` until it is. `exit_code` means something only once the
+//              execution is OVER -- `exited` or `killed`; before that nothing has been read.
+//   `record`   THE EVIDENCE -- `saved` (`run.json` holds this view), `stale` (it does not, and
+//              `record_error` says why and what is still there), `unknown` (a record written
+//              before this manager said). Failing to save evidence is not a failure of the tool.
 
 #include <zen/weave/shape.hpp>
 
@@ -180,6 +196,11 @@ struct Get {
 /// ASK FOR A CANCELLATION. A request, not an outcome: the worker is told (it may clean up), and the
 /// run is `cancelled` once its process has ended. `force` ends the process without waiting for the
 /// worker's cleanup. Answered `Run` as it stands after the request.
+///
+/// A RUN WHOSE VERDICT IS ALREADY IN can still be cancelled while its EXECUTION is alive -- a
+/// worker that returned and left a thread or a child behind. There is nobody left to ask, so that
+/// cancellation stops the execution outright, whatever `force` says, and the verdict is not
+/// rewritten: the run stays `passed` (or whatever it was) and its `process` becomes `killed`.
 struct Cancel {
     std::string lifetime;
     std::string name;
@@ -262,7 +283,10 @@ struct Run {
     std::string established;    ///< the name the door established for it
     std::int64_t pid = 0;
     std::int64_t exit_code = 0;
-    std::string process;        ///< not-started / running / exited / killed / unknown
+    std::string process;        ///< not-started / running / descendants / killing / exited / killed / unknown
+    std::string record;         ///< saved / stale / unknown -- is `run.json` this view?
+    std::string record_error;   ///< why the last save did not happen, and what is on disk instead
+    std::int64_t record_ms = 0; ///< when the record on disk was last written whole
     std::string summary;        ///< the tool's own verdict line
     std::string failure;        ///< why it did not pass: the tool's words, or the manager's
     std::vector<Artifact> artifacts;
@@ -280,7 +304,8 @@ struct Run {
             ZEN_FIELD(snapshot), ZEN_FIELD(inputs), ZEN_FIELD(directory), ZEN_FIELD(state),
             ZEN_FIELD(live), ZEN_FIELD(step), ZEN_FIELD(pending), ZEN_FIELD(cancel_requested),
             ZEN_FIELD(cancel_reason), ZEN_FIELD(session), ZEN_FIELD(established), ZEN_FIELD(pid),
-            ZEN_FIELD(exit_code), ZEN_FIELD(process), ZEN_FIELD(summary), ZEN_FIELD(failure),
+            ZEN_FIELD(exit_code), ZEN_FIELD(process), ZEN_FIELD(record), ZEN_FIELD(record_error),
+            ZEN_FIELD(record_ms), ZEN_FIELD(summary), ZEN_FIELD(failure),
             ZEN_FIELD(artifacts), ZEN_FIELD(asks), ZEN_FIELD(asks_dropped), ZEN_FIELD(notes),
             ZEN_FIELD(notes_dropped), ZEN_FIELD(started_ms), ZEN_FIELD(ended_ms),
             ZEN_FIELD(log));

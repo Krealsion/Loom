@@ -13,6 +13,15 @@ kept apart, because each sends a person somewhere different:
   not answered yet      ``NotAnswered``: the deadline is THIS CLIENT'S decision to stop waiting,
                         not evidence that the far side failed; the ask stays in the book
   the socket ended      ``Disconnected``: whatever was in flight is unknown, and is not resent
+
+ASKING WITH ``settle=True`` ADDS A SECOND REQUIREMENT, and this client holds it: the ask is
+complete when it has BOTH its attested answer AND the Settled frame for its send -- the host's
+own word that everything that send set in motion has been dispatched. Either may arrive first.
+An answer alone completes an ask only when settlement was not asked for; an answer without the
+settlement this client asked for leaves the conversation OPEN, so a wait that runs out raises
+``NotAnswered`` with the answer still held, and the next wait returns it once Settled lands.
+A refusal or a lost send completes it either way: there is then nothing left in motion to wait
+for. No ordinary message under the same number satisfies the answer half (``answers_ask``).
 """
 
 import collections
@@ -74,16 +83,32 @@ class Answer(object):
 
 
 class _Pending(object):
-    __slots__ = ("shape", "version", "answer", "error", "settled", "asked_at", "fire")
+    __slots__ = ("shape", "version", "answer", "error", "settle", "settled", "asked_at", "fire")
 
-    def __init__(self, shape, version, fire=False):
+    def __init__(self, shape, version, fire=False, settle=False):
         self.shape = shape
         self.version = version
         self.answer = None
         self.error = None
-        self.settled = False
+        self.settle = bool(settle)  # settlement was ASKED for: a completion requirement
+        self.settled = False        # settlement was OBSERVED: the host's Settled frame
         self.asked_at = time.monotonic()
         self.fire = fire  # nobody will wait: drop it once answered; keep only a failure
+
+    def complete(self):
+        """Is there nothing left to wait for? An error ends it whatever was asked; an answer
+        ends it only once the settlement this ask required has also been seen."""
+        if self.error is not None:
+            return True
+        return self.answer is not None and (self.settled or not self.settle)
+
+    def missing(self):
+        """What this conversation is still short of, for a message a person can act on."""
+        if self.answer is None and not self.settled:
+            return "no attested answer and no settlement"
+        if self.answer is None:
+            return "settled, but no attested answer"
+        return "answered, but the settlement it asked for has not arrived"
 
 
 class Connection(object):
@@ -178,18 +203,31 @@ class Connection(object):
 
     def ask_payload(self, payload, shape, version=1, role=None, target=0, settle=False,
                     fire=False):
-        open_now = sum(1 for p in self._book.values() if p.answer is None and p.error is None)
+        open_now = sum(1 for p in self._book.values() if not p.complete())
         if open_now >= self.MAX_OPEN:
             raise SendRefused("this client already holds %d open conversations" % self.MAX_OPEN)
         self._next += 1
         corr = self._next
-        self._book[corr] = _Pending(shape, version, fire)
+        # WHAT WAS ASKED FOR IS WHAT IS WAITED FOR: the settle flag is not only put on the wire,
+        # it is kept here as this conversation's second completion requirement.
+        self._book[corr] = _Pending(shape, version, fire, settle)
         self.channel.send_message(payload, corr, role=role, target=target, settle=settle)
         return corr
 
     def done(self, corr):
         p = self._book.get(corr)
-        return p is not None and (p.answer is not None or p.error is not None)
+        return p is not None and p.complete()
+
+    def settled(self, corr):
+        """Has the host said this send's work is all dispatched? (Asked for or not.)"""
+        p = self._book.get(corr)
+        return p is not None and p.settled
+
+    def answered(self, corr):
+        """Has the one delivery Loom attests as THIS ask's answer arrived? On its own it is not
+        completion when settlement was asked for -- ``done`` is the question for that."""
+        p = self._book.get(corr)
+        return p is not None and p.answer is not None
 
     def poll(self, timeout=0.0):
         """Read whatever arrived within ``timeout`` seconds and settle what it answers."""
@@ -198,16 +236,17 @@ class Connection(object):
 
     def wait(self, corr, timeout):
         """The attested answer to ``corr``, or the reason there is none. Raises NotAnswered when
-        this client's own wait runs out -- the ask stays open and may still be answered."""
+        this client's own wait runs out -- the ask stays open, keeping whichever half of it has
+        arrived, and a later wait returns the answer once the rest does."""
         p = self._book.get(corr)
         if p is None:
             raise KeyError("no conversation %d on this connection" % corr)
         deadline = time.monotonic() + timeout
-        while p.answer is None and p.error is None:
+        while not p.complete():
             left = deadline - time.monotonic()
             if left <= 0:
-                raise NotAnswered("no attested answer to %s (conversation %d) within %.1fs"
-                                  % (p.shape, corr, timeout))
+                raise NotAnswered("%s (conversation %d) is still open after %.1fs: %s"
+                                  % (p.shape, corr, timeout, p.missing()))
             for e in self.channel.read(min(left, 0.25)):
                 self._dispatch(e)
         del self._book[corr]
@@ -229,14 +268,15 @@ class Connection(object):
         return a
 
     def open_asks(self):
-        return [(c, p.shape) for c, p in self._book.items() if p.answer is None and p.error is None]
+        return [(c, p.shape) for c, p in self._book.items() if not p.complete()]
 
     # ---- what arrived ----------------------------------------------------------------------
 
     def _dispatch(self, e):
         self._arrive(e)
-        # Fire-and-forget asks leave the book as soon as they are answered; a failure is kept.
-        for corr in [c for c, p in self._book.items() if p.fire and (p.answer or p.error)]:
+        # Fire-and-forget asks leave the book as soon as nothing is left to wait for; a failure
+        # is kept. One that asked for settlement waits for it here too, like any other.
+        for corr in [c for c, p in self._book.items() if p.fire and p.complete()]:
             p = self._book.pop(corr)
             if p.error is not None:
                 self.fire_failures.append((p.shape, p.error))
