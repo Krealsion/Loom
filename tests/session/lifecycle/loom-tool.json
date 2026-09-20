@@ -88,10 +88,11 @@
    "name": "asks",
    "script": "asks.py",
    "summary": "Ask, then say nothing at all until released -- twice.",
-   "description": "Makes one allowed ask, goes quiet until a release gate appears, asks again, and goes quiet again. It never reports progress at a gate, so the interval between an acknowledged ask and anything else is as long as its driver wants -- which is where a run's record can quietly stop being the view it claims to be.",
+   "description": "Makes one allowed ask, goes quiet until a release gate appears, asks again, and goes quiet again. It never reports progress at a gate, and it collects each answer itself rather than through ctx.ask, so the interval between an acknowledged ask and anything else is as long as its driver wants however long the answer took -- which is where a run's record can quietly stop being the view it claims to be.",
    "inputs": [
     {"name": "hold", "type": "text", "default": "go", "help": "the final release gate"},
-    {"name": "seconds", "type": "int", "default": 120, "help": "how long a gate may wait"}
+    {"name": "seconds", "type": "int", "default": 120, "help": "how long a gate may wait"},
+    {"name": "slow", "type": "int", "default": 0, "help": "milliseconds to spend waiting for each answer before collecting it"}
    ],
    "outputs": [],
    "asks": ["loom.session.Describe v1 -> role loom.session"],
