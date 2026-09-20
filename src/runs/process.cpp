@@ -561,8 +561,9 @@ bool ChildProcess::wait_for_end(int milliseconds) {
         return false;
     }
     // There is no timed `waitid` without arranging signals, and this class arranges none: it
-    // looks, sleeps a little, and looks again, within the caller's bound. This is the only
-    // place it waits at all, and only a caller about to write down a final claim asks it to.
+    // looks, sleeps a little, and looks again, within the caller's bound. Only a caller about
+    // to write down a final claim asks it to (`release` is the other waiting path: it reaps
+    // the leader after SIGKILL, which is prompt because SIGKILL is not catchable).
     struct timespec step {};
     step.tv_sec = 0;
     step.tv_nsec = 2 * 1000 * 1000; // 2 ms
