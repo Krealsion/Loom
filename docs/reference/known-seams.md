@@ -567,3 +567,39 @@ dispatch, production broker hardening. History holds the reasoning
 authored pattern and two laws, not by a migration registry. See
 [handoff](handoff.md) and the
 [ADR](../decisions/migration-is-authored-not-inferred.md).
+
+## A worker does not end with a host that was KILLED — except on Windows, and not because of Loom
+
+**Status: KNOWN SEAM (platform-split, deliberately not closed).**
+
+"Every worker ends with the host" is true of a host that is **asked** to end —
+`Shutdown`, `quit`, `loom-session stop` — because the run manager's destructor
+ends every execution group it owns, including one whose worker leader has
+already exited leaving children behind. A host that is **killed outright** runs
+no destructor, and what happens then is the operating system's answer rather
+than this manager's. The two platforms answer differently and both are tested
+(`tests/session/journey.py`, section R):
+
+```text
+Windows   the execution group is a JOB OBJECT, opened with
+          JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. The kernel closes a dying
+          process's handles, so the job's last handle closes and the whole
+          group goes with the host -- a real guarantee, and the kernel's.
+POSIX     there is no equivalent. The workers keep running, reparented, with
+          nothing left that owns them. Their records hold the last state their
+          manager managed to write, and the `pid` in those records is how a
+          person finds them.
+```
+
+**What this is not.** It is not containment: a worker is a process of the
+session's user and a process that deliberately breaks out of its group is an OS
+sandbox's problem, not this one's
+([the exec boundary](capabilities.md#the-exec-boundary-three-independent-facts)).
+Nor is it a crash-recovery story: nothing resumes a run or a Python stack across
+a host restart either way ([sessions](../guides/sessions.md#8-when-something-goes-wrong)).
+
+**What would close it** is a POSIX mechanism that survives the host's death and
+owns the group — a subreaper daemon, a cgroup with a release agent, or a
+supervisor process that is not the host. Each is a new component with its own
+lifetime and its own authority question, which is why none was added for a
+limitation that a sentence can state exactly.
