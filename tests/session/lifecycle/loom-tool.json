@@ -30,6 +30,20 @@
    "terms": ["lifecycle", "descendant"]
   },
   {
+   "name": "crashes",
+   "script": "crashes.py",
+   "summary": "Die with NO verdict, leaving a child process of this worker running.",
+   "description": "Starts a child, writes its pid as an output, and then ends the worker outright without reporting anything. The manager knows its worker failed and knows an execution it owns is still going -- the case where a cancellation has nobody left to ask.",
+   "inputs": [
+    {"name": "seconds", "type": "int", "default": 300, "help": "how long the child lives"}
+   ],
+   "outputs": [
+    {"name": "child.pid", "help": "the pid of the child this worker left behind"}
+   ],
+   "asks": [],
+   "terms": ["lifecycle", "descendant", "crash"]
+  },
+  {
    "name": "cleanup",
    "script": "cleanup.py",
    "summary": "Hold, then clean up on the bus -- one cleanup that can finish and one that cannot.",
@@ -69,6 +83,19 @@
    ],
    "asks": ["loom.runs.Start v1 -> role loom.runs"],
    "terms": ["lifecycle", "settle"]
+  },
+  {
+   "name": "asks",
+   "script": "asks.py",
+   "summary": "Ask, then say nothing at all until released -- twice.",
+   "description": "Makes one allowed ask, goes quiet until a release gate appears, asks again, and goes quiet again. It never reports progress at a gate, so the interval between an acknowledged ask and anything else is as long as its driver wants -- which is where a run's record can quietly stop being the view it claims to be.",
+   "inputs": [
+    {"name": "hold", "type": "text", "default": "go", "help": "the final release gate"},
+    {"name": "seconds", "type": "int", "default": 120, "help": "how long a gate may wait"}
+   ],
+   "outputs": [],
+   "asks": ["loom.session.Describe v1 -> role loom.session"],
+   "terms": ["lifecycle", "record", "evidence"]
   }
  ]
 }

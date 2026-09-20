@@ -271,7 +271,10 @@ def _human_run(r):
         print("  the worker exited (%d) and left processes this manager still owns; the run's "
               "execution is not over. 'cancel' stops them." % r["exit_code"])
     if r["process"] == "killing":
-        print("  a stop was issued; this run's execution has not ended yet.")
+        print("  a stop was issued; this run's execution was not seen to end, and no exit code "
+              "was read for it.")
+    if r["process"] == "unknown":
+        print("  this run's execution is over and no exit code was ever readable for it.")
     if r.get("record") and r["record"] != "saved":
         print("  record: %s -- %s" % (r["record"], r["record_error"] or
                                       "no reason was recorded"))

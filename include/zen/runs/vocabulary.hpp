@@ -28,9 +28,10 @@
 //
 // WHAT A STATE MEANS. `starting` (the process is being started or has not connected yet),
 // `running` (its session is admitted), and then exactly one final state: `passed` / `failed` (the
-// tool's own verdict), `error` (the tool raised), `cancelled` (a cancellation was requested and
-// the worker ended), `crashed` (the process ended without a verdict), `interrupted` (the host is
-// ending). A client that stops waiting has stopped waiting; the run's state is the manager's.
+// tool's own verdict), `error` (the tool raised), `cancelled` (a cancellation was requested while
+// a worker was there to hear it, and that worker ended), `crashed` (the worker ended without a
+// verdict, unasked -- whatever was then done about what it left behind), `interrupted` (the host
+// is ending). A client that stops waiting has stopped waiting; the run's state is the manager's.
 //
 // A RUN SAYS THREE SEPARATE THINGS, and none of them stands for another:
 //
@@ -39,14 +40,24 @@
 //              still passed.
 //   `process`  THE EXECUTION -- `not-started`, `running` (the worker leads it), `descendants`
 //              (the worker has exited and left processes this manager still owns), `killing` (a
-//              stop was issued and the group has not gone yet), `exited`, `killed`, `unknown`.
+//              stop was issued and the group has not been seen to go), `exited`, `killed`,
+//              `unknown` (the execution is over and no exit code was ever readable for it).
 //              A verdict does NOT end an execution, and an execution that is still alive still
 //              counts against this manager's active capacity, can still be stopped by `Cancel`,
-//              and blocks `Release` until it is. `exit_code` means something only once the
-//              execution is OVER -- `exited` or `killed`; before that nothing has been read.
-//   `record`   THE EVIDENCE -- `saved` (`run.json` holds this view), `stale` (it does not, and
-//              `record_error` says why and what is still there), `unknown` (a record written
-//              before this manager said). Failing to save evidence is not a failure of the tool.
+//              and blocks `Release` until it is.
+//
+//              `exit_code` IS THE LEADER'S OWN, and it means something only at `exited` or
+//              `killed` -- the two words this manager writes only once it has actually read
+//              one. It is never a descendant's, never an aggregate for the group, and never a
+//              default standing in for an observation that was not made: a leader whose code is
+//              already known keeps it when the group it left behind is stopped later, and a
+//              host that ends an execution without seeing it finish records `killing`, which
+//              promises no code at all. `unknown` is the same refusal after the fact.
+//   `record`   THE EVIDENCE -- `saved` (`run.json` holds this view, as of `record_ms`), `stale`
+//              (it does not, and `record_error` says why and what is still there), `unknown` (a
+//              record written before this manager said). Every change to a run's view is
+//              covered: `saved` is not a promise about the last interesting change, it is a
+//              promise about this answer. Failing to save evidence is not a failure of the tool.
 
 #include <zen/weave/shape.hpp>
 
@@ -193,14 +204,19 @@ struct Get {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(name)); }
 };
 
-/// ASK FOR A CANCELLATION. A request, not an outcome: the worker is told (it may clean up), and the
-/// run is `cancelled` once its process has ended. `force` ends the process without waiting for the
-/// worker's cleanup. Answered `Run` as it stands after the request.
+/// ASK FOR A CANCELLATION. A request, not an outcome, WHILE THERE IS A WORKER TO ASK: it is told
+/// (it may clean up), and the run is `cancelled` once its process has ended. `force` ends the
+/// process without waiting for the worker's cleanup. Answered `Run` as it stands after the
+/// request. A worker that has been admitted but has not yet asked its standing question is a
+/// worker to ask: it is told the moment it asks.
 ///
-/// A RUN WHOSE VERDICT IS ALREADY IN can still be cancelled while its EXECUTION is alive -- a
-/// worker that returned and left a thread or a child behind. There is nobody left to ask, so that
-/// cancellation stops the execution outright, whatever `force` says, and the verdict is not
-/// rewritten: the run stays `passed` (or whatever it was) and its `process` becomes `killed`.
+/// WITH NO WORKER TO ASK, a cancellation STOPS THE EXECUTION the run still owns, whatever `force`
+/// says -- and there are two ways to have none. A run whose VERDICT IS ALREADY IN has a worker
+/// that concluded and a standing question that is spent; it stays `passed` (or whatever it was)
+/// and its `process` becomes `killed`. A run whose WORKER DIED BEFORE ITS VERDICT has nobody at
+/// all: its surviving processes are stopped, and the record keeps the two facts apart -- the run
+/// is `crashed` (that is what its worker did, and a later stop does not make it a cancellation),
+/// with the cancellation recorded as what stopped what the worker left behind.
 struct Cancel {
     std::string lifetime;
     std::string name;
@@ -282,7 +298,7 @@ struct Run {
     std::int64_t session = 0;   ///< the worker's session on this bus, once admitted
     std::string established;    ///< the name the door established for it
     std::int64_t pid = 0;
-    std::int64_t exit_code = 0;
+    std::int64_t exit_code = 0; ///< the LEADER's own code; read, never assumed (see the note above)
     std::string process;        ///< not-started / running / descendants / killing / exited / killed / unknown
     std::string record;         ///< saved / stale / unknown -- is `run.json` this view?
     std::string record_error;   ///< why the last save did not happen, and what is on disk instead

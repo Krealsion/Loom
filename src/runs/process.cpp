@@ -22,6 +22,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -230,10 +231,25 @@ bool ChildProcess::ended() {
         return false;
     }
     DWORD code = 0;
-    GetExitCodeProcess(process_, &code);
-    exit_code_ = static_cast<int>(code);
+    if (GetExitCodeProcess(process_, &code)) {
+        exit_code_ = static_cast<int>(code);
+        code_known_ = true;
+    }
     ended_ = true;
     return true;
+}
+
+bool ChildProcess::wait_for_end(int milliseconds) {
+    if (ended()) {
+        return true;
+    }
+    if (process_ == nullptr) {
+        return false;
+    }
+    if (milliseconds > 0) {
+        (void)WaitForSingleObject(process_, static_cast<DWORD>(milliseconds));
+    }
+    return ended();
 }
 
 bool ChildProcess::alive() {
@@ -290,8 +306,9 @@ void ChildProcess::release() noexcept {
 ChildProcess::~ChildProcess() { release(); }
 
 ChildProcess::ChildProcess(ChildProcess&& other) noexcept
-    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_), owned_(other.owned_),
-      process_(other.process_), job_(other.job_) {
+    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_),
+      code_known_(other.code_known_), owned_(other.owned_), process_(other.process_),
+      job_(other.job_) {
     other.pid_ = 0;
     other.owned_ = false;
     other.process_ = nullptr;
@@ -304,6 +321,7 @@ ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
         pid_ = other.pid_;
         exit_code_ = other.exit_code_;
         ended_ = other.ended_;
+        code_known_ = other.code_known_;
         owned_ = other.owned_;
         process_ = other.process_;
         job_ = other.job_;
@@ -516,9 +534,11 @@ bool ChildProcess::ended() {
     siginfo_t info{};
     info.si_pid = 0;
     if (::waitid(P_PID, static_cast<id_t>(pid_), &info, WEXITED | WNOHANG | WNOWAIT) != 0) {
-        // Somebody else reaped it, or it is not ours: it is over, its code is unknown, and this
-        // object holds nothing that could name the group any more.
+        // Somebody else reaped it, or it is not ours: it is over, its code is unknown -- and it
+        // stays unknown, never a default -- and this object holds nothing that could name the
+        // group any more.
         exit_code_ = -1;
+        code_known_ = false;
         ended_ = true;
         reaped_ = true;
         owned_ = false;
@@ -528,8 +548,33 @@ bool ChildProcess::ended() {
         return false;
     }
     exit_code_ = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
+    code_known_ = true;
     ended_ = true;
     return true;
+}
+
+bool ChildProcess::wait_for_end(int milliseconds) {
+    if (ended()) {
+        return true;
+    }
+    if (pid_ == 0) {
+        return false;
+    }
+    // There is no timed `waitid` without arranging signals, and this class arranges none: it
+    // looks, sleeps a little, and looks again, within the caller's bound. This is the only
+    // place it waits at all, and only a caller about to write down a final claim asks it to.
+    struct timespec step {};
+    step.tv_sec = 0;
+    step.tv_nsec = 2 * 1000 * 1000; // 2 ms
+    for (int waited = 0; waited < milliseconds; waited += 2) {
+        if (::nanosleep(&step, nullptr) != 0 && errno != EINTR) {
+            break;
+        }
+        if (ended()) {
+            return true;
+        }
+    }
+    return ended();
 }
 
 bool ChildProcess::group_alive() {
@@ -595,8 +640,8 @@ void ChildProcess::release() noexcept {
 ChildProcess::~ChildProcess() { release(); }
 
 ChildProcess::ChildProcess(ChildProcess&& other) noexcept
-    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_), owned_(other.owned_),
-      reaped_(other.reaped_) {
+    : pid_(other.pid_), exit_code_(other.exit_code_), ended_(other.ended_),
+      code_known_(other.code_known_), owned_(other.owned_), reaped_(other.reaped_) {
     other.pid_ = 0;
     other.owned_ = false;
     other.reaped_ = true;
@@ -608,6 +653,7 @@ ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
         pid_ = other.pid_;
         exit_code_ = other.exit_code_;
         ended_ = other.ended_;
+        code_known_ = other.code_known_;
         owned_ = other.owned_;
         reaped_ = other.reaped_;
         other.pid_ = 0;
