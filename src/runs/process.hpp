@@ -85,11 +85,14 @@ public:
     int exit_code() const noexcept { return exit_code_; }
     bool exit_code_known() const noexcept { return code_known_; }
 
-    /// WAIT, AT MOST `milliseconds`, FOR THE LEADER TO END -- the one place this class waits at
-    /// all, so that a caller about to write down a final claim ("it exited with N") can make the
-    /// observation the claim needs. Returns `ended()`: false means the end was not observed in
-    /// that time, and the caller must say so rather than reporting a code it never read. Zero
-    /// milliseconds is one look and no wait.
+    /// WAIT, AT MOST `milliseconds`, FOR THE LEADER TO END, so that a caller about to write down
+    /// a final claim ("it exited with N") can make the observation the claim needs. Returns
+    /// `ended()`: false means the end was not observed in that time, and the caller must say so
+    /// rather than reporting a code it never read. Zero milliseconds is one look and no wait.
+    ///
+    /// The only OTHER place this class waits is `release()`, which reaps the leader after
+    /// SIGKILL on POSIX so no zombie is left in the host's process table; every question --
+    /// `ended`, `alive`, `terminate` -- answers without waiting, as the note above says.
     bool wait_for_end(int milliseconds);
 
     /// Is anything this object owns still running -- the leader, or a descendant it left in the
