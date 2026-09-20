@@ -1,0 +1,102 @@
+{
+ "package": "lifecycle",
+ "version": "1",
+ "summary": "Tools whose VERDICT and whose EXECUTION end at different moments, for the journey.",
+ "tools": [
+  {
+   "name": "linger",
+   "script": "linger.py",
+   "summary": "Return a verdict while a thread of this process keeps running.",
+   "description": "Starts a thread nobody joins and returns at once. The tool's verdict is in long before the worker process can exit, which is the case a run manager must not mistake for the end of the run.",
+   "inputs": [
+    {"name": "seconds", "type": "int", "default": 300, "help": "how long the thread lingers"}
+   ],
+   "outputs": [],
+   "asks": [],
+   "terms": ["lifecycle", "thread"]
+  },
+  {
+   "name": "descendants",
+   "script": "descendants.py",
+   "summary": "Return a verdict, leaving a child process of this worker running.",
+   "description": "Starts a child process, writes its pid as an output, and exits. The worker LEADER is then gone while an execution the manager owns is not.",
+   "inputs": [
+    {"name": "seconds", "type": "int", "default": 300, "help": "how long the child lives"}
+   ],
+   "outputs": [
+    {"name": "child.pid", "help": "the pid of the child this worker left behind"}
+   ],
+   "asks": [],
+   "terms": ["lifecycle", "descendant"]
+  },
+  {
+   "name": "crashes",
+   "script": "crashes.py",
+   "summary": "Die with NO verdict, leaving a child process of this worker running.",
+   "description": "Starts a child, writes its pid as an output, and then ends the worker outright without reporting anything. The manager knows its worker failed and knows an execution it owns is still going -- the case where a cancellation has nobody left to ask.",
+   "inputs": [
+    {"name": "seconds", "type": "int", "default": 300, "help": "how long the child lives"}
+   ],
+   "outputs": [
+    {"name": "child.pid", "help": "the pid of the child this worker left behind"}
+   ],
+   "asks": [],
+   "terms": ["lifecycle", "descendant", "crash"]
+  },
+  {
+   "name": "cleanup",
+   "script": "cleanup.py",
+   "summary": "Hold, then clean up on the bus -- one cleanup that can finish and one that cannot.",
+   "description": "Registers two cleanups that both SPEAK: one asks the session door, which it is allowed to ask, and one asks an office it was never granted, which the bus refuses. Both run after a cancellation, and each says what it actually came to.",
+   "inputs": [
+    {"name": "hold", "type": "text", "default": "go", "help": "the release gate to wait at"},
+    {"name": "refuse", "type": "bool", "default": true, "help": "register the cleanup that cannot finish"}
+   ],
+   "outputs": [],
+   "asks": ["loom.session.Describe v1 -> role loom.session"],
+   "terms": ["lifecycle", "cleanup", "cancellation"]
+  },
+  {
+   "name": "stuck",
+   "script": "stuck.py",
+   "summary": "Hold, then clean up at a gate that nobody opens.",
+   "description": "Its cleanup waits on a release gate that the journey never creates, so the cleanup phase is genuinely blocked. What ends it is its own budget, or a forced cancellation -- never the host, which is a different process and stays answering throughout.",
+   "inputs": [
+    {"name": "hold", "type": "text", "default": "go", "help": "the release gate to wait at"},
+    {"name": "budget", "type": "int", "default": 60, "help": "seconds the cleanup phase may take"}
+   ],
+   "outputs": [],
+   "asks": [],
+   "terms": ["lifecycle", "cleanup"]
+  },
+  {
+   "name": "settle",
+   "script": "settle.py",
+   "summary": "Ask the run manager to start a run, asking for that send to be settled.",
+   "description": "A DIRECT ask (no link) that asks for settlement, of an office whose answering sets more work in motion on the host's own bus. What it reports is whether its conversation was complete only once BOTH the attested answer and the host's settlement for that send had arrived.",
+   "inputs": [
+    {"name": "name", "type": "text", "required": true, "help": "the run name to start"},
+    {"name": "tool", "type": "text", "default": "basics/steps", "help": "the tool to start"}
+   ],
+   "outputs": [
+    {"name": "settlement.json", "help": "what the conversation had, and when"}
+   ],
+   "asks": ["loom.runs.Start v1 -> role loom.runs"],
+   "terms": ["lifecycle", "settle"]
+  },
+  {
+   "name": "asks",
+   "script": "asks.py",
+   "summary": "Ask, then say nothing at all until released -- twice.",
+   "description": "Makes one allowed ask, goes quiet until a release gate appears, asks again, and goes quiet again. It never reports progress at a gate, and it collects each answer itself rather than through ctx.ask, so the interval between an acknowledged ask and anything else is as long as its driver wants however long the answer took -- which is where a run's record can quietly stop being the view it claims to be.",
+   "inputs": [
+    {"name": "hold", "type": "text", "default": "go", "help": "the final release gate"},
+    {"name": "seconds", "type": "int", "default": 120, "help": "how long a gate may wait"},
+    {"name": "slow", "type": "int", "default": 0, "help": "milliseconds to spend waiting for each answer before collecting it"}
+   ],
+   "outputs": [],
+   "asks": ["loom.session.Describe v1 -> role loom.session"],
+   "terms": ["lifecycle", "record", "evidence"]
+  }
+ ]
+}

@@ -219,8 +219,44 @@ public:
 
     void on(const link::Ask& ask, Mail& mail) {
         const std::uint64_t correlation = mail.correlation();
-        loom::Unverified asked = loom::parse(std::string_view(
-            reinterpret_cast<const char*>(ask.payload.data()), ask.payload.size()));
+        const std::string_view payload(reinterpret_cast<const char*>(ask.payload.data()),
+                                       ask.payload.size());
+        loom::Unverified asked = loom::parse(payload);
+        // A COMPAT ENVELOPE IS ADMITTED HERE, AND WHAT CROSSES IS STILL NATIVE. An asker that does
+        // not speak the canonical binary (a Python tool, over a compat session) may hand the link
+        // Zen's JSON envelope instead. The link admits it through THIS bus's gate against the shape
+        // this host resolves -- the one gate, the one decode budget -- and puts the canonical bytes
+        // of the admitted value on the wire, so the far host sees exactly what a C++ asker's
+        // `ask_role` would have sent. A shape nothing here declares cannot be encoded, and is
+        // refused before anything is submitted: the far vocabulary must be known on this host,
+        // exactly as it must be for the far ANSWER to be re-admitted (below).
+        std::string compat_native;
+        std::string compat_refusal;
+        if (!asked.well_formed()) {
+            loom::Unverified json = loom::compat::parse(payload);
+            if (json.well_formed()) {
+                asked = json;
+                std::shared_ptr<const Schema> door =
+                    bus_ != nullptr ? bus_->resolve_schema(json.claimed_name(),
+                                                           json.claimed_version())
+                                    : nullptr;
+                if (!door) {
+                    compat_refusal = json.claimed_name() + " v" +
+                                     std::to_string(json.claimed_version()) +
+                                     " is a shape nothing on this host declares, so the link cannot "
+                                     "encode it for the far host; load a participant that declares "
+                                     "it";
+                } else {
+                    loom::Admission a = loom::admit(json, door);
+                    if (!a.ok()) {
+                        compat_refusal = "the ask's payload did not pass this bus's gate: " +
+                                         a.first_error().message();
+                    } else {
+                        compat_native = loom::serialize(a.value());
+                    }
+                }
+            }
+        }
         const std::string shape = asked.claimed_name();
         const std::int64_t version = static_cast<std::int64_t>(asked.claimed_version());
         // REFUSED OR UNLINKED BEFORE ANYTHING IS SUBMITTED: said at once, as this delivery's one
@@ -232,6 +268,10 @@ public:
         if (correlation == 0) {
             tell_now(link::kOutcomeRefused, "an ask across a link needs a correlation of its own, "
                                             "so its answer can come back under it");
+            return;
+        }
+        if (!compat_refusal.empty()) {
+            tell_now(link::kOutcomeRefused, compat_refusal);
             return;
         }
         if (!client_ || !client_->admitted() || client_->disconnected()) {
@@ -255,8 +295,8 @@ public:
             return;
         }
         const std::uint64_t attempt = ++next_attempt_;
-        const std::string_view bytes(reinterpret_cast<const char*>(ask.payload.data()),
-                                     ask.payload.size());
+        const std::string_view bytes =
+            compat_native.empty() ? payload : std::string_view(compat_native);
         if (ask.role.empty()) {
             client_->send(static_cast<std::uint64_t>(ask.target), attempt, bytes, ask.settle);
         } else {

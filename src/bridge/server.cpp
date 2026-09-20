@@ -51,6 +51,25 @@ const char* name_of(ConnectionState s) noexcept {
     return "?";
 }
 
+const char* name_of(PayloadEncoding e) noexcept {
+    switch (e) {
+    case PayloadEncoding::Native:
+        return "native";
+    case PayloadEncoding::Compat:
+        return "compat";
+    }
+    return "?";
+}
+
+namespace {
+
+/// A value, in the serialization the session was admitted to speak.
+std::string encode_for(PayloadEncoding e, const loom::Value& v) {
+    return e == PayloadEncoding::Compat ? loom::compat::serialize(v) : loom::serialize(v);
+}
+
+} // namespace
+
 BridgeAdmission operator_admission() {
     return [](const ConnectionRequest& r) {
         ConnectionAdmitted a;
@@ -76,7 +95,8 @@ public:
     /// dies -- which the BUS decides, not the server: at teardown the bus destroys its weaves in
     /// registry order, so a proxy may be gone before the weave that owns the server is, and the
     /// server's own destructor must find a null rather than a freed object.
-    OperatorProxy(BridgeChannel* ch, OperatorProxy** slot) : ch_(ch), slot_(slot) {}
+    OperatorProxy(BridgeChannel* ch, OperatorProxy** slot, PayloadEncoding encoding)
+        : ch_(ch), slot_(slot), encoding_(encoding) {}
     ~OperatorProxy() override {
         if (slot_ != nullptr && *slot_ == this) {
             *slot_ = nullptr;
@@ -113,7 +133,9 @@ public:
         }
         put_u8(body, flags);
         put_bytes(body, in.provenance.authored_role());
-        body.append(loom::serialize(in.payload));
+        // The admitted value, in the serialization this session was admitted to speak. Both
+        // are total for a conforming value, and what the bus delivered has already conformed.
+        body.append(encode_for(encoding_, in.payload));
         ch_->queue(BridgeOp::Delivered, body);
     }
     loom::Value snapshot() const override {
@@ -138,6 +160,7 @@ public:
 private:
     BridgeChannel* ch_;
     OperatorProxy** slot_;
+    PayloadEncoding encoding_;
 };
 
 // ---- BridgeServer -------------------------------------------------------------------------------
@@ -181,6 +204,7 @@ Connection BridgeServer::view(const Conn& c) const {
     v.peer = c.peer;
     v.session = c.id;
     v.observes = c.observes;
+    v.encoding = c.encoding;
     v.refusal = c.refusal;
     return v;
 }
@@ -267,7 +291,7 @@ void BridgeServer::send_refused(Conn& c, std::uint64_t correlation, const std::s
 }
 
 void BridgeServer::admit(Conn& c, const ConnectionAdmitted& a) {
-    auto proxy = std::make_unique<OperatorProxy>(c.ch.get(), &c.proxy);
+    auto proxy = std::make_unique<OperatorProxy>(c.ch.get(), &c.proxy, a.encoding);
     OperatorProxy* raw = proxy.get();
     loom::WeaveId id;
     try {
@@ -282,6 +306,7 @@ void BridgeServer::admit(Conn& c, const ConnectionAdmitted& a) {
     c.proxy = raw;
     c.established = a.established_name;
     c.observes = a.observe;
+    c.encoding = a.encoding;
     c.state = ConnectionState::Admitted;
     proxy_ids_.insert(id.value);
     std::string welcome;
@@ -424,8 +449,9 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
             c.ch->queue(BridgeOp::SchemaNone, body);
         } else {
             // Ship the schema AS BYTES (the IPC currency): encode it to its descriptor Value and
-            // serialize. The client re-admits + reconstructs it (decode_schema).
-            c.ch->queue(BridgeOp::Schema, loom::serialize(loom::encode_schema(*schema)));
+            // serialize, in the session's own encoding. The client re-admits + reconstructs it
+            // (decode_schema).
+            c.ch->queue(BridgeOp::Schema, encode_for(c.encoding, loom::encode_schema(*schema)));
         }
         break;
     }
@@ -472,7 +498,15 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
 
         // Re-admit the session's output through the ONE gate, host-side, exactly as the kernel does
         // for a loaded library's emitted message and the isolation host does for a child's Emit.
-        loom::Unverified u = loom::parse(payload);
+        // Parsed in the encoding the session was admitted to speak, and only that one.
+        loom::Unverified u = c.encoding == PayloadEncoding::Compat ? loom::compat::parse(payload)
+                                                                   : loom::parse(payload);
+        if (c.encoding == PayloadEncoding::Compat && !u.well_formed()) {
+            send_refused(c, correlation,
+                         "malformed payload: this session's values cross as Zen's compat JSON "
+                         "envelope ({\"zen\":1,\"schema\":...,\"version\":...,\"fields\":{...}})");
+            break;
+        }
         std::shared_ptr<const loom::Schema> door =
             bus_.resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {

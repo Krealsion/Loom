@@ -31,6 +31,8 @@
 #   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
 #             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
 #   posix     rides `NOT WIN32`; the OS sandbox exists only there.
+#   runs      rides the run manager having been built (`TARGET zen-runs`: the kernel AND
+#             LOOM_BUILD_SESSION_TOOLS, default ON). Absent => declared absent, never "passed".
 #
 # A suite may carry MORE THAN ONE row, and its floor is the SUM of the rows whose gate is
 # active. That is how a conditional subpopulation INSIDE a suite is stated exactly instead
@@ -82,7 +84,7 @@ recorder           portable  31
 logger             portable  15
 component          portable  19
 pixel              portable  12
-bridge             portable  21
+bridge             portable  24
 bridge             posix     8
 kernel             kernel    136
 kernel             posix     2
@@ -98,3 +100,5 @@ dispatch_refusal   portable  15
 dispatch_loaded    kernel    5
 admission          kernel    21
 joint              kernel    24
+session            portable  10
+runs               runs      10

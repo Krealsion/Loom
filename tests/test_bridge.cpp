@@ -3482,4 +3482,197 @@ TEST_CASE("teardown: a weave that owns a BridgeServer may die with the bus, gues
     CHECK(true);
 }
 
+// ---- the payload encoding a session was admitted to speak --------------------------------------
+//
+// A peer that is not written in C++ should not have to reproduce the canonical binary's positional
+// body and schema content ids to take part. The host may admit such a session to Zen's compat JSON
+// envelope instead: its Sends are parsed as JSON and then admitted through the SAME gate, and what
+// is delivered to it is serialized the same way. One session, one encoding -- and nothing about
+// authority depends on which.
+
+namespace {
+
+/// Every frame the client has been handed so far, until `done` says enough.
+std::vector<loom::BridgeEvent> events_until(
+    loom::BridgeClient& client,
+    const std::function<bool(const std::vector<loom::BridgeEvent>&)>& done, int timeout_ms = 2000) {
+    std::vector<loom::BridgeEvent> events;
+    (void)drain_events(client, events, [&] { return done(events); }, timeout_ms);
+    return events;
+}
+
+const loom::BridgeEvent* first_of(const std::vector<loom::BridgeEvent>& events,
+                                  loom::BridgeEvent::Kind kind, std::uint64_t correlation) {
+    for (const loom::BridgeEvent& e : events) {
+        if (e.kind == kind && e.correlation == correlation) {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("encoding: a compat session's values cross as Zen's JSON envelope, through the same gate") {
+    GuestHost h([](const loom::ConnectionRequest&) {
+        loom::ConnectionAdmitted a = echo_only("python");
+        a.encoding = loom::PayloadEncoding::Compat;
+        return loom::ConnectionVerdict::admit(std::move(a));
+    });
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "python", "");
+    REQUIRE(client.await_admission(2000));
+
+    // JSON IN, admitted as the typed value, stamped from the session -- and JSON OUT.
+    client.send_to_role("echo", 42, loom::compat::serialize(loom::to_value(Echo{"hi"})));
+    std::vector<loom::BridgeEvent> events = events_until(client, [](const auto& ev) {
+        return first_of(ev, loom::BridgeEvent::Kind::Delivered, 42) != nullptr;
+    });
+    const loom::BridgeEvent* answer = first_of(events, loom::BridgeEvent::Kind::Delivered, 42);
+    REQUIRE(answer != nullptr);
+    CHECK(answer->answers_ask);
+    CHECK(answer->sender == h.echo_id.value);
+    REQUIRE_FALSE(answer->payload.empty());
+    CHECK(answer->payload.front() == '{'); // the envelope, not the canonical binary
+    CHECK_FALSE(loom::parse(answer->payload).well_formed());
+    loom::Admission back =
+        loom::admit(loom::compat::parse(answer->payload), schema_of<loom::Result>());
+    REQUIRE(back.ok());
+    CHECK(back.value().get("value")->as_text() == "echo:hi");
+    CHECK(h.echo->last_sender_.value == client.session());
+
+    // ONE SESSION, ONE ENCODING: the canonical binary on a compat session is refused before the bus,
+    // in words that name the envelope it should have sent.
+    client.send_to_role("echo", 43, loom::serialize(loom::to_value(Echo{"native"})));
+    // ...and the strict gate is the same gate: a field the door does not declare is refused.
+    client.send_to_role("echo", 44,
+                        R"({"zen":1,"schema":"Echo","version":1,"fields":{"msg":"x","extra":"y"}})");
+    events = events_until(client, [](const auto& ev) {
+        return first_of(ev, loom::BridgeEvent::Kind::SendRefused, 43) != nullptr &&
+               first_of(ev, loom::BridgeEvent::Kind::SendRefused, 44) != nullptr;
+    });
+    const loom::BridgeEvent* native_refused =
+        first_of(events, loom::BridgeEvent::Kind::SendRefused, 43);
+    const loom::BridgeEvent* strict_refused =
+        first_of(events, loom::BridgeEvent::Kind::SendRefused, 44);
+    REQUIRE(native_refused != nullptr);
+    REQUIRE(strict_refused != nullptr);
+    CHECK(native_refused->reason.find("compat JSON") != std::string::npos);
+    CHECK(strict_refused->reason.find("gate refused") != std::string::npos);
+    CHECK(h.echo->heard() == 1); // only the conforming JSON Echo ever reached the answerer
+
+    // DISCOVERY ANSWERS IN THE SAME ENCODING: the descriptor a Describe returns is JSON too.
+    client.describe("Echo", 1);
+    events = events_until(client, [](const auto& ev) {
+        for (const loom::BridgeEvent& e : ev) {
+            if (e.kind == loom::BridgeEvent::Kind::Schema) {
+                return true;
+            }
+        }
+        return false;
+    });
+    const loom::BridgeEvent* schema = nullptr;
+    for (const loom::BridgeEvent& e : events) {
+        if (e.kind == loom::BridgeEvent::Kind::Schema) {
+            schema = &e;
+        }
+    }
+    REQUIRE(schema != nullptr);
+    loom::Admission desc =
+        loom::admit(loom::compat::parse(schema->payload), loom::schema_desc_schema());
+    REQUIRE(desc.ok());
+    CHECK(desc.value().get("name")->as_text() == "Echo");
+
+    // ...and the inventory says which encoding the host admitted this session to.
+    bool reported_compat = false;
+    for (const loom::Connection& t : h.reported()) {
+        if (t.state == loom::ConnectionState::Admitted) {
+            reported_compat = t.encoding == loom::PayloadEncoding::Compat;
+        }
+    }
+    CHECK(reported_compat);
+}
+
+TEST_CASE("encoding: a native session is unchanged -- JSON is refused as any malformed payload was") {
+    GuestHost h([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_only("agent")); // the default: native
+    });
+    std::unique_ptr<loom::BridgeClient> c;
+    loom::BridgeClient& client = connect_client(c, h.port, "agent", "");
+    REQUIRE(client.await_admission(2000));
+    client.send_to_role("echo", 7, loom::compat::serialize(loom::to_value(Echo{"json"})));
+    client.send_to_role("echo", 8, loom::serialize(loom::to_value(Echo{"bin"})));
+    std::vector<loom::BridgeEvent> events = events_until(client, [](const auto& ev) {
+        return first_of(ev, loom::BridgeEvent::Kind::SendRefused, 7) != nullptr &&
+               first_of(ev, loom::BridgeEvent::Kind::Delivered, 8) != nullptr;
+    });
+    REQUIRE(first_of(events, loom::BridgeEvent::Kind::SendRefused, 7) != nullptr);
+    const loom::BridgeEvent* answer = first_of(events, loom::BridgeEvent::Kind::Delivered, 8);
+    REQUIRE(answer != nullptr);
+    CHECK(loom::parse(answer->payload).well_formed()); // the canonical binary, as always
+    CHECK(h.echo->heard() == 1);
+}
+
+// ---- a compat envelope handed to a link: admitted here, native on the wire ---------------------
+//
+// An asker over a compat session cannot put the canonical binary inside `loom.link.Ask.payload`.
+// It may put Zen's JSON envelope there instead: the link admits it through THIS bus's gate and
+// sends the admitted value's canonical bytes, so the far host sees what any C++ asker would have
+// sent. What this host does not declare, it cannot encode -- refused before anything crosses.
+
+TEST_CASE("link: an ask carrying a compat envelope is admitted here and crosses as the canonical binary") {
+    FarHost far([](const loom::ConnectionRequest&) {
+        return loom::ConnectionVerdict::admit(echo_roles("agent", {"echo2"}));
+    });
+    EchoAnswerer* echo = far.mount<EchoAnswerer>("echo2");
+    NearHost near(far.host.port);
+    std::string why;
+    std::atomic<bool> connected{false};
+    std::thread connecting([&] { connected.store(near.link->connect(3000, &why)); });
+    (void)wait_until([&] { far.host.server->step(); return connected.load(); }, 3000);
+    connecting.join();
+    REQUIRE_MESSAGE(connected.load(), why);
+
+    const auto envelope = [](std::string role, const std::string& json) {
+        loom::link::Ask a;
+        a.role = std::move(role);
+        a.payload.assign(json.begin(), json.end());
+        return a;
+    };
+    // 1. A conforming JSON Echo -- Echo is declared on the near bus (the witness accepts it).
+    loom::WeaveId ok_id{};
+    WitnessAsker* ok = near.mount<WitnessAsker>(&ok_id, loom::link::role_of("far"), "echo2");
+    ok->instead = envelope("echo2", loom::compat::serialize(loom::to_value(Echo{"from-json"})));
+    near.kick(ok_id, "unused");
+    REQUIRE(turn_until(far, near, [&] { return !ok->heard_.empty(); }));
+    INFO("heard: " << ok->account());
+    CHECK(ok->settled() == "echo:from-json"); // the far owner decoded the canonical binary
+    CHECK(echo->heard() == 1);
+    CHECK(near.link->open() == 0);
+
+    // 2. A shape nothing on the near bus declares: refused here, and nothing was submitted.
+    loom::WeaveId unknown_id{};
+    WitnessAsker* unknown =
+        near.mount<WitnessAsker>(&unknown_id, loom::link::role_of("far"), "echo2");
+    unknown->instead = envelope("echo2", R"({"zen":1,"schema":"NearOnly","version":1,"fields":{}})");
+    near.kick(unknown_id, "unused");
+    // 3. A declared shape carrying a field its door does not declare: the near gate refuses it.
+    loom::WeaveId strict_id{};
+    WitnessAsker* strict = near.mount<WitnessAsker>(&strict_id, loom::link::role_of("far"), "echo2");
+    strict->instead = envelope(
+        "echo2", R"({"zen":1,"schema":"Echo","version":1,"fields":{"msg":"x","extra":"y"}})");
+    near.kick(strict_id, "unused");
+    REQUIRE(turn_until(far, near, [&] {
+        return unknown->last_outcome_.has_value() && strict->last_outcome_.has_value();
+    }));
+    CHECK(unknown->last_outcome_->state == loom::link::kOutcomeRefused);
+    CHECK(unknown->last_outcome_->attempt == 0); // nothing was submitted
+    CHECK(unknown->last_outcome_->reason.find("nothing on this host declares") != std::string::npos);
+    CHECK(strict->last_outcome_->state == loom::link::kOutcomeRefused);
+    CHECK(strict->last_outcome_->attempt == 0);
+    CHECK(strict->last_outcome_->reason.find("gate") != std::string::npos);
+    CHECK(near.link->open() == 0);
+    CHECK(echo->heard() == 1); // neither refused ask reached the far owner
+}
+
 } // TEST_SUITE("bridge")

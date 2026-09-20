@@ -260,6 +260,34 @@ What the component *is*, and what it trusts: [bridge](bridge.md).
 | `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
 | `kMaxAbsentSchemas` (client) | 64 | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 
+## Sessions and runs
+
+What a session is, and who owns what in it: [sessions](../guides/sessions.md). Every bound here
+refuses in words at the limit; none evicts anything a client is still owed.
+
+| Bound | Value | Behavior |
+|---|---|---|
+| connections to a session host | 32 | the bridge's `kMaxOperatorConnections`, shared by clients and run workers |
+| `SessionDoor::kMaxExpectations` | 32 | run registrations held at once (expected, or admitted and still connected); past it `ExpectRun` is refused and nothing is registered. A registration leaves when its worker's connection ends, when its registrar forgets it, or when its registrar leaves the bus |
+| `SessionDoor::kMaxRulesPerRun` | 32 | rules one run may ask to be granted |
+| `SessionDoor::kMaxRunNameBytes` | 64 | a run name, of letters, digits, `-`, `_` and `.` only, so an established `run:<name>` is one plain token wherever it is printed |
+| `session::kMaxHistoryRows` | 256 | rows one `loom.history` answer carries; `truncated` says when more matched |
+| `RunManager::kMaxActive` | 8 | runs not yet final; past it Start is refused |
+| `RunManager::kMaxRuns` | 64 | runs held in one lifetime, final or not; past it Start is refused until finished runs are released (their directories stay unless released with `remove`) |
+| `RunManager::kMaxNotes` | 32 | notes kept per run; older ones are dropped and COUNTED (`notes_dropped`) |
+| `RunManager::kMaxAsks` | 128 | a run's own account of its asks; the oldest leaves first and is COUNTED (`asks_dropped`) |
+| `RunManager::kMaxArtifacts` | 32 | artifacts listed per run; one more is noted, not listed |
+| `RunManager::kMaxPast` | 64 | past lifetimes' records one `Past` answer carries, newest first |
+| a run's inputs | 16 KiB of JSON | refused before anything is created |
+| `kMaxPackages` / `kMaxToolsPerPackage` | 64 / 32 | what one catalog and one package may name; the rest is a reported problem |
+| `kMaxPackageFiles` / `kMaxPackageBytes` | 512 / 16 MiB | what a package may hold: a snapshot is a copy |
+| `Connection.MAX_OPEN` (Python client) | 256 | conversations one Python session holds open; one more is refused before anything is sent. An ask that asked for settlement counts as open until BOTH its attested answer and its settlement have arrived |
+| `tool.CLEANUP_SECONDS` (Python tool) | 30 s | a run's cleanup phase, after its ordinary work has ended however it ended. A tool may set its own (`ctx.cleanup_seconds`) before registering cleanups. **A budget checked, not a cap imposed**: it is read between cleanups and at the context's own wait points, so a cleanup blocked inside ordinary Python is not interrupted by it — `cancel --force` is the escape for that. What the budget leaves unattempted says so; nothing is recorded as done that did not finish |
+| `wire.MAX_POLL_READS` (Python client) | 1026 | buffer-fuls one zero-timeout poll may take before returning what it has — one whole frame at `MAX_FRAME`, and a bound all the same |
+| `wire.WRITE_SECONDS` (Python client) | 30 s | one whole frame's write. The channel sets it on EVERY send, so a preceding `read(0)` — which leaves the shared socket non-blocking on purpose — never decides how a write behaves. Backpressure from a live peer is waited on inside it; a peer that takes no more ends the channel, saying how much of the frame had already gone, and nothing is sent twice. Per channel (`Channel(..., write_seconds=...)`) |
+| `RunManager::kShutdownObserveMs` | 2000 ms | the WHOLE of a clean shutdown's budget for watching the execution GROUPS it just stopped actually go, so that a final `exited`/`killed` is an end the manager saw with a leader's exit code it read. Every stop is issued before any of it is spent, so a slow group cannot take the moment another run's stop was owed. **A budget for one observation, not a cap on the shutdown**: unspent time is not waited out, a group whose end is not seen in it is recorded `killing` (which promises no code, while any leader code read by then — including one this moment of watching was the first to see — is kept, and the record's note says whether there was one), and the POSIX reap in `ChildProcess::release` is a separate wait of its own |
+| serve mode's idle wait | 5 ms | the longest a client's request waits unread on an idle host (the interactive host's is 100 ms, a console's latency) |
+
 ## Transport channels (framed byte channels)
 
 Both framers -- the isolation `Channel` (parent side of an out-of-process Weave

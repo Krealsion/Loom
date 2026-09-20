@@ -180,6 +180,7 @@ and cannot host weaves; that configuration is exercised by CI rather than by thi
 | **`nm`** (binutils) | The installed-package witness and the weave build-contract check ask your artifact what it exports | Those two checks refuse to run rather than passing silently — absence of a tool is a failure, never a skip |
 | **A debugger** (`gdb`, `lldb`, Visual Studio) | For a weave that crashes the host — an in-process weave shares the host's address space, so it is an ordinary native debugging problem | Read [diagnostics](diagnostics.md) instead |
 | **An editor with `compile_commands.json` support** | Configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` and most editors will resolve Loom's headers | Your editor will not know where `<zen/…>` lives |
+| **Python 3.8 or newer** (standard library only) | The [session](sessions.md) tooling: the `loom-session` CLI, Python clients, and the editable tools a session's run manager starts. The test lane's `session_journey` entry runs with it | Everything else works: `loom-host`, including `--serve`, needs no Python; the CLI says it found none, the run manager refuses a run in words, and the lane lists `session_journey` as DECLARED ABSENT. `LOOM_SESSION_PYTHON` names an interpreter at configure; `-DLOOM_BUILD_SESSION_TOOLS=OFF` leaves the tooling out |
 
 **You do not need an IDE**, and installing one is not a step on this path. Every command
 on the neighbouring pages is a shell command.
@@ -192,7 +193,9 @@ otherwise:
 - **No package manager**, no vcpkg or Conan step. Loom has no third-party dependencies —
   see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 - **No crypto library.** The one digest Loom needs is one auditable file in its own tree.
-- **No Python, Node or scripting runtime.** The build, the tests and the checks are CMake.
+- **No Python, Node or scripting runtime** to build or check it. The build and the checks
+  are CMake; Python is needed only by the optional session tooling above, and by the one
+  lane entry that exercises it.
 - **No Zengine, no Workshop and no already-hosted tool.** That is what
   ["from nothing to a running weave"](running-loom.md) means, and it is why the compiler
   above is the only thing you have to install first.
