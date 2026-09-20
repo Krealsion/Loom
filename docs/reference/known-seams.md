@@ -414,6 +414,23 @@ needing to pass something the handle cannot reach — and the authored handoff d
 not: the migration result travelled as an ordinary domain message, and the
 transaction handle carried only what it always carried.
 
+## A construction-layer reply is not an attested answer
+
+The substrate doors every woven weave answers without its author writing a handler — the pokes
+and self-description (`zen.DescribeAccepted` → `zen.AcceptedShapes`) — reply with an ordinary
+send to `reply_to` under the request's correlation (`WeaveBase::answer_substrate`), not through
+the answer door. The reply therefore carries no answer attestation (`answers_ask` is false), and
+every asker that settles only on Loom's attested answer cannot settle on it: the link hands a far
+participant's un-attested word to nobody, the supplied host's probe ignores it, and a session's
+Python client treats it as ordinary speech (observed: the answer was delivered and settled
+nothing). By the same construction — traced in source, not yet observed — a Workshop guest's
+`inspect` power reaches the guest door's inventory through a link but would get silence from
+`zen.DescribeAccepted` there. Found by the session work (its example tool was re-pointed at `loom.session.Describe`,
+which answers through the door). **Trigger:** the first consumer that must discover a far
+participant's vocabulary through a link, or a strict local asker that needs self-description.
+Closing it — answering substrate doors through the answer door — changes every weave's reply
+path, loaded ones included, and is its own decision.
+
 ## `reply_to` — low observed use
 
 **Status: CURRENT, evidence-noted.** Ordinary replies exist and work; across
@@ -550,3 +567,42 @@ dispatch, production broker hardening. History holds the reasoning
 authored pattern and two laws, not by a migration registry. See
 [handoff](handoff.md) and the
 [ADR](../decisions/migration-is-authored-not-inferred.md).
+
+## A worker does not end with a host that was KILLED — except on Windows, and not because of Loom
+
+**Status: KNOWN SEAM (platform-split, deliberately not closed).**
+
+"Every worker ends with the host" is true of a host that is **asked** to end —
+`Shutdown`, `quit`, `loom-session stop` — because the run manager's destructor
+ends every execution group it owns, including one whose worker leader has
+already exited leaving children behind, and then waits a bounded moment to see
+each of them actually end so that the record it leaves reports a code it read
+(`kShutdownObserveMs`, [bounds](bounds.md#sessions-and-runs); what it does not
+see is recorded `killing`, which promises no code). A host that is **killed
+outright** runs no destructor, and what happens then is the operating system's
+answer rather than this manager's. The two platforms answer differently and both
+are tested (`tests/session/journey.py`, section R):
+
+```text
+Windows   the execution group is a JOB OBJECT, opened with
+          JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. The kernel closes a dying
+          process's handles, so the job's last handle closes and the whole
+          group goes with the host -- a real guarantee, and the kernel's.
+POSIX     there is no equivalent. The workers keep running, reparented, with
+          nothing left that owns them. Their records hold the last state their
+          manager managed to write, and the `pid` in those records is how a
+          person finds them.
+```
+
+**What this is not.** It is not containment: a worker is a process of the
+session's user and a process that deliberately breaks out of its group is an OS
+sandbox's problem, not this one's
+([the exec boundary](capabilities.md#the-exec-boundary-three-independent-facts)).
+Nor is it a crash-recovery story: nothing resumes a run or a Python stack across
+a host restart either way ([sessions](../guides/sessions.md#8-when-something-goes-wrong)).
+
+**What would close it** is a POSIX mechanism that survives the host's death and
+owns the group — a subreaper daemon, a cgroup with a release agent, or a
+supervisor process that is not the host. Each is a new component with its own
+lifetime and its own authority question, which is why none was added for a
+limitation that a sentence can state exactly.

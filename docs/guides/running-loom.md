@@ -88,7 +88,8 @@ The host's exit codes, because a script will want them:
 | `0` | it ran and you quit it |
 | `2` | the command line was wrong |
 | `3` | a file would not parse |
-| `4` | another host owns the decision store |
+| `4` | another host owns the decision store (or, with `--serve`, already serves that directory) |
+| `5` | `--serve` could not open its session: the directory, its files, its listener or randomness |
 
 ## 3. Write a weave of your own
 
@@ -189,8 +190,11 @@ that path is wrong — it is the **prefix**, not the `lib/cmake/loom` directory 
 
 Two things about the code, because they are the two a first weave gets wrong:
 
-- **`mail.answer` needs no authority; `mail.send_to_role` does.** An answer is authorized
-  by the ask that arrived. An unsolicited send is speech, and speech is granted.
+- **`mail.answer` is authorized by the ask; `mail.send_to_role` needs a rule.** The ask that
+  arrived is what lets a weave answer, and to whom. Like every delivery, the answer is still
+  checked against its author's grant for its shape: an admitted artifact's baseline covers the
+  standard replies (`zen.Result`, `zen.Ack`, `zen.Refused`), one more reason the counter
+  answers in one of them. An unsolicited send is speech, and speech is granted.
 - **The counter answers with `zen.Result`, not a shape of its own.** A shape reaches a
   generic operator console only if the registry can resolve it, and the registry learns
   shapes from weaves' *accept*-sets. A custom shape that only ever travels *to* the
@@ -682,6 +686,24 @@ A durable record says where it came from — the bus, this host's own diagnostic
 logger's own selection change — and a fact the memory has released is reported as forgotten,
 never as "nothing happened". `log read` flushes the stream first, so it reads what stands,
 not what was last closed: ordinary observations are otherwise buffered until the host quits.
+
+## 12. Keep it running for clients that come and go
+
+Everything above is one person at one console, and the host ends when that console closes.
+`loom-host --serve <dir>` is the same host kept alive on purpose: it works from `<dir>` (its boot
+plan, decisions and history live there), listens on loopback for **clients** that attach, ask and
+leave, writes `session.json` and `session.key` so a client can find and present itself, and does
+**not** end when its console closes — a client's Shutdown ends it, or `quit` at the console.
+
+```text
+$ loom-host --serve work
+  session: serving /home/you/work at 127.0.0.1:64912  (lifetime ae547299e9fa26c0cc60c5ee91b87585)
+```
+
+Its door admits the owner's clients — the session's own key, nothing else — with a grant to the
+session's vocabulary and nothing more, and a run manager's workers with exactly what that manager
+may itself say. With Loom's run manager booted, clients start named runs of editable Python tools
+that keep running when the client leaves. That is its own page: [sessions](sessions.md).
 
 ## When something goes wrong
 

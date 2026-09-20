@@ -63,7 +63,8 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_pixel.cpp
     test_bridge.cpp
     test_host_policy.cpp
-    test_host_input.cpp)
+    test_host_input.cpp
+    test_session.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
@@ -99,6 +100,57 @@ if(NOT WIN32)
     target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_POSIX})
     list(APPEND ZEN_TEST_SOURCES_SCOPED ${ZEN_TEST_SOURCES_POSIX})
     list(APPEND ZEN_POPULATION_GATES posix)
+endif()
+# THE RUN MANAGER'S TWO GATES (docs/guides/sessions.md). `runs` rides the manager having been
+# built at all -- a loadable weave, so the kernel, and LOOM_BUILD_SESSION_TOOLS -- and carries
+# the `runs` suite, which needs no Python. `python` rides that AND a Python 3.8+ interpreter:
+# the session journey starts real Python workers and clients. Python is optional tooling, never a
+# baseline prerequisite: where it is absent the journey is DECLARED ABSENT, said at configure and
+# by the population check, never passed. LOOM_SESSION_PYTHON names an interpreter explicitly.
+set(LOOM_SESSION_PYTHON "" CACHE FILEPATH
+    "Python 3.8+ for the session journey (empty: search for one)")
+set(zen_session_python "")
+if(TARGET zen-runs)
+    set(ZEN_TEST_SOURCES_RUNS test_runs.cpp)
+    target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_RUNS})
+    list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_RUNS})
+    target_link_libraries(zen-tests PRIVATE zen-runs)
+    # A worker that leaves a child behind (tests/runs_leader/leader.cpp): the one arrangement the
+    # `runs` suite cannot make for itself, since what the manager owns is the worker's execution
+    # GROUP and only the worker can put a second process in it. An ordinary executable, not a
+    # loadable weave, so it is on neither population roll. Its three constants are authored once,
+    # here, and reach both the worker and the suite that reads what it left.
+    set(zen_runs_leader_code 7)         # the LEADER's own exit code, which nothing may overwrite
+    set(zen_runs_leader_seconds 120)    # how long the child it leaves behind keeps running
+    set(zen_runs_leader_pidfile "child.pid")
+    add_executable(zen-runs-leader runs_leader/leader.cpp)
+    target_link_libraries(zen-runs-leader PRIVATE zen-warnings zen-sanitize)
+    target_compile_definitions(zen-runs-leader PRIVATE
+        ZEN_RUNS_LEADER_CODE=${zen_runs_leader_code}
+        ZEN_RUNS_LEADER_SECONDS=${zen_runs_leader_seconds}
+        ZEN_RUNS_LEADER_PIDFILE="${zen_runs_leader_pidfile}")
+    add_dependencies(zen-tests zen-runs-leader)
+    target_compile_definitions(zen-tests PRIVATE
+        ZEN_TEST_CMAKE="${CMAKE_COMMAND}"
+        ZEN_TEST_RUNS_LEADER="$<TARGET_FILE:zen-runs-leader>"
+        ZEN_RUNS_LEADER_CODE=${zen_runs_leader_code}
+        ZEN_RUNS_LEADER_PIDFILE="${zen_runs_leader_pidfile}"
+        ZEN_TEST_PYTHON_RUNTIME="${CMAKE_SOURCE_DIR}/python")
+    list(APPEND ZEN_POPULATION_GATES runs)
+    if(LOOM_SESSION_PYTHON)
+        set(zen_session_python ${LOOM_SESSION_PYTHON})
+    else()
+        find_package(Python3 3.8 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            set(zen_session_python ${Python3_EXECUTABLE})
+        endif()
+    endif()
+    if(zen_session_python)
+        list(APPEND ZEN_POPULATION_GATES python)
+    else()
+        message(STATUS "loom: no Python 3.8+ interpreter found -- the session journey is "
+                       "DECLARED ABSENT here (set LOOM_SESSION_PYTHON to run it)")
+    endif()
 endif()
 
 target_include_directories(zen-tests PRIVATE
@@ -689,6 +741,32 @@ add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
     -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/console
     -DZEN_GROUP=console
     -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
+
+# ---- The persistent session, as independent processes (docs/guides/sessions.md) ---------
+#
+# A real `loom-host --serve`, started once and kept; the real `loom-runs` artifact it boots; real
+# Python workers; and clients that attach, act and leave -- a run left pending with no client
+# attached and found finished by the next one, an edited tool run again without a restart, two
+# overlapping runs, failure, a tool bug, a refusal after work began, cancellation, a lost Start
+# answer recovered by name, pinned approval, the door's attenuation, and a restarted host that
+# refuses the old lifetime's handles. Rides the `python` gate: the workers are Python.
+if(zen_session_python)
+    add_test(NAME session_journey COMMAND ${zen_session_python}
+        ${CMAKE_CURRENT_SOURCE_DIR}/session/journey.py
+        --host $<TARGET_FILE:loom-host>
+        --runs $<TARGET_FILE:loom-runs>
+        --runtime ${CMAKE_BINARY_DIR}/session-tools/python
+        --tools ${CMAKE_SOURCE_DIR}/tools/basics
+        --work ${CMAKE_BINARY_DIR}/session-journey-work
+        --evidence ${CMAKE_BINARY_DIR}/session-journey-work.json)
+    set_tests_properties(session_journey PROPERTIES TIMEOUT 600)
+    # The Python client's answer rule, where no host can stage a forged answer: a conversation
+    # settles on Loom's attested answer or its refusal, never on a word under the same number.
+    add_test(NAME session_client COMMAND ${zen_session_python}
+        ${CMAKE_CURRENT_SOURCE_DIR}/session/test_client.py
+        --runtime ${CMAKE_BINARY_DIR}/session-tools/python)
+    set_tests_properties(session_client PROPERTIES TIMEOUT 60)
+endif()
 
 # ---- The supplied host's input, through a REAL terminal --------------------------------
 #

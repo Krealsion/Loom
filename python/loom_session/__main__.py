@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Joshua DeMoss
+"""``python -m loom_session`` -- the human CLI (see cli.py)."""
+
+import sys
+
+from .cli import main
+
+sys.exit(main())

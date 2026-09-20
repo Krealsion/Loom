@@ -57,6 +57,10 @@
 #   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
 #             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
 #   posix     rides `NOT WIN32`.
+#   python    rides the run manager having been built (the kernel and
+#             LOOM_BUILD_SESSION_TOOLS) AND a Python 3.8+ interpreter found at configure
+#             (or named by LOOM_SESSION_PYTHON): the session journey's workers are Python.
+#             Optional tooling, never a baseline prerequisite -- absent, it is declared absent.
 #
 # The gates that are actually on are written into the build tree at configure time from
 # the one variable the `population` entry also reads, so the two cannot disagree about
@@ -87,3 +91,5 @@ hook_return_types            portable
 all                          posix
 weave_contract               kernel
 weave_population             kernel
+session_journey              python
+session_client               python

@@ -17,3 +17,7 @@ cmake-build-*/
 *.a
 *.so
 *.obj
+
+# Python byte-code caches, left beside the optional session tooling
+__pycache__/
+*.pyc

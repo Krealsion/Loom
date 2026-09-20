@@ -173,6 +173,21 @@ public:
         return it == governed_.end() ? WeaveId{} : it->second.subject();
     }
 
+    /// The artifact name this warden administers `subject` under, or empty -- the same fact read
+    /// the other way, for a host door that must know WHOSE standing decision bounds a request a
+    /// participant made (the session door's run registration). Never a payload's claim.
+    std::string artifact_of(WeaveId subject) const {
+        if (!subject.valid()) {
+            return {};
+        }
+        for (const auto& [artifact, authority] : governed_) {
+            if (authority.subject() == subject) {
+                return artifact;
+            }
+        }
+        return {};
+    }
+
     /// A warden does not reload: a revived one would come back governing nobody while
     /// the host still believed it governed everything. Same argument the Weaver makes.
     LifecyclePolicy policy_config() const { return LifecyclePolicy{0, true}; }
