@@ -1332,10 +1332,12 @@ private:
     /// still there, the run is exactly what it was -- `running`, or `descendants` -- because a
     /// termination that did not happen is not evidence that anything ended.
     ///
-    /// A LEADER WHOSE CODE IS ALREADY KNOWN KEEPS IT. Stopping the group a leader left behind
-    /// is not a new result for the leader; this manager never substitutes a descendant's
-    /// termination for it, and never says no code was read when one was. Returns whether the
-    /// view moved.
+    /// A LEADER'S CODE IS KEPT THE MOMENT IT IS READ, and a leader whose code is already known
+    /// keeps that. Stopping the group a leader left behind is not a new result for the leader;
+    /// this manager never substitutes a descendant's termination for it, never says no code was
+    /// read when one was -- and never throws away one it has just read because the execution it
+    /// belongs to is not over, which would leave the note above talking about a default nobody
+    /// observed. Returns whether the view moved.
     bool end_execution(RunRecord& r, bool stopped, int observe_ms) {
         const std::string was = r.view.process;
         const std::int64_t code_was = r.view.exit_code;
@@ -1346,11 +1348,16 @@ private:
         const bool over = r.process.wait_for_group_end(observe_ms);
         const bool known = r.process.exit_code_known();
         const bool by_us = stopped || was == "killing" || was == "killed";
+        // THE LEADER'S CODE IS KEPT AS SOON AS IT IS READ, whether or not the execution it led
+        // is over -- the wait above is the first place some of them become readable at all, and
+        // a shutdown gets no second look. Writing it down settles nothing about the execution:
+        // `over` alone decides the word, so learning a code never promotes a group that is still
+        // running to `exited` or `killed`. It is the same thing `reap` does at `descendants`.
+        if (known) {
+            r.view.exit_code = r.process.exit_code();
+        }
         if (over) {
             r.view.process = ended_execution_word(known, by_us);
-            if (known) {
-                r.view.exit_code = r.process.exit_code();
-            }
         } else {
             if (by_us) {
                 r.view.process = "killing";

@@ -53,7 +53,10 @@
 //              default standing in for an observation that was not made: a leader whose code is
 //              already known keeps it when the group it left behind is stopped later, and a
 //              host that ends an execution without seeing it finish records `killing`, which
-//              promises no code at all. `unknown` is the same refusal after the fact.
+//              promises no code at all. `unknown` is the same refusal after the fact. A code
+//              this manager DID read is kept wherever it reads it -- at `descendants`, and at
+//              `killing` when the shutdown's own moment of watching was the first to see it --
+//              and there the run's NOTE, not the field, is what says whether one was read.
 //   `record`   THE EVIDENCE -- `saved` (`run.json` holds this view, as of `record_ms`), `stale`
 //              (it does not, and `record_error` says why and what is still there), `unknown` (a
 //              record written before this manager said). Every change to a run's view is

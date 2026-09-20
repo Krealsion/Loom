@@ -122,6 +122,38 @@ bool process_executing(long pid) {
 #endif
 }
 
+/// THE OPERATING SYSTEM'S OWN ANSWER ABOUT A WORKER LEADER, read without taking anything the
+/// manager still has to be able to read: POSIX `WNOWAIT` leaves the zombie that holds the status
+/// (and the group's number) exactly where it was, and a Windows handle consumes nothing at all.
+/// -1 while it is still running -- which is not a code, and no leader here ever exits with one.
+int leader_exit_code(std::int64_t pid) {
+    if (pid <= 0) {
+        return -1;
+    }
+#ifdef _WIN32
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
+                           static_cast<DWORD>(pid));
+    if (h == nullptr) {
+        return -1;
+    }
+    DWORD code = 0;
+    int answer = -1;
+    if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0 && GetExitCodeProcess(h, &code) != 0) {
+        answer = static_cast<int>(code);
+    }
+    CloseHandle(h);
+    return answer;
+#else
+    siginfo_t info{};
+    info.si_pid = 0;
+    if (::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0 ||
+        info.si_pid == 0) {
+        return -1;
+    }
+    return info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
+#endif
+}
+
 bool until(const std::function<bool()>& step, int ms = 5000) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (std::chrono::steady_clock::now() < end) {
@@ -326,6 +358,53 @@ private:
     std::uint64_t corr_ = 0;
 };
 
+/// THE ONE ARRANGEMENT THE CASE BELOW TAKES TWICE: a run whose worker has exited leaving a child
+/// of its own, and a manager that has NOT been told -- nothing has asked it anything since the
+/// run started, so the shutdown's own observation is the FIRST time it can learn the leader's
+/// code. `stopped` picks the branch the fallback takes; in both the group is still running, so
+/// in neither is the execution over.
+void shutdown_first_learns_the_leader_code(bool stopped, const char* name,
+                                           const char* expected_process) {
+    RunsHost h(/*serving=*/true, ZEN_TEST_RUNS_LEADER);
+    h.ask(Start{"demo/hello", name, "{\"times\": 1}"});
+    REQUIRE(h.client->refused.empty());
+    const fs::path dir = h.client->run.directory;
+    const std::int64_t pid = h.client->run.pid;
+    REQUIRE(until([&] { return leader_exit_code(pid) == ZEN_RUNS_LEADER_CODE; }, 30000));
+    const long child = left_child(dir);
+    REQUIRE(child > 0);
+    REQUIRE(process_executing(child));
+    // The manager's own evidence, before it is asked anything: the view `Start` wrote, with
+    // `exit_code` the field's default and no observation behind it.
+    const std::optional<Run> before = RunManager::read_record(dir / "run.json");
+    REQUIRE(before.has_value());
+    REQUIRE(before->process == "running");
+    REQUIRE(before->exit_code == 0);
+
+    h.manager->record_executions(stopped ? std::vector<bool>{true} : std::vector<bool>{}, 0);
+
+    const std::optional<Run> rec = RunManager::read_record(dir / "run.json");
+    REQUIRE(rec.has_value());
+    // WHAT THIS OBSERVATION READ IS THE LEADER'S OWN, and the record keeps it. Whether the
+    // execution is over is a different question, and the answer to it has not changed: an
+    // unstopped group is still what it was, and a stop not seen to take is `killing`.
+    CHECK(rec->exit_code == ZEN_RUNS_LEADER_CODE);
+    CHECK(rec->process == expected_process);
+    CHECK(rec->state == "interrupted");
+    const std::string said = joined(rec->notes);
+    CHECK(said.find("the exit code above is the worker leader's own") != std::string::npos);
+    CHECK(said.find("no exit code was read") == std::string::npos);
+    CHECK(process_executing(child));
+
+    // ...and a shutdown that really stops takes the group, so this test leaves nothing running.
+    h.manager->end_all_executions(RunManager::kShutdownObserveMs);
+    const std::optional<Run> done = RunManager::read_record(dir / "run.json");
+    REQUIRE(done.has_value());
+    CHECK(done->process == "killed");
+    CHECK(done->exit_code == ZEN_RUNS_LEADER_CODE);
+    CHECK(until([&] { return !process_executing(child); }, 30000));
+}
+
 } // namespace
 
 TEST_CASE("manager: with no session record here, a Start is refused and says what a session is") {
@@ -449,7 +528,13 @@ TEST_CASE("process: a live child is alive and stoppable; one that ended by itsel
     quick.output = (s.path / "brief.log").string();
     REQUIRE(brief.spawn(quick, &why));
     REQUIRE(until([&] { return brief.ended(); }));
-    CHECK_FALSE(brief.alive());      // it ended and left nothing behind
+    // IT ENDED AND LEFT NOTHING BEHIND -- a claim about the GROUP, so it is waited for the way
+    // this class waits for one. The leader's own end is the other question and is already
+    // answered above: on Windows the two are not synchronised in either direction (the job's
+    // accounting and the process handle each reach their answer first sometimes), so sampling
+    // the group at the instant the leader's handle signals is a coin toss, not an observation.
+    CHECK(brief.wait_for_group_end(30000));
+    CHECK_FALSE(brief.alive());
     CHECK_FALSE(brief.terminate());  // ...so there is nothing to stop, and nothing is signalled
     CHECK(bystander.alive());
     CHECK(bystander.terminate());
@@ -613,6 +698,15 @@ TEST_CASE("manager: an execution whose group was never seen to go is never `exit
     CHECK(rec->exit_code == ZEN_RUNS_LEADER_CODE); // the LEADER's, never what stopped the group
     CHECK(rec->state == "interrupted");
     CHECK(until([&] { return !process_executing(child); }, 30000));
+}
+
+TEST_CASE("manager: a leader's code first read DURING a shutdown's observation is kept, and "
+          "reading it does not turn an unfinished execution into a finished one") {
+    // The other run's case above reaches its shutdown having already been told the leader's
+    // code -- a client asked. These two are never asked, so the moment the shutdown spends
+    // watching is where the code becomes readable at all, and it is the only chance to keep it.
+    shutdown_first_learns_the_leader_code(/*stopped=*/false, "unstopped", "running");
+    shutdown_first_learns_the_leader_code(/*stopped=*/true, "stopping", "killing");
 }
 
 TEST_CASE("manager: the words for an execution this manager HAS seen end, and what each promises") {
