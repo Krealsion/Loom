@@ -183,6 +183,8 @@ from evidence that got saved. A run answers all three separately:
 
 - **A verdict does not end an execution.** A tool that returns having left a thread it never
   joined, or a child process of its own, is `passed` with `process` `running` or `descendants`.
+  Between asking for a stop and the group actually going, `process` is `killing` — and an exit
+  code is printed only once there is one to read, never as a 0 standing in for one.
   While that is true the run still counts against the 8 active, `cancel` still stops it, and
   `release` refuses — releasing a record is not a way to kill something, and the refusal says so.
   Stopping it afterwards never rewrites the verdict: the run stays `passed`, `process` becomes
