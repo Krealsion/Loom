@@ -203,10 +203,14 @@ from evidence that got saved. A run answers all three separately:
 - **An exit code is something the manager read.** `exited` and `killed` carry the leader's own
   code — never a descendant's, never one number for the whole group, and never a default filling
   in for an observation nobody made. A leader whose code is already known keeps it when the group
-  it left behind is stopped later. If a shutdown ends an execution and does not see the WHOLE of
-  it finish in the moment it waits — the leader's own exit is not that — the record says
-  `killing`, which promises no code at all; `unknown` is the answer about an execution that
-  really is over and whose code was never readable.
+  it left behind is stopped later, and keeps it the moment it is read — a code the shutdown's own
+  moment of watching is the first to see is still that leader's, and is written down. If a
+  shutdown ends an execution and does not see the WHOLE of it finish in the moment it waits — the
+  leader's own exit is not that — the record says `killing`, which promises no code at all;
+  `unknown` is the answer about an execution that really is over and whose code was never
+  readable. At either word the `exit_code` field is not a promise, and **the record's note is
+  what says whether a leader code was read**: `exit_code` is a number the manager observed only
+  where the note says one was, and otherwise it is the field's unread default.
 - **A record that could not be saved is not a failed tool.** If the manager cannot write
   `run.json` — a full disk, a permission, something else holding the temporary name — the last
   valid record is left exactly where it is, `record` becomes `stale` and `record_error` says the
@@ -365,8 +369,8 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | a run is `passed` but `process` is `running` or `descendants` | the tool finished; something it started did not | `cancel <name>` to end it, then `release` |
 | `... its execution is still alive ...: cancel it to stop that` | you asked to release a record whose work is still going | `cancel <name>` first — releasing is not a way to kill |
 | `record: stale — cannot open .../run.json.tmp ...` | `run.json` is behind the live run, for the reason given | clear the reason (disk, permission, a name in the way); the next question you ask saves it, as it stands then |
-| a past record with `process: killing` | the host stopped that execution and did not see the whole of it finish; any `exit_code` beside it is the worker leader's own, read earlier | nothing — `killing` is the honest absence of an observed end, not a zero |
-| a past record with `process: unknown` | that execution really did end, and no exit code was ever readable for it | nothing — it is the honest absence of a code, not a zero |
+| a past record with `process: killing` | the host stopped that execution and did not see the whole of it finish. `exit_code` promises nothing here: the record's own note says whether a leader code was read — if it was, the number beside it is that leader's; if it was not, the field is its unread default | nothing — `killing` is the honest absence of an observed END. Read the note, not the number |
+| a past record with `process: unknown` | that execution really did end, and no exit code was ever readable for it; the `exit_code` beside it is the field's unread default | nothing — it is the honest absence of a CODE, and the note says so too |
 | a cleanup line that is not `done` | the run tried to give something back and could not | the line names what happened; the far owner decides what it does about a guest that went away |
 
 **Recovering a session, start to finish.**
