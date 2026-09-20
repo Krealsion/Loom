@@ -51,9 +51,10 @@
 //                     change to the run tries again, and nothing loops.
 //
 // AND ONE RULE ABOUT EVIDENCE OF THE OPERATING SYSTEM: this manager writes down what it read.
-// `exited` and `killed` carry the LEADER's own exit code and are not written before one has
-// been observed -- not at a shutdown either, which waits a bounded moment for the ends it just
-// caused and then says `killing` or `unknown` rather than reporting a default.
+// `exited` and `killed` say the EXECUTION is over and carry the LEADER's own exit code, and
+// neither is written before the group has been seen to go and a code has been read. Not at a
+// shutdown either: it waits a bounded moment for the groups it just stopped and then says
+// `killing` rather than reporting an end it did not see, because a leader's exit is not one.
 
 #include "catalog.hpp"
 #include "process.hpp"
@@ -122,6 +123,22 @@ public:
     /// the manager still holds, and normally almost none of it is used.
     static constexpr int kShutdownObserveMs = 2000;
 
+    /// THE ONE PLACE THAT NAMES AN EXECUTION THIS MANAGER HAS SEEN END (`zen/runs/vocabulary.hpp`),
+    /// so that a reap and a shutdown cannot drift apart. Every caller has already established
+    /// that THE WHOLE OWNED EXECUTION is over -- the leader and anything it left in its group --
+    /// because that is the only thing these three words may be written after.
+    ///
+    /// `code_known` is about the LEADER and nothing else: `unknown` is the refusal to name a
+    /// code for an execution that really has ended, never a place to file an end nobody saw.
+    /// `by_us` is whether a stop of this manager's is what it ended under, counting one issued
+    /// earlier as well as one issued now.
+    static const char* ended_execution_word(bool code_known, bool by_us) {
+        if (!code_known) {
+            return "unknown";
+        }
+        return by_us ? "killed" : "exited";
+    }
+
     RunManager() : book_(kMaxActive * 4) {}
     explicit RunManager(RunManagerConfig config) : config_(std::move(config)), book_(kMaxActive * 4) {}
 
@@ -131,25 +148,51 @@ public:
     /// claimed about far work. This is the CLEAN end; a host killed outright never runs it, and
     /// only the Windows job object survives that (`src/runs/process.hpp`,
     /// docs/guides/sessions.md).
-    ~RunManager() {
-        // ONE budget for the whole shutdown's observations (see `end_execution`): a host that is
-        // ending waits a moment to see what it stopped, and never waits on it.
+    ~RunManager() { end_all_executions(kShutdownObserveMs); }
+
+    /// THE DESTRUCTOR'S WORK, NAMED AND IN ITS TWO HALVES. Every stop is issued FIRST, and only
+    /// then does one shared moment watch the groups go. That order is what makes the budget
+    /// shared in fact as well as in name: a group that is slow to go cannot spend the moment
+    /// another run's stop was owed, and cannot delay that stop being issued at all.
+    void end_all_executions(int observe_ms) {
+        record_executions(stop_all_executions(), observe_ms);
+    }
+
+    /// ISSUE THE STOP FOR EVERY EXECUTION THIS MANAGER STILL OWNS. The result says, run by run
+    /// in the order this manager holds them, whether the operating system took it -- and nothing
+    /// about whether it has taken effect, which is the other half's to observe.
+    std::vector<bool> stop_all_executions() {
+        std::vector<bool> stopped(runs_.size(), false);
+        for (std::size_t i = 0; i < runs_.size(); ++i) {
+            stopped[i] = runs_[i]->process.terminate();
+        }
+        return stopped;
+    }
+
+    /// WHAT EVERY RUN'S RECORD MAY CLAIM ABOUT ITS EXECUTION, observed now, written down, within
+    /// ONE shared moment (`observe_ms`) spent across all of them. It ends nothing itself: a group
+    /// still running is still running and says so, because a stop that was issued and not seen to
+    /// take is not an end (`end_execution`). `stopped` is what the stops achieved, run by run; an
+    /// empty one says none were issued.
+    void record_executions(const std::vector<bool>& stopped, int observe_ms) {
         const auto observe_until =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(kShutdownObserveMs);
-        for (auto& r : runs_) {
-            const bool stopped = r->process.terminate();
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(observe_ms);
+        for (std::size_t i = 0; i < runs_.size(); ++i) {
+            auto& r = runs_[i];
+            const bool was_stopped = i < stopped.size() && stopped[i];
             const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   observe_until - std::chrono::steady_clock::now())
                                   .count();
             const bool moved =
-                end_execution(*r, stopped, static_cast<int>(left > 0 ? left : 0));
+                end_execution(*r, was_stopped, static_cast<int>(left > 0 ? left : 0));
             if (final_state(r->view.state)) {
-                if (stopped) {
-                    // The verdict stands; only the execution was still going, and is not now.
+                if (was_stopped) {
+                    // The verdict stands; only the execution was still going. Whether it is over
+                    // now is `process`'s to say, and `end_execution` has just said it.
                     note(*r, "the session host ended while this run's execution was still alive; "
                              "it was stopped. The verdict above is the tool's and is unchanged");
                 }
-                if (stopped || moved) {
+                if (was_stopped || moved) {
                     write_record(*r);
                 }
                 continue;
@@ -1215,14 +1258,13 @@ private:
         }
         if (r.view.process == "running" || r.view.process == "killing" ||
             r.view.process == "killed" || r.view.process == "descendants") {
-            const bool stopped = r.view.process == "killing" || r.view.process == "killed";
+            // The group is gone -- `alive()` above is this manager's whole test for that -- so a
+            // final word is permitted, and `ended_execution_word` says which one (and never
+            // invents a code for `unknown`).
+            const bool by_us = r.view.process == "killing" || r.view.process == "killed";
+            r.view.process = ended_execution_word(r.process.exit_code_known(), by_us);
             if (r.process.exit_code_known()) {
-                r.view.process = stopped ? "killed" : "exited";
                 r.view.exit_code = r.process.exit_code();
-            } else {
-                // The execution is over and its code was never readable. `unknown` promises no
-                // code, which is the whole of what this manager can honestly say.
-                r.view.process = "unknown";
             }
         }
         if (!final_state(r.view.state)) {
@@ -1273,17 +1315,27 @@ private:
 
     /// WHAT A RECORD MAY SAY ABOUT AN EXECUTION AS THE HOST ENDS, and what it must not.
     ///
-    /// `exited` and `killed` promise the LEADER's own exit code (zen/runs/vocabulary.hpp), so
-    /// neither is written until this manager has read one. It asks for a bounded moment
-    /// (`observe_ms`, the shutdown's shared budget) and then says what it actually knows:
-    /// `killing` when a stop was issued and the end was not seen, `unknown` when the execution
-    /// is over and no code was ever readable. Neither promises a code, so none is invented --
-    /// a record that outlives its host is the only evidence left, and a default zero in it is a
-    /// claim nobody made.
+    /// `exited` and `killed` promise TWO things (zen/runs/vocabulary.hpp): that the execution is
+    /// over, and the LEADER's own exit code. Neither is written until this manager has observed
+    /// both. THE EXECUTION IS THE GROUP, NOT ITS LEADER -- a worker that exited leaving a child
+    /// of its own has ended nothing -- so the end this waits for is `wait_for_group_end`'s and
+    /// never `wait_for_end`'s: the leader's end can be true the instant the stop is issued, and
+    /// a record that outlives its host would then carry a claim nobody watched come true.
+    ///
+    /// It asks for a bounded moment (`observe_ms`, what is LEFT of the shutdown's one shared
+    /// budget) and then says what it actually knows: `killing` when the stop it issued has not
+    /// been seen to take the group, `unknown` when the execution is over and no code was ever
+    /// readable. Neither promises a code, so none is invented -- a record that outlives its host
+    /// is the only evidence left, and a default zero in it is a claim nobody made.
+    ///
+    /// AND A STOP THAT WAS NOT ISSUED CHANGES NOTHING. If nothing was stopped and the group is
+    /// still there, the run is exactly what it was -- `running`, or `descendants` -- because a
+    /// termination that did not happen is not evidence that anything ended.
     ///
     /// A LEADER WHOSE CODE IS ALREADY KNOWN KEEPS IT. Stopping the group a leader left behind
-    /// is not a new result for the leader, and this manager never substitutes a descendant's
-    /// termination for it. Returns whether the view moved.
+    /// is not a new result for the leader; this manager never substitutes a descendant's
+    /// termination for it, and never says no code was read when one was. Returns whether the
+    /// view moved.
     bool end_execution(RunRecord& r, bool stopped, int observe_ms) {
         const std::string was = r.view.process;
         const std::int64_t code_was = r.view.exit_code;
@@ -1291,18 +1343,29 @@ private:
             r.view.process = "not-started";
             return r.view.process != was;
         }
-        const bool over = r.process.wait_for_end(observe_ms) && r.process.exit_code_known();
+        const bool over = r.process.wait_for_group_end(observe_ms);
+        const bool known = r.process.exit_code_known();
+        const bool by_us = stopped || was == "killing" || was == "killed";
         if (over) {
-            const bool by_us = stopped || was == "killing" || was == "killed";
-            r.view.process = by_us ? "killed" : "exited";
-            r.view.exit_code = r.process.exit_code();
+            r.view.process = ended_execution_word(known, by_us);
+            if (known) {
+                r.view.exit_code = r.process.exit_code();
+            }
         } else {
-            r.view.process = stopped ? "killing" : "unknown";
-            note(r, "the host ended this run's execution and did not see it finish within " +
-                        std::to_string(observe_ms) + "ms; no exit code was read, and none is "
-                        "reported for it");
+            if (by_us) {
+                r.view.process = "killing";
+            }
+            note(r, "the host was ending and did not see the whole of this run's execution "
+                    "finish within " +
+                        std::to_string(observe_ms) + "ms; " +
+                        (known ? "the exit code above is the worker leader's own, and what it "
+                                 "left behind is not known to have ended"
+                               : "no exit code was read, and none is reported for it"));
         }
-        return r.view.process != was || r.view.exit_code != code_was;
+        // A NOTE IS A CHANGE TO THE VIEW like any other, so `!over` moves this run even when the
+        // word for it did not: `record` promises the evidence holds THIS answer, and a note
+        // nobody wrote down would leave that promise false in the last record there will be.
+        return !over || r.view.process != was || r.view.exit_code != code_was;
     }
 
     /// Before this manager answers anything about its runs: catch up with the operating system,

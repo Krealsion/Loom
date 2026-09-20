@@ -4,9 +4,11 @@
 #include "process.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <system_error>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -562,8 +564,9 @@ bool ChildProcess::wait_for_end(int milliseconds) {
     }
     // There is no timed `waitid` without arranging signals, and this class arranges none: it
     // looks, sleeps a little, and looks again, within the caller's bound. Only a caller about
-    // to write down a final claim asks it to (`release` is the other waiting path: it reaps
-    // the leader after SIGKILL, which is prompt because SIGKILL is not catchable).
+    // to write down a final claim asks it to (the other waiting paths are `wait_for_group_end`,
+    // for a claim about the execution rather than its leader, and `release`, which reaps the
+    // leader after SIGKILL -- prompt, because SIGKILL is not catchable).
     struct timespec step {};
     step.tv_sec = 0;
     step.tv_nsec = 2 * 1000 * 1000; // 2 ms
@@ -689,6 +692,46 @@ std::string ChildProcess::find_on_path(const std::string& name) {
 }
 
 #endif
+
+/// THE WHOLE EXECUTION IS OVER WHEN BOTH ITS HALVES ARE: the leader has ended, AND nothing this
+/// object owns is still running. Asked in that order, and BOTH asked, because the two are not
+/// the same question and neither implies the other here.
+///
+/// The leader first, so its own code is read while it can still be read: on POSIX `alive()`
+/// reaps the leader the moment the group empties. And the group is not enough on its own: on
+/// Windows the job's accounting drops to zero processes BEFORE the leader's process handle is
+/// signalled, so a caller that trusted the job alone would see the execution end a moment
+/// before there was a code to read, and would have to report `unknown` for a run whose leader
+/// the operating system knows the answer for. Measured on MinGW-w64; it is why the shutdown's
+/// two records said `unknown` with a default zero beside them until this asked both.
+bool ChildProcess::execution_over() {
+    const bool leader_over = ended();
+    return leader_over && !alive();
+}
+
+/// ONE RULE ON EVERY PLATFORM, because "the execution ended" means the same thing on both: look,
+/// sleep a little, look again, until `execution_over()` or the caller's moment is spent.
+///
+/// THE BOUND IS THE CLOCK, not a count of steps: asking the operating system costs real time
+/// (a Linux look walks the process table), and a caller that was promised a moment -- a
+/// shutdown spending one budget across every run it holds -- must get the moment it asked for.
+bool ChildProcess::wait_for_group_end(int milliseconds) {
+    if (!started()) {
+        return false; // nothing was ever owned, so nothing can be observed to end
+    }
+    if (execution_over()) {
+        return true;
+    }
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (execution_over()) {
+            return true;
+        }
+    }
+    return execution_over();
+}
 
 bool replace_file(const std::string& from, const std::string& to, std::string* why) {
 #ifdef _WIN32

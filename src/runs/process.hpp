@@ -30,6 +30,12 @@
 // or earlier when the group drains by itself. It never ends merely because the leader exited,
 // which is what makes a force-stop after a verdict mean something.
 //
+// SO THERE ARE TWO ENDS, AND TWO WAITS FOR THEM. A caller about to write down a final claim about
+// the LEADER ("it exited with N") waits with `wait_for_end`; a caller about to write down a final
+// claim about the EXECUTION ("it is over") waits with `wait_for_group_end`. They are not
+// interchangeable in either direction, and the second is never implied by the first: the leader's
+// end is already true the instant a stop is issued at a group whose leader had exited long ago.
+//
 // AND WHY IT CANNOT WANDER. A numeric pid or group id that nothing holds is reused by the
 // operating system, so a kill by remembered number can land on an unrelated later process. This
 // object never does that: Windows holds a job HANDLE, which names that job and no other for as
@@ -86,14 +92,28 @@ public:
     bool exit_code_known() const noexcept { return code_known_; }
 
     /// WAIT, AT MOST `milliseconds`, FOR THE LEADER TO END, so that a caller about to write down
-    /// a final claim ("it exited with N") can make the observation the claim needs. Returns
-    /// `ended()`: false means the end was not observed in that time, and the caller must say so
-    /// rather than reporting a code it never read. Zero milliseconds is one look and no wait.
-    ///
-    /// The only OTHER place this class waits is `release()`, which reaps the leader after
-    /// SIGKILL on POSIX so no zombie is left in the host's process table; every question --
-    /// `ended`, `alive`, `terminate` -- answers without waiting, as the note above says.
+    /// a final claim ABOUT THE LEADER ("it exited with N") can make the observation the claim
+    /// needs. Returns `ended()`: false means the end was not observed in that time, and the
+    /// caller must say so rather than reporting a code it never read. Zero milliseconds is one
+    /// look and no wait. It says NOTHING about the execution -- see `wait_for_group_end`.
     bool wait_for_end(int milliseconds);
+
+    /// WAIT, AT MOST `milliseconds`, FOR THE WHOLE OWNED EXECUTION TO END -- the leader and
+    /// anything it left in the execution group -- so that a caller about to write down a final
+    /// claim ABOUT THE EXECUTION ("it is over") can make the observation that claim needs.
+    /// True only once the leader has ended AND nothing this object owns is still running: false
+    /// means one of those was not established in the time given, and the caller must say so
+    /// rather than reporting an end it never saw. Zero milliseconds is one look and no wait, and
+    /// a process that was never started has nothing to observe and answers false.
+    ///
+    /// The LEADER's own code is read along the way wherever it is still readable, so
+    /// `exit_code_known()` afterwards answers about the leader exactly as it always does: this
+    /// never invents an aggregate for the group and never reports a descendant's code.
+    ///
+    /// These two waits and `release()` -- which reaps the leader after SIGKILL on POSIX so no
+    /// zombie is left in the host's process table -- are the only places this class waits; every
+    /// question, `ended`, `alive`, `terminate`, answers without waiting, as the note above says.
+    bool wait_for_group_end(int milliseconds);
 
     /// Is anything this object owns still running -- the leader, or a descendant it left in the
     /// execution group? Never waits. False once the group is empty (and then this object owns
@@ -112,6 +132,9 @@ public:
 private:
     /// End and let go of the worker (the destructor's work, shared with move assignment).
     void release() noexcept;
+    /// Has the WHOLE owned execution ended -- the leader AND the group? Both are asked, leader
+    /// first; neither answers for the other (see the definition).
+    bool execution_over();
     /// POSIX: has the execution group any member but the leader's own zombie? Reaps the leader
     /// and gives up ownership when it has not.
     bool group_alive();
