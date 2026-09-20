@@ -27,7 +27,14 @@ THE CLEANUP PHASE IS ITS OWN PHASE, and a cancellation does not reach into it. C
 the tool's ORDINARY work -- at the next wait point, as ``Cancelled`` -- and then the cleanups it
 registered run with the session still open and the same grant they always had, so a far resource
 this run took can actually be given back. What bounds that phase is its own deadline
-(``CLEANUP_SECONDS``), not the cancellation; and the manager's force-stop ends the process at any
+(``CLEANUP_SECONDS``), not the cancellation.
+
+THAT DEADLINE IS A BUDGET THIS CODE CHECKS, NOT A CAP IT IMPOSES. It is read between cleanups and
+at the context's own wait points (``ask``, ``hold``, anything through ``ctx``); nothing here
+preempts arbitrary Python, so a cleanup that blocks in a ``sleep``, a socket of its own or a
+subprocess runs as long as it runs. What the budget does promise is that once it is spent the
+cleanups that have not been attempted are not attempted and each says so. The escape for a
+cleanup blocked outside these APIs is the manager's force-stop, which ends the process at any
 moment, because the worker is a process of its own and the host never waits on it.
 
 WHAT A CLEANUP'S OUTCOME MEANS. ``done`` is the far owner's own answer; anything else is named
@@ -45,10 +52,11 @@ from .client import (DispatchRefused, NotAnswered, Refused, SendRefused)  # noqa
 
 RUNS_ROLE = "loom.runs"
 
-#: How long the whole cleanup phase may take. It is a bound on a tool's registered cleanups, not
-#: a promise about any one of them: a cleanup's own ask carries its own timeout. When it is spent
-#: the remaining cleanups are not attempted and each says so, which is a truthful record of what
-#: was and was not given back.
+#: The cleanup phase's budget: checked between cleanups and at this context's own wait points,
+#: never imposed on arbitrary Python (see the module note). It is a bound on WHICH of a tool's
+#: registered cleanups are attempted, not a promise about how long any one of them takes: a
+#: cleanup's own ask carries its own timeout. When it is spent the remaining cleanups are not
+#: attempted and each says so, which is a truthful record of what was and was not given back.
 CLEANUP_SECONDS = 30.0
 
 
@@ -132,8 +140,8 @@ class Context(object):
         self._last_pending_report = None
         self._cleaning = False         # the cleanup phase is running (see the module note)
         self._cleanup_deadline = None  # when that phase is out of time
-        #: How long this tool's whole cleanup phase may take. A tool that knows its cleanups are
-        #: slow (or must not be) says so here, before it registers them.
+        #: This tool's own cleanup budget, in place of ``CLEANUP_SECONDS``. A tool that knows
+        #: its cleanups are slow (or must not be) says so here, before it registers them.
         self.cleanup_seconds = CLEANUP_SECONDS
 
     # ---- telling the manager where the run is ----------------------------------------------
@@ -176,10 +184,18 @@ class Context(object):
 
     @property
     def cancel_requested(self):
-        """Has a cancellation been requested? Reads whatever has arrived, takes the manager's
-        directive when it is there, and LATCHES: once true, true for the rest of the run. It
-        never raises and never waits, so a tool that does its own looping can cooperate --
-        finish the piece it is on, and return or raise on its own terms."""
+        """Has a cancellation been requested? Reads whatever has ALREADY arrived, takes the
+        manager's directive when it is there, and LATCHES: once true, true for the rest of the
+        run. It does not wait for a cancellation and it does not raise ``Cancelled`` -- that is
+        what the wait points do -- so a tool that does its own looping can cooperate: finish the
+        piece it is on, and return or raise on its own terms.
+
+        WHAT IT IS NOT is a promise to do nothing else. Its poll is a zero-timeout read of a
+        real socket: it raises ``Disconnected`` if the session has ended under this tool, which
+        is a truthful end to the run rather than a silent False. And an arrival whose shape this
+        client has not seen before is decoded by asking the host for that shape, which is a
+        round trip. Neither is the cancellation's doing; both are what reading the session costs.
+        """
         self._pump(0.0)
         self._take_cancel()
         return self._cancel is not None

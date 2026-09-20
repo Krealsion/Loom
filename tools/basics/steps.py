@@ -42,9 +42,10 @@ def run(ctx):
 
 
 def work_until_asked_to_stop(ctx, seconds):
-    """Work in a loop that WAITS AT NOTHING -- no ask, no gate, no blocking call -- and still
-    notices a cancellation. `ctx.cancel_requested` reads whatever has arrived on the session,
-    never waits and never raises; once true it stays true. True when it was asked."""
+    """Work in a loop that WAITS AT NOTHING of its own -- no ask, no gate, no blocking call --
+    and still notices a cancellation. `ctx.cancel_requested` reads whatever has ALREADY arrived
+    on the session; it does not wait for a cancellation and does not raise `Cancelled`, and once
+    true it stays true. (Reading a session is not free: see its own note.) True when asked."""
     deadline = time.monotonic() + seconds
     turns = 0
     while time.monotonic() < deadline:

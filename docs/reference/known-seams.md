@@ -575,10 +575,13 @@ authored pattern and two laws, not by a migration registry. See
 "Every worker ends with the host" is true of a host that is **asked** to end —
 `Shutdown`, `quit`, `loom-session stop` — because the run manager's destructor
 ends every execution group it owns, including one whose worker leader has
-already exited leaving children behind. A host that is **killed outright** runs
-no destructor, and what happens then is the operating system's answer rather
-than this manager's. The two platforms answer differently and both are tested
-(`tests/session/journey.py`, section R):
+already exited leaving children behind, and then waits a bounded moment to see
+each of them actually end so that the record it leaves reports a code it read
+(`kShutdownObserveMs`, [bounds](bounds.md#sessions-and-runs); what it does not
+see is recorded `killing`, which promises no code). A host that is **killed
+outright** runs no destructor, and what happens then is the operating system's
+answer rather than this manager's. The two platforms answer differently and both
+are tested (`tests/session/journey.py`, section R):
 
 ```text
 Windows   the execution group is a JOB OBJECT, opened with
