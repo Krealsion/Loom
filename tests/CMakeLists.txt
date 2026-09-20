@@ -115,8 +115,26 @@ if(TARGET zen-runs)
     target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_RUNS})
     list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_RUNS})
     target_link_libraries(zen-tests PRIVATE zen-runs)
+    # A worker that leaves a child behind (tests/runs_leader/leader.cpp): the one arrangement the
+    # `runs` suite cannot make for itself, since what the manager owns is the worker's execution
+    # GROUP and only the worker can put a second process in it. An ordinary executable, not a
+    # loadable weave, so it is on neither population roll. Its three constants are authored once,
+    # here, and reach both the worker and the suite that reads what it left.
+    set(zen_runs_leader_code 7)         # the LEADER's own exit code, which nothing may overwrite
+    set(zen_runs_leader_seconds 120)    # how long the child it leaves behind keeps running
+    set(zen_runs_leader_pidfile "child.pid")
+    add_executable(zen-runs-leader runs_leader/leader.cpp)
+    target_link_libraries(zen-runs-leader PRIVATE zen-warnings zen-sanitize)
+    target_compile_definitions(zen-runs-leader PRIVATE
+        ZEN_RUNS_LEADER_CODE=${zen_runs_leader_code}
+        ZEN_RUNS_LEADER_SECONDS=${zen_runs_leader_seconds}
+        ZEN_RUNS_LEADER_PIDFILE="${zen_runs_leader_pidfile}")
+    add_dependencies(zen-tests zen-runs-leader)
     target_compile_definitions(zen-tests PRIVATE
         ZEN_TEST_CMAKE="${CMAKE_COMMAND}"
+        ZEN_TEST_RUNS_LEADER="$<TARGET_FILE:zen-runs-leader>"
+        ZEN_RUNS_LEADER_CODE=${zen_runs_leader_code}
+        ZEN_RUNS_LEADER_PIDFILE="${zen_runs_leader_pidfile}"
         ZEN_TEST_PYTHON_RUNTIME="${CMAKE_SOURCE_DIR}/python")
     list(APPEND ZEN_POPULATION_GATES runs)
     if(LOOM_SESSION_PYTHON)

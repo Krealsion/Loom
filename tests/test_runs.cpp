@@ -22,11 +22,21 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <csignal>
 #include <sys/types.h>
 #include <sys/wait.h>
 #endif
@@ -71,6 +81,45 @@ fs::path demo_package(const fs::path& root, const std::string& manifest = kManif
     write(dir / "loom-tool.json", manifest);
     write(dir / "hello.py", "def run(ctx):\n    return 'hello'\n");
     return dir;
+}
+
+/// Every note a run has collected, as one string, for a test that asks what was said at all.
+std::string joined(const std::vector<std::string>& notes) {
+    std::string all;
+    for (const std::string& n : notes) {
+        all += n;
+        all += '\n';
+    }
+    return all;
+}
+
+/// The process id a worker wrote down for the child it left behind (tests/runs_leader).
+long left_child(const fs::path& run_dir) {
+    long pid = 0;
+    std::ifstream in(run_dir / ZEN_RUNS_LEADER_PIDFILE);
+    in >> pid;
+    return pid;
+}
+
+/// IS THAT PROCESS RUNNING? Asked of the operating system directly, so that what the manager
+/// says about an execution can be checked against something other than the manager's own door.
+bool process_executing(long pid) {
+    if (pid <= 0) {
+        return false;
+    }
+#ifdef _WIN32
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (h == nullptr) {
+        return false;
+    }
+    DWORD code = 0;
+    const bool running = GetExitCodeProcess(h, &code) != 0 && code == STILL_ACTIVE;
+    CloseHandle(h);
+    return running;
+#else
+    // Not this process's child, so a dead one is reaped by init and stops answering entirely.
+    return ::kill(static_cast<pid_t>(pid), 0) == 0;
+#endif
 }
 
 bool until(const std::function<bool()>& step, int ms = 5000) {
@@ -470,6 +519,131 @@ TEST_CASE("process: an exit code is an OBSERVATION -- unknown until one is read,
     CHECK_FALSE(stolen.alive());
 #endif
 }
+
+TEST_CASE("process: the LEADER's end is not the EXECUTION's -- they are observed separately, and "
+          "only the group's end can carry a final claim") {
+    Scratch s{"group"};
+    ChildProcess leader;
+    SpawnSpec spec;
+    spec.program = ZEN_TEST_RUNS_LEADER;
+    spec.args = {"-X", "utf8", "-u", "-m", "loom_session.worker"}; // what it stands in for
+    spec.cwd = s.path.string();
+    spec.output = (s.path / "leader.log").string();
+    std::string why;
+    REQUIRE(leader.spawn(spec, &why));
+    REQUIRE(until([&] { return leader.ended(); }, 30000));
+    const long child = left_child(s.path);
+    REQUIRE(child > 0);
+    REQUIRE(process_executing(child));
+
+    // THE LEADER-ALONE PREDICATE ANSWERS "over" HERE, AND IT IS WRONG. `wait_for_end` is true at
+    // once and the code is readable, while the group this object owns is running -- so a caller
+    // that wrote `exited` or `killed` on the strength of those two would be claiming an end
+    // nobody watched happen.
+    CHECK(leader.wait_for_end(0));
+    REQUIRE(leader.exit_code_known());
+    CHECK(leader.exit_code() == ZEN_RUNS_LEADER_CODE);
+    CHECK(leader.alive());
+    CHECK_FALSE(leader.wait_for_group_end(0));   // one look: the EXECUTION has not ended
+    CHECK_FALSE(leader.wait_for_group_end(50));  // ...and spending a moment does not make it so
+    CHECK(process_executing(child));
+
+    REQUIRE(leader.terminate());
+    CHECK(leader.wait_for_group_end(30000));     // ...and now it has, and this is where it is seen
+    CHECK_FALSE(leader.alive());
+    CHECK(until([&] { return !process_executing(child); }, 30000));
+    // The leader keeps its OWN code through all of it: stopping what it left behind is not a
+    // result for the leader, and no aggregate is invented for the group.
+    CHECK(leader.exit_code() == ZEN_RUNS_LEADER_CODE);
+    CHECK(leader.exit_code_known());
+}
+
+TEST_CASE("manager: an execution whose group was never seen to go is never `exited` or `killed` "
+          "-- the worker's own code is kept, and no end is claimed that was not watched") {
+    RunsHost h(/*serving=*/true, ZEN_TEST_RUNS_LEADER);
+    h.ask(Start{"demo/hello", "left", "{\"times\": 1}"});
+    REQUIRE(h.client->refused.empty());
+    const fs::path dir = h.client->run.directory;
+    // The worker exits and the child it started keeps the execution alive. WHAT A CLIENT SEES
+    // then: no verdict at all -- this worker never connected, so the run is still `starting` --
+    // and `descendants` saying the execution it owns is not over.
+    REQUIRE(until(
+        [&] {
+            h.ask(Get{h.lifetime, "left"});
+            return h.client->run.process == "descendants";
+        },
+        30000));
+    CHECK(h.client->run.state == "starting");
+    CHECK(h.client->run.exit_code == ZEN_RUNS_LEADER_CODE);
+    const long child = left_child(dir);
+    REQUIRE(child > 0);
+    REQUIRE(process_executing(child));
+
+    // A HOST ENDING WITHOUT STOPPING ANYTHING SEES NOTHING END. No stop issued, no moment left
+    // to watch: an execution whose leader exited long ago is still exactly what it was. This is
+    // the case that separates the two ends -- the leader's is long past, the execution's is not.
+    h.manager->record_executions({}, 0);
+    std::optional<Run> rec = RunManager::read_record(dir / "run.json");
+    REQUIRE(rec.has_value());
+    CHECK(rec->process == "descendants");
+    CHECK(rec->exit_code == ZEN_RUNS_LEADER_CODE);
+    CHECK(rec->state == "interrupted"); // the host ended while this run had no verdict of its own
+    CHECK(process_executing(child));
+
+    // ...AND A STOP THAT HAS NOT BEEN SEEN TO TAKE IS `killing`, now on a run whose verdict is
+    // settled: the verdict stands, the code already read is kept, and none is invented.
+    h.manager->record_executions({true}, 0);
+    rec = RunManager::read_record(dir / "run.json");
+    REQUIRE(rec.has_value());
+    CHECK(rec->process == "killing");
+    CHECK(rec->state == "interrupted");
+    CHECK(rec->exit_code == ZEN_RUNS_LEADER_CODE);
+    CHECK(process_executing(child));
+    // The notes say what was and was not established, and do not deny a code this manager has.
+    const std::string said = joined(rec->notes);
+    CHECK(said.find("did not see the whole of this run's execution finish") != std::string::npos);
+    CHECK(said.find("no exit code was read") == std::string::npos);
+
+    // ...and then the whole thing as a host that is ending really does it: every stop issued
+    // first, one shared moment spent watching the groups go, and only then a final word.
+    h.manager->end_all_executions(RunManager::kShutdownObserveMs);
+    rec = RunManager::read_record(dir / "run.json");
+    REQUIRE(rec.has_value());
+    CHECK(rec->process == "killed");
+    CHECK(rec->exit_code == ZEN_RUNS_LEADER_CODE); // the LEADER's, never what stopped the group
+    CHECK(rec->state == "interrupted");
+    CHECK(until([&] { return !process_executing(child); }, 30000));
+}
+
+TEST_CASE("manager: the words for an execution this manager HAS seen end, and what each promises") {
+    // `unknown` is the refusal to name a code for an execution that really ended -- never the
+    // place an unobserved end is filed, and never displaced by a stop having been issued.
+    CHECK(std::string(RunManager::ended_execution_word(true, false)) == "exited");
+    CHECK(std::string(RunManager::ended_execution_word(true, true)) == "killed");
+    CHECK(std::string(RunManager::ended_execution_word(false, false)) == "unknown");
+    CHECK(std::string(RunManager::ended_execution_word(false, true)) == "unknown");
+}
+
+#ifndef _WIN32
+TEST_CASE("manager: an execution that IS over whose leader's code nobody could read is `unknown` "
+          "-- the other side of the distinction `killing` draws") {
+    RunsHost h;
+    h.ask(Start{"demo/hello", "stolen", "{\"times\": 1}"});
+    REQUIRE(h.client->refused.empty());
+    const fs::path dir = h.client->run.directory;
+    // Somebody else reaps the leader: its status is gone before this manager could read it, and
+    // the group is empty -- an end that IS established, with no code to report for it.
+    int status = 0;
+    REQUIRE(::waitpid(static_cast<pid_t>(h.client->run.pid), &status, 0) > 0);
+    h.manager->end_all_executions(RunManager::kShutdownObserveMs);
+    const std::optional<Run> rec = RunManager::read_record(dir / "run.json");
+    REQUIRE(rec.has_value());
+    CHECK(rec->process == "unknown");
+    CHECK(rec->state == "interrupted");
+    // ...and no code is invented for it -- not the -1 this manager holds for "never read".
+    CHECK(rec->exit_code == 0);
+}
+#endif
 
 // ---- the record: a save that fails is not a verdict, and an older record is still evidence ----
 

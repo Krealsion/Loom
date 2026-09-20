@@ -47,8 +47,9 @@
 //              and blocks `Release` until it is.
 //
 //              `exit_code` IS THE LEADER'S OWN, and it means something only at `exited` or
-//              `killed` -- the two words this manager writes only once it has actually read
-//              one. It is never a descendant's, never an aggregate for the group, and never a
+//              `killed` -- the two words this manager writes only once it has WATCHED THE
+//              EXECUTION END (the group, never just its leader) and actually read one. It is
+//              never a descendant's, never an aggregate for the group, and never a
 //              default standing in for an observation that was not made: a leader whose code is
 //              already known keeps it when the group it left behind is stopped later, and a
 //              host that ends an execution without seeing it finish records `killing`, which
