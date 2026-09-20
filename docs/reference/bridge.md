@@ -150,6 +150,16 @@ different places:
 | the socket ended after the send | nothing — the outcome is **unknown**, and a peer must not resend on its own |
 | silence | nothing; the ask is still open on the peer's own book |
 
+**What a peer that asked for settlement owes itself.** The two outcomes above are separate
+frames, unordered against each other, and a peer that asked for both has not got what it asked
+for until both have come. Loom's own Python client holds that rule: a conversation with
+`settle` is complete on its attested answer AND its `Settled`, in either arrival order, and a
+wait that runs out says which half is missing while keeping the half that came
+([sessions § 7](../guides/sessions.md#7-writing-a-tool)). A refusal — of the send or of the
+dispatch — completes such a conversation whatever was asked, because nothing is then in motion
+to settle. A peer that treats the answer alone as the end has silently asked for one thing and
+waited for another; the flag then costs a frame and buys nothing.
+
 ## The payload encoding a session speaks
 
 A payload is one of Zen's two serializations, and the host's policy chooses which, per session,

@@ -61,6 +61,42 @@ def until(predicate, seconds, what):
     return False
 
 
+def alive(pid):
+    """Is that process running, asked of the operating system? Never inferred from a report.
+
+    On POSIX a process that has been killed but not yet reaped by its parent still answers to
+    `kill(pid, 0)`, so a check that a worker has ENDED asks the manager (its parent) as well."""
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", "PID eq %d" % int(pid), "/NH"],
+                             capture_output=True, text=True)
+        return ("%d" % int(pid)) in out.stdout
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+def released(session, name):
+    """True once the manager lets that record go -- it refuses while an execution is alive."""
+    try:
+        session.release(name)
+        return True
+    except Exception:
+        return False
+
+
+def refuses(call, words):
+    """True when `call()` was refused in words containing `words`."""
+    try:
+        call()
+    except Exception as err:
+        return words in str(err)
+    return False
+
+
 APPROVALS = [
     "authority trust runs --rebuilds",
     "authority allow runs loom.session.ExpectRun v1 -> role loom.session",
@@ -71,6 +107,9 @@ APPROVALS = [
     "authority allow runs loom.runs.RunList v1 -> any target",
     "authority allow runs loom.runs.Directive v1 -> any target",
     "authority allow runs loom.session.Describe v1 -> role loom.session",
+    # For the lifecycle package's `settle` tool: a DIRECT ask of this manager, asking to be
+    # settled, made by a worker this manager may pass that rule on to.
+    "authority allow runs loom.runs.Start v1 -> role loom.runs",
 ]
 
 
@@ -141,12 +180,19 @@ def main():
                 "    for _ in range(ctx.inputs['times']):\n"
                 "        ctx.ask('loom.session', 'loom.session.Describe', {})\n"
                 "    return 'asked %d times' % ctx.inputs['times']\n")
+    # The lifecycle package: tools whose verdict and whose execution end at different moments,
+    # and whose cleanups speak on the bus. It lives beside this driver, not in the shipped
+    # examples -- a tool that deliberately leaves a process behind is a witness, not a sample.
+    lifecycle = os.path.join(pkgs, "lifecycle")
+    shutil.copytree(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lifecycle"),
+                    lifecycle, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
     catalog = {"python": sys.executable, "runtime": os.path.abspath(args.runtime),
                "packages": [{"path": basics, "approve": "any-revision"},
                             {"path": greedy, "approve": "any-revision"},
                             {"path": pinned, "approve": "PINNED"},
-                            {"path": chatty, "approve": "any-revision"}]}
+                            {"path": chatty, "approve": "any-revision"},
+                            {"path": lifecycle, "approve": "any-revision"}]}
 
     def write_catalog():
         with open(os.path.join(session_dir, "loom-tools.json"), "w", encoding="utf-8") as f:
@@ -384,10 +430,14 @@ def main():
         s.start("basics/steps", "force-me", {"count": 2, "hold": "never"})
         until(lambda: s.run("force-me")["step"] == "held: never", 30, "the run to hold")
         s.cancel("force-me", reason="no waiting", force=True)
-        forced = s.wait("force-me", timeout=60)
-        check("J3 a forced cancellation ends the process: cancelled, killed",
+        s.wait("force-me", timeout=60)
+        # `killed` is said once the execution is actually over -- which is also when there is
+        # an exit code to read. Waiting for it is waiting for the owner, not for a clock.
+        until(lambda: s.run("force-me")["process"] == "killed", 30, "the process to be gone")
+        forced = s.run("force-me")
+        check("J3 a forced cancellation ends the process: cancelled, killed, with its code",
               forced["state"] == "cancelled" and forced["process"] == "killed",
-              (forced["state"], forced["process"]))
+              (forced["state"], forced["process"], forced["exit_code"]))
 
     # ---- K. a Start whose answer was lost is recovered by name, never duplicated ------------
     # The Start ACTS (a second client sees the run exist) and its sender leaves without ever
@@ -451,12 +501,247 @@ def main():
               c["state"] == "passed" and len(c["asks"]) == 128 and c["asks_dropped"] == 3,
               (c["state"], len(c["asks"]), c.get("asks_dropped"), c["failure"][:200]))
 
+    # ---- N. a verdict is not the end of an execution -----------------------------------------
+    #
+    # The tool returns while its process goes on running -- a thread it never joined, or a child
+    # it started. The verdict is in; the execution is not over; and the manager must say both,
+    # keep counting the execution against its capacity, still be able to stop it, and refuse to
+    # let a client lose it by releasing the record.
+    with Session.attach(session_dir) as s:
+        before_active = s.runs()["active"]
+        s.start("lifecycle/linger", "linger", {"seconds": 300})
+        s.wait("linger", timeout=60)
+        r = s.run("linger")
+        check("N1 the tool's verdict arrives while its process is still running",
+              r["state"] == "passed" and r["process"] == "running" and alive(r["pid"]),
+              (r["state"], r["process"], r["pid"]))
+        check("N2 a live execution still counts against the manager's capacity",
+              s.runs()["active"] == before_active + 1,
+              (before_active, s.runs()["active"]))
+        try:
+            s.release("linger")
+            why = ""
+        except Refused as err:
+            why = str(err)
+        check("N3 releasing is not a way to kill it: the record is kept and the client is told "
+              "to stop the execution on purpose", "execution is still alive" in why, why)
+        stopped = s.cancel("linger", reason="the journey stops the execution")
+        # Asked of BOTH owners: the manager, whose answer is what a client acts on, and the
+        # operating system. On POSIX the manager is the worker's parent, so it is also the only
+        # thing that can reap it -- which it does the next time a client asks it anything, and
+        # asking is what this wait does.
+        ended = until(lambda: s.run("linger")["process"] == "killed" and not alive(r["pid"]), 30,
+                      "the execution to end")
+        check("N4 the execution is stopped, and the VERDICT is untouched",
+              stopped["state"] == "passed" and
+              stopped["process"] in ("killing", "killed") and ended,
+              (stopped["state"], stopped["process"], s.run("linger")["process"]))
+        check("N5 the evidence of a run that passed and was then stopped is readable, and still "
+              "says it passed", read_record(r["directory"])["state"] == "passed" and
+              read_record(r["directory"])["process"] == "killed",
+              read_record(r["directory"])["process"])
+        s.release("linger")
+        check("N6 once nothing is running, the record releases", "linger" not in
+              [x["name"] for x in s.runs()["rows"]])
+
+    # A worker that EXITS leaving a child behind: the leader is gone, the execution is not.
+    control = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    try:
+        with Session.attach(session_dir) as s:
+            s.start("lifecycle/descendants", "descendants", {"seconds": 300})
+            s.wait("descendants", timeout=60)
+            until(lambda: s.run("descendants")["process"] == "descendants", 30,
+                  "the worker to exit and its child to be noticed")
+            d = s.run("descendants")
+            art = dict((a["name"], a) for a in d["artifacts"]).get("child.pid")
+            child = int(open(art["path"], "rb").read()) if art else 0
+            check("N7 the worker leader exited and the manager says the execution goes on",
+                  d["state"] == "passed" and d["process"] == "descendants" and alive(child),
+                  (d["state"], d["process"], child))
+            check("N8 it is still counted, and still cannot be released",
+                  s.runs()["active"] >= 1 and refuses(lambda: s.release("descendants"),
+                                                      "execution is still alive"))
+            s.cancel("descendants", reason="the journey stops the child")
+            check("N9 cancelling reaches the child the worker left behind",
+                  until(lambda: not alive(child), 20, "the child to end"))
+            check("N10 an unrelated process of the same user was never this manager's to touch",
+                  control.poll() is None)
+            until(lambda: released(s, "descendants"), 20, "the record to release")
+    finally:
+        if control.poll() is None:
+            control.kill()
+            control.wait()
+
+    # ---- O. the cleanup phase: a cancellation stops work, not the giving back ----------------
+    with Session.attach(session_dir) as s:
+        s.start("lifecycle/cleanup", "cleanup-me", {"hold": "never", "refuse": True})
+        until(lambda: s.run("cleanup-me")["step"] == "held: never", 30, "the run to hold")
+        s.cancel("cleanup-me", reason="the journey cancels a run holding a far thing")
+        done = s.wait("cleanup-me", timeout=60)
+        notes = " | ".join(done["notes"])
+        check("O1 a cleanup that must SPEAK still speaks after the cancellation, and the owner "
+              "answered it", "cleanup ask the door, which this run may ask: done" in notes,
+              notes[-400:])
+        check("O2 the door really answered it: the cleanup said which lifetime it heard",
+              ("cleanup asked the door and it answered: lifetime " + first_lifetime[:12]) in notes,
+              notes[-400:])
+        check("O3 a cleanup that cannot finish is recorded as what it was -- the bus's own "
+              "refusal -- never as done",
+              "ask an office this run was never granted: RuntimeError" in notes and
+              "CapabilityDenied" in notes, notes[-400:])
+        check("O4 the run is cancelled, and its account of its cleanups is part of why",
+              done["state"] == "cancelled" and "cleanup" in done["failure"],
+              (done["state"], done["failure"][:200]))
+        # AND THE SESSION IS STILL A SESSION: the next run on it works.
+        s.start("basics/steps", "after-cleanup", {"count": 1, "message": "after"})
+        check("O5 the session serves the next run normally",
+              s.wait("after-cleanup", timeout=60)["state"] == "passed")
+
+    # A tool that WAITS AT NOTHING still cooperates, through the public property alone: no ask,
+    # no gate, nothing blocking -- the case a cancellation used to have no way to reach.
+    with Session.attach(session_dir) as s:
+        s.start("basics/steps", "cooperates", {"count": 3, "cooperate": 60})
+        until(lambda: s.run("cooperates")["state"] == "running" and
+              s.run("cooperates")["session"] != 0, 30, "the run to be working")
+        s.cancel("cooperates", reason="the journey asks a busy tool to stop")
+        coop = s.wait("cooperates", timeout=45)
+        check("O10 a tool looping on ctx.cancel_requested stops when asked, without waiting at "
+              "an ask or a gate and without anybody forcing it",
+              coop["cancel_requested"] and coop["state"] == "passed" and
+              "asked to stop" in coop["summary"] and coop["process"] != "killed",
+              (coop["state"], coop["process"], coop["summary"]))
+        check("O11 ...and it was its own turn of work that ended, with its report written",
+              any("asked to stop after" in n for n in coop["notes"]) and
+              any(a["name"] == "report.txt" and a["state"] == "verified"
+                  for a in coop["artifacts"]), " | ".join(coop["notes"])[-200:])
+
+    # A cleanup that BLOCKS: the host is a different process and never waits on it.
+    with Session.attach(session_dir) as s:
+        s.start("lifecycle/stuck", "stuck", {"hold": "never", "budget": 600})
+        until(lambda: s.run("stuck")["step"] == "held: never", 30, "the run to hold")
+        s.cancel("stuck", reason="the journey cancels a run whose cleanup cannot finish")
+        blocked = until(lambda: s.run("stuck")["step"].startswith("cleanup"), 30,
+                        "the run to reach its cleanup")
+        st = s.run("stuck")
+        check("O6 a blocked cleanup is visible AS a cleanup, not as a run that is stuck",
+              blocked and st["state"] == "running" and st["step"].startswith("cleanup") and
+              st["pending"], (st["state"], st["step"], st["pending"]))
+        check("O7 the host answers every other client while that cleanup is blocked",
+              s.describe()["lifetime"] == first_lifetime and
+              s.run("after-cleanup")["state"] == "passed")
+        forced = s.cancel("stuck", reason="no waiting", force=True)
+        s.wait("stuck", timeout=60)
+        until(lambda: s.run("stuck")["process"] == "killed", 30, "the process to be gone")
+        ended = s.run("stuck")
+        check("O8 a forced cancellation ends a blocked cleanup's process",
+              ended["state"] == "cancelled" and ended["process"] == "killed",
+              (forced["process"], ended["state"], ended["process"]))
+        # ...and a budget the tool set ends one by itself, with a truthful word for it.
+        s.start("lifecycle/stuck", "expires", {"hold": "never", "budget": 3})
+        until(lambda: s.run("expires")["step"] == "held: never", 30, "the run to hold")
+        s.cancel("expires", reason="let the cleanup budget end it")
+        out = s.wait("expires", timeout=90)
+        # The VERDICT is in at `wait`; the process exiting is a separate fact, so it is waited
+        # for separately -- which is the very distinction this phase came to make.
+        ended_by_itself = until(lambda: s.run("expires")["process"] == "exited", 30,
+                                "the worker to exit by itself")
+        out = s.run("expires")
+        check("O9 a cleanup phase that runs out of its own budget says so, and the run ends "
+              "without anybody forcing it",
+              out["state"] == "cancelled" and ended_by_itself and out["process"] == "exited" and
+              "CleanupExpired" in " | ".join(out["notes"]),
+              (out["state"], out["process"], " | ".join(out["notes"])[-200:]))
+
+    # ---- P. evidence that could not be saved is said, not silently lost ----------------------
+    with Session.attach(session_dir) as s:
+        s.start("basics/steps", "faulted", {"count": 2, "hold": "go", "message": "faulted"})
+        until(lambda: s.run("faulted")["step"] == "held: go", 30, "the run to hold")
+        run_dir = s.run("faulted")["directory"]
+        record = os.path.join(run_dir, "run.json")
+        tmp = record + ".tmp"
+        # The temporary is transient. The fault is only INJECTED once it is not there, and it is
+        # checked to have taken -- an attempt that did not establish the fault proves nothing.
+        cleared = until(lambda: not os.path.exists(tmp), 30, "the temporary record to clear")
+        established = False
+        if cleared:
+            try:
+                os.mkdir(tmp)
+                established = os.path.isdir(tmp)
+            except OSError:
+                established = False
+        check("P1 the fault is established: the name the record is written through is taken",
+              established, tmp)
+        if established:
+            saved_before = read_record(run_dir)
+            os.makedirs(os.path.join(run_dir, "release"), exist_ok=True)
+            open(os.path.join(run_dir, "release", "go"), "w").close()
+            def stale_and_finished():
+                r = s.run("faulted")
+                return r["record"] == "stale" and r["state"] == "passed"
+
+            told = until(stale_and_finished, 60,
+                         "the run to finish with its record unsaveable")
+            live = s.run("faulted")
+            check("P2 the manager says the evidence on disk is stale, and why", told and
+                  live["record"] == "stale" and tmp in live["record_error"],
+                  live.get("record_error", "")[:200])
+            check("P3 the tool's verdict is NOT relabelled because its evidence could not be "
+                  "saved", live["state"] == "passed" and not live["failure"],
+                  (live["state"], live["failure"][:120]))
+            on_disk = read_record(run_dir)
+            check("P4 the last valid record is still there, whole and readable",
+                  on_disk is not None and on_disk["name"] == "faulted" and
+                  on_disk["state"] == saved_before["state"],
+                  (on_disk or {}).get("state"))
+            os.rmdir(tmp)
+            again = until(lambda: s.run("faulted")["record"] == "saved", 30,
+                          "the record to be written again")
+            recovered = s.run("faulted")
+            check("P5 with the fault gone the next time a client asks about this run the "
+                  "record is saved again, and the record on disk is the run",
+                  again and recovered["record"] == "saved" and
+                  read_record(run_dir)["state"] == "passed",
+                  (recovered["record"], read_record(run_dir)["state"]))
+
+    # ---- Q. settlement asked for is settlement waited for ------------------------------------
+    with Session.attach(session_dir) as s:
+        s.start("lifecycle/settle", "settled-ask", {"name": "started-by-a-settled-ask"})
+        q = s.wait("settled-ask", timeout=90)
+        art = dict((a["name"], a) for a in q["artifacts"]).get("settlement.json")
+        told = json.load(open(art["path"], "r", encoding="utf-8")) if art else {}
+        check("Q1 a direct ask that asked for settlement was complete only with BOTH halves, "
+              "through the real bridge", q["state"] == "passed" and
+              told.get("settled_at_completion") is True and told.get("shape") == "loom.runs.Run",
+              (q["state"], told, q["failure"][:200]))
+        check("Q2 the work that ask set in motion really had happened: the run it asked for "
+              "exists, with a worker process of its own",
+              told.get("pid", 0) != 0 and
+              s.wait("started-by-a-settled-ask", timeout=60)["state"] == "passed",
+              told.get("pid"))
+        asked = [a for a in q["asks"] if a["shape"] == "loom.runs.Start"]
+        check("Q3 the run's own account says the ask asked to be settled, and was answered",
+              len(asked) == 1 and asked[0]["settle"] and asked[0]["outcome"] == "answer", asked)
+
     # ---- M. the host ends; a new lifetime refuses the old handle; records remain -------------
     with Session.attach(session_dir) as s:
         s.start("basics/steps", "left-held", {"count": 2, "hold": "never"})
         until(lambda: s.run("left-held")["step"] == "held: never", 30, "the run to hold")
+        # ...and one whose worker has ALREADY exited, leaving a child this manager owns:
+        # a clean shutdown has to account for that too, not only for live workers.
+        s.start("lifecycle/descendants", "left-descendants", {"seconds": 300})
+        s.wait("left-descendants", timeout=60)
+        until(lambda: s.run("left-descendants")["process"] == "descendants", 30,
+              "the worker to exit leaving its child")
+        left = s.run("left-descendants")
+        left_art = dict((a["name"], a) for a in left["artifacts"]).get("child.pid")
+        left_child = int(open(left_art["path"], "rb").read()) if left_art else 0
+        check("M0 a run whose worker exited still owns a live child when the host is told to end",
+              left["process"] == "descendants" and alive(left_child),
+              (left["process"], left_child))
         s.shutdown("the journey ends this lifetime")
     code = host.wait(timeout=30)
+    check("M0a a CLEAN shutdown ends an execution whose leader had already exited",
+          until(lambda: not alive(left_child), 30, "the orphaned child to end"), left_child)
     check("M1 Shutdown ends the host with exit 0 and removes its session files",
           code == 0 and not os.path.exists(os.path.join(session_dir, "session.json")), code)
     try:
@@ -488,6 +773,52 @@ def main():
                   "interrupted", past.get("left-held", {}).get("failure"))
             s.shutdown("the journey is over")
         host.wait(timeout=30)
+
+    # ---- R. a host that is KILLED is not a host that shut down -------------------------------
+    #
+    # The clean end runs the manager's destructor and every execution goes with it (M8, N4). An
+    # abruptly killed host runs nothing at all, so what happens to its workers is the operating
+    # system's answer, not this manager's -- and the two platforms answer differently. Both
+    # answers are pinned here, because a guarantee nobody tested is not a guarantee, and a
+    # limit nobody wrote down gets mistaken for one.
+    abrupt = os.path.join(work, "abrupt")
+    os.makedirs(abrupt)
+    shutil.copy(os.path.join(session_dir, "loom-boot.json"),
+                os.path.join(abrupt, "loom-boot.json"))
+    shutil.copy(os.path.join(session_dir, "loom-tools.json"),
+                os.path.join(abrupt, "loom-tools.json"))
+    killed_host = start_host(args, abrupt, APPROVALS + ["start runs %s loom.runs" % args.runs])
+    worker_pid = 0
+    if check("R0 a host of its own is serving, for a death nothing else has to survive",
+             until(lambda: Session.attach(abrupt).close() or True, 30, "the third host")):
+        with Session.attach(abrupt) as s:
+            s.start("lifecycle/linger", "outlives", {"seconds": 300})
+            s.wait("outlives", timeout=60)
+            worker_pid = s.run("outlives")["pid"]
+        check("R1 its worker is running when the host is killed", alive(worker_pid), worker_pid)
+        killed_host.kill()
+        killed_host.wait(timeout=30)
+        if os.name == "nt":
+            check("R2 (Windows) the worker goes with an abruptly killed host: the job object "
+                  "the kernel closes on its behalf takes the whole execution group",
+                  until(lambda: not alive(worker_pid), 30, "the worker to go with its host"),
+                  worker_pid)
+        else:
+            # NOT a defect and NOT a guarantee: POSIX has no equivalent of the job's
+            # kill-on-close, and docs/guides/sessions.md says so rather than implying otherwise.
+            check("R2 (POSIX) the worker SURVIVES an abruptly killed host -- there is no such "
+                  "guarantee on this platform, and this is what that means",
+                  alive(worker_pid), worker_pid)
+        check("R3 the session files of a host that was killed are still there, saying which "
+              "lifetime nothing is answering for",
+              os.path.exists(os.path.join(abrupt, "session.json")))
+        if alive(worker_pid):
+            # The journey owns what it started: nothing of this section is left running.
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(worker_pid)],
+                               capture_output=True)
+            else:
+                os.kill(worker_pid, 9)
     return finish(args, None)
 
 

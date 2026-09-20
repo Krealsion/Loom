@@ -3,6 +3,7 @@
 """basics/steps -- a journey with no application behind it (see loom-tool.json)."""
 
 import os
+import time
 
 
 def run(ctx):
@@ -25,6 +26,32 @@ def run(ctx):
         done.append(i)
         if i == 1 and ctx.inputs.get("hold"):
             ctx.hold(ctx.inputs["hold"], "held after step 1")
+        if i == 1 and int(ctx.inputs.get("cooperate", 0)) > 0:
+            asked = work_until_asked_to_stop(ctx, int(ctx.inputs["cooperate"]))
+            if asked:
+                # COOPERATING IS THE TOOL'S OWN DECISION, and so is the verdict it gives after
+                # it: this run ends `passed` with `cancel_requested` set, not `cancelled`.
+                # (Raising `loom_session.tool.Cancelled` here would end it `cancelled` instead.)
+                text = "".join("step %d done\n" % n for n in done) + "stopped when asked\n"
+                ctx.produce("report.txt", text.encode("utf-8"))
+                return "asked to stop during step 1's work: %d step(s), nothing left half done" % (
+                    len(done),)
     text = "".join("step %d done\n" % i for i in done) + ctx.inputs.get("message", "") + "\n"
     ctx.produce("report.txt", text.encode("utf-8"))
     return "%d step(s); report.txt written" % len(done)
+
+
+def work_until_asked_to_stop(ctx, seconds):
+    """Work in a loop that WAITS AT NOTHING -- no ask, no gate, no blocking call -- and still
+    notices a cancellation. `ctx.cancel_requested` reads whatever has arrived on the session,
+    never waits and never raises; once true it stays true. True when it was asked."""
+    deadline = time.monotonic() + seconds
+    turns = 0
+    while time.monotonic() < deadline:
+        if ctx.cancel_requested:
+            ctx.note("asked to stop after %d turn(s) of work; finishing this one and returning"
+                     % turns)
+            return True
+        turns += 1
+        time.sleep(0.01)  # a turn of this tool's own work
+    return False

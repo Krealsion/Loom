@@ -170,18 +170,46 @@ run 3f17415b/first -- passed (live)
   read back through Loom's gate. It survives the host; `loom-session runs work --past` lists
   earlier lifetimes' records — evidence of what happened, never live state.
 
+### Three things a run says, and why none stands for another
+
+A returning client has to be able to tell a finished tool from a finished execution, and either
+from evidence that got saved. A run answers all three separately:
+
+| field | the question it answers | its words |
+|---|---|---|
+| `state` | what did the TOOL conclude? | the states above. Settled once, never rewritten |
+| `process` | is anything still RUNNING? | `not-started`, `running`, `descendants`, `killing`, `exited`, `killed`, `unknown`. `exit_code` means something only at `exited` or `killed` -- before that nothing has been read |
+| `record` | is `run.json` this run? | `saved`, `stale` (with `record_error`), `unknown` (a record written before this manager said) |
+
+- **A verdict does not end an execution.** A tool that returns having left a thread it never
+  joined, or a child process of its own, is `passed` with `process` `running` or `descendants`.
+  While that is true the run still counts against the 8 active, `cancel` still stops it, and
+  `release` refuses — releasing a record is not a way to kill something, and the refusal says so.
+  Stopping it afterwards never rewrites the verdict: the run stays `passed`, `process` becomes
+  `killed`, and a note says what was stopped and why.
+- **A record that could not be saved is not a failed tool.** If the manager cannot write
+  `run.json` — a full disk, a permission, something else holding the temporary name — the last
+  valid record is left exactly where it is, `record` becomes `stale` and `record_error` says the
+  operating system's reason and what is still on disk. The verdict is untouched. The manager
+  tries again at the run's next change and whenever a client asks it about its runs; nothing
+  loops and nothing retries on its own. `loom-session show` prints the line; `--json` has both
+  fields.
+
 **Leaving is not cancelling.** Detach at any time; the run, its worker and its links carry on.
-The four ways a run can stop mean four different things:
+The ways a run can stop mean different things:
 
 | | what happened | what the record says |
 |---|---|---|
 | a client leaves | nothing, to the run | still `running` |
-| `cancel` | a REQUEST: the worker is told at its next wait, runs its cleanup, ends | `cancelled` once its process ended |
-| `cancel --force` | the worker's process tree is ended now; no cleanup ran | `cancelled`, process `killed` |
-| the host ends | every active worker ends with it | `interrupted` |
+| `cancel` | a REQUEST: the worker is told at its next wait, its cleanups run, it ends | `cancelled` once its process ended |
+| `cancel --force` | the worker's execution group is ended now; no cleanup ran | `cancelled`, process `killed` |
+| `cancel` after the verdict | there is nobody left to ask, so the execution is stopped outright | the verdict it had, process `killed` |
+| the host ends cleanly (`stop`, `quit`, `Shutdown`) | every execution this manager owns ends with it | `interrupted` — or its verdict, with process `killed` |
+| the host is KILLED | it runs nothing, so see below | whatever was last saved |
 
 A wait is the client's decision (`--wait`, `Session.wait(timeout=...)`): running out of it says
-nothing about the run, which is still its manager's to finish.
+nothing about the run, which is still its manager's to finish. `wait` returns on the **verdict**;
+if you also need the execution to be over, read `process` after it.
 
 Bounds: 8 active runs and 64 held per lifetime; release finished ones with
 `loom-session release work <name>` (`--remove` also deletes its directory). The rest are in
@@ -254,10 +282,35 @@ def run(ctx):
   is an exception: `Refused` (the owner said no), `DispatchRefused` (the bus said no),
   `SendRefused` (dropped before the bus), `LinkOutcome` (the link's word; `lost` means the outcome
   is unknown and is never retried for you), `NotAnswered` (your own wait ran out).
-- `ctx.ask_async(...)` returns a `Pending`; several may be open at once.
+- **`settle=True` asks for two things and waits for both**: the attested answer, and the host's
+  word that everything that send set in motion has been dispatched. They may arrive in either
+  order; an answer alone does not finish such an ask, and a `NotAnswered` from one says which
+  half is missing while the half that came is kept. Without `settle` the answer alone is enough.
+  Across a link the flag means the same on the far host's bus, which is how the Workshop tool
+  orders a picture after a chord.
+- `ctx.ask_async(...)` returns a `Pending`; several may be open at once. `Pending.done()` polls
+  without waiting and services whatever has already arrived.
 - `ctx.hold(gate)` waits until `<run>/release/<gate>` exists — for demonstrations and tests that
   must decide when a run proceeds while no client is attached.
 - `ctx.inputs` are typed as the manifest declares them (`text`, `int`, `bool`, `number`).
+
+**Cancelling, and giving things back.** A cancellation ends a tool's ORDINARY work: it is raised
+as `Cancelled` at the next wait point. What the tool registered with `ctx.on_cleanup` then runs
+in a phase of its own, with the session still open and the same grant it always had — so a run
+that took a far resource can hand it back after being cancelled, which is the only way the next
+run gets it. Each cleanup's outcome is recorded as what it actually was: `done` only when the
+far owner answered, and otherwise the refusal, the timeout, the lost link or the disconnection,
+by name. A cleanup that cannot finish does not become a lie, and it does not change the verdict —
+a tool that passed still passed, with a line on its summary saying what it could not give back.
+
+- The phase has a bound of its own (`ctx.cleanup_seconds`, 30 s by default); when it runs out,
+  what is left says so rather than waiting forever. The host is a different process and goes on
+  answering every other client throughout, and `cancel --force` ends a blocked cleanup at once.
+- `ctx.cancel_requested` is the cooperative door for a tool doing its own looping: it reads
+  whatever has arrived, never waits and never raises, and once true stays true. Finish the piece
+  you are on and return — or raise — on your own terms.
+- `--force` runs no cleanup at all. What the run took is then the far owner's to reclaim, in its
+  own way and on its own terms; the run does not claim to have given anything back.
 
 A tool that talks to another host through a link can only use shapes this host knows: the far
 answer is re-admitted here, and a request written as JSON is encoded here. Load a participant
@@ -274,14 +327,49 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | `the session door refused run ...: ... may not say itself` | the manager's ceiling | `authority allow runs <rule>` |
 | a run `crashed` | the worker ended without a verdict | its `failure` ends with the tail of `worker.log` |
 | `no Python interpreter was found` | the manager could not start a worker | `"python"` in `loom-tools.json` |
+| a run is `passed` but `process` is `running` or `descendants` | the tool finished; something it started did not | `cancel <name>` to end it, then `release` |
+| `... its execution is still alive ...: cancel it to stop that` | you asked to release a record whose work is still going | `cancel <name>` first — releasing is not a way to kill |
+| `record: stale — cannot open .../run.json.tmp ...` | `run.json` is behind the live run, for the reason given | clear the reason (disk, permission, a name in the way); the next question you ask saves it |
+| a cleanup line that is not `done` | the run tried to give something back and could not | the line names what happened; the far owner decides what it does about a guest that went away |
 
-**After a crash of the host**, nothing resumes: a restarted host is a new lifetime, its runs
-start empty, and the old lifetime's runs keep the last record their manager wrote (a run that was
-running then shows the state it had). What can be recovered is the record and the outputs on disk.
+**Recovering a session, start to finish.**
+
+```text
+loom-session runs work                 # what this lifetime holds, and how many are active
+loom-session show work <name>          # state (the verdict), process (the execution), record
+loom-session cancel work <name>        # stop a live execution -- after a verdict too
+loom-session show work <name>          # ...and read it back: process killed, the verdict intact
+loom-session release work <name>       # only once nothing of it is running
+loom-session runs work --past          # earlier lifetimes' records, read from their run.json
+```
+
+If `show` says `record: stale`, believe the answer and not the file: the answer is the manager's
+live state and the file is the last thing it managed to write. Fix the reason it gives and ask
+again — the next question saves it, and `record` goes back to `saved`.
+
+**After the host ends.** Nothing resumes: a restarted host is a new lifetime, its runs start
+empty, and the old lifetime's runs keep the last record their manager wrote. Which record that is
+depends on how the host ended, and the two are not the same thing:
+
+- **Ended cleanly** (`loom-session stop`, `quit`, `Shutdown`): the manager ends every execution
+  it owns and writes each run's last record — `interrupted` for one that had no verdict.
+- **Killed outright** (a crash, `kill -9`, the machine going down): the manager runs nothing, so
+  the records stay as they were and the states in them are whatever was last saved. What happens
+  to the workers is then the operating system's answer, not this manager's, and it differs:
+  **on Windows** each worker's execution group is a job object the kernel closes on the dying
+  host's behalf, so the workers go with it; **on POSIX there is no such guarantee** — the workers
+  keep running, reparented, with nothing left that owns them. Look for them by the `pid` in the
+  old records and end them yourself.
+
+What can be recovered either way is the record and the outputs on disk.
 
 ## What this does not do
 
 - Resume a run, or a worker's Python stack, across a host restart.
+- Outlive a host that was killed outright, on POSIX: only Windows' job object survives that, and
+  it is the kernel's doing rather than this manager's (§ 8).
+- Contain a worker that deliberately escapes its execution group — a process that breaks away is
+  an OS sandbox's problem, and this is not one.
 - Sandbox a tool, or authenticate a person: the owner's key is a local shared secret.
 - Listen anywhere but loopback, or add transport security.
 - Serve another platform's clients over the network, discover sessions, or share one across users.

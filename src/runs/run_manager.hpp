@@ -30,6 +30,18 @@
 // LIFETIMES. The host lifetime comes from the door's own published record (`session.json`,
 // written before anything booted); every handle names it, and a handle from another lifetime is
 // refused by name, never looked up as if it were this one's.
+//
+// THREE THINGS THIS MANAGER KEEPS APART, because a client that cannot tell them apart cannot act
+// (`zen/runs/vocabulary.hpp` says what each one's words mean):
+//
+//   the VERDICT       `state`. The tool's own conclusion, or the manager's for it. Settled once.
+//   the EXECUTION     `process`. Owned from spawn until release, and NOT ended by the verdict:
+//                     a worker that returned while a thread or a child of its own still runs is
+//                     a live execution -- it counts against `kMaxActive`, `Cancel` stops it, and
+//                     `Release` refuses until it is stopped. Stopping it never edits the verdict.
+//   the EVIDENCE      `record`. Whether `run.json` holds this view. A save that fails leaves the
+//                     LAST VALID record where it is, says so in the live view, and changes no
+//                     verdict; the next change to the run tries again, and nothing loops.
 
 #include "catalog.hpp"
 #include "process.hpp"
@@ -45,6 +57,7 @@
 #include <zen/weave/standard_shapes.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -96,14 +109,24 @@ public:
     RunManager() : book_(kMaxActive * 4) {}
     explicit RunManager(RunManagerConfig config) : config_(std::move(config)), book_(kMaxActive * 4) {}
 
-    /// THE HOST IS ENDING (or this manager is being unloaded): every run still active ends with
-    /// it, and its record says so. Nothing is resent and nothing is claimed about far work.
+    /// THE HOST IS ENDING (or this manager is being unloaded): every EXECUTION this manager owns
+    /// ends with it -- including one whose verdict is already in -- and the record says so.
+    /// Nothing is resent and nothing is claimed about far work. This is the CLEAN end; a host
+    /// killed outright never runs it, and only the Windows job object survives that
+    /// (`src/runs/process.hpp`, docs/guides/sessions.md).
     ~RunManager() {
         for (auto& r : runs_) {
+            const bool killed = r->process.terminate();
             if (final_state(r->view.state)) {
+                if (killed) {
+                    // The verdict stands; only the execution was still going, and is not now.
+                    r->view.process = "killed"; // the host is ending: nothing will reap it later
+                    note(*r, "the session host ended while this run's execution was still alive; "
+                             "it was stopped. The verdict above is the tool's and is unchanged");
+                    write_record(*r);
+                }
                 continue;
             }
-            const bool killed = r->process.terminate();
             const std::string was = r->view.state;
             r->view.state = "interrupted";
             r->view.failure = "the session host ended while this run was " + was +
@@ -516,6 +539,8 @@ public:
         write_record(*r);
     }
 
+    /// THE TOOL'S VERDICT -- which is not the end of its execution. The state is settled here;
+    /// whether anything is still running is `process`, and `reap` owns that.
     void on(const Finished& f, Mail& mail) {
         RunRecord* r = worker(mail);
         if (r == nullptr) {
@@ -537,6 +562,7 @@ public:
             (void)answer_deferred(due, mail, Directive{"finish", "the run's verdict is recorded"});
         }
         write_record(*r);
+        reap(*r, mail); // it may already be over; if it is not, `process` says what is left
     }
 
     /// THE WORKER'S STANDING QUESTION. Held, and answered once: `cancel` or `finish`.
@@ -580,22 +606,40 @@ public:
         }
     }
 
-    /// A CANCELLATION IS A REQUEST. The worker is told through its standing question and may
-    /// clean up; the run is `cancelled` once its process has ended. `force` ends it now.
+    /// A CANCELLATION IS A REQUEST while somebody is still there to hear it: the worker is told
+    /// through its standing question and may clean up, and the run is `cancelled` once its
+    /// process has ended. `force` ends it now.
+    ///
+    /// AFTER THE VERDICT IT IS NOT A REQUEST, because there is nobody left to ask: the tool has
+    /// already concluded and its standing question is spent. A run whose EXECUTION is still
+    /// alive is then stopped outright, and the verdict is left exactly as the tool gave it.
     void on(const Cancel& c, Mail& mail) {
         reap_all(mail);
         RunRecord* r = by_handle(c.lifetime, c.name, mail);
         if (r == nullptr) {
             return;
         }
-        if (!final_state(r->view.state)) {
+        const bool settled = final_state(r->view.state);
+        if (settled && alive(*r)) {
+            r->view.cancel_requested = true;
+            r->view.cancel_reason = c.reason.empty() ? std::string("a client asked") : c.reason;
+            const bool killing = r->process.terminate();
+            note(*r, std::string("the execution was stopped after the verdict (") +
+                         r->view.cancel_reason + "); the verdict '" + r->view.state +
+                         "' is the tool's own and is unchanged");
+            if (killing) {
+                r->view.process = "killing";
+            }
+            reap(*r, mail);
+            write_record(*r);
+        } else if (!settled) {
             r->view.cancel_requested = true;
             r->view.cancel_reason = c.reason.empty() ? std::string("a client asked") : c.reason;
             note(*r, std::string(c.force ? "FORCED " : "") + "cancellation requested: " +
                          r->view.cancel_reason);
             if (c.force || !r->session) {
                 if (r->process.terminate()) {
-                    r->view.process = "killed";
+                    r->view.process = "killing";
                 }
             } else if (r->control.valid()) {
                 DeferredAnswer due = std::move(r->control);
@@ -617,6 +661,15 @@ public:
         if (!final_state(r->view.state)) {
             (void)mail.answer(Refused{"run '" + rel.name + "' is " + r->view.state +
                                       "; cancel it or let it finish before releasing it"});
+            return;
+        }
+        // RELEASING IS NOT A WAY TO KILL SOMETHING. A record whose execution is still alive is
+        // kept, and the client is told to end that execution on purpose first.
+        if (alive(*r)) {
+            (void)mail.answer(Refused{
+                "run '" + rel.name + "' is " + r->view.state + ", but its execution is still "
+                "alive (" + r->view.process + ", pid " + std::to_string(r->view.pid) +
+                "): cancel it to stop that, then release it"});
             return;
         }
         forget_at_door(*r, mail);
@@ -666,6 +719,12 @@ public:
     }
 
     /// A run's record as this manager wrote it (`run.json`), read back through the gate.
+    ///
+    /// A RECORD WRITTEN BY AN EARLIER MANAGER is still evidence, and is still read. It claims
+    /// the shape of its own day, so the gate refuses it by identity; it is then read FORWARD
+    /// (`read_forward`) and admitted through the same gate as any fresh record -- structure,
+    /// types and all. Nothing is guessed about what it does not say: a field it has no word for
+    /// takes that field's documented default, and `record` becomes `unknown`.
     static std::optional<Run> read_record(const std::filesystem::path& file) {
         std::ifstream in(file, std::ios::binary);
         if (!in) {
@@ -673,11 +732,125 @@ public:
         }
         std::ostringstream ss;
         ss << in.rdbuf();
-        Admission a = admit(compat::parse(ss.str()), schema_of<Run>());
-        if (!a.ok()) {
+        const std::string text = ss.str();
+        Admission a = admit(compat::parse(text), schema_of<Run>());
+        if (a.ok()) {
+            return from_value<Run>(a.value());
+        }
+        const std::optional<std::string> forward = read_forward(text);
+        if (!forward.has_value()) {
             return std::nullopt;
         }
-        return from_value<Run>(a.value());
+        Admission b = admit(compat::parse(*forward), schema_of<Run>());
+        if (!b.ok()) {
+            return std::nullopt;
+        }
+        return from_value<Run>(b.value());
+    }
+
+    /// THE DOCUMENTED DEFAULT for each field a `Run` has that an older record may not carry.
+    /// One line per field, added when the field is; a field not named here is required of every
+    /// record, old or new, exactly as the gate requires it.
+    static const std::vector<std::pair<std::string, std::string>>& record_defaults() {
+        // The value is the field's COMPAT JSON spelling -- how this codec writes that kind.
+        static const std::vector<std::pair<std::string, std::string>> defaults = {
+            {"record", "\"unknown\""},     // Text: a record from before this manager said
+            {"record_error", "\"\""},      // Text
+            {"record_ms", "\"0\""},        // Int: compat writes an Int as a base-10 string
+        };
+        return defaults;
+    }
+
+    /// An older record, re-spelled as the current shape so the gate can judge it. The envelope's
+    /// content id is dropped -- it names the shape the record WAS written against, which is the
+    /// thing being read forward -- and every other member is carried through untouched. The
+    /// result is admitted normally: a record that is wrong about anything else is still refused.
+    static std::optional<std::string> read_forward(const std::string& text) {
+        const loom::detail::JsonParse parsed = loom::detail::parse_json(text, 32);
+        if (!parsed.ok || !parsed.value.is(loom::detail::JsonValue::Type::Object)) {
+            return std::nullopt;
+        }
+        const loom::detail::JsonValue* schema = parsed.value.find("schema");
+        const loom::detail::JsonValue* version = parsed.value.find("version");
+        const loom::detail::JsonValue* fields = parsed.value.find("fields");
+        if (schema == nullptr || schema->text != Run::zen_name || version == nullptr ||
+            version->text != "1" || fields == nullptr ||
+            !fields->is(loom::detail::JsonValue::Type::Object)) {
+            return std::nullopt;
+        }
+        std::string out = "{\"zen\":1,\"schema\":";
+        loom::detail::json_quote(Run::zen_name, out);
+        out += ",\"version\":1,\"fields\":{";
+        bool first = true;
+        for (const auto& [name, value] : fields->members) {
+            if (!first) {
+                out += ",";
+            }
+            first = false;
+            loom::detail::json_quote(name, out);
+            out += ":";
+            json_emit(value, out);
+        }
+        for (const auto& [name, spelling] : record_defaults()) {
+            if (fields->find(name) != nullptr) {
+                continue;
+            }
+            if (!first) {
+                out += ",";
+            }
+            first = false;
+            loom::detail::json_quote(name, out);
+            out += ":";
+            out += spelling;
+        }
+        out += "}}";
+        return out;
+    }
+
+    /// One parsed JSON node, written back out. Numbers keep their own token text, so nothing a
+    /// record said about a value is re-decided here.
+    static void json_emit(const loom::detail::JsonValue& v, std::string& out) {
+        using JT = loom::detail::JsonValue::Type;
+        switch (v.type) {
+        case JT::Null:
+            out += "null";
+            return;
+        case JT::Bool:
+            out += v.boolean ? "true" : "false";
+            return;
+        case JT::Number:
+            out += v.text;
+            return;
+        case JT::String:
+            loom::detail::json_quote(v.text, out);
+            return;
+        case JT::Array: {
+            out += "[";
+            for (std::size_t i = 0; i < v.items.size(); ++i) {
+                if (i != 0) {
+                    out += ",";
+                }
+                json_emit(v.items[i], out);
+            }
+            out += "]";
+            return;
+        }
+        case JT::Object: {
+            out += "{";
+            bool first = true;
+            for (const auto& [name, value] : v.members) {
+                if (!first) {
+                    out += ",";
+                }
+                first = false;
+                loom::detail::json_quote(name, out);
+                out += ":";
+                json_emit(value, out);
+            }
+            out += "}";
+            return;
+        }
+        }
     }
 
 private:
@@ -835,10 +1008,17 @@ private:
                     runs_.end());
     }
 
-    std::size_t active() const {
+    /// Is this run's EXECUTION still going -- the worker, or anything it left in the execution
+    /// group this manager owns? Asked of the operating system, never inferred from the verdict.
+    static bool alive(RunRecord& r) { return r.process.alive(); }
+
+    /// WHAT CAPACITY IS SPENT ON. A run counts while it has no verdict, and it keeps counting
+    /// while an execution this manager owns is still running -- because that is what capacity
+    /// bounds: work in flight on this machine, not rows in a table.
+    std::size_t active() {
         std::size_t n = 0;
-        for (const auto& r : runs_) {
-            n += final_state(r->view.state) ? 0u : 1u;
+        for (auto& r : runs_) {
+            n += (!final_state(r->view.state) || r->process.alive()) ? 1u : 0u;
         }
         return n;
     }
@@ -925,7 +1105,7 @@ private:
         }
     }
 
-    void note(RunRecord& r, const std::string& text) {
+    static void note(RunRecord& r, const std::string& text) {
         if (r.view.notes.size() >= kMaxNotes) {
             r.view.notes.erase(r.view.notes.begin());
             ++r.view.notes_dropped;
@@ -933,14 +1113,32 @@ private:
         r.view.notes.push_back(text);
     }
 
-    /// Has the worker process ended? If so, the run's final state -- the tool's own verdict when
-    /// it gave one, `cancelled` when a cancellation was asked for, `crashed` otherwise.
+    /// IS THE EXECUTION OVER? Only then does a run without a verdict get one -- `cancelled` when
+    /// a cancellation was asked for, `crashed` otherwise. A worker that exited while leaving
+    /// processes this manager owns has NOT ended its execution: that is said (`descendants`)
+    /// and the run stays controllable and counted, rather than being declared over.
     void reap(RunRecord& r, Mail& mail) {
         if (!r.process.started() || !r.process.ended()) {
             return;
         }
-        if (r.view.process == "running" || r.view.process == "killed") {
-            r.view.process = r.view.process == "killed" ? "killed" : "exited";
+        if (r.process.alive()) {
+            // Only a run nobody has stopped is DESCRIBED as having descendants: one that is
+            // being stopped says `killing` until its group has actually gone.
+            if (r.view.process == "running") {
+                r.view.process = "descendants";
+                r.view.exit_code = r.process.exit_code();
+                note(r, "the worker (pid " + std::to_string(r.view.pid) + ") exited with code " +
+                            std::to_string(r.process.exit_code()) +
+                            " and left processes of its own still running; this run's execution "
+                            "is not over. Cancel it to stop them");
+                write_record(r);
+            }
+            return;
+        }
+        if (r.view.process == "running" || r.view.process == "killing" ||
+            r.view.process == "killed" || r.view.process == "descendants") {
+            const bool stopped = r.view.process == "killing" || r.view.process == "killed";
+            r.view.process = stopped ? "killed" : "exited";
             r.view.exit_code = r.process.exit_code();
         }
         if (!final_state(r.view.state)) {
@@ -964,10 +1162,17 @@ private:
         write_record(r);
     }
 
+    /// Before this manager answers anything about its runs: catch up with the operating system,
+    /// and TRY A STALE RECORD AGAIN. The second half is the whole of the recovery policy -- one
+    /// attempt, when a client asks, on a run whose evidence is behind. A run that has finished
+    /// has no next change of its own to ride, so without this its record could never come back.
     void reap_all(Mail& mail) {
         for (auto& r : runs_) {
-            if (!r->forgotten || !final_state(r->view.state)) {
+            if (!r->forgotten || !final_state(r->view.state) || r->process.alive()) {
                 reap(*r, mail);
+            }
+            if (r->view.record == "stale") {
+                (void)write_record(*r);
             }
         }
     }
@@ -1052,22 +1257,90 @@ private:
         return !out.fail();
     }
 
-    /// The run's record, rewritten whole by way of a temp file.
-    static void write_record(const RunRecord& r) {
+    /// THE RUN'S RECORD, rewritten whole through a temporary file beside it and then put in
+    /// place as one step. Returns whether it was saved.
+    ///
+    /// A SAVE THAT FAILS IS NOT A VERDICT. The tool's `state` is untouched, the LAST VALID
+    /// record is left exactly where it is, and the live view says the evidence on disk is stale
+    /// and why -- which a client reads from the manager, never from the file that would not
+    /// open. THE RETRY POLICY IS TWO SENTENCES: the next change to this run tries again, and a
+    /// run whose record is stale is tried once more whenever a client asks this manager about
+    /// its runs (`reap_all`). Nothing retries on its own, nothing loops, and nothing waits.
+    static bool write_record(RunRecord& r) {
         const std::filesystem::path file = std::filesystem::path(r.view.directory) / "run.json";
         const std::filesystem::path tmp = file.string() + ".tmp";
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                return;
+        const std::string was = r.view.record;
+        const std::int64_t last_saved_ms = r.view.record_ms;
+        r.view.record = "saved";
+        r.view.record_error.clear();
+        r.view.record_ms = now_ms();
+        std::string why;
+        if (save_record(file, tmp, r.view, &why)) {
+            if (was == "stale") {
+                note(r, "the run's record could be written again: " + file.string() +
+                            " now holds this run");
+                // The note is part of the view, so it belongs in the file too: write once more.
+                r.view.record = "saved";
+                r.view.record_error.clear();
+                r.view.record_ms = now_ms();
+                (void)save_record(file, tmp, r.view, &why);
             }
-            out << compat::serialize(to_value(r.view));
+            return true;
         }
-        std::error_code ec;
-        std::filesystem::remove(file, ec);
-        std::filesystem::rename(tmp, file, ec);
+        r.view.record = "stale";
+        r.view.record_ms = last_saved_ms;
+        r.view.record_error =
+            why + ". " + file.string() + " still holds the last record that was written whole" +
+            (last_saved_ms != 0 ? " (at " + std::to_string(last_saved_ms) + ")" : " (none yet)") +
+            "; this run's live state is this answer, not that file";
+        if (was != "stale") {
+            note(r, "THE RUN'S RECORD COULD NOT BE SAVED: " + why +
+                        ". The verdict and everything else here are unaffected; only the "
+                        "evidence on disk is behind");
+        }
+        return false;
     }
 
+public:
+    /// One whole write, in the order that keeps a reader from ever seeing half a record: the
+    /// temporary file first and checked, then ONE replacement (`replace_file`). Nothing removes
+    /// the record before the new one exists, and a temporary that cannot be opened is reported
+    /// rather than cleared away -- whatever is in its place is somebody's, not this manager's.
+    /// Public for the same reason `read_record` is: the pair is the record's whole contract.
+    static bool save_record(const std::filesystem::path& file, const std::filesystem::path& tmp,
+                            const Run& view, std::string* why) {
+        const std::string text = compat::serialize(to_value(view));
+        {
+            errno = 0;
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                *why = "cannot open " + tmp.string() + " to write this run's record" +
+                       (errno != 0 ? ": " + std::error_code(errno, std::generic_category()).message()
+                                   : "");
+                return false;
+            }
+            out << text;
+            out.flush();
+            const bool wrote = static_cast<bool>(out);
+            out.close();
+            if (!wrote || out.fail()) {
+                std::error_code ec;
+                std::filesystem::remove(tmp, ec);
+                *why = "cannot write " + std::to_string(text.size()) + " bytes to " + tmp.string();
+                return false;
+            }
+        }
+        std::string reason;
+        if (!replace_file(tmp.string(), file.string(), &reason)) {
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec); // the new one is not in place; do not leave it lying
+            *why = reason;
+            return false;
+        }
+        return true;
+    }
+
+private:
     RunManagerConfig config_;
     std::vector<std::unique_ptr<RunRecord>> runs_;
     AskBook book_;

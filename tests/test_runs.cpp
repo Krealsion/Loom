@@ -17,10 +17,12 @@
 #include <zen/weave/standard_shapes.hpp>
 
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -355,6 +357,160 @@ TEST_CASE("manager: another lifetime's handle is refused by name; a stranger's r
     (void)h.bus.send_as_to_role(sid, kRunsRole, Message(to_value(Finished{"passed", "forged", ""}), sid, sid, 5));
     REQUIRE(until([&] { h.turn(); return raw->answers > 0; }));
     CHECK(raw->refused.find("not the worker of any run") != std::string::npos);
+}
+
+// ---- what this manager owns after the leader is gone, and what it never aims at ---------------
+
+TEST_CASE("process: a live child is alive and stoppable; one that ended by itself owns nothing, "
+          "so nothing later can be aimed at its number") {
+    Scratch s{"process"};
+    ChildProcess sleeper;
+    SpawnSpec spec;
+    spec.program = ZEN_TEST_CMAKE;
+    spec.args = {"-E", "sleep", "30"};
+    spec.cwd = s.path.string();
+    spec.output = (s.path / "sleeper.log").string();
+    std::string why;
+    REQUIRE(sleeper.spawn(spec, &why));
+    // An unrelated process of its own: nothing done to the first may reach the second.
+    ChildProcess bystander;
+    SpawnSpec other = spec;
+    other.output = (s.path / "bystander.log").string();
+    REQUIRE(bystander.spawn(other, &why));
+
+    CHECK(sleeper.alive());
+    CHECK_FALSE(sleeper.ended());
+    CHECK(sleeper.terminate());
+    // Waiting is this harness's own decision; that the execution ENDED is the claim, and it is
+    // read from the operating system through both doors -- the group, and the leader.
+    REQUIRE(until([&] { return !sleeper.alive() && sleeper.ended(); }));
+    // Nothing is left to end -- and saying so is the point: a `true` here would mean this object
+    // had signalled a number it no longer owns.
+    CHECK_FALSE(sleeper.terminate());
+    CHECK(bystander.alive());  // the other process was never this one's to touch
+
+    ChildProcess brief;
+    SpawnSpec quick = spec;
+    quick.args = {"-E", "true"};
+    quick.output = (s.path / "brief.log").string();
+    REQUIRE(brief.spawn(quick, &why));
+    REQUIRE(until([&] { return brief.ended(); }));
+    CHECK_FALSE(brief.alive());      // it ended and left nothing behind
+    CHECK_FALSE(brief.terminate());  // ...so there is nothing to stop, and nothing is signalled
+    CHECK(bystander.alive());
+    CHECK(bystander.terminate());
+}
+
+// ---- the record: a save that fails is not a verdict, and an older record is still evidence ----
+
+TEST_CASE("record: a save that cannot happen leaves the LAST VALID record exactly where it was, "
+          "says why, and works again once the fault is gone") {
+    Scratch s{"record"};
+    const fs::path file = s.path / "run.json";
+    const fs::path tmp = s.path / "run.json.tmp";
+    Run first;
+    first.lifetime = "0011223344556677889900aabbccddee";
+    first.name = "one";
+    first.state = "running";
+    first.step = "the first record";
+    first.record = "saved";
+    std::string why;
+    REQUIRE(RunManager::save_record(file, tmp, first, &why));
+    const std::string valid = [&] {
+        std::ifstream in(file, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }();
+    REQUIRE_FALSE(valid.empty());
+    CHECK_FALSE(fs::exists(tmp)); // the temporary does not outlive the write that used it
+
+    // THE FAULT: the temporary's name is taken by something this manager did not put there.
+    fs::create_directory(tmp);
+    REQUIRE(fs::is_directory(tmp));
+    Run second = first;
+    second.state = "passed";
+    second.step = "the second record";
+    why.clear();
+    CHECK_FALSE(RunManager::save_record(file, tmp, second, &why));
+    CHECK(why.find(tmp.string()) != std::string::npos);
+    CHECK(fs::is_directory(tmp)); // what somebody else put there is still theirs
+    const std::optional<Run> kept = RunManager::read_record(file);
+    REQUIRE(kept.has_value());
+    CHECK(kept->step == "the first record"); // the last valid record, whole and readable
+    CHECK(kept->state == "running");
+
+    fs::remove(tmp);
+    why.clear();
+    CHECK(RunManager::save_record(file, tmp, second, &why));
+    const std::optional<Run> now = RunManager::read_record(file);
+    REQUIRE(now.has_value());
+    CHECK(now->step == "the second record");
+    CHECK(now->state == "passed");
+
+    // AND THE WAY IS NEVER CLEARED FIRST. Something that is not this manager's stands where the
+    // record would go: the replacement fails and leaves it exactly as it was. Removing the
+    // destination before the new record is in place would both take what was there and leave
+    // nothing behind when the replacement then failed.
+    const fs::path taken = s.path / "taken.json";
+    const fs::path taken_tmp = s.path / "taken.json.tmp";
+    fs::create_directory(taken);
+    why.clear();
+    CHECK_FALSE(RunManager::save_record(taken, taken_tmp, second, &why));
+    CHECK(fs::is_directory(taken));
+    CHECK_FALSE(fs::exists(taken_tmp)); // nor is a temporary left lying beside it
+    CHECK(why.find(taken.string()) != std::string::npos);
+}
+
+TEST_CASE("record: one written before this manager had a word for its own saving is still read, "
+          "with that word's documented default -- and one short of anything else is refused") {
+    Scratch s{"forward"};
+    const fs::path file = s.path / "run.json";
+    const fs::path tmp = s.path / "run.json.tmp";
+    Run view;
+    view.lifetime = "0011223344556677889900aabbccddee";
+    view.name = "old";
+    view.state = "passed";
+    view.summary = "a run from an earlier manager";
+    view.record = "saved";
+    view.record_error = "";
+    view.record_ms = 1234;
+    std::string why;
+    REQUIRE(RunManager::save_record(file, tmp, view, &why));
+    std::string text = [&] {
+        std::ifstream in(file, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }();
+    // AN OLDER RECORD, exactly: the three fields this manager added are simply not in it, and
+    // its content id names the shape it was written against.
+    for (const char* gone : {"\"record\":\"saved\",", "\"record_error\":\"\",",
+                             "\"record_ms\":\"1234\","}) {
+        const std::size_t at = text.find(gone);
+        REQUIRE(at != std::string::npos);
+        text.erase(at, std::strlen(gone));
+    }
+    write(file, text);
+    // The gate refuses it by identity, as it should; the manager reads it forward and admits it.
+    CHECK_FALSE(admit(compat::parse(text), schema_of<Run>()).ok());
+    const std::optional<Run> old = RunManager::read_record(file);
+    REQUIRE(old.has_value());
+    CHECK(old->state == "passed");
+    CHECK(old->summary == "a run from an earlier manager");
+    CHECK(old->record == "unknown"); // no claim is made about evidence it never spoke of
+    CHECK(old->record_error.empty());
+    CHECK(old->record_ms == 0);
+
+    // A record short of a field that is not one of those is not read forward: it is refused.
+    std::string broken = text;
+    const std::size_t at = broken.find("\"summary\":");
+    REQUIRE(at != std::string::npos);
+    const std::size_t end = broken.find(',', broken.find(':', at + 10));
+    REQUIRE(end != std::string::npos);
+    broken.erase(at, end - at + 1);
+    write(file, broken);
+    CHECK_FALSE(RunManager::read_record(file).has_value());
 }
 
 TEST_CASE("manager: a finished run is forgotten on release, and its directory removed when asked") {

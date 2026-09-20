@@ -281,7 +281,9 @@ refuses in words at the limit; none evicts anything a client is still owed.
 | a run's inputs | 16 KiB of JSON | refused before anything is created |
 | `kMaxPackages` / `kMaxToolsPerPackage` | 64 / 32 | what one catalog and one package may name; the rest is a reported problem |
 | `kMaxPackageFiles` / `kMaxPackageBytes` | 512 / 16 MiB | what a package may hold: a snapshot is a copy |
-| `Connection.MAX_OPEN` (Python client) | 256 | conversations one Python session holds open; one more is refused before anything is sent |
+| `Connection.MAX_OPEN` (Python client) | 256 | conversations one Python session holds open; one more is refused before anything is sent. An ask that asked for settlement counts as open until BOTH its attested answer and its settlement have arrived |
+| `tool.CLEANUP_SECONDS` (Python tool) | 30 s | the whole of one run's cleanup phase, after its ordinary work has ended however it ended. A tool may set its own (`ctx.cleanup_seconds`) before registering cleanups. What the budget leaves unattempted says so; nothing is recorded as done that did not finish |
+| `wire.MAX_POLL_READS` (Python client) | 1026 | buffer-fuls one zero-timeout poll may take before returning what it has — one whole frame at `MAX_FRAME`, and a bound all the same |
 | serve mode's idle wait | 5 ms | the longest a client's request waits unread on an idle host (the interactive host's is 100 ms, a console's latency) |
 
 ## Transport channels (framed byte channels)

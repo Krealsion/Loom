@@ -15,6 +15,10 @@ import time
 
 PROTOCOL = 4
 MAX_FRAME = 64 * 1024 * 1024
+#: How many buffer-fuls one zero-timeout poll may take before it returns what it has. Enough for
+#: a whole frame at the limit, so a poll can complete the largest thing the host may send, and a
+#: bound all the same: a peer that never stops sending cannot hold a poll forever.
+MAX_POLL_READS = MAX_FRAME // (1 << 16) + 2
 
 # client -> host
 OP_HELLO = 1
@@ -219,10 +223,34 @@ class Channel:
         self.inbox = self.inbox[5 + n:]
         return op, payload
 
+    def _fill(self, timeout):
+        """One read from the socket, waiting at most ``timeout`` seconds. True when bytes were
+        added. A ZERO timeout takes what has already arrived and never waits for what has not;
+        it is not the same as reading nothing."""
+        self.sock.settimeout(max(0.0, timeout))
+        try:
+            chunk = self.sock.recv(1 << 16)
+        except (socket.timeout, BlockingIOError):
+            return False  # a zero timeout makes the socket non-blocking: "nothing here yet"
+        except OSError as err:
+            self.close()
+            raise Disconnected(str(err))
+        if not chunk:
+            self.close()
+            raise Disconnected("the host closed the connection")
+        self.inbox += chunk
+        return True
+
     def read(self, timeout):
-        """Every complete frame available within ``timeout`` seconds, as Events (maybe none)."""
+        """Every complete frame available within ``timeout`` seconds, as Events (maybe none).
+
+        ``read(0)`` is a POLL, not a no-op: it services every frame already on this socket and
+        returns without waiting for one more. A frame that has arrived is therefore seen at zero
+        timeout, and a partial frame is kept for the next read rather than blocking for its
+        remainder. The work is bounded either way -- at most one whole frame's worth of reads."""
         events = []
         deadline = time.monotonic() + max(0.0, timeout)
+        polls = 0
         while True:
             f = self._frame()
             while f is not None:
@@ -234,16 +262,9 @@ class Channel:
                 return events
             left = deadline - time.monotonic()
             if left <= 0:
+                polls += 1
+                if polls > MAX_POLL_READS or not self._fill(0.0):
+                    return events
+                continue
+            if not self._fill(left):
                 return events
-            self.sock.settimeout(left)
-            try:
-                chunk = self.sock.recv(1 << 16)
-            except socket.timeout:
-                return events
-            except OSError as err:
-                self.close()
-                raise Disconnected(str(err))
-            if not chunk:
-                self.close()
-                raise Disconnected("the host closed the connection")
-            self.inbox += chunk

@@ -22,6 +22,17 @@ sandbox, and nothing here says otherwise.
 THE VERDICT: returning passes; ``ctx.fail`` / a failed ``ctx.check`` fails; any other exception
 is an error; a cancellation that arrives at a wait point ends it as cancelled. Cleanups registered
 with ``ctx.on_cleanup`` run in every case, newest first, and each one's outcome is recorded.
+
+THE CLEANUP PHASE IS ITS OWN PHASE, and a cancellation does not reach into it. Cancelling stops
+the tool's ORDINARY work -- at the next wait point, as ``Cancelled`` -- and then the cleanups it
+registered run with the session still open and the same grant they always had, so a far resource
+this run took can actually be given back. What bounds that phase is its own deadline
+(``CLEANUP_SECONDS``), not the cancellation; and the manager's force-stop ends the process at any
+moment, because the worker is a process of its own and the host never waits on it.
+
+WHAT A CLEANUP'S OUTCOME MEANS. ``done`` is the far owner's own answer; anything else is named
+by what it was -- a refusal, a timeout, a lost link whose outcome is UNKNOWN, a disconnected
+session. Having attempted a cleanup is never recorded as having finished one.
 """
 
 import hashlib
@@ -34,6 +45,12 @@ from .client import (DispatchRefused, NotAnswered, Refused, SendRefused)  # noqa
 
 RUNS_ROLE = "loom.runs"
 
+#: How long the whole cleanup phase may take. It is a bound on a tool's registered cleanups, not
+#: a promise about any one of them: a cleanup's own ask carries its own timeout. When it is spent
+#: the remaining cleanups are not attempted and each says so, which is a truthful record of what
+#: was and was not given back.
+CLEANUP_SECONDS = 30.0
+
 
 class ToolFailed(Exception):
     """The tool's own verdict: something it checked did not hold."""
@@ -41,6 +58,10 @@ class ToolFailed(Exception):
 
 class Cancelled(Exception):
     """A cancellation was requested; raised at the tool's next wait point."""
+
+
+class CleanupExpired(Exception):
+    """The cleanup phase ran out of time; this cleanup was not attempted, or did not finish."""
 
 
 class LinkOutcome(Exception):
@@ -109,13 +130,23 @@ class Context(object):
         self._cleanups = []
         self._step = ""
         self._last_pending_report = None
+        self._cleaning = False         # the cleanup phase is running (see the module note)
+        self._cleanup_deadline = None  # when that phase is out of time
+        #: How long this tool's whole cleanup phase may take. A tool that knows its cleanups are
+        #: slow (or must not be) says so here, before it registers them.
+        self.cleanup_seconds = CLEANUP_SECONDS
 
     # ---- telling the manager where the run is ----------------------------------------------
 
     def step(self, name, note=""):
         """Name the step the tool is in (and optionally say one line about it)."""
-        self._step = name
+        self._set_step(name)
         self._report_progress(note)
+
+    def _set_step(self, name):
+        """A step in the cleanup phase says so, whatever the step calls itself: a client that
+        returns to a run waiting at something must be able to tell cleaning up from working."""
+        self._step = ("cleanup: " + name) if self._cleaning else name
 
     def note(self, text):
         self._report_progress(text)
@@ -139,15 +170,22 @@ class Context(object):
 
     def on_cleanup(self, action, label):
         """Run ``action()`` when the tool ends -- passed, failed, errored or cancelled -- newest
-        first. Not run when a CLIENT merely detaches: the run is still going then."""
+        first, in the cleanup phase, where a cancellation no longer interrupts it. Not run when a
+        CLIENT merely detaches: the run is still going then."""
         self._cleanups.append((label, action))
 
     @property
     def cancel_requested(self):
+        """Has a cancellation been requested? Reads whatever has arrived, takes the manager's
+        directive when it is there, and LATCHES: once true, true for the rest of the run. It
+        never raises and never waits, so a tool that does its own looping can cooperate --
+        finish the piece it is on, and return or raise on its own terms."""
         self._pump(0.0)
+        self._take_cancel()
         return self._cancel is not None
 
-    def _check_cancel(self):
+    def _take_cancel(self):
+        """Consume the manager's answer to the standing control question, if it has come."""
         if self._cancel is None and self.conn.done(self._control):
             try:
                 d = self.conn.wait(self._control, 0.0)
@@ -155,6 +193,18 @@ class Context(object):
                     self._cancel = d.get("reason") or "cancelled"
             except Exception:
                 pass
+        return self._cancel
+
+    def _check_cancel(self):
+        """The implicit check at every wait point: raise ``Cancelled`` once one was requested --
+        unless this is the cleanup phase, whose bound is its own deadline."""
+        self._pump(0.0)
+        self._take_cancel()
+        if self._cleaning:
+            if self._cleanup_deadline is not None and time.monotonic() >= self._cleanup_deadline:
+                raise CleanupExpired("the cleanup phase ran out of its %.0fs"
+                                     % self.cleanup_seconds)
+            return
         if self._cancel is not None:
             raise Cancelled(self._cancel)
 
@@ -259,7 +309,7 @@ class Context(object):
         what; a cancellation ends the wait. For a demonstration or a test that must control when
         a run proceeds without a client being attached."""
         path = os.path.join(self.run_dir, "release", gate)
-        self._step = "held: " + gate
+        self._set_step("held: " + gate)
         self.conn.ask("loom.runs.Progress", {
             "step": self._step, "note": note,
             "pending": [p.describe() for p in self._pending.values()] +
@@ -272,16 +322,47 @@ class Context(object):
 
     # ---- the end ------------------------------------------------------------------------------
 
-    def _run_cleanups(self):
+    def _run_cleanups(self, seconds=None):
+        """THE CLEANUP PHASE. The tool's ordinary work is over, whatever ended it; what it
+        registered now runs, newest first, with the session and the grant it has always had. A
+        cancellation already requested does not end this phase -- that is the whole point of it
+        -- and a cancellation requested DURING it does not either. Its own deadline does, and
+        each cleanup's outcome is recorded as what it actually was."""
+        if self._cleaning or not self._cleanups:
+            return []
+        budget = self.cleanup_seconds if seconds is None else seconds
+        self._cleaning = True
+        self._cleanup_deadline = time.monotonic() + max(0.0, float(budget))
         outcomes = []
-        while self._cleanups:
-            label, action = self._cleanups.pop()
-            try:
-                action()
-                outcomes.append("cleanup %s: done" % label)
-            except Exception as err:  # every cleanup runs, and says what it came to
-                outcomes.append("cleanup %s: %s: %s" % (label, type(err).__name__, err))
+        try:
+            while self._cleanups:
+                label, action = self._cleanups.pop()
+                self._report_cleanup(label)
+                if time.monotonic() >= self._cleanup_deadline:
+                    outcomes.append("cleanup %s: CleanupExpired: not attempted; the cleanup "
+                                    "phase had already run out of time" % label)
+                    continue
+                try:
+                    action()
+                    outcomes.append("cleanup %s: done" % label)
+                except Exception as err:  # every cleanup runs, and says what it came to
+                    outcomes.append("cleanup %s: %s: %s" % (label, type(err).__name__, err))
+        finally:
+            self._cleaning = False
+            self._cleanup_deadline = None
         return outcomes
+
+    def _report_cleanup(self, label):
+        """Say the run is cleaning up and what is left of it, so a client that returns while a
+        cleanup is blocked sees a run that is cleaning up rather than a run that is stuck."""
+        self._step = "cleanup"
+        left = ["cleanup '%s'" % label] + ["cleanup '%s' (queued)" % name for name, _ in
+                                           reversed(self._cleanups)]
+        try:
+            self.conn.ask("loom.runs.Progress", {"step": self._step, "note": "", "pending": left},
+                          role=RUNS_ROLE, fire=True)
+        except Exception:
+            pass  # a cleanup phase does not fail because the manager could not be told about it
 
 
 def load_request(run_dir):
