@@ -1276,15 +1276,10 @@ private:
         r.view.record_ms = now_ms();
         std::string why;
         if (save_record(file, tmp, r.view, &why)) {
-            if (was == "stale") {
-                note(r, "the run's record could be written again: " + file.string() +
-                            " now holds this run");
-                // The note is part of the view, so it belongs in the file too: write once more.
-                r.view.record = "saved";
-                r.view.record_error.clear();
-                r.view.record_ms = now_ms();
-                (void)save_record(file, tmp, r.view, &why);
-            }
+            // ONE WRITE, never two. A recovery needs no announcement of its own: when this run
+            // had been stale, the note the failure left is part of the view this write just
+            // saved, beside `record: saved` -- so a reader of the file sees both that there was
+            // a period it could not be written and that the period ended.
             return true;
         }
         r.view.record = "stale";
@@ -1294,6 +1289,8 @@ private:
             (last_saved_ms != 0 ? " (at " + std::to_string(last_saved_ms) + ")" : " (none yet)") +
             "; this run's live state is this answer, not that file";
         if (was != "stale") {
+            // Once, on the way in. A stale record is retried whenever a client asks, and a note
+            // per attempt would fill this run's bounded notes with the same sentence.
             note(r, "THE RUN'S RECORD COULD NOT BE SAVED: " + why +
                         ". The verdict and everything else here are unaffected; only the "
                         "evidence on disk is behind");
