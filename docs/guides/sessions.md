@@ -178,8 +178,8 @@ from evidence that got saved. A run answers all three separately:
 | field | the question it answers | its words |
 |---|---|---|
 | `state` | what did the TOOL conclude? | the states above. Settled once, never rewritten |
-| `process` | is anything still RUNNING? | `not-started`, `running`, `descendants`, `killing`, `exited`, `killed`, `unknown`. `exit_code` means something only at `exited` or `killed` -- before that nothing has been read |
-| `record` | is `run.json` this run? | `saved`, `stale` (with `record_error`), `unknown` (a record written before this manager said) |
+| `process` | is anything still RUNNING? | `not-started`, `running`, `descendants`, `killing`, `exited`, `killed`, `unknown`. `exit_code` is the WORKER LEADER's own code, and it means something only at `exited` or `killed` -- the two words the manager writes only once it has read one |
+| `record` | is `run.json` this run? | `saved`, `stale` (with `record_error`), `unknown` (a record written before this manager said). `saved` covers every change to the answer it comes with, not just the interesting ones |
 
 - **A verdict does not end an execution.** A tool that returns having left a thread it never
   joined, or a child process of its own, is `passed` with `process` `running` or `descendants`.
@@ -189,6 +189,18 @@ from evidence that got saved. A run answers all three separately:
   `release` refuses — releasing a record is not a way to kill something, and the refusal says so.
   Stopping it afterwards never rewrites the verdict: the run stays `passed`, `process` becomes
   `killed`, and a note says what was stopped and why.
+- **An execution can also outlive a worker that never got to a verdict.** A worker that dies
+  outright — leaving a child of its own running — is a `crashed` run whose execution is not
+  over, and `cancel` (no `--force` needed) is what stops what it left behind. There is nobody
+  left to clean anything up, so nothing claims to have been given back, and the record keeps the
+  two facts apart: the run stays `crashed`, its `failure` says the worker ended without a verdict
+  AND that the execution it left was then stopped, and `exit_code` remains the worker's own.
+- **An exit code is something the manager read.** `exited` and `killed` carry the leader's own
+  code — never a descendant's, never one number for the whole group, and never a default filling
+  in for an observation nobody made. A leader whose code is already known keeps it when the group
+  it left behind is stopped later. If a shutdown ends an execution and cannot see it finish in
+  the moment it waits, the record says `killing`, which promises no code at all; `unknown` is
+  the same answer about an execution that is over and whose code was never readable.
 - **A record that could not be saved is not a failed tool.** If the manager cannot write
   `run.json` — a full disk, a permission, something else holding the temporary name — the last
   valid record is left exactly where it is, `record` becomes `stale` and `record_error` says the
@@ -305,12 +317,25 @@ far owner answered, and otherwise the refusal, the timeout, the lost link or the
 by name. A cleanup that cannot finish does not become a lie, and it does not change the verdict —
 a tool that passed still passed, with a line on its summary saying what it could not give back.
 
-- The phase has a bound of its own (`ctx.cleanup_seconds`, 30 s by default); when it runs out,
-  what is left says so rather than waiting forever. The host is a different process and goes on
-  answering every other client throughout, and `cancel --force` ends a blocked cleanup at once.
+- **A cancellation is a request while there is a worker to ask.** If the worker has already
+  ended — its connection gone, its leader exited — `cancel` stops the execution the run still
+  owns instead, and no cleanup runs, because there is nothing left to run one. What the run took
+  is then the far owner's to reclaim. The run stays `crashed`: what its worker did is not
+  rewritten by what was done about what it left.
+- The phase has a budget of its own (`ctx.cleanup_seconds`, 30 s by default). It is **checked
+  between cleanups and at the context's own wait points** — an `ask`, a `hold`, anything that
+  goes through `ctx` — so a cleanup that blocks inside ordinary Python (a `sleep`, a socket of
+  its own, a subprocess) is not interrupted by it: nothing here preempts arbitrary code. What
+  the budget does guarantee is that once it is spent the remaining cleanups are not attempted
+  and each says so. The host is a different process and goes on answering every other client
+  throughout, and `cancel --force` is the escape for a cleanup blocked outside those APIs: it
+  ends the worker process.
 - `ctx.cancel_requested` is the cooperative door for a tool doing its own looping: it reads
-  whatever has arrived, never waits and never raises, and once true stays true. Finish the piece
-  you are on and return — or raise — on your own terms.
+  whatever has already arrived, and once true stays true. It does not wait for a cancellation
+  and it does not raise `Cancelled` — that is what the wait points do. It is not, however,
+  guaranteed to do nothing else: its poll can raise `Disconnected` if the session has ended
+  under it, and reading an arrival that needs a shape this client has not seen before asks the
+  host for that shape. Finish the piece you are on and return — or raise — on your own terms.
 - `--force` runs no cleanup at all. What the run took is then the far owner's to reclaim, in its
   own way and on its own terms; the run does not claim to have given anything back.
 
@@ -328,10 +353,12 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | `not approved to run` / `changed since it was approved` | the catalog's decision | approve in `loom-tools.json` |
 | `the session door refused run ...: ... may not say itself` | the manager's ceiling | `authority allow runs <rule>` |
 | a run `crashed` | the worker ended without a verdict | its `failure` ends with the tail of `worker.log` |
+| a run is `crashed` but `process` is `descendants` | the worker died and left something running | `cancel <name>` stops it; no cleanup runs, because the worker is gone |
 | `no Python interpreter was found` | the manager could not start a worker | `"python"` in `loom-tools.json` |
 | a run is `passed` but `process` is `running` or `descendants` | the tool finished; something it started did not | `cancel <name>` to end it, then `release` |
 | `... its execution is still alive ...: cancel it to stop that` | you asked to release a record whose work is still going | `cancel <name>` first — releasing is not a way to kill |
-| `record: stale — cannot open .../run.json.tmp ...` | `run.json` is behind the live run, for the reason given | clear the reason (disk, permission, a name in the way); the next question you ask saves it |
+| `record: stale — cannot open .../run.json.tmp ...` | `run.json` is behind the live run, for the reason given | clear the reason (disk, permission, a name in the way); the next question you ask saves it, as it stands then |
+| a past record with `process: killing` or `unknown` | the host stopped that execution and did not see it finish; no exit code was read | nothing — it is the honest absence of one, not a zero |
 | a cleanup line that is not `done` | the run tried to give something back and could not | the line names what happened; the far owner decides what it does about a guest that went away |
 
 **Recovering a session, start to finish.**
@@ -354,7 +381,12 @@ empty, and the old lifetime's runs keep the last record their manager wrote. Whi
 depends on how the host ended, and the two are not the same thing:
 
 - **Ended cleanly** (`loom-session stop`, `quit`, `Shutdown`): the manager ends every execution
-  it owns and writes each run's last record — `interrupted` for one that had no verdict.
+  it owns and writes each run's last record — `interrupted` for one that had no verdict. It
+  waits a bounded moment (two seconds over the whole shutdown) to SEE what it stopped actually
+  end, so that a last record saying `exited` or `killed` carries an exit code the manager read.
+  A run whose end it could not see in that moment is recorded `killing`, which promises no code
+  — the shutdown does not wait on a proof it may never get, and it does not write down a zero
+  in place of one.
 - **Killed outright** (a crash, `kill -9`, the machine going down): the manager runs nothing, so
   the records stay as they were and the states in them are whatever was last saved. What happens
   to the workers is then the operating system's answer, not this manager's, and it differs:
