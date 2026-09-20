@@ -792,7 +792,12 @@ def main():
     # happen to be followed by something else. A tool that asks and then says nothing leaves an
     # interval in which nothing would notice; this section lives in that interval.
     with Session.attach(session_dir) as s:
-        s.start("lifecycle/asks", "quiet-asks", {"hold": "go", "seconds": 180})
+        # `slow` makes every answer take longer than the 0.15s after which the runtime would
+        # report an ask pending -- the condition under which a later Progress used to save the
+        # asks for free and cover a missing AskReport save. The tool collects its own answers,
+        # so the interval after each AskReport is quiet anyway; running it slow on purpose is
+        # what keeps that true rather than lucky.
+        s.start("lifecycle/asks", "quiet-asks", {"hold": "go", "seconds": 180, "slow": 400})
         first = until(lambda: len(s.run("quiet-asks")["asks"]) == 1, 60,
                       "the first ask to be reported")
         live = s.run("quiet-asks")
