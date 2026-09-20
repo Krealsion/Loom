@@ -18,6 +18,10 @@ one half of something and hold the other:
                        out says which half is missing and keeps the half that came.
   POLLING (P1..P5)     ``read(0)`` services what is already on the socket and never waits for what
                        is not, over a REAL socket pair: whole frames, no data, half a frame.
+  WRITING (W1..W4)     a write's bound is its OWN, not whatever mode the last poll left the
+                       shared socket in: a slow-but-live peer still gets the whole frame, a peer
+                       that takes nothing ends the write at the channel's number, and a write
+                       that cannot happen at all is still Disconnected.
   CANCELLING (K1..K4)  the public ``cancel_requested`` takes the manager's directive, latches, and
                        never raises -- and the cleanup phase can still ask after a cancellation.
 
@@ -31,6 +35,7 @@ import collections
 import socket
 import struct
 import sys
+import threading
 import time
 
 CHECKS = []
@@ -187,8 +192,13 @@ def main():
           a4.shape == "zen.Ack" and s4.open_asks() == [])
 
     # ---- polling: read(0) over a REAL socket pair ---------------------------------------------
-    def pair():
+    def pair(buffer_bytes=0):
         left, right = socket.socketpair()
+        if buffer_bytes:
+            # SMALL BUFFERS so backpressure is a certainty rather than a hope. How much a kernel
+            # then absorbs is its own business: no check below depends on the number.
+            left.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_bytes)
+            right.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_bytes)
         ch = wire.Channel.__new__(wire.Channel)
         ch.sock = left
         ch.inbox = b""
@@ -240,6 +250,114 @@ def main():
     check("P5 a connection that ended is Disconnected at zero timeout too, not silence",
           gone is not None, gone)
     left.close()
+
+    # ---- writing: a frame's bound is its own, whatever the last poll left behind --------------
+    #
+    # Reads and writes share one socket. `read(0)` deliberately makes it non-blocking, and a
+    # write that INHERITED that mode turned ordinary backpressure from a live peer into a lost
+    # frame and a closed channel. These four say the mode is the write's own, that a slow-but-
+    # live peer gets the whole frame, and that a real write failure is still a real failure.
+    big = b"y" * (1 << 20)               # 1 MiB: under MAX_FRAME, over any socket buffer
+    frame_bytes = len(big) + 5
+
+    ch, left, right = pair(4096)
+    polled = ch.read(0.0)                # THE POLL: nothing there, socket left non-blocking
+    mode_after_poll = left.gettimeout()
+    taken = {"n": 0}
+
+    def drain_slowly():
+        """A peer that is BUSY, not gone: it takes nothing for a moment and then reads it all."""
+        time.sleep(0.1)
+        right.settimeout(10.0)
+        while taken["n"] < frame_bytes:
+            try:
+                chunk = right.recv(1 << 16)
+            except OSError:
+                return
+            if not chunk:
+                return
+            taken["n"] += len(chunk)
+
+    reader = threading.Thread(target=drain_slowly)
+    reader.start()
+    wrote = ""
+    try:
+        ch.send(wire.OP_SEND, big)
+    except Exception as err:
+        wrote = "%s: %s" % (type(err).__name__, err)
+    mode_after_write = left.gettimeout()
+    reader.join(20)
+    check("W1 a poll leaves the socket non-blocking, and the write that follows does not keep "
+          "that mode", polled == [] and mode_after_poll == 0.0 and mode_after_write != 0.0,
+          (mode_after_poll, mode_after_write))
+    check("W2 the whole frame reaches a peer that is merely slow, and nothing reports a failure",
+          taken["n"] == frame_bytes and wrote == "" and not ch.closed,
+          (taken["n"], frame_bytes, wrote))
+    ch.close()
+    right.close()
+
+    # A peer that STOPS taking, on every platform alike. How much a kernel buffers before it
+    # pushes back is its own business and no check here depends on it; what the write does when
+    # a peer takes no more is this client's, so that is staged directly under the real `_write`.
+    class StallingSocket(object):
+        def __init__(self, take_once):
+            self.take_once = take_once
+            self.taken = 0
+            self.timeouts = []
+            self.closed = False
+
+        def settimeout(self, seconds):
+            self.timeouts.append(seconds)
+
+        def send(self, view):
+            if self.taken >= self.take_once:
+                time.sleep(max(0.0, self.timeouts[-1]))  # it waits, and still takes nothing
+                return 0
+            n = min(len(view), self.take_once - self.taken)
+            self.taken += n
+            return n
+
+        def sendall(self, data):
+            # A stand-in is a whole socket: a caller that reaches for `sendall` gets what one
+            # does -- as much as this peer takes, and then the timeout it is waiting under.
+            self.send(memoryview(data))
+            raise socket.timeout("timed out")
+
+        def close(self):
+            self.closed = True
+
+    stalling = StallingSocket(4096)
+    ch = wire.Channel.__new__(wire.Channel)
+    ch.sock = stalling
+    ch.inbox = b""
+    ch.closed = False
+    ch.write_seconds = 0.5
+    started = time.monotonic()
+    stalled = ""
+    try:
+        ch.send(wire.OP_SEND, big)
+    except wire.Disconnected as err:
+        stalled = str(err)
+    took = time.monotonic() - started
+    check("W3 a peer that stops taking ends the write at the channel's own bound, says how much "
+          "had already gone, and closes the channel rather than sending it again",
+          "within 0.5s" in stalled and ("%d of this frame's %d bytes" % (4096, frame_bytes))
+          in stalled and "nothing is sent again" in stalled and ch.closed and stalling.closed and
+          took < 5.0 and stalling.timeouts and all(0.0 < t <= 0.5 for t in stalling.timeouts),
+          (stalled[:170], round(took, 2), len(stalling.timeouts)))
+
+    # ...and a GENUINE write failure is still one: the peer is gone before a byte is offered.
+    ch, left, right = pair()
+    right.close()
+    left.close()                                  # the socket itself is no longer usable
+    failed = ""
+    try:
+        ch.send(wire.OP_SEND, b"gone")
+    except wire.Disconnected as err:
+        failed = str(err)
+    check("W4 a write that cannot happen at all is Disconnected, with nothing claimed to have "
+          "been transmitted", failed != "" and "nothing of this" in failed and ch.closed,
+          failed[:140])
 
     # ---- cancelling: the public property, and the cleanup phase -------------------------------
     from loom_session import tool as ltool

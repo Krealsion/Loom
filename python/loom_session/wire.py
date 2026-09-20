@@ -7,6 +7,14 @@ standard library only. A frame is ``[u32 payload_len][u8 op][payload]``, little-
 payload's values are Zen's compat JSON envelope, because the session host admits every Python
 session to that encoding (``PayloadEncoding::Compat``) and re-admits what it sends through the
 one gate. Nothing here decides meaning: it moves bytes and says which frame they were.
+
+READING AND WRITING SHARE ONE SOCKET AND NOTHING ELSE. A read says how long it is prepared to
+wait, and a zero-timeout poll waits for nothing at all; a WRITE has a bound of its own
+(``WRITE_SECONDS``) and sets it every time, so what the last read or poll left the socket in
+never decides what the next frame does. Backpressure from a peer that is merely slow is waited
+on inside that bound; a peer that takes nothing more, or a socket that fails, ends the channel
+and says how much of the frame had already gone -- because a frame half on the wire cannot be
+taken back, and this client never sends one twice.
 """
 
 import socket
@@ -19,6 +27,11 @@ MAX_FRAME = 64 * 1024 * 1024
 #: a whole frame at the limit, so a poll can complete the largest thing the host may send, and a
 #: bound all the same: a peer that never stops sending cannot hold a poll forever.
 MAX_POLL_READS = MAX_FRAME // (1 << 16) + 2
+#: How long ONE WHOLE FRAME may take to reach a live peer. A write's bound is its own: it is set
+#: on every send, so a preceding read or poll never decides it. Generous, because this is how
+#: long a healthy peer may be busy before it takes the rest of a frame -- not a throughput
+#: target; nothing here tries to make a slow peer faster.
+WRITE_SECONDS = 30.0
 
 # client -> host
 OP_HELLO = 1
@@ -169,13 +182,19 @@ def decode(op, payload):
 
 
 class Channel:
-    """A connected socket, framed. Blocking reads with a deadline; writes are whole."""
+    """A connected socket, framed. Reads with a deadline; writes whole, within a bound of
+    their own (``WRITE_SECONDS``) that no read or poll can change."""
 
-    def __init__(self, host, port, connect_timeout=5.0):
+    #: This channel's bound on one whole frame's write, as a class default so that every
+    #: Channel has one -- including one a test builds without running ``__init__``.
+    write_seconds = WRITE_SECONDS
+
+    def __init__(self, host, port, connect_timeout=5.0, write_seconds=WRITE_SECONDS):
         self.sock = socket.create_connection((host, port), timeout=connect_timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.inbox = b""
         self.closed = False
+        self.write_seconds = write_seconds
 
     def close(self):
         if not self.closed:
@@ -190,11 +209,41 @@ class Channel:
             raise Disconnected("the connection is closed")
         if len(payload) > MAX_FRAME:
             raise ValueError("a frame over %d bytes is refused, never cut" % MAX_FRAME)
-        try:
-            self.sock.sendall(_u32(len(payload)) + bytes([op]) + payload)
-        except OSError as err:
-            self.close()
-            raise Disconnected(str(err))
+        self._write(_u32(len(payload)) + bytes([op]) + payload)
+
+    def _write(self, frame):
+        """ONE WHOLE FRAME, under this channel's own write bound.
+
+        The timeout is SET HERE, every time, so a preceding ``read(0)`` -- which leaves the
+        shared socket non-blocking on purpose -- cannot turn ordinary backpressure from a live
+        peer into a lost frame. Inside the bound a peer that is merely slow is waited for and
+        the frame goes whole.
+
+        A write that does not finish ENDS THE CHANNEL, and says how much had already gone.
+        Nothing is resent: a peer that has taken part of a frame is no longer reading frames
+        where this client thinks it is, and replaying the whole of one would say the same thing
+        twice. That is the honest end of a channel, not a retry policy."""
+        view = memoryview(frame)
+        total = len(view)
+        sent = 0
+        deadline = time.monotonic() + max(0.0, self.write_seconds)
+        while sent < total:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                self._write_ended(sent, total, "the peer took no more of it within %.1fs"
+                                  % self.write_seconds)
+            try:
+                self.sock.settimeout(left)  # EXPLICIT, never whatever the last read left behind
+                sent += self.sock.send(view[sent:])
+            except OSError as err:  # socket.timeout is an OSError too, and is one of these
+                self._write_ended(sent, total, str(err))
+
+    def _write_ended(self, sent, total, why):
+        self.close()
+        raise Disconnected(
+            ("%s; nothing of this %d-byte frame was transmitted" % (why, total)) if sent == 0 else
+            ("%s; %d of this frame's %d bytes had already been transmitted, so the channel is no "
+             "longer framed and nothing is sent again" % (why, sent, total)))
 
     def hello(self, claimed, credential):
         self.send(OP_HELLO, _u32(PROTOCOL) + _bytes(claimed) + _bytes(credential))
@@ -226,7 +275,8 @@ class Channel:
     def _fill(self, timeout):
         """One read from the socket, waiting at most ``timeout`` seconds. True when bytes were
         added. A ZERO timeout takes what has already arrived and never waits for what has not;
-        it is not the same as reading nothing."""
+        it is not the same as reading nothing. It leaves the shared socket non-blocking, which
+        is this read's business and nobody else's: ``_write`` sets the mode it needs."""
         self.sock.settimeout(max(0.0, timeout))
         try:
             chunk = self.sock.recv(1 << 16)
