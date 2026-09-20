@@ -78,7 +78,19 @@ public:
     /// ends it as 128 + the signal) and every later call answers the same. It says nothing about
     /// what the leader started: for that, ask `alive`.
     bool ended();
+
+    /// THE LEADER'S OWN exit code -- never a descendant's, and never an aggregate for the group.
+    /// Meaningful only when `exit_code_known()`: a leader can end without this object learning
+    /// its code (on POSIX, when somebody else reaped it), and -1 is that absence, not a result.
     int exit_code() const noexcept { return exit_code_; }
+    bool exit_code_known() const noexcept { return code_known_; }
+
+    /// WAIT, AT MOST `milliseconds`, FOR THE LEADER TO END -- the one place this class waits at
+    /// all, so that a caller about to write down a final claim ("it exited with N") can make the
+    /// observation the claim needs. Returns `ended()`: false means the end was not observed in
+    /// that time, and the caller must say so rather than reporting a code it never read. Zero
+    /// milliseconds is one look and no wait.
+    bool wait_for_end(int milliseconds);
 
     /// Is anything this object owns still running -- the leader, or a descendant it left in the
     /// execution group? Never waits. False once the group is empty (and then this object owns
@@ -103,7 +115,8 @@ private:
 
     std::int64_t pid_ = 0;
     int exit_code_ = -1;
-    bool ended_ = false;   ///< the LEADER has ended and its code is known
+    bool ended_ = false;   ///< the LEADER has ended
+    bool code_known_ = false; ///< ...and `exit_code_` is the code this object actually read
     bool owned_ = false;   ///< this object still owns the execution group (see the header note)
 #ifndef _WIN32
     bool reaped_ = false;  ///< the leader's zombie is gone; its pid may be recycled from now on

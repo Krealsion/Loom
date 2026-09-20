@@ -61,6 +61,41 @@ def until(predicate, seconds, what):
     return False
 
 
+def observed_exit_code(handle):
+    """The exit code of a process THIS driver held a handle to, read after it died -- evidence
+    about the operating system's own answer, obtained without asking the manager anything.
+
+    Windows keeps a dead process's code readable for as long as a handle is open, so the handle
+    is taken BEFORE the host is told to end. POSIX has no equivalent for a process that is not
+    this driver's child: there the code the manager reports is checked against what the signal
+    it sends must produce (SIGKILL: 128 + 9), which a default of 0 can never be."""
+    if handle is None:
+        return None
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    k32.WaitForSingleObject(handle, 20000)
+    code = ctypes.c_ulong(0)
+    ok = k32.GetExitCodeProcess(handle, ctypes.byref(code))
+    k32.CloseHandle(handle)
+    return int(code.value) if ok else None
+
+
+def hold_process(pid):
+    """A handle on that process, kept open across its death (Windows). None elsewhere."""
+    if os.name != "nt" or not pid:
+        return None
+    import ctypes
+    # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    h = ctypes.windll.kernel32.OpenProcess(0x00100000 | 0x1000, False, int(pid))
+    return h or None
+
+
+def stop_code():
+    """What ending a worker's execution group MUST produce as the leader's code on this
+    platform: the job object's termination code, or the signal's 128 + 9."""
+    return 1 if os.name == "nt" else 137
+
+
 def alive(pid):
     """Is that process running, asked of the operating system? Never inferred from a report.
 
@@ -139,7 +174,7 @@ def main():
         setattr(args, name, os.path.abspath(getattr(args, name)))
     sys.path.insert(0, args.runtime)
     from loom_session import client as lclient
-    from loom_session.session import Session, SessionGone
+    from loom_session.session import FINAL_STATES as FINAL, Session, SessionGone
     from loom_session.client import Refused
 
     work = os.path.abspath(args.work)
@@ -567,6 +602,56 @@ def main():
             check("N10 an unrelated process of the same user was never this manager's to touch",
                   control.poll() is None)
             until(lambda: released(s, "descendants"), 20, "the record to release")
+
+        # AND THE WORKER THAT DIED BEFORE ITS VERDICT. The manager has watched it go: there is
+        # nobody to ask for a cleanup, and nobody to hear a request -- but there is still an
+        # execution it owns. An ORDINARY cancellation has to reach it, and the record has to
+        # keep the worker's own failure apart from what was then done about what it left.
+        with Session.attach(session_dir) as s:
+            before_active = s.runs()["active"]
+            s.start("lifecycle/crashes", "crashed-child", {"seconds": 300})
+            gone = until(lambda: s.run("crashed-child")["process"] == "descendants", 60,
+                         "the worker to die leaving its child")
+            c = s.run("crashed-child")
+            # FROM THE FILE THE TOOL WROTE, not from the report it sent: a worker that dies with
+            # `os._exit` may have its last frames aborted with its socket, and what this section
+            # is about is the process, not the message.
+            pid_file = os.path.join(c["directory"], "out", "child.pid")
+            orphan = int(open(pid_file, "rb").read()) if os.path.exists(pid_file) else 0
+            check("N11 a worker that died BEFORE any verdict still leaves an execution this "
+                  "manager owns", gone and not c["state"] in FINAL and
+                  c["process"] == "descendants" and c["exit_code"] == 9 and orphan > 0 and
+                  alive(orphan), (c["state"], c["process"], c["exit_code"], orphan))
+            check("N12 it is counted while that execution runs, and cannot be released",
+                  s.runs()["active"] == before_active + 1 and
+                  refuses(lambda: s.release("crashed-child"), "is running"),
+                  (before_active, s.runs()["active"]))
+            asked = s.cancel("crashed-child", reason="the journey asks, ordinarily")
+            check("N13 an ORDINARY cancellation reaches what the dead worker left behind -- no "
+                  "force, and nothing left running",
+                  orphan > 0 and until(lambda: not alive(orphan), 30,
+                                       "the orphaned child to end"),
+                  (asked["process"], orphan))
+            until(lambda: s.run("crashed-child")["state"] in FINAL, 30, "the run to end")
+            ended = s.run("crashed-child")
+            check("N14 the record keeps the two apart: the worker CRASHED, and the execution it "
+                  "left was then stopped -- with the LEADER's own exit code, not the stop's",
+                  ended["state"] == "crashed" and ended["process"] == "killed" and
+                  ended["exit_code"] == 9 and "without a verdict" in ended["failure"] and
+                  "was then stopped" in ended["failure"],
+                  (ended["state"], ended["process"], ended["exit_code"],
+                   ended["failure"][:200]))
+            check("N15 the same thing is on disk, for whoever reads it after this host",
+                  read_record(ended["directory"])["state"] == "crashed" and
+                  int(read_record(ended["directory"])["exit_code"]) == 9,
+                  (read_record(ended["directory"])["state"],
+                   read_record(ended["directory"])["process"]))
+            check("N16 capacity comes back and the record releases",
+                  until(lambda: s.runs()["active"] == before_active, 20, "capacity") and
+                  until(lambda: released(s, "crashed-child"), 20, "the record to release"),
+                  s.runs()["active"])
+            check("N17 the unrelated process is still not this manager's to touch",
+                  control.poll() is None)
     finally:
         if control.poll() is None:
             control.kill()
@@ -703,6 +788,68 @@ def main():
                   read_record(run_dir)["state"] == "passed",
                   (recovered["record"], read_record(run_dir)["state"]))
 
+    # ...and `record: saved` has to be true of EVERY change it covers, not only the ones that
+    # happen to be followed by something else. A tool that asks and then says nothing leaves an
+    # interval in which nothing would notice; this section lives in that interval.
+    with Session.attach(session_dir) as s:
+        s.start("lifecycle/asks", "quiet-asks", {"hold": "go", "seconds": 180})
+        first = until(lambda: len(s.run("quiet-asks")["asks"]) == 1, 60,
+                      "the first ask to be reported")
+        live = s.run("quiet-asks")
+        quiet_dir = live["directory"]
+        on_disk = read_record(quiet_dir)
+        check("P6 an acknowledged ask is covered by the `saved` the same answer carries -- in "
+              "the quiet before the tool says anything else",
+              first and live["record"] == "saved" and len(live["asks"]) == 1 and
+              [a["shape"] for a in on_disk["asks"]] == [a["shape"] for a in live["asks"]] and
+              [str(a["correlation"]) for a in on_disk["asks"]] ==
+              [str(a["correlation"]) for a in live["asks"]],
+              (live["record"], len(live["asks"]), len(on_disk["asks"])))
+        # The same mutation under an ESTABLISHED write fault: the promise has to become an
+        # explanation, the last valid record has to survive, and the verdict is not involved.
+        quiet_tmp = os.path.join(quiet_dir, "run.json.tmp")
+        cleared = until(lambda: not os.path.exists(quiet_tmp), 30, "the temporary to clear")
+        established = False
+        if cleared:
+            try:
+                os.mkdir(quiet_tmp)
+                established = os.path.isdir(quiet_tmp)
+            except OSError:
+                established = False
+        check("P7 the fault is established for the second ask: the name the record is written "
+              "through is taken", established, quiet_tmp)
+        if established:
+            before_second = read_record(quiet_dir)
+            os.makedirs(os.path.join(quiet_dir, "release"), exist_ok=True)
+            open(os.path.join(quiet_dir, "release", "again"), "w").close()
+            told = until(lambda: len(s.run("quiet-asks")["asks"]) == 2 and
+                         s.run("quiet-asks")["record"] == "stale", 60,
+                         "the second ask to be reported with its record behind")
+            behind = s.run("quiet-asks")
+            still = read_record(quiet_dir)
+            check("P8 an ask the record could not carry is SAID to be behind, and the last "
+                  "valid record is still whole on disk", told and
+                  behind["record"] == "stale" and quiet_tmp in behind["record_error"] and
+                  len(behind["asks"]) == 2 and len(still["asks"]) == 1 and
+                  still["name"] == "quiet-asks" and behind["state"] == "running",
+                  (behind["record"], len(behind["asks"]), len(still["asks"]),
+                   behind.get("record_error", "")[:120]))
+            os.rmdir(quiet_tmp)
+            saved_again = until(lambda: s.run("quiet-asks")["record"] == "saved", 30,
+                                "the record to be saved again")
+            recovered = read_record(quiet_dir)
+            check("P9 recovery saves the evidence as it stands NOW -- no verdict and no later "
+                  "message required to make the earlier promise true",
+                  saved_again and len(recovered["asks"]) == 2 and
+                  recovered["state"] == "running",
+                  (len(recovered["asks"]), recovered["state"]))
+        open(os.path.join(quiet_dir, "release", "go"), "w").close()
+        verdict = s.wait("quiet-asks", timeout=90)
+        check("P10 the tool's verdict came through all of that untouched",
+              verdict["state"] == "passed" and "said nothing" in verdict["summary"] and
+              read_record(quiet_dir)["state"] == "passed",
+              (verdict["state"], verdict["summary"][:80]))
+
     # ---- Q. settlement asked for is settlement waited for ------------------------------------
     with Session.attach(session_dir) as s:
         s.start("lifecycle/settle", "settled-ask", {"name": "started-by-a-settled-ask"})
@@ -723,11 +870,26 @@ def main():
               len(asked) == 1 and asked[0]["settle"] and asked[0]["outcome"] == "answer", asked)
 
     # ---- M. the host ends; a new lifetime refuses the old handle; records remain -------------
+    #
+    # THREE RUNS, because a clean shutdown has three different things to say. One with no
+    # verdict and a live worker; one whose verdict is in while its worker still runs; and one
+    # whose worker has ALREADY exited, leaving a child this manager owns. Each leaves a record
+    # that outlives this host, so each record's account of the operating system is checked
+    # against the operating system -- a handle this driver holds open across the death, where
+    # the platform has one, and otherwise the code the manager's own signal must produce.
     with Session.attach(session_dir) as s:
         s.start("basics/steps", "left-held", {"count": 2, "hold": "never"})
         until(lambda: s.run("left-held")["step"] == "held: never", 30, "the run to hold")
-        # ...and one whose worker has ALREADY exited, leaving a child this manager owns:
-        # a clean shutdown has to account for that too, not only for live workers.
+        held_pid = s.run("left-held")["pid"]
+        held_dir = s.run("left-held")["directory"]
+        held_handle = hold_process(held_pid)
+        s.start("lifecycle/linger", "left-lingering", {"seconds": 300})
+        s.wait("left-lingering", timeout=60)
+        linger_run = s.run("left-lingering")
+        linger_handle = hold_process(linger_run["pid"])
+        check("M0b a run whose VERDICT is in still has a live worker when the host is told to "
+              "end", linger_run["state"] == "passed" and linger_run["process"] == "running" and
+              alive(linger_run["pid"]), (linger_run["state"], linger_run["process"]))
         s.start("lifecycle/descendants", "left-descendants", {"seconds": 300})
         s.wait("left-descendants", timeout=60)
         until(lambda: s.run("left-descendants")["process"] == "descendants", 30,
@@ -738,12 +900,37 @@ def main():
         check("M0 a run whose worker exited still owns a live child when the host is told to end",
               left["process"] == "descendants" and alive(left_child),
               (left["process"], left_child))
+        leader_code = left["exit_code"]
         s.shutdown("the journey ends this lifetime")
     code = host.wait(timeout=30)
     check("M0a a CLEAN shutdown ends an execution whose leader had already exited",
           until(lambda: not alive(left_child), 30, "the orphaned child to end"), left_child)
     check("M1 Shutdown ends the host with exit 0 and removes its session files",
           code == 0 and not os.path.exists(os.path.join(session_dir, "session.json")), code)
+    # THE RECORDS THE HOST LEFT, against what the operating system says happened.
+    held_observed = observed_exit_code(held_handle)
+    linger_observed = observed_exit_code(linger_handle)
+    held_record = read_record(held_dir)
+    linger_record = read_record(linger_run["directory"])
+    left_record = read_record(left["directory"])
+    check("M1a a run stopped by the shutdown records the code the OPERATING SYSTEM gave its "
+          "leader, not a default nobody read", int(held_record["exit_code"]) == stop_code() and
+          held_record["process"] == "killed" and
+          (held_observed is None or held_observed == int(held_record["exit_code"])),
+          (held_record["process"], held_record["exit_code"], held_observed, stop_code()))
+    check("M1b ...and so does one whose VERDICT was already in: the verdict stands, and the "
+          "execution's end is an observation", linger_record["state"] == "passed" and
+          linger_record["process"] == "killed" and
+          int(linger_record["exit_code"]) == stop_code() and
+          (linger_observed is None or linger_observed == int(linger_record["exit_code"])),
+          (linger_record["state"], linger_record["process"], linger_record["exit_code"],
+           linger_observed))
+    check("M1c a LEADER whose code was already known keeps it: stopping the group it left "
+          "behind is not a new result for the leader",
+          int(left_record["exit_code"]) == int(leader_code) and
+          int(left_record["exit_code"]) != stop_code() and
+          left_record["process"] == "killed",
+          (left_record["process"], left_record["exit_code"], leader_code, stop_code()))
     try:
         Session.attach(session_dir)
         gone = ""

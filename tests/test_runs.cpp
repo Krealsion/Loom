@@ -26,6 +26,11 @@
 #include <string>
 #include <thread>
 
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
+
 using namespace loom;
 using namespace loom::runs;
 
@@ -399,6 +404,71 @@ TEST_CASE("process: a live child is alive and stoppable; one that ended by itsel
     CHECK_FALSE(brief.terminate());  // ...so there is nothing to stop, and nothing is signalled
     CHECK(bystander.alive());
     CHECK(bystander.terminate());
+}
+
+TEST_CASE("process: an exit code is an OBSERVATION -- unknown until one is read, and waited for "
+          "within a bound when a final claim depends on it") {
+    Scratch s{"observe"};
+    ChildProcess sleeper;
+    SpawnSpec spec;
+    spec.program = ZEN_TEST_CMAKE;
+    spec.args = {"-E", "sleep", "30"};
+    spec.cwd = s.path.string();
+    spec.output = (s.path / "sleeper.log").string();
+    std::string why;
+    REQUIRE(sleeper.spawn(spec, &why));
+    // WHILE IT RUNS there is nothing to report: `exit_code()` is not a result, and a caller
+    // about to write one down is told so rather than handed the -1 it holds.
+    CHECK_FALSE(sleeper.ended());
+    CHECK_FALSE(sleeper.exit_code_known());
+    CHECK_FALSE(sleeper.wait_for_end(0));   // zero is one look and no wait
+    CHECK(sleeper.alive());
+
+    REQUIRE(sleeper.terminate());
+    // ...and now a BOUNDED wait, which is the one thing this class waits for: a final claim
+    // needs an observation, and this is where it is made.
+    CHECK(sleeper.wait_for_end(5000));
+    CHECK(sleeper.ended());
+    REQUIRE(sleeper.exit_code_known());
+#ifdef _WIN32
+    CHECK(sleeper.exit_code() == 1);         // the job object's own termination code
+#else
+    CHECK(sleeper.exit_code() == 128 + 9);   // SIGKILL, spelled the way this class spells signals
+#endif
+    const int once = sleeper.exit_code();
+    CHECK(sleeper.wait_for_end(0));          // it stays observed, and stays the same
+    CHECK(sleeper.exit_code() == once);
+
+    // A process that ends BY ITSELF is observed just the same, with its own code.
+    ChildProcess brief;
+    SpawnSpec quick = spec;
+    quick.args = {"-E", "true"};
+    quick.output = (s.path / "brief.log").string();
+    REQUIRE(brief.spawn(quick, &why));
+    CHECK(brief.wait_for_end(10000));
+    CHECK(brief.exit_code_known());
+    CHECK(brief.exit_code() == 0);
+
+    // ...and one that was never started has nothing to observe and says so.
+    ChildProcess never;
+    CHECK_FALSE(never.wait_for_end(1000));
+    CHECK_FALSE(never.exit_code_known());
+
+#ifndef _WIN32
+    // THE ONE CASE WHERE "IT ENDED" IS NOT "ITS CODE IS KNOWN": somebody else reaps the leader
+    // first, so its status is gone before this object could read it. The end is a fact; the
+    // code is not, and saying so is what keeps the -1 this object holds out of a record.
+    ChildProcess stolen;
+    SpawnSpec stolen_spec = spec;
+    stolen_spec.args = {"-E", "true"};
+    stolen_spec.output = (s.path / "stolen.log").string();
+    REQUIRE(stolen.spawn(stolen_spec, &why));
+    int status = 0;
+    REQUIRE(::waitpid(static_cast<pid_t>(stolen.pid()), &status, 0) > 0);
+    CHECK(stolen.ended());
+    CHECK_FALSE(stolen.exit_code_known());
+    CHECK_FALSE(stolen.alive());
+#endif
 }
 
 // ---- the record: a save that fails is not a verdict, and an older record is still evidence ----

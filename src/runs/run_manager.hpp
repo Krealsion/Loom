@@ -35,13 +35,25 @@
 // (`zen/runs/vocabulary.hpp` says what each one's words mean):
 //
 //   the VERDICT       `state`. The tool's own conclusion, or the manager's for it. Settled once.
+//                     A worker that died before reporting one is a `crashed` run, and stopping
+//                     what it left behind afterwards does not turn that into a cancellation.
 //   the EXECUTION     `process`. Owned from spawn until release, and NOT ended by the verdict:
 //                     a worker that returned while a thread or a child of its own still runs is
 //                     a live execution -- it counts against `kMaxActive`, `Cancel` stops it, and
 //                     `Release` refuses until it is stopped. Stopping it never edits the verdict.
-//   the EVIDENCE      `record`. Whether `run.json` holds this view. A save that fails leaves the
-//                     LAST VALID record where it is, says so in the live view, and changes no
-//                     verdict; the next change to the run tries again, and nothing loops.
+//                     Whether there is a WORKER to ask is a separate question again, asked of
+//                     the connection and the leader (`worker_present`) and never of a session
+//                     number the run once had; a cancellation is a request only while one is
+//                     there to hear it, and otherwise it is a stop.
+//   the EVIDENCE      `record`. Whether `run.json` holds this view -- EVERY change to it, not
+//                     just the interesting ones. A save that fails leaves the LAST VALID record
+//                     where it is, says so in the live view, and changes no verdict; the next
+//                     change to the run tries again, and nothing loops.
+//
+// AND ONE RULE ABOUT EVIDENCE OF THE OPERATING SYSTEM: this manager writes down what it read.
+// `exited` and `killed` carry the LEADER's own exit code and are not written before one has
+// been observed -- not at a shutdown either, which waits a bounded moment for the ends it just
+// caused and then says `killing` or `unknown` rather than reporting a default.
 
 #include "catalog.hpp"
 #include "process.hpp"
@@ -105,24 +117,39 @@ public:
     static constexpr std::size_t kMaxAsks = 128;     ///< asks per run the record keeps
     static constexpr std::size_t kMaxArtifacts = 32; ///< artifacts per run
     static constexpr std::size_t kMaxPast = 64;      ///< past records one answer carries
+    /// The WHOLE of a shutdown's budget for watching the executions it just stopped actually
+    /// end, so that a final record's `exited`/`killed` is an observation. Spent across every run
+    /// the manager still holds, and normally almost none of it is used.
+    static constexpr int kShutdownObserveMs = 2000;
 
     RunManager() : book_(kMaxActive * 4) {}
     explicit RunManager(RunManagerConfig config) : config_(std::move(config)), book_(kMaxActive * 4) {}
 
     /// THE HOST IS ENDING (or this manager is being unloaded): every EXECUTION this manager owns
-    /// ends with it -- including one whose verdict is already in -- and the record says so.
-    /// Nothing is resent and nothing is claimed about far work. This is the CLEAN end; a host
-    /// killed outright never runs it, and only the Windows job object survives that
-    /// (`src/runs/process.hpp`, docs/guides/sessions.md).
+    /// ends with it -- including one whose verdict is already in -- and the record says so,
+    /// including what it could NOT establish (`end_execution`). Nothing is resent and nothing is
+    /// claimed about far work. This is the CLEAN end; a host killed outright never runs it, and
+    /// only the Windows job object survives that (`src/runs/process.hpp`,
+    /// docs/guides/sessions.md).
     ~RunManager() {
+        // ONE budget for the whole shutdown's observations (see `end_execution`): a host that is
+        // ending waits a moment to see what it stopped, and never waits on it.
+        const auto observe_until =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(kShutdownObserveMs);
         for (auto& r : runs_) {
-            const bool killed = r->process.terminate();
+            const bool stopped = r->process.terminate();
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  observe_until - std::chrono::steady_clock::now())
+                                  .count();
+            const bool moved =
+                end_execution(*r, stopped, static_cast<int>(left > 0 ? left : 0));
             if (final_state(r->view.state)) {
-                if (killed) {
+                if (stopped) {
                     // The verdict stands; only the execution was still going, and is not now.
-                    r->view.process = "killed"; // the host is ending: nothing will reap it later
                     note(*r, "the session host ended while this run's execution was still alive; "
                              "it was stopped. The verdict above is the tool's and is unchanged");
+                }
+                if (stopped || moved) {
                     write_record(*r);
                 }
                 continue;
@@ -131,7 +158,6 @@ public:
             r->view.state = "interrupted";
             r->view.failure = "the session host ended while this run was " + was +
                               "; what its worker had asked far away is not known to have finished";
-            r->view.process = killed ? "killed" : (r->process.started() ? "exited" : "not-started");
             r->view.ended_ms = now_ms();
             write_record(*r);
         }
@@ -456,6 +482,7 @@ public:
         } else if (n.state == "closed") {
             r->closed = true;
             r->control = DeferredAnswer{}; // nobody left to answer
+            mark_worker_lost(*r);          // if it ended unasked, that is what happened to it
             note(*r, "worker connection ended");
             reap(*r, mail);
         }
@@ -511,6 +538,11 @@ public:
             r->view.asks.push_back(a.ask);
         }
         (void)mail.answer(Ack{});
+        // THE VIEW JUST CHANGED, so the evidence has to answer for it. `record` promises that
+        // `run.json` holds THIS view; a mutation that skipped the write left that promise false
+        // for as long as the tool stayed quiet -- with no fault, and nothing to notice it. Like
+        // every other change to a run, this one is saved, or the record says it is behind.
+        write_record(*r);
     }
 
     /// A FILE THE TOOL SAYS IT MADE, checked here on disk before it is listed as verified.
@@ -610,9 +642,16 @@ public:
     /// through its standing question and may clean up, and the run is `cancelled` once its
     /// process has ended. `force` ends it now.
     ///
-    /// AFTER THE VERDICT IT IS NOT A REQUEST, because there is nobody left to ask: the tool has
-    /// already concluded and its standing question is spent. A run whose EXECUTION is still
-    /// alive is then stopped outright, and the verdict is left exactly as the tool gave it.
+    /// WHO IS THERE TO HEAR IT is asked of the worker and the execution, never of a session
+    /// number this run once had or of whether a verdict happens to be in (`worker_present`).
+    /// A worker this manager has already watched go -- its connection ended, its leader exited
+    /// -- cannot clean anything up, so a cancellation aimed at its run stops the execution it
+    /// left behind outright. That is not a second verdict: what the worker did remains what it
+    /// did, and `reap` records the crash and the stop as the two separate things they are.
+    ///
+    /// AFTER THE VERDICT IT IS NOT A REQUEST either, for the same reason: the tool has already
+    /// concluded and its standing question is spent. A run whose EXECUTION is still alive is
+    /// stopped outright, and the verdict is left exactly as the tool gave it.
     void on(const Cancel& c, Mail& mail) {
         reap_all(mail);
         RunRecord* r = by_handle(c.lifetime, c.name, mail);
@@ -635,9 +674,14 @@ public:
         } else if (!settled) {
             r->view.cancel_requested = true;
             r->view.cancel_reason = c.reason.empty() ? std::string("a client asked") : c.reason;
+            const bool ask = !c.force && worker_present(*r);
             note(*r, std::string(c.force ? "FORCED " : "") + "cancellation requested: " +
-                         r->view.cancel_reason);
-            if (c.force || !r->session) {
+                         r->view.cancel_reason +
+                         (ask || c.force ? std::string()
+                                         : "; there is no worker left to ask (" +
+                                               worker_absence(*r) +
+                                               "), so the execution it owns is being stopped"));
+            if (!ask) {
                 if (r->process.terminate()) {
                     r->view.process = "killing";
                 }
@@ -646,6 +690,8 @@ public:
                 r->control = DeferredAnswer{};
                 (void)answer_deferred(due, mail, Directive{"cancel", r->view.cancel_reason});
             }
+            // ...and a worker that has not asked its standing question YET is still a worker:
+            // `on(Control&)` answers `cancel` the moment it does (`cancel_requested` is set).
             reap(*r, mail);
             write_record(*r);
         }
@@ -865,8 +911,9 @@ private:
         DeferredAnswer start_answer;   ///< the client's Start, until the door answers
         DeferredAnswer control;        ///< the worker's standing question
         std::uint64_t session = 0;     ///< the worker's session, once admitted
-        bool closed = false;
+        bool closed = false;           ///< its connection ended: there is nobody left to ask
         bool finished = false;
+        bool worker_lost = false;      ///< the worker ended without a verdict, unasked (`reap`)
         bool forgotten = false;        ///< the door was told to forget it
     };
 
@@ -1012,6 +1059,30 @@ private:
     /// group this manager owns? Asked of the operating system, never inferred from the verdict.
     static bool alive(RunRecord& r) { return r.process.alive(); }
 
+    /// IS THERE A WORKER TO ASK? What a cooperative cancellation needs: a session the door
+    /// admitted, a connection that has not ended, and a leader this manager has not watched
+    /// exit. Each is a fact about NOW. A session id is not -- it is the historical number of a
+    /// worker that may be long gone, and routing a request by it is how a dead worker's run
+    /// became uncancellable.
+    ///
+    /// A worker that is admitted and has not asked its standing question yet IS present: it
+    /// will ask, and `on(Control&)` hands it the cancellation then. Absence is something this
+    /// manager has observed, never something it inferred from silence.
+    static bool worker_present(RunRecord& r) {
+        return r.session != 0 && !r.closed && !(r.process.started() && r.process.ended());
+    }
+
+    /// Which of those is missing, for the note a client reads.
+    static std::string worker_absence(RunRecord& r) {
+        if (r.session == 0) {
+            return "it has not connected to this session";
+        }
+        if (r.closed) {
+            return "its connection to this session ended";
+        }
+        return "its leader process has exited";
+    }
+
     /// WHAT CAPACITY IS SPENT ON. A run counts while it has no verdict, and it keeps counting
     /// while an execution this manager owns is still running -- because that is what capacity
     /// bounds: work in flight on this machine, not rows in a table.
@@ -1113,22 +1184,29 @@ private:
         r.view.notes.push_back(text);
     }
 
-    /// IS THE EXECUTION OVER? Only then does a run without a verdict get one -- `cancelled` when
-    /// a cancellation was asked for, `crashed` otherwise. A worker that exited while leaving
-    /// processes this manager owns has NOT ended its execution: that is said (`descendants`)
-    /// and the run stays controllable and counted, rather than being declared over.
+    /// IS THE EXECUTION OVER? Only then does a run without a verdict get one. Which one is the
+    /// question `worker_lost` answers: a worker that ENDED ON ITS OWN, before anybody asked it
+    /// to stop, is a `crashed` run whatever is done to what it left behind, and a worker that
+    /// ended because a cancellation was asked for is `cancelled`. A worker that exited while
+    /// leaving processes this manager owns has NOT ended its execution: that is said
+    /// (`descendants`) and the run stays controllable and counted, rather than declared over.
     void reap(RunRecord& r, Mail& mail) {
         if (!r.process.started() || !r.process.ended()) {
             return;
         }
+        mark_worker_lost(r);
         if (r.process.alive()) {
             // Only a run nobody has stopped is DESCRIBED as having descendants: one that is
             // being stopped says `killing` until its group has actually gone.
             if (r.view.process == "running") {
                 r.view.process = "descendants";
-                r.view.exit_code = r.process.exit_code();
-                note(r, "the worker (pid " + std::to_string(r.view.pid) + ") exited with code " +
-                            std::to_string(r.process.exit_code()) +
+                const std::string code = r.process.exit_code_known()
+                                             ? "with code " + std::to_string(r.process.exit_code())
+                                             : "with a code this manager could not read";
+                if (r.process.exit_code_known()) {
+                    r.view.exit_code = r.process.exit_code();
+                }
+                note(r, "the worker (pid " + std::to_string(r.view.pid) + ") exited " + code +
                             " and left processes of its own still running; this run's execution "
                             "is not over. Cancel it to stop them");
                 write_record(r);
@@ -1138,28 +1216,93 @@ private:
         if (r.view.process == "running" || r.view.process == "killing" ||
             r.view.process == "killed" || r.view.process == "descendants") {
             const bool stopped = r.view.process == "killing" || r.view.process == "killed";
-            r.view.process = stopped ? "killed" : "exited";
-            r.view.exit_code = r.process.exit_code();
+            if (r.process.exit_code_known()) {
+                r.view.process = stopped ? "killed" : "exited";
+                r.view.exit_code = r.process.exit_code();
+            } else {
+                // The execution is over and its code was never readable. `unknown` promises no
+                // code, which is the whole of what this manager can honestly say.
+                r.view.process = "unknown";
+            }
         }
         if (!final_state(r.view.state)) {
             r.view.pending.clear();
             r.view.ended_ms = now_ms();
             ++state_.finished;
-            if (r.view.cancel_requested) {
+            if (r.worker_lost) {
+                r.view.state = "crashed";
+                r.view.failure = "the worker ended (" + exit_code_text(r) +
+                                 ") without a verdict; its output ends: " + tail(r.view.log);
+                if (r.view.cancel_requested) {
+                    // The worker's failure and what was done about what it left are two facts,
+                    // and the record keeps both rather than filing one under the other.
+                    r.view.failure += " (the execution it left behind was then stopped: " +
+                                      r.view.cancel_reason + ")";
+                }
+            } else if (r.view.cancel_requested) {
                 r.view.state = "cancelled";
                 if (r.view.failure.empty()) {
                     r.view.failure = "cancelled: " + r.view.cancel_reason;
                 }
             } else {
                 r.view.state = "crashed";
-                r.view.failure = "the worker ended (exit code " +
-                                 std::to_string(r.process.exit_code()) +
+                r.view.failure = "the worker ended (" + exit_code_text(r) +
                                  ") without a verdict; its output ends: " + tail(r.view.log);
             }
         }
         r.control = DeferredAnswer{};
         forget_at_door(r, mail);
         write_record(r);
+    }
+
+    /// THE WORKER ENDED WITHOUT A VERDICT AND NOBODY HAD ASKED IT TO. Latched where it becomes
+    /// known -- the connection closing, or the leader's exit -- because by the time the
+    /// execution is finally over a cancellation may have been asked for since, and which came
+    /// first is exactly what separates a run that crashed from a run that was cancelled.
+    static void mark_worker_lost(RunRecord& r) {
+        if (!r.finished && !r.view.cancel_requested) {
+            r.worker_lost = true;
+        }
+    }
+
+    static std::string exit_code_text(const RunRecord& r) {
+        return r.process.exit_code_known()
+                   ? "exit code " + std::to_string(r.process.exit_code())
+                   : std::string("with a code this manager could not read");
+    }
+
+    /// WHAT A RECORD MAY SAY ABOUT AN EXECUTION AS THE HOST ENDS, and what it must not.
+    ///
+    /// `exited` and `killed` promise the LEADER's own exit code (zen/runs/vocabulary.hpp), so
+    /// neither is written until this manager has read one. It asks for a bounded moment
+    /// (`observe_ms`, the shutdown's shared budget) and then says what it actually knows:
+    /// `killing` when a stop was issued and the end was not seen, `unknown` when the execution
+    /// is over and no code was ever readable. Neither promises a code, so none is invented --
+    /// a record that outlives its host is the only evidence left, and a default zero in it is a
+    /// claim nobody made.
+    ///
+    /// A LEADER WHOSE CODE IS ALREADY KNOWN KEEPS IT. Stopping the group a leader left behind
+    /// is not a new result for the leader, and this manager never substitutes a descendant's
+    /// termination for it. Returns whether the view moved.
+    bool end_execution(RunRecord& r, bool stopped, int observe_ms) {
+        const std::string was = r.view.process;
+        const std::int64_t code_was = r.view.exit_code;
+        if (!r.process.started()) {
+            r.view.process = "not-started";
+            return r.view.process != was;
+        }
+        const bool over = r.process.wait_for_end(observe_ms) && r.process.exit_code_known();
+        if (over) {
+            const bool by_us = stopped || was == "killing" || was == "killed";
+            r.view.process = by_us ? "killed" : "exited";
+            r.view.exit_code = r.process.exit_code();
+        } else {
+            r.view.process = stopped ? "killing" : "unknown";
+            note(r, "the host ended this run's execution and did not see it finish within " +
+                        std::to_string(observe_ms) + "ms; no exit code was read, and none is "
+                        "reported for it");
+        }
+        return r.view.process != was || r.view.exit_code != code_was;
     }
 
     /// Before this manager answers anything about its runs: catch up with the operating system,
