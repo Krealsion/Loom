@@ -42,6 +42,14 @@ second host naming the same file exits **4** and says how to proceed. Exit codes
 2 bad command line, 3 a file would not parse, 4 store (or, serving, session directory) in use,
 5 a session could not be opened.
 
+**Building a capability on a session for some other application to drive** (a guest door, an
+external-host tool package): `docs/guides/session-tools-map.md` routes a reader's actual
+question — start/return, find a capability, act on the target, read a result, recover, extend
+the harness — to the section of `docs/guides/sessions.md` that already answers it, so a
+contributor writing that application's own companion entry knows what belongs there (that
+target's admission and guest shapes) and what does not (the session and tool mechanics this
+repository already documents once).
+
 **`--serve <dir>` keeps the host alive for clients** (`docs/guides/sessions.md`): closed stdin
 closes only the console. One loopback door (`src/host/session_door.hpp`) admits the owner's key
 as a client with exactly the session/runs/history vocabularies, and a run manager's one-time
