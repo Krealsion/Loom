@@ -717,4 +717,47 @@ TEST_CASE("the protocol shapes are ordinary messages: the console can poke a tar
     CHECK(direct);
 }
 
+TEST_CASE("substrate replies authenticate the requester and preserve explicit redirection") {
+    Switchboard bus;
+    auto metrics = std::make_unique<MetricsWeave>();
+    auto* raw = metrics.get();
+    auto grant = au::emit_default_grant(*raw);
+    au::allow_poke_answers(grant);
+    au::allow_describe_answers(grant);
+    const auto target = bus.register_weave(std::move(metrics), std::move(grant), "test.metrics");
+    raw->zen_set_self(target);
+    auto replies = au::poke_answer_schemas();
+    replies.push_back(au::accepted_shapes_schema());
+    const auto asker = sbfx::register_probe(bus, replies);
+    const auto other = sbfx::register_probe(bus, replies);
+    std::vector<Message> received;
+    asker.weave->on_handle = [&](const Message& m, Bus&, sbfx::ProbeWeave&) {
+        received.push_back(m);
+    };
+    bool redirected = false;
+    other.weave->on_handle = [&](const Message& m, Bus&, sbfx::ProbeWeave&) {
+        redirected = true;
+        CHECK_FALSE(m.provenance.answers_ask());
+        CHECK(m.sender == target);
+    };
+    const std::vector<Value> requests{
+        au::to_value(au::PokeDescribe{}), au::to_value(au::PokeRead{"label"}),
+        au::to_value(au::PokeWrite{"rate", "7"}), au::to_value(au::PokeResetState{}),
+        au::to_value(au::DescribeAccepted{})};
+    for (const auto& request : requests) {
+        bus.send_as_to_role(asker.id, "test.metrics", Message(request, {}, {}, 71));
+        bus.drain_until_idle();
+        REQUIRE_FALSE(received.empty());
+        CHECK(received.back().provenance.answers_ask());
+        CHECK(received.back().sender == target);
+        CHECK(received.back().correlation == 71);
+    }
+    CHECK(received.size() == requests.size());
+    bus.send_as_to_role(asker.id, "test.metrics",
+                       Message(au::to_value(au::PokeDescribe{}), {}, other.id, 72));
+    bus.drain_until_idle();
+    CHECK(redirected);
+    CHECK(received.size() == requests.size());
+}
+
 } // TEST_SUITE
