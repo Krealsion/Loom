@@ -8,6 +8,9 @@ and that page says which ones and where to get them.
 **I want it to keep working while I am away.** [A session that outlives its
 client](guides/sessions.md) — keep a host running, attach and leave from a CLI or
 Python, and start named runs of editable Python tools that you can inspect later.
+[Six narrower questions, routed](guides/session-tools-map.md) — start/return, find a
+capability, act on a target, read a result, recover or finish, extend the harness —
+each to the page section that already answers it.
 
 **I am new.** Start with the [mental model](guides/mental-model.md), then
 [write your first weave](guides/writing-a-weave.md) — working code in two
