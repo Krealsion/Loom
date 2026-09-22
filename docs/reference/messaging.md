@@ -336,6 +336,22 @@ relaying the answer back. The two are deliberately separate — a relay's record
 about the asker it answers *for* and sheds its oldest entry when full, while an
 asker's book refuses a new conversation rather than drop one of its own.
 
+### Substrate answer attribution
+
+The four `zen.Poke*` doors and `zen.DescribeAccepted` use the authenticated answer door when
+the reply address is the request's stamped sender (including an omitted `reply_to`). The
+answer remains subject to the respondent's grant and the requester-incarnation check. A role
+asker checks `answers_ask()` before using `AskBook::settle`; `open_to_role` cannot authenticate
+a respondent by correlation alone.
+
+An explicit `reply_to` naming a different participant remains ordinary, grant-checked speech
+to that address, without answer provenance. A root request naming neither sender nor reply
+address has no reply. An answer does not earn a second answer; a refused answer attempt is
+never silently retried as ordinary speech.
+
+This behavior is in the authoring headers, with no ABI change. Rebuild artifacts compiled
+against older headers before relying on their substrate replies to settle a strict asker.
+
 ## Self-description — what may be said to this weave
 
 **Ask the target.** Every woven weave (`WeaveBase`) carries a fifth substrate

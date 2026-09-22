@@ -749,23 +749,10 @@ private:
 
     // ---- the poke doors (substrate-answered; see poke.hpp) -----------------
 
-    /// Send a substrate answer to the requester: reply_to if given, else the
-    /// stamped sender. A request with neither (a root fire-and-forget) has
-    /// nowhere to answer and is performed/refused silently by design — the
-    /// requester chose not to listen. The send is an ordinary gated send: the
-    /// bus stamps this Weave as sender and checks ITS grant. It takes NO path
-    /// around the gate (invariant 7). The grant rule mount() adds
-    /// (allow_poke_answers) is exactly the kind an Emit<...> declaration confers
-    /// — so a mount()ed weave's own maker code may likewise emit the four answer
-    /// shapes; that is inert not by enumeration of today's consumers but by the
-    /// standing consumer obligation (standard_shapes.hpp): a consumer of the
-    /// standard replies matches correlation + bus-stamped sender against its own
-    /// requests and treats an unsolicited answer as data at best. (Makers whose
-    /// own code replies with a standard shape still declare it in Emit<...> —
-    /// the ride-along grant is the answering machinery's, not a license to leave
-    /// the silhouette silent; pinned as a known carve-out in the weave suite.)
-    /// A finer per-send principal is the sub-weave-identity seam the auth phase
-    /// pulls, not this one.
+    /// Substrate answers use the same authority as maker-written answers. Replies
+    /// to the stamped requester use the authenticated answer door. Explicit
+    /// redirection to somebody else remains ordinary, grant-checked speech.
+    /// A root request with no reply address has nowhere to answer.
     template <class Answer>
     void answer_poke(const loom::Message& in, loom::Bus& bus, const Answer& answer) {
         answer_substrate(in, bus, to_value(answer));
@@ -778,6 +765,15 @@ private:
     void answer_substrate(const loom::Message& in, loom::Bus& bus, loom::Value answer) {
         const loom::WeaveId to = in.reply_to.valid() ? in.reply_to : in.sender;
         if (!to.valid()) {
+            return;
+        }
+        // A reply to the actual requester spends this delivery's answer right.
+        // An explicitly redirected reply remains ordinary speech: it cannot attest
+        // a conversation with somebody who did not send the request. Likewise an
+        // answer does not seed another answer (ANS-01); never downgrade a refused
+        // answer attempt into an ordinary send.
+        if (to == in.sender) {
+            (void)bus.answer(loom::Message(std::move(answer), self_, self_, in.correlation));
             return;
         }
         bus.send(to, loom::Message(std::move(answer), self_, self_, in.correlation));
@@ -829,8 +825,8 @@ private:
     /// request is fieldless, so it contributes nothing to the dependency closure
     /// and describes no shape that describes it back.
     ///
-    /// Sent through answer_substrate — the ordinary gated send every substrate
-    /// answer takes, addressed by the one shared rule. The grant mount() adds is
+    /// Sent through answer_substrate, with the same attribution and addressing
+    /// rule as the poke answers. The grant mount() adds is
     /// allow_describe_answers; a weave without it is CapabilityDenied at
     /// delivery, visible on the tap, exactly as an ungranted poke answer is.
     bool try_describe(const loom::Message& in, loom::Bus& bus) {
