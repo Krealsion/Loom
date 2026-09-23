@@ -47,6 +47,9 @@ both say plainly what they do *not* claim:
 the exec boundary) and [bridge](reference/bridge.md) (the crossing between two
 hosts — **the host's policy admits, and the transport is plain**).
 
+**I am writing a request handler.** [RoleRequest and AskBook](reference/messaging.md#one-role-addressed-request)
+cover attempt tracking, authenticated answers and explicit local settlement.
+
 **I am debugging behavior.** [guides/diagnostics.md](guides/diagnostics.md)
 first; the invariants themselves are the [laws](laws/README.md) — small, named
 (GATE/MSG/ANS/LIFE/PR/SENSE/HANDOFF/KERN, and POP for what a green *test* run

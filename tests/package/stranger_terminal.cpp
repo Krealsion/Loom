@@ -20,6 +20,7 @@
 #include <zen/terminal/input_lex.hpp>
 #include <zen/terminal/session.hpp>
 #include <zen/weave.hpp>
+#include <zen/weave/role_request.hpp>
 
 #include <cstdint>
 #include <cstdio>
@@ -50,6 +51,23 @@ struct Question {
 struct Answer {
     std::string a;
     ZEN_SHAPE(Answer, 1, ZEN_FIELD(a));
+};
+
+struct AskOnce { ZEN_SHAPE(AskOnce, 1); };
+class RoleClient final : public loom::WeaveBase<RoleClient, Nothing,
+    loom::Accept<AskOnce, Answer>, loom::Emit<Question>> {
+public:
+    loom::RoleRequest request;
+    bool received = false;
+    void on(const AskOnce&, loom::Mail& mail) {
+        ok(request.send_to_role(mail, "oracle", Question{"installed helper"}, 1),
+           "an installed RoleRequest queues through ordinary Mail");
+    }
+    void on(const Answer& answer, loom::Mail& mail) {
+        if (!request.matches_answer(mail) || answer.a != "you asked: installed helper") return;
+        received = true;
+        request.forget();
+    }
 };
 
 /// An ordinary service the stranger also wrote. It answers through Loom's own
@@ -195,6 +213,16 @@ int main() {
     const loom::TerminalDesk desk(*session.session, *seat.session);
     ok(!desk.chronology().empty(), "a merged, lens-labelled chronology is available by value");
 
+    auto client = std::make_unique<RoleClient>();
+    auto* client_raw = client.get();
+    loom::Grant client_grant;
+    client_grant.allow_to_role("Question", 1, "oracle");
+    const auto client_id = bus.register_weave(std::move(client), std::move(client_grant));
+    client_raw->zen_set_self(client_id);
+    bus.send(client_id, loom::Message(loom::to_value(AskOnce{})));
+    bus.drain_until_idle();
+    ok(client_raw->received && !client_raw->request.pending(),
+       "installed RoleRequest recognizes an authenticated answer before explicit settlement");
     std::printf("stranger terminal witness: %s\n", failures == 0 ? "PASSED" : "FAILED");
     return failures == 0 ? 0 : 1;
 }
