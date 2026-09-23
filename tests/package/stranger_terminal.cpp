@@ -151,6 +151,9 @@ int main() {
         }
     }
     ok(saw_answer, "the transcript carries the answer's ask, sender and provenance as data");
+    const auto authored = session.session->transcript().retained_value(asked.entry);
+    ok(authored && authored->get("q") && authored->get("q")->as_text() == "is anybody there",
+       "the installed transcript retrieves the original authored value by observation");
 
     const std::optional<loom::ReceivedMessage> got =
         session.session->received(session.session->transcript().last_received_id());
