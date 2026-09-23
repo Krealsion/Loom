@@ -336,6 +336,48 @@ relaying the answer back. The two are deliberately separate — a relay's record
 about the asker it answers *for* and sheds its oldest entry when full, while an
 asker's book refuses a new conversation rather than drop one of its own.
 
+### One role-addressed request
+
+For one operation that already has a caller-owned correlation, include
+[`zen/weave/role_request.hpp`](../../include/zen/weave/role_request.hpp) and keep a
+`loom::RoleRequest` in the asking participant. It combines an ordinary typed role send with
+the record of that exact attempt; it adds no authority or new wire protocol.
+
+```cpp
+loom::RoleRequest request; // image-local, alongside the operation's domain state
+// In a handler; next_correlation belongs to this participant, not this helper:
+request.send_to_role(mail, "service", MyRequest{value}, ++next_correlation);
+// Or pass mail.as_role("my.office") for explicitly office-authored speech.
+// In the corresponding answer handler:
+if (request.matches_answer(mail) && valid_for_this_operation(answer)) {
+    request.forget();
+    apply(answer);
+}
+```
+
+`send_to_role` returns false without sending if a request is already pending, preserving the
+incumbent record. An invalid returned ticket also yields false. Exceptions from the ordinary
+send still propagate. `pending()` means the caller has not forgotten its queued attempt;
+it does not establish delivery, progress or completion. `attempt()`, `correlation()` and
+`is<Request>()` expose the authored identity. Matching is read-only.
+
+`matches_answer(mail)` requires Loom's authenticated answer provenance and the recorded
+correlation. Use one correlation allocator across the participant's operations, including
+any AskBook and ordinary sends. The helper mints no numbers and cannot correct collisions.
+An answer's shape and payload meaning remain the handler's responsibility. Validate them
+before forgetting, including any entry identity, revision or operation stage.
+
+If the weave explicitly accepts `loom::DispatchRefused`,
+`matches_refusal(refused, mail)` requires its authenticated provenance, the exact attempt,
+role address, request shape/version and empty directed-target field. This is a dispatch
+refusal, not an answer. Forget only when the owner has interpreted that outcome.
+
+`forget()` changes local tracking only. Silence may remain pending forever; no retries,
+timeouts or remote cancellation are implied. Role resolution, answer incarnation checks
+and grants are the ordinary Loom mechanisms. Keep AskBook for a bounded collection of
+conversations and its correlation allocation; RoleRequest is a single-attempt convenience
+for a caller that already owns those decisions. It is not part of persisted weave state.
+
 ### Substrate answer attribution
 
 The four `zen.Poke*` doors and `zen.DescribeAccepted` use the authenticated answer door when
