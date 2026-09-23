@@ -202,18 +202,16 @@ reader for its whole life.
 
 ## Terminal session (one participant's own record)
 
-The same two-window split, and the same reasoning, one tier down: a
-[terminal session](terminal.md) keeps a wide window of cheap ENTRIES and a
-narrower one of the heavy VALUES they refer to. Both are history; nothing is
-owed on either. Both use `loom::BoundedHistory`, the primitive the console's
-windows always used and which moved to
-[`zen/bounded_history.hpp`](../../include/zen/bounded_history.hpp) at TERM-0 so
-there is one ring rather than six.
+A [terminal session](terminal.md) keeps a wide window of transcript entries and separate
+narrower windows of authored and received values. All three are history, using
+[`loom::BoundedHistory`](../../include/zen/bounded_history.hpp); none owns an outstanding
+conversation. Keeping a submitted value cannot displace a received value.
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
 | `kTranscriptCapacity` | 256 | transcript entries | `Transcript::entries_` -- a participant's own record | ring: oldest evicted, counted in `Transcript::evicted()` |
 | `kReceivedCapacity` | 64 | received `Value`s | `Transcript::received_` -- the `rN` store the `$rN.field` syntax reads | ring: oldest evicted, counted in `Transcript::received_evicted()`; its **id** then refuses |
+| `kAuthoredCapacity` | 64 | submitted `Value`s | `Transcript::authored_` | ring: oldest evicted; `retained_value(observation)` then returns no value |
 | `kMaxOutstandingAsks` | 8 | conversations | how many asks one participant will track at once -- the number the terminal hands its `loom::AskBook` | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
 
 **`loom::AskBook` has no default capacity, and that is a bound too.** The number
@@ -241,7 +239,9 @@ obligation may not" meet.
 **Ids are identities, not positions**, exactly as the console's `mN` labels are:
 `received(N)` answers for the message with that id, the retained range is
 `(evicted, evicted+size]`, and an evicted id refuses *and says it was evicted*
-rather than re-binding to a newer message.
+rather than re-binding to a newer message. `retained_value(observation)` additionally requires
+the exact transcript entry to remain: local prose and evicted entries or values return no value.
+An observation belongs to its terminal instance, not a later instance under the same UI label.
 
 **The vocabulary is deliberately unbounded**, and that is not an omission: every
 entry is placed by the HOST at mount, so there is no traffic that can grow it and
