@@ -612,6 +612,57 @@ TEST_CASE("SUBMITTED means authored, and says nothing about delivery — in eith
     CHECK(refused[0].dispatch_refusal->send.shape=="Work");
 }
 
+TEST_CASE("retained values identify authored and received content without replay or authority") {
+    Cast c;
+    const auto command = c.acting().send(Address::to_role(kServiceRole), "Work", 1,
+                                         {bare(std::int64_t{42})});
+    REQUIRE(submitted(command));
+    c.bus.drain_until_idle(); // denied delivery still has the original authored value
+    const auto before = c.tap.size();
+    const auto value = c.acting().transcript().retained_value(command.entry);
+    REQUIRE(value);
+    CHECK(value->schema().name() == "Work");
+    CHECK(value->get("n")->as_int() == 42);
+    CHECK(c.tap.size() == before);
+    CHECK_FALSE(c.acting().transcript().retained_value(0));
+    CHECK_FALSE(c.acting().transcript().retained_value(999999));
+    CHECK_FALSE(c.op().transcript().retained_value(command.entry));
+    const auto local = c.acting().record_command("send @some.service Work 1 n=99");
+    CHECK_FALSE(c.acting().transcript().retained_value(local));
+    c.bus.send(c.session.id, Message(notice("kept verbatim")));
+    c.bus.drain_until_idle();
+    const auto received = c.of_kind(c.acting(), TranscriptKind::Received).back();
+    REQUIRE(c.acting().transcript().retained_value(received.seq));
+    CHECK(c.acting().transcript().retained_value(received.seq)->get("text")->as_text() == "kept verbatim");
+}
+
+TEST_CASE("authored retention is bounded independently of replies and pending conversations") {
+    Cast c;
+    c.service->on_handle = [](const Message&, Bus&, ProbeWeave&) {};
+    c.bus.send(c.session.id, Message(notice("preserved reply")));
+    c.bus.drain_until_idle();
+    const auto incoming = c.of_kind(c.acting(), TranscriptKind::Received).back().seq;
+    const auto first = c.acting().ask(Address::to_role(kServiceRole), "Query", 1,
+                                     {bare(std::string("pending"))});
+    REQUIRE(submitted(first));
+    for (std::size_t i = 0; i < kAuthoredCapacity; ++i) {
+        REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1,
+                                          {bare(std::to_string(i))})));
+        c.bus.drain_until_idle();
+    }
+    CHECK_FALSE(c.acting().transcript().retained_value(first.entry));
+    CHECK(c.acting().waiting_on(first.ask));
+    REQUIRE(c.acting().transcript().retained_value(incoming));
+    const auto newest = c.of_kind(c.acting(), TranscriptKind::Submitted).back().seq;
+    const auto saved = c.acting().transcript().retained_value(newest);
+    REQUIRE(saved);
+    CHECK(saved->get("q")->as_text() == std::to_string(kAuthoredCapacity - 1));
+    for (std::size_t i = 0; i < kTranscriptCapacity; ++i) c.acting().record_notice("noise");
+    CHECK_FALSE(c.acting().transcript().retained_value(newest));
+    CHECK(saved->get("q")->as_text() == std::to_string(kAuthoredCapacity - 1));
+    CHECK(c.acting().waiting_on(first.ask));
+}
+
 // ---- receiving --------------------------------------------------------------
 
 TEST_CASE("an unsolicited message is recorded as one, with its trusted provenance") {

@@ -109,6 +109,21 @@ detail later; this does not change its parked Editor transaction.
 
 Full contract: [messaging](messaging.md#sender-visible-dispatch-refusal).
 
+## Reusing retained message values
+
+`Transcript::retained_value(observation)` reads the actual typed value behind an exact
+transcript entry's `seq`. It works for Submitted, Received and AnswerReceived entries.
+Local prose, unknown observations and evicted entries or payloads return `nullopt`; reading
+never authors or retries a command. Authored and inbound values each have a separate window
+of 64 values, alongside the 256-entry transcript. These are count bounds, not byte quotas.
+Eviction never settles an outstanding conversation. Nested values follow `Value`'s existing
+immutable-after-admission contract; serialize a snapshot before editing or transferring it.
+
+The observation belongs to its terminal instance. A host exposing this read to another
+participant must identify that instance and enforce its own retrieval authority. A retained
+message is content: its old address, sender, correlation and answer status are historical facts,
+not a grant or a live conversation. A new invocation requires current authority.
+
 ## Ask, answer, and which conversation an answer belongs to
 
 An ask is an ordinary gated send that the participant additionally remembers. No
@@ -224,6 +239,7 @@ sender, `prompt.requester` is the Weaver's own trusted fact, and
 
 ```text
 kTranscriptCapacity  256 entries      metadata; a session's worth of scrollback
+kAuthoredCapacity     64 messages     submitted values, separate from replies
 kReceivedCapacity     64 messages     the retained Values, bounded only by the
                                       decode budget, so a smaller window
 ```
