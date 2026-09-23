@@ -200,8 +200,10 @@ inline constexpr std::size_t kTranscriptCapacity = 256;
 /// windows.
 inline constexpr std::size_t kReceivedCapacity = 64;
 
-/// A participant's own record: a bounded window of entries, plus a bounded window
-/// of the values it received.
+/// Authored values have a separate bounded window; retaining a command never evicts a reply.
+inline constexpr std::size_t kAuthoredCapacity = 64;
+
+/// A participant's own record: bounded windows of entries, authored values and received values.
 ///
 /// EVICTION CANNOT COST CONVERSATION STATE. Pending asks live in the session, not
 /// in here, precisely so that scrolling past the horizon can never lose the fact
@@ -231,6 +233,11 @@ public:
     /// arrived or was evicted. Never another message.
     std::optional<ReceivedMessage> received(std::uint64_t id) const;
 
+    /// The value behind an exact retained observation, or nullopt for local prose, an unknown
+    /// observation, or an evicted entry/value. Reading authors nothing and carries no grant.
+    /// Nested cells follow Value's immutable-after-admission sharing contract.
+    std::optional<Value> retained_value(std::uint64_t observation) const;
+
     std::size_t size() const noexcept { return entries_.size(); }
     std::uint64_t evicted() const noexcept { return entries_.evicted(); }
     std::size_t received_size() const noexcept { return received_.size(); }
@@ -240,6 +247,12 @@ public:
 
 private:
     friend struct TerminalHistoryProbe;
+    friend class TerminalSession;
+    struct AuthoredValue { std::uint64_t observation; Value value; };
+    void retain_authored(std::uint64_t observation, Value value) {
+        authored_.push(AuthoredValue{observation, std::move(value)});
+    }
+    BoundedHistory<AuthoredValue, kAuthoredCapacity> authored_;
 
     BoundedHistory<TranscriptEntry, kTranscriptCapacity> entries_;
     BoundedHistory<ReceivedMessage, kReceivedCapacity> received_;

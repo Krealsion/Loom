@@ -88,6 +88,25 @@ std::optional<ReceivedMessage> Transcript::received(std::uint64_t id) const {
     return received_.at(static_cast<std::size_t>(id - base - 1));
 }
 
+std::optional<Value> Transcript::retained_value(std::uint64_t observation) const {
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        const auto& entry = entries_.at(i);
+        if (!observation || entry.seq != observation) continue;
+        if (entry.kind == TranscriptKind::Received || entry.kind == TranscriptKind::AnswerReceived) {
+            const auto message = received(entry.message);
+            return message ? std::optional<Value>{message->value} : std::nullopt;
+        }
+        if (entry.kind == TranscriptKind::Submitted) {
+            for (std::size_t j = 0; j < authored_.size(); ++j) {
+                const auto& item = authored_.at(j);
+                if (item.observation == observation) return item.value;
+            }
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 std::string safe_terminal_text(std::string_view raw) {
     static constexpr char kHex[] = "0123456789abcdef";
     std::string out;
@@ -351,6 +370,9 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
     entry.target = to.target;
     entry.role = to.role;
 
+    // Preserve the actual composed value before handing it to the channel. Neither later
+    // schema discovery nor re-executing the source text can reconstruct this historical fact.
+    transcript_.retain_authored(entry.seq, payload);
     switch (to.mode) {
     case Addressing::Weave:
         entry.attempt = channel_->send(to.target, std::move(payload), correlation).seq;
