@@ -144,6 +144,11 @@ with Session.attach("work") as s:
 
 ## 4. Runs
 
+`loom-session run` returns without waiting by default; exit 0 can mean the run is still
+starting or running. Use `--wait SECONDS` and check the run's verdict before starting dependent
+work. A wait timeout does not cancel the run: use `loom-session show work <name>` to inspect it
+or `loom-session wait work <name> --timeout SECONDS` to wait again.
+
 ```text
 $ loom-session run work basics/steps --name first --input count=2 --input message=hi --wait 30
 run 3f17415b/first -- passed (live)

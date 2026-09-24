@@ -450,12 +450,14 @@ def main(argv=None):
     c = command("shape", cmd_shape, "a shape's fields, from the host's schema")
     c.add_argument("name")
     c.add_argument("version", type=int, nargs="?", default=1)
-    c = command("run", cmd_run, "start a named run")
+    c = command("run", cmd_run, "start a named run (returns without waiting unless --wait is given)")
     c.add_argument("tool")
     c.add_argument("--name", required=True)
     c.add_argument("--input", action="append", default=[], help="name=value, typed by the tool")
     c.add_argument("--inputs", default="", help="all inputs as one JSON object")
-    c.add_argument("--wait", type=float, default=0.0, help="wait this many seconds for the end")
+    c.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
+                   help="wait up to SECONDS for the run's verdict (default: 0, return without "
+                        "waiting); a timeout does not cancel the run")
     c = command("runs", cmd_runs, "this lifetime's runs")
     c.add_argument("--past", action="store_true", help="records of earlier lifetimes instead")
     c = command("show", cmd_show, "one run")
