@@ -289,7 +289,8 @@ def _human_run(r):
         print("  artifact %s: %s, %d bytes, sha256 %s" % (a["name"], a["state"], a["bytes"],
                                                          a["sha256"][:16]))
     if r["asks_dropped"]:
-        print("  (%d earlier ask(s) not kept)" % r["asks_dropped"])
+        print("  (%d earlier ask(s) not kept; 'crossings' can inspect retained delivery history)"
+              % r["asks_dropped"])
     for first, last, count in _ask_groups(r["asks"]):
         print("  ask %s %s v%d -> %s%s: %s %s%s" % (
             first["correlation"] if count == 1 else "%d..%d" % (first["correlation"],
@@ -430,7 +431,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="command", required=True)
 
     def command(name, fn, help_text):
-        c = sub.add_parser(name, help=help_text)
+        c = sub.add_parser(name, help=help_text, description=help_text)
         c.add_argument("dir", help="the session directory")
         c.add_argument("--json", action="store_true", help="print the owner's answer as JSON")
         c.set_defaults(fn=fn)
@@ -452,7 +453,9 @@ def main(argv=None):
     c.add_argument("version", type=int, nargs="?", default=1)
     c = command("run", cmd_run, "start a named run (returns without waiting unless --wait is given)")
     c.add_argument("tool")
-    c.add_argument("--name", required=True)
+    c.add_argument("--name", required=True,
+                   help="reusing a held name with the same tool and inputs "
+                        "returns the existing run, so use a new name for a new experiment")
     c.add_argument("--input", action="append", default=[], help="name=value, typed by the tool")
     c.add_argument("--inputs", default="", help="all inputs as one JSON object")
     c.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
@@ -460,12 +463,14 @@ def main(argv=None):
                         "waiting); a timeout does not cancel the run")
     c = command("runs", cmd_runs, "this lifetime's runs")
     c.add_argument("--past", action="store_true", help="records of earlier lifetimes instead")
-    c = command("show", cmd_show, "one run")
+    c = command("show", cmd_show, "one run's verdict, execution state and saved record")
     c.add_argument("name")
     c.add_argument("--lifetime", default=None)
-    c = command("wait", cmd_wait, "wait for a run to finish")
+    c = command("wait", cmd_wait, "wait for a run's verdict; execution may still be active")
     c.add_argument("name")
-    c.add_argument("--timeout", type=float, default=60.0)
+    c.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS",
+                   help="wait up to SECONDS (default: 60); timeout does not cancel the run; "
+                        "use 'show' to inspect its process state before releasing resources")
     c = command("cancel", cmd_cancel, "ask for a run's cancellation")
     c.add_argument("name")
     c.add_argument("--force", action="store_true")
