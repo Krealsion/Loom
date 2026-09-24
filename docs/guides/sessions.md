@@ -144,6 +144,11 @@ with Session.attach("work") as s:
 
 ## 4. Runs
 
+`loom-session run` returns without waiting by default; exit 0 can mean the run is still
+starting or running. Use `--wait SECONDS` and check the run's verdict before starting dependent
+work. A wait timeout does not cancel the run: use `loom-session show work <name>` to inspect it
+or `loom-session wait work <name> --timeout SECONDS` to wait again.
+
 ```text
 $ loom-session run work basics/steps --name first --input count=2 --input message=hi --wait 30
 run 3f17415b/first -- passed (live)
@@ -153,10 +158,13 @@ run 3f17415b/first -- passed (live)
   artifact report.txt: verified, 27 bytes, sha256 a42644fe78226502
 ```
 
-- **A name is one run for the whole lifetime.** The handle is `(lifetime, name)`. Asking to start
+- **A held name identifies one run.** The handle is `(lifetime, name)`. Asking to start
   the same name with the same tool and inputs again answers the existing run — so a client whose
   answer was lost asks again and is told what became of it, and nothing starts twice. The same
-  name for anything else is refused.
+  name for anything else is refused. Use a new name for a new experiment, including after editing
+  the tool: asking again for an existing name does not execute the new package revision.
+  Releasing forgets the live record; a directory left on disk still prevents starting over it.
+  Use fresh names for successive experiments so their records and outputs remain distinguishable.
 - **A run executes a snapshot.** The package is copied into `runs/<lifetime prefix>-<name>/package`
   and its digest is the run's `revision`. Edit the tool and start another run: the new run uses
   the edit, the running and finished ones keep theirs. No compiler, no restart.
@@ -254,7 +262,16 @@ answers cross as bytes too — a picture fetched in chunks is most of a run's tr
 the Recorder's payload budget (1 MiB unless `history.payload_budget` says otherwise), so the
 earliest crossings' bytes are evicted first: give the budget room for what you mean to read back.
 The CLI prints the answers to the run's asks and the crossings, and counts the rest; `--json`
-lists every delivery.
+lists each delivery returned by that query, not deliveries outside its retained/read window.
+
+**Check which window you are reading.** The run record keeps at most 128 ask records, with
+`asks_dropped` counting earlier reports it no longer holds. `show` prints that loss explicitly.
+`crossings` reads the Recorder separately; it can still show retained deliveries whose ask reports
+have fallen out of the run record, but its read limit and the Recorder's event/payload retention
+are separate bounds. Its JSON `truncated` flag means the query stopped before exhausting the
+available history. A false flag does not prove earlier history was never evicted. Configure
+retention before the run, inspect the reported horizons, and use a tool-produced artifact for a
+complete account the tool itself needs to preserve. `--json` cannot recover discarded evidence.
 
 ## 6. Four decisions, kept apart
 
@@ -318,7 +335,26 @@ def run(ctx):
   must decide when a run proceeds while no client is attached.
 - `ctx.inputs` are typed as the manifest declares them (`text`, `int`, `bool`, `number`).
 
-**Cancelling, and giving things back.** A cancellation ends a tool's ORDINARY work: it is raised
+### Package files and run outputs
+
+The worker imports the script from the run's package snapshot and runs with the **run directory**
+as its working directory. `__file__` therefore locates the copied script, not the source checkout;
+a bare relative path starts in the run directory, not beside the script.
+
+| The tool needs... | Locate it through... |
+|---|---|
+| A bundled template or sample | A path relative to `Path(__file__).resolve().parent`, arranged for the script's location inside the package |
+| A maker's checkout or input file | An explicit manifest input (`ctx.inputs`); require an absolute path or document the base you resolve it against |
+| A result another client should inspect | `ctx.produce("result.json", encoded_bytes)`; it writes into this run's `out/` and reports the artifact for verification |
+
+Do not infer a workspace by walking upward from the copied script. Do not store durable maker
+data by writing back into the package snapshot: it belongs to this run and may be deleted when
+the run is released with `--remove`. These path choices locate files; they grant no additional
+filesystem authority ([the worker trust boundary](#6-four-decisions-kept-apart)).
+
+### Cancellation and cleanup
+
+A cancellation ends a tool's ORDINARY work: it is raised
 as `Cancelled` at the next wait point. What the tool registered with `ctx.on_cleanup` then runs
 in a phase of its own, with the session still open and the same grant it always had — so a run
 that took a far resource can hand it back after being cancelled, which is the only way the next
