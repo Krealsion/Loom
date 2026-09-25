@@ -21,18 +21,26 @@ another run's send is never its cause; a burst past a small window is dropped, c
 said, while the state shape keeps its newest; a publication by a participant not holding the
 office is never told, and a replaced holder is visible; the far host's revocation ends the
 subscription in words; a cancelled run's cleanup frees its subscription, and the next run on the
-same link starts clean; a client that stops waiting leaves the run to its manager; and when the
-far host dies the link says so (`lost`), and a new session after it is a new epoch and a new
-relay lifetime -- nothing of the old one continues. Exit 0 only when every check held.
+same link starts clean; a client that stops waiting leaves the run to its manager; a worker that
+goes without releasing -- stopped outright with its producer silent, or exiting with its window
+full, more times than the far relay's allowance for one session -- is released by the link on the
+host's own turn, and a fresh run still subscribes; and when the far host dies the link says so
+(`lost`), and a new session after it is a new epoch and a new relay lifetime -- nothing of the
+old one continues. Exit 0 only when every check held.
 """
 
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+
+# The far relay's bound on subscriptions held for one subscriber (zen/observe/relay.hpp
+# kMaxPerSubscriber): every run on one link is that one subscriber there.
+PER_SUBSCRIBER = 8
 
 CHECKS = []
 PROCS = []
@@ -124,6 +132,39 @@ def main():
     def links():
         with Session.attach(session_dir) as s:
             return dict((r["name"], r["state"]) for r in s.describe()["links"])
+
+    def carried(name="far"):
+        """The host console's own line for link `name`: (open, watched, releasing), or None."""
+        path = os.path.join(session_dir, "host.log")
+        start = os.path.getsize(path)
+        host.stdin.write(b"links\n")
+        host.stdin.flush()
+        pattern = re.compile(r"(?:^|\s)%s\s.*\((\d+) open, (\d+) watched(?:, (\d+) releasing)?\)"
+                             % re.escape(name))
+        seen = {}
+
+        def read():
+            with open(path, "rb") as f:
+                f.seek(start)
+                for line in f.read().decode("utf-8", "replace").splitlines():
+                    m = pattern.search(line)
+                    if m:
+                        seen["line"] = (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+                        return True
+            return False
+
+        until(read, 20, "the console's line for link %s" % name)
+        return seen.get("line")
+
+    def released_all(name="far", seconds=30):
+        """Until the link carries no subscription at all, as its console says."""
+        last = {}
+
+        def none():
+            last["line"] = carried(name)
+            return last["line"] is not None and last["line"][1] == 0
+
+        return until(none, seconds, "link %s to carry nothing" % name), last.get("line")
 
     if not check("F1 the session serves, both links admitted by the far host",
                  until(lambda: links() == {"far": "admitted", "other": "admitted"}, 60,
@@ -278,6 +319,64 @@ def main():
         check("R11 a client's wait that runs out is the client's decision: the run stays running, "
               "and a later wait finds it passed", stopped and still in ("starting", "running") and
               later == "passed", (stopped, still, later))
+
+        # ---- R14 a subscriber stopped outright while its producer is silent ----------------
+        s.start("observe-probe/script", "gone-silent", {"plan": json.dumps([
+            {"subscribe": {}}, {"hold": "never"}])})
+        until(lambda: s.run("gone-silent")["step"] == "held: never", 60, "the silent subscriber")
+        holding = carried()
+        asked = s.cancel("gone-silent", "observe journey: stop a subscriber outright", force=True)
+        rg = s.wait("gone-silent", timeout=60)
+        released, line = released_all()
+        r, st = run(s, "after-silent", [{"status": {}}])
+        rows = st[0].get("rows") if st else None
+        check("R14 a subscriber stopped outright -- no cleanup ran -- while its producer says nothing: "
+              "its process ended, and the link released its far subscription on the host's own turn; "
+              "the far relay holds nothing for the session and the link carries nothing",
+              holding is not None and holding[1] == 1 and asked.get("cancel_requested") and
+              rg["state"] == "cancelled" and rg.get("process") in ("killed", "exited") and
+              not any(n.startswith("cleanup") for n in rg.get("notes", [])) and released and
+              rows == [], (holding, rg["state"], rg.get("process"), line, rows))
+
+        # ---- R15 a worker that exits with its window full -----------------------------------
+        s.start("observe-probe/script", "gone-full", {"plan": json.dumps([
+            {"subscribe": {"window": 1}}, {"ask": {"verb": "tick", "count": 2, "settle": True}},
+            {"exit": 7}])})
+        rf = s.wait("gone-full", timeout=60)
+        with open(os.path.join(rf["directory"], "out", "probe.json"), encoding="utf-8") as f:
+            stf = json.load(f)
+        released, line = released_all()
+        r, st = run(s, "after-full", [{"ask": {"verb": "tick", "count": 20, "settle": True}},
+                                      {"status": {}}])
+        rows = st[1].get("rows") if len(st) > 1 else None
+        check("R15 a worker that exits with its window full -- a reader nothing can wake -- is released "
+              "without another word reaching it; twenty more publications find nothing held",
+              stf and stf[0].get("ok") and stf[0].get("window") == 1 and
+              rf["state"] == "crashed" and rf.get("process") == "exited" and released and
+              rows == [], (stf[:2], rf["state"], rf.get("process"), line, rows))
+
+        # ---- R16 more abandoned workers than the far relay's allowance for one session ------
+        abandoned = []
+        for i in range(PER_SUBSCRIBER + 1):
+            name = "gone-%d" % i
+            s.start("observe-probe/script", name, {"plan": json.dumps([
+                {"subscribe": {"window": 1}}, {"ask": {"verb": "tick", "count": 1, "settle": True}},
+                {"exit": 3}])})
+            ri = s.wait(name, timeout=60)
+            with open(os.path.join(ri["directory"], "out", "probe.json"), encoding="utf-8") as f:
+                sti = json.load(f)
+            abandoned.append((name, bool(sti and sti[0].get("ok")), sti[0].get("refused", "") if sti
+                              else "no record", ri["state"], ri.get("process")))
+        released, line = released_all()
+        r, st = run(s, "fresh", [{"subscribe": {}}, {"ask": {"verb": "tick", "count": 1, "settle": True}},
+                                 {"drain": {"from": "s"}}, {"release": {"from": "s"}}])
+        items = st[2]["items"] if len(st) > 2 else []
+        check("R16 %d workers abandon their subscriptions on one link -- more than the far relay holds "
+              "for one session -- and each is admitted, because each abandoned one was released; a "
+              "fresh run then subscribes and is told" % (PER_SUBSCRIBER + 1),
+              all(a[1] and a[3] == "crashed" and a[4] == "exited" for a in abandoned) and released and
+              st and st[0].get("ok") and [i["seq"] for i in items] == [1, 2],
+              (abandoned, line, st[:1], [(i["seq"], i["shape"]) for i in items]))
 
         # ---- R12 the far host dies; a new session is a new epoch and a new relay ------------
         before = run(s, "before-loss", [{"subscribe": {}}, {"release": {"from": "s"}}])[1]

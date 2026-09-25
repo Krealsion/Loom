@@ -299,7 +299,7 @@ Every bound here either refuses in words or drops-and-SAYS; none makes a produce
 | `observe::kMaxPerSubscriber` | 8 | held at once for one subscriber (every run on one link is ONE far subscriber); past it refused: release one first |
 | `observe::kMaxShapes` | 8 | shapes one subscription names |
 | `observe::kDefaultWindow` / `kMaxWindow` | 256 / 4096 | numbered words standing unacknowledged per subscription. Past it an occurrence is dropped, COUNTED and said as a `Gap` before anything later; a `latest` shape keeps only its newest, which says how many it stood for (`coalesced`) |
-| `LinkWeave::kMaxWatches` (the supplied host) | 32 | far subscriptions one link holds in custody, subscriptions being made included; past it the `Subscribe` is refused before it crosses |
+| `LinkWeave::kMaxWatches` (the supplied host) | 32 | far subscriptions one link holds in custody, subscriptions being made and those being released for a gone asker included; past it the `Subscribe` is refused before it crosses. A gone asker's subscription is released on the host's own turn, so abandoning subscribers does not use it up |
 | `Subscription.max_pending` (Python client) | 2 × window, at least 64 | observations read here and not yet taken; past it they are dropped HERE and handed over as a local `Gap` with their count |
 | `Connection.MAX_UNCLAIMED` (Python client) | 1024 | words for a subscription not (yet) registered here — the relay's first words can arrive with its answer; past it the oldest are let go and counted (`stray_observations`) |
 

@@ -234,8 +234,18 @@ answered, the session (`epoch`) and the local asker. It forwards that relay's la
 `epoch` and `session` filled and `cause` translated from its own attempt to the asker's own
 correlation, or 0. A word about any other subscription, from any other far participant or from an
 ended session is counted (`stray_observations`) and dropped. When the session ends, each
-subscription it carried is told `Ended` `lost`; when the asker is gone, the link asks the far relay
-to release. At most `LinkWeave::kMaxWatches` per link ([bounds](bounds.md#observation-relay)).
+subscription it carried is told `Ended` `lost`. At most `LinkWeave::kMaxWatches` per link
+([bounds](bounds.md#observation-relay)).
+
+**The link enforces whose subscription it is**, because the far relay cannot: every local asker is
+the link's one session there. A `Release` or `Acknowledge` crosses only for the local participant
+that holds that subscription on the current session under the relay lifetime it names; anybody
+else's — in either encoding, to the relay's office or its id — is told `Outcome` `refused` (attempt
+0) and changes nothing on either side. **A subscriber that is gone** (removed, dead, or succeeded by
+a new life or incarnation, even mid-subscribe) is noticed on the host's own turn, not at the next
+word: the link asks the far relay to release, tells nobody, and counts the subscription as
+`releasing` until the far relay's answer or its own ending says it is over, or the session ends
+([observation across a link](observation.md#across-a-link)).
 
 ## Servicing
 

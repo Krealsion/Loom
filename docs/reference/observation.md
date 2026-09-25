@@ -164,6 +164,7 @@ answer that follows it.
 | the relay is ending (`end_all(kGone, …)`) | `Ended { kind: gone }`, said | the same |
 | the subscriber is gone (`forget`, or found gone at a delivery) | nothing: there is nobody to tell | the same |
 | the session it crossed on ended (a link) | `Ended { kind: lost }`, said by the link | the far relay's own, when that host notices |
+| its local subscriber is gone (a link) | nothing; the link asks the far relay to release on the host's own turn | the far relay's, when its answer comes; the link's custody then |
 
 `Ended.last` is the last number said before it and `lost` counts occurrences still held back and
 never told. **Ending an observation stops nothing the producer was doing** — a build goes on, a
@@ -179,9 +180,30 @@ participant that answered it, on the session it was made on; everything else is 
 (`stray_observations`) and dropped. It fills `link`, `epoch` and `session`, and translates `cause`
 from its own far attempt to **the local asker's own correlation** — or 0. When the session ends,
 each subscription it carried is told `Ended { kind: lost }`: what the far relay said after the last
-word forwarded is unknown. When the local asker is gone, the link asks the far relay to release.
-A new session after a reconnect is a new epoch: nothing of the old one is forwarded into it, and a
-subscription number reused by a restarted relay is told apart by the relay's lifetime.
+word forwarded is unknown. A new session after a reconnect is a new epoch: nothing of the old one
+is forwarded into it, and a subscription number reused by a restarted relay is told apart by the
+relay's lifetime.
+
+**Whose subscription it is stays the link's to say.** The far relay judges `Release` and
+`Acknowledge` by their subscriber, and every local asker is the link's one session there, so the
+far check cannot tell one local asker from another. The link decides before anything crosses: a
+control — in either encoding, addressed to the relay's office or to its id — goes out only for the
+local participant that holds that subscription, exactly (the same life and incarnation), on the
+current session and under the relay lifetime the control names. Anybody else's, and any control
+naming a subscription that ended, a session that ended or another relay lifetime, is answered
+`Outcome { refused }` with attempt 0: nothing was submitted, and the holder's window and custody
+are exactly as they were. Knowing a subscription's numbers is not holding it.
+
+**A local subscriber that is gone is released on the host's own turn.** Removed, dead, or
+succeeded by a new life or incarnation — including while its subscription was still being made —
+it is noticed by the link's `service()`, not at the next word, because a silent producer sends no
+word and a full window can never reopen for a reader that is gone. The link asks the far relay to
+release it and tells nobody. Asking is not the far side having let go: the link keeps counting the
+subscription (`releasing()`, and the host console's `links` line) until the far relay's answer or
+its own `Ended` says it is over; a release the far host refuses to deliver leaves it counted until
+the session ends. So abandoned subscribers never use up the far relay's allowance for the session
+(`kMaxPerSubscriber`) or the link's own (`kMaxWatches`), and ending one never touches another
+asker's subscription or anything the producer is doing.
 
 ## From Python
 
@@ -216,6 +238,9 @@ a quiet spell finds nearly the whole window open. `summary()` is its account: wo
 
 Suite `observe` (the relay: policy, readiness, holder-only, cause, window, gap and coalescing,
 every ending, retirement); suite `bridge` (the link's custody: forwarding, cause translation,
-strays, `lost` at a session's end, far release); the Python client's O-checks
+strays, `lost` at a session's end, controls only from their holder, stale controls, release of a
+gone subscriber with a silent producer, a full window or mid-subscribe, abandonment past the far
+allowance, an undelivered release still counted); the Python client's O-checks
 (`tests/session/test_client.py`: numbering, holes, local bounds, acknowledgement, cause); the
-two-process journey `observe_journey`.
+two-process journey `observe_journey` (with real workers stopped outright or exiting unreleased,
+more of them than the far allowance).

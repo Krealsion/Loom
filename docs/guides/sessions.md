@@ -340,7 +340,10 @@ def run(ctx):
   ([observation](../reference/observation.md)). It returns a `Subscription` whose `next(timeout)`
   hands over, in order, each `Observation` (typed with the descriptors the relay sent), each
   `Gap` (a loss, counted — the relay's or found here) and the `Ended`; it is released in the
-  run's cleanup. **Subscribe before you act**, and ask with `settle=True`: everything your ask
+  run's cleanup, and a run that ends without one — stopped outright, its worker gone — has it
+  released by the link it crossed, on the host's own turn. Only the run that subscribed can
+  release or acknowledge it: every run on a link is one session to the far host, so the link
+  refuses another run's control before it crosses. **Subscribe before you act**, and ask with `settle=True`: everything your ask
   set in motion synchronously has then arrived before its answer, marked with your own
   correlation (`o.cause == answer.correlation`). A wait that runs out returns `None` — your
   decision, never the producer's silence.
@@ -429,6 +432,7 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | `not approved to run` / `changed since it was approved` | the catalog's decision | approve in `loom-tools.json` |
 | `package 'P' uses 'N': ...` | a package this one builds on is missing, unapproved, or builds on others | list and approve `N` in `loom-tools.json` |
 | `ctx.observe` refused in the far host's words | that host's policy: this session may not observe that office's shapes | the far host's maker decides (e.g. a Workshop guests row's `observe`) |
+| `this link carries no subscription N of that relay lifetime for you` | a release or acknowledgement for a subscription this run does not hold — another run's, or one whose session or subscription already ended | only the run that subscribed controls it; nothing was sent |
 | a `Gap` from a subscription | observations were lost — the relay's window, or this client's bound, or a hole in the numbers | a count that needed them is unknowable: say so; acknowledge faster or ask for a larger window |
 | `the session door refused run ...: ... may not say itself` | the manager's ceiling | `authority allow runs <rule>` |
 | a run `crashed` | the worker ended without a verdict | its `failure` ends with the tail of `worker.log` |

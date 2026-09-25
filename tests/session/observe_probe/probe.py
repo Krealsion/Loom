@@ -11,10 +11,13 @@ plan of small steps against the far test host, through a link, and everything th
   {"release": {"from": "s"}}
   {"hold": "gate"}                                      until <run>/release/<gate> exists
   {"sleep": 0.5}
+  {"exit": 3}                                           write probe.json, then end the worker
+                                                        at once: no cleanup, nothing released
 
 Every step's record goes to probe.json in order; a refusal is recorded, never raised, so the
 journey reads what the far host said."""
 import json
+import os
 import time
 
 from loom_session.tool import LinkOutcome, NotAnswered, Refused
@@ -76,6 +79,11 @@ def run(ctx):
                 ctx.hold(arg)
             elif verb == "sleep":
                 time.sleep(float(arg))
+            elif verb == "exit":
+                # A WORKER THAT GOES WITHOUT A WORD: its subscriptions are left for the link to find.
+                done.append(rec)
+                ctx.produce("probe.json", json.dumps(done, indent=1).encode())
+                os._exit(int(arg))
             done.append(rec)
     finally:
         for name, s in subs.items():
