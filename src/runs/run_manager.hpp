@@ -236,9 +236,7 @@ public:
                 row.package = p.name;
                 row.name = t.name;
                 row.summary = t.summary;
-                std::string why;
-                row.approved = approved(p, p.revision, &why);
-                row.approval = approval_text(p, row.approved, why);
+                row.approved = runnable(c, p, &row.approval);
                 row.revision = p.revision;
                 out.rows.push_back(std::move(row));
             }
@@ -265,9 +263,7 @@ public:
         d.revision = p->revision;
         d.package_dir = p->dir;
         d.source = (std::filesystem::path(p->dir) / t->script).string();
-        std::string why;
-        d.approved = approved(*p, p->revision, &why);
-        d.approval = approval_text(*p, d.approved, why);
+        d.approved = runnable(c, *p, &d.approval);
         for (const InputSpec& in : t->inputs) {
             d.inputs.push_back(ToolInput{in.name, in.type, in.required, in.default_json, in.help});
         }
@@ -334,6 +330,11 @@ public:
                              " runs; release finished ones first (their directories stay)");
             return;
         }
+        std::vector<const Package*> used; // what it builds on, each listed and using nothing itself
+        if (!uses_of(c, *pkg, &used, &why)) {
+            refuse(mail, "run '" + s.name + "': " + why);
+            return;
+        }
         const std::string python = !c.python.empty() ? c.python : default_python();
         if (python.empty()) {
             refuse(mail, "no Python interpreter was found on PATH; name one in the catalog: "
@@ -372,6 +373,23 @@ public:
             refuse(mail, "run '" + s.name + "': " + why);
             return;
         }
+        // WHAT IT BUILDS ON, snapshotted beside it and judged as its snapshot stands, exactly as
+        // its own package is: an edit made meanwhile changes the next run, never this one.
+        std::vector<std::string> uses, used_notes;
+        for (const Package* u : used) {
+            const std::filesystem::path at = dir / "uses" / u->name;
+            std::string rev;
+            if (!snapshot_package(u->dir, at, &why) || (rev = package_revision(at, &why)).empty() ||
+                !approved(*u, rev, &why)) {
+                std::filesystem::remove_all(dir, ec);
+                refuse(mail, "run '" + s.name + "': package '" + pkg->name + "' uses '" + u->name +
+                                 "': " + why);
+                return;
+            }
+            uses.push_back(at.string());
+            used_notes.push_back("builds on package " + u->name + " at revision " + rev.substr(0, 12) +
+                                 " (its snapshot: " + at.string() + ")");
+        }
         const std::string credential = loom::host::secure_random_hex(32);
         if (credential.empty()) {
             std::filesystem::remove_all(dir, ec);
@@ -393,6 +411,10 @@ public:
         r->python = python;
         r->runtime = runtime;
         r->script = tool->script;
+        r->uses = uses;
+        for (const std::string& n : used_notes) {
+            note(*r, n);
+        }
         if (!write_private(dir / "credential", credential, &why) ||
             !write_request(*r, *pkg, *tool, &why)) {
             std::filesystem::remove_all(dir, ec);
@@ -949,6 +971,7 @@ private:
         std::string python;
         std::string runtime;
         std::string script;
+        std::vector<std::string> uses; ///< snapshots of the packages it builds on, in order
         std::vector<std::string> granted;
         std::uint64_t expect_corr = 0; ///< the door registration still unanswered
         DeferredAnswer start_answer;   ///< the client's Start, until the door answers
@@ -1003,6 +1026,31 @@ private:
         }
         return p.approve == "any-revision" ? std::string("any revision")
                                            : "revision " + p.approve.substr(0, 12);
+    }
+
+    /// MAY `p` RUN AS IT STANDS -- its own approval and that of every package it builds on -- and
+    /// the words for it: the first decision missing, or each approval, used packages named.
+    static bool runnable(const Catalog& c, const Package& p, std::string* approval) {
+        std::string why;
+        if (!approved(p, p.revision, &why)) {
+            *approval = approval_text(p, false, why);
+            return false;
+        }
+        std::string text = approval_text(p, true, why);
+        std::vector<const Package*> used;
+        if (!uses_of(c, p, &used, &why)) {
+            *approval = "not approved: " + why;
+            return false;
+        }
+        for (const Package* u : used) {
+            if (!approved(*u, u->revision, &why)) {
+                *approval = "not approved: package '" + p.name + "' uses '" + u->name + "': " + why;
+                return false;
+            }
+            text += "; uses " + u->name + " (" + approval_text(*u, true, why) + ")";
+        }
+        *approval = text;
+        return true;
     }
 
     static bool valid_name(const std::string& name, std::string* why) {
@@ -1457,6 +1505,13 @@ private:
         field("revision", r.view.revision);
         field("snapshot", r.view.snapshot);
         field("out", (std::filesystem::path(r.view.directory) / "out").string());
+        loom::detail::json_quote("uses", json);
+        json += ":[";
+        for (std::size_t i = 0; i < r.uses.size(); ++i) {
+            json += i ? "," : "";
+            loom::detail::json_quote(r.uses[i], json);
+        }
+        json += "],";
         loom::detail::json_quote("inputs", json);
         json += ":" + r.view.inputs + "}";
         std::ofstream out(std::filesystem::path(r.view.directory) / "request.json",

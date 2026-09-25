@@ -63,6 +63,9 @@ def main():
             "-", "_").replace(".", "_"), script)
         module = importlib.util.module_from_spec(spec)
         sys.path.insert(0, request["snapshot"])  # the package's own helpers, from the snapshot
+        # ...then what it builds on ("uses"), each an approved package's snapshot, after its own.
+        for i, used in enumerate(request.get("uses") or []):
+            sys.path.insert(1 + i, used)
         spec.loader.exec_module(module)
         if not hasattr(module, "run"):
             raise tool.ToolFailed("%s defines no run(ctx)" % request["script"])

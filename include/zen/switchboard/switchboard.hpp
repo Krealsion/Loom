@@ -198,6 +198,14 @@ enum class FenceState : std::uint8_t {
 };
 const char* name_of(FenceState s) noexcept;
 
+/// The delivery a dispatch is in: its seq, the seq of the delivery during which it was queued, and
+/// its fence (`Switchboard::current_dispatch`). All zero outside a dispatch.
+struct DispatchPosition {
+    std::uint64_t seq = 0;
+    std::uint64_t parent = 0;
+    Fence fence{};
+};
+
 /// What an observer/tap is told about. Deliveries (Delivered/Refused/
 /// HandlerFailed) and lifecycle transitions (Died/Revived) flow through the same
 /// hook.
@@ -1116,6 +1124,23 @@ public:
     /// same table routing binds, so it cannot drift from it.
     std::string role_of(WeaveId id) const;
 
+    /// This participant as it is right now: its id, its life and its incarnation (an invalid
+    /// `who` when there is no such weave). A read-only snapshot for hosts -- an observation relay
+    /// names the incarnation that published what it tells -- and never a reservation: the weave
+    /// may die or be reloaded the next turn, which a later snapshot will say.
+    ParticipantRef participant(WeaveId id) const;
+
+    /// WHERE DISPATCH IS RIGHT NOW: the delivery being dispatched, the delivery during which it was
+    /// queued (its dispatch parent, as history records it) and the fence it belongs to -- all zero
+    /// outside a dispatch. For host wiring that runs inside a delivery and must say which one: an
+    /// observation relay reads it to name a publication's place in this host's history and the
+    /// settle-requested send that set it in motion. A read of facts the bus already stamps on the
+    /// envelope; it grants nothing and cannot change them.
+    DispatchPosition current_dispatch() const noexcept {
+        return DispatchPosition{current_dispatch_seq_, current_dispatch_parent_,
+                                Fence{current_dispatch_fence_}};
+    }
+
     /// THE COMMIT. One operation, one visible change.
     ///
     /// Unseals `candidate` and moves `role` from `incumbent` to it. Everything an
@@ -1878,8 +1903,6 @@ private:
         Conversation conversation = Conversation::NotAsked;
     };
 
-    /// Snapshot a participant as it is right now.
-    ParticipantRef participant(WeaveId id) const;
     /// Is this participant still exactly who it was, and still alive?
     bool still(const ParticipantRef& was) const;
 
@@ -2308,6 +2331,8 @@ private:
     /// guard, and read by every enqueue path so a message authored inside a
     /// handler carries the delivery it was authored from. 0 outside a dispatch.
     std::uint64_t current_dispatch_seq_ = 0;
+    /// ...AND THE DELIVERY IT WAS QUEUED DURING (its dispatch parent), with the same lifetime.
+    std::uint64_t current_dispatch_parent_ = 0;
     /// THE FENCE OF THE DELIVERY BEING DISPATCHED (0 = none), for the whole of its dispatch --
     /// the handler and every refusal, notice and showing its dispatch queues -- so everything
     /// queued because of it is counted where it is. Set and restored by `deliver_one`; a host's
@@ -2370,6 +2395,7 @@ private:
         ~DeliveryScope() {
             sb_.current_target_ = WeaveId{};
             sb_.current_dispatch_seq_ = 0;
+            sb_.current_dispatch_parent_ = 0;
             sb_.authority_ = ReplyAuthority{};
             sb_.delivery_ = DeliveryFacts{};
         }

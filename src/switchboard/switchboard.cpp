@@ -2672,6 +2672,7 @@ void Switchboard::deliver_one(Envelope env) {
         // guard, one lifetime — the dispatch seq is exactly as scoped as the
         // target it belongs to (RTH-1).
         current_dispatch_seq_ = env.seq;
+        current_dispatch_parent_ = env.dispatch_parent;
         // ...AND IT REMEMBERS WHO ASKED, not merely where to send (ANS-03). Captured
         // HERE, at the delivery that earns the authority, so that an answer produced
         // later — this handler's, or a deferred one spent minutes from now — is bound
@@ -3402,6 +3403,7 @@ void Switchboard::deliver_admission(Envelope env) {
         const DeliveryScope delivering(*this);
         current_target_ = env.target;
         current_dispatch_seq_ = env.seq;
+        current_dispatch_parent_ = env.dispatch_parent;
         authority_ = ReplyAuthority{};
         delivery_ = DeliveryFacts{trusted.provenance.answers_ask(), env.msg.sender,
                                   env.msg.correlation, TxnId{}};

@@ -93,3 +93,4 @@ weave_contract               kernel
 weave_population             kernel
 session_journey              python
 session_client               python
+observe_journey              python

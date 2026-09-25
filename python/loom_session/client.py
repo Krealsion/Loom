@@ -30,6 +30,9 @@ import time
 from . import values, wire
 from .wire import Disconnected
 
+#: What an observation relay (and a link carrying one) says about a subscription.
+OBSERVATION_WORDS = ("loom.observe.Observed", "loom.observe.Gap", "loom.observe.Ended")
+
 
 class Denied(Exception):
     """The host refused this connection, in its own words."""
@@ -131,6 +134,20 @@ class Connection(object):
         self.unsolicited = collections.deque(maxlen=64)
         #: What became of fire-and-forget asks that did NOT come back answered, newest last.
         self.fire_failures = collections.deque(maxlen=64)
+        #: Subscriptions this client holds (``loom_session.observe``), by (speaker, number, relay):
+        #: an observation word goes to its subscription, never into ``unsolicited``.
+        self._watching = {}
+        #: Words for a subscription not (yet) held here, in arrival order. The relay's first words
+        #: can arrive in the same read as its answer, before the subscription is registered, so
+        #: they wait here and ``watch`` hands them over; past ``MAX_UNCLAIMED`` the oldest go.
+        self._unclaimed = collections.deque()
+        self._evicted = 0
+        #: Why the last few unclaimed words were let go.
+        self.strays = collections.deque(maxlen=16)
+        #: Observation words arrived and not yet routed, and whether routing is under way (one
+        #: word's reading may dispatch later arrivals; they wait here, in order).
+        self._words = collections.deque()
+        self._routing = False
         self.codec = values.Codec(self.schema)
         deadline = time.monotonic() + admit_timeout
         while not self.session:
@@ -270,6 +287,66 @@ class Connection(object):
     def open_asks(self):
         return [(c, p.shape) for c, p in self._book.items() if not p.complete()]
 
+    # ---- subscriptions ----------------------------------------------------------------------
+
+    #: Observation words held for a subscription not yet registered here.
+    MAX_UNCLAIMED = 1024
+
+    def watch(self, subscription):
+        """Deliver observation words from ``subscription.speaker`` about its number and relay
+        lifetime to it (``loom_session.observe.Subscription``) -- first those already waiting."""
+        self._watching[subscription.key] = subscription
+        keep = collections.deque()
+        for key, shape, fields in self._unclaimed:
+            if key == subscription.key:
+                subscription._take(shape, fields)
+            else:
+                keep.append((key, shape, fields))
+        self._unclaimed = keep
+
+    def unwatch(self, subscription):
+        self._watching.pop(subscription.key, None)
+
+    @property
+    def stray_observations(self):
+        """Observation words no subscription here has claimed: let go, or still waiting."""
+        return self._evicted + len(self._unclaimed)
+
+    def _observation(self, e, shape, version):
+        """An observation word: to the subscription it names, from the participant that answered
+        that subscription -- or held unclaimed, and in the end let go, counted -- IN ARRIVAL ORDER.
+        Reading one can wait on the host (a shape described the first time it is met), and that
+        wait dispatches whatever arrives meanwhile: a word arriving then queues behind the one
+        being read and never overtakes it."""
+        self._words.append((e, shape))
+        if self._routing:
+            return
+        self._routing = True
+        try:
+            while self._words:
+                self._route(*self._words.popleft())
+        finally:
+            self._routing = False
+
+    def _route(self, e, shape):
+        try:
+            _, _, fields = self.decode(e.payload)
+        except Exception as err:  # a word this client cannot read is not delivered
+            self._evicted += 1
+            self.strays.append((shape, e.sender, "unreadable: %s" % err))
+            return
+        key = (e.sender, int(fields.get("subscription", 0)), fields.get("relay", ""))
+        sub = self._watching.get(key)
+        if sub is not None:
+            sub._take(shape, fields)
+            return
+        self._unclaimed.append((key, shape, fields))
+        while len(self._unclaimed) > self.MAX_UNCLAIMED:
+            old = self._unclaimed.popleft()
+            self._evicted += 1
+            self.strays.append((old[1], old[0][0], "subscription %s of relay %r from #%d was "
+                                "never held here" % (old[0][1], old[0][2], old[0][0])))
+
     # ---- what arrived ----------------------------------------------------------------------
 
     def _dispatch(self, e):
@@ -315,6 +392,16 @@ class Connection(object):
             shape, version, fields = self.decode(e.payload)
             p.answer = Answer(shape, version, fields, e.sender, e.correlation, e.payload)
             return
+        # AN OBSERVATION WORD is ordinary speech too, but it belongs to a subscription: numbered,
+        # checked for holes there, and never dropped silently into the bounded deque below.
+        if not e.answers_ask:
+            try:
+                name, version, _ = values.open_envelope(e.payload)
+            except ValueError:
+                name, version = "", 0
+            if name in OBSERVATION_WORDS:
+                self._observation(e, name, version)
+                return
         # NOT AN ANSWER to anything this client asked: somebody's ordinary word. Kept, bounded,
         # and never allowed to settle a conversation.
         self.unsolicited.append(e)
