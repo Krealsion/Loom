@@ -84,7 +84,7 @@ recorder           portable  31
 logger             portable  15
 component          portable  19
 pixel              portable  12
-bridge             portable  31
+bridge             portable  39
 bridge             posix     8
 kernel             kernel    136
 kernel             posix     2

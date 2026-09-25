@@ -3817,9 +3817,9 @@ struct ObservedFar {
     ob::Relay* relay = nullptr;
     FarTicker* ticker = nullptr;
     loom::WeaveId ticker_id{};
-    ObservedFar()
-        : far([](const loom::ConnectionRequest&) {
-              return loom::ConnectionVerdict::admit(observer_guest());
+    explicit ObservedFar(loom::ConnectionAdmitted guest = observer_guest())
+        : far([guest](const loom::ConnectionRequest&) {
+              return loom::ConnectionVerdict::admit(guest);
           }) {
         loom::BridgeServer* server = far.host.server.get();
         relay = ob::mount_relay(
@@ -4023,9 +4023,10 @@ TEST_CASE("link: an asker that is gone has its far subscription released") {
     REQUIRE(turn_until(o.far, near, [&] { return !w->subscribed.empty(); }));
     CHECK(o.relay->active() == 1);
     (void)near.bus.unregister_weave(w_id);
-    o.say(1, 1); // the next word finds nobody to tell, so the link asks the relay to stop
+    o.say(1, 1); // said while the release is on its way: it reaches nobody
     REQUIRE(turn_until(o.far, near, [&] { return o.relay->active() == 0; }));
-    CHECK(near.link->watches() == 0);
+    REQUIRE(turn_until(o.far, near, [&] { return near.link->watches() == 0; }));
+    CHECK(near.link->releasing() == 0);
 }
 
 TEST_CASE("link: a release through the link is answered Ended and ends the link's custody") {
@@ -4048,6 +4049,319 @@ TEST_CASE("link: a release through the link is answered Ended and ends the link'
     o.say(1, 1);
     (void)turn_until(o.far, near, [] { return false; }, 300);
     CHECK(w->observed.empty());
+}
+
+// ---- whose subscription it is, when every near asker is one session to the far relay ----------
+//
+// The far relay judges a Release or an Acknowledge by its subscriber, and across a link every near
+// asker is the link's one session there -- so only the link can keep one near asker's
+// subscription from another's controls. And a near subscriber that is gone must be released by
+// the link's own turn: a silent producer, or a window the gone reader can never reopen, sends no
+// word that would reveal it.
+
+namespace {
+
+/// The envelope for `msg` to a far office, in Zen's JSON rather than the canonical binary.
+template <class T>
+loom::link::Ask compat_ask(const std::string& far_role, const T& msg) {
+    loom::link::Ask a;
+    a.role = far_role;
+    const std::string json = loom::compat::serialize(loom::to_value(msg));
+    a.payload.assign(json.begin(), json.end());
+    return a;
+}
+
+/// Say an envelope already made to the near link, AS `who`; returns its correlation.
+std::uint64_t ask_as(NearHost& near, loom::WeaveId who, const loom::link::Ask& a) {
+    static std::uint64_t corr = 7000;
+    const std::uint64_t c = ++corr;
+    (void)near.bus.send_as_to_role(who, loom::link::role_of("far"),
+                                   loom::Message(loom::to_value(a), who, loom::WeaveId{}, c));
+    return c;
+}
+
+ob::Release release_of(std::int64_t subscription, const std::string& relay) {
+    ob::Release r;
+    r.subscription = subscription;
+    r.relay = relay;
+    return r;
+}
+
+ob::Acknowledge ack_of(std::int64_t subscription, const std::string& relay, std::int64_t through) {
+    ob::Acknowledge a;
+    a.subscription = subscription;
+    a.relay = relay;
+    a.through = through;
+    return a;
+}
+
+/// What the far host lets its guest say, less `Release`: its relay never hears one from it.
+loom::ConnectionAdmitted observer_guest_who_cannot_release() {
+    loom::ConnectionAdmitted a;
+    for (const char* shape : {ob::Subscribe::zen_name, ob::Acknowledge::zen_name,
+                              ob::StatusRequested::zen_name}) {
+        a.grant.allow_to_role(shape, 1, ob::kObserveRole);
+    }
+    a.grant.allow_to_role(LinkSay::zen_name, LinkSay::zen_version, "far.ticker");
+    a.established_name = "watcher";
+    return a;
+}
+
+} // namespace
+
+TEST_CASE("link: a subscription's release and acknowledgement cross only for the near asker that holds it") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    loom::WeaveId b_id{};
+    LinkWatcher* a = near.mount<LinkWatcher>(&a_id);
+    LinkWatcher* b = near.mount<LinkWatcher>(&b_id);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please(4));
+    REQUIRE(turn_until(o.far, near, [&] { return !a->subscribed.empty(); }));
+    o.say(4, 1); // A's window of four is full now
+    REQUIRE(turn_until(o.far, near, [&] { return a->observed.size() == 4; }));
+    const ob::Subscribed held = a->subscribed[0];
+    const ob::Release release = release_of(held.subscription, held.relay);
+    const ob::Acknowledge ack = ack_of(held.subscription, held.relay, 4);
+    const loom::WeaveId relay_far = o.far.host.bus.role_holder(ob::kObserveRole);
+    // B knows A's numbers, and tries every door: canonical and JSON, the relay's office and its id.
+    (void)ask_as(near, b_id, loom::link::ask_role(ob::kObserveRole, release));
+    (void)ask_as(near, b_id, compat_ask(ob::kObserveRole, release));
+    (void)ask_as(near, b_id, loom::link::ask_target(relay_far.value, release));
+    (void)ask_as(near, b_id, loom::link::ask_role(ob::kObserveRole, ack));
+    (void)ask_as(near, b_id, compat_ask(ob::kObserveRole, ack));
+    (void)ask_as(near, b_id, loom::link::ask_target(relay_far.value, ack));
+    REQUIRE(turn_until(o.far, near, [&] { return b->outcomes.size() == 6; }));
+    INFO("B: " << b->account());
+    for (const loom::link::Outcome& out : b->outcomes) {
+        CHECK(out.state == loom::link::kOutcomeRefused);
+        CHECK(out.attempt == 0); // refused before anything was submitted
+        CHECK(out.reason.find("no subscription") != std::string::npos);
+    }
+    CHECK(b->ended.empty());
+    CHECK(b->acks == 0);
+    // NOTHING CHANGED, THERE OR HERE: the far relay holds A's subscription with its window shut,
+    // and the link still carries it for A, who was told nothing.
+    REQUIRE(o.relay->active() == 1);
+    CHECK(o.relay->rows()[0].acked == 0);
+    CHECK(near.link->watches() == 1);
+    CHECK(a->ended.empty());
+    o.say(2, 5); // past A's shut window: counted there, never told
+    (void)turn_until(o.far, near, [] { return false; }, 200);
+    CHECK(a->observed.size() == 4);
+    // A's own acknowledgement opens the window, and A's own release ends the subscription.
+    (void)ask_through(near, a_id, ob::kObserveRole, ack);
+    REQUIRE(turn_until(o.far, near, [&] { return a->acks == 1; }));
+    CHECK(o.relay->rows()[0].acked == 4);
+    o.say(1, 7);
+    REQUIRE(turn_until(o.far, near, [&] { return a->observed.size() == 5; }));
+    CHECK(link_tick_of(a->observed[4]) == 7);
+    (void)ask_through(near, a_id, ob::kObserveRole, release);
+    REQUIRE(turn_until(o.far, near, [&] { return !a->ended.empty(); }));
+    CHECK(a->ended[0].kind == ob::kEndedReleased);
+    CHECK(o.relay->active() == 0);
+    CHECK(near.link->watches() == 0);
+}
+
+TEST_CASE("link: a control from an ended subscription, an ended session or another relay lifetime reaches nothing") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    LinkWatcher* a = near.mount<LinkWatcher>(&a_id);
+    // One subscription released, one lost with its session.
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near, [&] { return a->subscribed.size() == 1; }));
+    const ob::Subscribed released = a->subscribed[0];
+    (void)ask_through(near, a_id, ob::kObserveRole,
+                      release_of(released.subscription, released.relay));
+    REQUIRE(turn_until(o.far, near, [&] { return a->ended.size() == 1; }));
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near, [&] { return a->subscribed.size() == 2; }));
+    const ob::Subscribed lost = a->subscribed[1];
+    REQUIRE(o.far.host.server->disconnect(o.far.host.server->connections().at(0).connection));
+    REQUIRE(turn_until(o.far, near, [&] { return a->ended.size() == 2; }));
+    CHECK(a->ended[1].kind == ob::kEndedLost);
+    // A new session and a new subscription, of the same far relay lifetime.
+    link_up(o.far, near);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near, [&] { return a->subscribed.size() == 3; }));
+    const ob::Subscribed now = a->subscribed[2];
+    REQUIRE(now.relay == released.relay);
+    // The asker's own stale controls, and the new number under a lifetime that did not mint it.
+    (void)ask_through(near, a_id, ob::kObserveRole, release_of(released.subscription, released.relay));
+    (void)ask_through(near, a_id, ob::kObserveRole, ack_of(lost.subscription, lost.relay, 1));
+    (void)ask_through(near, a_id, ob::kObserveRole, release_of(lost.subscription, lost.relay));
+    (void)ask_through(near, a_id, ob::kObserveRole,
+                      release_of(now.subscription, "00000000000000000000000000000000"));
+    REQUIRE(turn_until(o.far, near, [&] { return a->outcomes.size() == 4; }));
+    INFO("A: " << a->account());
+    for (const loom::link::Outcome& out : a->outcomes) {
+        CHECK(out.state == loom::link::kOutcomeRefused);
+        CHECK(out.attempt == 0);
+    }
+    // The new subscription is untouched: still carried, still telling A.
+    CHECK(near.link->watches() == 1);
+    o.say(1, 9);
+    REQUIRE(turn_until(o.far, near, [&] { return !a->observed.empty(); }));
+    CHECK(a->observed.back().subscription == now.subscription);
+    CHECK(a->observed.back().seq == 1);
+    CHECK(a->ended.size() == 2);
+}
+
+TEST_CASE("link: a subscriber that is gone is released on the host's own turn while its producer says nothing") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    LinkWatcher* a = near.mount<LinkWatcher>(&a_id);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near, [&] { return !a->subscribed.empty(); }));
+    REQUIRE(o.relay->active() == 1);
+    REQUIRE(near.bus.unregister_weave(a_id));
+    const bool released = turn_until(
+        o.far, near, [&] { return o.relay->active() == 0 && near.link->watches() == 0; });
+    INFO("far active " << o.relay->active() << ", near watches " << near.link->watches()
+                       << ", releasing " << near.link->releasing());
+    CHECK(released);
+    CHECK(near.link->releasing() == 0);
+    CHECK(o.ticker->heard() == 0); // nothing was published to reveal the departure
+}
+
+TEST_CASE("link: a subscriber that is gone with its window full is released though no word can reach it") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    LinkWatcher* a = near.mount<LinkWatcher>(&a_id);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please(1));
+    REQUIRE(turn_until(o.far, near, [&] { return !a->subscribed.empty(); }));
+    o.say(1, 1);
+    REQUIRE(turn_until(o.far, near, [&] { return a->observed.size() == 1; })); // window full
+    REQUIRE(near.bus.unregister_weave(a_id));
+    o.say(20, 2); // counted at the relay, and no word the link could hear
+    const bool released = turn_until(
+        o.far, near, [&] { return o.relay->active() == 0 && near.link->watches() == 0; });
+    INFO("far active " << o.relay->active() << ", near watches " << near.link->watches());
+    CHECK(released);
+    CHECK(near.link->releasing() == 0);
+}
+
+TEST_CASE("link: a subscriber that leaves while its subscription is being made is released when the answer comes") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    (void)near.mount<LinkWatcher>(&a_id);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    near.bus.pump_pending(); // the link takes the ask and submits it; the far side has not answered
+    REQUIRE(near.link->open() == 1);
+    REQUIRE(near.bus.unregister_weave(a_id));
+    const bool released = turn_until(o.far, near, [&] {
+        return near.link->open() == 0 && near.link->watches() == 0 && o.relay->active() == 0;
+    });
+    INFO("open " << near.link->open() << ", near watches " << near.link->watches()
+                 << ", far active " << o.relay->active());
+    CHECK(released);
+    o.say(1, 1);
+    (void)turn_until(o.far, near, [] { return false; }, 200);
+    CHECK(near.link->stray_observations() == 0);
+}
+
+TEST_CASE("link: a subscriber revived as a new life is not the one that subscribed") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    LinkWatcher* a = near.mount<LinkWatcher>(&a_id);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near, [&] { return !a->subscribed.empty(); }));
+    const ob::Subscribed held = a->subscribed[0];
+    const std::string state = loom::serialize(a->snapshot());
+    // A word for the predecessor is read off the socket and waits on this bus...
+    o.say(1, 1);
+    REQUIRE(wait_until(
+        [&] {
+            o.far.host.server->step();
+            near.link->service();
+            return near.bus.pending() != 0;
+        },
+        3000));
+    // ...when it dies and is revived between two of the host's turns: the same id, another life.
+    near.bus.kill(a_id);
+    REQUIRE(near.bus.reload(a_id, state).revived);
+    (void)ask_through(near, a_id, ob::kObserveRole, release_of(held.subscription, held.relay));
+    // The link acts on both before its own turn looks at anything: the word reaches nobody, and
+    // the successor's release of what its predecessor held is refused.
+    near.bus.pump_pending();
+    near.bus.pump_pending();
+    CHECK(a->observed.empty());
+    REQUIRE(a->outcomes.size() == 1);
+    CHECK(a->outcomes[0].state == loom::link::kOutcomeRefused);
+    CHECK(a->outcomes[0].attempt == 0);
+    // The link releases what the predecessor held at the far relay, and tells nobody.
+    REQUIRE(turn_until(o.far, near,
+                       [&] { return o.relay->active() == 0 && near.link->watches() == 0; }));
+    o.say(1, 2);
+    (void)turn_until(o.far, near, [] { return false; }, 200);
+    CHECK(a->observed.empty()); // a successor inherits nothing its predecessor observed
+    CHECK(a->ended.empty());
+}
+
+TEST_CASE("link: abandoned subscribers never use up the far session's allowance") {
+    ObservedFar o;
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    // More abandoned subscribers than the far relay holds for one session, each gone with its
+    // window full -- the case that no later word can ever clean up.
+    for (std::size_t i = 0; i < ob::kMaxPerSubscriber + 2; ++i) {
+        loom::WeaveId id{};
+        LinkWatcher* w = near.mount<LinkWatcher>(&id);
+        (void)ask_through(near, id, ob::kObserveRole, ticks_please(1));
+        const bool subscribed = turn_until(
+            o.far, near, [&] { return !w->subscribed.empty() || !w->refused.empty(); });
+        INFO("abandoned subscriber " << i << ": " << w->account());
+        REQUIRE(subscribed);
+        REQUIRE(w->refused.empty());
+        o.say(1, 100 + static_cast<std::int64_t>(i));
+        REQUIRE(turn_until(o.far, near, [&] { return w->observed.size() == 1; }));
+        REQUIRE(near.bus.unregister_weave(id));
+    }
+    REQUIRE(turn_until(o.far, near,
+                       [&] { return o.relay->active() == 0 && near.link->watches() == 0; }));
+    // A fresh subscriber on the same live link is admitted and told.
+    loom::WeaveId fresh_id{};
+    LinkWatcher* fresh = near.mount<LinkWatcher>(&fresh_id);
+    (void)ask_through(near, fresh_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near,
+                       [&] { return !fresh->subscribed.empty() || !fresh->refused.empty(); }));
+    CHECK(fresh->refused.empty());
+    o.say(1, 500);
+    REQUIRE(turn_until(o.far, near, [&] { return fresh->observed.size() == 1; }));
+    CHECK(link_tick_of(fresh->observed[0]) == 500);
+}
+
+TEST_CASE("link: a release the far host never delivers leaves the subscription counted until the session ends") {
+    ObservedFar o(observer_guest_who_cannot_release());
+    NearHost near(o.far.host.port);
+    link_up(o.far, near);
+    loom::WeaveId a_id{};
+    LinkWatcher* a = near.mount<LinkWatcher>(&a_id);
+    (void)ask_through(near, a_id, ob::kObserveRole, ticks_please());
+    REQUIRE(turn_until(o.far, near, [&] { return !a->subscribed.empty(); }));
+    REQUIRE(near.bus.unregister_weave(a_id));
+    // The link asks; the far host's gate refuses the send, so the relay never hears it. Asking was
+    // not the far side letting go.
+    REQUIRE(turn_until(o.far, near, [&] { return near.link->releasing() == 1; }));
+    (void)turn_until(o.far, near, [] { return false; }, 300);
+    CHECK(o.relay->active() == 1);
+    CHECK(near.link->watches() == 1);
+    CHECK(near.link->releasing() == 1);
+    // The session's own ending ends it, and there is nobody to tell.
+    REQUIRE(o.far.host.server->disconnect(o.far.host.server->connections().at(0).connection));
+    REQUIRE(turn_until(o.far, near, [&] { return near.link->watches() == 0; }));
+    CHECK(near.link->releasing() == 0);
 }
 
 namespace {

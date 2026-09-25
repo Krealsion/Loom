@@ -630,8 +630,13 @@ What the link's session may say on the far bus is the far host's.
 
 ```text
 loom> links
-  workshop  127.0.0.1:7654  admitted  as 'agent', session 9  (0 open)
+  workshop  127.0.0.1:7654  admitted  as 'agent', session 9  (0 open, 0 watched)
 ```
+
+`watched` counts the far subscriptions the link carries for its askers
+([observation across a link](../reference/observation.md#across-a-link)); `releasing`, shown when
+there are any, counts those whose asker is gone and whose release the far relay has not yet
+confirmed.
 
 **What the history keeps of a crossing.** Every frame the far host ships to the link's session
 becomes a `loom.link.Crossed` record the link says to itself before it acts on it: the far

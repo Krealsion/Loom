@@ -220,16 +220,27 @@ int main(int argc, char** argv) {
     std::printf("far host: listening on 127.0.0.1:%u\n", static_cast<unsigned>(loom::bridge_socket_port(listener)));
     std::fflush(stdout);
 
+    std::vector<Request> after_answer; // done a turn later, once the asking turn's answer has left
     for (;;) {
         server.service();
         (void)bus.pump_pending();
         std::vector<Request> todo;
-        todo.swap(host.requests);
+        todo.swap(after_answer);
+        for (Request& r : host.requests) {
+            if (r.verb == "replace") {
+                after_answer.push_back(std::move(r));
+            } else {
+                todo.push_back(std::move(r));
+            }
+        }
+        host.requests.clear();
         for (const Request& r : todo) {
             if (r.verb == "foreign") {
                 (void)bus.send(forger_id, loom::Message(loom::to_value(ObserveProbeCommand{"tick", 1})));
             } else if (r.verb == "replace") {
-                // THE OFFICE CHANGES HANDS: a new participant holds it, with a new id, from now on.
+                // THE OFFICE CHANGES HANDS: a new participant holds it, with a new id, from now on --
+                // after the holder's answer to the asker was delivered, which a holder already gone
+                // could no longer send.
                 (void)bus.unregister_weave(bus.role_holder(kTicker));
                 (void)mount_ticker(bus, host);
             } else if (r.verb == "revoke") {
