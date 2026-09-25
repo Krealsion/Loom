@@ -65,7 +65,8 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_bridge.cpp
     test_host_policy.cpp
     test_host_input.cpp
-    test_session.cpp)
+    test_session.cpp
+    test_observe.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.
 set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
@@ -767,6 +768,31 @@ if(zen_session_python)
         ${CMAKE_CURRENT_SOURCE_DIR}/session/test_client.py
         --runtime ${CMAKE_BINARY_DIR}/session-tools/python)
     set_tests_properties(session_client PROPERTIES TIMEOUT 60)
+    # THE OBSERVATION JOURNEY: a subscription across two real hosts. The session host links to a
+    # far host of this directory's own (observe_far/far_host.cpp: a bridge server, a relay whose
+    # policy admits one guest to two shapes, a producer it can be told to drive), boots the probe
+    # vocabulary (weavelib/observe_probe_vocab.cpp) so a tool's command can be encoded, and runs
+    # the probe package (session/observe_probe) as real workers. Refusals, readiness, cause,
+    # bursts, foreign publications, a replaced holder, revocation, cancellation, a client's wait,
+    # and the far host's death and return -- each read from the other process's behaviour.
+    add_executable(zen-observe-far-host observe_far/far_host.cpp)
+    target_link_libraries(zen-observe-far-host PRIVATE loom zen-switchboard zen-bridge zen-warnings
+                                                       zen-sanitize)
+    add_library(zen_observe_probe_vocab SHARED weavelib/observe_probe_vocab.cpp)
+    target_link_libraries(zen_observe_probe_vocab PRIVATE loom zen-switchboard zen-warnings
+                                                          zen-sanitize)
+    loom_weave_build_contract(zen_observe_probe_vocab)
+    add_test(NAME observe_journey COMMAND ${zen_session_python}
+        ${CMAKE_CURRENT_SOURCE_DIR}/session/observe_journey.py
+        --host $<TARGET_FILE:loom-host>
+        --runs $<TARGET_FILE:loom-runs>
+        --runtime ${CMAKE_BINARY_DIR}/session-tools/python
+        --far $<TARGET_FILE:zen-observe-far-host>
+        --vocab $<TARGET_FILE:zen_observe_probe_vocab>
+        --probe ${CMAKE_CURRENT_SOURCE_DIR}/session/observe_probe
+        --work ${CMAKE_BINARY_DIR}/observe-journey-work
+        --evidence ${CMAKE_BINARY_DIR}/observe-journey-work.json)
+    set_tests_properties(observe_journey PROPERTIES TIMEOUT 600)
 endif()
 
 # ---- The supplied host's input, through a REAL terminal --------------------------------

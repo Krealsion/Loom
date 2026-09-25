@@ -254,15 +254,29 @@ bool read_manifest(const std::filesystem::path& dir, Package* p, std::string* wh
         *why = where + ": the manifest is one object";
         return false;
     }
-    if (!only_keys(root, {"package", "version", "summary", "tools"}, where, why) ||
+    if (!only_keys(root, {"package", "version", "summary", "uses", "tools"}, where, why) ||
         !text_of(root, "package", true, &p->name, where, why) ||
         !text_of(root, "version", false, &p->version, where, why) ||
-        !text_of(root, "summary", false, &p->summary, where, why)) {
+        !text_of(root, "summary", false, &p->summary, where, why) ||
+        !texts_of(root, "uses", &p->uses, where, why)) {
         return false;
     }
     if (p->name.empty() || p->name.find('/') != std::string::npos) {
         *why = where + ": a package's name is non-empty and has no '/'";
         return false;
+    }
+    if (p->uses.size() > kMaxUses) {
+        *why = where + ": 'uses' names at most " + std::to_string(kMaxUses) + " packages";
+        return false;
+    }
+    for (std::size_t i = 0; i < p->uses.size(); ++i) {
+        const std::string& u = p->uses[i];
+        if (u.empty() || u.find('/') != std::string::npos || u == p->name ||
+            std::find(p->uses.begin(), p->uses.begin() + static_cast<std::ptrdiff_t>(i), u) !=
+                p->uses.begin() + static_cast<std::ptrdiff_t>(i)) {
+            *why = where + ": 'uses' names other packages of the catalog by name, each once";
+            return false;
+        }
     }
     const JsonValue* tools = root.find("tools");
     if (tools == nullptr || tools->type != JT::Array) {
@@ -350,6 +364,35 @@ const Package* Catalog::find(const std::string& id, const ToolSpec** tool) const
         }
     }
     return nullptr;
+}
+
+const Package* Catalog::package(const std::string& name) const {
+    for (const Package& p : packages) {
+        if (p.name == name && p.problem.empty()) {
+            return &p;
+        }
+    }
+    return nullptr;
+}
+
+bool uses_of(const Catalog& c, const Package& p, std::vector<const Package*>* used,
+             std::string* why) {
+    used->clear();
+    for (const std::string& name : p.uses) {
+        const Package* u = c.package(name);
+        if (u == nullptr) {
+            *why = "package '" + p.name + "' uses '" + name + "', which the catalog " + c.file +
+                   " does not list (or could not read)";
+            return false;
+        }
+        if (!u->uses.empty()) {
+            *why = "package '" + p.name + "' uses '" + name + "', which uses others itself; a " +
+                   "package builds on packages that use nothing";
+            return false;
+        }
+        used->push_back(u);
+    }
+    return true;
 }
 
 std::string file_sha256(const std::filesystem::path& file) {

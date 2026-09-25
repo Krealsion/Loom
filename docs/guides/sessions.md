@@ -334,6 +334,19 @@ def run(ctx):
 - `ctx.hold(gate)` waits until `<run>/release/<gate>` exists — for demonstrations and tests that
   must decide when a run proceeds while no client is attached.
 - `ctx.inputs` are typed as the manifest declares them (`text`, `int`, `bool`, `number`).
+- `ctx.observe(office, shapes, via=<link>, latest=...)` subscribes to one office's publications
+  of the named shapes at the relay `loom.observe` — here, or on the far host through the link —
+  when that host's policy lets this session observe them
+  ([observation](../reference/observation.md)). It returns a `Subscription` whose `next(timeout)`
+  hands over, in order, each `Observation` (typed with the descriptors the relay sent), each
+  `Gap` (a loss, counted — the relay's or found here) and the `Ended`; it is released in the
+  run's cleanup, and a run that ends without one — stopped outright, its worker gone — has it
+  released by the link it crossed, on the host's own turn. Only the run that subscribed can
+  release or acknowledge it: every run on a link is one session to the far host, so the link
+  refuses another run's control before it crosses. **Subscribe before you act**, and ask with `settle=True`: everything your ask
+  set in motion synchronously has then arrived before its answer, marked with your own
+  correlation (`o.cause == answer.correlation`). A wait that runs out returns `None` — your
+  decision, never the producer's silence.
 
 ### Package files and run outputs
 
@@ -351,6 +364,25 @@ Do not infer a workspace by walking upward from the copied script. Do not store 
 data by writing back into the package snapshot: it belongs to this run and may be deleted when
 the run is released with `--remove`. These path choices locate files; they grant no additional
 filesystem authority ([the worker trust boundary](#6-four-decisions-kept-apart)).
+
+### A package that builds on another
+
+A policy for one application — a monitor for a game, say — is small, and the machinery it drives
+(acting on that application, following its owner's words) lives in another package. The policy's
+manifest names it:
+
+```json
+{ "package": "tower-defense", "uses": ["workshop"], "tools": [ ... ] }
+```
+
+A run of it snapshots each package it uses beside its own (`<run>/uses/<name>`) and puts those
+after its own on the worker's import path, so `import monitor` finds the other package's module.
+**Each is approved on its own**, exactly as the run's own package is: the run starts only when
+every one is approved in `loom-tools.json` as its snapshot stands, and it is refused naming the
+first that is not. A used package that uses others is refused (one level), a name the catalog does
+not list is refused, and nothing is found by path. The run's notes name each used package's
+revision; the description's `approval` says `uses <name> (...)`. Code named by a run's *inputs*
+is never a substitute: a path is never approval.
 
 ### Cancellation and cleanup
 
@@ -398,6 +430,10 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | `... nothing answers there` | the host that wrote `session.json` has ended | start it again: a new lifetime |
 | `run handle ... belongs to another host lifetime` | that run belonged to an ended host | `runs --past` shows its record |
 | `not approved to run` / `changed since it was approved` | the catalog's decision | approve in `loom-tools.json` |
+| `package 'P' uses 'N': ...` | a package this one builds on is missing, unapproved, or builds on others | list and approve `N` in `loom-tools.json` |
+| `ctx.observe` refused in the far host's words | that host's policy: this session may not observe that office's shapes | the far host's maker decides (e.g. a Workshop guests row's `observe`) |
+| `this link carries no subscription N of that relay lifetime for you` | a release or acknowledgement for a subscription this run does not hold — another run's, or one whose session or subscription already ended | only the run that subscribed controls it; nothing was sent |
+| a `Gap` from a subscription | observations were lost — the relay's window, or this client's bound, or a hole in the numbers | a count that needed them is unknowable: say so; acknowledge faster or ask for a larger window |
 | `the session door refused run ...: ... may not say itself` | the manager's ceiling | `authority allow runs <rule>` |
 | a run `crashed` | the worker ended without a verdict | its `failure` ends with the tail of `worker.log` |
 | a run is still `running` but `process` is `descendants` | the worker exited and left something running; a note names its pid and code. If it exited without a verdict there is nobody left to ask, and the crash is recorded when the execution ends | `cancel <name>` stops what it left; no cleanup runs, because the worker is gone. The run is then `crashed` (or keeps the verdict it had), with `exit_code` still the worker's own |

@@ -46,14 +46,39 @@
 // THE HOST SERVICES IT. A loaded weave has nothing to wake it; the host loop calls `service()`
 // every turn, exactly as it reads a line, so the socket is read between bus turns and what it
 // read is delivered in the next one.
+//
+// A FAR RELAY'S OBSERVATIONS REACH THE LOCAL PARTICIPANT THAT SUBSCRIBED, AND NOBODY ELSE. When a
+// far `loom.observe.Subscribed` crosses as the answer to a local asker's ask, the link keeps the
+// subscription's custody here: which far relay lifetime and far sender answered, on which epoch,
+// for which local asker -- that participant exactly, in the life and incarnation that asked. From
+// then on the far relay's own `Observed`, `Gap` and `Ended` for that subscription -- ordinary far
+// speech, which the link otherwise ignores -- are re-admitted through this bus's gate and said by
+// the link to that asker, with the link, epoch and far session filled in, and `cause` translated
+// from the far attempt to the asker's own correlation when that attempt was the asker's (and
+// emptied when it was not). Words about a subscription the link does not hold for that relay,
+// sender and epoch are ignored; a session that ends ends its subscriptions `lost`.
+//
+// THE FAR RELAY CANNOT TELL THIS HOST'S ASKERS APART -- every one of them is this link's one session
+// there -- SO THE LINK KEEPS THE DISTINCTION. A `Release` or an `Acknowledge`, in either encoding and
+// to whatever far address, crosses only for the local participant that holds that subscription on
+// the current session under that relay lifetime; anybody else's is told `refused` before anything
+// is submitted, and changes nothing here or there. A SUBSCRIBER THAT IS GONE -- removed, dead, or
+// succeeded by a new life or incarnation, even while its subscription was still being made -- is
+// noticed on the host's own turn (`service()`), never only at the next word, since a silent
+// producer or a full window may never send one. The link asks the far relay to release, tells
+// nobody, and goes on counting the subscription (`releasing()`) until the far relay's answer or
+// its own ending says it is over: asking is not the far side having let go. zen/observe/vocabulary.hpp
+// says what each word means.
 
 #include <zen/bridge/client.hpp>
 #include <zen/bridge/link.hpp>
+#include <zen/observe/vocabulary.hpp>
 #include <zen/serialize.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/weave.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -77,13 +102,20 @@ struct LinkState {
 class LinkWeave final
     : public WeaveBase<LinkWeave, LinkState,
                        Accept<link::Ask, link::StatusRequested, link::Crossed>,
-                       Emit<link::Outcome, link::Status, link::Crossed>> {
+                       Emit<link::Outcome, link::Status, link::Crossed, observe::Subscribe,
+                            observe::Subscribed, observe::Observed, observe::Gap, observe::Ended,
+                            observe::Release, observe::Acknowledge, observe::StatusRequested,
+                            observe::Status>> {
 public:
     /// The most crossings one link holds open at once. Each holds a deferred answer, which is
     /// host-side state the whole bus shares (`Switchboard::kMaxDeferredAnswers`), so a link
     /// keeps well inside it. Past it a new Ask is told `refused` at once, and every open one is
     /// untouched.
     static constexpr std::size_t kMaxOpenAsks = 16;
+
+    /// The most far subscriptions one link carries for its askers at once, counting subscribe
+    /// asks still open. Past it a `loom.observe.Subscribe` is told `refused` before it crosses.
+    static constexpr std::size_t kMaxWatches = 32;
 
     LinkWeave(std::string name, std::string endpoint, std::string identity, std::string credential)
         : name_(std::move(name)), endpoint_(std::move(endpoint)), identity_(std::move(identity)),
@@ -213,6 +245,7 @@ public:
                 break; // a link keeps no far registry and is given no tap
             }
         }
+        retire_departed();
     }
 
     // ---- the doors ------------------------------------------------------------------------
@@ -232,6 +265,7 @@ public:
         // exactly as it must be for the far ANSWER to be re-admitted (below).
         std::string compat_native;
         std::string compat_refusal;
+        std::optional<loom::Value> compat_value;
         if (!asked.well_formed()) {
             loom::Unverified json = loom::compat::parse(payload);
             if (json.well_formed()) {
@@ -253,6 +287,7 @@ public:
                                          a.first_error().message();
                     } else {
                         compat_native = loom::serialize(a.value());
+                        compat_value = a.value();
                     }
                 }
             }
@@ -274,6 +309,15 @@ public:
             tell_now(link::kOutcomeRefused, compat_refusal);
             return;
         }
+        // A SUBSCRIPTION'S CONTROLS ARE ITS SUBSCRIBER'S, decided here because the far relay sees
+        // only this link's session: by the payload's shape, so no encoding or far address skips it.
+        if (control(shape)) {
+            std::string why;
+            if (!may_control(compat_value, asked, shape, version, mail.sender(), &why)) {
+                tell_now(link::kOutcomeRefused, std::move(why));
+                return;
+            }
+        }
         if (!client_ || !client_->admitted() || client_->disconnected()) {
             tell_now(link::kOutcomeUnlinked, link_state_ == "denied"
                                                  ? "this link was denied: " + detail_
@@ -284,6 +328,13 @@ public:
             tell_now(link::kOutcomeRefused, "this link already holds " +
                                                 std::to_string(kMaxOpenAsks) +
                                                 " open asks; wait for one to be answered");
+            return;
+        }
+        const bool subscribing = shape == observe::Subscribe::zen_name;
+        if (subscribing && watches_.size() + subscribing_now() >= kMaxWatches) {
+            tell_now(link::kOutcomeRefused, "this link already carries " +
+                                                std::to_string(kMaxWatches) +
+                                                " subscriptions; release one first");
             return;
         }
         // THE ASKER'S ANSWER RIGHT, KEPT FOR THE FAR SIDE TO EARN. A refused deferral leaves the
@@ -318,12 +369,13 @@ public:
         Crossing c;
         c.attempt = attempt;
         c.epoch = epoch_;
-        c.asker = mail.sender();
+        c.asker = bus_->participant(mail.sender());
         c.correlation = correlation;
         c.due = std::move(due);
         c.shape = shape;
         c.version = version;
         c.settle = ask.settle;
+        c.subscribe = subscribing;
         open_.push_back(std::move(c));
     }
 
@@ -349,8 +401,13 @@ public:
             ++state_.ignored; // somebody else's account of a crossing is not the link's
             return;
         }
+        if (x.kind == link::kCrossedMessage && observation(x.shape)) {
+            observed(x);
+            return;
+        }
         if (x.kind == link::kCrossedEnded) {
             const std::uint64_t epoch = static_cast<std::uint64_t>(x.epoch);
+            end_watches(epoch, x.session, x.reason);
             for (std::size_t i = 0; i < open_.size();) {
                 if (open_[i].epoch != epoch) {
                     ++i;
@@ -368,6 +425,9 @@ public:
                             mail);
             }
             return;
+        }
+        if (released(x)) {
+            return; // the far relay's word about a release this link asked for its gone asker
         }
         const std::size_t i = find(static_cast<std::uint64_t>(x.attempt),
                                    static_cast<std::uint64_t>(x.epoch));
@@ -438,22 +498,50 @@ public:
             return;
         }
         c.held = std::move(a).value();
+        custody(c, x);
         complete_if_ready(i, mail);
     }
+
+    /// How many far subscriptions this link carries for its askers now, counting those it is
+    /// releasing because their asker is gone.
+    std::size_t watches() const noexcept { return watches_.size(); }
+    /// Of those, how many belong to an asker that is gone: the far relay was asked to release them
+    /// (or could not be asked), and has not yet said they are over.
+    std::size_t releasing() const noexcept {
+        return static_cast<std::size_t>(std::count_if(
+            watches_.begin(), watches_.end(), [](const Watch& w) { return w.retiring; }));
+    }
+    /// Far observation words that named no subscription this link holds, or came from the wrong
+    /// far sender or epoch: ignored, and counted here as well as in `ignored`.
+    std::int64_t stray_observations() const noexcept { return strays_; }
 
 private:
     struct Crossing {
         std::uint64_t attempt = 0;     ///< the link's number on the wire
         std::uint64_t epoch = 0;       ///< the session it went out on
-        WeaveId asker{};
+        ParticipantRef asker{};        ///< who asked: that id, in that life and incarnation
         std::uint64_t correlation = 0; ///< the asker's, for reading; Loom binds the answer to it
         DeferredAnswer due;            ///< the asker's answer right
         std::string shape;
         std::int64_t version = 0;
         bool settle = false;
         bool settled = false;
+        bool subscribe = false; ///< a `loom.observe.Subscribe`: counts against kMaxWatches
         std::optional<loom::Value> held;           ///< a far answer waiting on settlement
         std::optional<link::Outcome> held_outcome; ///< a refusal waiting on settlement
+    };
+
+    /// ONE FAR SUBSCRIPTION IN THIS LINK'S CUSTODY: the far relay lifetime and far sender that
+    /// answered it, the session (epoch) it was made on, and the local asker it is for.
+    struct Watch {
+        std::int64_t subscription = 0;
+        std::string relay;
+        std::uint64_t epoch = 0;
+        std::int64_t far_sender = 0;
+        ParticipantRef subscriber{}; ///< the asker exactly: a successor or a new life is not it
+        std::int64_t last = 0;       ///< the last number forwarded
+        bool retiring = false;       ///< its asker is gone; the far relay has not said it is over
+        std::uint64_t release = 0;   ///< the attempt that asked the far relay to release; 0: unsent
     };
 
     static link::Outcome outcome_of(const char* state, std::string reason, std::string shape,
@@ -528,6 +616,9 @@ private:
         for (const Crossing& c : open_) {
             any = any || c.epoch == epoch_;
         }
+        for (const Watch& w : watches_) {
+            any = any || w.epoch == epoch_; // a subscription carried on it ends `lost` too
+        }
         if (!any) {
             return;
         }
@@ -573,6 +664,266 @@ private:
         (void)loom::answer_deferred(due, mail, o);
     }
 
+    // ---- far subscriptions ------------------------------------------------------------------
+
+    static bool observation(const std::string& shape) {
+        return shape == observe::Observed::zen_name || shape == observe::Gap::zen_name ||
+               shape == observe::Ended::zen_name;
+    }
+
+    std::size_t subscribing_now() const {
+        return static_cast<std::size_t>(
+            std::count_if(open_.begin(), open_.end(), [](const Crossing& c) { return c.subscribe; }));
+    }
+
+    Watch* watch_for(std::int64_t subscription, const std::string& relay, std::uint64_t epoch) {
+        for (Watch& w : watches_) {
+            if (w.subscription == subscription && w.relay == relay && w.epoch == epoch) {
+                return &w;
+            }
+        }
+        return nullptr;
+    }
+
+    void unwatch(const Watch* w) {
+        watches_.erase(std::remove_if(watches_.begin(), watches_.end(),
+                                      [&](const Watch& o) { return &o == w; }),
+                       watches_.end());
+    }
+
+    /// A far answer about a subscription changes this link's custody: a `Subscribed` for this
+    /// crossing's asker begins one -- which the host's next turn releases if that asker left while
+    /// it was being made -- and the `Ended` that answers a release finishes one.
+    void custody(const Crossing& c, const link::Crossed& x) {
+        const loom::Value& v = *c.held;
+        const std::string name(v.schema().name());
+        const loom::Cell* sub = v.get("subscription");
+        const loom::Cell* relay = v.get("relay");
+        if (sub == nullptr || relay == nullptr) {
+            return;
+        }
+        if (name == observe::Subscribed::zen_name && c.subscribe) {
+            Watch w;
+            w.subscription = sub->as_int();
+            w.relay = relay->as_text();
+            w.epoch = c.epoch;
+            w.far_sender = x.far_sender;
+            w.subscriber = c.asker;
+            watches_.push_back(std::move(w));
+        } else if (name == observe::Ended::zen_name) {
+            if (Watch* w = watch_for(sub->as_int(), relay->as_text(), c.epoch)) {
+                if (w->subscriber == c.asker) {
+                    unwatch(w);
+                }
+            }
+        }
+    }
+
+    /// Is this participant still exactly the one that asked: registered, alive, in the same life and
+    /// incarnation? A successor is somebody else, and inherits nothing its predecessor held.
+    bool still(const ParticipantRef& who) const {
+        return bus_ != nullptr && who.valid() && bus_->alive(who.who) &&
+               bus_->participant(who.who) == who;
+    }
+
+    /// The shapes that act on a subscription the asker already holds.
+    static bool control(const std::string& shape) {
+        return shape == observe::Release::zen_name || shape == observe::Acknowledge::zen_name;
+    }
+
+    /// MAY `asker` SAY THIS CONTROL? Only about a subscription this link carries on its current
+    /// session, under the relay lifetime the control names, for that very participant -- and never
+    /// one being released because its asker is gone. Knowing the numbers is not holding them.
+    bool may_control(const std::optional<loom::Value>& compat, const loom::Unverified& asked,
+                     const std::string& shape, std::int64_t version, WeaveId asker,
+                     std::string* why) {
+        std::optional<loom::Value> value = compat;
+        if (!value) {
+            std::shared_ptr<const Schema> door =
+                bus_ != nullptr
+                    ? bus_->resolve_schema(shape, static_cast<std::uint32_t>(version))
+                    : nullptr;
+            if (!door) {
+                *why = shape + " v" + std::to_string(version) +
+                       " is a subscription control this link cannot read, so it cannot check "
+                       "whose subscription it names; nothing was sent";
+                return false;
+            }
+            loom::Admission a = loom::admit(asked, door);
+            if (!a.ok()) {
+                *why = "the ask's payload did not pass this bus's gate: " +
+                       a.first_error().message();
+                return false;
+            }
+            value = std::move(a).value();
+        }
+        const loom::Cell* sub = value->get("subscription");
+        const loom::Cell* relay = value->get("relay");
+        const Watch* w = (sub != nullptr && relay != nullptr)
+                             ? watch_for(sub->as_int(), relay->as_text(), epoch_)
+                             : nullptr;
+        if (w == nullptr || w->retiring || !still(w->subscriber) ||
+            !(bus_->participant(asker) == w->subscriber)) {
+            *why = "this link carries no subscription " +
+                   (sub != nullptr ? std::to_string(sub->as_int()) : std::string("?")) +
+                   " of that relay lifetime for you on its current session; nothing was sent";
+            return false;
+        }
+        return true;
+    }
+
+    /// ON THE HOST'S TURN: a subscription whose asker is gone is released now, whether or not its
+    /// producer ever says another word -- a silent producer, or a window the gone reader can never
+    /// reopen, would otherwise hold it at the far relay until the session ends.
+    void retire_departed() {
+        for (Watch& w : watches_) {
+            if (!w.retiring && !still(w.subscriber)) {
+                retire(w);
+            }
+        }
+    }
+
+    /// Begin releasing `w` at the far relay for an asker that is gone. The watch stays -- counted,
+    /// its words dropped, nobody told -- until the far relay's answer or its own `Ended` says the
+    /// subscription is over, or the session ends: asking is not the far side having let go.
+    void retire(Watch& w) {
+        w.retiring = true;
+        w.release = 0;
+        if (!client_ || !client_->admitted() || client_->disconnected() || w.epoch != epoch_) {
+            return; // nothing to send it on: the session's own ending ends it
+        }
+        observe::Release r;
+        r.subscription = w.subscription;
+        r.relay = w.relay;
+        const std::string bytes = loom::serialize(loom::to_value(r));
+        w.release = ++next_attempt_;
+        client_->send_to_role(observe::kObserveRole, w.release, bytes, false);
+        client_->flush();
+    }
+
+    /// THE FAR RELAY'S WORD ABOUT A RELEASE THIS LINK ASKED FOR: an answer -- its `Ended`, or its
+    /// refusal because it no longer holds the subscription -- means the far side let go; a refused
+    /// send or delivery means it did not hear the release, so the subscription stays counted,
+    /// releasing, until the session ends. Returns whether `x` was about such a release.
+    bool released(const link::Crossed& x) {
+        for (Watch& w : watches_) {
+            if (!w.retiring || w.release == 0 ||
+                w.release != static_cast<std::uint64_t>(x.attempt) ||
+                w.epoch != static_cast<std::uint64_t>(x.epoch)) {
+                continue;
+            }
+            if (x.kind == link::kCrossedAnswer) {
+                unwatch(&w);
+                return true;
+            }
+            if (x.kind == link::kCrossedSendRefused || x.kind == link::kCrossedDispatchRefused) {
+                w.release = 0;
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    /// A far relay's word about a subscription: forwarded to the local asker it is for, or not at
+    /// all. Only the relay that answered, on the session it answered on, about a subscription this
+    /// link holds, is heard.
+    void observed(const link::Crossed& x) {
+        loom::Unverified u = loom::parse(std::string_view(
+            reinterpret_cast<const char*>(x.payload.data()), x.payload.size()));
+        std::shared_ptr<const Schema> door =
+            bus_->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            ++state_.ignored;
+            ++strays_;
+            return;
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            ++state_.ignored;
+            ++strays_;
+            return;
+        }
+        loom::Value v = std::move(a).value();
+        const loom::Cell* sub = v.get("subscription");
+        const loom::Cell* relay = v.get("relay");
+        Watch* w = (sub != nullptr && relay != nullptr)
+                       ? watch_for(sub->as_int(), relay->as_text(),
+                                   static_cast<std::uint64_t>(x.epoch))
+                       : nullptr;
+        if (w == nullptr || w->far_sender != x.far_sender) {
+            ++state_.ignored; // not a subscription this link holds, or not its relay speaking
+            ++strays_;
+            return;
+        }
+        const bool ended = std::string(v.schema().name()) == observe::Ended::zen_name;
+        if (!w->retiring && !still(w->subscriber)) {
+            retire(*w); // gone since the host's last turn: nobody here reads another word
+        }
+        if (w->retiring) {
+            // BEING RELEASED FOR AN ASKER THAT IS GONE: its words are dropped, and the relay's own
+            // ending -- revoked or gone while the release was on its way -- is the far side letting go.
+            if (ended) {
+                unwatch(w);
+            }
+            ++state_.ignored;
+            return;
+        }
+        v.set("link", loom::Cell::text(name_));
+        v.set("epoch", loom::Cell::integer(x.epoch));
+        v.set("session", loom::Cell::integer(x.session));
+        if (const loom::Cell* seq = v.get("seq")) {
+            w->last = seq->as_int();
+        }
+        if (const loom::Cell* cause = v.get("cause")) {
+            // THE FAR CAUSE IS AN ATTEMPT OF THIS LINK'S; the asker knows its own correlation.
+            std::int64_t local = 0;
+            const std::size_t i = find(static_cast<std::uint64_t>(cause->as_int()),
+                                       static_cast<std::uint64_t>(x.epoch));
+            if (cause->as_int() != 0 && i < open_.size() && open_[i].asker == w->subscriber) {
+                local = static_cast<std::int64_t>(open_[i].correlation);
+            }
+            v.set("cause", loom::Cell::integer(local));
+        }
+        const WeaveId to = w->subscriber.who;
+        if (ended) {
+            unwatch(w);
+        }
+        (void)bus_->send_as(this->self_, to, Message(std::move(v), this->self_, WeaveId{}, 0));
+    }
+
+    /// The session a subscription crossed on ended: each of its subscriptions is over, and its
+    /// asker is told so, `lost` -- what the far relay said after the last word forwarded is unknown.
+    /// One being released for a gone asker ends with nobody told: there is nobody to tell.
+    void end_watches(std::uint64_t epoch, std::int64_t session, const std::string& why) {
+        std::vector<Watch> ending;
+        for (const Watch& w : watches_) {
+            if (w.epoch == epoch) {
+                ending.push_back(w);
+            }
+        }
+        watches_.erase(std::remove_if(watches_.begin(), watches_.end(),
+                                      [&](const Watch& w) { return w.epoch == epoch; }),
+                       watches_.end());
+        for (const Watch& w : ending) {
+            if (w.retiring || !still(w.subscriber)) {
+                continue;
+            }
+            observe::Ended e;
+            e.subscription = w.subscription;
+            e.relay = w.relay;
+            e.seq = w.last + 1;
+            e.last = w.last;
+            e.kind = observe::kEndedLost;
+            e.reason = "the link's session ended: " + why;
+            e.link = name_;
+            e.epoch = static_cast<std::int64_t>(w.epoch);
+            e.session = session;
+            (void)bus_->send_as(this->self_, w.subscriber.who,
+                                Message(to_value(e), this->self_, WeaveId{}, 0));
+        }
+    }
+
     std::string name_;
     std::string endpoint_;
     std::string identity_;
@@ -582,6 +933,8 @@ private:
     Switchboard* bus_ = nullptr;
     std::unique_ptr<BridgeClient> client_;
     std::vector<Crossing> open_;
+    std::vector<Watch> watches_;     ///< far subscriptions in this link's custody (kMaxWatches)
+    std::int64_t strays_ = 0;        ///< far observation words that named none of them
     std::uint64_t next_attempt_ = 0; ///< the last attempt minted; never reused
     std::uint64_t epoch_ = 0;        ///< sessions opened; 0 before the first
     std::uint64_t ended_epoch_ = 0;  ///< the last epoch told `ended`

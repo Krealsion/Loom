@@ -1,0 +1,19 @@
+{
+ "package": "observe-probe",
+ "version": "1",
+ "summary": "The observation journey's hands: small planned steps against the far test host through a link, everything recorded.",
+ "tools": [
+  {
+   "name": "script",
+   "script": "probe.py",
+   "summary": "Run a plan of subscribe / ask / take / drain / status / release / hold steps and keep what came back.",
+   "inputs": [
+    {"name": "link", "type": "text", "default": "far", "help": "the link to the far test host"},
+    {"name": "plan", "type": "text", "required": true, "help": "a JSON list of steps (probe.py says which)"}
+   ],
+   "outputs": [{"name": "probe.json", "help": "each step's record, in order, and each subscription's own account"}],
+   "asks": ["loom.link.Ask v1 -> role loom.link.far", "loom.link.Ask v1 -> role loom.link.other"],
+   "terms": ["observe", "journey"]
+  }
+ ]
+}
