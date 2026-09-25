@@ -47,7 +47,7 @@ import json
 import os
 import time
 
-from . import client
+from . import client, observe
 from .client import (DispatchRefused, NotAnswered, Refused, SendRefused)  # noqa: F401 (re-export)
 
 RUNS_ROLE = "loom.runs"
@@ -247,6 +247,32 @@ class Context(object):
     def ask(self, office, shape, fields=None, version=1, via=None, settle=False, timeout=60.0):
         """Ask and wait for its answer (see ``Pending.wait``)."""
         return self.ask_async(office, shape, fields, version, via, settle).wait(timeout)
+
+    # ---- observing --------------------------------------------------------------------------
+
+    def observe(self, producer, shapes, via=None, latest=(), window=0, label="", max_pending=None,
+                timeout=30.0):
+        """SUBSCRIBE to ``producer``'s publications of ``shapes`` (``("Name", version)`` or
+        ``"Name@version"``), from now on, at the relay ``loom.observe`` -- this host's, or the far
+        host's through the link ``via``. Returns a ``loom_session.observe.Subscription``; a
+        refusal raises ``Refused`` in the far host's words. ``latest`` names shapes that are
+        state rather than occurrences (the relay may keep only the newest of each while this
+        run is behind). Payloads come in Zen's JSON envelope and are decoded with the
+        descriptors the relay sends. The subscription is released in this run's cleanup phase,
+        however the run ends. See ``loom_session.observe`` for what each item means."""
+        requested = observe.shape_refs(shapes)
+        for word in observe.WORDS:  # described now, so no word waits on the host as it arrives
+            self.conn.schema(word, 1)
+        fields = {"producer": producer, "shapes": requested, "latest": list(latest),
+                  "encoding": "compat", "window": int(window),
+                  "label": label or ("run:" + self.name)}
+        answer = self.ask(observe.ROLE, "loom.observe.Subscribe", fields, via=via, timeout=timeout)
+        if answer.shape != "loom.observe.Subscribed":
+            raise ToolFailed("the relay answered %s, not loom.observe.Subscribed" % answer.shape)
+        sub = observe.Subscription(self, answer, via, requested, max_pending)
+        self.conn.watch(sub)
+        self.on_cleanup(sub.release, "release subscription %d to %s" % (sub.subscription, producer))
+        return sub
 
     def _wait(self, p, timeout):
         deadline = time.monotonic() + timeout

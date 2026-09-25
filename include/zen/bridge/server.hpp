@@ -52,6 +52,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -222,6 +223,22 @@ public:
     /// Sever an admitted or waiting connection now: its proxy leaves the bus at the next service,
     /// so no further delivery can land on it. Returns false when there is no such connection.
     bool disconnect(std::uint64_t connection);
+
+    // ---- which session set a delivery in motion ------------------------------------------
+
+    /// The session that opened a fence (its proxy's id, the sender the bus stamps on its sends)
+    /// and the correlation it put on that settle-requested Send.
+    struct SettleOrigin {
+        loom::WeaveId session{};
+        std::uint64_t correlation = 0;
+    };
+
+    /// WHO OPENED `fence`, if a session of this server did and the server still holds it -- from
+    /// the Send reaching the bus until its settlement has been told, which is the whole time
+    /// anything that Send set in motion can be dispatched. Empty for every other fence. Read-only:
+    /// an observation relay (zen/observe/relay.hpp) uses it to tell a session which of ITS OWN
+    /// sends set a publication in motion, and must never tell one session another's.
+    std::optional<SettleOrigin> settle_origin(loom::Fence fence) const;
 
     // ---- the inventory ---------------------------------------------------------------------
 

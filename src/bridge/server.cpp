@@ -366,6 +366,20 @@ bool BridgeServer::disconnect(std::uint64_t connection) {
     return true;
 }
 
+std::optional<BridgeServer::SettleOrigin> BridgeServer::settle_origin(loom::Fence fence) const {
+    if (!fence.valid()) {
+        return std::nullopt;
+    }
+    for (const auto& c : conns_) {
+        for (const Conn::Settling& s : c->settling) {
+            if (s.fence.value == fence.value) {
+                return SettleOrigin{c->id, s.correlation};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 void BridgeServer::on_hello(Conn& c, const BridgeIncoming& f) {
     Cursor cur(f.payload);
     std::uint32_t proto = 0;

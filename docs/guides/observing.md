@@ -14,6 +14,7 @@ Reference: [senses](../reference/senses.md). Laws:
 | please do something | a message (`send`) |
 | answer this question | an ask + an answer |
 | **this is what I currently claim is so** | **a Sense** |
+| (as a reader elsewhere) tell me each thing that office publishes, as it happens | a subscription at the host's [observation relay](#following-another-participants-publications) |
 
 If a consumer would otherwise ask the same question over and over and act on the
 reply, that is a Sense. If the *asking* is the point — because it changes
@@ -113,6 +114,40 @@ Loom will not hide the distinction, and will not choose for you.
 
 **4. Do not build a journal out of it.** A Sense keeps one value per key. If you
 want history, tap the bus (`add_observer`) — that is what the tap is for.
+
+## Following another participant's publications
+
+A Sense is the latest claim; it cannot say *every* time something happened. A reader that must
+see each occurrence — an agent following one build through to its end on another host, a monitor
+counting enemies past a checkpoint — subscribes at the producer host's **observation relay**
+([reference](../reference/observation.md)):
+
+```python
+sub = ctx.observe("td.game", [("TdSeen", 1), ("TdOccurred", 1)], via="workshop",
+                  latest=["TdSeen"])          # TdSeen is where the game stands: the newest is enough
+press = ctx.ask("zengine.input", "InjectInput", {...}, via="workshop", settle=True)
+began = [o for o in sub.drain() if o.kind == "observed" and o.cause == press.correlation]
+while True:
+    o = sub.next(30.0)                        # Observation, Gap, Ended -- or None: your wait ran out
+    ...
+```
+
+Get these right, in this order:
+
+1. **The producer's host decides.** Nothing is observable until that host mounts a relay with a
+   policy that admits you, and its default admits nobody. Being able to type into an application
+   is not permission to observe it, and observing it is no permission to act on it.
+2. **Subscribe before you act.** A subscription tells what is published after it began and
+   nothing before; the answer to `Subscribe` is the moment. A reader that joins late learns the
+   past only from the producer — its whole-state shape (name it `latest`) and its own numbering.
+3. **Attribute by `cause`, not by arrival.** A settle-requested ask's synchronous consequences
+   carry your correlation; the first thing to arrive after a key press is only the first thing to
+   arrive. Work the producer defers (a build, a timer) carries none: join it by the producer's own
+   words (an ask number, an operation number).
+4. **A `Gap` means "cannot tell".** Occurrences can be lost — a shut window, a slow reader — and
+   each loss is said. A count that needed them is not a smaller count; it is unknown.
+5. **Ending stops only the words.** Releasing, or losing the link, says nothing about what the
+   producer did next.
 
 ## What it is not
 
