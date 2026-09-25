@@ -288,6 +288,21 @@ refuses in words at the limit; none evicts anything a client is still owed.
 | `RunManager::kShutdownObserveMs` | 2000 ms | the WHOLE of a clean shutdown's budget for watching the execution GROUPS it just stopped actually go, so that a final `exited`/`killed` is an end the manager saw with a leader's exit code it read. Every stop is issued before any of it is spent, so a slow group cannot take the moment another run's stop was owed. **A budget for one observation, not a cap on the shutdown**: unspent time is not waited out, a group whose end is not seen in it is recorded `killing` (which promises no code, while any leader code read by then — including one this moment of watching was the first to see — is kept, and the record's note says whether there was one), and the POSIX reap in `ChildProcess::release` is a separate wait of its own |
 | serve mode's idle wait | 5 ms | the longest a client's request waits unread on an idle host (the interactive host's is 100 ms, a console's latency) |
 
+## Observation relay
+
+What a subscription is, and what each bound costs a subscriber: [observation](observation.md).
+Every bound here either refuses in words or drops-and-SAYS; none makes a producer wait.
+
+| Bound | Value | Behavior |
+|---|---|---|
+| `observe::kMaxSubscriptions` | 64 | subscriptions one relay holds; past it `Subscribe` is refused |
+| `observe::kMaxPerSubscriber` | 8 | held at once for one subscriber (every run on one link is ONE far subscriber); past it refused: release one first |
+| `observe::kMaxShapes` | 8 | shapes one subscription names |
+| `observe::kDefaultWindow` / `kMaxWindow` | 256 / 4096 | numbered words standing unacknowledged per subscription. Past it an occurrence is dropped, COUNTED and said as a `Gap` before anything later; a `latest` shape keeps only its newest, which says how many it stood for (`coalesced`) |
+| `LinkWeave::kMaxWatches` (the supplied host) | 32 | far subscriptions one link holds in custody, subscriptions being made and those being released for a gone asker included; past it the `Subscribe` is refused before it crosses. A gone asker's subscription is released on the host's own turn, so abandoning subscribers does not use it up |
+| `Subscription.max_pending` (Python client) | 2 × window, at least 64 | observations read here and not yet taken; past it they are dropped HERE and handed over as a local `Gap` with their count |
+| `Connection.MAX_UNCLAIMED` (Python client) | 1024 | words for a subscription not (yet) registered here — the relay's first words can arrive with its answer; past it the oldest are let go and counted (`stray_observations`) |
+
 ## Transport channels (framed byte channels)
 
 Both framers -- the isolation `Channel` (parent side of an out-of-process Weave

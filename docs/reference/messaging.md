@@ -640,6 +640,15 @@ fenced begins its own fence and is not counted in the enclosing one: the host is
 somebody else, not continuing that delivery's work. Ids are never reused. The bridge's
 `Settled` is this, across a socket ([bridge](bridge.md#what-a-session-is-told)).
 
+**Where a delivery sits, read from inside it.** `Switchboard::current_dispatch()` is the
+delivery being dispatched right now — its `seq`, its `dispatch_parent` and the fence it belongs
+to (invalid when none) — and nothing while no handler runs. It is host wiring, like the fence
+verbs: a relay reads it inside a listener's delivery to say which delivery published what it is
+forwarding and which fence (so which opener's send) set it in motion
+([observation](observation.md#cause-what-the-subscribers-own-send-set-in-motion)). The bridge
+server's `settle_origin(fence)` says which session and correlation opened a fence it holds.
+`Switchboard::participant(id)` is a participant's `(life, incarnation)` as the bus knows it now.
+
 ## Tests
 
 Suites `switchboard` (the `fence:` cases among them), `provenance`, `capabilities`, `poke`,

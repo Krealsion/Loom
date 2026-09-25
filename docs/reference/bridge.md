@@ -226,6 +226,27 @@ declares cannot be encoded and is refused (`Outcome` `refused`, attempt 0) befor
 as is an envelope the gate refuses. That is the same requirement the far ANSWER already had: to
 speak a far vocabulary through a link, some participant of this host must declare it.
 
+**A subscription made through a link** — `loom.observe.Subscribe` to the far host's relay
+([observation](observation.md)) — is the one far conversation that outlives its answer. The link
+keeps its **custody**: the far relay's lifetime and subscription number, the far participant that
+answered, the session (`epoch`) and the local asker. It forwards that relay's later words
+(`Observed`, `Gap`, `Ended`) to the asker as ordinary speech — never as an answer — with `link`,
+`epoch` and `session` filled and `cause` translated from its own attempt to the asker's own
+correlation, or 0. A word about any other subscription, from any other far participant or from an
+ended session is counted (`stray_observations`) and dropped. When the session ends, each
+subscription it carried is told `Ended` `lost`. At most `LinkWeave::kMaxWatches` per link
+([bounds](bounds.md#observation-relay)).
+
+**The link enforces whose subscription it is**, because the far relay cannot: every local asker is
+the link's one session there. A `Release` or `Acknowledge` crosses only for the local participant
+that holds that subscription on the current session under the relay lifetime it names; anybody
+else's — in either encoding, to the relay's office or its id — is told `Outcome` `refused` (attempt
+0) and changes nothing on either side. **A subscriber that is gone** (removed, dead, or succeeded by
+a new life or incarnation, even mid-subscribe) is noticed on the host's own turn, not at the next
+word: the link asks the far relay to release, tells nobody, and counts the subscription as
+`releasing` until the far relay's answer or its own ending says it is over, or the session ends
+([observation across a link](observation.md#across-a-link)).
+
 ## Servicing
 
 `service()` is the I/O half and only that: accept, read and dispatch every

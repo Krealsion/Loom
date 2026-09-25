@@ -27,6 +27,13 @@
 // A run executes a SNAPSHOT copied into its own directory, and its revision is the snapshot's
 // digest: an edit made while a run is going changes the next run, never that one.
 //
+// A PACKAGE MAY BUILD ON ANOTHER. `"uses": ["workshop"]` in a manifest names packages of the same
+// catalog whose modules its tools import -- a game's monitor policy, say, on the package that
+// drives the application it watches. A run of it snapshots each one beside its own and puts them
+// after its own on the worker's import path; it starts only when every one is approved as its
+// snapshot stands, exactly as its own package must be. One level: a used package that uses others
+// is refused, and nothing is found by path.
+//
 // Both files are read strictly: a key neither file defines is a problem the catalog reports,
 // never a key it silently ignores.
 
@@ -73,6 +80,7 @@ struct Package {
     std::string version;
     std::string summary;
     std::vector<ToolSpec> tools;
+    std::vector<std::string> uses; ///< packages of this catalog its tools import, by name
     std::string revision;     ///< the content digest as it stands now
     std::string approve;      ///< "" / "any-revision" / a 64-hex digest
     std::string problem;      ///< why it could not be read, when it could not
@@ -88,6 +96,9 @@ struct Catalog {
 
     /// "<package>/<tool>" -> the package and the tool, or nullptrs.
     const Package* find(const std::string& id, const ToolSpec** tool) const;
+
+    /// A package this catalog read, by its name; nullptr when none (or it could not be read).
+    const Package* package(const std::string& name) const;
 };
 
 /// The most packages a catalog names, the most tools a package holds, and the most files and
@@ -96,6 +107,7 @@ inline constexpr std::size_t kMaxPackages = 64;
 inline constexpr std::size_t kMaxToolsPerPackage = 32;
 inline constexpr std::size_t kMaxPackageFiles = 512;
 inline constexpr std::uintmax_t kMaxPackageBytes = 16u * 1024u * 1024u;
+inline constexpr std::size_t kMaxUses = 4; ///< packages one package builds on
 
 /// Read `file` and every package it names. Never throws: what could not be read is a problem.
 Catalog read_catalog(const std::string& file);
@@ -109,6 +121,12 @@ bool snapshot_package(const std::filesystem::path& from, const std::filesystem::
 
 /// May a run of `p` start at `revision`? `*why` says what the operator would have to decide.
 bool approved(const Package& p, const std::string& revision, std::string* why);
+
+/// THE PACKAGES `p` BUILDS ON, in its order: each listed in `c`, readable and using nothing
+/// itself -- or false, with `*why` naming the first that is not. Approval is not judged here: a run
+/// judges each one's snapshot, a description each one as it stands (`approved`).
+bool uses_of(const Catalog& c, const Package& p, std::vector<const Package*>* used,
+             std::string* why);
 
 /// A run's inputs, checked against the tool's declaration: `json` must be one object whose keys
 /// the tool declares, of the declared types; defaults are filled in. Returns the normalized JSON

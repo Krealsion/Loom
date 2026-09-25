@@ -1483,7 +1483,11 @@ void cmd_links(HostSession& s, const std::vector<Token>& tok) {
         } else if (!l->detail().empty()) {
             std::cout << "  -- " << l->detail();
         }
-        std::cout << "  (" << l->open() << " open)\n";
+        std::cout << "  (" << l->open() << " open, " << l->watches() << " watched";
+        if (l->releasing() != 0) {
+            std::cout << ", " << l->releasing() << " releasing";
+        }
+        std::cout << ")\n";
     }
 }
 

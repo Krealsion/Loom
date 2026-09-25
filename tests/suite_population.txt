@@ -84,7 +84,7 @@ recorder           portable  31
 logger             portable  15
 component          portable  19
 pixel              portable  12
-bridge             portable  24
+bridge             portable  39
 bridge             posix     8
 kernel             kernel    136
 kernel             posix     2
@@ -101,4 +101,5 @@ dispatch_loaded    kernel    5
 admission          kernel    21
 joint              kernel    24
 session            portable  10
-runs               runs      10
+observe            portable  15
+runs               runs      12

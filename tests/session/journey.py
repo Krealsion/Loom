@@ -215,6 +215,21 @@ def main():
                 "    for _ in range(ctx.inputs['times']):\n"
                 "        ctx.ask('loom.session', 'loom.session.Describe', {})\n"
                 "    return 'asked %d times' % ctx.inputs['times']\n")
+    # A package that BUILDS ON chatty (`uses`): its tool imports chatty's module, which the worker
+    # finds in the run's snapshot of chatty, after its own package's.
+    builds_on = os.path.join(pkgs, "builds-on")
+    os.makedirs(builds_on)
+    with open(os.path.join(builds_on, "loom-tool.json"), "w", encoding="utf-8") as f:
+        json.dump({"package": "builds-on", "version": "1", "summary": "Builds on chatty.",
+                   "uses": ["chatty"],
+                   "tools": [{"name": "imports", "script": "imports.py",
+                              "summary": "Import a module of the package this one builds on."}]},
+                  f, indent=1)
+    with open(os.path.join(builds_on, "imports.py"), "w", encoding="utf-8") as f:
+        f.write("import os\n"
+                "import ask\n"
+                "def run(ctx):\n"
+                "    return 'imported ask from ' + os.path.dirname(os.path.abspath(ask.__file__))\n")
     # The lifecycle package: tools whose verdict and whose execution end at different moments,
     # and whose cleanups speak on the bus. It lives beside this driver, not in the shipped
     # examples -- a tool that deliberately leaves a process behind is a witness, not a sample.
@@ -227,6 +242,7 @@ def main():
                             {"path": greedy, "approve": "any-revision"},
                             {"path": pinned, "approve": "PINNED"},
                             {"path": chatty, "approve": "any-revision"},
+                            {"path": builds_on, "approve": "any-revision"},
                             {"path": lifecycle, "approve": "any-revision"}]}
 
     def write_catalog():
@@ -535,6 +551,15 @@ def main():
         check("L5 a run's own account of its asks is bounded, and counts what it let go",
               c["state"] == "passed" and len(c["asks"]) == 128 and c["asks_dropped"] == 3,
               (c["state"], len(c["asks"]), c.get("asks_dropped"), c["failure"][:200]))
+        s.start("builds-on/imports", "builds-on", {})
+        b = s.wait("builds-on", timeout=120)
+        used = os.path.join(b["directory"], "uses", "chatty")
+        check("L6 a package that builds on another imports that one's SNAPSHOT, taken beside its "
+              "own, and the record says which revision",
+              b["state"] == "passed" and os.path.normcase(b["summary"]) ==
+              os.path.normcase("imported ask from " + used) and
+              any(n.startswith("builds on package chatty at revision ") for n in b["notes"]),
+              (b["state"], b["summary"], b["failure"][:200], b["notes"][:3]))
 
     # ---- N. a verdict is not the end of an execution -----------------------------------------
     #

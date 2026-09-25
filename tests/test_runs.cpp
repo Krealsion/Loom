@@ -235,6 +235,48 @@ TEST_CASE("catalog: approval is the operator's word -- a pinned revision, any re
     CHECK(approved(p, std::string(64, 'b'), &why));
 }
 
+TEST_CASE("catalog: a package builds on others by name -- listed, each once, at most four, using nothing itself; anything else is a problem") {
+    Scratch s("uses");
+    demo_package(s.path);
+    write(s.path / "base" / "loom-tool.json", R"({"package": "base", "tools": []})");
+    write(s.path / "base" / "helper.py", "WORD = 'base'\n");
+    const auto policy = [&](const std::string& uses) {
+        write(s.path / "policy" / "loom-tool.json",
+              R"({"package": "policy", "uses": )" + uses +
+                  R"(, "tools": [{"name": "watch", "script": "watch.py", "summary": "watches"}]})");
+        write(s.path / "policy" / "watch.py", "import helper\ndef run(ctx):\n    return helper.WORD\n");
+        write(s.path / "loom-tools.json",
+              R"({"packages": [{"path": "demo"}, {"path": "base"}, {"path": "policy"}]})");
+        return read_catalog((s.path / "loom-tools.json").string());
+    };
+    Catalog c = policy(R"(["base"])");
+    REQUIRE(c.problems.empty());
+    const Package* p = c.package("policy");
+    REQUIRE(p != nullptr);
+    CHECK(p->uses == std::vector<std::string>{"base"});
+    std::vector<const Package*> used;
+    std::string why;
+    REQUIRE(uses_of(c, *p, &used, &why));
+    REQUIRE(used.size() == 1);
+    CHECK(used[0]->name == "base");
+    // Refused in the manifest: itself, twice, a path, too many, not a list.
+    for (const char* bad : {R"(["policy"])", R"(["base", "base"])", R"(["../base"])",
+                            R"(["a", "b", "c", "d", "e"])", R"("base")"}) {
+        c = policy(bad);
+        CHECK_MESSAGE(c.package("policy") == nullptr, bad);
+        CHECK_MESSAGE(!c.problems.empty(), bad);
+    }
+    // Named but not in the catalog, or building on others itself: a refusal naming which.
+    c = policy(R"(["nowhere"])");
+    REQUIRE(c.package("policy") != nullptr);
+    CHECK_FALSE(uses_of(c, *c.package("policy"), &used, &why));
+    CHECK(why.find("uses 'nowhere', which the catalog") != std::string::npos);
+    write(s.path / "base" / "loom-tool.json", R"({"package": "base", "uses": ["demo"], "tools": []})");
+    c = policy(R"(["base"])");
+    CHECK_FALSE(uses_of(c, *c.package("policy"), &used, &why));
+    CHECK(why.find("which uses others itself") != std::string::npos);
+}
+
 TEST_CASE("inputs: unknown names and wrong types are refused; defaults fill in the declared order") {
     Scratch s("inputs");
     demo_package(s.path);
@@ -474,6 +516,69 @@ TEST_CASE("manager: a worker that ends without a verdict is CRASHED with its exi
     CHECK(h.client->refused.find("already used") != std::string::npos);
     h.ask(List{});
     CHECK(h.client->list.rows.size() == 1);
+}
+
+TEST_CASE("manager: a package that builds on another runs with that one's snapshot beside its own, "
+          "judged as the snapshot stands; unlisted or unapproved, nothing starts") {
+    RunsHost h;
+    write(h.dir.path / "base" / "loom-tool.json", R"({"package": "base", "tools": []})");
+    write(h.dir.path / "base" / "helper.py", "WORD = 'base'\n");
+    write(h.dir.path / "policy" / "loom-tool.json",
+          R"({"package": "policy", "uses": ["base"],
+              "tools": [{"name": "watch", "script": "watch.py", "summary": "watches a producer"}]})");
+    write(h.dir.path / "policy" / "watch.py", "import helper\ndef run(ctx):\n    return helper.WORD\n");
+    const std::string python = fs::path(ZEN_TEST_CMAKE).generic_string();
+    const auto catalog = [&](const std::string& base_entry) {
+        write(h.dir.path / "loom-tools.json",
+              "{\"python\": \"" + python + "\", \"packages\": [{\"path\": \"policy\", \"approve\": "
+              "\"any-revision\"}" + base_entry + "]}");
+    };
+    std::error_code ec;
+    const auto nothing_started = [&] {
+        return !fs::exists(h.dir.path / "runs") || fs::is_empty(h.dir.path / "runs", ec);
+    };
+    catalog("");
+    h.ask(Start{"policy/watch", "a", "{}"});
+    CHECK(h.client->refused.find("uses 'base', which the catalog") != std::string::npos);
+    CHECK(nothing_started());
+    catalog(R"(, {"path": "base"})");
+    h.ask(Start{"policy/watch", "b", "{}"});
+    CHECK(h.client->refused.find("uses 'base': package 'base' is not approved to run") !=
+          std::string::npos);
+    CHECK(nothing_started());
+    h.ask(DescribeTool{"policy/watch"});
+    CHECK_FALSE(h.client->description.approved);
+    CHECK(h.client->description.approval.find("uses 'base'") != std::string::npos);
+    // Pinned to a revision the used package no longer has: refused as its own would be.
+    catalog(R"(, {"path": "base", "approve": ")" + std::string(64, 'a') + "\"}");
+    h.ask(Start{"policy/watch", "c", "{}"});
+    CHECK(h.client->refused.find("changed since it was approved") != std::string::npos);
+    CHECK(nothing_started());
+
+    catalog(R"(, {"path": "base", "approve": "any-revision"})");
+    h.ask(ListTools{"watches"});
+    REQUIRE(h.client->tools.rows.size() == 1);
+    CHECK(h.client->tools.rows[0].approved);
+    CHECK(h.client->tools.rows[0].approval == "any revision; uses base (any revision)");
+    h.client->refused.clear(); // the client keeps its last refusal; this start must add none
+    h.ask(Start{"policy/watch", "d", "{}"});
+    REQUIRE(h.client->refused.empty());
+    const fs::path dir = h.client->run.directory;
+    CHECK(fs::exists(dir / "package" / "watch.py"));
+    CHECK(fs::exists(dir / "uses" / "base" / "helper.py")); // its snapshot, beside the run's own
+    std::ifstream in(dir / "request.json", std::ios::binary);
+    const std::string request((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string spelled; // the snapshot's directory as the request's JSON spells it
+    for (const char ch : (dir / "uses" / "base").string()) {
+        spelled += ch == '\\' ? std::string("\\\\") : std::string(1, ch);
+    }
+    CHECK(request.find("\"uses\":[\"" + spelled + "\"]") != std::string::npos);
+    CHECK(joined(h.client->run.notes).find("builds on package base at revision ") != std::string::npos);
+    // AN EDIT MADE NOW CHANGES THE NEXT RUN, NEVER THIS ONE: the snapshot keeps what it copied.
+    write(h.dir.path / "base" / "helper.py", "WORD = 'edited'\n");
+    std::ifstream kept(dir / "uses" / "base" / "helper.py", std::ios::binary);
+    const std::string was((std::istreambuf_iterator<char>(kept)), std::istreambuf_iterator<char>());
+    CHECK(was == "WORD = 'base'\n");
 }
 
 TEST_CASE("manager: another lifetime's handle is refused by name; a stranger's report is refused and moves nothing") {
