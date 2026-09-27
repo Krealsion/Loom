@@ -1,6 +1,6 @@
 # The Weaver — reference
 
-The first delegate of a **human being's** authority decisions. Laws:
+A delegate of a **human being's** authority decisions. Laws:
 [GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides),
 [MSG-02](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
 
@@ -12,9 +12,9 @@ SWITCHBOARD   enforces        the Kernel, which has the last word
 ```
 
 Or, in one sentence: **the Kernel enforces, the Weaver decides, the session
-acts.** [GRANT-0](capabilities.md#live-delegation) built the mechanism by
+acts.** [Live delegation](capabilities.md#live-delegation) is the mechanism by
 which a host may appoint an administrator for one live subject's speech; the
-Weaver is the first policy actor to hold one.
+Weaver is a policy actor that holds one.
 
 ## The four parties, and what each is not
 
@@ -115,7 +115,7 @@ visible at the target: the service sees the *session* as `mail.sender()`.
 
 ## Policy, stated
 
-| question | WEAVER-1's answer |
+| question | the Weaver's answer |
 |---|---|
 | who may request | only `GrantAuthority::subject()`, by bus stamp |
 | who may decide | only the host-configured operator seat, by bus stamp |
@@ -154,30 +154,33 @@ ASCII becomes a visible `\xNN`, a literal backslash is doubled, and truncation i
 stated rather than performed silently.
 
 The sanitizer lives at the Weaver rather than in a renderer, on purpose: a
-terminal console, a future Workshop pane, and anything else that ever displays an
+terminal console, a graphical pane, and anything else that ever displays an
 `AuthorityPrompt` inherit it. A sanitizer in one renderer protects one renderer.
 The field is named `requester_says` so the attribution is at the point of
 reading, not in documentation the operator does not have open.
 
-ASCII-only is a real V1 limitation: a non-ASCII purpose arrives escaped rather
+ASCII-only is a real limitation: a non-ASCII purpose arrives escaped rather
 than translated.
 
 ## A prompt is a send, and a sender cannot observe send fate
 
 This inherits the standing seam
 ([sender cannot observe send fate](known-seams.md#sender-cannot-observe-send-fate))
-and it has two visible consequences here, neither of which WEAVER-1 papers over:
+and it has two visible consequences here, neither of which the Weaver papers over:
 
-- **The session does not learn it was denied.** The human flow "try → see the
-  refusal → ask" cannot be automated by the session today. WEAVER-1 proves the
-  two halves separately: an unauthorized action *is* denied (visible on the tap),
-  and a session *can* ask. It never claims the session connected them.
+- **The session learns it was denied only if it asked to be told.** A session that
+  accepts `zen.DispatchRefused` hears, by exact attempt, that an action was refused
+  before any handler ran
+  ([sender-visible dispatch refusal](messaging.md#sender-visible-dispatch-refusal)),
+  and may then ask; a [terminal session](terminal.md) does exactly that. One that
+  does not accept it is told nothing, and the refusal shows only on the host's tap.
+  Either way the Weaver is not what connects the two: the session asks on its own.
 - **The Weaver cannot know its prompt arrived.** If the operator seat is
   misconfigured, unreachable, or dies, the request simply stays pending and the
   session simply keeps waiting. Nothing is lost or corrupted — the deferred
   answer is bounded, held by one slot, and reclaimed when either party dies — but
   nobody is told. An operator surface that must guarantee delivery of a prompt
-  needs a mechanism that does not exist yet.
+  needs a mechanism Loom does not have.
 
 ## The role is an address, never a power
 
@@ -193,7 +196,7 @@ admitted before the Weaver exists.
 
 ## What this does not govern
 
-WEAVER-1 governs **Loom message authority**: `LiveAuthority` delegation and
+The Weaver governs **Loom message authority**: `LiveAuthority` delegation and
 revocation for one governed session's speech. It does not govern process memory
 safety, hostile in-process native code (a `dlopen`ed weave shares this address
 space — see [dynamic weaves](../guides/dynamic-weaves.md)), kernel escape,
@@ -204,12 +207,11 @@ There is **no persistence**: restarting anything forgets every approval. There i
 words. There is **no time expiry**. There is no remote authentication: the
 operator seat is a WeaveId a host chose, not a person.
 
-WEAVER-1's *bootstrap* operator — a `ConsoleEngine` holding `allow_any()`,
-host-wired discovery and the tap — is no longer the only option.
-[TERM-0](terminal.md) drives this whole workflow from an operator seat that is an
-ordinary participant with four rules and none of those three powers, which
-measured that none of them was necessary to be the user. The **human** half of
-the seam is untouched: a WeaveId is still not a person.
+The operator seat needs no special powers. A `ConsoleEngine` holding
+`allow_any()`, host-wired discovery and the tap can be one, and so can the
+[terminal session](terminal.md)'s seat: an ordinary participant with four rules
+and none of those three powers, which drives this whole workflow. The **human**
+half of the seam remains: a WeaveId is not a person.
 
 ## Running it
 
@@ -220,4 +222,4 @@ the operator composes `zen.ApproveAuthority` the way it would compose any
 registered shape, through the ordinary gated send path.
 
 PROVEN BY — [`include/zen/weaver/`](../../include/zen/weaver/),
-`tests/test_weaver.cpp` (suite `weaver`), and the unchanged `grant` suite.
+`tests/test_weaver.cpp` (suite `weaver`), and the `grant` suite.

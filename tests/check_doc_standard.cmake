@@ -49,7 +49,6 @@ set(ZEN_DOC_STANDARD_PENDING
     "^docs/guides/observing[.]md$"
     "^docs/guides/replacing-a-service[.]md$"
     "^docs/guides/session-tools-map[.]md$"
-    "^docs/guides/tools[.]md$"
     "^docs/guides/writing-a-weave[.]md$"
     "^docs/laws/README[.]md$"
     "^docs/laws/admission-laws[.]md$"
@@ -61,9 +60,7 @@ set(ZEN_DOC_STANDARD_PENDING
     "^docs/reference/kernel[.]md$"
     "^docs/reference/lifecycle[.]md$"
     "^docs/reference/prepared-replacement[.]md$"
-    "^docs/reference/senses[.]md$"
-    "^docs/reference/values-and-admission[.]md$"
-    "^docs/reference/weaver[.]md$")
+    "^docs/reference/values-and-admission[.]md$")
 
 string(ASCII 1 ZEN_SOH)
 string(ASCII 2 ZEN_STX)
