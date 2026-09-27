@@ -50,7 +50,6 @@ set(ZEN_COMMENT_PENDING
     "^src/history/record[.]cpp$"
     "^src/host/boot_plan[.]cpp$"
     "^src/host/config_file[.]cpp$"
-    "^src/host/config_file[.]hpp$"
     "^src/host/secure_random[.]hpp$"
     "^src/host/session_files[.]hpp$"
     "^src/host/store_lock[.]cpp$"
