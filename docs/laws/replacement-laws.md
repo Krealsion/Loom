@@ -72,7 +72,7 @@ candidate's authenticated answer to that transaction's one preparation ask.
 MEANS
 - the deciding fact is the ask's own bus-private envelope identity, carried
   into the answer — never the correlation (a number a sender chooses), never a
-  host assertion (`mark_candidate_ready` was withdrawn);
+  host assertion (there is no `mark_candidate_ready`);
 - one ask, one answer: a second offer meets `WrongState` (the state already
   moved), a forged or mis-addressed offer meets `InvalidReadiness` and
   consumes nothing;
@@ -169,7 +169,7 @@ DOES NOT MEAN
   [LIFE-05](lifecycle-laws.md#life-05--a-committed-activation-is-not-answerable)).
 
 PROVEN BY — `PendingAdmission` on the envelope; suite `kernel` (first-breath
-vertical, original missing-grant reproducer, no-post-commit-refusal
+vertical, the missing-grant reproducer, no-post-commit-refusal
 assertions).
 
 ## PR-09 — Replacement verifies the successor, not continuity
@@ -187,7 +187,7 @@ MEANS
 - what (if anything) crosses a replacement is an authored, domain-owned
   decision — work, obligation, intent, a reopened question, or nothing
   (six independent Night Lab applications each answered differently);
-- the Timer package is the one domain that required an exact final boundary,
+- Zengine's Timer package is the one domain that required an exact final boundary,
   and built it *on top* of this substrate (its letter is written after
   admission freezes the incumbent).
 

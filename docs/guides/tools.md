@@ -32,8 +32,8 @@ That is the whole list.
 ### Where to get them
 
 - **Linux / WSL**: `sudo apt install build-essential cmake git` (Debian/Ubuntu),
-  `sudo dnf install gcc-c++ cmake make git` (Fedora). WSL Ubuntu 22.04 is the canonical
-  development host for this project.
+  `sudo dnf install gcc-c++ cmake make git` (Fedora). Linux is the reference platform,
+  including under WSL.
 - **Windows**: two routes, both tested — see [the Windows route](#the-windows-route)
   below, which gives the actual commands for each.
 - **macOS**: not tested. The portable subset has no reason not to build under Apple
@@ -157,9 +157,10 @@ cmake --build build --parallel
 An editor is optional here as everywhere: these are shell commands, and
 [running Loom](running-loom.md) is driven from a console, not an IDE.
 
-### What has actually been run
+### What these routes have been checked on
 
-Stated because "supported" and "tested" are different words:
+Stated because "supported" and "tested" are different words. What CI checks on every
+change is in `.github/workflows/ci.yml`; these are the routes on this page, run whole:
 
 | | Configuration | What was run |
 |---|---|---|
@@ -196,7 +197,7 @@ otherwise:
 - **No Python, Node or scripting runtime** to build or check it. The build and the checks
   are CMake; Python is needed only by the optional session tooling above, and by the one
   lane entry that exercises it.
-- **No Zengine, no Workshop and no already-hosted tool.** That is what
+- **Nothing built on Loom, and no already-hosted tool.** That is what
   ["from nothing to a running weave"](running-loom.md) means, and it is why the compiler
   above is the only thing you have to install first.
 

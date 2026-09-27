@@ -49,8 +49,7 @@ kept (non-copyable, rvalue-qualified verbs).
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-office).
 
-**Evidence / history.** R2D-0 in [history](../history/README.md); the priced
-workarounds and five sightings in
-[night-lab evidence](../evidence/night-lab.md); the focused replay
-`playground/night-lab/followups/role-authorship/`; suites `role_authorship`,
-`kernel` (ABI v5 parity), `isolation` (fail-closed pipe).
+**Evidence / history.** The priced workarounds, the five sightings and the
+focused role-authorship replay in [night-lab evidence](../evidence/night-lab.md);
+suites `role_authorship`, `kernel` (ABI v5 parity), `isolation` (fail-closed
+pipe); how it came to be, in [history](../history/README.md).

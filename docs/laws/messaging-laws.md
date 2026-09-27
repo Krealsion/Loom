@@ -145,7 +145,7 @@ PROVEN BY — `Switchboard::office_send_as` / `office_send_to_role_as` /
 `office_publish_as` (`holds_role_now` at enqueue); suite `role_authorship`
 (the hostile matrix, the replacement matrix, the definition-of-done program);
 suite `kernel` (dynamic parity, the previous-ABI refusal); suite `isolation` (fail-closed
-across the pipe); Night Lab follow-up `followups/role-authorship`.
+across the pipe); and the role-authorship replay in [Night Lab](../evidence/night-lab.md).
 
 ## MSG-08 — A Loom-owned rejection is observable where Loom owns it
 
@@ -168,7 +168,7 @@ MEANS
   **role it was handed**, which is an address the sender stated and not a
   resolution: it sits beside an invalid target, and the pair reads "where it was
   sent", never "who answered";
-- the observability floor is now the same on both tiers: a loaded weave's
+- the observability floor is the same on both tiers: a loaded weave's
   unresolvable reach and a native weave's unresolvable reach are both loud, and
   a comparable native failure is not reclassified;
 - **an unresolvable PUBLICATION is unheard, not refused**, and that is the same
@@ -177,8 +177,8 @@ MEANS
   (name, version), so an unresolvable shape has no live accepter *by
   construction*: the publication provably reached nobody, which is what a native
   publication into a world with no listeners does silently every day. Reporting
-  the loaded tier and not the native one made the seam LOUDER than the floor this
-  law sets, on the one case where nothing had gone wrong.
+  the loaded tier and not the native one would make the seam LOUDER than the floor
+  this law sets, on the one case where nothing has gone wrong.
 
 DOES NOT MEAN, of that last clause
 - that a publication cannot fail. One whose shape RESOLVES and whose bytes fail
@@ -186,10 +186,10 @@ DOES NOT MEAN, of that last clause
   handed those bytes, so a delivery that should have happened did not;
 - that an addressed reach is ever quiet. A send, a role send, an answer and an
   office send each named somewhere they expected to arrive, so zero arrivals is a
-  failure there whatever the reason — which is the P-011 case itself;
-- that the library is told less. The seam's status to the emitting library is
-  unchanged; only Loom's own diagnostic is withheld, and `Bus::publish`'s
-  recipient count never crossed this seam in either direction.
+  failure there whatever the reason;
+- that the library is told less. The seam's status to the emitting library is the
+  same either way; only Loom's own diagnostic is withheld, and `Bus::publish`'s
+  recipient count never crosses this seam in either direction.
 
 DOES NOT MEAN
 - that a synchronous seam failure becomes a later dispatch notice. MSG-12 begins
@@ -202,13 +202,12 @@ DOES NOT MEAN
 PROVEN BY — `Switchboard::note_seam_refusal` (deliberately `refuse_now`'s body,
 not a second mechanism); `kernel.cpp`'s one `seam_reject` helper behind every
 addressed seam entry point, and `kUnheardPublication` behind the two publication
-doors; suite `kernel` (the Night Lab III P-011 reproducer against a real
-artifact, the native-still-loud control, the no-false-refusal case, and FRIC-0's
+doors; suite `kernel` (a real artifact whose unresolvable emission is reported
+rather than lost, the native-still-loud control, the no-false-refusal case, and the
 three-part publication argument: the native control measured in the same process,
 the gate-refused publication that stays loud, and the same shape from the same
 seam going quiet only when its address is taken away).
-Evidence: [night-lab](../evidence/night-lab.md), reproducer
-`workshop-marathon/repros/core/silent-seam-emission/`.
+Evidence: [night-lab](../evidence/night-lab.md).
 
 ## MSG-09 — A dispatch turn can be bounded without bending FIFO
 
@@ -240,62 +239,53 @@ MEANS
   producing. Under a perpetual service that is never, and that is the correct
   answer rather than a defect — a caller asking for quiescence in a world that
   will not become quiescent has asked for something that does not exist;
-- **the call site says which promise was made** (FRIC-1). This is part of the law
-  and not presentation: the two names must state the terminating condition each
+- **the call site says which promise was made.** This is part of the law and
+  not presentation: the two names must state the terminating condition each
   turn actually has, because a host chooses between them at the moment it is
-  least able to read the substrate's source. The retired spellings `pump()` and
-  `run()` both named the drain in words an ordinary C++ reader takes for the
-  bounded one, and a first-contact host that reached for the short name got a
-  program that never returned;
+  least able to read the substrate's source. There is no `pump()` and no `run()`:
+  either would name the drain in words an ordinary C++ reader takes for the
+  bounded one, and a first-contact host that reached for the short name would get
+  a program that never returns;
 - both return how many deliveries they made, and both are non-reentrant; an
   empty queue is a no-op for either, not a drain.
 
 DOES NOT MEAN
-- that the drain's behaviour changed. It is the same function every existing
-  caller had under the name `pump()`, and `BridgeServer` still defaults to it
-  until a host says otherwise;
-- that Loom acquired a thread or a scheduler. It did not, and neither is planned;
+- that `BridgeServer` bounds its turns on its own. It drains to idle until a host
+  says otherwise;
+- that Loom has a thread or a scheduler. It has neither, and neither is planned;
 - that the substrate chose a bound. The primitive is the Switchboard's because
   only the queue's owner can bound dispatch without reordering; the **policy** is
   the host's, because only the host knows what it is composing with;
 - that `pump_pending()` is unbounded because it takes no number. Its bound is a
   fact about the queue, read before anything runs, and a producer cannot extend
   it from inside the turn;
-- that a **numeric** budget is available. It was tried and withdrawn — see below;
+- that a **numeric** budget is available — see below;
 - that `drain_until_idle()` is discouraged. It is the right call for a test or
   script settling a world before it asserts, for a one-shot bootstrap, and for a
   host whose entire program *is* the bus and whose exit is `stop()`.
 
-A NUMERIC BUDGET WAS TRIED AND REJECTED. R2E-0 first shipped `pump_bounded(n)`
-and `BridgeServer::set_dispatch_budget(n)`, counting deliveries dispatched. The
-consumer disproved it: with a real Zengine Timer, `pump_bounded(64)` throttled
-the Codex Rule Garden 17× (2s → 34s), and a budget large enough not to throttle
-was drain-to-empty again with the starvation back. A count sized against a
-*producer's* rate, chosen from the *consumer's* side, is the same class of
-fragility as a deadline approached from the other direction. Both surfaces were
-removed in R2E-0a; the count survives only as `pump_pending`'s private
-implementation. The experiment is kept as history, not as API — see
-[`../decisions/`](../decisions/).
+NO NUMERIC BUDGET. A count of deliveries sized against a *producer's* rate,
+chosen from the *consumer's* side, is the same class of fragility as a deadline
+approached from the other direction. Measured on a real timer-driven
+application, a budget of 64 deliveries a turn made its live round-trip seventeen
+times slower (2 s to 34 s), and a budget large enough not to throttle was
+drain-to-empty again, with the starvation back. The count exists only as
+`pump_pending`'s private implementation.
 
-NOR IS A CAP AN ACCEPTABLE REPAIR OF THE DRAIN. FRIC-1 renamed the drain rather
-than bounding it, for the same reason: a turn limit or a wall-clock deadline
-inside `drain_until_idle()` would convert a semantic operation into a heuristic
-and leave the caller with neither promise. The unbounded operation stays
-unbounded and says so in its name.
+NOR IS A CAP AN ACCEPTABLE REPAIR OF THE DRAIN, for the same reason: a turn limit
+or a wall-clock deadline inside `drain_until_idle()` would convert a semantic
+operation into a heuristic and leave the caller with neither promise. The
+unbounded operation stays unbounded and says so in its name.
 
 PROVEN BY — `Switchboard::pump_pending`; `Switchboard::drain_until_idle`;
 `BridgeServer::set_bounded_dispatch`; suite `switchboard` (the starvation
 reproduction, the entry-snapshot bound against a self-re-arming producer, the
 finite backlog cleared whole, FIFO and `stop()` across the boundary, the
-empty-queue no-op, reentrancy, the drain still draining to empty, and FRIC-1's
-two cases — one perpetually productive world left measurably different by each
-turn, and an outer host loop keeping control every lap while the service stays
-healthy), suite `bridge` (a bridge host staying responsive — accepting and
-welcoming an operator — while a perpetual driver runs, and the default still
-draining). Evidence: Codex Rule Garden finding 1, and its follow-up — the fake
-`GardenYieldPump → bus.stop()` message is deleted, replaced by
-`set_bounded_dispatch()`, and the live round-trip runs in the same 2s it did
-with the fake.
+empty-queue no-op, reentrancy, the drain still draining to empty, one
+perpetually productive world left measurably different by each turn, and an
+outer host loop keeping control every lap while the service stays healthy),
+suite `bridge` (a bridge host staying responsive — accepting and welcoming an
+operator — while a perpetual driver runs, and the default still draining).
 
 ## MSG-10 — A callback that throws costs the delivery, not the bus
 
@@ -309,12 +299,12 @@ MEANS
 - the exception is not swallowed, not translated into a `RefusalReason`, and not
   answered by terminating the process; no weave is quarantined for having thrown;
 - **the tap is told, exactly once, that the handler did not complete**
-  (`EventKind::HandlerFailed`, RTH-1). The event carries the delivery's ordinary
+  (`EventKind::HandlerFailed`). The event carries the delivery's ordinary
   facts and the payload, and NO reason — Loom has none to give. It is emitted
   after the delivery scope is torn down, exactly where a `Delivered` event would
-  have been, and the exception is rethrown immediately afterwards. Before this
-  the throwing path emitted nothing at all, so an observer's record of the bus
-  read as though the delivery had never happened;
+  have been, and the exception is rethrown immediately afterwards. Without it an
+  observer's record of the bus would read as though the delivery had never
+  happened;
 - **the loaded-weave seam says the same word.** A `dlopen`ed weave's exception is
   caught at the ABI boundary and crosses back as a status; the Kernel's
   `HostAdapter` reports a non-OK status through `Switchboard::note_handler_failure()`
@@ -339,7 +329,7 @@ DOES NOT MEAN
 - that Loom says what the failed delivery *did*. Its journal slot stays
   `Pending` — "no outcome was recorded", neither delivered nor refused, **on both
   seams** — and `HandlerFailed` says only that the handler was entered and did
-  not complete. The queue is what says the message was consumed, and STF-1
+  not complete. The queue is what says the message was consumed, and Loom
   restores state rather than inventing an outcome;
 - that an observer is safe from the exception. The `HandlerFailed` emission runs
   before the rethrow, so an observer that throws from it **replaces** the

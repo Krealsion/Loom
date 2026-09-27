@@ -12,7 +12,7 @@ rules select shape→target (`allow_to_any`, `allow_any_to`, `allow_to_role`,
 `allow_any`); the bus authorizes each weave-originated delivery against its
 sender's **effective** authority **at delivery**, before role resolution and
 before the gate (`CapabilityDenied`). The host is the only origin of authority,
-and a weave still cannot widen itself — but a host may now appoint an
+and a weave still cannot widen itself — but a host may appoint an
 administrator, so the sentence has three parts rather than one:
 
 ```text
@@ -27,7 +27,7 @@ EFFECTIVE  baseline union delegated — what the bus checks, at delivery
 `LiveAuthority` (send rules + observe rules), plus containment policy. Only the
 first is delegable, because only it is read at the moment of use.
 
-## Live delegation (GRANT-0)
+## Live delegation
 
 `host_grant_authority(bus, subject, ceiling)` — the one expression that mints
 one, in [`zen/host/grant_wiring.hpp`](../../include/zen/host/grant_wiring.hpp),
@@ -90,15 +90,15 @@ host with standing decisions can make them effective in time.
 Because the window belongs to the **door**, every route that can load anything
 passes through it: a host's own boot walk, an operator command, and an ordinary
 `zen.LoadWeave` a weave sends to the Manager of its own accord. A host that
-adopted at one of its own call sites governed only the artifacts that arrived
-that way. The supplied host is the first consumer
+adopted at one of its own call sites would govern only the artifacts that
+arrived that way. The supplied host adopts here
 ([running Loom](../guides/running-loom.md)).
 
-This is **message authority only**. It is not "grants are now mutable": an
+This is **message authority only**. It does not make grants mutable: an
 isolated child's namespace, mount view and cgroup leaf were built before it
 ran, and no write in this process moves them.
 
-**The first holder of one is the [Weaver](weaver.md)** (WEAVER-1) — an ordinary
+**The supplied holder of one is the [Weaver](weaver.md)** — an ordinary
 weave that puts an authority request in front of a human being and installs the
 answer. Keep the four apart: the **Kernel** enforces, a **`GrantAuthority`** is
 the administration mechanism, the **Weaver** is one policy delegate, and the
@@ -129,11 +129,11 @@ boundary the OS enforces is what the next sections are for, and that is a
 different mechanism with a different threat model — see
 [guides/dynamic-weaves](../guides/dynamic-weaves.md#what-loading-it-in-process-means).
 
-## Hosting and enforcement tiers (B1-B5)
+## Hosting and enforcement tiers
 
 Source comments in [`grant.hpp`](../../include/zen/switchboard/grant.hpp),
 `include/zen/isolation/**`, `src/isolation/**` and the isolation suites use
-`B1`–`B5` as shorthand for **which boundary one `Grant` is being projected
+`B1` to `B5` as shorthand for **which boundary one `Grant` is being projected
 onto**. The grant is the single source of truth; a tier names the mechanism
 that enforces part of it, and the reach that mechanism has.
 
@@ -173,7 +173,7 @@ into namespace/mount/cgroup state this process cannot revisit. Widening a
 weave's message authority therefore weakens no OS boundary, and an OS sandbox
 authorizes no message.
 
-**What is enforced today.** `Network`, the five `FsAccess` levels
+**What is enforced.** `Network`, the five `FsAccess` levels
 ([the view is enumerated below](#the-filesystem-view-what-is-in-it)) and the
 three resource dimensions ([subject to
 delegation](#delegation-is-what-makes-a-resource-cap-real)) are imposed and
@@ -207,11 +207,9 @@ The same rule, one layer up, for the **in-process** kernel: a `dlopen`ed weave's
 baseline comes from the host's **admission policy**
 ([`zen/kernel/admission.hpp`](../../include/zen/kernel/admission.hpp)), and a
 `Kernel` on which no host has called `admit_with(...)` admits nothing at all. There
-is no default grant any more — the three-argument `Kernel::load` used to mint
-`Grant{}.allow_any()` for anything it could open, and the control door and
-`load_candidate` both spent it, so the permissive default had three doors and could
-not be closed at any one of them. It is closed at the artifact door, where all three
-pass.
+is no default grant: the three-argument `Kernel::load`, the control door and
+`load_candidate` all reach an artifact through one door, and the policy is asked
+there, so no route can hand out authority the policy did not.
 
 A policy is asked **twice**, and the two questions are different:
 
@@ -242,9 +240,7 @@ code has run; first asked at `Speak`, it describes the file after. A file that c
 answers `identified() == false`, with `failure()` saying why — there is no way to see an
 identity nobody asked for, so none can pass for a build or for a failure.
 `loom::file_content_id_scans()` counts every reading, which is how the `admission` suite
-tells whether an operation did identity work at all, rather than timing it. (It was once
-computed for every policy-mediated load, whether the policy read it or not, and that alone
-failed Zengine's replacement-timing tests under `trust_every_artifact`.)
+tells whether an operation did identity work at all, rather than timing it.
 
 Two things this is **not**:
 
@@ -262,7 +258,7 @@ Two things this is **not**:
   still comes from the host's own knowledge — see [known
   seams](known-seams.md#a-manifest-says-what-a-weave-accepts-and-since-abi-v9-what-it-declares-it-says--never-what-it-asks-leave-to-send-where).)
 
-A host that genuinely wants the old behaviour asks for it by name —
+A host that wants every artifact trusted asks for it by name —
 `trust_every_artifact("why")` — and the `why` comes back in every verdict, so a
 reader can grep for who decided to trust everything and find their reason beside it.
 The supplied host (`loom-host`) instead reads a per-install file of the person's
@@ -319,7 +315,7 @@ why it is a list rather than a sentence about secrets.
 |---|---|---|
 | `None` | — | nothing is writable |
 | `ReadOnly` + a granted path | that host tree, recursive bind | no |
-| `WriteScoped` + a granted path (today only the StorageBroker's grant carries one; a mod is `None` and never gets a path) | that host directory bound at `/scratch` | **yes**, and **persistent** (real host storage) |
+| `WriteScoped` + a granted path (only the StorageBroker's grant carries one; a mod is `None` and never gets a path) | that host directory bound at `/scratch` | **yes**, and **persistent** (real host storage) |
 | `WriteScoped` with no path | a fresh `tmpfs` at `/scratch` | yes, ephemeral |
 | `WriteNoExec` | a fresh `tmpfs` at `/scratch`, `MS_NOEXEC` | yes, ephemeral, no native `execve` from it |
 | `WriteAnywhere` | **no view is built at all** — this level resolves to *granted*, not *contained*: the unrestricted host filesystem, by the grant | yes, everywhere |
@@ -359,8 +355,7 @@ So the honest sentence is: **the view contains the system software set, the
 system configuration tree, and the deployment directory — read-only — and
 nothing else unless a grant added it.** A secret is absent here only if it is
 not in `/etc` and not beside the artifact. That is a real and useful boundary;
-it is not "secrets are absent" as an unconditional claim, and this reference
-used to say the latter.
+it is not "secrets are absent" as an unconditional claim.
 
 Writable submounts are noexec **only** at `WriteNoExec`, and even there the
 block is native `execve` — not code an interpreter already inside the view
@@ -395,7 +390,7 @@ uncontained warning, never a false claim).
 
 ### The exec boundary: three independent facts
 
-Reading any one of these as the others is exactly the mistake C-2 was. A
+Do not read any one of these as the others. A
 **capability namespace** decides what a *fresh* attempt can reach — and nothing
 else. It says nothing about a descriptor that was **already open** and crossed
 `execve`, nor about what the child was **told**. Each has its own boundary:
@@ -429,22 +424,21 @@ that kept the host's descriptors is never allowed to run under a containment
 claim. Loom's own sockets additionally set `FD_CLOEXEC` at creation, which is
 defence in depth and explicitly *not* the boundary.
 
-**The environment is authored, not inherited.** `execve` used to receive
-`environ`, so a weave at `FsAccess::None` with no network was still handed the
-host's `HOME` and `PATH`, the addresses of the session bus, the compositor and
-the audio server, whatever tokens the embedding process held — and any `LD_*`,
+**The environment is authored, not inherited.** Handing `execve` the host's
+`environ` would give a weave at `FsAccess::None` with no network the host's
+`HOME` and `PATH`, the addresses of the session bus, the compositor and the
+audio server, whatever tokens the embedding process holds — and any `LD_*`,
 which the loader acts on *before* any Zen code in the child runs. None of that
-was a capability Zen granted; it crossed because the host possessed it.
+is a capability Zen grants; it would cross only because the host possessed it.
 
-The child's environment is now built entry by entry, and the current authored
-set is:
+The child's environment is built entry by entry, and the authored set is:
 
 ```text
 <empty>
 ```
 
-That is a measurement, not a preference. On the canonical toolchain, in all
-three lanes, `zen-weave-host` reaches `main()`, completes loader startup,
+That is a measurement, not a preference. On the reference toolchain (Linux and
+GCC), in Debug, Release and the sanitizer build, `zen-weave-host` reaches `main()`, completes loader startup,
 `dlopen`s a real weave, checks the ABI and constructs the instance under
 `env -i`; the binary carries no `RPATH`/`RUNPATH`, and every library it needs
 (including `libasan`/`libubsan` in the sanitizer lane) resolves from the system
@@ -460,11 +454,11 @@ authored environment cannot be constructed the spawn **refuses**; it never
 falls back to `environ`, and there is no option that disables this.
 
 Two consequences worth stating plainly: a host-set `LD_PRELOAD` (or any `LD_*`)
-does **not** reach the sandbox, and a host-set `ASAN_OPTIONS` no longer
-configures the child's sanitizer runtime.
+does **not** reach the sandbox, and a host-set `ASAN_OPTIONS` does not
+configure the child's sanitizer runtime.
 
-What this still does **not** say: the control fd is a real channel to the host,
-by design — *contained* has always meant no external reachability, not no-IPC.
+What this does **not** say: the control fd is a real channel to the host, by
+design — *contained* means no external reachability, not no IPC.
 
 **The honest threat tier: abuse, not escape.** The sandbox stops buggy or
 greedy code. seccomp is the named, unbuilt escalation to escape-tier. Any
@@ -544,52 +538,21 @@ the exec boundary closes every descriptor but the control fd and the standard th
 ([three separate facts](#the-exec-boundary-three-independent-facts)), so a child
 that reaches the endpoint reached it over the network.
 
-#### Why it is written this way — a retired environment exception (BL-VER-07 → BL-VER-08)
+#### Why the endpoint is the test's own
 
-**This is history, not an operator instruction.** It is kept because the shape of
-the old mistake is the reason for the current design, and because a reader who finds
-BL-VER-07 cited elsewhere should be able to learn that it no longer applies.
+A probe that knocks on a closed port and expects `ECONNREFUSED` measures how the
+*host* treats a closed port, not whether the child can reach the network, and some
+hosts answer nothing. Under WSL2's mirrored networking mode a SYN to a closed port
+outside the local ephemeral range is dropped and no reset comes back, so `connect()`
+spends the kernel's whole retry budget — about two minutes at the default
+`tcp_syn_retries` — and ends in `ETIMEDOUT`; a standalone C program with no Loom in it
+does the same there. An endpoint the test opens and owns asks nothing of the host, and
+on such a host the case runs in a fraction of a second.
 
-The positive control used to connect to the literal **port 1** and require
-`ECONNREFUSED`, on the reasoning that "nothing listens there, so a reachable stack
-refuses". That inferred an open door from the noise made by knocking on somebody
-else's closed one — and it made the result depend on how the *host* treats a closed
-port. On a WSL2 host in mirrored networking mode it does not treat it at all: the
-SYN is black-holed, no RST comes back, and `connect()` burns the kernel's whole
-retry budget — measured at **123.4 / 124.1 / 124.4 s** over three runs with
-`tcp_syn_retries = 6`, ending in `ETIMEDOUT (110)` and never `ECONNREFUSED (111)`.
-Against the case's 2000 ms budget, nothing had arrived. A twenty-line C program with
-no Loom anywhere near it behaved identically, which is what settled *environment,
-not defect* — and it is why the repair was to the test's assumption and not to the
-isolation implementation, which BL-VER-08 left untouched.
+If the network case fails, the two halves fail for different reasons and the
+difference is the diagnosis: a contained child answering anything but `ENETUNREACH`
+points at the network namespace, not the endpoint; a granted child that cannot connect
+at all points at the grant or the endpoint, and the endpoint is inside the test.
 
-BL-VER-08 also measured the black hole more precisely than BL-VER-07 recorded it:
-on that host it is **not** closed ports in general. Closed ports at 1, 7, 80, 443,
-1023, 1024, 2000, 9999, 30000 and 60000 all black-holed, while a closed port inside
-the local ephemeral range (`ip_local_port_range = 44620 48715`) answered
-`ECONNREFUSED` in 0.4 ms. The mirroring intercepts the ports the Windows side might
-be serving and leaves the Linux ephemeral range alone.
-
-None of that can affect the current test, which no longer asks any closed port
-anything. On the exact WSL2 mirrored-networking host that produced the ~124 s stall,
-the case now runs in **0.09–0.13 s** and the official lane passes.
-
-```text
-the former mirrored-WSL exception    RETIRED — it does not apply to current source
-what replaced it                     an endpoint the test establishes and owns
-ECONNREFUSED in the positive oracle  GONE
-```
-
-If the network case fails now, **BL-VER-07 does not explain it.** Investigate it as
-new. In particular the two halves fail for different reasons and the difference is
-the diagnosis: a contained child answering anything but `ENETUNREACH` means the
-netns, not the endpoint; a granted child failing to connect at all means the grant
-or the endpoint, and the endpoint is inside the test.
-
-PROVEN BY — `tests/test_isolation.cpp` (the case
-`"network is OS-enforced: a child without the Network grant cannot reach the
-network"`, identified by that sentence and never by a line number) and
-`tests/enforcement_gate.hpp` (the executed-count assertions). Evidence trail:
-three phase records kept outside this repository — the terminal phase's
-measurement, the verification phase that recorded the exception, and the one
-that replaced the witness and retired it.
+Pinned in the `isolation` suite (`tests/test_isolation.cpp`), with the executed-count
+assertions of `tests/enforcement_gate.hpp`.

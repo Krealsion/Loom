@@ -1,6 +1,6 @@
 # A claim is not a message, and must not become a second state system
 
-**Status: current (R2E-0).** Laws: [SENSE-01..05](../laws/sense-laws.md).
+**Status: current.** Laws: [SENSE-01..05](../laws/sense-laws.md).
 Reference: [senses](../reference/senses.md).
 
 ## The pressure
@@ -76,21 +76,19 @@ was the convenient option and was rejected by name: a send rule answers *"may yo
 emit this shape **there**"*, a read answers *"may you pull it"*, and reporting one
 as the other sends an operator to edit the wrong thing.
 
-Because the floor is empty, **no existing weave gained any reach from Senses
+Because the floor is empty, **no weave gains any reach from Senses
 existing**. That is what keeps a latest-claim repository from becoming a
 universal data-exfiltration rail — the thing a "just let anyone read it" design
 would have quietly built.
 
 ### A third declaration list
 
-`Claims<...>` is not `Emit<...>`, twice over: a Sense is not an emitted message,
-and `Emit` was, when this was decided, informational and did not register — so
-discovery would still have had to wait for a runtime claim to accidentally reveal
-a shape (the Rule Garden already hit exactly that with response-only shapes).
-`Claims<...>` registers at mount and is enforced at claim time. (Since
-[declared vocabulary is agreed at admission](declared-vocabulary-is-agreed-at-admission.md)
-`Emit<...>` registers too; the first reason stands on its own, and enforcement at
-the claim doors is what still sets `Claims<...>` apart.)
+`Claims<...>` is not `Emit<...>`: a Sense is not an emitted message, and a shape
+declared as sendable says nothing about what may be claimed. `Claims<...>`
+registers at mount, so discovery need not wait for a runtime claim to reveal a
+shape, and it is enforced at claim time. `Emit<...>` registers too
+([declared vocabulary is agreed at admission](declared-vocabulary-is-agreed-at-admission.md));
+enforcement at the claim doors is what sets `Claims<...>` apart.
 
 ## The honest answer to the risk
 
@@ -116,5 +114,5 @@ If applications start using Senses to **coordinate** — claiming in order to ma
 another participant act, or reading in a loop to detect a change — the category
 has been misused into a message bus, and the correct response is to make that
 harder, not to add change notification. Change notification is exactly the door
-through which a second state system would walk in, and this phase deliberately
-did not build it.
+through which a second state system would walk in, and Loom deliberately does
+not build it.

@@ -15,10 +15,10 @@ concurrency:
 
 jobs:
   # Cheap, first, and independent of any build: the repository refuses to record an AI
-  # assistant as a commit co-author, and after HIST-1 that is true of all of main. The
-  # check self-tests before it answers, because a clean history and a broken detector
-  # look identical from here. Full history is required -- it states the invariant over
-  # everything reachable, not just today's push.
+  # assistant as a commit co-author, and that holds for all of main. The check self-tests
+  # before it answers, because a clean history and a broken detector look identical from
+  # here. Full history is required -- it states the invariant over everything reachable,
+  # not just this push.
   loom-commit-attribution:
     name: Loom / commit attribution
     runs-on: ubuntu-24.04
@@ -49,9 +49,10 @@ jobs:
           cmake --version
           nm --version
 
-      # Hosted-image workaround, not a Loom requirement. R2F-Fa's control pair
-      # measured the official verifier failing on ubuntu-24.04 as shipped and
-      # passing after this ephemeral change. Remove only with replacement evidence.
+      # Hosted-image workaround, not a Loom requirement: ubuntu-24.04 as shipped
+      # restricts the unprivileged user namespaces the isolation suites create, and
+      # the official lane fails there without this ephemeral change. Remove it only
+      # with a run that passes without it.
       - name: Permit Loom's unprivileged sandbox namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -94,9 +95,10 @@ jobs:
           cmake --version
           nm --version
 
-      # Hosted-image workaround, not a Loom requirement. R2F-Fa's control pair
-      # measured the official verifier failing on ubuntu-24.04 as shipped and
-      # passing after this ephemeral change. Remove only with replacement evidence.
+      # Hosted-image workaround, not a Loom requirement: ubuntu-24.04 as shipped
+      # restricts the unprivileged user namespaces the isolation suites create, and
+      # the official lane fails there without this ephemeral change. Remove it only
+      # with a run that passes without it.
       - name: Permit Loom's unprivileged sandbox namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -139,9 +141,10 @@ jobs:
           cmake --version
           nm --version
 
-      # Hosted-image workaround, not a Loom requirement. R2F-Fa's control pair
-      # measured the official verifier failing on ubuntu-24.04 as shipped and
-      # passing after this ephemeral change. Remove only with replacement evidence.
+      # Hosted-image workaround, not a Loom requirement: ubuntu-24.04 as shipped
+      # restricts the unprivileged user namespaces the isolation suites create, and
+      # the official lane fails there without this ephemeral change. Remove it only
+      # with a run that passes without it.
       - name: Permit Loom's unprivileged sandbox namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -228,7 +231,7 @@ jobs:
       # Zengine's OWN official lane, run from the canonical checkout this job fetched.
       # This job claims to verify Zengine, so it has to ask Zengine's question: a bare
       # `ctest` here would report 10/10 over a tree that had lost a whole test case or
-      # a whole entry (COLD-2 C-4), and this lane's whole purpose is to be the thing a
+      # a whole entry, and this lane's whole purpose is to be the thing a
       # stranger's result is quoted from. The expected population lives in Zengine's
       # tests/test_population.txt; no count belongs in this file.
       - name: Verify canonical Zengine's repository-owned population
@@ -283,9 +286,9 @@ jobs:
       - name: Verify the repository-owned population
         run: cmake -DZEN_BUILD_DIR=build-win-kernel -P tests/verify.cmake
 
-  # The MSVC lane (MSVC-0). It exists because "Windows" was never one toolchain: the
-  # MinGW lanes above were green for months while a normal MSVC consumer could not
-  # compile Loom's public shape macros at all, and could not link a weave.
+  # The MSVC lane. "Windows" is not one toolchain: the MinGW lanes above can be green
+  # while a normal MSVC consumer cannot compile Loom's public shape macros at all, or
+  # link a weave.
   #
   # STEP ORDER IS DELIBERATE. The installed-package witness runs BEFORE the repository
   # population, because it is the claim this lane exists to keep honest and it must be
@@ -294,16 +297,12 @@ jobs:
   # weave actually exports, so it fails if the package ever stops carrying
   # /Zc:preprocessor or the ABI symbol loses its exact undecorated spelling.
   #
-  # WHAT THIS LANE ALREADY CAUGHT, and why it stays on Debug. On its first run the
-  # `verify` step failed the `component` suite here and nowhere else: tree_of()'s
-  # recursive rebuild exhausted the C++ stack at chain depth ~240 while kMaxUiDepth=256
-  # still accepted 257, so a deep component frame killed the process instead of being
-  # rebuilt or refused -- a real zen-ui defect (P-MSVC-1), not an MSVC quirk. Only fat
-  # Debug frames showed it; MinGW walked 4000 deep and MSVC Release was already 31/31,
-  # so switching this lane to Release would have bought a green by choosing the
-  # configuration that passes. It was left visibly red instead, and MSVC-1 made the walk
-  # iterative: the cap is now the first bound on every toolchain and this lane is green.
-  # Keep it on Debug -- the thickest frames are the point.
+  # WHY IT STAYS ON DEBUG. MSVC's Debug frames are the thickest of any lane, so a deep
+  # recursion every other lane survives can exhaust the stack here first: a recursive
+  # component-tree walk did, below the depth the UI cap accepted -- a real defect, not
+  # an MSVC quirk, and only this lane showed it. Moving the lane to Release would buy a
+  # green by choosing the configuration that passes. Keep it on Debug -- the thickest
+  # frames are the point.
   loom-windows-msvc:
     name: Loom / Windows / MSVC + installed-package witness (advisory)
     runs-on: windows-2025
