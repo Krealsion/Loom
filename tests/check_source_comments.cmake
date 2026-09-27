@@ -30,7 +30,6 @@ set(ZEN_COMMENT_PENDING
     "^src/gate[.]cpp$"
     "^src/history/record[.]cpp$"
     "^src/host/store_lock[.]cpp$"
-    "^src/isolation/channel[.]cpp$"
     "^src/kernel/admission[.]cpp$"
     "^src/runs/catalog[.]cpp$"
     "^src/runs/runs_weave[.]cpp$"
