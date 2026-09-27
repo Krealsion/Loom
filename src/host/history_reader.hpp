@@ -4,40 +4,12 @@
 #ifndef ZEN_HOST_HISTORY_READER_HPP
 #define ZEN_HOST_HISTORY_READER_HPP
 
-// A SCOPED READER OVER THE HOST'S OWN RECORDER, ANSWERED BY MESSAGE.
-//
-// The console reads the Recorder directly (`history ...`). A client attached to a session host is
-// not the console and is not given a tap, so it asks this participant instead -- office
-// `loom.history`, two questions (`zen/session/vocabulary.hpp`):
-//
-//   DeliveriesTo{participant}   the deliveries TO one participant this host still remembers,
-//                               newest first -- e.g. a run worker's session, to find the answers
-//                               it was handed and where they came from
-//   Delivery{seq}               what became of one bus delivery
-//
-// and, for every row whose dispatch parent is a LINK's own `loom.link.Crossed` record, the
-// crossing it descends from: the link's name and epoch, the far session and the name the far host
-// established, the far bus's stamp and office, the attempt, the kind of frame. That is the link's
-// account of what ARRIVED, recorded before the link acted -- never an observation of the far
-// execution -- and the reader says so by what it names it.
-//
-// IT ADDS NO MEMORY. Every answer is read off the Recorder at the moment of the question, in the
-// Recorder's own four words -- retained, forgotten, not-recorded, unobserved -- so a record the
-// window released is reported as forgotten, never as "nothing happened". A crossing's fields need
-// its record's PAYLOAD, which is the host's retention choice (`history.retain` in the boot plan):
-// kept, the fields are read back through the gate; declined or evicted, the reader says which and
-// names no field it could not read.
-//
-// A CROSSING IS A LINK'S OWN WORD, AND ONLY THAT. A `loom.link.Crossed` counts when its record was
-// said by a link this host mounted, to itself -- the host tells the reader which WeaveIds are its
-// links. Any other participant that sends itself something shaped like a crossing is ordinary
-// traffic here, exactly as the link itself ignores it.
-//
-// READING IS NOT WRITING. The host declares this participant in the Recorder's structural
-// blacklist, so its questions and answers never enter the history they are about.
-//
-// WHO MAY ASK is the grant's business, not this reader's: the session door gives its owner's
-// client sessions these two shapes, and gives run workers neither.
+// A scoped reader over the host's own Recorder, answered by message: office `loom.history`,
+// asked `DeliveriesTo{participant}` and `Delivery{seq}` (zen/session/vocabulary.hpp) by a
+// client that is not the console and has no tap. It adds no memory: every answer is read off
+// the Recorder in its own four words, and a row descended from a link's own `loom.link.Crossed`
+// carries that crossing, read from its retained payload. The host blacklists this reader in the
+// Recorder, so reading never writes history; who may ask is the session door's grant.
 
 #include <zen/bridge/link.hpp>
 #include <zen/history/recorder.hpp>
