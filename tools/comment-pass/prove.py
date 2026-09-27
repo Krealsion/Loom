@@ -12,11 +12,11 @@
 # line for line and carry the same literals. A manifest is also read as its check reads it,
 # through CMake, since an open bracket or a non-ASCII byte in a comment changes that reading.
 #
-# What may differ, each printed: the instruments, new files whose code is the checks'
-# (INSTRUMENTS); the checks' registration lines in tests/CMakeLists.txt and their rows in
-# tests/entry_population.txt, when START lacks them; a failure message or exemption reason named
-# below by its START literal, reworded to show no private id; a CI workflow's whole-line `#`
-# comments. Every other changed file must be markdown or this directory's. Every law pointer
+# What may differ, each printed: the instruments, the checks' own files (INSTRUMENTS); a directory
+# left to Git whole (LEFT_TO_GIT); the checks' registration lines in tests/CMakeLists.txt and their
+# rows in tests/entry_population.txt, when START lacks them; a failure message or exemption
+# reason named below by its START literal, reworded to show no private id; a CI workflow's
+# whole-line `#` comments. Every other changed file must be markdown or this directory's. Every law pointer
 # (`// MSG-09; docs/laws/messaging-laws.md`) must stand where it stood: the same file, above the
 # same code.
 
@@ -35,7 +35,9 @@ import lex  # noqa: E402
 
 TOOLS = "tools/comment-pass/"
 INSTRUMENTS = ("tests/check_source_comments.cmake", "tests/check_doc_standard.cmake",
-               "tests/private_ids.cmake")
+               "tests/private_ids.cmake", "tests/check_doc_links.cmake")
+# Directories the pass leaves to Git: removed whole, every file in them, and named.
+LEFT_TO_GIT = ("docs/audits/",)
 REGISTRATION_FILE = "tests/CMakeLists.txt"
 REGISTRATION = (
     "add_test(NAME source_comments COMMAND ${CMAKE_COMMAND}",
@@ -244,8 +246,13 @@ def main():
     end = {p for p in end if os.path.exists(os.path.join(repo, p))}
     start_text = read_start(repo, args.start, sorted(start))
     failures, set_aside, reworded, added_lines = [], {}, [], {}
+    left_to_git = collections.Counter()
     for p in sorted(start - end):
-        failures.append("%s: removed" % p)
+        gone = next((d for d in LEFT_TO_GIT if p.startswith(d)), None)
+        if gone and not any(q.startswith(gone) for q in end):
+            left_to_git[gone] += 1
+        else:
+            failures.append("%s: removed" % p)
     for p in sorted(end - start):
         if p not in INSTRUMENTS:
             failures.append("%s: added" % p)
@@ -307,6 +314,8 @@ def main():
         print("prove: %s changed its whole-line comments only: %d other lines, identical" % (p, n))
     for key in sorted(+added):
         print("prove: law pointer added in %s: %s (above: %s)" % (key[0], key[1][:70], key[2][:50]))
+    for d, n in sorted(left_to_git.items()):
+        print("prove: set aside by name, left to Git: %s, %d code file(s) removed with it" % (d, n))
     for p in INSTRUMENTS:
         if p in end:
             print("prove: set aside, the instrument %s: %s" % (

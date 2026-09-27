@@ -547,6 +547,19 @@ the missing coverage ([capabilities](capabilities.md)); the sanitizer lane is
 not weakened to hide the messages either. What would earn a fix is a leak
 question about child-side code that the host-side lane genuinely cannot reach.
 
+## A cgroup leaf is confirmed by substring
+
+**Status: KNOWN SEAM — latent.**
+
+Before an out-of-process weave is reported resource-contained, the isolation host confirms that
+the child sits in its cgroup leaf and that the leaf's limits read back as set (`cgroup_confirm`,
+`src/isolation/sandbox.cpp`). The membership half asks whether the child's `/proc/<pid>/cgroup`
+contains `/<leaf>` anywhere, so a leaf whose name prefixes another's also matches that one:
+`zen-weave-1` is found in a child that sits in `zen-weave-10`. The host numbers every leaf itself
+and moves the child into it before asking, so no known path reaches the false match. The fix is to
+compare the whole last path component; its trigger is any change that lets a child reach a leaf
+the host did not just move it into.
+
 ## Deferred-with-intent (the standing trigger map)
 
 Certain triggers (hooks left deliberately): **weaver identity** (first

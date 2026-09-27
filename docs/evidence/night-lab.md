@@ -1,14 +1,15 @@
 # Night Lab — the application evidence
 
-**Repository:** <https://github.com/Krealsion/zen-night-lab>. Three
-experiments live side by side, each pinned to the substrate it ran on:
-`original/` (Night One, its own older Loom), `marathon/` (Night Two at
-`bf09f79` — six applications against Loom `78d64ea` / Zengine `f6a4c69`,
-ABI v4, all green: 159 cases / 848 assertions, 86 mutations + 6 canaries),
-and `followups/role-authorship/` (the R2D-0 replay against Loom `30eab0a`,
-ABI v5 — 4 cases / 59 assertions, 3 mutations RED, verdict CLOSED). Reports:
-`marathon/FINAL-REPORT.md`, `marathon/EVIDENCE.md`, `marathon/FRICTION.md`,
-`followups/role-authorship/REPORT.md`.
+**Repository:** <https://github.com/Krealsion/zen-night-lab>, an independent
+application lab. Three experiments live side by side, each pinned to the
+substrate it ran on: `original/`, the first, against its own older Loom;
+`marathon/`, six applications against Loom `78d64ea` and Zengine `f6a4c69`
+at ABI v4, all green (159 cases, 848 assertions, 86 mutations and 6
+canaries); and `followups/role-authorship/`, which replayed three of them
+against Loom `30eab0a` at ABI v5 once office authorship existed (4 cases, 59
+assertions, 3 mutations red). Its reports are `marathon/FINAL-REPORT.md`,
+`marathon/EVIDENCE.md`, `marathon/FRICTION.md` and
+`followups/role-authorship/REPORT.md` in that repository.
 
 The six: `kitchen-replay` · `download-manager` · `build-farm` ·
 `import-pipeline` · `lobby` · `scheduler` (which replaces the **Zengine
@@ -40,7 +41,7 @@ pipeline is the control: identity works when you talk to *somebody*; it fails
 when you talk to *whoever holds an office*. Meaning: independent applications
 need trusted office authorship.
 
-**This evidence forced R2D-0, and the seam is CLOSED.** The follow-up replay
+**This evidence is why office authorship exists, and the seam is closed.** The follow-up replay
 (`followups/role-authorship/` in the same repository, pinned to its own
 vendored Loom at ABI v5) re-ran the three sharpest verticals on
 `mail.as_role(...)` / `mail.authored_from_role(...)`: the lobby's strict
@@ -98,11 +99,10 @@ Meaning: do not build these on the strength of old hypotheses.
 - **The seal is a security property**: of five possible speakers of a stale
   claim, the retired predecessor is the one the substrate silences completely.
 - **`TimedWeave` bindings are authored** — the scheduler priced the dynamic
-  case and the raw protocol carried it
-  (TIMER-05, in the separate Zengine repository:
-  `Zengine/docs/laws/timer-laws.md`).
+  case and the raw protocol carried it (a law of Zengine's Timer, in
+  [Zengine's timer laws](https://github.com/Krealsion/Zengine/blob/main/docs/laws/timer-laws.md)).
 - **Minted identities need surviving namespaces** — three sightings, two
   defects → the [guideline](../reference/known-seams.md#minted-identity-needs-a-surviving-namespace).
-- `Mail::answer()` across the seam and `TimedWeave`-vs-activation, found by
-  Night One, are **closed** (ABI v4; `on_timed_activation`) — re-tested in the
-  marathon, not assumed (`marathon/repro_answer_seam.cpp`).
+- `Mail::answer()` across the dynamic seam and `TimedWeave`-vs-activation,
+  found by the first experiment, are **closed** (ABI v4; `on_timed_activation`)
+  — re-tested in the marathon, not assumed (`marathon/repro_answer_seam.cpp`).

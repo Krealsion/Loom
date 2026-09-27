@@ -77,8 +77,9 @@ refuses:
   removal note, or a private id.
 - `doc_standard` (`tests/check_doc_standard.cmake`) reads every current-facing Markdown file for
   a private id.
-- `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link and
-  refuses a path outside the repository in any current-facing text file.
+- `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every
+  `.md` path in a C/C++ or CMake comment, and refuses a path outside the repository in any
+  current-facing text file, whether it is spelled out or reached by climbing above it with `../`.
 
 What a private id is, `tests/private_ids.cmake` says once for both. Files not yet brought to
 this standard are listed in each check, and the list only shrinks. No check can see history or
