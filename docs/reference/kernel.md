@@ -1,7 +1,7 @@
 # Kernel — reference
 
 Dynamic weaves: loading native libraries as bus participants across a true C
-ABI. Laws: [KERN-01..04](../laws/kernel-laws.md). ABI detail:
+ABI. Laws: [KERN-01..05](../laws/kernel-laws.md). ABI detail:
 [dynamic-abi](dynamic-abi.md). Guide:
 [dynamic-weaves](../guides/dynamic-weaves.md).
 
@@ -58,7 +58,7 @@ reported correctly at once, including truthfully-unchanged during
 
 ## Platforms
 
-Canonical: Linux/WSL (`dlopen`). `LOOM_ENABLE_WINDOWS_KERNEL` is an opt-in
+Reference platform: Linux, including under WSL (`dlopen`). `LOOM_ENABLE_WINDOWS_KERNEL` is an opt-in
 **development/demo** `LoadLibrary` backend with no isolation, truth-pinned at
 every surface (`containment_note()`); never a default.
 
@@ -97,6 +97,5 @@ a consumer's build system is neither enumerated nor required to adopt it.
 
 ## Tests
 
-Suite `kernel` (446+ assertions across load/unload/reload/candidate/admission
-lifetimes), `capabilities` (the message door), Zengine's lanes as the
+Suite `kernel` (load/unload/reload/candidate/admission lifetimes), `capabilities` (the message door), Zengine's lanes as the
 stranger-consumer proof.

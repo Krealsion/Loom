@@ -59,9 +59,8 @@ the *domain* answer; the coordinator maps that answer to the transaction's
 to the exact preparation ask — and never reads the domain payload's meaning
 (`StationReady`, `TimerCandidateDeclined`, … are the coordinator's to
 interpret). A buggy or malicious coordinator could therefore map an authentic
-refusal to `Ready`; that is the current, deliberate boundary — coordinators
-are host-tier trusted infrastructure today — documented rather than papered
-over. Offering `Refused` terminalizes the transaction as `CandidateRefused`;
+refusal to `Ready`; that is the deliberate boundary — coordinators are
+host-tier trusted infrastructure — documented rather than papered over. Offering `Refused` terminalizes the transaction as `CandidateRefused`;
 hostile or mis-addressed offers refuse the command (`InvalidReadiness`) and
 terminalize nothing.
 
@@ -126,5 +125,5 @@ coordinators hold a host-provided handle reference — see
 ## Tests
 
 `tests/test_kernel.cpp` — the seal, transaction, readiness, admission,
-first-breath, and facade sections; Zengine `tests/test_timer.cpp` — a live
+first-breath, and facade sections; Zengine's `tests/test_timer.cpp` — a live
 service crossing the boundary.

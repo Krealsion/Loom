@@ -47,12 +47,7 @@ set(ZEN_DOC_STANDARD_PENDING
     "^docs/guides/observing[.]md$"
     "^docs/guides/replacing-a-service[.]md$"
     "^docs/guides/session-tools-map[.]md$"
-    "^docs/guides/writing-a-weave[.]md$"
-    "^docs/reference/handoff[.]md$"
-    "^docs/reference/kernel[.]md$"
-    "^docs/reference/lifecycle[.]md$"
-    "^docs/reference/prepared-replacement[.]md$"
-    "^docs/reference/values-and-admission[.]md$")
+    "^docs/guides/writing-a-weave[.]md$")
 
 string(ASCII 1 ZEN_SOH)
 string(ASCII 2 ZEN_STX)
