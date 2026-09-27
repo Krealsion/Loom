@@ -4,62 +4,29 @@
 #ifndef ZEN_WEAVER_VOCABULARY_HPP
 #define ZEN_WEAVER_VOCABULARY_HPP
 
-// THE AUTHORITY-POLICY VOCABULARY — the shapes a governed session, a human
-// operator and a Weaver say to one another.
-// docs/reference/weaver.md
+// The authority-policy vocabulary: the shapes a governed session, a human operator and a
+// Weaver say to one another. docs/reference/weaver.md#the-vocabulary
 //
-// It is a HEADER OF ITS OWN, apart from the Weaver that implements the policy,
-// and that separation is the architecture rather than tidiness: a governed
-// session must be able to ask for authority while knowing nothing whatever
-// about the thing that decides. It includes this file and not `weaver.hpp`, so
-// "the session depends on the request language, never on the policy" is a fact
-// the include graph enforces.
+// It is a header of its own so that a governed session can ask for authority knowing nothing
+// about what decides: the session includes this file and never `weaver.hpp`. Every shape moves
+// a decision or an answer, and none moves work: approval hands a session authority and never
+// performs, replays or brokers what the session wanted to do.
 //
-// THE SENTENCE THESE SHAPES CARRY:
+// Four rules the field lists enforce, where a runtime check could be deleted:
 //
-//     the Kernel enforces.  the Weaver decides.  the session acts.
+//   No requester field. The Weaver takes the requester from the bus-stamped `mail.sender()`,
+//       so there is nothing to forge.
+//   No subject field, anywhere. The Weaver governs one subject, named by its capability, so no
+//       shape can name another.
+//   The decision is the shape, never a field. `ApproveAuthority` and `RefuseAuthority` are two
+//       contentless shapes; a mistyped shape name is a gate refusal, never a yes.
+//   The request language is narrower than `LiveAuthority`: one shape, one version, one office.
+//       No "any shape", "any target", WeaveId or observe rule can be asked for, however wide
+//       the Weaver's ceiling.
 //
-// so every shape here moves a DECISION or an ANSWER, and none of them moves
-// work. Approval hands a session authority; it never performs, replays or
-// brokers what the session wanted to do (that is why there is no shape here
-// meaning "and go do it").
-//
-// FOUR RULES THE FIELD LISTS ENFORCE, each of which would otherwise be a runtime
-// check somebody could delete:
-//
-//   NO REQUESTER FIELD.  `RequestAuthority` carries no identity, so there is
-//       nothing to forge. The Weaver derives the requester from the bus-stamped
-//       `mail.sender()` and compares it with the one subject its capability
-//       names. An identity field beside a trusted stamp is an impersonation
-//       surface whose only defence is that everyone remembers to ignore it.
-//
-//   NO SUBJECT FIELD, ANYWHERE.  The operator's four decision shapes name no
-//       subject either. The Weaver already governs exactly one, from the
-//       capability, so cross-subject administration is not refused — it is a
-//       sentence with nowhere to put the other subject (the same argument
-//       `GrantAuthority` itself makes one level down).
-//
-//   THE DECISION IS THE SHAPE, NEVER A FIELD.  `ApproveAuthority` and
-//       `RefuseAuthority` are two contentless shapes rather than one carrying a
-//       bool. A field can be defaulted, mis-parsed or mis-typed into meaning
-//       yes; a shape identity cannot — a mistyped shape name is a gate refusal,
-//       which is the safe direction for a security decision.
-//
-//   THE REQUEST LANGUAGE IS NARROWER THAN `LiveAuthority`.  A request names one
-//       shape, one version and one office. There is no way to spell "any shape",
-//       "any target", an exact WeaveId, or an observe rule, so the widest thing
-//       a session can ASK for is one exact send right — regardless of how wide a
-//       ceiling the host happened to hand the Weaver.
-//
-// The wire names carry the substrate's `zen.` prefix, which is why these
-// registration blocks are hand-written rather than `ZEN_SHAPE(...)` (the macro
-// derives the name from the struct, and `#ShapeName` cannot produce a dot) —
-// exactly as `standard_shapes.hpp` does, and for the same reason.
-//
-// REUSED, NOT REINVENTED: a refusal is `zen.Refused` and a bare success is
-// `zen.Ack` (standard_shapes.hpp). Only two answers here are bespoke, and each
-// earns it by carrying structure whose absence would leave the reader confused
-// rather than merely less-informed.
+// docs/reference/weaver.md#four-rules-that-live-in-the-field-lists. The wire names carry the
+// `zen.` prefix, so the registration blocks are written by hand, as in standard_shapes.hpp. A
+// refusal is `zen.Refused` and a bare success `zen.Ack`.
 
 #include <zen/weave/shape.hpp>
 
@@ -72,27 +39,12 @@ namespace loom {
 
 // ---- the governed session speaks -------------------------------------------
 
-/// ASK FOR ONE EXACT SEND RIGHT: "may I say `shape v<version>` to whoever holds
-/// `to_role`?"
-///
-/// Sent as an ordinary message, which is what makes it an ask: a delivery from a
-/// live weave confers the authority to answer it, so the Weaver answers through
-/// Loom's own correlation and the session reads `mail.answers_ask()`. There is
-/// no request id here, and no place for one — inventing a correlation beside the
-/// one Loom already keeps would be a second, weaker way to know which answer
-/// belongs to which question.
-///
-/// ROLE, NOT WEAVEID, ON PURPOSE. Authority that follows an office follows
-/// whoever holds it at delivery, which is what a session actually wants from a
-/// service, and it is what `Grant::allow_to_role` already means. Asking by
-/// WeaveId would freeze one incarnation into permanent authority and would put a
-/// weave's identity in a payload, which is the shape this vocabulary is built to
-/// avoid.
-///
-/// `purpose` IS UNTRUSTED. It is prose the requester wrote about itself. It is
-/// not evidence of anything, it never reaches the authority decision, and the
-/// Weaver escapes it before an operator ever sees it (see `Weaver::safe_text`).
-/// Leaving it empty is ordinary and costs the requester nothing.
+/// Ask for one exact send right: "may I say `shape v<version>` to whoever holds `to_role`?".
+/// Sent as an ordinary message, so the Weaver answers through Loom's own answer authority and
+/// the session reads `mail.answers_ask()`; there is no request id of its own. A role, not a
+/// WeaveId: authority that follows an office follows whoever holds it at delivery, as
+/// `Grant::allow_to_role` does. `purpose` is untrusted prose, never part of the decision, and
+/// escaped by the Weaver before an operator sees it (`safe_operator_text`); it may be empty.
 struct RequestAuthority {
     std::string shape;    ///< the shape name the session wants to be allowed to send
     std::int64_t version; ///< that shape's version (1 .. UINT32_MAX)
@@ -176,12 +128,9 @@ struct RefuseAuthority {
     static auto zen_fields() { return std::make_tuple(); }
 };
 
-/// THE OFF SWITCH — take back ALL delegated authority from the governed session,
-/// at once. Whole-overlay rather than per-rule on purpose: the first user seat
-/// needs one control it can be certain of, and "which of my four rules did I just
-/// remove?" is a question a person should not have to answer under pressure. The
-/// admission baseline is untouched — a union cannot subtract — so revoking never
-/// costs a session what the host gave it.
+/// The off switch: take back all delegated authority from the governed session at once, so a
+/// person has one control whose effect is certain. The admission baseline is untouched (a union
+/// cannot subtract), so revoking never costs a session what the host gave it.
 struct RevokeAuthority {
     using ZenSelf = RevokeAuthority;
     static constexpr const char* zen_name = "zen.RevokeAuthority";
@@ -234,13 +183,10 @@ struct AuthorityGranted {
 /// WHAT THE BUS WILL ACTUALLY DECIDE, rendered — the answer to
 /// `DescribeAuthority`.
 ///
-/// TWO LISTS, NOT THREE, and the missing one is the point. `base` is what the
-/// host admitted; `delegated` is what an operator has installed since; EFFECTIVE
-/// authority is their union BY DEFINITION and so is read rather than transmitted.
-/// Loom deliberately has no materialized "effective authority" object for the
-/// same reason (grant.hpp: "There is no third, materialized effective authority
-/// object to fall out of date") — shipping one here would recreate exactly the
-/// second store this whole design exists to avoid.
+/// Two lists, not three: `base` is what the host admitted, `delegated` what an operator has
+/// installed since, and effective authority is their union, read rather than sent. Loom keeps
+/// no materialized effective authority either; it is computed at every delivery
+/// (`effective_permits*`, zen/switchboard/grant.hpp).
 ///
 /// Each entry is one rule, rendered by the Weaver from the snapshot the Kernel
 /// handed it: `Work v1 -> role some.service`, `any shape -> any target`,
