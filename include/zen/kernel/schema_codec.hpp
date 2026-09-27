@@ -4,12 +4,10 @@
 #ifndef ZEN_KERNEL_SCHEMA_CODEC_HPP
 #define ZEN_KERNEL_SCHEMA_CODEC_HPP
 
-// Crossing a Schema over the C ABI without C++ types: a Schema is encoded *as a
-// Value* of a fixed meta-schema (the minimal schema-as-value precursor), so it
-// travels as ordinary bytes and is re-admitted through loom's gate just like
-// any other value before the host reconstructs it. This header is shared by the
-// library (encode) and the host (decode); each side has its own copy, and they
-// agree only on the bytes.
+// Crossing a Schema over the C ABI without C++ types: a Schema is encoded as a Value of a fixed
+// meta-schema, so it travels as bytes and is re-admitted through the gate like any value
+// before the host rebuilds it. The library encodes and the host decodes, each with its own
+// copy of this header; they agree only on the bytes.
 //
 // A type reference is encoded as a flat, prefix-order list of tokens, so nested
 // Lists and Messages need no recursive meta-schema:
@@ -32,11 +30,9 @@
 
 namespace loom {
 
-/// A Weave's *ask*: the capabilities it requests of the host. This is advice, not
-/// authority — conformance data carried in the manifest and gated like the
-/// accept-set, which the host reads to know what to surface. A declaration never
-/// becomes a grant; the host (via the floor-factory + grant-record) decides alone.
-/// Default-constructed = no ask (the floor): an empty ask emits no manifest section.
+/// A Weave's ask: the capabilities it requests of the host. Advice, not authority: carried in
+/// the manifest and gated like the accept-set, so the host can show it; the host's admission
+/// policy decides alone. A default one is no ask, and writes no manifest section.
 struct CapabilityAsk {
     bool network = false;           ///< would like os_cap::Network
     std::string filesystem;         ///< an FsAccess level name (e.g. "write-scoped"); "" = none
@@ -82,33 +78,12 @@ inline std::shared_ptr<const Schema> capability_ask_schema() {
 }
 
 inline std::shared_ptr<const Schema> manifest_schema() {
-    // v2 added the optional `requests` (the ask). v3 adds the optional
-    // `referenced` list: the schemas the accept-set and state NEST, listed
-    // before anything that references them, so a manifest is self-contained —
-    // decode registers these into the dependency registry first and the
-    // (name, version) references in later descriptors resolve. This section
-    // was documented from the start ("a manifest lists referenced schemas
-    // before the schemas that reference them") but unbuilt until the first
-    // consumer with a nested shape arrived (Zengine's snake: a state carrying
-    // List<Pos> + a Pos field) and the gap refused its load. Optional, so a
-    // flat manifest stays lean. Each bump — never mutation — keeps the
-    // invariant that a published (name, version) is a frozen shape.
-    // v4 adds the optional `claims` list: the SENSES this weave declares
-    // it can claim. It rides the manifest rather than a second descriptor entry
-    // because it is the same kind of fact as the accept-set — part of what this
-    // weave's contract IS — so one manifest still means one decode and one gate
-    // crossing. Optional, so a weave that claims nothing stays lean; its nested
-    // shapes are collected into `referenced` exactly as the accept-set's are.
-    // v5 adds the optional `emits` list: the shapes this weave DECLARES IT MAY
-    // SEND (its Emit<...>), by definition. Until v5 an emitter's definition never
-    // crossed the seam, so a loaded emitter and a divergent acceptor of one
-    // (name, version) both admitted and the disagreement surfaced only when a
-    // value met a door (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
-    // Descriptive VOCABULARY, never authority: the host claims these definitions
-    // into its agreement wall and derives no send rule from them. Optional, so
-    // a weave that declares no emits stays lean; nested shapes join `referenced`.
-    // An artifact whose manifest predates this section is an ABI v8 image, and
-    // the descriptor version gate refuses it before the manifest is ever read.
+    // zen.Manifest v5: `referenced` (the nested schemas, listed before whatever references
+    // them, so the manifest is self-contained), `accepted`, `state`, and the optional
+    // `requests` (the ask), `claims` (the claim-set) and `emits` (the emit-set: vocabulary the
+    // host claims into its agreement wall, never authority). An image built for an older
+    // manifest is an older ABI, refused by the version gate before its manifest is read.
+    // docs/decisions/declared-vocabulary-is-agreed-at-admission.md
     static const auto s = SchemaBuilder("zen.Manifest", 5)
                               .list("referenced", type_message(schema_desc_schema()),
                                     /*required=*/false)
@@ -183,18 +158,11 @@ inline Value encode_capability_ask(const CapabilityAsk& ask) {
     return v;
 }
 
-// THE `referenced` SECTION IS THE COMPONENT CLOSURE, walked by `loom::collect_referenced`
-// (zen/schema.hpp — the traversal lives with the schemas, one layer down, because
-// every declaration in the system walks the same closure: a weave's registration,
-// this manifest, a described accept-set, a consumer's own descriptors). Post-order,
-// so the decoder resolves the list front to back with no second pass; deduplicated
-// by IDENTITY, so two definitions of one (name, version) both travel and the
-// loader's registry refuses the manifest instead of a substituted shape loading.
-
-// `ask` is optional: a null ask emits no requests section (the floor), which admits
-// because the manifest's requests field is optional. The `referenced` section is
-// likewise emitted only when some declared shape actually nests something, and
-// `emits` only when the weave declares an emit-set.
+// The `referenced` section is the component closure, walked by `loom::collect_referenced`
+// (zen/schema.hpp), post-order so the decoder resolves it front to back, and deduplicated by
+// identity, so two definitions of one (name, version) both travel and the loader refuses the
+// manifest. `ask` may be null: then no requests section is written. `referenced` is written
+// only when a declared shape nests something, and `emits` only when an emit-set is declared.
 inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& accepted,
                              const Schema& state, const CapabilityAsk* ask = nullptr,
                              const std::vector<std::shared_ptr<const Schema>>* claims = nullptr,
@@ -205,9 +173,7 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
         collect_referenced(*s, referenced);
     }
     collect_referenced(state, referenced);
-    // A claimed or emitted shape may nest others exactly as an accepted one may,
-    // so their dependencies join the same section — the manifest stays
-    // self-contained, whichever list a shape was declared in.
+    // Claimed and emitted shapes may nest others too; their dependencies join the same section.
     if (claims != nullptr) {
         for (const auto& s : *claims) {
             collect_referenced(*s, referenced);
@@ -256,27 +222,15 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
 }
 
 // ---- decode (admitted descriptor Value -> Schema) ----------------------------
-//
-// Precondition: `desc` has already passed the gate against the meta-schema, so
-// its declared shape is sound. Reconstruction can still fail semantically
-// (unresolved nested schema, malformed type) — those throw and the host turns
-// them into a clean load refusal.
+// Precondition: `desc` has passed the gate against the meta-schema. Reconstruction can still
+// fail (an unresolved nested schema, a malformed type); that throws, and the host refuses the
+// load cleanly.
 
-// The type-token stream is flat: its length is bounded by the list cap
-// (kMaxListCount, ~1M), *not* by the value-tree depth cap. But decode_type
-// recurses once per List token, so a field typed List<List<…>> nested tens of
-// thousands deep — cheap to encode, well under any frame cap — would drive the
-// host's reconstruction stack to a SIGSEGV that no try/catch can catch, at mount
-// time, before the mod runs a single message. This cap refuses such a descriptor
-// on the way down (before the recursive call), turning it into an ordinary thrown
-// refusal that every decode_schema call site already converts to a clean Refused.
-//
-// The bound mirrors detail::kMaxBinaryDepth (64), and the mirror is principled,
-// not cosmetic: a *value* nested deeper than kMaxBinaryDepth can never be
-// serialized or admitted, so a *type* nested deeper than it could only ever
-// describe values the gate already rejects — refusing it costs no legitimate
-// schema. Kept in sync with kMaxBinaryDepth by hand: this public header must not
-// reach into src/detail, and schema_codec must stay in the portable subset.
+// Refuses a type nested deeper than this on the way down. decode_type recurses once per List
+// token and the token stream is bounded only by the list cap, so a deeply nested List<List<...>>
+// would otherwise overflow the host's stack at load. It equals detail::kMaxBinaryDepth (64): a
+// value nested deeper can never be serialized or admitted, so no legitimate schema is refused.
+// Kept equal by hand, since this public, portable header cannot include src/detail.
 inline constexpr int kMaxTypeDepth = 64;
 
 inline TypeRef decode_type(const Cell::Array& tokens, std::size_t& i, const Registry& deps,
@@ -338,18 +292,11 @@ inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Regi
     return make_schema(std::move(name), version, std::move(rebuilt));
 }
 
-/// Decode an admitted manifest's optional `referenced` section into `deps`, in
-/// order — the encoder's post-order guarantee is what makes one forward pass
-/// sufficient. Every entry lands in the registry (identical re-registration is
-/// a no-op; a conflicting one throws SchemaConflict — the cross-library
-/// agreement wall applies to components exactly as it does to doors), so the
-/// (name, version) references in the manifest's accepted/state descriptors
-/// resolve. A hand-built manifest with a mis-ordered list simply fails its own
-/// resolution and the load refuses cleanly.
-///
-/// This overload publishes for the Registry's whole lifetime. Prefer the
-/// claim-taking one below wherever the artifact that brought these components
-/// can go away again.
+/// Decode an admitted manifest's optional `referenced` section into `deps`, in order; the
+/// encoder's post-order makes one forward pass enough. Identical re-registration is a no-op, a
+/// conflicting one throws SchemaConflict, and a mis-ordered hand-built list fails its own
+/// resolution. This overload publishes for the Registry's whole lifetime; prefer the
+/// claim-taking one wherever the artifact that brought the components can go away.
 inline void decode_referenced(const Value& manifest, Registry& deps) {
     const Cell* refs = manifest.get("referenced");
     if (refs == nullptr) {
@@ -360,23 +307,12 @@ inline void decode_referenced(const Value& manifest, Registry& deps) {
     }
 }
 
-/// The same decode, taking a LIVE CLAIM instead of publishing forever (LIFE-08):
-/// the components resolve while `scope` lives and stop resolving when the last
-/// claim on them goes.
-///
-/// Necessarily one claim per entry rather than one for the batch, and that is
-/// the encoder's post-order guarantee showing through: entry N+1's type tokens
-/// are resolved against `deps`, so entry N has to be discoverable before N+1 can
-/// be decoded at all. Batching would mean decoding against something other than
-/// the registry, which is a different (and larger) change than this one.
-///
-/// A CONTRADICTORY MANIFEST IS REFUSED HERE, whoever wrote it. Two entries
-/// naming one (name, version) with different content — what a weave declaring
-/// `Box { Part {a} }` beside `Box2 { Part {a, b} }` honestly encodes, or what a
-/// hand-built manifest may carry — meet the registry's wall at the second entry
-/// and throw `SchemaConflict`. The entries already claimed stay in `scope`, so
-/// the caller that owns the scope (a `Kernel::Manifest`, an isolation `Link`)
-/// releases them by going out of scope: a refused manifest leaves nothing.
+/// The same decode, taking a live claim instead of publishing for good (LIFE-08): the
+/// components resolve while `scope` lives. One claim per entry, since each entry resolves
+/// against the ones before it. Two entries naming one (name, version) with different content
+/// meet the registry's wall at the second and throw `SchemaConflict`; the entries already
+/// claimed are in `scope`, so the caller's scope releases them and a refused manifest leaves
+/// nothing.
 inline void decode_referenced(const Value& manifest, Registry& deps, SchemaClaimScope& scope) {
     const Cell* refs = manifest.get("referenced");
     if (refs == nullptr) {
@@ -387,9 +323,8 @@ inline void decode_referenced(const Value& manifest, Registry& deps, SchemaClaim
     }
 }
 
-// Precondition: `v` has passed the gate against capability_ask_schema() (it does,
-// as a nested message inside an admitted manifest), so every field is present and
-// well-typed.
+// Precondition: `v` passed the gate against capability_ask_schema() (as a message nested in an
+// admitted manifest), so every field is present and well-typed.
 inline CapabilityAsk decode_capability_ask(const Value& v) {
     CapabilityAsk ask;
     ask.network = v.get("network")->as_bool();

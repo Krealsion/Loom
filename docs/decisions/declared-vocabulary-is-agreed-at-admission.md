@@ -65,8 +65,8 @@ through the one wall, natively and across the seam alike.** Concretely:
 - **Vocabulary is not authority.** Declaring a shape registers what it *means*. Send authority
   is still the grant the host attached at admission (GATE-03, GATE-05); a declared emitter with
   no rule for a shape is refused `CapabilityDenied` at delivery, pinned as the denied-send
-  control beside the discovery case. The admission policy is shown the declaration as advice
-  and derives nothing from it.
+  control beside the discovery case. The admission policy is shown the capability ask as
+  advice, never the emit-set, and derives no grant from either.
 - **`Emit<...>` is not an exhaustive send list.** Publishing a shape absent from it is not
   refused for that reason; a router or forwarder that speaks shapes chosen at runtime meets the
   seam and its grant exactly as before. The emit-enforcement seam on `Mail` stays open.

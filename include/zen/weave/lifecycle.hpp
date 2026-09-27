@@ -4,64 +4,26 @@
 #ifndef ZEN_WEAVE_LIFECYCLE_HPP
 #define ZEN_WEAVE_LIFECYCLE_HPP
 
-// The lifecycle conversations a weave may choose to have. Two live here:
+// The lifecycle conversations a weave may choose to have: the letter (zen.PrepareShutdown,
+// zen.Bequest, zen.ClaimBequest), a cooperative handoff to an heir, and activation
+// (zen.Activated), the fact that a new code incarnation is live. Neither is required: a weave
+// that ignores them is unaffected. They are protocol any weave may use, so they live beside the
+// standard reply shapes; the Weave Manager is one consumer.
+// docs/reference/lifecycle.md#graceful-swap--the-other-ceremony-and-when-to-prefer-it
 //
-//   THE LETTER (zen.PrepareShutdown / zen.Bequest / zen.ClaimBequest) — cooperative
-//   handoff: a weave writes a letter to its heir. Everything below the TIER note
-//   down to bequeath_item/claim_item is the letter's.
+// Reload transplants state across the same shape; the letter speaks across a different one. The
+// predecessor chooses what to pass on, in its own vocabulary, as messages, and there is no state
+// blob, which would be a second transplant path with none of reload's shape agreement.
 //
-//   ACTIVATION (zen.Activated) — the one narrow fact that a newly committed code
-//   incarnation is live. It is not part of the letter and knows nothing about it;
-//   the two share a header because they share a tier, not a mechanism.
+// The letter may not assume immediacy, a clock, or that the predecessor's id still means
+// anything: the heir claims it when it wakes (pull, never push, which would need the steward to
+// hold grants for shapes unknown at mount). And a letter still queued when its author is
+// removed is refused `SenderLifeEnded` (MSG-03), so a graceful swap asks, receives the letter,
+// and only then unloads.
 //
-// TIER. This header is the **Loomstd embryo**. The shapes here are not core law
-// (nothing in the substrate requires them; a weave that ignores them is a clean
-// non-event) and they are not domain vocabulary either. They are the small
-// UNIVERSAL middle: a lifecycle conversation any weave, in any package, may
-// choose to have. That is why they live in weave/ beside the standard reply
-// shapes rather than in kernel/ with the machinery that happens to drive them —
-// the Weave Manager is *a* consumer of this protocol, not its owner. When
-// Loomstd becomes a real build artifact, this header moves there whole.
-//
-// WHAT IT IS FOR. Reload transplants state across the SAME shape. The letter
-// converses across a DIFFERENT one: when a weave is replaced by a successor that
-// is not shaped like it, nothing of what it knew can be transplanted — but it can
-// still be *said*. So the predecessor chooses what to pass on, in its own
-// vocabulary, as messages.
-//
-// MESSAGES ONLY — NO STATE BLOB. A deliberate deviation from the original
-// {state, wake_messages[]} sketch. A state blob would be a second, shadow
-// transplant path with none of reload's shape agreement — precisely the quiet
-// growth of "reload" into "replace" the two ops exist to prevent. A weave that
-// wants its state to carry says so **in its own vocabulary, as an item**. The
-// letter is a conversation, not a transfer.
-//
-// TWO LAWS, both earned from 1a's own pins rather than assumed:
-//
-//   1. THE LETTER MUST NOT KNOW THE GAP. Nothing here may assume immediacy, wall
-//      clock, or that the predecessor's WeaveId still means anything. The letter
-//      waits; the heir asks when it wakes — a microsecond later or a month. That
-//      is why delivery is PULL (the heir claims) and never push. Pull is also
-//      what the grant model forces: pushing arbitrary domain shapes at an heir
-//      would require the steward to hold shape grants unknowable at mount, and
-//      `allow_any` on the steward is exactly the transitive reach its broker note
-//      refuses.
-//
-//   2. THE LETTER DIES WITH ITS SENDER unless it is waited for. A gated message
-//      is authorized by looking its sender up at DELIVERY time, so a letter still
-//      queued when its author is unregistered is refused CapabilityDenied (the
-//      1a in-flight pin). A graceful swap is therefore TWO-STAGE by construction:
-//      ask, *receive the letter*, and only then unload. Fire-and-forget would
-//      post the letter into the void.
-//
-// THE ITEMS ARE BYTES, AND THE GATE STAYS THE SOLE ADMITTER. A list cannot hold
-// heterogeneous messages: a List's element is ONE TypeRef, and the gate pins a
-// nested Message to a single schema by content_id (gate.cpp). So a letter whose
-// items are arbitrary shapes cannot be a List<Message> — it is a List<Bytes>,
-// each item serialized by the predecessor and **re-admitted through the real gate
-// by the heir when it reads it** (see claim_item). The bytes are inert until they
-// pass the one validator, exactly like every other untrusted input: the escape
-// hatch buys heterogeneity without buying a second admission path.
+// Items are serialized bytes: a List holds one element type, and a letter's items are of any
+// shape. The heir re-admits each through the gate when it reads it (claim_item), so the bytes
+// stay inert until they pass the one validator.
 
 #include <zen/gate.hpp>
 #include <zen/serialize.hpp>
@@ -77,22 +39,15 @@
 
 namespace loom {
 
-/// The steward's well-known role. An heir wakes knowing nothing — not its
-/// predecessor's id, not the steward's — so it claims by ROLE, the one address
-/// that outlives its holder. (Role-first addressing, applied to the steward
-/// itself: the Manager must survive the swaps it performs.)
+/// The steward's role. An heir knows neither its predecessor's id nor the steward's, so it
+/// claims by role, the address that outlives its holder.
 inline constexpr const char* kManagerRole = "zen.manager";
 
-/// A letter carries at most this many items. Bounded and PINNED, not hidden: a
-/// predecessor writing its heir an unbounded letter would be a memory hole in
-/// the steward, and "the last thing it did was flood the mailbox" is a poor
-/// epitaph. Thirty-two is enough to say something and too few to hide in; a
-/// predecessor with more to pass on should say less, more densely.
+/// The most items a letter carries, so a predecessor cannot flood the steward.
 inline constexpr std::size_t kMaxBequestItems = 32;
 
-/// "You are being replaced. Say what you want your heir to know." Zero fields:
-/// the correlation carries the conversation, and there is nothing else to say
-/// that the recipient does not already know about itself.
+/// "You are being replaced; say what you want your heir to know." The correlation carries the
+/// conversation, so there are no fields.
 struct PrepareShutdown {
     using ZenSelf = PrepareShutdown;
     static constexpr const char* zen_name = "zen.PrepareShutdown";
@@ -100,11 +55,8 @@ struct PrepareShutdown {
     static auto zen_fields() { return std::make_tuple(); }
 };
 
-/// The letter itself. `role` is the succession it belongs to — descriptive, for
-/// the heir and for anyone poking the steward's mail; it is NOT the authority
-/// for filing it (the steward keys by its own record of what it asked about,
-/// never by a field on the payload — the same routing-metadata-not-payload
-/// discipline the relay uses for askers).
+/// The letter. `role` names the succession it belongs to, descriptively; the steward files it
+/// under its own record of what it asked, never under a payload field.
 struct Bequest {
     std::string role;
     std::vector<Bytes> items; ///< each item: one serialized message, gate-checked on read
@@ -114,7 +66,7 @@ struct Bequest {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role), ZEN_FIELD(items)); }
 };
 
-/// "Did anyone leave me anything?" The heir's question, asked whenever it wakes.
+/// "Did anyone leave me anything?": the heir's question, asked when it wakes.
 struct ClaimBequest {
     std::string role;
     using ZenSelf = ClaimBequest;
@@ -123,59 +75,25 @@ struct ClaimBequest {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role)); }
 };
 
-// ---- activation (LIFE-01) ---------------------------------------------------
+// ---- activation (LIFE-01, LIFE-02) ------------------------------------------
+// `zen.Activated` means exactly: "the lifecycle operator that sent this has committed a new code
+// incarnation at this address." Not that the weave is healthy, ready, a role holder, that
+// state was kept, that a predecessor existed, or that anything should start. Do not grow it.
 //
-// THE WHOLE FACT, and nothing beside it. `zen.Activated` means exactly:
+// A weave participates by listing it in its accept-set; a sender asks first and otherwise stays
+// silent, so a non-participant hears nothing. Its identity is the bus-stamped sender plus
+// `sequence`, monotonic within that sender's revived lineage and unique nowhere else. Any weave
+// granted the shape can send one, so a consumer checks the stamped sender against the operator
+// it trusts, or requires Loom's attestation (`Mail::lifecycle_attested`), and treats a sequence
+// no newer than that sender's last as a duplicate. No role field and no cause field.
 //
-//     "The lifecycle operator that sent this message has successfully committed a
-//      new code incarnation at this address."
-//
-// It does NOT mean the weave is healthy, ready for domain traffic, holder of a
-// role, that state was preserved, that a predecessor existed, that a replacement
-// was graceful, that external resources are available, that it should start a
-// loop, that it should repeat prior work, or that the system is ready. Those are
-// larger claims; none of them is smuggled in here. The power of this shape is how
-// little it claims — do not grow it to carry tomorrow's lifecycle.
-//
-// PARTICIPATION IS DECLARED, NOT ATTEMPTED. A weave opts in by listing this shape
-// in its accepted schemas; a sender asks first and stays silent otherwise. A
-// non-participant hears nothing and produces no refusal — the optional-
-// participation floor, exactly as with the letter's PrepareShutdown.
-//
-// IDENTITY IS **bus-stamped sender + sequence**. `sequence` is monotonic within
-// the revived lineage of the sender that emitted it; it is NOT claimed unique
-// across hosts, control weaves, or histories, and a naked number is not an
-// identity. The stamped sender stays load-bearing.
-//
-// THE CONSUMER'S OBLIGATION follows from that, and it is the consumer's, not the
-// substrate's: this is an ordinary registered shape, so any weave granted it can
-// emit one — exactly as any weave granted `zen.Ack` can emit an Ack. A consumer
-// that acts on an activation must therefore check the BUS-STAMPED SENDER (the one
-// field a sender cannot forge) against the operator it actually trusts, and treat
-// a sequence that is not newer than the last one from that sender as a duplicate.
-// Trusting a bare `sequence` because it looked plausible is the same mistake as
-// trusting an unsolicited standard reply, and has the same answer.
-//
-// NO ROLE FIELD: a loaded weave may hold none, a weave already knows which
-// message it received, and role ownership is separate live composition truth —
-// a payload field would invite trusting metadata over the bus and the live role
-// map. NO CAUSE FIELD: "load"/"reload"/"swap"/"recovery" is vocabulary no proven
-// consumer needs yet; the only proven fact is that a new incarnation committed.
-//
-// WHO SENDS IT, TODAY: the kernel's control door (kernel/control.hpp), on a
-// successful LoadLibrary or ReloadLibrary — the ordinary participant sitting on
-// the kernel operation, reachable by the default Manager and by any explicitly
-// authorized alternate operator alike. Host-native mount<T>() weaves are NOT
-// covered. What a participant should DO on activation is its own business and no
-// part of this shape (Zengine's Timer is the first intended consumer).
+// The kernel's control door (kernel/control.hpp) sends it on a successful LoadLibrary or
+// ReloadLibrary; weaves mounted natively with mount<T>() are not activated.
 struct Activated {
-    /// Positive, and newer than the previous activation from the same revived
-    /// lineage, and never reused by that lineage — *because the sender refuses
-    /// the lifecycle operation when it cannot say that truthfully.* The field is
-    /// a finite signed integer, so a lineage has a last representable sequence;
-    /// at that boundary the operation is refused rather than wrapped, and no
-    /// activation is emitted at all. The guarantee is real and it names its
-    /// condition (see ControlState / activation_block in kernel/control.hpp).
+    /// Positive, newer than the previous activation from the same revived lineage, and never
+    /// reused by it, because the sender refuses the lifecycle operation when it cannot say so;
+    /// at the last representable value the operation is refused and nothing is sent (LIFE-03;
+    /// ControlState and activation_block in kernel/control.hpp).
     std::int64_t sequence;
 
     using ZenSelf = Activated;
@@ -184,8 +102,7 @@ struct Activated {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(sequence)); }
 };
 
-/// Write one already-built Value into a letter item. The predecessor's side of
-/// the escape hatch: canonical bytes out.
+/// Write one built Value into a letter item, as canonical bytes.
 inline Bytes bequeath_item_value(const Value& v) {
     const std::string encoded = loom::serialize(v);
     return Bytes(encoded.begin(), encoded.end());
@@ -197,12 +114,9 @@ Bytes bequeath_item(const T& msg) {
     return bequeath_item_value(to_value(msg));
 }
 
-/// Read one letter item back as `T`, or nothing. THE GATE IS THE TRUTH HERE:
-/// the bytes are parsed and admitted against T's own schema before a single
-/// field is touched, so a letter item that is malformed, truncated, or simply a
-/// different shape than the heir hoped for is a clean nullopt — never a
-/// misread. An heir reading a letter is reading untrusted input, and this is
-/// the one door it comes through.
+/// Read one letter item back as `T`, or nothing. The bytes are parsed and admitted against T's
+/// schema before any field is read, so a malformed, truncated or differently shaped item is a
+/// clean nullopt. A letter is untrusted input, and this is its one door.
 template <class T>
 std::optional<T> claim_item(const Bytes& item) {
     const std::string_view bytes(reinterpret_cast<const char*>(item.data()), item.size());

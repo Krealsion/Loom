@@ -5,16 +5,10 @@
 #define ZEN_KERNEL_ABI_H
 
 /*
- * The Zen Weave C ABI — the permanent boundary a dynamic library exports.
- *
- * Only C crosses this seam: opaque instance handles, plain function pointers,
- * const uint8_t* + size_t byte buffers, and integer status codes. No C++ types,
- * no STL, no std::any, no exceptions. Every Zen value/schema/message crosses as
- * serialized bytes, and the host re-admits those bytes through loom's gate
- * before trusting them — so the DLL boundary is just another boundary the one
- * gate guards.
- *
- * This header is valid C and C++.
+ * The Zen Weave C ABI: the boundary a dynamic weave library exports. Only C crosses it: opaque
+ * instance handles, function pointers, byte buffers and integer statuses; never a C++ type or
+ * an exception. Every value, schema and message crosses as serialized bytes the host re-admits
+ * through the gate. Valid C and C++.
  */
 
 #include <stddef.h>
@@ -24,168 +18,28 @@
 extern "C" {
 #endif
 
-/* The ABI's own version, distinct from any schema version. The host rejects a
- * descriptor whose abi_version it does not support.
- *
- * v2 (R2B-1): handle() carries the delivery's PROVENANCE — Loom's own word about
- * why a recipient may trust this message's standing in a lifecycle conversation.
- * A loaded weave could previously distinguish a message's shape and its sender
- * but not whether Loom itself authorized it, which left a heir claiming an
- * inheritance by role unable to tell the steward it actually reached from any
- * weave holding the same grant.
- *
- * PAID AS A BREAK, DELIBERATELY. Provenance is a fact ABOUT ONE DELIVERY, so it
- * belongs beside `sender` in the call rather than behind an ambient query a
- * library could read at the wrong moment. The cost is that every pre-v2 artifact
- * is refused at load with a version reason — which is the honest failure. The
- * alternative (an appended host callback) would have loaded stale artifacts
- * happily and left them silently unable to accept an activation, i.e. loaded and
- * permanently inert. A refusal that names its cause beats a weave that never
- * speaks. */
+/* The ABI's own version, distinct from any schema version. The loader requires exact equality
+ * and refuses any other version before calling into the image, at load and as a replacement for
+ * a live participant, naming both; there is no old-image bridge. Rebuild hosts, libraries and
+ * images together. What each version carried: docs/reference/dynamic-abi.md */
 #define ZEN_ABI_VERSION 9u
-/* v9: THE DECLARED EMIT-SET CROSSES THE SEAM, BY DEFINITION. No slot changes in
- * either table; what changes is what the descriptor's manifest carries
- * (zen.Manifest v5 adds the optional `emits` list, zen/kernel/schema_codec.hpp)
- * and what the host does with it: the emitted shapes are claimed into the host's
- * agreement wall beside the accept-set, with every component they nest, so a
- * loaded emitter of `Pong v1 {a, b}` and any acceptor of `Pong v1 {a}` refuse at
- * load in either order -- where an image that could not say what it emits was
- * admitted and the disagreement surfaced as the first refused delivery
- * (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
- *
- * A DECLARATION IS VOCABULARY, NOT AUTHORITY. The host derives no send rule from
- * the section: what a loaded artifact may say is still the grant its admission
- * attached (docs/reference/capabilities.md#admitting-a-loaded-artifact), and the
- * list is not exhaustive -- an emission of an undeclared shape meets the seam and
- * the grant exactly as before.
- *
- * Paid as a break although the tables are unchanged, and deliberately, as the one
- * compatibility boundary the seam declares. A v8 image would not slip past the
- * manifest gate: its descriptor claims zen.Manifest v4, a different identity from
- * the v5 door, and the gate refuses that (SchemaMismatch) -- but only in
- * reconstruct(), after open_library() has run the image's static initializers
- * and create() has built its instance, with a sentence about a meta-schema. The
- * version gate refuses it in fetch_abi(), before any callback into the image,
- * naming both versions, at load and as a replacement for a live participant,
- * and the incumbent stands. "Declared nothing" and "could not declare" are two
- * versions, not two readings of one gate sentence. Rebuild hosts, libraries and
- * images together (docs/reference/dynamic-abi.md). */
-/* v8: JOINT PUBLICATION crosses the seam for a CLAIMANT. Two slots are appended,
- * one to each table: ZenHostApi::sense_offer (the claimant offers the next value
- * of its own latest claim for an exact operation) and ZenWeaveAbi::claim_published
- * (the host shows the library a value a joint operation published under its key,
- * and the library's status IS the application fact). Two statuses join the
- * table: ZEN_ERR_JOINT_BASE (a refused offer, by name) and ZEN_CLAIM_DECLINED,
- * the one positive status -- neither OK nor an error -- for a library that,
- * functioning, did not apply a published value and keeps state of its own.
- *
- * ONLY THE CLAIMANT'S SURFACE CROSSES. The operator's verbs (begin, commit,
- * cancel, status, release) and the authority they need are native: a loaded
- * operator's Bus inherits the refusing defaults, deliberately and visibly, and
- * a loaded coordinator ABI is a design of its own (docs/reference/joint-publication.md).
- *
- * Paid as a break, as every earlier addition was, and for the same reason: the
- * host reads ZenWeaveAbi past `handle` only because the version says the slot
- * is there. A v7 image loaded by this host would be read past its descriptor's
- * end; a v8 image under a v7 host would offer into a table that ends before its
- * door. The loader checks exact equality and nothing else, so both refuse at
- * load with both versions named -- an image built against v7 is refused whole,
- * including as a replacement for a live participant, and the incumbent stands.
- * No size negotiation, no old-image bridge: rebuild hosts, libraries and images
- * together (docs/reference/dynamic-abi.md).
- *
- * v7: addressed sends return their actual queued attempt via attempt_out (NULL
- * is allowed; zero means no queued identity). Dispatch-refusal provenance is a
- * host delivery fact. The isolated pipe supplies no attempt and refuses a
- * manifest requesting this notice door. Pre-v7 binaries refuse at load. */
 
-/* v3 (R2B-2): the host API gained the deferred-answer door, so a DYNAMICALLY
- * LOADED weave can hold an answer right across handler boundaries — the case a
- * dynamic steward needs and v2 could not express. Appending callbacks is
- * binary-compatible in itself, but the version is still bumped: a v2 library
- * loaded by a v3 host would be indistinguishable from a v3 one by number alone,
- * and a v3 library loaded by a v2 host would read past the struct. A version is
- * exactly the thing that makes those two cases refuse instead of guess. */
-
-/* v4 (R2B-3b-1a): the host API gained the IMMEDIATE ANSWER door.
- *
- * A native weave writes `mail.answer(reply)` and Loom enqueues an authenticated
- * answer. A dynamically loaded weave writes the same line, reached `HostApiBus`,
- * and got the base class's do-nothing default: no answer, no refusal, no bus
- * event. The same public word meant two different things depending on which side
- * of this seam it was spoken, and the difference was SILENT.
- *
- * Paid as a version bump rather than a quiet append. Appending a callback is
- * binary-compatible in itself, which is exactly the danger: a v3 library loaded by
- * a v4 host would be indistinguishable by number alone and would keep failing
- * silently, and a v4 library loaded by a v3 host would read past the struct. A
- * version is the thing that makes both refuse instead of guess. */
-
-/* v5 (R2D-0): role-authored delivery provenance crosses the seam, both ways.
- *
- * v5 carries the office-authorship fact into handle() beside the other
- * host-computed delivery facts, and gives loaded weaves the explicit
- * office-authorship doors native weaves have: office_send / office_send_to_role
- * / office_publish. The host verifies role membership at the authorship moment —
- * the library REQUESTS "speak as R" and never attests itself, exactly as it
- * never chooses its own sender id.
- *
- * Inbound, the authored role travels as its own parameter rather than another
- * ZEN_PROV_* kind, because it is a DIFFERENT AXIS: an answer or an activation
- * could in principle also be office speech, and folding the office into the
- * mutually-exclusive flag word would foreclose that representation for a layout
- * convenience.
- *
- * Paid as a break, once again deliberately: a v4 artifact under a v5 host would
- * be silently unable to author or observe office speech — the exact
- * same-word-two-meanings failure v4 closed for answer(). Old artifacts refuse
- * at load with the version named; nothing loads crippled. */
-
-/* v6 (R2E-0): SENSES cross the seam, both ways.
- *
- * A Sense is a deliberate immutable claim of the latest observation a
- * participant has made available — the second thing a participant can say, read
- * synchronously and carrying no causality. Senses are intended for real loadable
- * components, so a loaded weave gets exactly the surface a native one has:
- * claim / office_claim outbound, observe / observe_office inbound, and the
- * declared claim-set in the manifest.
- *
- * The manifest half is what makes DISCOVERY work across the seam: the claim-set
- * is descriptor bytes the host re-admits and registers at load, so "what Senses
- * can this artifact provide?" is answerable before it has claimed anything —
- * rather than after a runtime claim accidentally reveals a shape.
- *
- * The trust split is v5's, unchanged: the library REQUESTS "claim as R" and the
- * host verifies membership at the claim moment; the library asks to observe and
- * the host authorizes against the loaded weave's own grant. A library attests
- * nothing about itself in either direction.
- *
- * Paid as a break for the third time, and for the third time deliberately: a v5
- * artifact under a v6 host would compile against a Bus whose claim/observe verbs
- * silently return the refusing defaults — a weave unable to claim, unable to
- * read, and unable to say so. That is precisely the same-word-two-meanings
- * failure v4 closed for answer() and v5 closed for office speech. Old artifacts
- * refuse at load with both versions named; nothing loads crippled. */
-
-/* Delivery provenance flags (ZEN_PROV_*). Zero means an ordinary message: it
- * stands on its shape and its sender stamp, and claims nothing more. These are
- * set by the HOST from bus-owned state; they have no wire representation and no
- * schema, so no payload a weave can compose ever produces one. */
+/* Delivery provenance (ZEN_PROV_*), one value per delivery. Zero is an ordinary message. Set
+ * by the host from bus-owned state; no payload a weave composes produces one. */
 enum {
     ZEN_PROV_NONE = 0u,
-    /* This delivery is THE one authorized answer to a request this weave sent.
-     * Only the weave that actually received that request could produce it, and
-     * only once. */
+    /* The one authorized answer to a request this weave sent. */
     ZEN_PROV_ANSWER = 1u,
-    /* Loom attests a lifecycle commit for THIS incarnation. The attested
-     * sequence travels beside the flag so an attestation issued for one
-     * activation cannot authenticate another. */
+    /* Loom attests a lifecycle commit for this incarnation; the attested sequence travels
+     * beside it, so an attestation for one activation cannot authenticate another. */
     ZEN_PROV_ACTIVATION = 2u,
+    /* Loom's notice that this weave's own addressed send was refused before any handler ran
+     * (docs/reference/messaging.md#sender-visible-dispatch-refusal). */
     ZEN_PROV_DISPATCH_REFUSAL = 3u
 };
 
-/* Status codes returned across the seam. 0 == OK; negatives are errors. No
- * exception ever crosses the boundary; the host adapter translates these. */
+/* Status codes returned across the seam: 0 is OK, negatives are errors. No exception crosses;
+ * the host adapter translates these. */
 typedef int32_t ZenStatus;
 enum {
     ZEN_OK = 0,
@@ -193,79 +47,36 @@ enum {
     ZEN_ERR_REFUSED = -2,        /* the host gate refused the bytes */
     ZEN_ERR_UNKNOWN_SCHEMA = -3, /* the host could not resolve the payload's schema */
     ZEN_ERR_NO_TARGET = -4,      /* the host had no such routing target */
-    /* Role authorship denied (v5): the sender does not currently hold the role
-     * it deliberately asked to speak for. NOT a gate refusal and NOT a grant
-     * problem — nothing was queued, and nothing was downgraded to personal
-     * speech. Distinct so a caller can tell "the office refused me" from "the
-     * payload was malformed". */
+    /* The sender does not hold the office it asked to speak for; nothing was queued. Not a
+     * gate refusal. */
     ZEN_ERR_ROLE_AUTHORSHIP_DENIED = -5,
-    /* Sense refusals (v6). Four distinct answers, kept distinct across the seam
-     * for the reason every refusal in Loom is kept distinct: they send a maker
-     * to four different places. NO_CLAIM is "nobody has claimed that"; NOT
-     * AUTHORIZED is "your grant does not permit reading that shape" — collapsing
-     * those two would let a misconfigured grant masquerade as an empty world.
-     * UNDECLARED is "you did not list that shape in Claims<...>"; OFFICE is the
-     * claim-side twin of ZEN_ERR_ROLE_AUTHORSHIP_DENIED. */
+    /* Sense refusals, distinct as their causes are: nothing claimed; the grant does not permit
+     * reading the shape; the shape is not in Claims<...>; the office is not held. */
     ZEN_ERR_SENSE_NO_CLAIM = -6,
     ZEN_ERR_SENSE_NOT_AUTHORIZED = -7,
     ZEN_ERR_SENSE_UNDECLARED = -8,
     ZEN_ERR_SENSE_OFFICE_NOT_HELD = -9,
-    /* Joint publication (v8): a refused joint OFFER crosses back as
-     * ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator, so the library
-     * side can name the refusal rather than receive one silence. A status below
-     * the base that maps to no enumerator reads as NoLiveDelivery library-side --
-     * a refusal, never a fabricated acceptance. */
+    /* A refused joint offer: ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator. A
+     * status below the base naming no enumerator reads as NoLiveDelivery, never as accepted. */
     ZEN_ERR_JOINT_BASE = -100,
-    /* Joint publication (v8): THE ONE ANSWER THAT IS NEITHER OK NOR AN ERROR, and
-     * the one positive status in this table. Returned only by
-     * ZenWeaveAbi::claim_published: the library, functioning, did NOT apply the
-     * published value and keeps state of its own (it re-claims that truth at its
-     * next delivery). The host records Declined and holds nothing. Every negative
-     * status from that slot is a FAILED application and a held weave; every other
-     * positive status is UNDEFINED for that slot and the host reads it as Failed
-     * (the raw mapping is on the slot below). */
+    /* The one status that is neither OK nor an error, returned only by claim_published: the
+     * library, functioning, did not apply the value and keeps state of its own. */
     ZEN_CLAIM_DECLINED = 1
 };
 
-/* A host-provided byte sink. The library hands bytes to the host via write();
- * the host copies them immediately into host-owned memory. The library
- * allocates nothing host-visible and frees nothing across the seam, so no host
- * pointer can outlive the library. */
+/* A host-provided byte sink: the library hands bytes over through write(), the host copies
+ * them at once, and nothing either side must free crosses the seam. */
 typedef struct ZenByteSink {
     void* ctx;
     void (*write)(void* ctx, const uint8_t* data, size_t len);
 } ZenByteSink;
 
-/* THE AUTHORSHIP OF ONE OBSERVED CLAIM (v6), filled by the HOST. Plain data with
- * a fixed layout, because it must cross a C boundary; every field is a fact the
- * host computed, and none is anything the claiming library said about itself.
- *
- * THE OFFICE NAME IS NOT IN THIS STRUCT, AND THAT IS THE POINT. It crosses
- * through a caller-provided ZenByteSink instead, exactly as the claim's VALUE
- * does — so the identity a reader observes is the identity that was authored,
- * byte for byte, at any length. An earlier draft carried it as a fixed
- * `char office[128]` and truncated silently at the bound; that let a dynamic
- * observation report an office identity NOBODY EVER AUTHORED — a 200-character
- * role arriving as a plausible 127-character prefix, indistinguishable from a
- * real name. A fabricated identity is worse than a refusal and far worse than a
- * long copy, so the bound is gone rather than raised: a bigger buffer would only
- * move the lie further out. The sink keeps the original ownership property that
- * motivated the buffer — the library allocates the storage and the host only
- * writes into it, so nothing crosses the seam that either side must free.
- *
- * An office sink that is never written means the claim was PERSONAL, which no
- * real office name can collide with (a zero-length role is not a role).
- * `office_holder_is_current` is meaningful only for an office claim — false says
- * the office has moved since, and the claim is the previous holder's.
- *
- * THE TWO GENERATION FACTS ARE INDEPENDENT and both are carried, because a
- * live replacement moves the incarnation WITHOUT ending the life:
- *   author_life_is_current         the life that claimed is still at that address
- *   author_incarnation_is_current  the code that claimed is still the code there
- * After a same-life replacement the first is true and the second is false, and a
- * reader that cannot tell those apart cannot tell a predecessor's still-valid
- * historical claim from one the current incarnation just authored. Deriving the
- * second from the first would erase exactly that distinction. */
+/* The authorship of one observed claim, filled by the host from its own facts. The office name
+ * is not here: it crosses through a ZenByteSink like the value, so the name a reader sees is
+ * the one authored, at any length. An office sink never written means a personal claim.
+ * `office_holder_is_current` is meaningful only for an office claim. The two generation facts
+ * are independent: after a live code replacement the life is current and the incarnation is
+ * not. */
 typedef struct ZenSenseBy {
     uint64_t author;
     uint64_t author_life;
@@ -277,57 +88,42 @@ typedef struct ZenSenseBy {
     uint64_t revision;
 } ZenSenseBy;
 
-/* Host callbacks a Weave uses to send/publish from inside handle(). The payload
- * crosses as serialized message bytes; the host admits it through the gate
- * before routing it on the bus. Weave ids are opaque uint64 values (0 == none).
- * Inputs are valid only for the duration of the call. */
+/* Host callbacks a Weave uses from inside handle(). Payloads cross as serialized message bytes
+ * the host admits through the gate before routing; weave ids are opaque (0 is none); inputs are
+ * valid only for the call. `attempt_out` (may be NULL) receives an addressed send's queued
+ * attempt, 0 if nothing was queued. */
 typedef struct ZenHostApi {
     void* ctx;
     ZenStatus (*send)(void* ctx, uint64_t target, uint64_t reply_to, uint64_t correlation,
                       const uint8_t* payload, size_t len, uint64_t* attempt_out);
     ZenStatus (*publish)(void* ctx, uint64_t reply_to, uint64_t correlation,
                          const uint8_t* payload, size_t len);
-    /* Send to whichever Weave currently holds `role` (Part A's role-addressing). The
-     * sender is NOT passed and never rides the wire — the host stamps it from the
-     * connection, so a mod cannot impersonate another. `role` is NUL-terminated. */
+    /* Send to whichever Weave holds `role` now. The host stamps the sender from the context,
+     * so a library cannot speak as another. `role` is NUL-terminated. */
     ZenStatus (*send_to_role)(void* ctx, const char* role, uint64_t reply_to,
                               uint64_t correlation, const uint8_t* payload, size_t len, uint64_t* attempt_out);
-    /* Deferred answers (ANS-02). The capability crosses as an OPAQUE token: it has
-     * no wire form, is not a message field, is not reconstructible from sender,
-     * correlation, role or schema, and is validated host-side against the bound
-     * requester, respondent, both incarnations and correlation. A number on its
-     * own is not authority — the library must also be speaking through the host
-     * context of a live delivery to the incarnation that earned the right.
+    /* Deferred answers (ANS-02). The capability crosses as an opaque token, validated host-side
+     * against the bound requester, respondent, both incarnations and correlation, and only from
+     * the host context of a live delivery to the incarnation that earned it.
      *
-     * defer_answer:    convert this delivery's immediate answer right into a
-     *                  retained one. 0 == there was none to convert.
-     * answer_deferred: spend it. The host chooses the recipient and correlation.
+     * defer_answer:     convert this delivery's answer right into a retained one; 0 if none.
+     * answer_deferred:  spend it; the host chooses the recipient and correlation.
      * release_deferred: abandon it; the host slot is reclaimed at once. */
     uint64_t (*defer_answer)(void* ctx);
     ZenStatus (*answer_deferred)(void* ctx, uint64_t token, const uint8_t* payload, size_t len);
     void (*release_deferred)(void* ctx, uint64_t token);
-    /* The IMMEDIATE authenticated answer (v4): the same trusted operation a native
-     * weave reaches through `mail.answer()`. The library asks for the public
-     * operation and nothing more — no authority crosses, in either direction. The
-     * host decides whether this delivery earned an answer, chooses the recipient
-     * and the correlation, and stamps the requester-target provenance; a library
-     * cannot name any of them. ZEN_ERR_REFUSED means there was no answer authority
-     * to spend (a root's request, or one already answered), which is a REAL
-     * result the caller can act on rather than the silence it used to get. */
+    /* The immediate authenticated answer, as `mail.answer()` natively. The host decides whether
+     * this delivery earned an answer and chooses the recipient and correlation.
+     * ZEN_ERR_REFUSED means there was no answer to spend: a root's request, or one already
+     * answered. */
     ZenStatus (*answer)(void* ctx, const uint8_t* payload, size_t len);
-    /* Deliberate office authorship (v5): the same trusted operations a native
-     * weave reaches through `mail.as_role(...)`. The library REQUESTS "speak as
-     * as_role" — it cannot attest anything: the host knows the exact weave bound
-     * to this context, verifies role_holder(as_role) == that weave AT THIS
-     * MOMENT, and stamps the provenance itself. Every string is NUL-terminated
-     * and valid only for the call. ZEN_ERR_ROLE_AUTHORSHIP_DENIED means the
-     * sender does not hold that office — nothing was queued, nothing downgraded.
-     *
-     * office_send_to_role carries TWO roles that are different facts: as_role is
-     * the office spoken for (verified now); to_role is the destination slot
-     * (resolved at delivery). office_publish reports the recipient count through
-     * `recipients_out` (may be NULL) so "authorized, zero listeners" and
-     * "authorship denied" stay distinct across the seam. */
+    /* Office authorship: what a native weave reaches through `mail.as_role(...)`. The library
+     * requests "speak as as_role"; the host verifies the weave bound to this context holds it
+     * now and stamps the provenance. ZEN_ERR_ROLE_AUTHORSHIP_DENIED means nothing was queued.
+     * In office_send_to_role, as_role is the office spoken for and to_role the destination,
+     * resolved at delivery. office_publish writes the recipient count to `recipients_out` (may
+     * be NULL), so "zero listeners" and "denied" stay distinct. Strings are NUL-terminated and
+     * valid for the call. */
     ZenStatus (*office_send)(void* ctx, const char* as_role, uint64_t target, uint64_t reply_to,
                              uint64_t correlation, const uint8_t* payload, size_t len, uint64_t* attempt_out);
     ZenStatus (*office_send_to_role)(void* ctx, const char* as_role, const char* to_role,
@@ -336,33 +132,15 @@ typedef struct ZenHostApi {
     ZenStatus (*office_publish)(void* ctx, const char* as_role, uint64_t reply_to,
                                 uint64_t correlation, const uint8_t* payload, size_t len,
                                 uint64_t* recipients_out);
-    /* SENSES (v6): the same trusted operations a native weave reaches through
-     * `mail.claim(...)` / `mail.as_role(R).claim(...)` / `mail.latest<T>(...)`.
+    /* Senses: what a native weave reaches through `mail.claim(...)`,
+     * `mail.as_role(R).claim(...)` and `mail.latest<T>(...)`. A claim's bytes are admitted
+     * through the gate before they are stored, against the declared claim-set; the office form
+     * verifies membership now. `revision_out` (may be NULL) receives the claim's revision.
      *
-     * claim / office_claim take the claimed value as serialized bytes, which the
-     * host admits through the one gate before storing — a stored claim is never
-     * an unadmitted value. The host checks the loaded weave's DECLARED claim-set
-     * (from the manifest) and, for the office form, verifies role membership at
-     * the claim moment, exactly as office_send does. `revision_out` (may be NULL)
-     * receives the claim's sequence under its key.
-     *
-     * observe / observe_office name the shape by (name, version) rather than
-     * carrying a schema, and return the claim as bytes through `sink`, the
-     * AUTHORED OFFICE NAME through `office_sink`, and the remaining authorship
-     * facts through `by` — the host's own facts, never the library's. The
-     * library gets a COPY: no host pointer outlives the call, so a loaded reader
-     * has no more reach into a claimant than a native one does.
-     *
-     * `office_sink` is written only for an office claim, and is written EXACTLY:
-     * a personal claim leaves it untouched, and no length bound is imposed in
-     * either direction. Two sinks rather than one struct field is what makes
-     * "the observed identity is the authored identity" true at any name length —
-     * see ZenSenseBy for why the earlier fixed buffer was a defect rather than a
-     * simplification.
-     *
-     * A refusal crosses back as ZEN_ERR_SENSE_* so "not authorized", "nothing
-     * claimed", "you did not declare that" and "you do not hold that office"
-     * stay four distinct answers rather than one silence. */
+     * observe and observe_office name the shape by (name, version) and return a copy: the value
+     * through `sink`, the authored office through `office_sink` (written only for an office
+     * claim, exactly, at any length) and the other authorship facts through `by`. A refusal is
+     * one of the four ZEN_ERR_SENSE_* statuses. */
     ZenStatus (*sense_claim)(void* ctx, const uint8_t* payload, size_t len,
                              uint64_t* revision_out);
     ZenStatus (*sense_office_claim)(void* ctx, const char* as_role, const uint8_t* payload,
@@ -373,39 +151,27 @@ typedef struct ZenHostApi {
     ZenStatus (*sense_observe_office)(void* ctx, const char* role, const char* shape_name,
                                       uint32_t shape_version, ZenByteSink sink,
                                       ZenByteSink office_sink, ZenSenseBy* by);
-    /* v8: OFFER the next value of one of this weave's own latest claims for the
-     * exact joint operation `op` (docs/reference/joint-publication.md). The bytes
-     * are admitted host-side against the weave's DECLARED claim-set; the host
-     * checks the operation, the bound revision and the exact claimant, and stores
-     * the value until the operator commits or the operation aborts. Nothing is
-     * published by this call. ZEN_OK, or ZEN_ERR_JOINT_BASE minus the refusal.
-     * The isolated pipe supplies no offer door (NULL): a child cannot present the
-     * exact identity an operation binds. */
+    /* Offer the next value of one of this weave's own latest claims for the joint operation
+     * `op` (docs/reference/joint-publication.md). Admitted against the declared claim-set; the
+     * host checks the operation, bound revision and exact claimant, and keeps the value until
+     * the operator commits or the operation aborts. Nothing is published here. Returns ZEN_OK
+     * or ZEN_ERR_JOINT_BASE minus the refusal. The isolated pipe supplies NULL: a child cannot
+     * present the exact identity an operation binds. */
     ZenStatus (*sense_offer)(void* ctx, uint64_t op, const uint8_t* payload, size_t len);
 } ZenHostApi;
 
-/* The single descriptor a Weave library exposes, returned by zen_weave_abi().
- * Every method works over the opaque instance handle and byte buffers.
- *
- * Buffer ownership:
- *   - library -> host returns go through `sink` (host copies; library frees nothing);
- *   - host -> library inputs are const ptr + len, valid only for the call.
- */
+/* The descriptor a Weave library exposes through zen_weave_abi(), over an opaque instance
+ * handle and byte buffers. Returns from the library go through a `sink`, which the host
+ * copies; inputs from the host are const pointer and length, valid only for the call. */
 typedef struct ZenWeaveAbi {
     uint32_t abi_version;
 
     void* (*create)(void);
     void (*destroy)(void* instance);
 
-    /* Emit the manifest (accepted schemas + state schema + declared claim-set) as
-     * descriptor bytes.
-     *
-     * v6 adds the CLAIM-SET to the manifest rather than adding a second
-     * descriptor entry point, because it is the same kind of fact as the
-     * accept-set — what this weave's contract is — and one manifest means one
-     * decode, one gate crossing, and one place a maker can look. The host
-     * re-admits and registers the claim-set at load, which is what makes a loaded
-     * artifact's Sense capability discoverable BEFORE it has claimed anything. */
+    /* Emit the manifest (zen.Manifest, zen/kernel/schema_codec.hpp) as descriptor bytes: what
+     * the weave accepts, its state shape, and what it claims, emits and asks for. The host
+     * re-admits and registers it at load, so all of it is known before the weave runs. */
     ZenStatus (*describe)(void* instance, ZenByteSink sink);
     /* Emit persistable state as bytes. */
     ZenStatus (*snapshot)(void* instance, ZenByteSink sink);
@@ -413,88 +179,43 @@ typedef struct ZenWeaveAbi {
     ZenStatus (*policy)(void* instance, ZenByteSink sink);
     /* Restore from state bytes the host has already admitted through the gate. */
     ZenStatus (*revive)(void* instance, const uint8_t* state, size_t len);
-    /* Handle an already-host-gated inbound message; may send/publish via `host`.
-     *
-     * `provenance` is a ZEN_PROV_* flag word and `attested_sequence` is the
-     * sequence Loom attested (meaningful only for ZEN_PROV_ACTIVATION, else 0).
-     * `authored_role` (v5) is the office this delivery was DELIBERATELY authored
-     * as, verified by the host at the authorship moment — NULL (or empty) means
-     * personal speech, which no real office can be confused with. It is a
-     * separate parameter, not a ZEN_PROV_* kind, because it is a separate axis:
-     * the conversation/lifecycle standing and the authored office may coexist.
-     * The string is NUL-terminated and valid only for the duration of the call.
-     * All are host-computed delivery facts, not payload: a library may trust
-     * them exactly as far as it trusts `sender`, and can neither forge one on
-     * the way out nor find one on an ordinary message. */
+    /* Handle an inbound message the host has already gated; may send through `host`.
+     * `provenance` is a ZEN_PROV_* value and `attested_sequence` the sequence Loom attested
+     * (for ZEN_PROV_ACTIVATION, else 0). `authored_role` is the office this delivery was
+     * deliberately authored as, verified by the host; NULL or empty is personal speech. It is
+     * its own parameter because it may coexist with an answer or an activation. All three are
+     * host-computed facts a library trusts as far as `sender`: none can be forged outbound or
+     * found on an ordinary message. Strings are NUL-terminated and valid for the call. */
     ZenStatus (*handle)(void* instance, uint64_t sender, uint64_t reply_to, uint64_t correlation,
                         uint32_t provenance, int64_t attested_sequence, const char* authored_role,
                         const uint8_t* payload, size_t len, const ZenHostApi* host);
-    /* v8: one of this weave's own latest claims was PUBLISHED BY A JOINT OPERATION
-     * and the weave has not run since. The host calls this before the weave's next
-     * `handle` and before its next `snapshot`, with the published value as bytes
-     * the library re-admits against its own claim-set. No host table is passed:
-     * this is not a delivery, and the weave may send nothing from it. The host
-     * reads this slot for every v8 image; ZEN_EXPORT_WEAVE always fills it, and a
-     * hand-written descriptor that leaves it NULL is shown nothing and is read as
-     * Failed -- a value a weave cannot be shown is a value it did not apply.
-     *
-     * THE STATUS IS THE FACT, and the host maps it exactly as follows
+    /* One of this weave's own latest claims was published by a joint operation and the weave
+     * has not run since. Called before its next `handle` and its next `snapshot`, with the
+     * value as bytes the library re-admits against its claim-set. Not a delivery: no host
+     * table, and nothing may be sent. ZEN_EXPORT_WEAVE always fills it; a NULL slot is shown
+     * nothing and read as Failed. The status is the fact, mapped exactly
      * (docs/reference/joint-publication.md#the-showing-and-its-three-answers):
      *
-     *   ZEN_OK               Applied.  The library applied the value and stands
-     *                                  behind it. Nothing is owed.
-     *   ZEN_CLAIM_DECLINED   Declined. The library, functioning, did NOT apply it
-     *                                  and keeps state of its own -- what a
-     *                                  successor answers when shown a value its
-     *                                  predecessor prepared. Recorded against
-     *                                  exactly this instance and publication; not
-     *                                  held; the operator is told; the library
-     *                                  re-claims its own truth at its next delivery.
-     *   any negative status  Failed.   The showing did not complete. ZEN_ERR is
-     *                                  what `do_claim_published` returns for an
-     *                                  exception that escaped the maker's handler
-     *                                  or for `PublishedClaim::Failed`;
-     *                                  ZEN_ERR_UNKNOWN_SCHEMA / ZEN_ERR_REFUSED for
-     *                                  bytes the library's own gate would not
-     *                                  admit. The weave is HELD -- deliveries
-     *                                  refused `ApplicationFailed`, its ordinary
-     *                                  snapshot refused, this slot not called
-     *                                  again for that value -- until it is
-     *                                  reloaded or removed; the operator is told.
-     *   any other positive   Failed.   Undefined for this slot; never Applied.
-     *
-     * A host that discards this status turns a weave that could not apply its
-     * claim into one that silently stands behind it; a host that reads "did not
-     * apply, and is fine" as "applied" reports a repair as a success. Neither
-     * mapping is permitted here. */
+     *   ZEN_OK               Applied.  The library applied the value and stands behind it.
+     *   ZEN_CLAIM_DECLINED   Declined. Functioning, it did not apply the value and keeps state
+     *                                  of its own, re-claimed at its next delivery. Not held;
+     *                                  the operator is told.
+     *   any negative status  Failed.   The showing did not complete: ZEN_ERR for an exception
+     *                                  from the maker's handler or `PublishedClaim::Failed`,
+     *                                  ZEN_ERR_UNKNOWN_SCHEMA or ZEN_ERR_REFUSED for bytes the
+     *                                  library's gate refused. The weave is held (deliveries
+     *                                  refused `ApplicationFailed`, its ordinary snapshot
+     *                                  refused, this slot not called again for that value)
+     *                                  until reloaded or removed; the operator is told.
+     *   any other positive   Failed.   Undefined for this slot; never Applied. */
     ZenStatus (*claim_published)(void* instance, const uint8_t* value, size_t len);
 } ZenWeaveAbi;
 
-/* THE EXPORT DECORATION BELONGS TO THE DECLARATION, NOT ONLY THE DEFINITION.
- *
- * On PE, __declspec(dllexport) is the precise spelling -- and marking the ONE ABI
- * symbol for export also switches off MinGW's export-everything auto-export, so a
- * weave's dynamic surface shrinks to exactly `zen_weave_abi`: the RTLD_LOCAL
- * spirit, PE edition. The ELF visibility attribute is not meaningful on PE (and is
- * warning-hostile under -Werror there), hence the platform split.
- *
- * IT LIVES HERE, BESIDE THE DECLARATION, BECAUSE MSVC COUNTS IT AS PART OF THE
- * LINKAGE. Keeping the decoration only at the definition site (kernel/export.hpp)
- * makes every weave declare this symbol undecorated here and define it decorated
- * there. GCC and MinGW merge that silently; MSVC refuses it outright -- `error
- * C2375: 'zen_weave_abi': redefinition; different linkage` -- and would refuse
- * every weave in this tree. MSVC is right: the two spellings genuinely disagree
- * about what the symbol is, and only one compiler says so.
- *
- * So the entry point's COMPLETE signature is stated once, in the header that owns
- * the ABI, and the definition macro reuses this very token rather than re-deriving
- * an equivalent one. Declaration and definition now agree by construction rather
- * than by two platform ladders happening to stay in step.
- *
- * On an image that merely INCLUDES this header without defining the entry point --
- * every host, the Kernel included -- the decoration is inert: nothing is exported
- * because nothing is defined, and the host still finds the symbol the only way it
- * ever has, by name through the dynamic loader. */
+/* The export decoration, on the declaration as well as the definition: MSVC counts it as part
+ * of the linkage and refuses a symbol declared plain and defined decorated (C2375), so the
+ * definition macro in kernel/export.hpp reuses this token. On PE, dllexport on this one symbol
+ * also turns off MinGW's export-everything, so a weave exports exactly `zen_weave_abi`. In a
+ * host that only includes this header it exports nothing. */
 #if defined(_WIN32)
 #define ZEN_KERNEL_EXPORT __declspec(dllexport)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -503,8 +224,8 @@ typedef struct ZenWeaveAbi {
 #define ZEN_KERNEL_EXPORT
 #endif
 
-/* The one exported symbol every Zen Weave library provides. Returns a pointer to
- * a static descriptor (never freed by the host). */
+/* The one symbol every Zen Weave library exports: a pointer to a static descriptor the host
+ * never frees. */
 ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void);
 
 #ifdef __cplusplus

@@ -4,34 +4,15 @@
 #ifndef ZEN_WEAVE_RELAY_HPP
 #define ZEN_WEAVE_RELAY_HPP
 
-// The request/reply relay pattern, expressed once: "forward this request to a
-// named target, and relay its answer back to whoever asked me — matched by
-// correlation." Any weave that fronts a protocol for an operator (the Poke
-// weave is the living consumer) repeats the same dance: stamp a fresh sequence
-// number on the forward, remember who asked under it, and when an answer
-// carrying that sequence number comes back FROM THE FORWARDED-TO TARGET, send
-// it on with the asker's original correlation.
+// The request/reply relay: forward a request to a named target, and relay its answer back to
+// whoever asked, matched by correlation and by the target as bus-stamped sender. For a weave
+// fronting a protocol for an operator, such as the poke weave. It keeps only the correlation
+// bookkeeping (RelayState) and two moves, forward and relay: no expected-reply registry, no
+// timeout. RelayState is ordinary weave state, snapshotted, revived and inspectable.
 //
-// The helper carries the least the pattern needs — the correlation bookkeeping
-// (RelayState) and the two moves (forward / relay) — and nothing more: no
-// expected-reply-type registry (the target answers what it answers; a refusal
-// can answer any request), no timeouts (send-fate observability is a named
-// seam, not built), no knobs. The maker's Accept<...>/Emit<...> declarations
-// stay where they were, fully visible: the helper removes bookkeeping, never
-// the contract.
-//
-// RelayState is honest weave state: an ordinary shape that snapshots, revives,
-// and is itself poke-inspectable (default access: readable, not writable).
-//
-// NOT THE SAME THING AS `loom::AskBook` (ask_book.hpp), and the difference is
-// which participant's conversation it is about. This is the MIDDLEMAN's record:
-// every entry exists on behalf of somebody else, carries the asker it must answer
-// and that asker's own correlation, and is SHED OLDEST-FIRST when full — losing
-// one disappoints a caller, which is the right trade for a weave whose whole job
-// is other people's traffic. An asker's book is about its OWN questions, so it
-// refuses a new conversation rather than drop one it is waiting on. Same two
-// checks on the way back (correlation AND bus-stamped sender); different owner,
-// different capacity policy, different thing to lose.
+// Not `loom::AskBook` (ask_book.hpp): this is a middleman's record, each entry on behalf of
+// somebody else, and it sheds the oldest when full; an asker's book refuses a new conversation
+// rather than drop its own. docs/reference/messaging.md#the-askers-own-book
 
 #include <zen/weave/shape.hpp>
 #include <zen/weave/weave.hpp>
@@ -71,20 +52,13 @@ struct RelayState {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(next_seq), ZEN_FIELD(pending)); }
 };
 
-/// Pending forwards are bounded; the oldest is shed when full (its answer, if
-/// it ever comes, is then treated as unsolicited and dropped).
+/// Pending forwards are bounded; the oldest is shed when full, and its answer, if it comes, is
+/// dropped as unsolicited.
 inline constexpr std::size_t kMaxRelayPending = 64;
 
-/// Forward `req` to `target` on behalf of an asker captured EARLIER. The
-/// explicit form, for a multi-stage orchestration: when the answer that will
-/// finally satisfy the asker is triggered by some *other* weave's message, the
-/// inbound Mail no longer describes the asker, so the caller supplies the asker
-/// and correlation it recorded when the request first arrived. The
-/// routing-metadata-not-payload discipline is unchanged — it simply moves to
-/// wherever the caller first captured them.
-///
-/// Also allocates the sequence number, so a caller running a chain of its own
-/// can draw correlations from this one counter and never collide with a relay.
+/// Forward `req` to `target` for an asker captured earlier, for a multi-stage orchestration
+/// where the inbound Mail no longer describes the asker. Allocates the sequence number, so a
+/// caller's own chain can draw from this counter without colliding with the relay.
 template <class Req>
 std::int64_t forward_for(Mail& mail, RelayState& s, std::int64_t target, const Req& req,
                          WeaveId asker, std::uint64_t corr) {
@@ -102,23 +76,17 @@ std::int64_t forward_for(Mail& mail, RelayState& s, std::int64_t target, const R
     return seq;
 }
 
-/// Forward `req` to `target`, remembering who asked so the answer can be
-/// relayed back. The asker is taken from the inbound command's routing
-/// metadata (reply_to if given, else the bus-stamped sender) — never from its
-/// payload. A fire-and-forget command (no asker) forwards nothing: there is
-/// no one to answer.
+/// Forward `req` to `target`, remembering who asked: reply_to if given, else the bus-stamped
+/// sender, never the payload. A command with no asker forwards nothing.
 template <class Req>
 void forward(Mail& mail, RelayState& s, std::int64_t target, const Req& req) {
     const WeaveId asker = mail.reply_to().valid() ? mail.reply_to() : mail.sender();
     (void)forward_for(mail, s, target, req, asker, mail.correlation());
 }
 
-/// Relay `answer` to the asker of the pending forward it correlates to,
-/// restoring the asker's original correlation. The answer must come from the
-/// weave that was actually forwarded to: the sender is bus-stamped (a
-/// participant cannot claim another's identity), so a third party can emit an
-/// answer-shaped message but cannot speak AS the target — a forged or
-/// unsolicited or stale answer is dropped, not relayed.
+/// Relay `answer` to the asker of the forward it correlates to, restoring the asker's
+/// correlation. It must come from the weave forwarded to, by bus-stamped sender, so a forged,
+/// unsolicited or stale answer is dropped.
 template <class Answer>
 void relay(Mail& mail, RelayState& s, const Answer& answer) {
     for (std::size_t i = 0; i < s.pending.size(); ++i) {

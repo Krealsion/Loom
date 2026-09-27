@@ -9,13 +9,12 @@
 #include <charconv>
 
 namespace loom {
-/// Explicitly accept this shape to request later dispatch-refusal notices for
-/// ordinary directed/role sends authored by this incarnation. The shape alone
-/// is ordinary speech: check Mail::dispatch_refused() / Message provenance.
-/// Absence proves nothing. See docs/reference/messaging.md.
+/// Explicitly accept this shape to be told of later dispatch refusals of the ordinary directed
+/// and role-addressed sends this incarnation authors. The shape alone is ordinary speech: check
+/// Mail::dispatch_refused(). Absence proves nothing.
+/// docs/reference/messaging.md#sender-visible-dispatch-refusal
 struct DispatchRefused {
-    // Canonical unsigned decimal: Loom's wire Int is signed. These fields retain
-    // all 64 bits without changing the value grammar. Use the typed accessors.
+    // Canonical unsigned decimal, since Loom's wire Int is signed; use the typed accessors.
     std::string attempt;
     std::string target; // directed WeaveId; empty for a role address
     std::string role;   // original authored role address, never its resolved holder
@@ -45,19 +44,12 @@ private:
     }
 };
 
-/// A BOUND PARTICIPANT OF A JOINT OPERATION THIS WEAVE OPERATES WAS REPLACED OR REMOVED
-/// (docs/reference/joint-publication.md#the-operators-notices). Sent to the operator, and only to
-/// an operator that explicitly accepts it, once per operation, when a lifecycle change of a
-/// bound participant ends the operation (`invalidate_joint_for`) or ends the possibility of
-/// an answer to an operation the bus had already aborted -- so an operator waiting on a
-/// reply that died with its author is not waiting on silence the bus already knows the end
-/// of. Deliberately NOT sent when a bound claim merely moves (`abort_joint_on_claim`): that
-/// owner is alive and answers the operator in its own, more specific words, and the operator
-/// meets the abort at its next verb. THE SHAPE ALONE IS ORDINARY SPEECH: an operator
-/// re-reads `joint_status` for the bus's own record, which is the fact; a forged notice makes
-/// it consult a record that says Preparing, and it does nothing. Absence proves nothing.
-/// A QUEUED NOTICE IS NOT CONSUMPTION: the record it names is kept until the operator
-/// releases it (SENSE-07), so the re-read always finds it.
+/// A bound participant of a joint operation this weave operates was replaced or removed
+/// (docs/reference/joint-publication.md#the-operators-notices). Sent once per operation, and only
+/// to an operator that accepts it, when that ends the operation or ends any answer to one the bus
+/// already aborted. Not sent when a bound claim merely moves: that owner is alive and answers
+/// in its own words. The shape alone is ordinary speech: the operator re-reads `joint_status`,
+/// the bus's record, kept until it releases it (SENSE-07). Absence proves nothing.
 struct JointEnded {
     std::string op;     ///< canonical unsigned decimal, as `DispatchRefused` spells its attempt
     std::string reason; ///< `name_of(JointRefusal)`: ParticipantChanged / StaleRevision
@@ -76,23 +68,13 @@ struct JointEnded {
     }
 };
 
-/// THE APPLICATION OF A JOINT PUBLICATION THIS WEAVE OPERATES SETTLED
-/// (docs/reference/joint-publication.md#the-operators-notices). Sent to the operator, and only to an operator
-/// that explicitly accepts it, once per settlement: every bound claimant was shown its
-/// published value and completed (`applied`), or one could not complete its showing
-/// (`reason` Failed: it is HELD, deliveries to it are refused `ApplicationFailed`, and
-/// only a reload or a removal ends that), or one answered that it keeps state of its own
-/// (`reason` Declined: functioning, not held, re-claiming its truth at its next
-/// delivery), or one was removed before it was shown
-/// (`reason` Lost). A repair that re-settles -- a reloaded successor shown again -- is
-/// said again, with the successor's own answer. `claimant` and `role` name the
-/// participant a non-application is about, so the operator can tell a requester WHICH
-/// owner and not merely that something did. THE SHAPE ALONE IS ORDINARY SPEECH: the
-/// operator re-reads `joint_status(op).application` for the bus's own record, which is
-/// the fact, and that record is KEPT until the operator releases it -- a notice is never
-/// the last copy of an outcome; a forged notice makes it consult a record that says
-/// otherwise; a stale one, a record that says Missing (SENSE-07). Its ordinary payload is
-/// not an authenticated outcome: the record is.
+/// The application of a joint publication this weave operates settled
+/// (docs/reference/joint-publication.md#the-operators-notices). Sent once per settlement, and
+/// only to an operator that accepts it: every claimant applied (`applied`), or one failed (and
+/// is held), declined (and is not), or was removed before it was shown (`reason`). A repair that
+/// settles again is said again. `claimant` and `role` name the participant a non-application is
+/// about. The shape alone is ordinary speech: the operator re-reads
+/// `joint_status(op).application`, the bus's record, kept until it releases it (SENSE-07).
 struct JointApplied {
     std::string op;       ///< canonical unsigned decimal
     bool applied = false; ///< every bound claimant applied its published value

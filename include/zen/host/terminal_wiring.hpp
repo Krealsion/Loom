@@ -4,36 +4,20 @@
 #ifndef ZEN_HOST_TERMINAL_WIRING_HPP
 #define ZEN_HOST_TERMINAL_WIRING_HPP
 
-// HOST WIRING — not part of the terminal-authoring surface.
+// Host wiring, not part of the terminal-authoring surface: like grant_wiring.hpp and
+// lifecycle_wiring.hpp, the one place a terminal needs the `Switchboard&`, in a file no
+// participant-side header includes. docs/reference/terminal.md
 //
-// The same discipline `grant_wiring.hpp` and `lifecycle_wiring.hpp` keep, for the
-// same reason: everything in this tree that needs a `Switchboard&` should be
-// findable in one grep, in a file no participant-side header includes. A terminal
-// core that could reach the Switchboard would be a host wearing a terminal's name,
-// so the one expression that touches it lives here instead.
+// `host_participant_channel` makes an outbound door bound to one WeaveId, built on
+// `Switchboard::send_as`: the host decides who a terminal participant is, and each message is
+// authorized at delivery against that weave's own effective authority, which decides what it
+// may say. A channel widens nothing: bound to an empty grant it says nothing, and no verb on it
+// takes a sender.
 //
-// WHAT IT MINTS, AND WHAT THAT IS NOT. `host_participant_channel` produces an
-// outbound door bound to one WeaveId. It is built on `Switchboard::send_as`,
-// which is host root authority — the host chooses whose identity the door carries
-// — and every message that leaves it is then authorized AT DELIVERY against that
-// weave's own effective authority, by the same predicates every other delivery
-// is checked with. So:
-//
-//     the HOST decides WHO a terminal participant is
-//     the KERNEL decides WHAT that participant may say
-//
-// and neither can be talked out of its half. Handing a participant a channel
-// widens nothing: a channel bound to a weave with an empty grant can say nothing
-// at all, and there is no verb on it that takes a sender, so the participant it
-// was given to cannot speak as anybody else.
-//
-// WHY IT EXISTS AT ALL. A weave's own `Bus` is handed to `handle()` and is gone
-// when the handler returns, so a participant driven by a keyboard has no way to
-// speak: nothing delivers it a message when a person presses return. The
-// alternative — having the presentation root-send a "do this" message into the
-// participant so it can speak from inside a handler — was rejected, and the
-// reason is the whole phase: it makes every terminal command a wire shape, and it
-// makes the presentation a root sender. This is the narrower bridge.
+// It exists because a weave's `Bus` lives only while its handler runs, and a participant
+// driven by a keyboard has no handler running when a person presses return. Root-sending the
+// participant a "do this" message instead would make every terminal command a wire shape and the
+// presentation a root sender.
 
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/switchboard.hpp>
@@ -44,35 +28,25 @@
 
 namespace loom {
 
-/// Bind an outbound door to `who`, on `bus`.
-///
-/// Requires the Switchboard by reference — which is the boundary, not a
-/// formality: only something that already holds the host's authority can decide
-/// which identity a door carries.
+/// Bind an outbound door to `who`, on `bus`. Needing the Switchboard is the boundary: only the
+/// host decides which identity a door carries.
 std::unique_ptr<ParticipantChannel> host_participant_channel(Switchboard& bus, WeaveId who);
 
-/// What a host keeps after mounting a terminal participant.
-///
-/// The bus OWNS the participant, like every weave. `session` is non-owning, so a
-/// presentation holding it can be built and destroyed without ending the
-/// participant — closing a pane kills nothing — and ending the participant stays
-/// the host's explicit act (`unregister_weave`), after which this pointer must
-/// not be used.
+/// What a host keeps after mounting a terminal participant. The bus owns the participant, as
+/// every weave; `session` is non-owning, so a presentation holding it can come and go without
+/// ending the participant. Ending it is the host's act (`unregister_weave`), after which the
+/// pointer must not be used.
 struct MountedTerminal {
     WeaveId id{};
     TerminalSession* session = nullptr;
 };
 
-/// Register `session` with `grant` as its admission baseline, then bind its door.
-///
-/// The two steps are in this order because they must be: the identity does not
-/// exist until the bus assigns it, and the door carries the identity.
+/// Register `session` with `grant` as its admission baseline, then bind its door, in that order
+/// because the door carries the identity the bus assigns.
 MountedTerminal host_mount_terminal(Switchboard& bus, std::unique_ptr<TerminalSession> session,
                                     Grant grant);
 
-/// As above, and bind the participant to `role`. A role is an address, never a
-/// power — a terminal that holds one has gained nothing but a name others can
-/// send to.
+/// As above, and bind the participant to `role`: an address others can send to, never a power.
 MountedTerminal host_mount_terminal(Switchboard& bus, std::unique_ptr<TerminalSession> session,
                                     Grant grant, std::string role);
 

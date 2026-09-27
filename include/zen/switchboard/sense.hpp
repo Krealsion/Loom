@@ -4,28 +4,17 @@
 #ifndef ZEN_SWITCHBOARD_SENSE_HPP
 #define ZEN_SWITCHBOARD_SENSE_HPP
 
-// SENSES — the second thing a participant can say.
+// Senses: the second thing a participant can say.
 // SENSE-01..05; docs/laws/sense-laws.md · docs/reference/senses.md
 //
-//   MESSAGES   what happened / what I want done      causal, FIFO, queued
+//   MESSAGES   what happened, or what I want done   causal, FIFO, queued
 //   SENSES     what I currently claim is so          acausal, latest-only, pulled
 //
-// A Sense is A DELIBERATE IMMUTABLE CLAIM OF THE LATEST OBSERVATION A
-// PARTICIPANT HAS MADE AVAILABLE. A renderer, inspector, status panel or editor
-// warning wants already-known state many times; turning that into
-// ask/FIFO/handler/answer/FIFO/reader adds traffic and latency without adding
-// causality. So this is a repository of latest claims, read synchronously, and
-// it is deliberately NOT a second message system:
-//
-//   - it carries no causality and participates in none;
-//   - it reorders nothing and is reordered by nothing;
-//   - it never applies queued work speculatively to look current;
-//   - it never grows a journal — one entry per meaningful current key.
-//
-// THE TERM, used consistently everywhere: **latest claim**. Never "current
-// state", never "same-frame truth", never "latest real state". A claim is not
-// prophecy: pending FIFO work may already make it stale with respect to what
-// happens next, and Loom will not pretend otherwise.
+// A Sense is a participant's deliberate, immutable claim of the latest observation it has made
+// available, read synchronously, for consumers that want known state many times (a renderer,
+// an inspector, a status panel). It is not a second message system: it carries no causality,
+// reorders nothing, never applies queued work to look current, and keeps one entry per current
+// key. A latest claim is not a prediction: queued work may already make it stale.
 
 #include <zen/switchboard/message.hpp> // WeaveId
 #include <zen/value.hpp>
@@ -38,130 +27,77 @@
 
 namespace loom {
 
-/// Why a claim or an observation did not produce a value. Each is a genuinely
-/// different problem sending the reader somewhere different, so none of them is
-/// an empty result.
+/// Why a claim or an observation produced no value; each sends the reader somewhere different.
 enum class SenseRefusal : std::uint8_t {
     None = 0,
-    /// NOTHING HAS EVER BEEN CLAIMED under this key — or what was claimed has
-    /// been cleaned up because its key stopped meaning anything (the weave was
-    /// unregistered; the role became unheld). Distinct from `NotAuthorized`,
-    /// which is about the reader, and from a stale claim, which IS a value and
-    /// arrives stamped rather than withheld.
+    /// Nothing has been claimed under this key, or its key stopped meaning anything (the weave
+    /// was removed, the role became unheld). A stale claim is a value, not this.
     NoClaim,
-    /// THE READER'S GRANT DOES NOT PERMIT OBSERVING THIS SHAPE. Reading a Sense
-    /// is authorized like everything else in Loom: default-empty, host-granted,
-    /// never widened in band. Deliberately distinct from `NoClaim` so a
-    /// misconfigured grant cannot masquerade as "nobody has claimed anything" —
-    /// the two send an operator to opposite places.
+    /// The reader's grant does not permit observing this shape. Distinct from `NoClaim`, so a
+    /// misconfigured grant never looks like an empty world.
     NotAuthorized,
-    /// THE CLAIMANT DID NOT DECLARE THIS SHAPE (claim side). A weave may claim
-    /// only shapes it listed in `Claims<...>`, which is what makes Sense
-    /// capabilities discoverable BEFORE the first runtime claim rather than
-    /// after it. Undeclared is a maker error, and it is loud.
+    /// The claimant did not declare this shape in `Claims<...>` (claim side).
     Undeclared,
-    /// THE CLAIMANT DOES NOT HOLD THE OFFICE it asked to claim as (claim side).
-    /// The MSG-07 rule, reused because here it is exactly honest: holding is
-    /// necessary and not sufficient, and asking to claim as an office you do not
-    /// hold is refused at the claim moment — never downgraded to a personal
-    /// claim.
+    /// The claimant does not hold the office it asked to claim as (claim side). Refused, never
+    /// made a personal claim instead (as MSG-07 for speech).
     OfficeNotHeld,
-    /// THE VALUE DID NOT PASS THE GATE for the shape it claimed (claim side).
-    /// A Sense value crosses the same one gate every other value crosses; a
-    /// malformed claim is refused rather than stored.
+    /// The value did not pass the gate for the shape it claimed (claim side).
     GateRefused,
 };
 
 const char* name_of(SenseRefusal r) noexcept;
 
-/// WHO CLAIMED THIS, AND IS THAT STILL WHO YOU THINK IT IS. Immutable, carried
-/// on every reading, and never recomputed from later topology — the same
-/// discipline office-authored delivery provenance follows (MSG-07).
-///
-/// A reader must be able to answer "who claimed this?" without trusting the
-/// value, so a Sense value is never naked globally-trusted data.
+/// Who claimed this, and whether that is still who it was: carried on every reading and never
+/// recomputed, like office-authored delivery provenance (MSG-07).
 struct SenseAuthorship {
     /// The exact weave that made the claim.
     WeaveId author{};
-    /// The author's life and incarnation AT THE CLAIM MOMENT.
+    /// The author's life and incarnation when it claimed.
     std::uint64_t author_life = 0;
     std::uint64_t author_incarnation = 0;
-    /// Is that life still the life at that address? False means the author has
-    /// since died and been revived, or was removed — the claim is a fact about a
-    /// life that has ended. The same question, and the same answer shape, as
-    /// `BusEvent::sender_life` / `sender_life_now`.
+    /// Is that life still the life at that address? False once the author died and was
+    /// revived, or was removed.
     bool author_life_is_current = false;
-    /// Is that INCARNATION still the code at that address? A SEPARATE QUESTION
-    /// from the life, and the reason it exists is live replacement: a prepared
-    /// replacement swaps the code behind an id without ending its life, so
-    ///
-    ///     life 7 / incarnation 3   claims X
-    ///     ... replacement ...
-    ///     life 7 / incarnation 4   is now current
-    ///
-    /// leaves `author_life_is_current == true` and this `false`. The claim stays
-    /// historically truthful — it is still incarnation 3's, and Loom never
-    /// rewrites it — but a reader that cannot tell "the predecessor's still-valid
-    /// claim" from "the current incarnation's claim" cannot tell whether what it
-    /// is reading survived the swap on purpose. Deriving this from
-    /// `author_life_is_current` would erase exactly that distinction, which is
-    /// why it is asked of the topology separately.
+    /// Is that incarnation still the code at that address? Separate from the life: a live
+    /// replacement changes the code without ending the life, leaving the life current and this
+    /// false, so a reader can tell a predecessor's claim from the current code's.
     bool author_incarnation_is_current = false;
-    /// The office this claim was DELIBERATELY authored as; empty for a personal
-    /// claim. Holding a role attaches nothing: a role-holder's personal claim
-    /// arrives with this empty, which is the entire point.
+    /// The office this claim was deliberately authored as; empty for a personal claim, which
+    /// is what a role holder's ordinary claim is.
     std::string office;
-    /// Meaningful only when `office` is non-empty: does the author STILL hold
-    /// that office? False after a replacement moved the role — the predecessor's
-    /// claim is still readable and still says the predecessor claimed it. Loom
-    /// never relabels it as the successor's.
+    /// For an office claim: does the author still hold the office? False after a replacement
+    /// moved it; the claim still says the predecessor made it.
     bool office_holder_is_current = false;
-    /// Monotonic per key. Orders replacement of THIS claim: a higher revision is
-    /// a later claim under the same key. Not a global clock and not comparable
-    /// across keys.
+    /// Increases with each claim under this key; not a clock, and not comparable across keys.
     std::uint64_t revision = 0;
-    /// The shape claimed. Carried so a reading is self-describing.
+    /// The shape claimed, so a reading describes itself.
     std::string schema_name;
     std::uint32_t schema_version = 0;
 
-    /// True when this claim was authored as an office whose holder has since
-    /// changed. The reader decides what that means; Loom only refuses to hide it.
+    /// True when this claim was authored as an office whose holder has since changed.
     bool office_claim_is_stale() const noexcept {
         return !office.empty() && !office_holder_is_current;
     }
 };
 
-/// ONE OBSERVATION, BY VALUE. The value is a copy the reader owns: there is no
-/// pointer or reference into the claimant's state anywhere in this type, so
-///
-///     other.sense.health = 9000;
-///
-/// has no spelling. Mutation of another participant remains what it always was
-/// — intentional Loom traffic (a domain message, a Poke, an authorized
-/// operation) — and reading a Sense confers none of it.
+/// One observation, by value: a copy the reader owns, with no reference into the claimant, so
+/// reading a Sense confers no way to change its author. Changing another participant is still
+/// done by message.
 struct SenseReading {
-    /// `None` iff `value` holds the claim. Otherwise `value` is empty and this
-    /// says exactly why, because refusal, staleness and absence are three
-    /// different answers.
+    /// `None` iff `value` holds the claim; otherwise why not.
     SenseRefusal refusal = SenseRefusal::NoClaim;
     SenseAuthorship by{};
-    /// The claim, by value. `std::optional` rather than a defaulted `Value`
-    /// because a `Value` always claims a schema — there is no such thing as a
-    /// blank one, and inventing an empty-schema placeholder to fill this slot
-    /// would be a value nobody claimed.
+    /// The claim, by value; empty on a refusal. Optional because every `Value` has a schema and
+    /// there is no blank one.
     std::optional<Value> value{};
 
-    /// True iff a claim was read. Staleness does NOT make this false — a stale
-    /// office claim is a real claim, honestly stamped (see
-    /// `SenseAuthorship::office_claim_is_stale`), and collapsing the two would
-    /// destroy the distinction between "this office has never claimed" and
-    /// "this office's claim is the previous holder's".
+    /// True iff a claim was read. A stale office claim is still a claim, so this stays true
+    /// for it (see `SenseAuthorship::office_claim_is_stale`).
     explicit operator bool() const noexcept { return refusal == SenseRefusal::None; }
 };
 
-/// THE RESULT OF CLAIMING. `accepted` is the whole verdict; `why` names the
-/// refusal when it is false. `revision` is the claim's own sequence under its
-/// key, meaningful only when accepted.
+/// The result of claiming: `accepted` is the verdict, `why` the refusal when false, and
+/// `revision` the claim's revision under its key when accepted.
 struct SenseClaimResult {
     bool accepted = false;
     SenseRefusal why = SenseRefusal::None;
@@ -170,87 +106,22 @@ struct SenseClaimResult {
     explicit operator bool() const noexcept { return accepted; }
 };
 
-// =============================================================================
-// JOINT PUBLICATION OF LATEST CLAIMS
-// =============================================================================
-//
-// Reference: docs/reference/joint-publication.md. Laws: SENSE-06 (a publication
-// is shown, and what the showing came to is recorded, never assumed) and
-// SENSE-07 (a record is kept until its operator releases it) in
-// docs/laws/sense-laws.md. The consumer this was built for is an application
-// whose document owner and presentation owner must change their facts TOGETHER
-// at one observable boundary; Loom supplies the mechanism and no vocabulary of
-// either.
-//
-// WHAT IT ADDS TO A SENSE. A latest claim already is a bus-owned, gate-admitted,
-// revisioned, exactly-attributed value that dies with its claimant (SENSE-01..05).
-// A JOINT PUBLICATION is an operation over several such keys:
-//
-//   begin    an OPERATOR holding a host-minted `JointAuthority` binds the exact
-//            claimants (life + incarnation) of several claim keys and the keys'
-//            current revisions;
-//   offer    each claimant, from inside its own delivery, offers the NEXT value
-//            of its own key for that exact operation (declared shape, the gate,
-//            the bound revision);
-//   commit   the operator asks the bus to publish: the bus revalidates every
-//            participant, revision and offer, then exchanges every offered value
-//            into its claim record in ONE step, running no participant code,
-//            gate, allocation, I/O or cleanup between two exchanges;
-//   hook     a claimant whose key was published BY AN OPERATION (not by its own
-//            claim) hears `Weave::claim_published` before its next delivery and
-//            before its next snapshot, so a reader can never observe the weave
-//            behind its own published claim.
-//
-// PUBLICATION IS NOT APPLICATION. What each
-// showing came to is a second fact the bus keeps (`JointApplication`, on the claim
-// record and on the operation): Pending until shown, Applied when the hook completed,
-// Declined when the claimant answered that it keeps state of its own instead (it is
-// functioning and NOT held; its next ordinary claim replaces the published value),
-// Failed when the hook did not complete -- a native throw, or a non-OK status across
-// the seam -- and Lost when the claimant was removed unshown. A Failed claimant is
-// HELD: deliveries to it are refused `ApplicationFailed`, its ordinary snapshot is
-// refused, and the hook is not re-run; a reload (its successor is shown again) or a
-// removal ends the hold. The operator is told once per settlement (`zen.JointApplied`)
-// and re-reads `joint_status`.
-//
-// PUBLICATION IS NOT THE END OF AN OUTCOME'S LIFETIME, AND A QUEUED NOTIFICATION IS
-// NOT CONSUMPTION. An operation's record is
-// what its operator re-reads when the bus's notice reaches it, so the record is KEPT --
-// Committed with its application, or Aborted with its reason -- until the operator
-// RELEASES it (`release_joint`, its own explicit act), or until the operator's own life
-// or incarnation changes (nobody is left to consume it: the bus releases it; a
-// successor at the same address inherits nothing). Only a released slot is reused. The
-// bound is `kMaxJointOperations` records live or unreleased; an operator that never
-// releases meets `Exhausted` at its next begin, in words, and never another operator's
-// outstanding record reused under it. After a release the operation reads Missing,
-// legitimately. The per-key facts -- application, publishing operation, revision --
-// stay on the claim record, so a held claimant is still held and still repaired, and a
-// repair's re-settlement of a released record is owed to nobody.
-//
-// THE AUTHORITY IS BOUND THE SAME WAY, AND ONLY TO ITS OWN RECORDS. A `JointAuthority`
-// names the exact operator life and incarnation it was minted for and expires with
-// either; retiring the operator's records at that transition and refusing its retained
-// capability are two obligations, and the bus keeps both (the successor is authorized
-// by the host minting again). A valid authority reaches only the operations its
-// holder began: another operator's operation id meets `NotOperator` before that
-// record is touched, and nothing of it -- state, offers, notices owed -- changes.
-//
-// WHAT IT DOES NOT ADD. No document, layout or application vocabulary; no queue;
-// no answer; no retry; no timeout; no durability across a process. An operation
-// is bounded (`Switchboard::kMaxJointOperations`, `kMaxJointKeys`,
-// `kMaxJointOfferBytes`), one live operation binds a key at a time, and an
-// operation is aborted — its offers released — the moment a bound participant's
-// life or incarnation changes, or its claimant claims ordinarily over a bound key.
+// ---- Joint publication of latest claims ------------------------------------------------
+// An operation over several claim keys, for owners whose facts must change together at one
+// observable boundary. An operator holding a host-minted `JointAuthority` begins it, binding
+// each key's exact claimant and revision; each claimant offers its key's next value from its
+// own delivery; commit publishes every value in one step, running no participant code
+// between two. Each claimant is then shown its value before its next delivery or snapshot,
+// and the outcome is recorded (`JointApplication`); a claimant that failed is held. A record
+// is kept until its operator releases it or the operator's life or incarnation changes.
+// Bounded; no queue, answer, retry, timeout or durability; an operation aborts when a bound
+// participant changes or a claimant claims ordinarily over a bound key.
+// SENSE-06, SENSE-07; docs/reference/joint-publication.md
 
-/// One latest-claim key, as an operator names it: a claimant and a declared shape.
-/// Personal keys only: an office key is a different key space, and no consumer
-/// has needed one bound (docs/reference/joint-publication.md#what-is-not-here).
-///
-/// THE CLAIMANT MAY BE NAMED BY ROLE. An operator that coordinates offices rather
-/// than weaves leaves `claimant` invalid and fills `role`; `begin`
-/// resolves the office to its holder AT THAT MOMENT and binds that exact
-/// participant, so a role that moves afterwards does not move the operation.
-/// A key naming both is refused as the contradiction it is.
+/// One latest-claim key as an operator names it: a claimant and a declared shape. Personal keys
+/// only (docs/reference/joint-publication.md#what-is-not-here). The claimant may be named by
+/// `role` instead, with `claimant` invalid: `begin` binds the role's holder at that moment, so
+/// the role moving afterwards does not move the operation. A key naming both is refused.
 struct ClaimKey {
     WeaveId claimant{};
     std::string role;
@@ -263,20 +134,15 @@ struct ClaimKey {
     }
 };
 
-/// Why a joint-publication verb did not do what it was asked. Each names a
-/// different fix, exactly as `SenseRefusal` does; none is an empty result.
+/// Why a joint-publication verb did not do what it was asked; each names a different fix.
 enum class JointRefusal : std::uint8_t {
     None = 0,
-    /// Not spoken from inside a live delivery of the weave that presented it — a
-    /// Bus that is not a live participating context refuses truthfully.
+    /// Not called from inside a live delivery of the weave that presented it.
     NoLiveDelivery,
     /// The authority was not issued by this Loom, or its board is gone.
     ForeignAuthority,
-    /// The caller is not the exact operator (weave, life and incarnation) the
-    /// authority names — a successor at the same address inherits nothing, and a
-    /// capability retained across the operator's swap, revival or removal names
-    /// nobody now; the host mints again — OR the operation named is another
-    /// operator's: refused before the record is touched, changing nothing of it.
+    /// The caller is not the exact operator (id, life, incarnation) the authority names, or the
+    /// operation is another operator's; refused before the record is touched.
     NotOperator,
     /// A named claimant holds none of the roles the authority's ceiling names.
     OutsideCeiling,
@@ -311,11 +177,9 @@ enum class JointRefusal : std::uint8_t {
 
 const char* name_of(JointRefusal r) noexcept;
 
-/// The whole state machine. `Preparing` is the only live state; the two terminals
-/// are terminal, and a terminal record stays in its slot -- readable, its outcome
-/// owed to its operator -- until that operator releases it or is itself replaced,
-/// removed or dead; only then is the slot reused (bounded, deliberately — there is
-/// no journal here, and `Exhausted` is the answer when nothing was released).
+/// An operation's state. `Preparing` is the only live one. A terminal record stays readable in
+/// its slot until its operator releases it or is replaced, removed or dead; only then is the
+/// slot reused, and `Exhausted` is the answer when none is free.
 enum class JointState : std::uint8_t { Missing, Preparing, Committed, Aborted };
 
 const char* name_of(JointState s) noexcept;
@@ -333,12 +197,9 @@ struct JointResult {
     explicit operator bool() const noexcept { return ok; }
 };
 
-/// WHAT BECAME OF A PUBLISHED VALUE AT ITS CLAIMANT.
-///
-/// A commit PUBLISHES: every reader sees the new values from that instant. Each
-/// claimant is then SHOWN its value once, before its next delivery and before its
-/// next snapshot, and that showing is a second, attributable fact -- kept on the
-/// claim record and on the operation, so it outlives the claimant's removal.
+/// What became of a published value at its claimant. A commit publishes to every reader at once;
+/// each claimant is then shown its value once, before its next delivery or snapshot, and the
+/// outcome is kept on the claim record and the operation, so it outlives the claimant.
 enum class JointApplication : std::uint8_t {
     /// Nothing is owed: an ordinary claim, or an operation that has not committed.
     None = 0,
@@ -346,16 +207,13 @@ enum class JointApplication : std::uint8_t {
     Pending,
     /// Shown, and the claimant's hook completed.
     Applied,
-    /// Shown, and the hook did not complete -- a native throw, or a non-OK status
-    /// across the seam. The claimant is HELD until reloaded or removed.
+    /// Shown, and the hook did not complete: a native throw, or a non-OK status across the seam.
+    /// The claimant is held until reloaded or removed.
     Failed,
     /// The claimant was removed before it could be shown.
     Lost,
-    /// Shown, and the claimant ANSWERED that it does not apply this value: it keeps
-    /// or reconciles state of its own and re-claims that truth at its next delivery
-    ///. Functioning, not held, nothing
-    /// retried; the publication stands on the claim record until that claim. What
-    /// a successor says when shown a value its predecessor prepared and it did not.
+    /// Shown, and the claimant answered that it does not apply this value: it keeps state of its
+    /// own and re-claims it at its next delivery. Functioning, not held, nothing retried.
     Declined,
 };
 
@@ -367,42 +225,25 @@ struct JointStatus {
 
     JointState state = JointState::Missing;
     JointRefusal reason = JointRefusal::None;
-    /// After a commit, the application over every bound claimant: Failed if any
-    /// failed, else Lost if any was removed unshown, else Declined if any declined,
-    /// else Pending if any is still to be shown, else Applied. None while not
-    /// committed. `failed` names the claimant a Failed, Lost or Declined aggregate
-    /// is about, and `failed_role` the office it was bound through, if any.
+    /// After a commit, the application over every bound claimant: Failed if any failed, else
+    /// Lost, else Declined, else Pending, else Applied; None before a commit. `failed` names the
+    /// claimant a Failed, Lost or Declined result is about, `failed_role` the office it was bound
+    /// through, if any.
     JointApplication application = JointApplication::None;
     WeaveId failed{};
     std::string failed_role;
 };
 
-/// THE RIGHT TO COORDINATE A JOINT PUBLICATION — host-minted, operator-bound.
+/// The right to coordinate joint publications, minted by the host
+/// (`Switchboard::mint_joint_authority`) for one operator weave over a ceiling of roles: only
+/// claims whose claimants hold one of them at `begin` may be bound. Every verb checks that the
+/// presenter is the exact operator it names and that this Loom issued it; an operation id in a
+/// payload is never authority.
 ///
-/// Minted by the host (`Switchboard::mint_joint_authority`) for ONE operator weave
-/// over a CEILING of roles: only claims whose claimants hold one of those roles at
-/// `begin` may be bound. Presenting it authorizes nothing by itself: every verb
-/// checks that the presenter is the exact operator (id, life and incarnation) it
-/// names and that this Loom issued it. An operation id in a payload is never
-/// authority; this object plus the live delivery is.
-///
-/// WHAT IT NAMES IS A PARTICIPANT, NOT AN ADDRESS. Minting captures the operator's
-/// life and incarnation AT THAT MOMENT, and the capability expires with either: a
-/// code swap or reload (new incarnation), a death and revival (new life), or a
-/// removal leaves a successor at the same `WeaveId` that this object does not
-/// name, exactly as the operator's records are retired at that transition. A
-/// retained copy in the successor's hands meets `NotOperator`; the host, and only
-/// the host, authorizes the successor by minting again. Nothing here refreshes
-/// itself, and ordinary activity (a snapshot, a Poke) is not a new incarnation.
-/// An authority minted for an absent or dead operator is not `valid()`: there is
-/// no live participant to bind, so it cannot become a future life's by accident.
-///
-/// WHAT IT AUTHORIZES IS THE HOLDER'S OWN RECORDS. A valid authority is the right
-/// to coordinate operations this operator began, never an effect on another
-/// operator's record: a verb named with somebody else's operation id is refused
-/// `NotOperator` before the record is touched, its state, offers and obligations
-/// left exactly as they were. A refusal is judged by what it changed, which must
-/// be nothing, and not by its return value alone.
+/// It names a participant, not an address: it expires when the operator's life or incarnation
+/// changes (a swap, a reload, a revival, a removal), and a successor holding a copy meets
+/// `NotOperator` until the host mints again. It reaches only its holder's own operations:
+/// another operator's id is refused `NotOperator` before that record is touched.
 /// docs/reference/joint-publication.md#authority; SENSE-07.
 class JointAuthority {
 public:
@@ -412,15 +253,13 @@ public:
     JointAuthority(JointAuthority&&) = default;
     JointAuthority& operator=(JointAuthority&&) = default;
 
-    /// Does this name an operator at all? False for a default one and for one
-    /// minted when its operator was absent or dead. It does NOT promise the
-    /// operator is still that life and incarnation -- only the issuing
-    /// Switchboard can say that, and only at the moment of use.
+    /// Does this name an operator? False for a default one and for one minted for an absent or
+    /// dead operator. It does not promise the operator is still that life and incarnation; only
+    /// the issuing Switchboard says that, at the moment of use.
     bool valid() const noexcept { return operator_.valid(); }
     WeaveId operator_id() const noexcept { return operator_; }
-    /// The exact life and incarnation this was minted for. Readable so a host
-    /// can see, beside `Switchboard::participant`-level facts of its own, whether a
-    /// capability it holds still names the operator it is about to hand it to.
+    /// The exact life and incarnation this was minted for, so a host can check it still names
+    /// the operator it is about to hand it to.
     std::uint64_t operator_life() const noexcept { return life_; }
     std::uint64_t operator_incarnation() const noexcept { return incarnation_; }
     const std::vector<std::string>& ceiling() const noexcept { return ceiling_; }
@@ -432,13 +271,11 @@ private:
         : issuer_(std::move(issuer)), operator_(op), life_(life), incarnation_(incarnation),
           ceiling_(std::move(ceiling)) {}
 
-    /// WEAK, for the reason every authority's is: it must not keep its board
-    /// alive, and one from a dead world must not validate against a later board.
+    /// Weak, like every authority's issuer: it does not keep its board alive, and one from a
+    /// dead board never validates against a later one.
     std::weak_ptr<const LoomIdentity> issuer_;
-    /// The three facts of a participant, as `ParticipantRef` carries them for a
-    /// bound claimant: the id, and the life and incarnation captured at minting.
-    /// Two integers rather than the struct because this header sits below the
-    /// Switchboard's; the truth of what they mean stays in one place, the record.
+    /// The operator's id, and its life and incarnation when minted, as a `ParticipantRef`
+    /// would carry them; that type sits above this header.
     WeaveId operator_{};
     std::uint64_t life_ = 0;
     std::uint64_t incarnation_ = 0;
