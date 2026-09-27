@@ -73,7 +73,6 @@ set(ZEN_COMMENT_PENDING
     "^src/runs/process[.]cpp$"
     "^src/runs/runs_weave[.]cpp$"
     "^src/schema[.]cpp$"
-    "^src/serialize[.]cpp$"
     "^src/terminal/composer[.]cpp$"
     "^src/terminal/host_channel[.]cpp$"
     "^src/ui/pixel[.]cpp$"
