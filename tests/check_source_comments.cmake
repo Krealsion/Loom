@@ -27,7 +27,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
     "^include/zen/weave[.]hpp$"
-    "^include/zen/zen[.]hpp$"
     "^src/"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
