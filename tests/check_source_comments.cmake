@@ -59,7 +59,6 @@ set(ZEN_COMMENT_PENDING
     "^src/isolation/channel[.]cpp$"
     "^src/kernel/admission[.]cpp$"
     "^src/runs/catalog[.]cpp$"
-    "^src/runs/catalog[.]hpp$"
     "^src/runs/runs_weave[.]cpp$"
     "^src/schema[.]cpp$"
     "^src/terminal/host_channel[.]cpp$"
