@@ -1,66 +1,30 @@
-# Audits — the dated records
+# Audits — what a cold read found
 
-Audits are point-in-time examinations; their findings that changed the system
-are ratified in commits and reflected in current reference/laws. The artifacts
-stay where they were made.
+An audit reads the substrate as an adversary would, and hand-verifies the security-critical paths
+rather than trusting a report. What it confirmed and what changed because of it is below; each
+repair is pinned by a test, so the current fact is in the suite named, not on this page. The
+audit's working papers and its reproduction programs are in Git (`git log -- docs/audits`).
 
-## 2026-07-20 — the architecture audit (in-repo)
+## The architecture audit, 2026-07-20
 
-[`docs/audits/2026-07-20/`](../audits/2026-07-20/): finder briefing, lead
-hand-verification, doc-diff pass, legibility log, and runnable repros. Its
-verified claims fed the reference pages; its style (hand-verify the
-security-critical paths, never trust the report) is standing doctrine.
+| what it found | now | pinned by |
+|---|---|---|
+| A flat type-token stream nesting `List<List<…>>` deeply enough passed the gate, then overflowed the host's stack in `decode_schema`. | refused at a nesting ceiling | suite `schema_codec` |
+| On a cgroup base that delegates `pids` but not `memory`, a weave's containment note claimed a memory cap while memory ran uncapped. | the note names only a cap it can impose | suite `isolation` |
+| The delivery journal grew without bound. | a bounded ring: recent outcomes survive, older ones are evicted | suite `switchboard` |
+| The grant key was an FNV-1a hash, and collisions could be worked for. | a SHA-256 digest truncated to 128 bits, checked against NIST vectors | suite `policy` |
+| `cgroup_confirm` recognises a leaf by substring, so `zen-weave-1` matches a process in `zen-weave-10`. | open | [known seams](../reference/known-seams.md#a-cgroup-leaf-is-confirmed-by-substring) |
 
-## 2026-07-26 — the trust gate (operator workspace, out-of-repo)
+## An isolation witness that stopped witnessing in Release
 
-A full-repo trust audit whose report and backups live **outside the
-repositories**, in the maintainer's workspace (the report, and repository
-bundles that were verified and test-restored). Recorded here because
-a fresh clone will not contain them. What it changed *is* in-tree: the R1
-repairs are ratified on Zengine `main`, the timer-survival over-claim it
-measured false is corrected everywhere current, and its two process rules —
-push at phase end; state which repo's green was proven — are now house
-discipline.
-
-## 2026-08-03 — STF-0: the OOM witness that stopped witnessing
-
-**Found by R2E-0a's verification pass; repaired by STF-0.** The isolation suite's
-memory-bomb fixture allocated 200 MiB and `memset` it into a pointer never read
-and never freed. That is dead code: at `-O2` GCC deletes the `malloc` and the
-`memset` outright. So the **Release** child never grew, never crossed its 64 MiB
-cgroup cap, was never OOM-killed and was never quarantined — the case had stopped
-testing anything while still failing loudly, which is the only reason it was
-noticed at all.
-
-**Debug passing did not prove Release containment.** Debug keeps the dead store,
-so the same source tested a real property on one lane and nothing on the other.
-A green Debug lane was never evidence about the optimized build.
-
-The repair is test-only. The pressure is now made observable: stores go through a
-`volatile` pointer, and there is **one store per page** (`sysconf(_SC_PAGESIZE)`
-stride) so the whole range is faulted in — a single volatile write is equally
-un-removable and equally useless. Both bomb sites were repaired, `handle()` and
-`revive()`, because quarantine is reached by dying repeatedly until `max_reloads`
-runs out.
-
-Confirmed rather than assumed, in three independent ways:
-
-- **the optimized binary** still calls `malloc` and `sysconf`, and the page loop
-  survives `-O2` in all four inlined copies — `movb $0x1,(%rcx)` per iteration,
-  bound `cmp $0xc7fffff` (= 200 MiB − 1, the full range);
-- **the kernel's own books**, inside a delegated scope: `memory.events` `oom_kill`
-  goes **0 → 4**, and 4 is exactly the initial death plus the three revives the
-  reload budget allows before quarantine;
-- **the mutation**: restoring the old unused `malloc`+`memset` turns Release red
-  and leaves Debug green — reproducing the original asymmetry — and drops
-  `sysconf@plt` from 5 to 0 in the optimized artifact.
-
-**No production isolation mechanism changed.** Release returned to 30/30, with
-`isolation` and the aggregate `all` both moving red → green.
-
-## Mutation campaigns
-
-Every R2-arc phase ran a mutation campaign against its own tests (canary
-hand-proven first; whole binary; masked-vs-hole reported). Their summaries
-live in the phase records ([history](../history/README.md)) and the marathon's
-in `marathon/FINAL-REPORT.md` at [Night Lab](night-lab.md).
+The isolation suite's memory-bomb fixture allocated 200 MiB and wrote it through a pointer that
+was never read. At `-O2` GCC removes that allocation and its writes, so the Release child never
+crossed its 64 MiB cgroup cap and was never killed or quarantined; the case still failed, which
+is how it was noticed. Debug keeps the dead store, so the same source tested a real property in
+one build and nothing in the other: **a green Debug lane is not evidence about the optimized
+build.** The fixture now writes one byte per page through a `volatile` pointer, so the whole
+range is faulted in (`tests/weavelib/test_weave.cpp`). Three things confirmed it: the optimized
+binary still calls `malloc` and `sysconf` and keeps the page loop; inside a delegated scope,
+`memory.events` counts four OOM kills, the first death and the three revives the reload budget
+allows; and restoring the old unused write turns Release red while Debug stays green. No
+production isolation mechanism changed.

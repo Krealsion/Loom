@@ -68,8 +68,8 @@ DOES NOT MEAN
 - that revisions are a clock — a revision orders replacement **of one key**, and
   is not comparable across keys.
 
-PROVEN BY — `Switchboard::claim_as` (writes on the call); suite `sense` (S1 the
-ordering witness, S2 the no-future-knowledge witness, the newer-claim-always-wins
+PROVEN BY — `Switchboard::claim_as` (writes on the call); suite `sense` (the
+ordering witness, the no-future-knowledge witness, the newer-claim-always-wins
 case).
 
 ## SENSE-03 — Role movement never relabels a predecessor's claim
@@ -81,7 +81,7 @@ successor is considered to have claimed nothing until it deliberately claims.
 MEANS
 - a role-bound reading after a replacement returns the predecessor's claim, with
   `author`, `office` and the staleness stamp all truthful;
-- the alternative — returning nothing — was **deliberately rejected**: it would
+- the alternative — returning nothing — is **deliberately rejected**: it would
   collapse "this office has never claimed" and "this office's claim is the
   previous holder's" into one empty answer, and those are different facts. A
   reader wanting the strict view writes
@@ -100,9 +100,9 @@ DOES NOT MEAN
   at read time, so they can never go stale inside the repository.
 
 PROVEN BY — `Switchboard::authorship_of` (currency asked at read, never stored);
-suite `sense` (S3, the office/personal separation), suite `kernel` (S3 across a
-real committed admission, where the role moves in place), suite `handoff` (the
-same across a full authored handoff).
+suite `sense` (role movement, and the office/personal separation), suite
+`kernel` (the same across a real committed admission, where the role moves in
+place), suite `handoff` (the same across a full authored handoff).
 
 ## SENSE-04 — Claiming as an office is explicit; the claim-set is a contract
 
@@ -144,8 +144,10 @@ DOES NOT MEAN
   claim is representable at all.
 
 PROVEN BY — `Switchboard::make_claim` (declaration check), `office_claim_as`
-(`holds_role_now` at the claim moment); suite `sense` (S4, S6, the discovery
-case), suite `kernel` (the sealed candidate refused, and dynamic parity).
+(`holds_role_now` at the claim moment); suite `sense` (personal and office
+claims kept apart, the unheld office and the undeclared shape refused, the
+discovery case), suite `kernel` (the sealed candidate refused, and dynamic
+parity).
 
 ## SENSE-05 — Reading is authorized, and the repository is bounded
 
@@ -174,7 +176,7 @@ MEANS
   incarnation.
 
 DOES NOT MEAN
-- that reading is narrowable by claimant today — the rule selects a **shape**,
+- that reading is narrowable by claimant — the rule selects a **shape**,
   which is the granularity `allow_to_any` already has for sending. A
   per-claimant rule waits for a consumer that needs it;
 - that the host is gated: holding a `Switchboard&` is root authority, and its
@@ -185,8 +187,8 @@ DOES NOT MEAN
 
 PROVEN BY — `Grant::permits_observe` (its own rule vector),
 `Switchboard::observe_as` (authorization before lookup),
-`forget_personal_claims` / `forget_office_claims`; suite `sense` (S5 the
-lifetime witness, S6 the authorization witnesses), suite `kernel` (a loaded
+`forget_personal_claims` / `forget_office_claims`; suite `sense` (the bounded
+repository and its lifetime witness, the authorization witnesses), suite `kernel` (a loaded
 reader refused without a rule; `Kernel::load`'s explicit-grant overload).
 
 ## SENSE-06 — A publication is shown, and what the showing came to is recorded, never assumed
@@ -215,7 +217,7 @@ MEANS
   exception; across the ABI the slot's status is the fact, mapped exactly as
   `zen/kernel/abi.h` says, and a hook return type the SDK cannot read is refused
   at compile time;
-- a substrate door that mutated the maker's state (a performed `zen.PokeWrite`
+- a substrate door that mutated the weave's state (a performed `zen.PokeWrite`
   or `zen.PokeResetState`) runs the participant's `after_delivery`, so its
   claim follows its state whichever door moved it; the doors that only read or
   refuse invalidate nothing.
@@ -235,8 +237,10 @@ fixed order, stops at the first failure), `note_application`,
 `RefusalReason::ApplicationFailed`, `SnapshotAccess`,
 `reset_failed_application_for_successor`, `WeaveBase::published_as` (the
 three return types, `static_assert` on any other), `HostAdapter::claim_published`
-(`src/kernel/kernel.cpp`, the status mapping); suite `joint` (J2, J7, J11–J16,
-J20, J21), the `hook_return_types` entry.
+(`src/kernel/kernel.cpp`, the status mapping); suite `joint` (the showing before
+the next handler and snapshot, the loaded claimant, the loaded and native
+failures held and repaired, several publications under one weave, Lost, the
+mutation doors, Declined native and loaded), the `hook_return_types` entry.
 
 ## SENSE-07 — An operation's record is kept until its operator releases it
 
@@ -268,7 +272,7 @@ MEANS
   changes; a refusal is judged by what it changed, never by its name alone.
 
 DOES NOT MEAN
-- that Loom keeps a history — eight records is a bound, not a journal, and no
+- that Loom keeps a history — `kMaxJointOperations` records is a bound, not a journal, and no
   fairness between operators is promised: what one keeps, all pay for;
 - that a Preparing record can be released — it is live; cancel it;
 - that a record's release repairs or unholds anything — those are the
@@ -278,5 +282,7 @@ PROVEN BY — `Switchboard::begin_joint_as` (only a Missing slot is taken),
 `release_joint_as`, `retire_joint`, `invalidate_joint_for` (the operator's
 lifecycle), `joint_records`, `kMaxJointOperations`; `mint_joint_authority` and
 `joint_authority_check` (the exact life and incarnation), `commit_joint_as`
-(ownership before any effect); suite `joint` (J8, J17 both schedules, J18, J19;
-J23 the foreign operator, J24 the retained capability).
+(ownership before any effect); suite `joint` (bounds and retention until
+release, the committed record outliving an unrelated begin under both
+schedules, the aborted record outliving one, the operator's lifetime, the
+foreign operator, the retained capability).

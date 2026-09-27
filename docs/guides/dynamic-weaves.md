@@ -31,10 +31,9 @@ process-memory authority  what native code may TOUCH.
 
 So: **an ordinary in-process dynamic weave is trusted at the process-memory
 level.** `Kernel::containment_note()` says so in one line —
-*"in-process; trusted; no OS sandbox"* — and `Kernel::load`'s default grant is
-`Grant{}.allow_any()`, a deliberately permissive *bus* default that is
-consistent with a participant already trusted with the address space. Load
-artifacts you would run as your own code.
+*"in-process; trusted; no OS sandbox"*. Its *bus* authority is whatever the
+host's admission policy grants it, and there is no default
+([below](#load-it)). Load artifacts you would run as your own code.
 
 Running a stranger's artifact under an OS boundary instead is a **different
 mechanism with a different threat model**: the out-of-process host
@@ -74,7 +73,7 @@ loom_weave_build_contract(my-weave)   # <- the one line that is not yours to ski
 
 You do not need to know which compiler option that is, and you should not spell
 one yourself. On ELF/GNU it stops your vague-linkage statics — every
-`schema_of<T>()` the maker path instantiates for your shapes — from being
+`schema_of<T>()` the authoring path instantiates for your shapes — from being
 emitted `STB_GNU_UNIQUE`, a binding glibc resolves through a process-wide table
 that ignores `RTLD_LOCAL` and outlives `dlclose`. Skip it and the second library
 sharing your vocabulary header silently reads the first one's destroyed statics;
@@ -143,9 +142,8 @@ The door answers every operation — `zen.Result{weave id}` or `zen.Refused{why}
 — to the message's `reply_to`, else to its bus-stamped sender. A host-injected
 send has neither, so the host above reads the outcome from the kernel; a
 participant that drives the door hears the answer, and the Weave Manager
-(`zen/kernel/manager.hpp`) is the first one that does. The test that pins the
-door's ownership of the fact is `tests/test_manager.cpp`, case *"R2A-1 C: the
-direct control door activates too — the fact is not the Manager's"*: a
+(`zen/kernel/manager.hpp`) is one that does. The activation is the door's fact,
+not the Manager's: suite `manager` (`tests/test_manager.cpp`) pins that a
 participant holding exactly `load_capability` loads with no Manager in the path,
 and exactly one activation is delivered, stamped from the door.
 
@@ -179,7 +177,7 @@ into the same authenticated later refusal a native sender can receive. Check
 seam value or refused office authorship returns an invalid ticket immediately.
 The [contract](../reference/messaging.md#sender-visible-dispatch-refusal) distinguishes
 those boundaries from later dispatch and from unanswered delivery. Isolated
-children cannot request this new attestation; their manifest is refused.
+children cannot request this attestation; their manifest is refused.
 Since ABI v9 a loaded weave's declared `Emit<...>` crosses the seam by
 definition (`zen.Manifest` v5) and is claimed at load beside its doors, so a
 shape you emit under a name some acceptor spells differently is a refused load
@@ -187,8 +185,8 @@ with the shape named, exactly as it is a refused mount natively — and, exactly
 as natively, declaring it grants nothing
 ([decision](../decisions/declared-vocabulary-is-agreed-at-admission.md)).
 
-Platforms: canonical on Linux/WSL; the opt-in Windows backend is
-development-only and says so ([reference/kernel](../reference/kernel.md)).
+Platforms: Linux is the reference, including under WSL; the opt-in Windows
+backend is development-only and says so ([reference/kernel](../reference/kernel.md)).
 
 ## Deeper
 

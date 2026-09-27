@@ -64,8 +64,8 @@ The reading owns its value — `std::optional<Value>`, by value. There is no
 pointer or reference into the claimant anywhere in the type, so
 `other.sense.level = 9000;` has no spelling ([SENSE-01](../laws/sense-laws.md)).
 
-`SenseRefusal` keeps four different problems apart, because they send a maker to
-four different places:
+`SenseRefusal` keeps each problem apart, because each sends you to a different
+place:
 
 ```text
 NoClaim         nothing has been claimed under this key
@@ -146,7 +146,7 @@ After a replacement moves the role, a role-bound reading still returns the
 `office_holder_is_current = false`. It is never relabelled, and the successor is
 considered to have claimed nothing until it deliberately claims.
 
-Returning nothing was deliberately rejected: it would collapse "this office has
+Returning nothing is deliberately rejected: it would collapse "this office has
 never claimed" and "this office's claim is the previous holder's" into one empty
 answer. The strict reading is one visible line:
 
@@ -166,8 +166,8 @@ Grant{}.allow_observe_any()              // an inspector, a renderer, a console
 A **send rule is never consulted for a read**. They answer different questions
 ("may you emit this shape *there*" vs "may you pull it"), and reporting one as
 the other sends an operator to edit the wrong thing. Because the floor is empty,
-no existing weave gained reach from Senses existing — a Sense repository is not a
-universal exfiltration rail. Authorization happens *before* the lookup, so an
+no weave gains reach from Senses existing — a Sense repository is not a universal
+exfiltration rail. Authorization happens *before* the lookup, so an
 unauthorized reader cannot learn whether a claim exists.
 
 Loaded artifacts get their grant from `Kernel::load`'s explicit-grant overload:
@@ -180,7 +180,7 @@ runs after every handler — and after a substrate door that *changed* the state
 a performed `zen.PokeWrite` or `zen.PokeResetState`. A describe, a read, a
 refused write or a bad literal changes nothing and runs nothing. Any hook that
 runs "at the end of every delivery" is accounted against the doors the
-construction layer answers before maker dispatch (`zen/weave/poke.hpp`), and
+construction layer answers before the weave's own dispatch (`zen/weave/poke.hpp`), and
 this is which of them it covers ([SENSE-06](../laws/sense-laws.md)).
 
 ### Who can author a claim as someone else
@@ -231,12 +231,13 @@ Senses cross the seam at [ABI v6](dynamic-abi.md): claim/observe doors both ways
 and the declared claim-set in the manifest. A loaded reader receives **bytes**
 and re-admits them against its own definition of the shape, so no host pointer
 into the repository ever reaches a library. The out-of-process pipe fails closed
-in both directions, joining the standing V1 law.
+in both directions, as it does for every door that needs a verified identity.
 
 ## Tests
 
-Suite `sense` (S1–S6, discovery, the reading-owns-its-value case, the
-no-bus-traffic case); suite `kernel` (office claim across a real committed
+Suite `sense` (ordering, authorship and its two generation facts, role movement,
+personal and office keys, the bounded repository, authorization, discovery, the
+reading-owns-its-value case, the no-bus-traffic case); suite `kernel` (office claim across a real committed
 admission, the sealed candidate refused, dynamic parity); suite `handoff`
 (Senses meeting an authored handoff); suite `joint` (joint publication, native
 and loaded).
