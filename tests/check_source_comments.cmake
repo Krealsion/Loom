@@ -37,7 +37,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/content_id[.]hpp$"
     "^include/zen/gate[.]hpp$"
     "^include/zen/history/dump[.]hpp$"
-    "^include/zen/history/logger[.]hpp$"
     "^include/zen/history/record[.]hpp$"
     "^include/zen/isolation/channel[.]hpp$"
     "^include/zen/isolation/grant_record[.]hpp$"
