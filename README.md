@@ -1,39 +1,42 @@
-# loom
+# Loom
 
-The substrate of **Zen**: a capability-secure fabric where makers compose each
-other's **native** code safely — each keeping ownership of their own work —
-with a machine-checkable, honest account of exactly what was contained.
+Loom is a C++20 library, and a host program built on it, for running native code written by
+different people inside one application safely. Each piece keeps ownership of its own work, talks
+to the others only through messages, and holds only the authority it was given; the runtime
+reports exactly what it contained and how. Loom is the substrate of **Zen**, an invitation to a
+serious playground for building and sharing software ([zen-vision.md](zen-vision.md)).
 
-A Zen value **carries its own shape**, typed enough to be challenged at any
-boundary and dynamic enough to be built at runtime from a schema discovered
-seconds ago. Exactly one gate, `admit`, guards every boundary — the live bus,
-persistence, the dynamic-library seam, IPC. Nothing crosses a boundary it
-cannot prove it belongs across. The library holds the **grammar, never the
-answers**: no application message type, no policy, is hard-coded anywhere.
+## The ideas, in the order they build
 
-## The spine
-
-- **One gate, every boundary.** A single validator; there is no second path.
-- **Untrusted until proven.** Parsed bytes are `Unverified` — no accessors;
-  the only road to a usable `Value` is `admit`.
-- **Published schemas are immutable.** A `(name, version)` is frozen; identity
-  across boundaries is the content-id, never the C++ type.
-- **Authority is minimal and explicit.** A weave says nothing until granted
-  reach; grants are checked before the gate and never confused with it.
-- **Honest enforcement.** The runtime claims only what it imposed *and
-  confirmed*, fails safe when it cannot — and the containment tier is stated
-  plainly: **abuse, not escape**.
+- A **weave** is one participant: a piece of native code, compiled into the program or loaded
+  from a shared library, that receives and sends messages. It is the unit of authorship.
+- A **value** carries its own **shape**: a **schema** is a frozen `(name, version)` with its
+  fields, identified across boundaries by a content id rather than by a C++ type. Values can be
+  built at runtime from a schema discovered seconds ago.
+- **One gate, every boundary.** Whatever crosses a boundary — the live bus, storage, the
+  shared-library seam, another process — is checked by one function, `admit`, against its schema.
+  Parsed bytes are `Unverified` and have no accessors; the only way to a usable `Value` is
+  `admit`. There is no second path.
+- **Published schemas are immutable.** Once a `(name, version)` is published, it never changes.
+- **Authority is minimal and explicit.** A **grant** says which shapes a weave may send, and to
+  whom. A weave with no grant can say nothing. Grants are checked before the gate and are never
+  confused with it.
+- **Honest enforcement.** Where Loom confines a weave in an operating-system sandbox, it claims
+  only what it imposed *and confirmed*, and fails safe when it cannot. The sandbox is built
+  against **abuse, not escape**: it stops buggy or greedy code, not a determined attacker.
+- **The grammar, never the answers.** Loom hard-codes no application message and no policy; a
+  host decides both.
 
 ## What is here
 
 | | |
 |---|---|
-| `loom` (core) | schema · value · the one gate · registry · canonical serialization |
-| `zen-switchboard` | the in-process bus: gated delivery, grants, lifecycle, prepared replacement |
-| `zen-kernel` | weaves from dynamic libraries across a true C ABI (**v6**); hot-reload; sealed candidates. In-process: the library shares this address space, and is trusted at that level ([why](docs/guides/dynamic-weaves.md#what-loading-it-in-process-means)) |
-| `include/zen/weave/` | authoring sugar: `ZEN_SHAPE`, `WeaveBase`, `Mail`, `mount` |
+| `loom` (core) | schemas, values, the gate, the schema registry, canonical serialization |
+| `zen-switchboard` | the in-process message bus: gated delivery, grants, lifecycle, prepared replacement of a running service |
+| `zen-kernel` | weaves loaded from shared libraries across a C ABI (version **9**), reloaded in place, or prepared as sealed candidates before they take over. A loaded library shares the host's address space and is trusted at that level ([why](docs/guides/dynamic-weaves.md#what-loading-it-in-process-means)) |
+| `include/zen/weave/` | the authoring layer: `ZEN_SHAPE`, `WeaveBase`, `Mail`, `mount` |
 | `include/zen/host/` | host wiring: lifecycle authority, `loom::PreparedReplacement` |
-| isolation · console · bridge | OS sandboxing (Linux) · the operator console/TUI · the remote-operator crossing. The bridge **does not authenticate** — reachability of its socket is operator authority ([bridge](docs/reference/bridge.md)) |
+| isolation · console · bridge | the operating-system sandbox (Linux) · the operator's console · the crossing between two hosts. The bridge **does not authenticate**: a connection acts on nothing until the host's admission policy answers it, and under the operator policy, reaching the socket is enough ([bridge](docs/reference/bridge.md)) |
 
 ## Sixty seconds of weave
 
@@ -54,49 +57,46 @@ bus.send(id, loom::Message(loom::to_value(Ping{7})));
 bus.drain_until_idle();
 ```
 
-Runnable versions live in [`examples/`](examples/) — `quickstart.cpp` (the
-value-and-gate core), `heartbeat_woven.cpp` (the above), `answering.cpp`
+`Responder` accepts `Ping`, may emit `Pong`, and keeps a `Count` as its state. Runnable versions
+live in [`examples/`](examples/): `quickstart.cpp` (values and the gate), `heartbeat.cpp` and
+`heartbeat_woven.cpp` (weaves on the bus, by hand and with the authoring layer), `answering.cpp`
 (immediate and deferred answers).
 
 ## Run it
 
-Loom ships a host. Install it and you have a program — not a library you have to
-write a host around first:
+Loom ships a host. Install it and you have a program, not a library you have to write a host
+around first:
 
 ```sh
 cmake -B build -DCMAKE_INSTALL_PREFIX=$HOME/loom && cmake --build build && cmake --install build
 $HOME/loom/bin/loom-host
 ```
 
-`loom-host` boots the weaves you chose, in the order you wrote, and gives you a
-console with **authority** in it: what may run, what it may say, approve, refuse,
-inspect, revoke — remembered across restarts and revocable afterwards. Nothing is
-loaded because a file named it; a participant gets authority because your policy
-permits it.
+`loom-host` starts the weaves you chose, in the order you wrote, and gives you a console with
+**authority** in it: what may run, what it may say; approve, refuse, inspect, revoke —
+remembered across restarts and revocable afterwards. Nothing is loaded because a file named it; a
+participant gets authority because your policy permits it.
 
-Start at **[from nothing to a running weave](docs/guides/running-loom.md)** — install,
-start, write a weave of your own, run it, change it. It needs
-[a compiler and CMake](docs/guides/tools.md) and nothing else: no Zengine, no
-Workshop, no already-hosted tool.
+Start at **[from nothing to a running weave](docs/guides/running-loom.md)**: install, start,
+write a weave of your own, run it, change it. It needs [a compiler and CMake](docs/guides/tools.md)
+and nothing else.
 
 ## Documentation
 
 **[docs/README.md](docs/README.md)** routes everything: start with the
-[mental model](docs/guides/mental-model.md) and
-[writing a weave](docs/guides/writing-a-weave.md); exact semantics in
-[reference](docs/reference/); the named invariants in
-[laws](docs/laws/README.md); why in [decisions](docs/decisions/README.md) and
-[history](docs/history/README.md); application evidence in
-[evidence](docs/evidence/README.md). Machine collaborators start at
-[docs/CONTEXT.md](docs/CONTEXT.md); build rules for agents in
-[AGENTS.md](AGENTS.md). The soul of the project is
-[zen-vision.md](zen-vision.md).
+[mental model](docs/guides/mental-model.md) and [writing a weave](docs/guides/writing-a-weave.md);
+exact semantics are in the [reference](docs/reference/); the named invariants in the
+[laws](docs/laws/README.md); why things are as they are in the
+[decisions](docs/decisions/README.md) and [history](docs/history/README.md); what applications
+found in the [evidence](docs/evidence/README.md). Every term is defined once, in the
+[terminology index](docs/terminology.md). A machine collaborator starts at
+[docs/CONTEXT.md](docs/CONTEXT.md) and builds by [AGENTS.md](AGENTS.md).
 
-## Build & test
+## Build and test
 
-CMake ≥ 3.16, a C++20 compiler (verified GCC 11.4, WSL/Linux canonical);
-builds clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
--Wsign-conversion -Werror`.
+CMake 3.16 or newer and a C++20 compiler (GCC 11.4 or newer; Linux is the reference platform).
+The build is clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
+-Werror`.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -109,38 +109,36 @@ cmake --build build-san
 cmake -DZEN_BUILD_DIR=build-san -P tests/verify.cmake
 ```
 
-`tests/verify.cmake` is the result worth quoting: a bare `ctest` accepts a
-selector that matched nothing as success, and the lane does not. A named suite
-that selects zero cases fails; the suite inventory and per-suite case floors in
-`tests/suite_population.txt` are checked every run; the CTest entries that are
-*not* suites are declared in `tests/entry_population.txt` and checked by name —
-by the lane, and independently by the `population` entry inside it — so the lane
-cannot quietly get smaller; and the two OS-enforcement populations are
-exact and independent — a missing witness and an unannounced extra one both fail,
-and the expected counts live only in the `ZEN_ENFORCEMENT_POPULATION(...)` calls
-closing `tests/test_isolation.cpp` and `tests/test_policy.cpp`, moving only by a
-deliberate edit there. See
-[`docs/laws/population-laws.md`](docs/laws/population-laws.md).
+`tests/verify.cmake` is the result worth quoting. A bare `ctest` accepts a selector that matched
+nothing as success; the lane does not. What the lane holds:
 
-The `isolation`/`policy` suites need a delegated cgroup-v2 scope; ctest
-launches them through `tests/run-under-scope.sh`, and outside such a scope the
-OS-enforcement cases **fail hard by design** rather than pass having verified
-nothing. `ZEN_ALLOW_UNENFORCEABLE=1` converts those into marked-degraded skips
-for a host that genuinely cannot enforce — such a run prints
-`*** NON-ENFORCEMENT MODE ***`, asserts no enforcement population, and is
-refused by the official lane; it is never evidence about containment. The
-portable suites run everywhere, including Windows — under **both MinGW-w64 and
-MSVC** — where the `posix` gate is off and those suites are reported as
-*declared absent* rather than passing; the Windows kernel backend is an
-explicit development-only opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`), and with it on
-the `kernel` gate is taken on either compiler.
+- a named suite that selects zero cases fails;
+- the suite inventory and each suite's case floor in `tests/suite_population.txt` are checked
+  every run;
+- the CTest entries that are *not* suites are declared in `tests/entry_population.txt` and
+  checked by name, by the lane and independently by the `population` entry, so the lane cannot
+  quietly get smaller;
+- the two OS-enforcement populations are exact: a missing witness and an unannounced extra one
+  both fail. The expected counts live only in the `ZEN_ENFORCEMENT_POPULATION(...)` calls that
+  close `tests/test_isolation.cpp` and `tests/test_policy.cpp`.
 
-MSVC support means the package and the weave ABI, not the security story: the
-OS sandbox, isolation and the honesty lattice remain Linux-only on every
-Windows compiler. Tested on MSVC 19.50 (Visual Studio 2026) x64; clang-cl and
-ARM64 are unverified.
+The laws behind this are in [`docs/laws/population-laws.md`](docs/laws/population-laws.md).
 
-## Consuming loom
+The `isolation` and `policy` suites need a delegated cgroup-v2 scope; CTest launches them through
+`tests/run-under-scope.sh`, and outside such a scope the OS-enforcement cases **fail by design**
+rather than pass having verified nothing. `ZEN_ALLOW_UNENFORCEABLE=1` turns those into marked,
+degraded skips for a host that cannot enforce: such a run prints `*** NON-ENFORCEMENT MODE ***`,
+asserts no enforcement population, is refused by the official lane, and is never evidence about
+containment.
+
+The portable suites run everywhere, including Windows under **both MinGW-w64 and MSVC**, where
+the `posix` gate is off and its suites are reported as *declared absent* rather than passing. The
+Windows kernel backend is an opt-in for development (`LOOM_ENABLE_WINDOWS_KERNEL`); with it on, the
+`kernel` gate runs on either compiler. MSVC support means the package and the weave ABI, not the
+security story: the operating-system sandbox and its enforcement reports are Linux-only. Tested on
+MSVC 19.50 (Visual Studio 2026) x64; clang-cl and ARM64 are unverified.
+
+## Consuming Loom
 
 ```sh
 cmake --install build --prefix /path/to/prefix
@@ -153,43 +151,32 @@ target_link_libraries(my_weave PRIVATE loom::core)          # values, schemas, t
 # gate hosting on:  if(TARGET loom::kernel)                 # "can this install host weaves?"
 ```
 
-The exported surface is deliberately smaller than the build tree —
-`loom::core`, `loom::switchboard`, `loom::kernel` (+ the `sanitize`/`warnings`
-interface plumbing, carried so `-Werror` never reaches your sources). Exported
-names match the in-tree aliases exactly, so a sibling-source build swaps for
-the installed package without touching a link line.
+The exported surface is deliberately smaller than the build tree: `loom::core`,
+`loom::switchboard`, `loom::kernel`, and the `sanitize` and `warnings` interface targets, carried
+so that `-Werror` never reaches your sources. Exported names match the in-tree aliases exactly, so
+a build from source and a build against the installed package use the same link lines.
 
-**MSVC consumers get the conforming preprocessor automatically.** `ZEN_SHAPE`'s
-access tags (`ZEN_EXPOSE`/`ZEN_HIDE`) dispatch on C++20 `__VA_OPT__`, which
-MSVC's default traditional preprocessor does not implement, so `loom::core`
-carries `/Zc:preprocessor` as an interface requirement — link the target and it
-arrives. Only a consumer compiling these headers **without** the CMake targets
-needs to pass it by hand; nothing else about the package is MSVC-specific.
-`tests/package/` is the witness that this stays true:
+**MSVC consumers get the conforming preprocessor automatically.** `ZEN_SHAPE`'s access tags
+(`ZEN_EXPOSE`, `ZEN_HIDE`) dispatch on C++20 `__VA_OPT__`, which MSVC's default traditional
+preprocessor does not implement, so `loom::core` carries `/Zc:preprocessor` as an interface
+requirement: link the target and it arrives. Only a consumer compiling these headers **without**
+the CMake targets needs to pass it by hand. `tests/package/` is the witness that this stays true:
 
 ```sh
 cmake -DZEN_PREFIX=/path/to/prefix -DZEN_WORK=/tmp/w -P tests/package/run.cmake
 ```
 
-It builds an external project through `find_package(loom)` alone — no flags, no
-sibling include path — compiles every macro form, and then asks the produced
-weave what it exports and loads it through the real Kernel.
+It builds an external project through `find_package(loom)` alone — no flags, no include path of
+its own — compiles every macro form, and then asks the produced weave what it exports and loads
+it through the real kernel.
 
-## Where this lives
-
-Loom is one of two repositories, usually checked out side by side:
-
-```
-Loom/        this repo — the substrate, everyone's
-Zengine/     the default weave set (Timer, Input, Surface, snake) — the first consumer
-```
+## Who builds on it
 
 Your own weaves live wherever you keep them; nothing here assumes a layout.
-Zengine consumes the Loom **by the stranger's path** (an installed package),
-which keeps the dependency arrow un-invertible and makes an unexported surface
-fail at home before it fails for a guest. **Per-repo green:** each repo's
-suite proves that repo; every report states *which* repo's green was proven,
-and git runs per repository (`git -C Loom status`).
+[Zengine](https://github.com/Krealsion/Zengine) is the first consumer: the default set of weaves
+(Timer, Input, Surface and others), which builds against an installed Loom through
+`find_package`, exactly as a stranger would. Its packages and their laws are its own; this
+repository documents Loom alone.
 
 ## License
 

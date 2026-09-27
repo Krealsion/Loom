@@ -30,14 +30,7 @@ set(ZEN_DOC_STANDARD_EXCLUDE
 # Documents not yet brought to the standard. The list only shrinks: a document leaves it when
 # it meets the standard.
 set(ZEN_DOC_STANDARD_PENDING
-    "^docs/(guides|reference|laws|decisions|evidence|audits)/"
-    "^README[.]md$"
-    "^DESIGN[.]md$"
-    "^AGENTS[.]md$"
-    "^zen-design-ledger[.]md$"
-    "^docs/README[.]md$"
-    "^docs/CONTEXT[.]md$"
-    "^docs/terminology[.]md$")
+    "^docs/(guides|reference|laws|decisions|evidence|audits)/")
 
 string(ASCII 1 ZEN_SOH)
 string(ASCII 2 ZEN_STX)

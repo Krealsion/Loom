@@ -9,7 +9,7 @@ starts the supplied host and builds something against the installed package. Do 
 first even if you intend to change Loom itself: the shortest way to understand what a
 change breaks is to have used the thing it breaks.
 
-The build and the official test lane are in [the README](README.md#build--test); the
+The build and the official test lane are in [the README](README.md#build-and-test); the
 build rules a machine collaborator needs are in [AGENTS.md](AGENTS.md).
 
 ## Code contributions

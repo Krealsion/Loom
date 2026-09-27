@@ -20,13 +20,11 @@ pages, no history required.
 [Messaging](guides/messaging.md) ·
 [dynamic weaves](guides/dynamic-weaves.md) ·
 [replacing a service](guides/replacing-a-service.md).
-Timers are not Loom's: they are the Timer *package*, owned by the separate
-**Zengine** repository, at `Zengine/docs/`. Zengine-owned pages are named that
-way throughout and never linked — no page under `docs/` reaches into a sibling
-checkout, so this tree is readable from a Loom clone alone. That is the narrow
-case of the rule in [CONTRIBUTING.md](../CONTRIBUTING.md#comments-and-documents): a
-public repository names no path outside itself, and `doc_links` reads every
-current-facing file for one.
+Timers are not Loom's: they belong to the Timer package of
+[Zengine](https://github.com/Krealsion/Zengine), which documents it. No page here names a path
+into another repository, so this tree reads whole from a Loom clone alone; that is the narrow
+case of the rule in [CONTRIBUTING.md](../CONTRIBUTING.md#comments-and-documents) that a public
+repository names no path outside itself.
 
 **I need exact semantics.** [reference/](reference/) — one page per subsystem:
 [values & admission](reference/values-and-admission.md),
@@ -37,6 +35,7 @@ current-facing file for one.
 [weaver](reference/weaver.md), [terminal](reference/terminal.md),
 [senses](reference/senses.md),
 [joint publication](reference/joint-publication.md),
+[observation](reference/observation.md), [history](reference/history.md),
 [bounds](reference/bounds.md),
 [known seams](reference/known-seams.md). Words are defined once, in the
 [terminology index](terminology.md).
@@ -52,12 +51,12 @@ cover attempt tracking, authenticated answers and explicit local settlement.
 
 **I am debugging behavior.** [guides/diagnostics.md](guides/diagnostics.md)
 first; the invariants themselves are the [laws](laws/README.md) — small, named
-(GATE/MSG/ANS/LIFE/PR/SENSE/HANDOFF/KERN, and POP for what a green *test* run
-means), each stating what it does *not* mean.
+(`GATE`, `MSG`, `ANS`, `LIFE`, `PR`, `SENSE`, `HANDOFF`, `KERN`, and `POP` for what a
+green *test* run means), each stating what it does *not* mean.
 
 **I need to know why.** [decisions/](decisions/README.md) for the choices that
 would otherwise be re-litigated; [history/](history/README.md) for the frozen
-manuscripts and the phase chronology.
+manuscripts and the record of how Loom came to be this way.
 
 **I want experimental evidence.** [evidence/](evidence/README.md) — Night Lab
 and the audits: what real applications discovered, distinct from what the API
