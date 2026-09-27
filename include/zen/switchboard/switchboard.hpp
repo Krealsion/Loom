@@ -82,9 +82,10 @@ enum class RefusalReason : std::uint8_t {
     /// docs/reference/known-seams.md#rejections-at-the-dynamic-seam
     SeamUnresolved,
     /// The target is held behind a value a joint operation published under one of its own keys
-    /// and it could not apply: its `claim_published` hook threw, or returned a non-OK status
-    /// across the seam. Nothing is delivered to it until it is reloaded or removed;
-    /// `joint_status` and `zen.JointApplied` say so.
+    /// and it could not apply: its `claim_published` hook threw or returned `Failed`, or a loaded
+    /// weave's slot answered neither `ZEN_OK` nor `ZEN_CLAIM_DECLINED` (zen/kernel/abi.h).
+    /// Nothing is delivered to it until it is reloaded or removed; `joint_status` and
+    /// `zen.JointApplied` say so.
     /// SENSE-06; docs/laws/sense-laws.md
     /// docs/reference/joint-publication.md#the-hold-and-diagnostic-access
     ApplicationFailed,
@@ -836,7 +837,6 @@ public:
     /// admission is scheduled, and becomes `Committed` inside its dispatch once the role has moved
     /// and the activation is delivered, or `Aborted` with `AdmissionRefused` if the world drifted.
     /// PR-07; docs/laws/replacement-laws.md
-    /// PR-07; docs/laws/replacement-laws.md
     TxnResult commit_prepared_replacement(TxnId id, const LifecycleAuthority& authority,
                                           Message activation, std::int64_t sequence);
 
@@ -929,7 +929,6 @@ private:
         /// no words for the containment already applied to a child. Effective authority is the
         /// union, computed at every delivery by `effective_permits*`. Survives a code swap and a
         /// revival; destroyed with the record.
-        /// GATE-05; docs/reference/capabilities.md#live-delegation
         /// GATE-05; docs/reference/capabilities.md#live-delegation
         LiveAuthority delegated{};
         /// The registry claim on the shapes delegated rules name, as a grant's rules have, so a
