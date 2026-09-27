@@ -36,7 +36,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/weave/poke_weave[.]hpp$"
     "^include/zen/weave/relay[.]hpp$"
     "^include/zen/weave/role_request[.]hpp$"
-    "^include/zen/weave/shape[.]hpp$"
     "^include/zen/weave/standard_shapes[.]hpp$"
     "^src/"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
