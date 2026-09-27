@@ -15,10 +15,11 @@
 # What may differ, each printed: the instruments, the checks' own files (INSTRUMENTS); a directory
 # left to Git whole (LEFT_TO_GIT); the checks' registration lines in tests/CMakeLists.txt and their
 # rows in tests/entry_population.txt, when START lacks them; a failure message or exemption
-# reason named below by its START literal, reworded to show no private id; a CI workflow's
-# whole-line `#` comments. Every other changed file must be markdown or this directory's. Every law pointer
-# (`// MSG-09; docs/laws/messaging-laws.md`, after `//`, `///` or `//!`) must stand where it stood:
-# the same file, above the same code, and once. A pointer written over two lines is not one it sees.
+# reason named below by its START literal, reworded to show no private id or stage name; a CI
+# workflow's whole-line `#` comments. Every other changed file must be markdown or this
+# directory's. Every law pointer (`// MSG-09; docs/laws/messaging-laws.md`, after `//`, `///` or
+# `//!`) must stand where it stood: the same file, above the same code, and once. A pointer written
+# over two lines is not one it sees.
 
 import argparse
 import collections
@@ -53,8 +54,9 @@ MANIFESTS = {
     "tests/entry_population.txt": ("tests/check_entry_population.cmake",
                                    ("source_comments portable", "doc_standard portable")),
 }
-# The failure messages and the exemption reason that showed a reader a private id, named by their
-# START literals. Each may be reworded, and the rewording may show no id.
+# The failure messages and the exemption reason that showed a reader a private id or a plan's
+# stage name, named by their START literals. Each may be reworded, and the rewording may show no
+# id.
 REWORDED = {
     "tests/CMakeLists.txt": (
         '"the F-22 negative control: same source as zen_test_contract_applied, contract "',),
@@ -66,6 +68,8 @@ REWORDED = {
         '"symbols in total). The negative control has stopped reproducing F-22, so "',),
     "tests/verify.cmake": (
         '"A lane that proceeded without it would be the lane VOLATILE-2a closed: one that "',),
+    "include/zen/ui/tree.hpp": (
+        '"of Stage 3: intent and relationship, never coordinates)."',),
 }
 WORKFLOWS = ".github/workflows/"
 # The manifests' reading in their checks, restated; the line it keys on must still be in each
