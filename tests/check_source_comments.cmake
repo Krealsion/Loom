@@ -33,7 +33,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/host/prepared_replacement[.]hpp$"
     "^include/zen/host/terminal_wiring[.]hpp$"
     "^include/zen/kernel/admission[.]hpp$"
-    "^include/zen/kernel/control[.]hpp$"
     "^include/zen/kernel/export[.]hpp$"
     "^include/zen/kernel/manager[.]hpp$"
     "^include/zen/kernel/schema_codec[.]hpp$"
