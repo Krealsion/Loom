@@ -185,7 +185,7 @@ struct Evicted {
 };
 
 /// The frontend-facing console, independent of where the bus lives: `ConsoleEngine` implements
-/// it in process and `RemoteConsole` over the operator protocol on a socket, so a frontend
+/// it in process and `RemoteConsole` over the bridge protocol on a socket, so a frontend
 /// written against it runs on either. Remotely, discovery and the tap are answered by messages.
 class Console {
 public:
