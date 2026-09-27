@@ -4,51 +4,12 @@
 #ifndef ZEN_RUNS_PROCESS_HPP
 #define ZEN_RUNS_PROCESS_HPP
 
-// ONE WORKER PROCESS, STARTED AND WATCHED WITHOUT BLOCKING THE HOST.
-//
-// The run manager starts each run's worker as a separate operating-system process and then only
-// ASKS about it -- `poll` never waits -- because the manager lives on the host's single bus thread
-// and a manager that blocked on a child would stop the session for every client.
-//
-// WHAT THE CHILD GETS, EXACTLY, because the exec boundary is where ambient authority leaks
-// (docs/reference/capabilities.md, "the exec boundary"): its standard input is the null device,
-// its standard output and error go to one file in the run's directory, its working directory is
-// the run's directory, and its environment is the host's plus the variables the manager names.
-// NOTHING ELSE IS INHERITED: on Windows the handle list is explicit (PROC_THREAD_ATTRIBUTE_
-// HANDLE_LIST), and on POSIX every descriptor above the three standard ones is closed before the
-// program starts -- so a worker never holds the host's listener or a client's socket open.
-//
-// WHAT IT IS NOT: a sandbox. The worker runs as the same user with the same filesystem and network
-// reach as the host. Its bus authority is bounded by its session's grant; its OS authority is not
-// bounded here at all, and the docs say so.
-//
-// WHAT IS OWNED, AND UNTIL WHEN. The unit of ownership is the worker's EXECUTION GROUP -- a
-// Windows job object, a POSIX process group -- not the one process that leads it. A leader that
-// exits leaving children behind has not ended the execution: `ended()` says the leader is gone,
-// `alive()` says whether anything this object owns is still running, and `terminate()` ends the
-// whole group in either case. Ownership begins at `spawn` and ends at `release` (the destructor),
-// or earlier when the group drains by itself. It never ends merely because the leader exited,
-// which is what makes a force-stop after a verdict mean something.
-//
-// SO THERE ARE TWO ENDS, AND TWO WAITS FOR THEM. A caller about to write down a final claim about
-// the LEADER ("it exited with N") waits with `wait_for_end`; a caller about to write down a final
-// claim about the EXECUTION ("it is over") waits with `wait_for_group_end`. They are not
-// interchangeable in either direction, and the second is never implied by the first: the leader's
-// end is already true the instant a stop is issued at a group whose leader had exited long ago.
-//
-// AND WHY IT CANNOT WANDER. A numeric pid or group id that nothing holds is reused by the
-// operating system, so a kill by remembered number can land on an unrelated later process. This
-// object never does that: Windows holds a job HANDLE, which names that job and no other for as
-// long as it is open; POSIX keeps the leader UNREAPED (a zombie, read with `waitid(WNOWAIT)`)
-// for exactly as long as the group still has members, and a pid with a zombie on it is not
-// recycled -- so the group id it also serves as is this group's and no other. When the group is
-// empty the leader is reaped at once and ownership is given up, so there is nothing left to aim.
-//
-// WHEN THE HOST ITSELF ENDS. On a clean shutdown the manager destroys these objects and every
-// owned group is ended. On Windows that also holds when the host dies ABRUPTLY: the job carries
-// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and the kernel closes the handle for a dying process, so
-// the group goes with it. On POSIX there is NO such guarantee -- an abruptly killed host leaves
-// its workers running, reparented, with their records unfinished (docs/guides/sessions.md).
+// One worker process, started and watched without blocking the host: `poll` never waits,
+// because the manager lives on the host's one bus thread. The child gets the null device for
+// stdin, one output file, the run's directory and the host's environment plus named variables,
+// and nothing else (docs/reference/capabilities.md#the-exec-boundary-three-independent-facts).
+// Not a sandbox: same user, same filesystem and network (docs/guides/sessions.md). What is owned
+// is the execution group (a Windows job, a POSIX process group), from `spawn` to `release`.
 
 #include <cstdint>
 #include <string>
@@ -98,21 +59,11 @@ public:
     /// look and no wait. It says NOTHING about the execution -- see `wait_for_group_end`.
     bool wait_for_end(int milliseconds);
 
-    /// WAIT, AT MOST `milliseconds`, FOR THE WHOLE OWNED EXECUTION TO END -- the leader and
-    /// anything it left in the execution group -- so that a caller about to write down a final
-    /// claim ABOUT THE EXECUTION ("it is over") can make the observation that claim needs.
-    /// True only once the leader has ended AND nothing this object owns is still running: false
-    /// means one of those was not established in the time given, and the caller must say so
-    /// rather than reporting an end it never saw. Zero milliseconds is one look and no wait, and
-    /// a process that was never started has nothing to observe and answers false.
-    ///
-    /// The LEADER's own code is read along the way wherever it is still readable, so
-    /// `exit_code_known()` afterwards answers about the leader exactly as it always does: this
-    /// never invents an aggregate for the group and never reports a descendant's code.
-    ///
-    /// These two waits and `release()` -- which reaps the leader after SIGKILL on POSIX so no
-    /// zombie is left in the host's process table -- are the only places this class waits; every
-    /// question, `ended`, `alive`, `terminate`, answers without waiting, as the note above says.
+    /// Wait, at most `milliseconds`, for the whole owned execution to end, the leader and
+    /// anything it left in the group, so a caller about to write "it is over" has observed it.
+    /// False means that was not established in time (or nothing was ever started); zero is one
+    /// look. The leader's code is read along the way where still readable; never a descendant's.
+    /// These two waits and `release()` are the only places this class waits.
     bool wait_for_group_end(int milliseconds);
 
     /// Is anything this object owns still running -- the leader, or a descendant it left in the
@@ -130,13 +81,17 @@ public:
     static std::string find_on_path(const std::string& name);
 
 private:
-    /// End and let go of the worker (the destructor's work, shared with move assignment).
+    /// End and let go of the worker (the destructor's work, shared with move assignment). A host
+    /// killed outright never runs it: on Windows the job's KILL_ON_JOB_CLOSE still ends the
+    /// group, and on POSIX the workers are left running (docs/guides/sessions.md).
     void release() noexcept;
     /// Has the WHOLE owned execution ended -- the leader AND the group? Both are asked, leader
     /// first; neither answers for the other (see the definition).
     bool execution_over();
     /// POSIX: has the execution group any member but the leader's own zombie? Reaps the leader
-    /// and gives up ownership when it has not.
+    /// and gives up ownership when it has not. The leader stays unreaped while the group has
+    /// members, so its pid, which is also the group id, cannot be recycled under a later kill;
+    /// Windows holds the job handle for the same reason.
     bool group_alive();
 
     std::int64_t pid_ = 0;
