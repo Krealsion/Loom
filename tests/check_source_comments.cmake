@@ -36,20 +36,13 @@ set(ZEN_COMMENT_PENDING
     "^examples/heartbeat[.]cpp$"
     "^examples/heartbeat_woven[.]cpp$"
     "^examples/quickstart[.]cpp$"
-    "^tests/check_commit_attribution[.]cmake$"
-    "^tests/check_doc_links[.]cmake$"
-    "^tests/check_entry_population[.]cmake$"
-    "^tests/check_population[.]cmake$"
     "^tests/check_weave_contract[.]cmake$"
     "^tests/check_weave_population[.]cmake$"
     "^tests/entry_population[.]txt$"
     "^tests/hook_return/CMakeLists[.]txt$"
-    "^tests/host_process/run[.]cmake$"
     "^tests/package/CMakeLists[.]txt$"
     "^tests/package/run[.]cmake$"
-    "^tests/suite_population[.]txt$"
-    "^tests/verify[.]cmake$"
-    "^tests/weave_population[.]cmake$")
+    "^tests/suite_population[.]txt$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
