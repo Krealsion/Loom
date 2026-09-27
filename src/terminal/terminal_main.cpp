@@ -1,38 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE FIRST PRESENTATION OF THE TERMINAL CORE — a plain REPL that owns no
-// terminal semantics whatever.
-//
-// Everything this file does is parse a line, name a participant, call the core,
-// and render what came back. It holds no transcript of its own, decides nothing
-// about authority, and has no privileged path to anything: delete it and the
-// terminal is still there, in `zen-terminal`, waiting for another presentation.
-// That is the claim this package makes, and this file is where it is either true or
-// obviously false.
-//
-// THREE LENSES, VISIBLY DIFFERENT, AND NEVER SILENTLY CROSSED:
-//
-//     session>   the governed participant. Its own WeaveId, its own small grant.
-//     operator>  the seat whose word the Weaver treats as the user's. A DIFFERENT
-//                WeaveId, with a different grant, whose messages leave through its
-//                own door.
-//     debug>     THE HOST LOOKING. Not a participant at all — this is the process
-//                that owns the Switchboard reading its own registry and its own
-//                tap. It can see things neither participant can, and every line it
-//                prints says so.
-//
-// A command typed at one prompt is authored by that participant and by no other.
-// There is no fallback, no automatic retry as somebody with more authority, and
-// no command that quietly changes who is speaking. If the session lacks the
-// authority for what you typed, you get what an ordinary participant gets:
-// nothing back, because Loom does not tell a sender its send's fate.
-//
-// IT HOSTS ITS OWN LOOM. This executable boots a Switchboard, a service, a
-// Weaver, a governed session and an operator seat, all in this process. It does
-// NOT attach to another program's Loom — there is no socket here, no token, no
-// authentication, and no remote anything. A "terminal" here means a
-// presentation of participants that live in the same process.
+// A plain REPL presentation of the terminal core that owns no terminal semantics: it parses a
+// line, names a participant, calls the core and renders what came back. It hosts its own Loom
+// in this process (no socket, no remote anything) with three lenses, never silently crossed:
+// `session>` the governed participant, `operator>` the seat the Weaver treats as the user, a
+// different weave, and `debug>` the host itself reading its own registry and tap. A command is
+// authored by its prompt's participant alone: no fallback, no retry with more authority.
 
 #include <zen/host/grant_wiring.hpp>
 #include <zen/host/terminal_wiring.hpp>
@@ -55,8 +29,8 @@ namespace {
 
 using loom::lex_arg;
 // The address half of the command grammar is shared with every other presentation of this
-// core since WT-1, exactly as the value half already was -- one parser, in
-// <zen/terminal/input_lex.hpp>, so `#12` / `@office` / `*` cannot come to mean two things.
+// core, as the value half is: one parser, in <zen/terminal/input_lex.hpp>, so `#12`,
+// `@office` and `*` cannot come to mean two things.
 using loom::parse_address;
 using loom::parse_u64;
 using loom::Token;
@@ -311,9 +285,8 @@ int main() {
 
     // ---- the operator seat: a DIFFERENT weave -------------------------------
     //
-    // Four rules, all of them "say one contentless decision to the policy office". No allow_any,
-    // no tap, no discovery, no host root — the Weaver's bootstrap console held all four, and none
-    // of them turned out to be necessary to be the user.
+    // Four rules, all of them "say one contentless decision to the policy office". No
+    // allow_any, no tap, no discovery, no host root: none is needed to be the user.
     loom::Grant operator_grant;
     operator_grant.allow_to_role("zen.ApproveAuthority", 1, kWeaverRole);
     operator_grant.allow_to_role("zen.RefuseAuthority", 1, kWeaverRole);
@@ -357,12 +330,10 @@ int main() {
     weaver_raw->zen_set_self(weaver_id);
 
     // ---- the HOST DEBUG LENS ------------------------------------------------
-    //
-    // The tap, held by the host, wired to NEITHER participant. Everything it collects is
-    // legitimately the host's — this process owns the Switchboard — and nothing it collects ever
-    // reaches a transcript. That separation is the point: a participant that inherited this would
-    // see every other weave's traffic and would look, line for line, exactly like one that could
-    // not.
+    // The tap, held by the host and wired to neither participant: this process owns the
+    // Switchboard, so what it collects is the host's, and none of it reaches a transcript. A
+    // participant that inherited it would see every weave's traffic and look exactly like one
+    // that could not.
     struct Seen {
         std::string kind, schema, refusal;
         loom::WeaveId from, to;
