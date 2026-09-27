@@ -4,35 +4,21 @@
 #ifndef ZEN_WEAVE_POKE_WEAVE_HPP
 #define ZEN_WEAVE_POKE_WEAVE_HPP
 
-// The Poke weave: the live-inspect/manipulate participant an operator drives.
+// The Poke weave: the participant an operator drives to inspect and change other weaves live.
+// An ordinary woven Weave with no special powers: an accept-set, and the grant mount<PokeWeave>
+// derives from its Emit<...>. It reaches other weaves only by sending them the poke protocol,
+// which each target's construction layer enforces (poke.hpp), so it cannot reach past what a
+// weave exposed. docs/guides/diagnostics.md#5-live-inspection
 //
-// It is an ORDINARY woven Weave with no special powers — the most-granted
-// participant, never an exception. It holds exactly the two kinds of thing any
-// participant can hold: an accept-set (its command and answer doors) and a
-// grant (mount<PokeWeave> derives it from the declared Emit<...> like any
-// other trusted mount). It inspects and manipulates other weaves ONLY by
-// sending them the poke protocol messages; enforcement lives in the TARGET's
-// own construction layer (see poke.hpp) — the Poke weave cannot reach past
-// any weave boundary, and a weave that didn't expose something cannot be
-// poked into it.
-//
-// The operator (e.g. the console) sends it a command naming a target:
 //   zen.PokeInspect{target}            -> forwards zen.PokeDescribe
 //   zen.PokeGet{target, field}         -> forwards zen.PokeRead
 //   zen.PokeSet{target, field, value}  -> forwards zen.PokeWrite
 //   zen.PokeReset{target}              -> forwards zen.PokeResetState
-// and the target's answer (zen.PokeStructure / zen.Result / zen.Ack /
-// zen.Refused) is relayed back to the original asker with the original
-// correlation. The forward/relay dance is the standard request/reply relay
-// pattern (relay.hpp); this weave's whole state IS the relay bookkeeping —
-// honest bounded state, itself poke-inspectable.
 //
-// A command whose forward is never answered (no such target, a raw non-woven
-// Weave with no poke doors, or a target whose grant denies its answers)
-// leaves a pending entry behind; the refusal itself is visible on the bus
-// tap. Pending entries are bounded (kMaxRelayPending, oldest shed) — a
-// participant cannot observe the fate of its own sends today; that
-// observability is a named seam, not built here.
+// The target's answer is relayed to the asker with its own correlation (relay.hpp). A forward
+// never answered (no such target, a raw Weave with no poke doors, a target not granted its
+// answers) stays pending, bounded by kMaxRelayPending, oldest shed; the refusal is on the bus
+// tap, and this weave does not accept dispatch-refusal notices.
 
 #include <zen/weave/poke.hpp>
 #include <zen/weave/relay.hpp>
@@ -45,10 +31,9 @@
 namespace loom {
 
 // ---- the operator command shapes --------------------------------------------
-// Distinct from the protocol shapes: a command NAMES a third-party target; a
-// protocol message arriving AT a weave always means "you".
+// A command names a third-party target; a protocol message arriving at a weave means "you".
 
-/// Inspect a weave's structure (every field + tag-state).
+/// Inspect a weave's structure: every field, with its tags.
 struct PokeInspect {
     std::int64_t target = 0;
     using ZenSelf = PokeInspect;
@@ -67,8 +52,8 @@ struct PokeGet {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(target), ZEN_FIELD(field)); }
 };
 
-/// Set one field on a weave (the value is a text literal, parsed by the
-/// target against the field's declared kind).
+/// Set one field on a weave; the value is a text literal the target parses against the field's
+/// declared kind.
 struct PokeSet {
     std::int64_t target = 0;
     std::string field;
@@ -90,10 +75,8 @@ struct PokeReset {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(target)); }
 };
 
-/// The debugger-as-participant. Mount it like any weave:
-///   WeaveId poke = loom::mount<PokeWeave>(bus);
-/// and drive it by message (the console composes the zen.Poke* commands).
-/// Its state is the relay bookkeeping and nothing else.
+/// The poke participant. Mount it like any weave, `loom::mount<PokeWeave>(bus)`, and drive it by
+/// message; its state is the relay bookkeeping and nothing else.
 class PokeWeave : public WeaveBase<PokeWeave, RelayState,
                                    Accept<PokeInspect, PokeGet, PokeSet, PokeReset, PokeStructure,
                                           Result, Ack, Refused>,
