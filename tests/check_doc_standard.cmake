@@ -40,14 +40,7 @@ set(ZEN_DOC_STANDARD_PENDING
     "^docs/decisions/no-rollback-after-committed-production[.]md$"
     "^docs/decisions/office-authorship-is-deliberate[.]md$"
     "^docs/decisions/one-gate-at-every-boundary[.]md$"
-    "^docs/decisions/readiness-is-authenticated-conversation[.]md$"
-    "^docs/guides/diagnostics[.]md$"
-    "^docs/guides/mental-model[.]md$"
-    "^docs/guides/messaging[.]md$"
-    "^docs/guides/observing[.]md$"
-    "^docs/guides/replacing-a-service[.]md$"
-    "^docs/guides/session-tools-map[.]md$"
-    "^docs/guides/writing-a-weave[.]md$")
+    "^docs/decisions/readiness-is-authenticated-conversation[.]md$")
 
 string(ASCII 1 ZEN_SOH)
 string(ASCII 2 ZEN_STX)

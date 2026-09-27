@@ -96,7 +96,7 @@ Two truths worth designing around:
   it ([ANS-03](../laws/answer-authority-laws.md)).
 
 `mail.reply(...)` also exists — an *ordinary* send back at the sender's
-address, with no authority attached. Evidence note: across six Night Lab
+address, with no authority attached. Across six [Night Lab](../evidence/night-lab.md)
 applications, nothing ended up wanting it; every response wanted either an
 answer (provable) or a role send (replacement-surviving). It remains
 supported.
