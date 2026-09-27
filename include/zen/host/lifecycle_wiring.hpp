@@ -4,72 +4,33 @@
 #ifndef ZEN_HOST_LIFECYCLE_WIRING_HPP
 #define ZEN_HOST_LIFECYCLE_WIRING_HPP
 
-// HOST WIRING — not part of the weave-authoring surface.
+// Host wiring, not part of the weave-authoring surface: the one expression that yields a
+// `loom::LifecycleAuthority`, kept apart from zen/switchboard.hpp, which every native weave
+// includes, so where lifecycle authority comes from has a one-file answer.
 //
-// This header exists to hold exactly one expression: the one that yields a
-// `loom::LifecycleAuthority`. It is deliberately the whole of its contents, so
-// that "where can lifecycle authority come from?" has a one-file answer that a
-// reviewer can read in a minute and an auditor can grep for in one line.
-//
-// WHY IT IS A SEPARATE HEADER, and why that is not merely a rename. On
-// `Switchboard` as a public static the mint is reachable from every weave that
-// includes `zen/switchboard.hpp` — which is every native weave. Living here
-// removes it from the authoring surface.
-//
-// DO NOT OVERSTATE THAT WALL. It is NOT true that a weave "has nothing to pass
-// it", and the falsehood would matter:
-//
-//     An ordinary weave MAY construct another Switchboard and mint genuine
-//     authority there. That authority has no standing in the running Loom.
-//
-// Constructing a board is ordinary — a Switchboard is an ordinary object. What a
-// weave cannot do is make its own board be THIS one. The protection is not
-// scarcity of boards; it is that an authority names its issuer and the issuer
-// checks (`Switchboard::issued_here`). An authority minted elsewhere is real —
-// elsewhere.
-//
-// SAY IT PRECISELY. "Holding the Switchboard IS being the host" is too broad,
-// and the gap is real:
-//
-//     Holding a Switchboard grants host authority only within THAT
-//     Switchboard's Loom.
-//
-// Constructing a separate board creates a separate authority domain. Anyone may
-// own a Switchboard; nobody thereby owns yours. Every Loom is its own authority
-// domain, and an authority carries which one issued it.
-//
-// That is the same line this codebase has always drawn: `Switchboard::send` is
-// root authority and `send_as` is a weave speaking as itself, and lifecycle
-// minting sits on the same side of it.
+// This is not scarcity: any weave may construct a Switchboard of its own and mint real
+// authority there. That authority names its issuer, and the running Loom's Switchboard refuses
+// it (`Switchboard::issued_here`): holding a Switchboard grants host authority within that
+// Switchboard's Loom only.
 // LIFE-04; docs/laws/lifecycle-laws.md
 //
-// THE TIERS THIS KEEPS APART, none of which implies the next:
+//   a Switchboard     mints authority for that Switchboard only
+//   an authority      attests through its issuing Switchboard only
+//   an exact grant    permits the shape, never lifecycle provenance
+//   a Bus or Mail     confers no authority over the host Loom
 //
-//   POSSESSING A SWITCHBOARD  mints authority for THAT Switchboard only
-//   POSSESSING AN AUTHORITY   attests through its ISSUING Switchboard only
-//   POSSESSING AN EXACT GRANT permits the shape, never lifecycle provenance
-//   POSSESSING A Bus / Mail   implies no authority over the host Loom at all
-//
-// WHO USES THIS, and it is a short list on purpose:
-//   - `loom::mount_control` (kernel/control.hpp) — the one production caller,
-//     handing the kernel's control door its authority at mount;
-//   - host programs wiring an alternative lifecycle operator of their own;
-//   - test harnesses, which ARE hosts: they hold the Switchboard, so they are
-//     inside the boundary by construction rather than by exemption.
-//
-// A weave may freely INSPECT the provenance it receives (`Mail::answers_ask`,
-// `Mail::lifecycle_attested`). It may not create it. Reading Loom's word and
-// speaking as Loom are different acts, and only the second one is gated here.
+// Used by `loom::mount_control` (kernel/control.hpp), by hosts wiring a lifecycle operator of
+// their own, and by test harnesses, which hold the Switchboard and so are hosts. A weave may
+// inspect the provenance it receives (`Mail::answers_ask`, `Mail::lifecycle_attested`); it
+// cannot create it.
 
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
 namespace loom {
 
-/// Mint the lifecycle authority for a host that owns `bus`.
-///
-/// Requires the Switchboard by reference — which is the check, not a formality.
-/// There is no other declaration of this name anywhere, and the Switchboard's
+/// Mint the lifecycle authority for a host that owns `bus`. Needing the Switchboard is the
+/// check: this is the one function the Switchboard befriends to reach its private mint.
 /// private mint has exactly one friend: this function.
 inline LifecycleAuthority host_lifecycle_authority(Switchboard& bus) {
     return bus.lifecycle_authority();

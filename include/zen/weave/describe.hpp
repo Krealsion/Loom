@@ -4,58 +4,20 @@
 #ifndef ZEN_WEAVE_DESCRIBE_HPP
 #define ZEN_WEAVE_DESCRIBE_HPP
 
-// The self-description door: ask a target WHAT SHAPES IT ACCEPTS, by message.
+// The self-description door: ask a target by message which shapes it accepts. Every woven Weave
+// answers zen.DescribeAccepted with zen.AcceptedShapes, built from Weave::accepted_schemas(),
+// the vector the Switchboard matches deliveries against. zen.PokeDescribe says what a weave is;
+// this says what may be said to it. Answered by the construction layer, never by the maker.
+// docs/reference/messaging.md#self-description--what-may-be-said-to-this-weave
 //
-// Every woven Weave (WeaveBase) answers a fifth substrate door beside the four
-// zen.Poke* ones —
-//   zen.DescribeAccepted -> zen.AcceptedShapes
-// — from the SAME vector the Switchboard captured as its doors at registration
-// (Weave::accepted_schemas()), so the answer is the acceptance truth the gate
-// later enforces and not a second store that can drift from it.
+// The request has no fields: the envelope names the target, and the target owns the answer.
+// The answer is a snapshot of what the answering weave accepted, not a subscription, and not
+// authority: sending a discovered shape is still gated by the asker's grant.
 //
-// THE SUBJECT IS THE ACCEPT-SET, WHICH IS THE OTHER HALF OF zen.PokeDescribe.
-// A poke describes what a weave *is* (its state's fields); this describes what
-// may be *said* to it (its doors). Neither derives the other, and the two are
-// answered by the same construction layer under the same non-interceptability
-// rule: a maker cannot list these shapes in Accept<...>, so a woven weave
-// cannot lie about its own vocabulary.
-//
-// THE REQUEST IS FIELDLESS AND ADDRESSED TO THE TARGET. `send_to_role(role,
-// DescribeAccepted{})` already says who is being asked; a `role` field would
-// restate the envelope and would invite a directory service to answer for
-// somebody else. The target owns the fact, so the target is asked directly.
-//
-// WHAT THE ANSWER MEANS, EXACTLY:
-//
-//     these are the (name, version) shapes I accepted when I answered
-//
-// It is a SNAPSHOT. It carries no promise about a later delivery: a role may be
-// swapped, a weave replaced, an artifact unloaded. It is not a subscription and
-// nothing invalidates it. And it is not authority — knowing that a door exists
-// is not permission to walk through it; sending a discovered shape is gated by
-// the asker's own grant exactly as it was before the asker knew the name.
-//
-// ROOTS ARE NOT DEPENDENCIES, and the wire keeps them apart in two lists:
-//
-//     accepted    the roots -- shapes that may actually be SENT to this target
-//     referenced  the structural closure -- shapes that exist only so a root can
-//                 be understood, in POST-ORDER (a schema's own references first)
-//
-// The closure is not decoration. `zen.SchemaDesc` names a nested message by
-// (name, version) and `decode_schema` resolves that against a dependency
-// Registry, so a consumer handed only the roots CANNOT decode a root that nests
-// anything — measured, not assumed. Shipping the closure in the encoder's
-// post-order is what makes one round trip self-sufficient for a stranger that
-// never compiled against any of these shapes. The manifest (zen.Manifest, see
-// kernel/schema_codec.hpp) solved the identical problem the identical way for
-// the load path; this reuses its collect_referenced and its zen.SchemaDesc v1
-// unchanged rather than inventing a second descriptor format.
-//
-// WHY NOT REUSE zen.Manifest ITSELF: it is the kernel's LOAD contract and its
-// subject is wider — a required state descriptor, the capability ask, the
-// claim-set. Those are facts a host reads when admitting an artifact, not facts
-// a peer asked for; and binding a participant-tier protocol to the load
-// contract would make every future manifest bump a discovery-protocol bump.
+// Two lists: `accepted`, the roots that may be sent, and `referenced`, their structural closure
+// in post-order, without which a consumer cannot decode a root that nests anything. It reuses
+// the manifest's collect_referenced and zen.SchemaDesc v1 rather than zen.Manifest itself,
+// which is the load contract and carries facts for a host, not a peer.
 
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/switchboard/grant.hpp>
@@ -71,9 +33,8 @@
 namespace loom {
 
 // ---- the protocol shapes ----------------------------------------------------
-// Hand-written registration block (not ZEN_SHAPE) so the wire name carries the
-// substrate's "zen." prefix, which #ShapeName cannot produce. A maker's own
-// struct named DescribeAccepted derives "DescribeAccepted" — no collision.
+// Registered by hand so the wire name carries the "zen." prefix; a maker's own struct named
+// DescribeAccepted is "DescribeAccepted", with no collision.
 
 /// Ask a weave which message shapes it accepts. Fieldless: the envelope already
 /// names the target, and the target owns the answer.
@@ -84,17 +45,10 @@ struct DescribeAccepted {
     static auto zen_fields() { return std::make_tuple(); }
 };
 
-/// The grammar of the answer. Hand-built rather than a ZEN_SHAPE because its
-/// fields are lists of `zen.SchemaDesc v1` — an existing SchemaBuilder shape,
-/// not a C++ struct with zen_fields(). Exactly how zen.Manifest carries the
-/// same two sections.
-///
-/// `referenced` is optional so a target whose accepted shapes nest nothing (the
-/// common case, and every scalar-only shape) sends the lean form; absent and
-/// empty mean the same thing. `accepted` is required and is never empty for a
-/// woven weave, which always carries at least the five substrate doors — so an
-/// empty answer can never be confused with "this weave declines to describe
-/// itself", which is expressed by there being no answer at all.
+/// The answer's grammar, hand-built because its fields are lists of `zen.SchemaDesc v1`, as
+/// zen.Manifest's are. `referenced` is optional; absent and empty mean the same. `accepted` is
+/// never empty for a woven weave, which has at least the five substrate doors; a weave that
+/// declines to describe itself sends no answer.
 inline std::shared_ptr<const Schema> accepted_shapes_schema() {
     static const auto s = SchemaBuilder(kAcceptedShapesShapeName, 1)
                               .list("referenced", type_message(schema_desc_schema()),
@@ -114,13 +68,9 @@ inline std::vector<std::shared_ptr<const Schema>> describe_answer_schemas() {
     return {accepted_shapes_schema()};
 }
 
-/// Allow a Weave's self-description ANSWER. The construction layer does the
-/// answering, but the send is gated like any other — the grant stays the host's
-/// sole authority. mount() adds this for a trusted Weave; a host using
-/// mount_granted decides for itself (an ungranted Weave's answer is
-/// CapabilityDenied at delivery, visible on the tap). The symmetric partner of
-/// allow_poke_answers (poke.hpp), and deliberately a SEPARATE call: a host may
-/// want a weave inspectable without it being self-describing, or the reverse.
+/// Allow a Weave's self-description answer, which is gated like any send. mount() adds it for
+/// a trusted Weave; under mount_granted an ungranted answer is `CapabilityDenied` at delivery.
+/// Separate from allow_poke_answers (poke.hpp), so either can be allowed alone.
 inline Grant& allow_describe_answers(Grant& grant) {
     for (const auto& s : describe_answer_schemas()) {
         grant.allow_to_any(s->name(), s->version());
@@ -130,20 +80,10 @@ inline Grant& allow_describe_answers(Grant& grant) {
 
 // ---- encode (an accept-set -> the answer Value) ------------------------------
 
-/// Build the answer from a weave's real accept-set: the roots verbatim, plus
-/// the transitive structural closure their fields reference, deduplicated by
-/// (name, version) and emitted in the post-order `collect_referenced`
-/// guarantees.
-///
-/// A root that is ALSO a dependency of another root appears in both lists, and
-/// that is truthful rather than redundant — it genuinely is both. Registering it
-/// twice on the consumer side is an identical re-registration, which the
-/// Registry treats as a no-op.
-///
-/// Cannot fail for want of resolution: it walks the `TypeRef::message` pointers
-/// the schemas already hold, so nothing is looked up and nothing can be missing.
-/// A null entry would be a broken accept-set, which register_weave already
-/// refuses before any weave can be asked anything.
+/// Build the answer from a weave's accept-set: the roots as they are, and the closure their
+/// fields reference, deduplicated by identity, in the post-order `collect_referenced` gives. A
+/// root that is also another root's dependency is in both lists, and registering it twice is a
+/// no-op. It cannot fail to resolve: it follows the pointers the schemas already hold.
 inline Value encode_accepted_shapes(
     const std::vector<std::shared_ptr<const Schema>>& accepted) {
     Value v(accepted_shapes_schema());
@@ -171,17 +111,11 @@ inline Value encode_accepted_shapes(
 }
 
 // ---- decode (the answer Value -> Schemas a stranger can inspect) -------------
-//
-// Precondition: `answer` has passed the gate against accepted_shapes_schema(),
-// so its declared shape is sound. Reconstruction can still fail semantically (a
-// hand-built answer with a mis-ordered closure, a type nested past the codec's
-// depth cap) — those throw, exactly as decode_schema does, and a consumer turns
-// them into its own refusal rather than into a half-built vocabulary.
+// Precondition: `answer` passed the gate against accepted_shapes_schema(). A mis-ordered closure
+// or a type nested past the codec's depth cap still throws, as decode_schema does.
 
-/// Register the answer's dependency closure into `deps`, in order. The
-/// encoder's post-order guarantee is what makes one forward pass sufficient:
-/// entry N+1's type tokens are resolved against what entries 0..N already put
-/// there. The mirror of decode_referenced (schema_codec.hpp) for this reply.
+/// Register the answer's closure into `deps`, in order: one forward pass, as for
+/// decode_referenced (schema_codec.hpp).
 inline void decode_accepted_referenced(const Value& answer, Registry& deps) {
     const Cell* refs = answer.get("referenced");
     if (refs == nullptr) {
@@ -192,14 +126,9 @@ inline void decode_accepted_referenced(const Value& answer, Registry& deps) {
     }
 }
 
-/// Reconstruct the ACCEPTED ROOTS — the shapes that may actually be sent to the
-/// target — resolving nested references against `deps`. Call
-/// decode_accepted_referenced first, or a root that nests anything will not
-/// resolve.
-///
-/// Returns them in the target's own declaration order, which is the order its
-/// Accept<...> named them followed by the substrate doors. That order is stable
-/// for a given target and carries no meaning beyond being stable.
+/// Reconstruct the accepted roots, the shapes that may be sent to the target, resolving nested
+/// references against `deps`; call decode_accepted_referenced first. In the target's own
+/// order: its Accept<...> list, then the substrate doors.
 inline std::vector<std::shared_ptr<const Schema>> decode_accepted_roots(const Value& answer,
                                                                        const Registry& deps) {
     std::vector<std::shared_ptr<const Schema>> out;
