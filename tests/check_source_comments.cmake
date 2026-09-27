@@ -75,7 +75,6 @@ set(ZEN_COMMENT_PENDING
     "^src/ui/pixel[.]cpp$"
     "^src/ui/tree[.]cpp$"
     "^src/value[.]cpp$"
-    "^src/weaver/weaver_demo[.]cpp$"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
