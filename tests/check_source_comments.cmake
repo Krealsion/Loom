@@ -68,7 +68,6 @@ set(ZEN_COMMENT_PENDING
     "^src/host/session_files[.]hpp$"
     "^src/host/store_lock[.]cpp$"
     "^src/host/store_lock[.]hpp$"
-    "^src/host/warden[.]hpp$"
     "^src/isolation/channel[.]cpp$"
     "^src/isolation/grant_record[.]cpp$"
     "^src/isolation/weave_host_main[.]cpp$"
