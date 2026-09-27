@@ -47,7 +47,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/observe/relay[.]hpp$"
     "^include/zen/observe/vocabulary[.]hpp$"
     "^include/zen/registry[.]hpp$"
-    "^include/zen/runs/vocabulary[.]hpp$"
     "^include/zen/schema[.]hpp$"
     "^include/zen/serialize[.]hpp$"
     "^include/zen/session/vocabulary[.]hpp$"
