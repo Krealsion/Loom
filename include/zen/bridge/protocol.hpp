@@ -4,54 +4,35 @@
 #ifndef ZEN_BRIDGE_PROTOCOL_HPP
 #define ZEN_BRIDGE_PROTOCOL_HPP
 
-// THE CROSSING'S WIRE: what one Loom host says to another over a framed socket.
+// The crossing's wire: what one Loom host says to another over a framed socket.
+// docs/reference/bridge.md
 //
-// A `Switchboard&` cannot cross a socket. What crosses instead is a small fixed vocabulary of
-// frames: a HANDSHAKE the host answers with admission or refusal, DISCOVERY the host answers,
-// a SEND the host re-admits through the one gate and stamps from the connection, a DELIVERY the
-// host ships to the connection with the facts Loom stamped on it, and -- for a connection the
-// host's policy lets OBSERVE -- a copy of each bus event.
+// A `Switchboard&` cannot cross a socket, so a small fixed vocabulary of frames does: a
+// handshake the host answers with admission or refusal, discovery the host answers, a send the
+// host re-admits through the one gate and stamps from the connection, a delivery the host ships
+// with the facts Loom stamped on it, and, for a connection the host's policy lets observe, a
+// copy of each bus event. Frames are [u32 payload_len][u8 op][payload], little-endian, read
+// through the bounds-checked Cursor of <zen/wire.hpp> (shared with the isolation protocol), so
+// a hostile or truncated frame is rejected, never over-read.
 //
-// Frames are length-prefixed exactly as the out-of-process-weave protocol: [u32 payload_len]
-// [u8 op][payload], little-endian, read through the bounds-checked Cursor -- so a hostile or
-// truncated frame is rejected, never over-read. The wire primitives (put_u*, Cursor,
-// kMaxFrameLen) are the portable, header-only helpers of <zen/wire.hpp>, shared with the
-// isolation protocol.
+//   Hello      a claimed name and a credential: data the host's admission policy judges, never
+//              the identity it establishes, which comes back on Welcome.
+//   Denied     the host's refusal and its reason, before the connection is severed. A refused
+//              connection has no proxy and acts on nothing.
+//   Welcome    the session identity the host minted (the proxy's WeaveId) and the name its
+//              policy established (empty when none).
+//   Send       to a WeaveId, to an office (`role`) or published; it may ask to be told when
+//              what it set in motion on the host's bus has been dispatched.
+//   Delivered  the payload and what Loom stamped beside it: the sender, the correlation,
+//              whether Loom attests it as the answer to an ask this connection sent, whether it
+//              is a dispatch-refusal notice, and the office the sender spoke as.
+//   Settled    the host's word, once, that everything a settle-requested Send set in motion
+//              has been dispatched (`loom::Fence`). Not an answer, and not a claim that nothing
+//              else is pending: work deferred to a timer or a later turn is not waited for.
+//   Tap        copied only to a connection whose admission verdict grants observation.
 //
-// ---- v4: a crossing between two hosts, not only an operator's console ------------------
-//
-// v3 was written for ONE principal: every connection was the operator, so `Hello` carried a
-// version and nothing else, `Delivered` carried payload bytes and nothing else, and every
-// connection received the whole-bus tap. v4 is written for a GUEST -- another host's
-// participant, admitted deliberately and granted narrowly -- and changes exactly what that
-// needs:
-//
-//   Hello      carries a CLAIMED name and a credential. What the peer says about itself is
-//              data the host's admission policy judges; it is never the identity the host
-//              establishes, which comes back on Welcome.
-//   Denied     the host's refusal, with its reason, before the connection is severed.
-//              A refused connection has no proxy on the bus and can act on nothing.
-//   Welcome    the session identity the host minted (the proxy's WeaveId) and the name the
-//              host's policy ESTABLISHED for this connection (empty when the policy
-//              established none).
-//   Send       may address an OFFICE (`role`) as well as a WeaveId, so a guest can speak to
-//              "whoever holds zengine.input" without learning a small integer first; and may
-//              ask to be told when what it SET IN MOTION on the host's bus has been dispatched.
-//   Delivered  carries what Loom stamped on the delivery beside the payload: the bus-stamped
-//              sender, the correlation, whether Loom attests it as THE answer to an ask this
-//              connection sent (`answers_ask`), whether it is a dispatch-refusal notice, and
-//              the office the sender spoke as. A richer client cannot recover a fact the
-//              crossing discarded, so the crossing no longer discards them.
-//   Settled    the host's word, once, that everything a settle-requested Send set in motion on
-//              its bus has been dispatched (`loom::Fence`): the send and every delivery queued
-//              from inside the dispatch of anything it caused. Not an answer, and not a claim
-//              that nothing else is pending -- a request delivered to a silent participant is
-//              dispatched, and work deferred to a timer or a later turn is not waited for.
-//   Tap        is copied only to a connection whose admission verdict grants observation.
-//
-// Zen's serialized values are still the currency: a Send crosses as serialized message bytes the
-// host re-admits through the ONE gate, exactly as a child's Emit is -- and the host stamps the
-// sender from the CONNECTION, never the wire (the anti-spoof).
+// A Send's payload is serialized message bytes the host re-admits through the one gate, and
+// the host stamps its sender from the connection, never the wire.
 
 #include <zen/wire.hpp> // put_u8/u32/u64, put_bytes, Cursor, kMaxFrameLen, kEmitSend/kEmitPublish
 
@@ -63,8 +44,8 @@ namespace loom {
 enum class BridgeOp : std::uint8_t {
     // ---- client -> host ----
     Hello = 1,      ///< [u32 proto_version][bytes claimed_name][bytes credential] -- the handshake.
-                    ///< The two trailing fields are read as empty when absent, so a v3-shaped
-                    ///< Hello still identifies itself; the VERSION is what a host judges.
+                    ///< The two trailing fields read as empty when absent, so a shorter
+                    ///< Hello still parses; the VERSION is what a host judges.
                     ///< The host answers Welcome, or Denied and severs.
     ListWeaves = 2, ///< (empty) -- explicit discovery refresh; the host replies Weaves
     Describe = 3,   ///< [bytes name][u32 version] -- the host replies Schema (encoded) or SchemaNone
@@ -121,15 +102,13 @@ inline constexpr std::uint8_t kTapDelivered = 0;
 inline constexpr std::uint8_t kTapRefused = 1;
 inline constexpr std::uint8_t kTapDied = 2;
 inline constexpr std::uint8_t kTapRevived = 3;
-/// The handler was entered and did not complete normally (RTH-1). NOT a refusal:
-/// Loom declined nothing, and carries no reason to send - see loom::EventKind.
+/// The handler was entered and did not complete normally. Not a refusal: Loom declined
+/// nothing and has no reason to send (loom::EventKind).
 inline constexpr std::uint8_t kTapHandlerFailed = 4;
 
-/// The crossing's protocol version (bumped on any wire change -- shape OR vocabulary; Hello and
-/// Welcome carry it). v2 added SendRefused; v3 added the HandlerFailed tap kind; v4 is the
-/// two-host crossing above: Hello's identity, Denied, Welcome's established name, Send's role
-/// address and settle flag, Delivered's stamped context, and Settled. A host refuses a peer whose version it does not
-/// speak, in words, before anything else happens on that connection.
+/// The crossing's protocol version, raised on any wire change of shape or vocabulary; Hello and
+/// Welcome carry it. A host refuses a peer whose version it does not speak, in words, before
+/// anything else happens on that connection.
 inline constexpr std::uint32_t kBridgeProtocolVersion = 4;
 
 /// The longest claimed name or credential a Hello may carry. A bound on what a peer can make a
