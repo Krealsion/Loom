@@ -28,7 +28,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^src/detail/json[.]cpp$"
     "^src/gate[.]cpp$"
-    "^src/history/dump[.]cpp$"
     "^src/history/record[.]cpp$"
     "^src/host/boot_plan[.]cpp$"
     "^src/host/config_file[.]cpp$"
