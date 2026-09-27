@@ -12,7 +12,7 @@ SWITCHBOARD   enforces        the Kernel, which has the last word
 ```
 
 Or, in one sentence: **the Kernel enforces, the Weaver decides, the session
-acts.** [GRANT-0](capabilities.md#live-delegation-grant-0) built the mechanism by
+acts.** [GRANT-0](capabilities.md#live-delegation) built the mechanism by
 which a host may appoint an administrator for one live subject's speech; the
 Weaver is the first policy actor to hold one.
 

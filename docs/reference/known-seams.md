@@ -48,7 +48,7 @@ consumer).
 **Status: KNOWN SEAM** (three of them, kept apart on purpose). The primitive
 itself is current and law-backed
 ([GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides),
-[capabilities](capabilities.md#live-delegation-grant-0)); these are the edges
+[capabilities](capabilities.md#live-delegation)); these are the edges
 around it, stated so shorthand cannot harden into a guarantee.
 
 ```text
