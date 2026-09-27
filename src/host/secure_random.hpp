@@ -4,18 +4,12 @@
 #ifndef ZEN_HOST_SECURE_RANDOM_HPP
 #define ZEN_HOST_SECURE_RANDOM_HPP
 
-// THE TWO SECRETS A SESSION MINTS, AND HOW THEY ARE COMPARED.
-//
-// A session host mints a CLIENT KEY when it starts (written to a file only its owner should read)
-// and a run manager mints a ONE-TIME CREDENTIAL for each worker it starts. Both come from the
-// operating system's own generator -- `rand_s` (RtlGenRandom) on Windows, `/dev/urandom` elsewhere
-// -- never from `std::random_device`, whose quality is the standard library's to choose and has
-// been deterministic on some MinGW toolchains. A failure to read randomness is a failure to mint,
-// said out loud, never a weak key.
-//
-// WHAT THEY ARE, HONESTLY: shared secrets on one machine, as private as the files they live in and
-// the processes that hold them. They are not transport security (the bridge has none, and a
-// session listens on loopback only) and they authenticate no person.
+// The two secrets a session mints, and how they are compared: a client key when a session host
+// starts, and a one-time credential per run worker. Both come from the OS generator (`rand_s` on
+// Windows, `/dev/urandom` elsewhere), never `std::random_device`, which some MinGW toolchains
+// made deterministic; failing to read randomness fails the mint. They are shared secrets on one
+// machine, as private as their files and processes: not transport security, and no person's
+// identity.
 
 #ifdef _WIN32
 // Declared here rather than by defining _CRT_RAND_S, which only works when it precedes the
