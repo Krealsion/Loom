@@ -36,7 +36,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/kernel/export[.]hpp$"
     "^include/zen/kernel/schema_codec[.]hpp$"
     "^include/zen/switchboard/bus[.]hpp$"
-    "^include/zen/switchboard/message[.]hpp$"
     "^include/zen/switchboard/weave_contract[.]hpp$"
     "^include/zen/weave/ask_book[.]hpp$"
     "^include/zen/weave/describe[.]hpp$"
