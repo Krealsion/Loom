@@ -39,7 +39,6 @@ set(ZEN_COMMENT_PENDING
     "^src/console/terminal_windows[.]cpp$"
     "^src/console/tui_render[.]cpp$"
     "^src/console/tui_render[.]hpp$"
-    "^src/console/ui[.]cpp$"
     "^src/content_id[.]cpp$"
     "^src/detail/base64[.]cpp$"
     "^src/detail/base64[.]hpp$"
