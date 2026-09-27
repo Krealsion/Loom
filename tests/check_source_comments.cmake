@@ -31,7 +31,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/host/grant_wiring[.]hpp$"
     "^include/zen/host/lifecycle_wiring[.]hpp$"
     "^include/zen/host/terminal_wiring[.]hpp$"
-    "^include/zen/kernel/schema_codec[.]hpp$"
     "^include/zen/switchboard/weave_contract[.]hpp$"
     "^include/zen/weave/describe[.]hpp$"
     "^include/zen/weave/dispatch_refusal[.]hpp$"
