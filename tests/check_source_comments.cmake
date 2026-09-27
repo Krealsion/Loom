@@ -52,7 +52,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/switchboard[.]hpp$"
     "^include/zen/terminal/composer[.]hpp$"
     "^include/zen/terminal/input_lex[.]hpp$"
-    "^include/zen/terminal/transcript[.]hpp$"
     "^include/zen/terminal/vocabulary[.]hpp$"
     "^include/zen/ui/pixel[.]hpp$"
     "^include/zen/ui/tree[.]hpp$"
