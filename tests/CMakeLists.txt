@@ -694,6 +694,12 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
 add_test(NAME doc_links COMMAND ${CMAKE_COMMAND}
     -DZEN_REPO=${CMAKE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_links.cmake)
+add_test(NAME source_comments COMMAND ${CMAKE_COMMAND}
+    -DZEN_REPO=${CMAKE_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_source_comments.cmake)
+add_test(NAME doc_standard COMMAND ${CMAKE_COMMAND}
+    -DZEN_REPO=${CMAKE_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_standard.cmake)
 
 # ---- The hook-return contract (SENSE-06) -------------------------------------------------
 #

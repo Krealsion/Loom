@@ -87,6 +87,8 @@ empty_population_refused     portable
 empty_population_says_so     portable
 population                   portable
 doc_links                    portable
+source_comments              portable
+doc_standard                 portable
 hook_return_types            portable
 all                          posix
 weave_contract               kernel
