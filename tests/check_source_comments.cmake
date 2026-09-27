@@ -40,7 +40,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/history/record[.]hpp$"
     "^include/zen/isolation/channel[.]hpp$"
     "^include/zen/isolation/grant_record[.]hpp$"
-    "^include/zen/isolation/host[.]hpp$"
     "^include/zen/isolation/protocol[.]hpp$"
     "^include/zen/kind[.]hpp$"
     "^include/zen/observe/relay[.]hpp$"

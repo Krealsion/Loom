@@ -4,21 +4,12 @@
 #ifndef ZEN_ISOLATION_HOST_HPP
 #define ZEN_ISOLATION_HOST_HPP
 
-// Out-of-process Weave hosting. IsolationHost spawns a child zen-weave-host per
-// Weave, bridges it to the bus through a proxy that *is* a Weave (so the
-// Switchboard is unchanged), and supervises it: crash detection → bounded reload
-// from a host-owned snapshot → quarantine. Everything is single-threaded — the
-// only async is the child's reply *timing* — so the bus's FIFO and reentrancy
-// guarantees hold. The Switchboard must outlive the host.
-//
-// Honest containment (B3): an out-of-process Weave is *isolated* (process boundary:
-// crash-contained, cannot touch host memory) and, when its grant withholds the
-// Network capability and this host can enforce it, also *network-sandboxed* (the
-// child runs with no network interface, so connect() fails at the syscall level).
-// containment() is generated from what was ACTUALLY imposed per Weave — it never
-// claims enforcement it did not apply. When the safe floor cannot be enforced the
-// mount fails safe (refuses) unless dev-mode is on, in which case it proceeds with
-// the Weave visibly marked uncontained.
+// Out-of-process weave hosting. IsolationHost spawns a zen-weave-host child per weave, bridges
+// it to the bus through a proxy that is itself a weave, and supervises it: crash detection,
+// bounded reload from a host-owned snapshot, then quarantine. Single-threaded, so the bus's FIFO
+// and reentrancy guarantees hold. containment() reports only what was imposed; a safe floor that
+// cannot be enforced refuses the mount unless dev mode lets it run, visibly uncontained.
+// docs/reference/capabilities.md#os-containment-out-of-process-linuxwsl
 
 #include <zen/isolation/channel.hpp>
 #include <zen/isolation/grant_record.hpp>
@@ -48,10 +39,8 @@ struct OutOfProcessResult {
     std::string error;
 };
 
-/// One capability's resolved outcome on a mounted child — recorded so containment()
-/// reports the truth *per capability* and crash-recovery reapplies identically. B3
-/// resolves exactly one (Network); B4 resolves more here, unchanged in shape (each
-/// Link holds a vector of these, and containment() iterates them).
+/// One capability's resolved outcome on a mounted child, recorded so containment() reports each
+/// capability truthfully and crash recovery reapplies it identically.
 struct CapabilityResolution {
     enum class Outcome {
         Enforced,    ///< the safe floor was imposed AND positively confirmed
@@ -73,59 +62,45 @@ public:
     IsolationHost(const IsolationHost&) = delete;
     IsolationHost& operator=(const IsolationHost&) = delete;
 
-    /// Mount a Weave out-of-process from `so_path` under `name`, with `grant`.
-    /// Spawns a child, handshakes (reconstructs its schemas, caches its initial
-    /// snapshot and policy), and registers the proxy on the bus.
-    ///
-    /// B3: if the grant withholds os_cap::Network, the child is launched into a
-    /// no-interface network namespace (OS-enforced). If that cannot be enforced on
-    /// this host, the mount refuses (fail-safe) unless dev-mode is on — then it
-    /// proceeds with the Weave marked network-uncontained.
+    /// Mount a weave out of process from `so_path` under `name`, with `grant`: spawn a child,
+    /// handshake (reconstruct its schemas, cache its snapshot and policy), register the proxy.
+    /// What the grant withholds is enforced in the child (a network namespace with no
+    /// interface, a restricted filesystem view, a cgroup leaf); what this host cannot enforce
+    /// refuses the mount unless dev mode is on, and then the weave is marked uncontained.
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
                              loom::Grant grant, const std::string& role = "");
 
-    /// Mount the StorageBroker out-of-process at the TCB tier: host-granted
-    /// FsAccess::WriteScoped to `storage_root` ONLY (the persistent-scoped-write
-    /// extension — disk, but contained to that one dir; it can't reach the host home),
-    /// permitted to reply StorageValue to any mod, and registered under role
-    /// "storage" so floored mods reach it by role-addressing. `storage_root` is
-    /// created if absent. Storage is **session-scoped** (keyed by the ephemeral
-    /// sender); persistent-across-restart awaits the first-class-identity phase.
+    /// Mount the StorageBroker out of process with host-granted FsAccess::WriteScoped to
+    /// `storage_root` only (created if absent), permission to reply StorageValue to any mod, and
+    /// the role "storage", so floored mods reach it by role. Its storage is keyed by the
+    /// sender's WeaveId, which a restart does not keep, so a mod's data lasts one session.
     OutOfProcessResult mount_broker(const std::string& name, const std::string& so_path,
                                     const std::string& storage_root);
 
-    /// Mount the NetworkBroker out-of-process at the TCB tier: host-granted
-    /// `os_cap::Network` (so it runs in the host netns, with the real network),
-    /// `FsAccess::None`, bounded resources, permitted to reply NetResponse to any mod, and
-    /// registered under role "net". A **higher-trust** broker than the StorageBroker:
-    /// network is binary, so the OS gives it the *whole* host network — its per-destination
-    /// scoping is **software** (its own allow-list), not OS-enforced. No mod reaches it
-    /// without a recorded `net` grant delta (the floor denies the net role).
+    /// Mount the NetworkBroker out of process with host-granted `os_cap::Network` (the whole
+    /// host network), FsAccess::None, bounded resources, permission to reply NetResponse to any
+    /// mod, and the role "net". Its per-destination scoping is its own allow-list, not the
+    /// OS's. No mod reaches it without a recorded `net` grant delta: the floor denies the role.
     OutOfProcessResult mount_net_broker(const std::string& name, const std::string& so_path);
 
-    /// Mount an untrusted mod from `so_path` under `name` on the **floor**: minimal
-    /// authority (no network, FsAccess::None, bounded resources) plus a single
-    /// send-rule to the storage broker role — enough to persist and retrieve on
-    /// messages alone, with zero disk access. The mod's identity is its .so
-    /// content-hash; any delta the host has recorded for that identity (see
-    /// record_grant_delta) is applied on top of the floor. The mod's *ask* is read
-    /// (declared_ask) but never consulted for the grant: a declaration is not a grant.
+    /// Mount an untrusted mod on the floor: no network, FsAccess::None, bounded resources, and
+    /// one send rule to the storage broker's role. Its identity is its .so content hash, and a
+    /// delta recorded for that identity (record_grant_delta) is applied on top. Its declared
+    /// ask is read (declared_ask) but never used for the grant.
     OutOfProcessResult mount_mod(const std::string& name, const std::string& so_path);
 
     /// Point the host's grant-record at a per-install JSON file (loading it). The
     /// floor-factory consults it for deltas; record_grant_delta writes to it.
     void set_grant_record_path(const std::string& path);
 
-    /// Record (replace) a capability delta for a Weave identity (its .so
-    /// content-hash, from so_content_hash) and persist it. This is the host holding
-    /// the pen — the stand-in for the consent UX (deferred). The host, never a Weave,
-    /// decides; only a delta recorded here raises a mod above the floor.
+    /// Record (replace) a capability delta for a weave identity (its .so content hash, from
+    /// so_content_hash) and persist it. The host decides, never a weave: only a delta recorded
+    /// here raises a mod above the floor.
     void record_grant_delta(const std::string& content_hash, GrantDelta delta);
 
-    /// Dev-mode (default off = strict): converts a fail-safe refusal — when a
-    /// requested capability cannot be enforced on this host — into a loud warning,
-    /// proceeding with the Weave visibly marked uncontained for that capability. A
-    /// deployment-level choice (dev box vs prod); the one knob B3 introduces.
+    /// Dev mode (off by default): a mount whose requested containment cannot be enforced here
+    /// proceeds with a loud warning and the weave visibly marked uncontained for that
+    /// capability, instead of refusing. A deployment's choice, a dev box's or production's.
     void set_dev_mode(bool on) noexcept { dev_mode_ = on; }
     bool dev_mode() const noexcept { return dev_mode_; }
 
@@ -142,17 +117,11 @@ public:
     /// of an *intended* enforcement fails safe (refuses) in both strict and dev mode.
     void force_entry_failure_for_test(bool on) noexcept { force_entry_failure_ = on; }
 
-    /// One host-loop iteration, single-threaded: flush + drain child I/O
-    /// (re-enqueue child output gated, refresh cached snapshots, note deaths) →
-    /// dispatch the bus (proxies fire-and-continue) → supervise (reap dead
-    /// children, drive bounded reload-then-quarantine).
-    ///
-    /// ⚠ THE BUS STEP IS `Switchboard::drain_until_idle()`, so this iteration
-    /// inherits that contract: composed with a perpetual in-process service it
-    /// does not return. Isolation's own hosts have no such service; a host that
-    /// wants one must drive `Switchboard::pump_pending()` itself rather than
-    /// this (FRIC-1 recorded the gap; `BridgeServer::set_bounded_dispatch()` is
-    /// the shape a bounded switch would take here).
+    /// One host-loop iteration: flush and drain child I/O (re-enqueue child output through the
+    /// gate, refresh cached snapshots, note deaths), dispatch the bus, then supervise (reap dead
+    /// children, reload or quarantine). The bus step is `Switchboard::drain_until_idle()`, so a
+    /// perpetual in-process service on the same bus keeps it from returning; such a host drives
+    /// `Switchboard::pump_pending()` itself.
     void step();
 
     /// Step until `predicate()` holds or `max_steps` is reached. Sleeps briefly
@@ -188,23 +157,15 @@ private:
         std::unique_ptr<Channel> channel; // null when no live child
         pid_t pid = -1;
         std::vector<std::shared_ptr<const Schema>> accept;
-        /// The child's declared emit-set (its manifest's `emits`, ABI v9), decoded
-        /// the way its doors are — top-level, against this host's registry — and
-        /// declared by the proxy on the bus so the one agreement wall reads it.
-        /// Vocabulary only: the child's grant is decided by the host as before.
+        /// The child's declared emit-set (its manifest's `emits`), decoded the way its doors
+        /// are, against this host's registry, and declared by the proxy on the bus so the one
+        /// agreement wall reads it. Vocabulary only: the host still decides the child's grant.
         std::vector<std::shared_ptr<const Schema>> emits;
         std::shared_ptr<const Schema> state_schema;
-        /// THE MOUNT'S CLAIM on this host's dependency registry (LIFE-08), and the
-        /// mount is the honest scope — wider than the child process, narrower
-        /// than the host.
-        ///
-        /// A child that dies is respawned under this same Link and re-uses the
-        /// accept-set and state schema cached above without re-reconstructing
-        /// them, so tying the claim to a child process would drop vocabulary a
-        /// live mount still depends on. Everything that could still need these
-        /// shapes decoded — the channel's unread bytes, the cached snapshot,
-        /// the next respawn's handshake — is owned by this Link and dies with
-        /// it. `unmount` is therefore the whole release path.
+        /// The mount's claim on this host's dependency registry (LIFE-08), scoped to the mount:
+        /// a respawned child reuses the accept-set and state schema cached above, and everything
+        /// that could still need these shapes decoded (unread channel bytes, the cached
+        /// snapshot, the next handshake) is owned by this Link. `unmount` is the release path.
         SchemaClaimScope schemas;
         std::optional<Value> snapshot_value; // last good admitted snapshot (host-owned)
         std::string snapshot_bytes;          // its canonical bytes, for revival
