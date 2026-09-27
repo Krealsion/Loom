@@ -28,7 +28,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^include/zen/admission[.]hpp$"
     "^include/zen/bridge/client[.]hpp$"
-    "^include/zen/console/ui[.]hpp$"
     "^include/zen/gate[.]hpp$"
     "^include/zen/history/dump[.]hpp$"
     "^include/zen/isolation/channel[.]hpp$"
