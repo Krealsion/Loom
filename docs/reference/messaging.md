@@ -1,7 +1,7 @@
 # Messaging — reference
 
-The Switchboard: the in-process bus, first live boundary. Laws:
-[MSG-01..11](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
+The Switchboard: the in-process bus every message crosses. Laws:
+[MSG-01..12](../laws/messaging-laws.md), [ANS-01..07](../laws/answer-authority-laws.md).
 Guide: [messaging](../guides/messaging.md).
 
 ## Dispatch model
@@ -182,7 +182,7 @@ protocol is not extended. Wire-originated payloads cannot attest this fact.
 ## Office authorship (role-authored provenance)
 
 A weave may **deliberately** author one statement in the capacity of a role it
-currently holds ([MSG-07](../laws/messaging-laws.md)). The maker surface is a
+currently holds ([MSG-07](../laws/messaging-laws.md)). The authoring surface is a
 per-statement view:
 
 ```cpp
@@ -230,13 +230,12 @@ Semantics, exactly:
   clears it, so a stored-and-resent Message is personal speech.
 - **Orthogonal to answers/activations in representation**: the authored office
   is a second axis beside `answers_ask()`/`lifecycle_attested()`, so the type
-  admits combined facts (no public V1 door produces them; an answer's
+  admits combined facts (no public door produces them; an answer's
   provenance never inherits the ask's office).
-- **Dynamic parity** ([dynamic-abi](dynamic-abi.md); the office doors arrived
-  at ABI v5): the same authoring
-  and reading surface works in a loaded weave, with the host verifying every
-  request. Out-of-process weaves fail closed in both directions — the
-  isolation pipe carries no attestation in V1.
+- **Dynamic parity** ([dynamic-abi](dynamic-abi.md); the office doors are in
+  ABI v5 and later): the same authoring and reading surface works in a loaded
+  weave, with the host verifying every request. Out-of-process weaves fail
+  closed in both directions — the isolation pipe carries no attestation.
 
 ## Answers
 
@@ -264,9 +263,9 @@ authenticate ([ANS-05](../laws/answer-authority-laws.md)).
 **`reply_to` / ordinary replies** — a `Message` carries a `reply_to` address a
 responder may target with an ordinary send. That reply is *ordinary speech*:
 no provenance, no authority, delivered to whatever occupies the address.
-Evidence note: across six Night Lab applications, no natural use for ordinary
-reply survived — every response wanted either an *answer* (provable) or a
-*role send* (replacement-surviving). Kept, documented, low-observed-use.
+Across six [Night Lab](../evidence/night-lab.md) applications no natural use for an
+ordinary reply appeared — every response wanted either an *answer* (provable) or a
+*role send* (replacement-surviving). It is kept and documented, and rarely used.
 
 ### The asker's own book
 
@@ -309,16 +308,15 @@ if (const std::optional<loom::PendingAsk> closed = asks.settle(mail.correlation(
   stays outstanding until the asker locally `forget`s it — which cancels nothing
   at the far end, because there is no cancellation vocabulary to cancel it with.
 
-**Who keeps one.** `loom::TerminalSession`, and — since the supplied host's
-corrections — `loom::ConsoleEngine`, which is the operator's own asking
-participant. The console's case is the sharpest illustration of why the pair is
+**Who keeps one.** `loom::TerminalSession`, and `loom::ConsoleEngine`, which is
+the operator's own asking participant. The console's case is the sharpest illustration of why the pair is
 needed: it is registered `AcceptMode::AnyRegistered`, and every artifact a host
 admits may send `zen.Result` to anyone under the ordinary poke-answer baseline
 ([capabilities](capabilities.md#admitting-a-loaded-artifact)), so "the newest
 entry in the reply window" is a value other participants can author at will. A
-host that read it as its own answer chose the subject of an administration
-capability from a message a loaded artifact had volunteered. Every correlation
-the console stamps now comes from that one book — `open()` for a tracked
+host that read it as its own answer would choose the subject of an administration
+capability from a message a loaded artifact volunteered. Every correlation
+the console stamps comes from that one book — `open()` for a tracked
 conversation, `mint_correlation()` for an ordinary send — because a second
 counter beside it could stamp a send with a number an open conversation is
 already using.
@@ -391,8 +389,8 @@ to that address, without answer provenance. A root request naming neither sender
 address has no reply. An answer does not earn a second answer; a refused answer attempt is
 never silently retried as ordinary speech.
 
-This behavior is in the authoring headers, with no ABI change. Rebuild artifacts compiled
-against older headers before relying on their substrate replies to settle a strict asker.
+This behaviour lives in the authoring headers, not in the ABI: rebuild an artifact compiled
+against older headers before relying on its substrate replies to settle a strict asker.
 
 ## Self-description — what may be said to this weave
 
@@ -407,8 +405,8 @@ The request is **fieldless and addressed to the target**, because the envelope
 already names who is being asked and the target owns the answer:
 `send_to_role("zengine.timer", DescribeAccepted{})`. There is no directory
 service, no `role` field, no `WeaveId` lookup, and no registry enumeration
-anywhere in the path — Loom has never had a way to enumerate schemas, and this
-does not add one.
+anywhere in the path — Loom has no way to enumerate schemas, and this does not
+add one.
 
 The answer is built from `Weave::accepted_schemas()` — **the same vector the
 Switchboard captured as this weave's doors at registration**, which is what
@@ -473,9 +471,7 @@ retains the last `kJournalCapacity = 1024` delivery outcomes by ticket
 seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
 inspect/manipulate *by message* where a weave opts in.
 
-**What a `BusEvent` carries, and what each field is NOT** (RTH-1 added the last
-four; every one of them was already on the private `Envelope` and was simply not
-carried out to an observer):
+**What a `BusEvent` carries, and what each field is NOT:**
 
 | Field | Is | Is not |
 |---|---|---|
@@ -511,7 +507,7 @@ Senders do not otherwise observe delivery fate
 A rejection Loom performs is observable somewhere Loom owns
 ([MSG-08](../laws/messaging-laws.md)). The dynamic seam admits a loaded weave's
 bytes host-side *before* routing; when that fails nothing is queued, so no
-delivery-time refusal can report it. Those rejections now get a seq, a journal
+delivery-time refusal can report it. Those rejections get a seq, a journal
 slot and a tap event — `SeamUnresolved` for an unresolvable claimed shape,
 `GateRefused` (with the gate's error) for bytes that fail the gate — carrying the
 **claimed** (name, version), the sending artifact, and a target *only where one
@@ -533,10 +529,10 @@ no later dispatch-refusal notice follows. ABI v7's ordinary addressed callbacks
 return real attempts when they enqueue; see
 [sender-visible dispatch refusal](#sender-visible-dispatch-refusal) and
 [dynamic ABI](dynamic-abi.md) for that contract. The host diagnostics add no
-future, retry or dead letter. This diagnostic gap was found by Night Lab III
-(P-011), where a loaded weave's emission vanished entirely while the identical
-native reach refused loudly; the publication half was corrected by FRIC-0, where
-the same uniformity had made an ordinary quiet startup look like a failure.
+future, retry or dead letter. Without them a loaded weave's refused emission would
+vanish while the identical native send refused loudly; and a publication nobody
+hears is not reported, because an ordinary quiet startup would then look like a
+failure.
 
 ## Two dispatch turns, and the call site says which
 
@@ -577,17 +573,16 @@ correct answer to the question asked, not a defect: quiescence in a world that
 will not become quiescent does not exist, and Loom will not invent a turn budget
 or a deadline to pretend otherwise.
 
-**The names carry that difference deliberately** (FRIC-1). The drain used to be
-called `pump()`, with `run()` beside it as a synonym, and the bounded turn wore
-the qualifier — so the short, obvious-looking name made the expensive promise
-and a first-contact host that reached for it never got control back. Neither
-spelling survives; the behaviour behind the drain is unchanged.
+**The names carry that difference deliberately.** There is no `pump()` and no
+`run()`: to an ordinary C++ reader either reads as the bounded turn, and a
+first-contact host that reached for one expecting control back would never get
+it. The bounded turn has the plain name, and the drain says what it does.
 
-A numeric `pump_bounded(n)` existed briefly and was withdrawn in R2E-0a: sizing
-`n` means knowing the producer's rate, and with a real Zengine Timer 64 throttled
-the Codex Rule Garden 17× while a value large enough not to throttle was
-drain-to-empty again. If you want a hard cap on work per turn, bound it in your
-own loop — Loom will not pretend it can pick the number for you.
+There is no numeric turn budget either: sizing one means knowing the producer's
+rate, and a budget small enough to bound a turn throttles a busy producer (64
+slowed a timer-driven application seventeen-fold) while one large enough not to
+throttle is drain-to-empty again. If you want a hard cap on work per turn, bound
+it in your own loop — Loom will not pretend it can pick the number for you.
 
 Both are counts, never deadlines; FIFO is untouched; `stop()` ends either turn
 early and the return value reports what actually happened.

@@ -1,11 +1,11 @@
 # History — what the host knows, and what it keeps (reference)
 
-Zen remembered almost nothing about a message once the turn that carried it was
-over: the Switchboard's journal keeps a *verdict* per delivery seq and nothing
-else, and everything richer belonged to a participant — a `TerminalSession`'s
-transcript, a `ConsoleEngine`'s tap window, an application tool's picture of one
-operation. Nothing could answer a question about a message the asker did not
-itself send or receive.
+Left to the bus, Zen remembers almost nothing about a message once the turn that
+carried it is over: the Switchboard's journal keeps a *verdict* per delivery seq
+and nothing else, and everything richer belongs to a participant — a
+`TerminalSession`'s transcript, a `ConsoleEngine`'s tap window, an application
+tool's picture of one operation. None of those can answer a question about a
+message the asker did not itself send or receive.
 
 Two host-side lenses on the tap answer that, and they answer **different
 questions**:
@@ -89,7 +89,7 @@ PROTECTED   refusals, failed handlers, deaths.     "The rare thing I came lookin
 A last-call slot can say *`HandlerFailed` happened*; only the recent FIFO can say
 what surrounded it. They are different questions and neither answers the other,
 which is why noisy traffic can be kept out of recent context **without** being
-made unrecordable — the correction RTH-1a makes to RTH-1's single window.
+made unrecordable.
 
 **One owning store, several claims.** A fact is stored once and the windows hold
 its identity; it is released when the last window lets go, and `held` on a
@@ -156,7 +156,7 @@ host can clear.
 
 **Protection decides whether a fact is KEPT; the shape decides whether it takes
 RECENT CONTEXT.** So a muted shape's one refused beat is still kept, and a storm
-of refused beats still cannot drown the build a maker came for. Admission is a
+of refused beats still cannot drown the build a person came for. Admission is a
 metadata decision keyed on a stable shape name and taken on the dispatch that
 produced the event: no payload is decoded, no predicate is evaluated, and the
 resolved rule is cached per shape on first sight.
@@ -179,7 +179,7 @@ the pointer would be a use-after-free the ordinary lane calls green.
 ## The structural blacklist is not a filter
 
 ```text
-RETENTION POLICY   maker-controlled       which real facts deserve memory
+RETENTION POLICY   host-controlled        which real facts deserve memory
 RECORDER BLACKLIST architecture-controlled what is not a fact about the system at all
 ```
 
@@ -188,9 +188,9 @@ host declares as the recorder's own — from the recordable universe entirely,
 before any rule is consulted. It exists to make recursive history impossible
 rather than unlikely. Neither owner authors any bus traffic (both are tap
 consumers; the Logger writes with an ordinary file handle), so a
-default-constructed blacklist is empty and says so. The first host mechanic that
-does speak is the session host's scoped reader (below), and the host declares it
-here before it can answer anything.
+default-constructed blacklist is empty and says so. The session host's scoped
+reader (below) does speak, and the host declares it here before it can answer
+anything.
 
 **The Logger has none and needs none**: its selection is a whitelist, so
 machinery nobody named is already excluded by construction. The Recorder's
@@ -223,10 +223,10 @@ Derived statistics — "300 beats omitted" — are **counters**, answered from
 ## A whitelist, not a budget
 
 Nothing is durable unless it was **named**, and what was named is not capped by
-traffic that was not. RTH-1's persistence was the recorder's window written to a
-file behind a global 8 MiB ceiling, which meant an idle application's heartbeat
-consumed the horizon in about three minutes and a weave replacement an hour later
-was silently unwritable. That failure is the reason this half exists.
+traffic that was not. The recorder's window written to a file behind one global
+ceiling would be spent by whatever is loudest: at 8 MiB an idle application's
+heartbeat fills it in about three minutes, and a weave replacement an hour later
+would be silently unwritable. That is why this half exists, and exists apart.
 
 ```cpp
 LoggerSelection {
@@ -285,9 +285,9 @@ content for the same reason.
 background thread, no idle detection, no compaction, no rotation.
 
 The container is a stream of top-level values, `[u32 len][bytes]`, each one
-canonical native bytes of `zen.history.LogRecord` v1. That shape is Arena's and
-is chosen for Arena's reason: `kMaxDecodedCells` bounds a *single* decode, so a
-whole stream as one nested document could not be read back. `Logger::read`
+canonical native bytes of `zen.history.LogRecord` v1. It is a stream of values
+rather than one document because `kMaxDecodedCells` bounds a *single* decode, so
+a whole stream as one nested document could not be read back. `Logger::read`
 re-admits every record through the one gate, so a corrupt or forged file is
 refused rather than trusted.
 

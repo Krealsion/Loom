@@ -4,8 +4,8 @@ How one incarnation deliberately becomes another. Laws:
 [HANDOFF-01..03](../laws/handoff-laws.md), sitting on
 [PR-01..09](../laws/replacement-laws.md).
 
-**This is a pattern, not an API.** R2E-0 added no Loom primitive for continuity,
-because the substrate already had every piece:
+**This is a pattern, not an API.** There is no Loom primitive for continuity,
+because the substrate already has every piece:
 
 | What handoff needs | What already provides it |
 |---|---|
@@ -14,7 +14,7 @@ because the substrate already had every piece:
 | a visible refusal for old traffic | the accept-set door (`NotAccepted`) |
 | an inspectable, testable, versioned, refusable, attributable transformer | an ordinary weave |
 
-The standing law is unchanged: prepared replacement **preserves nothing**
+The standing law holds: prepared replacement **preserves nothing**
 ([PR-09](../laws/replacement-laws.md)). What crosses is what a migration carried.
 
 ## The shape
@@ -114,8 +114,7 @@ declined to act.
 ## Exact vs stale — keep them visibly apart
 
 - **A snapshot taken while the incumbent is live is a snapshot.** It may go stale
-  before it is used; PR-09's "no atomic incumbent snapshot" is unchanged. Label
-  it.
+  before it is used; PR-09's "no atomic incumbent snapshot" holds. Label it.
 - **A value authored at the boundary is exact**, because nothing further changes
   it — exact *according to the domain's chosen policy*, which is what quiescing
   buys.
@@ -135,8 +134,8 @@ Four positions, four honest outcomes, **no automatic migration ever**:
 | queued around commit (role-addressed) | resolved at delivery → reaches the successor |
 | after the role moved | `NotAccepted`, visibly, by name |
 
-> **Loom gave the developer a boundary and a refusal. It did not pretend to know
-> whether the old command still meant anything.**
+> **Loom gives the developer a boundary and a refusal. It does not pretend to know
+> whether the old command still means anything.**
 
 Protocol compatibility is a *different problem* from state migration
 ([HANDOFF-03](../laws/handoff-laws.md)): it is a standing obligation needing a
@@ -175,7 +174,7 @@ be worth the word.
 
 ## Tests
 
-Suite `handoff` — the incompatible-gate premise in both directions, H1 the
-stale-snapshot witness, H2 the exact-boundary witness, the full authored handoff,
+Suite `handoff` — the incompatible-gate premise in both directions, the
+stale-snapshot witness, the exact-boundary witness, the full authored handoff,
 the namespace witness and its control, the refused migration, the four-position
 queued-old-protocol witness, the Senses interaction, and the PR-09 re-proof.

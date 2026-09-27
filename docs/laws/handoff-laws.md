@@ -4,7 +4,7 @@ Reference: [handoff](../reference/handoff.md). The ceremony these laws sit on
 is [prepared replacement](../reference/prepared-replacement.md)
 ([PR-01..09](replacement-laws.md)).
 
-**Authored handoff added no Loom API.** These laws describe what the substrate
+**Authored handoff needs no Loom API.** These laws describe what the substrate
 already guarantees and what it deliberately refuses to do, so the pattern cannot
 drift into a promise Loom never made. The negative half of the first one is
 already law: [PR-09](replacement-laws.md) — prepared replacement preserves
@@ -69,7 +69,7 @@ MEANS
   authors **at** the boundary is exact — which is the difference between an
   ordinary snapshot and a final one;
 - a snapshot taken while the incumbent is live is a snapshot, and must be
-  labelled one. PR-09's "no atomic incumbent snapshot" is unchanged; the boundary
+  labelled one. PR-09's "no atomic incumbent snapshot" stands; the boundary
   is a *domain* construction on top of FIFO, not a substrate ceremony;
 - a domain refusal after the boundary is **not** a Loom refusal: the message was
   delivered, the holder was unchanged, the shape was accepted, and the service
@@ -82,8 +82,9 @@ DOES NOT MEAN
 - that the boundary makes the replacement atomic. It makes the *authored value*
   exact; the ceremony's atomicity is still [PR-08](replacement-laws.md)'s.
 
-PROVEN BY — suite `handoff` (H2 the exact-boundary witness with A/B/C before and
-D/E after, H1 the stale-snapshot witness that is made to go stale on purpose).
+PROVEN BY — suite `handoff` (the exact-boundary witness, with three messages before
+the boundary and two after, and the stale-snapshot witness that is made to go stale
+on purpose).
 
 ## HANDOFF-03 — Protocol compatibility is not state migration
 
@@ -103,9 +104,8 @@ MEANS
   office it is delivered and the domain declines it; queued around commit and
   after the role moves it reaches a successor that does not accept the shape and
   refuses `NotAccepted`, visibly and by name;
-- **the lesson, stated plainly:** Loom gave the developer a boundary and a
-  refusal. It did not pretend to know whether the old command still meant
-  anything.
+- **stated plainly:** Loom gives the developer a boundary and a refusal. It does
+  not pretend to know whether the old command still means anything.
 
 DOES NOT MEAN
 - that dual-accepting both shapes is wrong — it is one of the legitimate
@@ -114,4 +114,4 @@ DOES NOT MEAN
   outcome for a command whose meaning did not survive.
 
 PROVEN BY — suite `handoff` (the four-position queued-old-protocol witness);
-`Switchboard` accept-set routing (`NotAccepted`), unchanged by this phase.
+`Switchboard` accept-set routing (`NotAccepted`).

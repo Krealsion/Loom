@@ -148,7 +148,7 @@ domain answers differently:
 build farm         carries stable intent; the successor restarts work
 kitchen            tolerates stale work through idempotency
 download manager   carries an obligation snapshot; degrades honestly
-Timer              cannot tolerate a stale moving snapshot at all —
+Zengine's Timer    cannot tolerate a stale moving snapshot at all —
                    so it authored an exact final boundary on top
 ```
 

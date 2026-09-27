@@ -43,7 +43,7 @@ DOES NOT MEAN
 
 PROVEN BY — `include/zen/admission.hpp` (`Unverified`'s accessor-free surface is
 a compile-time fact); suites `gate`, `serialize`, `fuzz`, `schema_codec`,
-`bridge` (the R2F-A cases).
+`bridge` (the decode-budget cases, end to end).
 
 ## GATE-03 — Authorization is not conformance
 
@@ -126,7 +126,7 @@ MEANS
   `LiveAuthority` has no vocabulary for them.
 
 DOES NOT MEAN
-- **that grants are now mutable.** OS capabilities, `FsAccess` and
+- **that grants are mutable.** OS capabilities, `FsAccess` and
   `ResourceLimits` are consumed once, at `IsolationHost::mount`, into a namespace,
   a mount view and a cgroup leaf that this process cannot revisit. They remain
   admission-time, and the delegation door cannot express them;
@@ -136,10 +136,10 @@ DOES NOT MEAN
 - that a capability is a lease — destroying one revokes nothing it established;
 - that a capability outliving its subject is dangerous: WeaveIds are never
   reused, so it names nothing and refuses `NoSuchSubject` permanently;
-- that authorization moved. It is still checked before role resolution and before
-  the gate (GATE-03); only the value it reads is now a union of two.
+- that authorization moves. It is checked before role resolution and before the
+  gate (GATE-03); only the value it reads is a union of two.
 
 PROVEN BY — `include/zen/switchboard/grant.hpp` (`LiveAuthority::contains`,
 `effective_permits*`), `include/zen/host/grant_wiring.hpp`,
 `src/switchboard/switchboard.cpp` (`delegate_authority_as`, `deliver_one`,
-`observe_as`); suite `grant`, and the unchanged `capabilities`/`policy` suites.
+`observe_as`); suite `grant`, and the `capabilities`/`policy` suites.

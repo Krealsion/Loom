@@ -26,11 +26,11 @@ law, implementation, or test.
 | `HANDOFF-xx` | [handoff-laws.md](handoff-laws.md) | authored continuity across an incompatible schema: migration, the FIFO boundary, protocol vs state |
 | `KERN-xx` | [kernel-laws.md](kernel-laws.md) | dynamic artifacts, lifetimes, role truth |
 | `POP-xx` | [population-laws.md](population-laws.md) | what a green result means: suite/case/enforcement populations, declared absence, the opt-out |
-| `TIMER-xx` | **Zengine repo** — `docs/laws/timer-laws.md` (a separate repository; not in a Loom checkout) | Timer continuity (Zengine owns that truth) |
+| `TIMER-xx` | [Zengine's timer laws](https://github.com/Krealsion/Zengine/blob/main/docs/laws/timer-laws.md), a separate repository | Timer continuity (Zengine owns that truth) |
 
-Identifiers are stable and deliberately carry **no phase coordinates** — phase
-names belong to [history](../history/README.md), which each law may cite as
-rationale.
+Identifiers are stable and deliberately carry **no development-phase names**: a
+law says its reason in words, and how it came to be is in
+[history](../history/README.md) and in Git.
 
 ## Reading a law
 

@@ -3,13 +3,12 @@
 #
 # The `doc_links` entry: does every repository-local documentation reference resolve -- each
 # relative link and #anchor in a current-facing *.md, each repository-relative *.md path in a
-# first-party C/C++ comment -- and does no current-facing text file name a path outside this
-# repository (CONTRIBUTING.md#comments-and-documents)? It requires no reference, demands nothing
-# above the repository root (counted and declined), and excludes frozen history by written rule.
+# first-party C/C++ or CMake comment -- and does no current-facing text name a path outside this
+# repository, by spelling or by climbing above it with `../` (CONTRIBUTING.md#comments-and-documents)?
+# It requires no reference, and excludes frozen history by written rule.
 
 # A comment's path is read from the repository root, because a comment moves with its code. The
-# self-test makes the real predicate say no (a missing path, a missing anchor) and yes (a live
-# document and a heading read from it at runtime) before it answers.
+# self-test makes the real predicates say no and yes before it answers.
 #   cmake -P tests/check_doc_links.cmake              (from the repository root)
 #   cmake -DZEN_REPO=<repo> -P tests/check_doc_links.cmake
 
@@ -45,11 +44,11 @@ set(ZEN_DOC_EXCLUDE
     "^\\.vscode/"
     "^\\.claude/"            # harness state, gitignored
     "^docs/history/"         # frozen: describes the tree at its source commit
-    "^docs/audits/"          # dated audit artifacts and their repro programs
     "^archive/"              # rehomed historical source
     "third_party/")          # vendored
 
-# First-party C/C++ whose comments are in scope. Anything not listed here is not scanned.
+# First-party C/C++ whose comments are in scope. Anything not listed here is not scanned. CMake
+# comments are read in every CMakeLists.txt, *.cmake and *.cmake.in the text sweep below finds.
 set(ZEN_DOC_SOURCE_ROOTS include src tests examples)
 set(ZEN_DOC_SOURCE_GLOBS *.h *.hpp *.ipp *.c *.cc *.cpp *.cxx)
 
@@ -119,6 +118,14 @@ function(zen_doc_comments content out)
     set(${out} "${line_comments} ${block_comments}" PARENT_SCOPE)
 endfunction()
 
+# Every `#` comment in a CMake file, as one blob, quoted arguments bounded to a line going first
+# so that a `#` inside one opens no comment. A bracket comment is read as far as its first line.
+function(zen_doc_cmake_comments content out)
+    string(REGEX REPLACE "\"[^\"\n]*\"" "" code "${content}")
+    string(REGEX MATCHALL "#[^\n]*" comments "${code}")
+    set(${out} "${comments}" PARENT_SCOPE)
+endfunction()
+
 # Every heading slug in a markdown file; the self-test requires a real document to yield one.
 # Memoised in a GLOBAL property keyed by the resolved path, because a hub document is the target
 # of dozens of anchors and a function cannot write its caller's scope.
@@ -144,10 +151,45 @@ function(zen_doc_headings path out)
     set(${out} "${slugs}" PARENT_SCOPE)
 endfunction()
 
+# Whether an absolute, normalised path is the repository root or under it.
+function(zen_doc_inside resolved out)
+    string(FIND "${resolved}/" "${ZEN_REPO}/" at)
+    if(at EQUAL 0)
+        set(${out} TRUE PARENT_SCOPE)
+    else()
+        set(${out} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+# Every `../` path in a text that climbs above the repository: read against the directory of the
+# file that holds it, or, when nothing there has that name, against the repository root, where a
+# comment's paths and a reader's commands start; a bare `../`, naming nothing, is words about
+# paths. A sibling checkout climbs from either; a link from one docs folder to another, or an
+# include of a neighbouring source folder, stays inside.
+function(zen_doc_climbs base_dir text out)
+    set(found "")
+    string(REGEX MATCHALL "(^|[^A-Za-z0-9_./-])(\\.\\./)+[A-Za-z0-9_.-]+" hits "${text}")
+    foreach(hit IN LISTS hits)
+        string(REGEX REPLACE "^[^.]" "" hit "${hit}")
+        string(REGEX REPLACE "([^./])[.]+$" "\\1" hit "${hit}")   # a sentence's full stop
+        get_filename_component(from_file "${base_dir}/${hit}" ABSOLUTE)
+        zen_doc_inside("${from_file}" inside)
+        if(inside AND NOT EXISTS "${from_file}")
+            get_filename_component(from_root "${ZEN_REPO}/${hit}" ABSOLUTE)
+            zen_doc_inside("${from_root}" inside)
+        endif()
+        if(NOT inside)
+            list(APPEND found "${hit}")
+        endif()
+    endforeach()
+    set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+
 # ---- the predicate, in one place so the self-test exercises the real one -------------
 #
 # Sets ${out} to one of: ok | outside | broken:<reason>. `outside` is a real answer and not
-# a failure: it is how a cross-repository or absolute reference is counted and declined.
+# a failure: it is how a URL, a same-file anchor or an absolute path is counted and declined. A
+# relative path that climbs above the repository is broken: a reader's clone has nothing there.
 function(zen_doc_verdict base_dir target out)
     if(target MATCHES "^[A-Za-z][A-Za-z0-9+.-]*:" OR target MATCHES "^//")
         set(${out} "outside" PARENT_SCOPE)   # a URL, or a protocol-relative one
@@ -175,9 +217,9 @@ function(zen_doc_verdict base_dir target out)
     endif()
 
     get_filename_component(resolved "${base_dir}/${path}" ABSOLUTE)
-    string(FIND "${resolved}" "${ZEN_REPO}/" inside)
-    if(NOT inside EQUAL 0)
-        set(${out} "outside" PARENT_SCOPE)   # above the repository root: not ours to demand
+    zen_doc_inside("${resolved}" inside)
+    if(NOT inside)
+        set(${out} "broken:climbs above the repository" PARENT_SCOPE)
         return()
     endif()
 
@@ -252,6 +294,28 @@ if(NOT v MATCHES "^broken:")
         "check, silently.")
 endif()
 
+# Climbing: a link and a prose path above the repository are refused, from the root and from a
+# folder where nothing has the name; paths that stay inside are not.
+zen_doc_verdict("${ZEN_REPO}/docs" "../../Zengine/README.md" v)
+zen_doc_climbs("${ZEN_REPO}" "a sibling checkout, ../Zengine, beside it" climb_root)
+zen_doc_climbs("${ZEN_REPO}/docs" "build it in `../Zengine`." climb_docs)
+zen_doc_climbs("${ZEN_REPO}/docs/laws" "see ../reference/ and ../../tests, x/../y, and a bare ../" climb_none)
+if(NOT v MATCHES "^broken:climbs" OR NOT climb_root STREQUAL "../Zengine"
+   OR NOT climb_docs STREQUAL "../Zengine" OR NOT climb_none STREQUAL "")
+    message(FATAL_ERROR
+        "doc-links: SELF-TEST FAILED -- climbing above the repository: a link answered '${v}', "
+        "prose at the root found '${climb_root}' and under docs/ '${climb_docs}' (want "
+        "'../Zengine' each), and paths that stay inside found '${climb_none}' (want nothing).")
+endif()
+
+# A CMake comment is read and a quoted argument is not.
+zen_doc_cmake_comments("set(X \"a # docs/in-a-string.md\") # see docs/reference/kernel.md\n# two\n" cm)
+if(NOT cm MATCHES "docs/reference/kernel[.]md" OR cm MATCHES "in-a-string" OR NOT cm MATCHES "two")
+    message(FATAL_ERROR
+        "doc-links: SELF-TEST FAILED -- CMake comments read as '${cm}': want both comments and "
+        "not the quoted argument.")
+endif()
+
 # The outside-path predicate: the INDICES (into ZEN_DOC_OUTSIDE_SPELLINGS) of every spelling
 # the text carries, empty when it names nothing outside the tree. Indices rather than the
 # spellings themselves, so the backslash one can never reach a CMake list.
@@ -294,7 +358,9 @@ endif()
 message(STATUS
     "doc-links: self-test OK -- a missing path and a missing anchor are both refused, a "
     "live document and one of its own headings are both accepted; four planted outside paths "
-    "are found, a clean sentence is not, and this file carries every declared spelling")
+    "are found, a clean sentence is not, and this file carries every declared spelling; a "
+    "path climbing above the repository is refused and one staying inside is not; a CMake "
+    "comment is read and its quoted argument is not")
 
 # ---- gathering the two populations -----------------------------------------------------
 
@@ -398,15 +464,22 @@ foreach(rel IN LISTS root_any nested_any)
     endif()
 endforeach()
 list(REMOVE_DUPLICATES text_files)
+set(cmake_files "")
+foreach(rel IN LISTS text_files)
+    if(rel MATCHES "(^|/)CMakeLists[.]txt$" OR rel MATCHES "[.]cmake([.]in)?$")
+        list(APPEND cmake_files "${rel}")
+    endif()
+endforeach()
 
 list(LENGTH md_files md_count)
 list(LENGTH src_files src_count)
-if(md_count EQUAL 0 OR src_count EQUAL 0)
+list(LENGTH cmake_files cmake_count)
+if(md_count EQUAL 0 OR src_count EQUAL 0 OR cmake_count EQUAL 0)
     message(FATAL_ERROR
-        "doc-links: the sweep found ${md_count} markdown file(s) and ${src_count} first-party "
-        "source file(s). An expectation of nothing is satisfied by anything (POP-01), so an "
-        "empty population is a failure here and not a quiet pass -- check ZEN_REPO and the "
-        "exclusion rules at the top of this file.")
+        "doc-links: the sweep found ${md_count} markdown file(s), ${src_count} first-party "
+        "C/C++ file(s) and ${cmake_count} CMake file(s). An expectation of nothing is "
+        "satisfied by anything (POP-01), so an empty population is a failure here and not a "
+        "quiet pass -- check ZEN_REPO and the exclusion rules at the top of this file.")
 endif()
 
 # ---- population 1: markdown links ------------------------------------------------------
@@ -438,6 +511,12 @@ foreach(rel IN LISTS md_files)
             math(EXPR checked "${checked} + 1")
         endif()
     endforeach()
+    # The prose, its link targets taken out, since each was judged above.
+    string(REGEX REPLACE "\\]\\([^)\r\n \t]+\\)" "]()" prose "${content}")
+    zen_doc_climbs("${base}" "${prose}" climbs)
+    foreach(climb IN LISTS climbs)
+        list(APPEND problems "${rel}: climbs above the repository -> ${climb}   (say the thing in words)")
+    endforeach()
 endforeach()
 
 if(checked EQUAL 0)
@@ -448,25 +527,37 @@ if(checked EQUAL 0)
 endif()
 set(md_checked "${checked}")
 
-# ---- population 2: repository-relative doc paths in first-party C/C++ comments ---------
+# ---- population 2: repository-relative doc paths in first-party C/C++ and CMake comments --
 # Comment text only, resolved against the repository root rather than the file, since a comment
-# travels with its code. A file that mentions no `.md` is skipped whole.
+# travels with its code; and every `../` path in it that climbs above the repository. A file that
+# mentions neither `.md` nor `../` is skipped whole.
 
 set(src_scanned 0)
 set(src_refs 0)
+set(md_ref_regex "[A-Za-z0-9_.][A-Za-z0-9_./-]*\\.md(#[A-Za-z0-9_-]+)?")
 
-foreach(rel IN LISTS src_files)
+foreach(rel IN LISTS src_files cmake_files)
     set(path "${ZEN_REPO}/${rel}")
     zen_doc_read_source("${path}" content)
     string(FIND "${content}" ".md" mentions)
-    if(mentions EQUAL -1)
+    string(FIND "${content}" "../" climbs_at)
+    if(mentions EQUAL -1 AND climbs_at EQUAL -1)
         continue()
     endif()
     math(EXPR src_scanned "${src_scanned} + 1")
 
-    zen_doc_comments("${content}" comment_text)
-    string(REGEX MATCHALL "[A-Za-z0-9_.][A-Za-z0-9_./-]*\\.md(#[A-Za-z0-9_-]+)?"
-           refs "${comment_text}")
+    if(rel IN_LIST cmake_files)
+        zen_doc_cmake_comments("${content}" comment_text)
+    else()
+        zen_doc_comments("${content}" comment_text)
+    endif()
+    string(REGEX REPLACE "${md_ref_regex}" "" comment_prose "${comment_text}")
+    get_filename_component(base "${path}" DIRECTORY)
+    zen_doc_climbs("${base}" "${comment_prose}" climbs)
+    foreach(climb IN LISTS climbs)
+        list(APPEND problems "${rel}: a comment climbs above the repository -> ${climb}   (say the thing in words)")
+    endforeach()
+    string(REGEX MATCHALL "${md_ref_regex}" refs "${comment_text}")
     if(refs)
         list(REMOVE_DUPLICATES refs)
     endif()
@@ -476,7 +567,7 @@ foreach(rel IN LISTS src_files)
             math(EXPR outside "${outside} + 1")
         elseif(v MATCHES "^broken:(.*)$")
             string(CONCAT problem "${rel}: ${CMAKE_MATCH_1} -> ${ref}"
-                   "   (a source comment's reference is resolved against the"
+                   "   (a comment's reference is resolved against the"
                    " repository root, not against the file)")
             list(APPEND problems "${problem}")
             math(EXPR src_refs "${src_refs} + 1")
@@ -530,10 +621,11 @@ list(LENGTH pruned pruned_count)
 message(STATUS "doc-links: ${md_count} markdown files (${md_excluded} excluded by rule, "
                "${pruned_count} top-level directories pruned), ${md_checked} repo-local "
                "links checked")
-message(STATUS "doc-links: ${src_count} first-party C/C++ files, ${src_scanned} carrying a "
-               ".md reference, ${src_refs} comment references checked")
+message(STATUS "doc-links: ${src_count} first-party C/C++ and ${cmake_count} CMake files, "
+               "${src_scanned} carrying a .md reference or a ../ path, ${src_refs} comment "
+               "references checked")
 message(STATUS "doc-links: ${outside} references counted and declined (external URL, "
-               "same-file anchor, or above the repository root)")
+               "same-file anchor, or absolute path)")
 message(STATUS "doc-links: ${outside_read} current-facing text files read whole for a path "
                "outside this repository (${outside_spelling_count} spellings; "
                "${outside_exempt} declaring file exempt by rule) -- ${outside_leaks} found")

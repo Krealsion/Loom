@@ -18,7 +18,7 @@ what:
 | a worker | one Python process per run, its own session | the run's asks and its verdict |
 | a client | the `loom-session` CLI, or `loom_session.Session` in Python | nothing: it asks the owners |
 
-Everything below was run to write this page, on Windows and on Linux.
+The transcripts below are real ones, from Windows and from Linux.
 
 ## 1. What you need
 
@@ -280,7 +280,7 @@ complete account the tool itself needs to preserve. `--json` cannot recover disc
 | who may attach | the host: the owner's key admits a client; nothing else does | `session.key` |
 | which package may run, at which revision | you | `loom-tools.json` `"approve"` |
 | what the manager may say, and so pass on | you | `authority allow runs ...` |
-| what a link's session may do on another host | that host | e.g. a Workshop's guests file |
+| what a link's session may do on another host | that host | e.g. the guests file of Zengine's Workshop, an application built on Loom |
 
 **A client** is admitted with exactly the session, run-manager and history vocabularies, to exactly
 those offices, and no tap. It cannot register runs or speak to your other participants.
@@ -357,11 +357,11 @@ a bare relative path starts in the run directory, not beside the script.
 | The tool needs... | Locate it through... |
 |---|---|
 | A bundled template or sample | A path relative to `Path(__file__).resolve().parent`, arranged for the script's location inside the package |
-| A maker's checkout or input file | An explicit manifest input (`ctx.inputs`); require an absolute path or document the base you resolve it against |
+| Your own checkout or input file | An explicit manifest input (`ctx.inputs`); require an absolute path or document the base you resolve it against |
 | A result another client should inspect | `ctx.produce("result.json", encoded_bytes)`; it writes into this run's `out/` and reports the artifact for verification |
 
-Do not infer a workspace by walking upward from the copied script. Do not store durable maker
-data by writing back into the package snapshot: it belongs to this run and may be deleted when
+Do not infer a workspace by walking upward from the copied script. Do not store durable data
+of your own by writing back into the package snapshot: it belongs to this run and may be deleted when
 the run is released with `--remove`. These path choices locate files; they grant no additional
 filesystem authority ([the worker trust boundary](#6-four-decisions-kept-apart)).
 
@@ -431,7 +431,7 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | `run handle ... belongs to another host lifetime` | that run belonged to an ended host | `runs --past` shows its record |
 | `not approved to run` / `changed since it was approved` | the catalog's decision | approve in `loom-tools.json` |
 | `package 'P' uses 'N': ...` | a package this one builds on is missing, unapproved, or builds on others | list and approve `N` in `loom-tools.json` |
-| `ctx.observe` refused in the far host's words | that host's policy: this session may not observe that office's shapes | the far host's maker decides (e.g. a Workshop guests row's `observe`) |
+| `ctx.observe` refused in the far host's words | that host's policy: this session may not observe that office's shapes | the far host's owner decides (e.g. a Workshop guests row's `observe`) |
 | `this link carries no subscription N of that relay lifetime for you` | a release or acknowledgement for a subscription this run does not hold — another run's, or one whose session or subscription already ended | only the run that subscribed controls it; nothing was sent |
 | a `Gap` from a subscription | observations were lost — the relay's window, or this client's bound, or a hole in the numbers | a count that needed them is unknowable: say so; acknowledge faster or ask for a larger window |
 | `the session door refused run ...: ... may not say itself` | the manager's ceiling | `authority allow runs <rule>` |

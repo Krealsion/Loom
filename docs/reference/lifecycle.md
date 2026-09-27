@@ -113,11 +113,11 @@ Minting `LifecycleAuthority` requires the `Switchboard&` itself
 an authority is honored only by the board that issued it
 ([LIFE-04](../laws/lifecycle-laws.md)).
 
-## Graceful swap — the legacy ceremony, and when to prefer it
+## Graceful swap — the other ceremony, and when to prefer it
 
 The Weave Manager's `SwapWeave` composite and the cooperative-handoff **letter**
-(`zen.PrepareShutdown` → `zen.Bequest` / `zen.ClaimBequest`) predate prepared
-replacement and remain supported. The two ceremonies are **disjoint**: graceful
+(`zen.PrepareShutdown` → `zen.Bequest` / `zen.ClaimBequest`) are supported beside
+prepared replacement. The two ceremonies are **disjoint**: graceful
 swap talks to the *outgoing* holder, preserves authored work, verifies nothing
 about the successor, and has an observable window; prepared replacement talks
 to the *incoming* holder, verifies everything, has no window — and tells the

@@ -15,16 +15,16 @@ No slot changes in either table; the descriptor's manifest is `zen.Manifest`
 `state`, `requests` and `claims`, and the host claims those definitions — with
 every component they nest — into its agreement wall at load, beside the
 accept-set. A loaded emitter of `Pong v1 {a, b}` and an acceptor of `Pong v1 {a}`
-now refuse at load in either order, where a v8 image, unable to say what it
-emitted, was admitted and the disagreement surfaced as its first refused
-delivery. The section is descriptive vocabulary: the host reads no grant from it,
-and it is not an exhaustive send list. Paid as a break although the tables are
-unchanged, as the one compatibility boundary this seam declares: a v8 image's
-manifest claims `zen.Manifest` v4, a different identity from the v5 door, and the
-gate would refuse it (`SchemaMismatch`, pinned in suite `schema_codec`) — but only
-in `reconstruct`, after the image's static initializers and `create()` had run,
-with a sentence about a meta-schema. The version gate refuses the image in
-`fetch_abi`, before any callback into it, with both versions named, at load and
+refuse at load in either order; an image unable to say what it emits would be
+admitted, and the disagreement would surface as its first refused delivery. The
+section is descriptive vocabulary: the host reads no grant from it, and it is not
+an exhaustive send list. It is a version break although the tables are
+unchanged, because the version is the one compatibility boundary this seam
+declares: a v8 image's manifest claims `zen.Manifest` v4, a different identity
+from the v5 door, and the gate would refuse it (`SchemaMismatch`, pinned in suite
+`schema_codec`) — but only in `reconstruct`, after the image's static
+initializers and `create()` had run, with a sentence about a meta-schema. The
+version gate refuses the image in `fetch_abi` instead, before any callback into it, with both versions named, at load and
 at reload over a live participant, and the incumbent stands. "Declared nothing"
 and "could not declare" are two versions, not two readings of one gate sentence.
 
@@ -44,13 +44,13 @@ functioning, did not apply the value and keeps state of its own.
 The host maps every status of the showing slot, and the mapping is on the slot
 in `abi.h`: `ZEN_OK` is Applied; `ZEN_CLAIM_DECLINED` is Declined (not held; the
 operator told; the library re-claims its own truth at its next delivery); every
-negative status is Failed (`ZEN_ERR` for an exception that escaped the maker's
+negative status is Failed (`ZEN_ERR` for an exception that escaped the library's
 handler or a returned `PublishedClaim::Failed`, `ZEN_ERR_UNKNOWN_SCHEMA` /
 `ZEN_ERR_REFUSED` for bytes the library's gate would not admit) and the weave is
 held; every other positive status is undefined for the slot and read as Failed.
 A descriptor whose slot is NULL is shown nothing and read as Failed. Each of
-the three answers is witnessed through the real image (suite `joint`: J7
-Applied, J11 Failed, J21 Declined).
+the three answers is witnessed through the real image (suite `joint`: a loaded
+claimant that applies, one whose showing fails, and one that declines).
 
 Only the claimant's verbs cross. The operator's — begin, commit, cancel,
 status, release — and the authority they need are native; a loaded operator's
@@ -66,7 +66,7 @@ hosts, libraries and images together.
 send callbacks (`send`, `send_to_role`, `office_send`, `office_send_to_role`)
 return their actual queued sequence through `attempt_out`; NULL is allowed and
 zero means no queued identity. The C++ wrappers return that sequence as Ticket,
-so matching no longer relies on invalid or success-sentinel tickets. Immediate
+so matching needs no invalid or success-sentinel tickets. Immediate
 seam failures queue nothing and receive no later dispatch notice.
 
 The accept-set declares zen.DispatchRefused through the existing manifest.
@@ -78,8 +78,8 @@ publication callbacks keep their separate existing status/return contracts.
 No binary compatibility with v6 is claimed: a real pre-v7 image is refused at
 load with both versions named. The isolated pipe returns no attempt identity and
 refuses a manifest accepting zen.DispatchRefused, naming its unsupported
-attestation reach. Nonparticipating child speech retains its existing behavior.
-The bridge/wire payload format gains no trusted provenance field.
+attestation reach. Nonparticipating child speech is unaffected. The bridge/wire
+payload format carries no trusted provenance field.
 
 **v6 carries Senses across the seam, both ways**, so a loaded weave has exactly
 the surface a native one has: `claim` / `office_claim` outbound, `observe` /
@@ -112,22 +112,18 @@ version) that was asked for.
 
 **The office name crosses exactly, at any length.** It travels through a
 caller-provided `ZenByteSink` — the same mechanism the claim's value uses — and
-is *not* a field in `ZenSenseBy`. The first v6 draft carried it as a fixed
-`char office[128]` and truncated at the bound, which let an observation report an
-office identity nobody ever authored: a 200-character role arrived as a plausible
-127-character prefix, and two offices agreeing for their first 127 bytes were
-indistinguishable. R2E-0a removed the bound rather than raising it — a bigger
-buffer only moves the lie further out — so no representability limit remains and
-no truncation refusal was needed. An office sink that is never written means the
-claim was personal, which no real role name can imitate.
+is *not* a field in `ZenSenseBy`. A fixed `char office[128]` would truncate at the
+bound and let an observation report an office identity nobody ever authored: a
+200-character role arriving as a plausible 127-character prefix, and two offices
+agreeing for their first 127 bytes indistinguishable. A bigger buffer only moves
+that lie further out, so there is no bound, no representability limit and no
+truncation refusal. An office sink that is never written means the claim was
+personal, which no real role name can imitate.
 
 No binary compatibility is claimed: a v5 artifact refuses at load, naming both
 versions — the honest failure, since it would otherwise load compiled against a
 Bus whose claim/observe verbs silently return the refusing defaults: unable to
-claim, unable to read, and unable to say so. R2E-0a changed v6's layout **without
-bumping to v7**, deliberately: v6 was never published, so no released artifact
-could observe the difference, and a bump would assert a compatibility boundary
-that does not exist.
+claim, unable to read, and unable to say so.
 
 **v5 carried role-authored delivery provenance and gave loaded weaves the
 explicit office-authorship doors native weaves already have**, for the same
@@ -149,14 +145,12 @@ versions ([KERN-04](../laws/kernel-laws.md)).
 ## A handler that does not finish
 
 The library catches everything at its own boundary: `do_handle` wraps the whole
-call and returns `ZEN_ERR` where an exception escaped, so a loaded weave'''s
+call and returns `ZEN_ERR` where an exception escaped, so a loaded weave's
 exception never reaches the Switchboard and a pump over one still returns
-normally. What the host does with that status is the part RTH-1 changed. It used
-to be discarded entirely — the message was validly delivered, and the library'''s
-internal error was the library'''s own concern — which is still true and was still
-not the whole truth: the bus then recorded and announced a plain `Delivered` for
-a handler that never completed, which is the one thing an observer most needs not
-to be told.
+normally. The message was validly delivered, and the library's internal error is
+the library's own concern — but discarding the status would have the bus record
+and announce a plain `Delivered` for a handler that never completed, which is the
+one thing an observer most needs not to be told.
 
 So the status crosses back as a fact and nothing else. `HostAdapter::handle`
 reports a non-OK status through `Switchboard::note_handler_failure()`, the bus
@@ -166,7 +160,7 @@ journal outcome — exactly what the native throwing path already did
 Nothing is refused, nothing is retried, nothing is translated into a
 `RefusalReason`, and the status reaches no weave.
 
-## Constructing the tables (BL-4)
+## Constructing the tables
 
 **Every in-tree construction of `ZenWeaveAbi` and `ZenHostApi` names its fields**
 — designated initializers, in declaration order. That is `ZEN_EXPORT_WEAVE`, the
@@ -195,10 +189,10 @@ imply one another:
 
 A designator can still name the wrong function. For the descriptor's three
 byte-emitting doors, the gate catches that mistake: manifest, state and lifecycle
-policy have different schemas. The existing `kernel` case "BL-4: the descriptor's
-three same-signature doors each answer for themselves" pins the successful
-consequences. BL-4's v6 mutation evidence covers all three descriptor swaps;
-v7 leaves those signatures, named mappings and schema distinctions unchanged.
+policy have different schemas. A `kernel` case, the descriptor's three
+same-signature doors each answering for themselves, pins the successful
+consequences; a swap of any two is refused by the gate, since each door's answer
+has its own schema.
 
 **The host table has one compatible pair.** `send_to_role` and `office_publish`
 share a function-pointer type since v7 added `attempt_out` to the addressed door:
@@ -212,11 +206,11 @@ nothing in the host table, and the descriptor's appended `claim_published`
 same shape, bytes in. A designator can still name the wrong one; what tells
 them apart is their consequence: `revive` admits the bytes against the STATE
 schema and `claim_published` against the CLAIM-SET, so a swap is a gate
-refusal at the first real showing (J7 shows a `DocFact`, which the probe's
-`ProbeState` gate refuses), never a silent success.
+refusal at the first real showing (the loaded claimant is shown a `DocFact`,
+which the probe's `ProbeState` gate refuses), never a silent success.
 
-The `dispatch_loaded` case "ABI v7: loaded role sends and office publications have
-distinct successful semantics" loads the real image and checks the host's actual
+The `dispatch_loaded` case for loaded role sends and office publications loads
+the real image and checks the host's actual
 destination set, personal versus verified office provenance, and exact attempt
 versus recipient count. It chooses an addressed role the author also holds and
 primes sequences above the fanout count, so both wrong callbacks can succeed and
@@ -228,17 +222,18 @@ restoring that host makes it pass.
 
 ### When fields or signatures evolve
 
-`abi.h` promises valid C. Bounded v7 checks compiled the actual header and a
-minimal named C producer under strict C99/C11/C17, and the export path under
-C++20. There is no standing C-producer compilation gate: the project remains
-`LANGUAGES CXX`. A real C/non-C++ producer or public binding is the trigger to
-add that infrastructure; this compatibility witness does not create one.
+`abi.h` promises valid C. There is no standing C-producer compilation gate: the
+project is `LANGUAGES CXX`, and the promise is checked when the header changes,
+by compiling it with a minimal named C producer under strict C99/C11/C17 and the
+export path under C++20 (step 4 below). A real C/non-C++ producer or public
+binding is the trigger to add that infrastructure.
 
 For an appended field **or a changed existing signature**:
 
 1. Inventory assignment-compatible callbacks across **all** fields, including
    nonadjacent pairs. A signature change can create a collision without adding
-   or moving a field, as `attempt_out` did in v7.
+   or moving a field: v7's `attempt_out` made `send_to_role` and `office_publish`
+   one type.
 2. Keep each construction site explicit and in declaration order: export macro,
    in-process host, isolation child and manual bad/stale descriptors. Append new
    fields at the end and document their meaning in the header; review existing
@@ -257,17 +252,17 @@ For an appended field **or a changed existing signature**:
    at load and at reload, where a refused candidate must leave the incumbent
    untouched. The manual previous/future-version fixtures pin the gate's
    ordering; a current image relabeled old does not replace evidence from an
-   actual pre-change artifact. See the v2/v4/v5/v6/v7/v8 notes in `abi.h` for
-   the breaks already paid.
+   actual pre-change artifact. The version notes in `abi.h` say what each
+   break carried.
 6. **State what the bus records for every status of a new callback slot** —
    including the one that is neither OK nor an error — and witness each with a
    loaded image whose callback answers it. A slot whose status the host
    discards, or maps by default to success, turns a library that failed into
-   one that silently succeeded: `claim_published`'s first host `(void)`-ed its
-   `ZEN_ERR`, and a library whose hook threw stood behind a claim it never
+   one that silently succeeded: a host that `(void)`s `claim_published`'s
+   `ZEN_ERR` has a library whose hook threw stand behind a claim it never
    applied. Document the raw mapping on the slot, including undefined values,
-   and pin each defined value through the real image (suite `joint`: J7, J11,
-   J21).
+   and pin each defined value through the real image (suite `joint`, one loaded
+   image per answer).
 
 ## Host services (what a loaded weave's `Bus` really is)
 
@@ -300,7 +295,7 @@ application fact ([joint publication](joint-publication.md#what-crosses-the-abi)
 The operator's verbs keep the refusing defaults across the seam.
 
 Out-of-process children receive **null** capability doors and fail closed
-(cross-process attestation is deliberately out of scope in V1) — including
+(cross-process attestation is deliberately out of scope) — including
 the v5 office doors, in both directions: an isolated weave genuinely holding
 its role is still refused office authorship at the pipe, and told so. The v6
 Sense doors join the same standing law: the claim doors are null because the pipe
@@ -319,8 +314,7 @@ it protects **mixed** artifacts. The fixture is a current-layout image that
 *claims* the previous version: it pins the gate's ordering, and it is not
 evidence about an old binary's descriptor. That evidence is an image genuinely
 compiled against the pre-change header, retained with its hash and refused by
-the current host with both versions named; each bump's landing record carries
-one.
+the current host with both versions named, and a version bump owes one.
 
 ## Tests
 
@@ -333,7 +327,6 @@ both orders); suite `schema_codec` (`zen.Manifest` v5 carries the emit-set and
 its components; a v4 manifest does not pass the v5 door; a manifest carrying two
 definitions of one component is refused at the second); suite `joint` (the v8
 claimant doors: offer across the seam, and the showing's three statuses); suite
-`isolation` (the fail-closed pipe, both directions; a child's emit-set); Night
-Lab `repro_answer_seam.cpp` as the application-shaped witness. The v9 landing
-record (`loom-schema-admission-implementation` in the Zen workspace) carries the
-retained v8 image refused by a v9 host with both versions named.
+`isolation` (the fail-closed pipe, both directions; a child's emit-set);
+[Night Lab](../evidence/night-lab.md)'s `marathon/repro_answer_seam.cpp` as the
+application-shaped witness.

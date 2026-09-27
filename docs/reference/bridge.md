@@ -37,14 +37,14 @@ proxy-participant pattern, pointed at a peer.
 
 **Two consumers, one crossing.** The *operator's* console
 (`zen-console-remote`, `zen-bridge-probe`) is one principal with the whole bus;
-a *guest* — another Loom host's participant, a Workshop's agent — is admitted
+a *guest* — another Loom host's participant, an agent of Zengine's Workshop — is admitted
 deliberately and granted narrowly. The crossing serves both through one
 policy seam, and the difference between them is entirely the policy's answer.
 
 **Where it lives.** `loom::bridge` (`zen-bridge`: the channel, the protocol, the
 server, the console-free client, the link envelope) is **exported** by
-`find_package(loom)` since the two-host crossing: a Loom host that links to
-another host reaches it that way, and Loom's own supplied host does. The
+`find_package(loom)`: a Loom host that links to another host reaches it that
+way, and Loom's own supplied host does. The
 operator's console over it (`RemoteConsole`, `zen-bridge-console`) stays
 unexported with the console engine it needs. Nothing of the console's
 dependency closure crosses the package boundary.
@@ -69,10 +69,10 @@ version — and where it came from, and answers one of three things:
 | **Defer** | the connection waits in `AwaitingDecision`: its sends are refused aloud (`SendRefused: not admitted`), never queued; `BridgeServer::decide(connection, verdict)` settles it later |
 
 `Defer` + `decide` is the seam an interactive decision attaches to: a console
-command today, a per-connection popup tomorrow. Nothing downstream of the
-verdict changes for it.
+command, or a per-connection popup. Nothing downstream of the verdict changes
+for it.
 
-`operator_admission()` is the old model stated as a policy: every connection is
+`operator_admission()` is the whole-bus operator stated as a policy: every connection is
 the operator — `allow_any()`, accept-any, observing the whole bus — and its
 established name is whatever it claimed. **Under that policy reachability of
 the socket is authority**, and a listener served with it must not be exposed
@@ -118,8 +118,7 @@ authored_role     the office the sender deliberately spoke as, or empty
 ```
 
 A peer that only got bytes could not tell an attested answer from any admitted
-participant's helpful `zen.Result`; v4's crossing no longer discards the
-difference.
+participant's helpful `zen.Result`; protocol v4 carries the difference.
 
 A `Send` may carry `kSendSettle`. The host then opens a
 [fence](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)
@@ -176,8 +175,8 @@ budget, and the JSON decoder refuses a field the shape does not declare), and a 
 deliveries, and its `Describe` answers, are the admitted values serialized as JSON. One session
 speaks one encoding: a compat session's native payload is refused before the bus in words, and a
 native session's JSON is refused as any malformed payload always was. Authority does not depend on
-the encoding. The supplied host's session door admits every session as `Compat`; Workshop's guest
-door, and every link between hosts, stay `Native`. Suite `bridge`, the `encoding:` cases.
+the encoding. The supplied host's session door admits every session as `Compat`; Zengine's
+Workshop guest door, and every link between hosts, stay `Native`. Suite `bridge`, the `encoding:` cases.
 
 ## The tap
 
@@ -269,15 +268,15 @@ awaiting a decision, admitted, refused, closed — with the connection as it
 stands, so an inventory can show a session and drop it rather than show a dead
 one as live. `connections()` is the same inventory on demand.
 
-A server may be **owned by a weave** -- Workshop's guest door is one -- and die
+A server may be **owned by a weave** -- Zengine's Workshop guest door is one -- and die
 with the bus. Two things then hold. The Switchboard's destructor empties its
 registry into a local before any weave is destroyed, so the server's own
 re-entrant unregistration finds nothing to erase from a map being torn down;
 and a proxy, which the bus may destroy *before* the weave that owns the server
 (registry order, not the server's), clears the connection's pointer to it as it
 dies, so the server's destructor finds a null rather than a freed object. The
-bridge suite's `teardown:` case holds both, and the sanitizer lane is where the
-second one showed.
+bridge suite's `teardown:` case holds both, and it is the sanitizer lane that
+sees the second.
 
 ## Validation: what Bridge checks, and what it deliberately does not
 
@@ -320,7 +319,7 @@ materialization ([bounds](bounds.md#the-decode-materialization-bound)).
 **Bridge authenticates a credential exactly as far as the host's policy does,
 and provides no transport security.** There is no TLS and no peer-credential
 check in the mechanism; a credential in a Hello is bytes the policy compares
-to something it holds. That is enough for a maker's own two processes on one
+to something it holds. That is enough for one person's own two processes on one
 machine, and it is what it is: a shared secret, as private as the file it lives
 in.
 
@@ -361,7 +360,7 @@ Suite `bridge` — transport round-trip and EOF-as-an-event (both AF_INET and
 AF_UNIX), the forged-wire-sender pin, the connection cap, the pre-`Hello`
 severance, hostile-`Send` refusal, malformed framing, the client's bounded
 caches, a SIGKILLed peer reaped across two real processes, the bounded-dispatch
-cases, the C-1 remote-window cases — and the crossing's: a refused connection
+cases, the remote console's window cases — and the crossing's: a refused connection
 registers no proxy and its sends act on nothing; the established name is the
 policy's word; a guest's send is stamped from the session and answered with
 Loom's attestation; what the grant does not cover is refused at the bus and the

@@ -11,9 +11,9 @@ Supersedes the recorded meaning of `Emit<...>` as "informational; does not regis
 
 ## The pressure
 
-A native Workshop declared the newer `PaneInventory v1` only in `Emit<...>`. An older loaded
-desktop accepted the same name and version over a different nested `InventoryPane v1`. Both
-admitted. The first publication was refused at the gate — `claimed shape does not match this
+In Zengine's Workshop, an application built on Loom, a native participant declared the newer
+`PaneInventory v1` only in `Emit<...>`. An older loaded desktop accepted the same name and
+version over a different nested `InventoryPane v1`. Both admitted. The first publication was refused at the gate — `claimed shape does not match this
 door` — and Pane Manager stayed waiting, with the refusal visible only on the tap, because a
 publication carries no addressed refusal back to its author. In the shipped load order the
 stale desktop won the wall and the *current* Info pane was the artifact refused.
@@ -35,12 +35,11 @@ a `Box2` it never declared** — a false contract, not a refused one.
 component those shapes nest is claimed, by definition, in the one registration transaction,
 through the one wall, natively and across the seam alike.** Concretely:
 
-- `loom::Weave` gained `emitted_schemas()` (defaulted empty); `WeaveBase` writes it from
+- `loom::Weave` has `emitted_schemas()` (defaulted empty); `WeaveBase` writes it from
   `Emit<...>`, `final`. `Switchboard::register_weave` and the code-swap re-claim take the
   **closure** of the accept-set, claim-set, emit-set and state shape.
-- The closure is walked by one traversal, `collect_referenced` in `zen/schema.hpp` — moved
-  down from the kernel codec to the layer that owns schemas, same name and signature —
-  deduplicated by **identity** (name, version *and* content-id), never by name alone. Two
+- The closure is walked by one traversal, `collect_referenced` in `zen/schema.hpp` — the
+  layer that owns schemas, not the kernel codec — deduplicated by **identity** (name, version *and* content-id), never by name alone. Two
   definitions of one key both survive the walk; the Registry's existing same-key/different-
   content comparison refuses them, inside one declaration or against a live one.
 - `zen.Manifest` v5 adds the optional `emits` list; `do_describe` writes it from the same
@@ -48,8 +47,8 @@ through the one wall, natively and across the seam alike.** Concretely:
   isolation proxy answer `emitted_schemas()` from it. The encoder's `referenced` section carries
   both definitions of a contradictory component, and `decode_referenced` refuses at the second.
 - A reload candidate's whole closure is checked against the bus's live vocabulary **before**
-  the incumbent is touched, with the registry's own sentence — the one place validate-then-
-  commit had a gap once nested components and emits were claimed.
+  the incumbent is touched, with the registry's own sentence, so claiming nested components
+  and emits leaves validate-then-commit without a gap.
 - The ABI is bumped to **v9** although no table slot changed, as the explicit compatibility and
   deployment boundary. A v8 image would not slip through the manifest gate — its descriptor
   claims `zen.Manifest` v4, whose identity differs from the v5 door's, and the gate refuses that
@@ -86,9 +85,9 @@ through the one wall, natively and across the seam alike.** Concretely:
   GATE-04 and the registry reference say only accepted/claimed/persisted shapes agree). Rejected:
   it leaves the product to explain a publication's gate refusal from the tap, since no author is
   told; and it keeps a declaration that means one thing natively and nothing across the seam.
-- **Native half only, manifest later.** The experiment that proved the direction did exactly
-  this; a loaded emitter still slipped through to a delivery-time seam refusal with a different
-  sentence for the same cause. Rejected as the landed shape: one phase, both halves.
+- **Native half only, manifest later.** A loaded emitter then still slips through to a
+  delivery-time seam refusal, with a different sentence for the same cause. Rejected: both
+  halves land together.
 - **Keep name-keyed deduplication and refuse contradictions at describe time.** Rejected: the
   refusal would surface as `describe() failed` with no shape named, and a hand-built manifest
   would still be trusted. Carrying both definitions lets the *loader* refuse with the shape
@@ -105,18 +104,17 @@ through the one wall, natively and across the seam alike.** Concretely:
   decide which is newer or right, and it will refuse a current artifact behind a stale one that
   registered first. What makes the stale desktop the loser in Workshop is Workshop's own
   startup order — the host mounts Workshop, whose `Emit<...>` declares the current
-  `PaneInventory`, before its plan loads any pane — measured with the real artifacts in the
-  corrections record (`loom-schema-admission-implementation-corrections`), whichever side of
-  the stale desktop the plan puts the current Info pane.
+  `PaneInventory`, before its plan loads any pane — whichever side of the stale desktop the
+  plan puts the current Info pane.
 - An emitted-only shape resolves from its emitter's declaration: a `AcceptMode::AnyRegistered`
-  weave (the console) is now offered it on a directed send, where before the send was refused
-  `NotAccepted`; publication still fans out to listed doors only. The known-seams reply-shape
-  gap closes on the descriptive side; the approval-interface side of that seam remains.
+  weave (the console) is offered it on a directed send rather than refusing it `NotAccepted`;
+  publication still fans out to listed doors only. The known-seams reply-shape gap is closed on
+  the descriptive side; the approval-interface side of that seam remains.
 - A consumer compiled against older headers rebuilds (the `loom::Weave` vtable grew); every
   image built against ABI v8 is refused at load and at reload with both versions named.
 - Zengine's three seams that reuse `collect_referenced` (operator descriptors, provider
   contributions, maker definitions) inherit identity deduplication: a self-contradictory
-  definition now refuses at its decoder instead of substituting.
+  definition refuses at its decoder instead of substituting.
 
 ## Current laws supported
 
@@ -136,7 +134,6 @@ Box/Box2 manifest refused at the second Part, a hand-built manifest, the v4 door
 `kernel` (native/loaded and loaded/loaded emitters, nested-only across artifacts and against a
 native weave, one artifact contradicting itself in both orders with the agreeing control,
 refusal cleanup and reclamation, reload against a native-only definition, prepared candidate,
-P-LOOM-06's copied weave), `isolation` (a child's emit-set against the bus and against another
-mount), and `tests/package/stranger_host.cpp` (the installed package carries the emit-set and
-the nested closure). Phase record: `loom-schema-admission-implementation` in the Zen workspace;
-research: `loom-schema-admission-research`, with its independent review.
+a guide's weave copied whole), `isolation` (a child's emit-set against the bus and against
+another mount), and `tests/package/stranger_host.cpp` (the installed package carries the
+emit-set and the nested closure).

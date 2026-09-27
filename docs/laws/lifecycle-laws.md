@@ -93,9 +93,9 @@ MEANS
   never removed from the weave.
 
 DOES NOT MEAN
-- that `announce_lifecycle` changed — that is still an ordinary gated send with
+- that `announce_lifecycle` is affected — it is an ordinary gated send with
   ordinary answer semantics;
-- that `zen.Activated`-shaped ordinary messages became unanswerable — the
+- that `zen.Activated`-shaped ordinary messages are unanswerable — the
   distinction is provenance, not shape.
 
 PROVEN BY — `deliver_admission` sets no reply authority; suite `kernel`
@@ -126,14 +126,14 @@ MEANS
 
 DOES NOT MEAN
 - that no weave may be removed during a dispatch turn — removing a **different**
-  weave from inside a callback works exactly as before, returns its owner, and
-  performs its ordinary cleanup. The guard is exact to the active target, never
+  weave from inside a callback works, returns its owner, and performs its
+  ordinary cleanup. The guard is exact to the active target, never
   to `in_dispatch_`;
-- that removal became asynchronous, deferred, or queued — success still transfers
-  a unique owner the caller may destroy immediately, which is *why* refusing is
+- that removal is asynchronous, deferred, or queued — success transfers a unique
+  owner the caller may destroy immediately, which is *why* refusing is
   the only honest answer: Loom cannot both hand over unique ownership and keep it;
-- that ownership became shared, that any lifecycle operation is forbidden from a
-  callback, or that observers changed — a tap removing the just-delivered weave
+- that ownership is shared, that any lifecycle operation is forbidden from a
+  callback, or that observers are affected — a tap removing the just-delivered weave
   runs after that weave's member call has already returned
   ([MSG-11](messaging-laws.md));
 - that ordinary weave code gained this reach. A handler is delivered a `WeaveBus`,
@@ -141,8 +141,8 @@ DOES NOT MEAN
   deliberately supplies concrete `Switchboard&` access.
 
 PROVEN BY — the active-target early return at the top of
-`Switchboard::unregister_weave`; suites `switchboard` (R2F-B cases: self-removal
-refused, retry after return, a different weave still removable, mutation-free
+`Switchboard::unregister_weave`; suites `switchboard` (self-removal refused, retry
+after return, a different weave still removable, mutation-free
 refusal, exception unwind) and `kernel` (committed activation, the `finish_txn`
 discard route).
 
@@ -168,29 +168,29 @@ MEANS
   at the end of the poll that decoded it, so a permanently incomplete suffix —
   the shape that defeats "clear only when the buffer is exactly empty" — pins
   nothing behind it;
-- **nothing about framing moved.** Frame bytes, order, the length encoding,
-  `kMaxFrameLen`, `kMaxBacklog`, EOF, failed state, non-blocking behavior and
-  readiness are exactly as before. A compaction subtracts the same amount from
+- **reclamation touches nothing about framing.** Frame bytes, order, the length
+  encoding, `kMaxFrameLen`, `kMaxBacklog`, EOF, failed state, non-blocking behavior
+  and readiness do not depend on it. A compaction subtracts the same amount from
   both terms of the backlog cap, so the number that cap reads is invariant.
 
 DOES NOT MEAN
 - an **RSS guarantee**. The allocation is kept for reuse at its high-water mark;
   what is bounded is the channel's *live* buffer, not what the allocator has
   returned to the OS. "Capacity remains reusable" and "sent bytes remain part of
-  the live buffer" are different claims, and only the second was the defect;
+  the live buffer" are different claims, and only the second is ruled out;
 - `shrink_to_fit()` after every frame, a ring buffer, scatter/gather parsing, or
   any new transport machinery;
 - a **message-history** feature. Nothing retains delivered frames for replay;
 - flow control, backpressure, congestion control, or a queue-size policy. A peer
-  that will not drain is still contained by `kMaxBacklog` failing the channel,
-  exactly as before — reclamation moves the backlog, it never shrinks it;
+  that will not drain is contained by `kMaxBacklog` failing the channel —
+  reclamation moves the backlog, it never shrinks it;
 - that a failed channel reclaims. Once `failed()`, `flush()` returns before
   doing anything: the state that records why it died is not disturbed.
 
 PROVEN BY — the compaction branch at the end of `Channel::flush()`
 (`src/isolation/channel.cpp`) and `BridgeChannel::flush()`
 (`src/bridge/channel.cpp`), and the unconditional `inbox_.erase(0, pos)` in each
-`poll()`. Suites `isolation` and `bridge` (R2F-C cases, one independent set per
+`poll()`. Suites `isolation` and `bridge` (one independent set of cases per
 framer: a never-idle channel over a persistent backlog, frames queued behind a
 half-sent one, backlog-cap and failed-channel invariance, over-length refusal,
 EOF, and the receive-side parity case). Published values:

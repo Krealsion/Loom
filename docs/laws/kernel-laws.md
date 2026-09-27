@@ -118,8 +118,8 @@ built artifacts with `nm`, over a roll of contracted targets derived from the
 function itself, with a deliberately uncontracted twin as the control); CTest
 entry `weave_population` (that the artifacts which must be on that roll are on
 it — a separate, build-graph-derived expectation, [POP-05](population-laws.md);
-before it, a fixture that stopped calling the function simply left the roll and
-nothing said so, COLD-2 C-3); suite `kernel` (a contracted image releases and
+without it, a fixture that stopped calling the function would simply leave the roll
+and nothing would say so); suite `kernel` (a contracted image releases and
 each load gets a fresh lifetime; the uncontracted one stays resident while
 `dlclose` reports success — the loader's bookkeeping, which is *not* what
 notices a fixture losing the contract).

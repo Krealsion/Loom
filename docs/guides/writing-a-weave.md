@@ -1,7 +1,7 @@
 # Writing a weave
 
 One task: a participant that hears one shape, keeps state, and speaks another.
-The whole program below compiles today — it is
+The whole program below compiles — it is
 [`examples/heartbeat_woven.cpp`](../../examples/heartbeat_woven.cpp), built in
 the normal lane.
 

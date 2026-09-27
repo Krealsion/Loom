@@ -8,5 +8,5 @@ these pages defines behavior — [reference](../reference/) and
 - [night-lab.md](night-lab.md) — the application portfolio: six programs built
   against the current substrate, what held, what refused, and the seams they
   priced.
-- [audits.md](audits.md) — the dated architecture audits and where their
-  artifacts live.
+- [audits.md](audits.md) — what a cold read of the substrate found, and the
+  suite that now pins each repair.

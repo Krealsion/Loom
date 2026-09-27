@@ -15,7 +15,7 @@
 // the *filesystem view*; in B5 the *quantitative* one. Which mechanism enforces
 // each, why they are not a ladder, and what they do not claim (B2–B5 are Linux/WSL
 // only, and none of them is a claim of kernel-escape resistance) is owned by
-// docs/reference/capabilities.md#hosting-and-enforcement-tiers-b1-b5.
+// docs/reference/capabilities.md#hosting-and-enforcement-tiers.
 //
 // AND THE PROJECTIONS DO NOT ALL ANSWER AT THE SAME MOMENT (GATE-05). That was
 // always true and used not to matter, because nothing could change a grant after
@@ -136,7 +136,7 @@ struct ResourceLimits {
 };
 
 /// THE HALF OF AN AUTHORITY THAT ANSWERS AT THE MOMENT OF USE (GATE-05).
-/// docs/reference/capabilities.md#live-delegation-grant-0
+/// docs/reference/capabilities.md#live-delegation
 ///
 /// Send rules and observe rules, and deliberately NOTHING ELSE. Every rule here
 /// is consulted off the live record each time it is needed — a send rule in

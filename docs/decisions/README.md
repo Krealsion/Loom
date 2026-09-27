@@ -1,14 +1,14 @@
 # Decisions — why, on record
 
 ADR-style records for exactly the choices a future maintainer might be tempted
-to unmake without knowing what rejected them. Not every phase is a decision;
-the full narrative lives in [history](../history/README.md).
+to unmake without knowing what rejected them. How Loom came to be this way is in
+[history](../history/README.md) and in Git.
 
 | Record | One line |
 |---|---|
 | [one-gate-at-every-boundary](one-gate-at-every-boundary.md) | one validator, no fast path, authorization kept outside it |
 | [lifecycle-authority-is-loom-owned](lifecycle-authority-is-loom-owned.md) | attestation is a host capability, board-relative; a grant is never authority |
-| [readiness-is-authenticated-conversation](readiness-is-authenticated-conversation.md) | the candidate answers for itself; host assertion was removed |
+| [readiness-is-authenticated-conversation](readiness-is-authenticated-conversation.md) | the candidate answers for itself; no host asserts it |
 | [admission-and-activation-share-one-boundary](admission-and-activation-share-one-boundary.md) | one envelope is both; commit schedules |
 | [committed-activation-is-not-answerable](committed-activation-is-not-answerable.md) | first breath is a fact, not an ask |
 | [no-rollback-after-committed-production](no-rollback-after-committed-production.md) | failure direction is refuse-before, never unwind-after |
@@ -17,7 +17,7 @@ the full narrative lives in [history](../history/README.md).
 | [migration-is-authored-not-inferred](migration-is-authored-not-inferred.md) | supersedes automatic gate migration: an authored transformation before admission, never coercion inside it |
 | [dispatch-refusal-returns-to-its-author](dispatch-refusal-returns-to-its-author.md) | authenticated later refusal, exact attempts, original incarnation and ordinary consumer ownership |
 | [declared-vocabulary-is-agreed-at-admission](declared-vocabulary-is-agreed-at-admission.md) | every declared shape and component — accepted, claimed, emitted, persisted — meets one wall at the door, natively and across the seam; a declaration is never authority |
-| Zengine (separate repo): `docs/decisions/timer-continuity-carries-remaining-duration.md` | durations cross; due times cannot |
+| [Zengine's timer-continuity decision](https://github.com/Krealsion/Zengine/blob/main/docs/decisions/timer-continuity-carries-remaining-duration.md), a separate repository | durations cross; due times cannot |
 
 Shape of each: context → decision → alternatives considered → why rejected →
 consequences → current laws supported → evidence.

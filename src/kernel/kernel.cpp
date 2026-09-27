@@ -847,7 +847,7 @@ public:
         // loaded semantic witness distinguishes destination, office provenance
         // and attempt versus count through this actual host table; the payload
         // gate cannot distinguish two operations carrying the same shape.
-        // See docs/reference/dynamic-abi.md#constructing-the-tables-bl-4.
+        // See docs/reference/dynamic-abi.md#constructing-the-tables.
         ZenHostApi api{.ctx                  = &ctx,
                        .send                 = &zen_host_send,
                        .publish              = &zen_host_publish,

@@ -2,7 +2,7 @@
 
 An **ordinary Loom weave that a presentation can drive**: one identity, one
 grant, one supplied vocabulary, its own transcript. Laws:
-[MSG-01..07](../laws/messaging-laws.md),
+[MSG-01..07, MSG-12](../laws/messaging-laws.md),
 [ANS-01..07](../laws/answer-authority-laws.md),
 [GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides).
 
@@ -10,7 +10,7 @@ grant, one supplied vocabulary, its own transcript. Laws:
 the Kernel enforces.  the Weaver decides.  the session acts.
 ```
 
-[WEAVER-1](weaver.md) built the second line. This is the third, made into
+The [Weaver](weaver.md) is the second line. This is the third, made into
 something you can hold — and the test of whether it earned the name is that
 everything it can do is an **ordinary participant's power**, or is not here.
 
@@ -56,7 +56,7 @@ up:
 loom::TerminalDesk desk(session, operator_seat);  // throws if they are the same weave
 ```
 
-## The three powers "inspect" used to hide
+## Three powers one "inspect" would conflate
 
 ```text
 TYPE KNOWLEDGE       which shape schemas can be described and composed
@@ -88,13 +88,13 @@ it uses no host tap, registry access or private routing exception.
 
 TranscriptEntry keeps the actual received shape and retained message id, and its
 `dispatch_refusal` record holds authenticated original-send metadata plus the
-retired local ask id, if any. The top-level Received category stays source
-compatible with existing presentations. A generic renderer can show the actual
-received shape; an updated renderer checks this structured detail first to show
-the safe reason, address and exact attempt. Ordinary speech of the same shape has
+retired local ask id, if any. The top-level category is Received, so a generic
+renderer can show the actual received shape; a renderer that knows this
+structured detail checks it first to show the safe reason, address and exact
+attempt. Ordinary speech of the same shape has
 no such record. It is never AnswerReceived and answers_ask remains false.
 
-The existing Loom terminal presents DISPATCH REFUSED with the original send and
+Loom's terminal presents DISPATCH REFUSED with the original send and
 reason, separate from SUBMITTED and local composition refusal. Text escaping is
 applied at presentation. Matching uses the queued attempt, correlation, original
 shape/version and authored address after checking Loom provenance. Only that
@@ -102,10 +102,9 @@ matching ask leaves the outstanding set. Local forgetting cannot cancel remote
 work; transcript eviction cannot settle another ask. Delivered but unanswered
 requests remain outstanding under the existing local policy.
 
-No authority request or retry is automatic. The maker can review the reason,
-use the existing authority workflow where appropriate, then explicitly retry
-from the same participant. Zengine's pane can integrate the public structured
-detail later; this does not change its parked Editor transaction.
+No authority request or retry is automatic. The person at the terminal can
+review the reason, use the authority workflow where appropriate, then explicitly
+retry from the same participant.
 
 Full contract: [messaging](messaging.md#sender-visible-dispatch-refusal).
 
@@ -144,12 +143,12 @@ tell **which** of several outstanding asks an answer belongs to, from Loom's own
 record — no request id is invented, and none is needed.
 
 A terminal therefore supports **several outstanding conversations**
-(`kMaxOutstandingAsks`, currently 8). The bound is the terminal refusing to grow
+(`kMaxOutstandingAsks`, 8). The bound is the terminal refusing to grow
 an unbounded map, not a limit of Loom: the (N+1)th ask is refused **locally**,
 nothing is authored, and the N already outstanding are untouched — a new ask
 must never displace a conversation somebody is waiting on.
 
-**The bookkeeping itself is not the terminal's** (FRIC-2). Which conversations
+**The bookkeeping itself is not the terminal's.** Which conversations
 are open, which arrival settles which one, and the correlation sequence this
 participant numbers everything it authors from are all
 [`loom::AskBook`](../../include/zen/weave/ask_book.hpp) — the reusable asker-side
@@ -218,8 +217,8 @@ has to keep. The user retries, explicitly, and the target sees the *session*.
 ## The transcript
 
 A presentation-neutral model, not output. Entries carry structured facts so a
-console renderer, a graphical pane and a future executor can each present the
-same record without parsing each other's strings.
+console renderer, a graphical pane or any other presentation can show the same
+record without parsing another's strings.
 
 Trusted facts are kept apart from payload, always:
 
@@ -293,11 +292,10 @@ applied to a value.
 | can say "delivered" | yes (journal) | **no** |
 
 Both are legitimate; they are not the same security role and forcing one class to
-serve both would have made the weaker one look like the stronger. The console
-keeps its powers and its name. What moved down at TERM-0 is the **typed
-composer** (`loom::compose_message` and the Arg/Ref/FieldValue vocabulary) and
-the bounded-history primitive, so there is one assumption ladder and one ring
-buffer rather than two of each; every name is unchanged, in the same namespace.
+serve both would make the weaker one look like the stronger. What they share is
+the **typed composer** (`loom::compose_message` and the Arg/Ref/FieldValue
+vocabulary) and the bounded-history primitive, so there is one assumption ladder
+and one ring buffer rather than two of each.
 
 ## Running it
 
@@ -334,7 +332,7 @@ send @some.service Work 1 7
 
 The operator's received id depends on its earlier traffic; use the id printed
 with its actual `AuthorityPrompt`. Approval changes authority only. The final
-send is the maker's explicit retry, with a fresh attempt identity. A notice never
+send is the person's explicit retry, with a fresh attempt identity. A notice never
 requests a grant, switches the speaking participant or retries on its own.
 
 ## What this does not govern
@@ -347,5 +345,5 @@ nothing here persists: restarting forgets every transcript and every approval.
 
 PROVEN BY — [`include/zen/terminal/`](../../include/zen/terminal/),
 [`include/zen/host/terminal_wiring.hpp`](../../include/zen/host/terminal_wiring.hpp),
-`tests/test_terminal.cpp` (suite `terminal`), and the unchanged `weaver`,
-`grant` and `console` suites.
+`tests/test_terminal.cpp` (suite `terminal`), and the `weaver`, `grant` and
+`console` suites.

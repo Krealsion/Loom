@@ -50,10 +50,10 @@ A record is **stored once** and claimed by whichever windows want it, so the
 total held is bounded by `recent + protected + Σ last_n` and a fact in three
 windows costs one record, not three. It is released when the last window lets go.
 
-**Why the payload budget is in bytes and the windows are in records.** RTH-0
-measured the two halves of Zen's traffic ranking differently: an idle
-application's noise is 300 messages a second at 31–47 bytes each, while one
-interactive `SurfaceCanvas` is up to 2.75 KiB and is ~90% of interactive bytes.
+**Why the payload budget is in bytes and the windows are in records.** Measured
+on applications built on Loom, the two halves of the traffic rank differently: an
+idle application's noise is 300 messages a second at 31–47 bytes each, while one
+interactive canvas update is up to 2.75 KiB and about 90% of interactive bytes.
 A single budget in entries bounds the wrong thing at one end or the other.
 
 **"Protected" means it does not compete, not that it is permanent.** Its window
@@ -63,13 +63,12 @@ promised indefinite memory in RAM would be promising a leak.
 ## Logger (durable record)
 
 **Deliberately not bounded by a global budget**, and that is the one entry in
-this document whose answer is "no number". RTH-1 gave the persistent log an
-8 MiB horizon shared with all traffic, which meant an idle application's
-heartbeat consumed it in about three minutes and a weave replacement an hour
-later was silently unwritable. RTH-1a removed it: durable append is **uncapped**
-unless a per-shape `LogRule::cap` says otherwise, and a shape that reaches its
-own cap stops and writes a record saying so, so a cap can never be mistaken for
-an ending.
+this document whose answer is "no number". A horizon shared with all traffic is
+spent by whatever is loudest: at 8 MiB, an idle application's heartbeat fills it
+in about three minutes, and a weave replacement an hour later would be silently
+unwritable. So durable append is **uncapped** unless a per-shape `LogRule::cap`
+says otherwise, and a shape that reaches its own cap stops and writes a record
+saying so, so a cap can never be mistaken for an ending.
 
 | Bound | Default | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
@@ -113,16 +112,15 @@ takes the answer (`take_settled`) or forgets the conversation (`forget_ask`, whi
 cancels nothing at the far end). The bound is applied **when a conversation is
 opened** because that is the only moment anything can still be refused honestly: an
 arrival cannot be turned away without losing an answer, and evicting a held answer
-would erase it before it was read. It once counted open conversations only, and an
-answer leaves the book when it settles — so a frontend that composed and pumped kept
-every answer it was ever sent (measured: 1,000 sends, 64 replies in history, 1,000
-answers retained).
+would erase it before it was read. Counting open conversations alone would not bound
+it: an answer leaves the book when it settles, so a frontend that composed and pumped
+would keep every answer it was ever sent.
 
 **An arrival is kept with its routing facts**, not just its payload:
 `BufferEntry` carries the bus-stamped `sender`, the `correlation` the sender
-named, and whether Loom attested it as an answer. The window used to keep the
-`Value` alone, which left every consumer unable to tell an answer it had earned
-from a reply-shaped message any participant may send.
+named, and whether Loom attested it as an answer. The `Value` alone would leave
+every consumer unable to tell an answer it had earned from a reply-shaped message
+any participant may send.
 
 **Why those two numbers.** The tap matches `kJournalCapacity` deliberately: one
 tap entry is roughly one journal entry, so an operator who can still *see* an
@@ -164,9 +162,9 @@ thread) only move bytes into it.
 **A backlog, so bounded by waiting, never by discarding.** Every command a producer wrote is
 owed to the host, in order, so the bound is applied by not reading: what the host has not
 reached stays with its producer — a pipe's writer waits, a file stays on disk, a terminal
-keeps what was typed — and a script of any length is read as fast as the host runs it. The
-Windows reader once did the opposite and moved everything into memory as fast as it arrived:
-a 25.6 MB file of commands took about 37 MB before the host had run one.
+keeps what was typed — and a script of any length is read as fast as the host runs it. A
+reader that moved everything into memory as fast as it arrived would hold a whole script: a
+25.6 MB file of commands took about 37 MB before the host had run one.
 
 **The only thing dropped is a line that was refused**, and it is dropped whole. Its rest is
 discarded as it arrives instead of being held until its newline, which is what lets a line
@@ -176,8 +174,7 @@ no second half of one can run.
 
 **Why 4000.** A Linux terminal in its ordinary (canonical) mode keeps only the first 4095
 bytes of a typed line and drops the rest without a sign; a Windows console delivers a long
-typed line whole (both measured: WSL2 kernel 6.6, Windows 11 26200 console, lines to 100,000
-characters). A limit below 4095 means a line that terminal cut short is always refused and
+typed line whole (both measured, with typed lines up to 100,000 characters). A limit below 4095 means a line that terminal cut short is always refused and
 never run, and one number on both platforms means a command either works everywhere or is
 refused everywhere. It is still far above any command the host has — a `start` with a long
 path is a few hundred bytes.
@@ -343,7 +340,7 @@ requires* — not every schema ever registered
 | a reload candidate | its `Manifest` goes out of scope — a refused candidate leaves nothing |
 
 **Overflow behavior: none, because there is no cap.** A host that holds a
-million live weaves has a million weaves' vocabulary; what BL-0 removed is
+million live weaves has a million weaves' vocabulary; what it rules out is
 growth from *history*. A long-running host that repeatedly loads and unloads
 distinct shapes returns to its baseline.
 
@@ -423,12 +420,11 @@ bounded only by the host-wide pid limit. These numbers are what a *delegated*
 leaf imposes — see
 [capabilities § delegation](capabilities.md#delegation-is-what-makes-a-resource-cap-real).
 
-## Zengine Timer (owned there, listed for reach)
+## Packages built on Loom
 
-`kMaxHandoffEntries = 32` · `kPreparedClaimBeats = 8` (derived + published) ·
-`kBeatCapMs = 10`. Owned by the **separate Zengine repository**, at
-`Zengine/docs/reference/timer-continuity.md` — quoted here for reach, not
-linked, because a Loom checkout does not contain it.
+A package publishes its own bounds, and this page does not copy them. Zengine's
+Timer, for one, states its handoff and beat bounds in
+[its timer-continuity reference](https://github.com/Krealsion/Zengine/blob/main/docs/reference/timer-continuity.md).
 
 ## Dispatch-refusal notices
 

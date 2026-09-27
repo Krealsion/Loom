@@ -1,17 +1,16 @@
 # Verification-population laws (POP)
 
 These are laws about **what a green result means**, not about what the runtime does.
-Every other namespace in this garden constrains the Loom; this one constrains the
-harness that claims to have checked it — the project's own ethos ("never claim an
-enforcement, or a proof, you did not impose") turned on its own test suite.
+Every other law register here constrains Loom; this one constrains the harness that
+claims to have checked it — the project's own ethos ("never claim an enforcement, or a
+proof, you did not impose") turned on its own test suite.
 
-They exist because external-audit findings kept landing on the same sentence from
-different directions: a named suite could pass having executed nothing (COLD-1 F-2),
-the counter designed to catch exactly that could be satisfied by a *different* suite
-(F-24), a consumer repo could delete its whole test tree at configure time and
-still print "100% tests passed" (F-25), and — one layer down, over built artifacts
-rather than test cases — twenty-three loadable weaves could silently leave the
-reloadable-weave build contract with every lane green (COLD-2 C-3, POP-05).
+They exist because audits kept finding the same sentence from different directions: a
+named suite could pass having executed nothing, the counter designed to catch exactly
+that could be satisfied by a *different* suite, a consumer repository could delete its
+whole test tree at configure time and still print "100% tests passed", and — one layer
+down, over built artifacts rather than test cases — twenty-three loadable weaves could
+silently leave the reloadable-weave build contract with every lane green (POP-05).
 
 The one law under all of them:
 
@@ -30,18 +29,17 @@ Harness: [`tests/CMakeLists.txt`](../../tests/CMakeLists.txt) ·
 [`tests/check_weave_population.cmake`](../../tests/check_weave_population.cmake).
 Running them: [`AGENTS.md`](../../AGENTS.md).
 
-**These laws are Zen's, and Zen is two repositories.** POP-01, POP-02 and POP-03 bind the
-Loom's harness *and* Zengine's; POP-05 is about the Loom's own test tree today. That was not
-true when this file was written, and the gap was easy to miss precisely because the heading
-says "what a green result means" and POP-03 already reached across — a reader could
-reasonably conclude the rest did too. It did not: until C4, Zengine had stock doctest mains
-(zero selected cases printed `Status: SUCCESS!` and exited 0), no inventory of its expected
-CTest entries, and no case floors, so deleting a whole test case left `ctest` reporting 10 of
-10 (COLD-2 C-4). Zengine now owns the equivalent mechanism, **as its own**:
-`Zengine/tests/verify.cmake` · `Zengine/tests/check_population.cmake` ·
-`Zengine/tests/test_population.txt` · `Zengine/tests/doctest_main.cpp`, with the registration
-helpers in `Zengine/CMakeLists.txt`. It is a second implementation and not a shared one on
-purpose — Zengine is consumed as a stranger against an *installed* Loom package, which ships
+**These laws are Zen's, and Zen is two repositories.** POP-01, POP-02 and POP-03 bind
+Loom's harness *and* Zengine's; POP-05 is about Loom's own test tree. Without them a stock
+doctest main prints `Status: SUCCESS!` and exits 0 for zero selected cases, and with no
+inventory of expected CTest entries and no case floors, deleting a whole test case leaves
+`ctest` reporting 10 of 10. Zengine owns the equivalent mechanism, **as its own**: its
+[`tests/verify.cmake`](https://github.com/Krealsion/Zengine/blob/main/tests/verify.cmake) ·
+[`tests/check_population.cmake`](https://github.com/Krealsion/Zengine/blob/main/tests/check_population.cmake) ·
+[`tests/test_population.txt`](https://github.com/Krealsion/Zengine/blob/main/tests/test_population.txt) ·
+[`tests/doctest_main.cpp`](https://github.com/Krealsion/Zengine/blob/main/tests/doctest_main.cpp), with the registration helpers in
+its [`CMakeLists.txt`](https://github.com/Krealsion/Zengine/blob/main/CMakeLists.txt). It is a second implementation and not a
+shared one on purpose — Zengine is consumed as a stranger against an *installed* Loom package, which ships
 headers and libraries and no test metadata, so a population contract that needed the
 substrate's source tree would be a contract Zengine does not own.
 
@@ -64,20 +62,20 @@ MEANS
   vanished (and therefore registers nothing that could fail) is still caught;
 - the official lane `tests/verify.cmake` refuses a selector that matched zero CTest
   entries, and passes `--no-tests=error` so CTest refuses it too;
-- **the entries themselves are a declared population, not only the suites** (VOLATILE-2a).
+- **the entries themselves are a declared population, not only the suites.**
   `tests/entry_population.txt` names the CTest entries that are not suites — the population
   checks, the empty-population witnesses, the weave-artifact checks, the documentation
   checks, the aggregate runner — with the gate each rides; the expected set is that union
   with the gate-resolved suites, compared to `ctest -N` **by name, both directions**, by
-  two independently executed doors (the lane, and the `population` entry). Until it
-  existed, deleting one `add_test` left the lane registering one
-  fewer entry, running everything that remained, and reporting green at the smaller number
-  — including for the entries whose whole job is to notice absences;
-- **in Zengine, the same four sentences with its own nouns** (C4): every runtime suite links
-  `Zengine/tests/doctest_main.cpp`, so a filter matching nothing exits **70** saying `EMPTY
-  TEST POPULATION`; `Zengine/tests/test_population.txt` pins the exact CTest-entry inventory
+  two independently executed doors (the lane, and the `population` entry). Without it,
+  deleting one `add_test` would leave the lane registering one fewer entry, running
+  everything that remained, and reporting green at the smaller number — including for the
+  entries whose whole job is to notice absences;
+- **in Zengine, the same four sentences with its own nouns**: every runtime suite links
+  Zengine's `tests/doctest_main.cpp`, so a filter matching nothing exits **70** saying `EMPTY
+  TEST POPULATION`; its `tests/test_population.txt` pins the exact CTest-entry inventory
   per gate, plus a floor for each doctest surface and the diagnostic each compile-negative
-  test must be judged on; and `Zengine/tests/verify.cmake` refuses a build tree registering
+  test must be judged on; and its `tests/verify.cmake` refuses a build tree registering
   zero entries, refuses an inventory that does not match, and re-proves the empty-population
   refusal on every doctest binary on every run before it trusts a single case count.
 
@@ -96,7 +94,7 @@ DOES NOT MEAN
   entry, so it cannot be only one — and the lane's door is what names a missing
   `population`;
 - that a lane can defend itself against an edit to itself. It cannot, and the arrangement
-  no longer pretends a source-text tripwire is a substitute (VOLATILE-B1). The inventory is
+  does not pretend a source-text tripwire is a substitute. The inventory is
   taken by **two independently executed doors** over one implementation and one authored
   expectation: the lane before it runs anything, and the `population` entry as part of its
   own work, each asking `ctest -N` what this build registered. What neither door can see on
@@ -118,15 +116,14 @@ PROVEN BY — `tests/doctest_main.cpp` (the run-census listener); CTest entries
 `empty_population_refused` (nonzero exit) and `empty_population_says_so` (the
 diagnostic — two entries because `PASS_REGULAR_EXPRESSION` makes CTest ignore the exit
 code, so one test could pin either but not both); the `population` entry; the derived
-`foreach` registration in `tests/CMakeLists.txt`. In Zengine, by
-`Zengine/tests/doctest_main.cpp` and the canary in
-`Zengine/tests/check_population.cmake` (`zengine_assert_refuses_empty_population`, run
-against every doctest surface on every verification); measured by C4's controls — a filter
-matching nothing goes from 0-cases-exit-0 to exit 70, deleting one case from
-`test_input.cpp` goes from a fully green run to `input selected N cases, below declared
-floor M`, and deleting a whole CTest entry goes from a fully green run to a named `MISSING`.
-The floors those controls crossed are in `Zengine/tests/test_population.txt`, which is where
-they can be current; a run's own numbers belong to the report that measured it.
+`foreach` registration in `tests/CMakeLists.txt`. In Zengine, by its
+`tests/doctest_main.cpp` and the canary in its `tests/check_population.cmake`
+(`zengine_assert_refuses_empty_population`, run against every doctest surface on every
+verification); measured by controls — a filter matching nothing exits 70 where a stock main
+exits 0, deleting one case from `test_input.cpp` turns a fully green run into `input
+selected N cases, below declared floor M`, and deleting a whole CTest entry turns one into a
+named `MISSING`. The floors those controls cross are in Zengine's `tests/test_population.txt`,
+which is where they can be current; a run's own numbers belong to the record of that run.
 
 ## POP-02 — A coverage floor belongs to the population it counts
 
@@ -148,19 +145,19 @@ MEANS
   owning declaration, which is the correct price for a population that is small,
   security-relevant and intentionally stable. That is the opposite of the suite case floors
   below, and the difference is the point rather than an inconsistency;
-- **in Zengine, the counting unit is the binary rather than the suite** (C4): its five
+- **in Zengine, the counting unit is the binary rather than the suite**: its five
   runtime surfaces are five separate executables with no `TEST_SUITE` declarations, so each
   floor is read out of that surface's own `--count` and no other surface's growth can cover
   its loss. One aggregate floor over all of them was refused for exactly that reason — it
   would let a whole domain disappear behind another domain's additions. Its conditional
   subpopulations — the cases behind `#if defined(SURFACE_HAS_SDL)` — are their own manifest
   rows, so a surface reads one number where the SDL skin is built and a smaller one where it
-  is not, with no slack in either. Both are in `Zengine/tests/test_population.txt`.
+  is not, with no slack in either. Both are in Zengine's `tests/test_population.txt`.
 
 DOES NOT MEAN
 - that every population contract in the tree is exact. Suite CASE floors are minimums
-  anchored to a measured baseline, because that population is meant to grow every
-  phase; the enforcement populations are small, security-relevant and intentionally
+  anchored to a measured baseline, because that population is meant to grow; the
+  enforcement populations are small, security-relevant and intentionally
   stable, which is what makes exactness the right price there. Two populations, two
   policies, each argued in `tests/suite_population.txt` and `enforcement_gate.hpp`.
   Zengine draws the same line in the same place: its CTest-entry inventory is exact, its
@@ -169,19 +166,18 @@ DOES NOT MEAN
   a reviewed edit to the manifest, and it should read like one;
 - that a case floor is a coverage number, or that assertion totals are a population at all.
   Neither repository's assertion total is an oracle, and neither is written into a contract
-  file: nothing enforces such a figure, so it travels dated and lane-named with the report
-  that measured it, or not at all;
+  file: nothing enforces such a figure, so it travels dated and lane-named with the record
+  of the run that measured it, or not at all;
 - that the tally proves containment. It proves the containment proofs *ran*; the
   proofs themselves are what prove containment.
 
 PROVEN BY — `tests/enforcement_gate.hpp` (`ZEN_REQUIRE_ENFORCEABLE`,
 `ZEN_ENFORCEMENT_POPULATION`); the coverage cases at the end of suites `isolation` and
 `policy`; observable in any verbose run as
-`OS-enforcement cases executed for '<domain>': N of N expected`. In Zengine, by
-`Zengine/tests/test_population.txt` and the per-entry floor report the official lane prints
+`OS-enforcement cases executed for '<domain>': N of N expected`. In Zengine, by its
+`tests/test_population.txt` and the per-entry floor report its official lane prints
 (`<entry>: doctest, <n> cases (floor <m> = <the rows whose gates are active>)`); measured by
-C4's control B, where deleting one case from `test_input.cpp` fails `input` alone and names
-it.
+a control where deleting one case from `test_input.cpp` fails `input` alone and names it.
 
 ## POP-03 — Unsupported testability is declared, never disguised
 
@@ -192,9 +188,9 @@ absent*; it is never allowed to look like a population that ran.
 MEANS
 - Zengine's suites need a Loom exporting `loom::kernel`. With testing enabled and no
   kernel, configuration **fails** with a message saying what is missing, why the tests
-  cannot be trusted without it, and how to get a Loom that can host weaves. It used to
-  `return()` quietly, after which `ctest` printed "100% tests passed" over one
-  surviving smoke test — reachable from the supported default Windows Loom package;
+  cannot be trusted without it, and how to get a Loom that can host weaves. Returning
+  quietly instead would leave `ctest` printing "100% tests passed" over one surviving
+  smoke test — reachable from the supported default Windows Loom package;
 - the requirement belongs to the tests, not the package: `-DBUILD_TESTING=OFF`
   configures and builds against a kernel-less Loom, and with a kernel-full Loom it
   still builds every weave library and registers no tests;
@@ -211,8 +207,8 @@ DOES NOT MEAN
 - that every optional feature must be enabled everywhere;
 - that Zengine itself requires a kernel. Only its suites do.
 
-PROVEN BY — `Zengine/tests/CMakeLists.txt` (the `FATAL_ERROR`), `Zengine/CMakeLists.txt`
-(`BUILD_TESTING`); `tests/check_population.cmake`'s gate handling, exercised for real by
+PROVEN BY — Zengine's [`tests/CMakeLists.txt`](https://github.com/Krealsion/Zengine/blob/main/tests/CMakeLists.txt) (the
+`FATAL_ERROR`) and [`CMakeLists.txt`](https://github.com/Krealsion/Zengine/blob/main/CMakeLists.txt) (`BUILD_TESTING`); `tests/check_population.cmake`'s gate handling, exercised for real by
 the native Windows lane, where the `kernel` and `posix` gates are off.
 
 ## POP-04 — An opt-out run is not enforcement evidence
@@ -251,11 +247,11 @@ are required* is established independently of *which artifacts opted in*. A gree
 means the two agree; an artifact that quietly leaves the contract is named, not missed.
 
 This is POP-01's reasoning applied one layer down, to a population of **built artifacts**
-rather than of test cases. It is here because the same sentence failed again from a new
-direction: COLD-2 finding C-3 removed one line from the fixture factory, twenty-three
-loadable weaves left the reloadable-weave contract roll, thirteen `STB_GNU_UNIQUE` symbols
-returned to `libzen_test_weave.so`, and the whole official lane stayed green — because the
-only check over them iterated the roll, and a derived list cannot detect its own absences.
+rather than of test cases. It is here because a derived list cannot detect its own
+absences: removing one line from the fixture factory took twenty-three loadable weaves off
+the reloadable-weave contract roll and returned thirteen `STB_GNU_UNIQUE` symbols to
+`libzen_test_weave.so`, and the whole official lane stayed green, because the only check
+over them iterated the roll.
 
 MEANS
 - the requirement comes from the **build graph**: `tests/weave_population.cmake` classifies
@@ -270,7 +266,7 @@ MEANS
 - an exclusion is a **written** position: `zen_weave_contract_exempt(<target> <reason>)`
   records it on the target itself (so it cannot outlive the artifact), the reason is
   mandatory and printed on every run, and an exempt target appearing *on* the roll is itself
-  a failure. Today there is exactly one, the F-22 negative control;
+  a failure. The contract check's own negative control is one;
 - zero is not a pass on either side, and the sweep cannot go blind quietly: the contract's
   own applied/bypass pair is a fixed canary the gate checks in both directions, so a
   classifier that stops recognising weaves is a configure-time refusal rather than two
@@ -292,7 +288,7 @@ DOES NOT MEAN
 
 PROVEN BY — `tests/weave_population.cmake` (the sweep + the exemption declaration);
 `tests/check_weave_population.cmake` and the `weave_population` CTest entry; the gate and its
-canary in `tests/CMakeLists.txt`. Measured by re-running COLD-2's M6 against it: the roll
-drops 42 → 17, the requirement stays 42, thirteen unique symbols return, and the lane fails
-naming all twenty-five artifacts — while removing the contract from a *single* target names
-exactly that one.
+canary in `tests/CMakeLists.txt`. Measured by removing that factory line again: the roll
+shrinks, the requirement stays whole, the unique symbols return, and the lane fails naming
+every artifact that left — while removing the contract from a *single* target names exactly
+that one.

@@ -23,9 +23,9 @@ wakes the operator always finds the record it names.
 
 ## What it is for, and what is not here
 
-One consumer shaped it: an application whose document owner and presentation
-owner must change their facts together when a source is opened — never a
-frame in which one says the new document and the other the old layout. Loom
+It exists for an application whose document owner and presentation owner must
+change their facts together when a source is opened — never a frame in which
+one says the new document and the other the old layout. Loom
 supplies the mechanism and no vocabulary of either.
 
 ### What is not here
@@ -86,18 +86,18 @@ another operator's record: every verb named with somebody else's operation id
 is refused `NotOperator` *before* the record is touched — its state, reason,
 offers and the notices owed on it stay exactly as they were, and its owner
 still commits. **A refusal is judged by what it changed, which must be
-nothing, not by its return value alone**: the landed candidate once refused a
-foreign commit `ParticipantChanged` while aborting the record it named and
-discarding its offers, because the ownership test shared a branch with the
-lifecycle abort, and a passing refusal-by-name test did not see it.
+nothing, not by its return value alone**: an ownership test that shared a
+branch with the lifecycle abort could refuse a foreign commit by the right name
+while aborting the record it named and discarding its offers, and a test of the
+refusal's name alone would pass.
 
-Proof: J23 (a foreign operator's *own valid* authority named with another
-operator's operation id — every verb refused, the record untouched, the owner
-commits), J24 (the retained capability across a swap and across a death and
-revival; nothing minted for the dead; the fresh-authority path). J6's copied
-capability and J19's operator lifetime are the neighbouring predicates: the
-copy is refused at the authority before any record is looked at, and the
-lifetime case retires the record — neither is proof of these two properties.
+Proof, in suite `joint`: a foreign operator's *own valid* authority named with
+another operator's operation id (every verb refused, the record untouched, the
+owner commits), and the retained capability across a swap and across a death
+and revival (nothing minted for the dead; the fresh-authority path). The copied
+capability and the operator's lifetime are neighbouring cases, not proof of
+these two: the copy is refused at the authority before any record is looked
+at, and the lifetime case retires the record.
 
 ## The operation
 
@@ -130,7 +130,7 @@ incarnation, never the operator's.
 ## The showing and its three answers
 
 After a commit each claimant is **shown** its published value once —
-`Weave::claim_published`, routed by `WeaveBase` to the maker's
+`Weave::claim_published`, routed by `WeaveBase` to the weave's
 `on_claim_published(const T&)` — **before its next delivery and before its next
 snapshot**, outside any dispatch. No reader can observe a weave standing behind
 its own published claim. What the showing came to is recorded on the claim
@@ -287,7 +287,7 @@ Missing; and it does nothing. Absence proves nothing.
 A participant that derives its claim from its state keeps **one truthful owner
 view** through every door that changes the state:
 
-- `WeaveBase::handle` runs the maker's `after_delivery(Mail&)` after the
+- `WeaveBase::handle` runs the weave's `after_delivery(Mail&)` after the
   handler, and also after a substrate door that **mutated** the state — a
   performed `zen.PokeWrite` or `zen.PokeResetState` — and after nothing else. A
   describe, a read, a refused write, a refused reset and a bad literal change
@@ -365,19 +365,18 @@ offers.
 ## Tests
 
 Suite `joint` (`tests/test_joint.cpp`; kernel-gated, since it loads a real
-claimant, `tests/weavelib/joint_probe.cpp`): J1 one boundary, J2 the showing
-before the next handler and snapshot, J3–J5 abort on claim, reload and removal,
-J6 every refusal by name, J7 the loaded claimant (Applied), J8 bounds,
-retention until release and exhaustion in words, J9 nothing runs inside the
-exchange, J10 `zen.JointEnded`, J11 the loaded failure held, J12 the native
-throw recorded then re-raised and repaired by a swap, J13 several publications
-under one weave, J14 Lost, J15/J16 the mutation doors native and loaded, J17
-the committed record outlives an unrelated begin (both schedules), J18 the
-aborted record outlives one, J19 the operator's lifetime, J20 Declined native
-(and Failed by answer), J21 Declined loaded, J22 a refused replacement runs
-nothing of the incumbent's, J23 a foreign operator's valid authority changes
-nothing of another operator's record, J24 the capability names the exact
-life and incarnation and the host authorizes a successor by minting again.
-The `hook_return_types` entry pins
-the compile-time refusal of an unsupported hook return type; suite `kernel`
-pins the v8 gate at load and at reload.
+claimant, `tests/weavelib/joint_probe.cpp`) pins: one boundary; the showing
+before the next handler and snapshot; abort on claim, reload and removal; every
+refusal by name; the loaded claimant (Applied); bounds, retention until release
+and exhaustion in words; nothing running inside the exchange;
+`zen.JointEnded`; the loaded failure held; the native throw recorded, then
+re-raised, then repaired by a swap; several publications under one weave;
+Lost; the mutation doors, native and loaded; the committed record outliving an
+unrelated begin (both schedules), and the aborted record outliving one; the
+operator's lifetime; Declined, native (and Failed by answer) and loaded; a
+refused replacement running nothing of the incumbent's; a foreign operator's
+valid authority changing nothing of another operator's record; and the
+capability naming the exact life and incarnation, with the host authorizing a
+successor by minting again. The `hook_return_types` entry pins the compile-time
+refusal of an unsupported hook return type; suite `kernel` pins the v8 gate at
+load and at reload.

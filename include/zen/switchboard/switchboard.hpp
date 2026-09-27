@@ -1467,7 +1467,7 @@ private:
         /// destroyed with this record. VALUE-INITIALIZED here rather than at the
         /// registration site, so the empty floor is a property of the type instead
         /// of a line somebody has to remember to write.
-        /// GATE-05; docs/reference/capabilities.md#live-delegation-grant-0
+        /// GATE-05; docs/reference/capabilities.md#live-delegation
         LiveAuthority delegated{};
         /// WHY THE SHAPES A DELEGATED RULE NAMES STILL RESOLVE (LIFE-08).
         /// docs/laws/lifecycle-laws.md

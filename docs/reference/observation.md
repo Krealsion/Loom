@@ -240,7 +240,7 @@ Suite `observe` (the relay: policy, readiness, holder-only, cause, window, gap a
 every ending, retirement); suite `bridge` (the link's custody: forwarding, cause translation,
 strays, `lost` at a session's end, controls only from their holder, stale controls, release of a
 gone subscriber with a silent producer, a full window or mid-subscribe, abandonment past the far
-allowance, an undelivered release still counted); the Python client's O-checks
+allowance, an undelivered release still counted); the Python client's observation checks
 (`tests/session/test_client.py`: numbering, holes, local bounds, acknowledgement, cause); the
 two-process journey `observe_journey` (with real workers stopped outright or exiting unreleased,
 more of them than the far allowance).

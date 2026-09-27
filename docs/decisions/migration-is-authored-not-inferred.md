@@ -1,7 +1,7 @@
 # Migration is an authored transformation, not an inferred one
 
-**Status: current (R2E-0).** Supersedes the speculative "automatic gate
-migration" direction contemplated in earlier exploration. Laws:
+**Status: current.** Supersedes the speculative "automatic gate migration"
+direction contemplated in earlier exploration. Laws:
 [HANDOFF-01..03](../laws/handoff-laws.md).
 
 ## What was previously contemplated
@@ -18,13 +18,12 @@ believed otherwise. This ADR records the supersession.
 
 ## What new evidence appeared
 
-The first real consumers arrived: the Workshop wants live code editing, and
-Workshop values have already evolved. That fired the standing "migration layer"
-trigger in
+Real consumers arrived: Zengine's Workshop wants live code editing, and its
+values have already evolved. That fired the standing "migration layer" trigger in
 [known-seams](../reference/known-seams.md#deferred-with-intent-the-standing-trigger-map),
-and the phase built the thing rather than continuing to reason about it — two
-real loadable ledgers whose state schemas disagree on every field, a temporary
-migrator, and a full prepared replacement across them.
+and the thing was built rather than reasoned about further — two real loadable
+ledgers whose state schemas disagree on every field, a temporary migrator, and a
+full prepared replacement across them (suite `handoff`).
 
 Three facts came out of building it.
 
@@ -35,13 +34,12 @@ consequence of the fields happening to disagree — it is structural, and an
 inference layer would have had to deliberately punch through it.
 
 **2. Every property a migration must have is already a property of a weave.**
-The phase required migrations to be inspectable, testable, versioned, refusable
-and attributable. An ordinary temporary weave has all five as facts Loom already
+A migration must be inspectable, testable, versioned, refusable and
+attributable. An ordinary temporary weave has all five as facts Loom already
 carries. A callback registry has none of the last three; a plain library function
 cannot be attributed at all; a gate hook is invisible by construction. The
-alternative that looked closest — letting the *candidate* own the migration — was
-not ruled out, and later prose overstating it as impossible was corrected in
-R2E-0a. A candidate may declare an explicit migration protocol carrying the
+alternative that looks closest — letting the *candidate* own the migration — is
+not ruled out, and it is not impossible. A candidate may declare an explicit migration protocol carrying the
 predecessor's state and transform it itself; that shape is admitted like any
 other, and the version boundary stands. What it costs is the five properties
 above: the transformation is versioned with the successor rather than
@@ -54,8 +52,8 @@ ceasing to be different, and no explicit migration protocol does it.
 
 **3. Nothing needed to be added.** Prepared replacement already verifies the
 successor; FIFO already supplies an exact boundary; the accept-set door already
-refuses old traffic loudly. The Handoff Garden calls no API that R2E-0 invented,
-because R2E-0 invented none for continuity.
+refuses old traffic loudly. The handoff witness calls no API invented for
+continuity, because there is none.
 
 ## Why the current design differs
 
@@ -94,7 +92,7 @@ unchanged, and still refuses everything it always refused.
 
 ## What remains intentionally unresolved
 
-- **No migration vocabulary is canonized.** The Handoff Garden's `MigrateV1ToV2`
+- **No migration vocabulary is canonized.** The handoff witness's `MigrateV1ToV2`
   / `MigrationResult` pair is a *test domain's* protocol, not a Loom shape. If
   many packages converge on the same spelling, that is when a shared vocabulary
   is earned — and it would be a package, not the substrate.
@@ -102,8 +100,8 @@ unchanged, and still refuses everything it always refused.
   shapes generically would need it; this one does not, because it knows both
   schemas statically. Recorded as pressure, not built.
 - **Whether a persistent compatibility adapter deserves package support** is
-  untested here. The phase proved refusal is honest and visible; it did not build
-  the adapter pattern, and does not claim to know its shape.
+  untested here. Refusal is shown honest and visible; the adapter pattern is not
+  built, and its shape is not claimed.
 
 ## If this is ever wrong
 
