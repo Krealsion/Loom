@@ -7,7 +7,7 @@
 // WHAT A TERMINAL PARTICIPANT KNOWS HOW TO SAY — and, separately, what it has
 // declared it is willing to be told.
 //
-// THREE POWERS THE WORD "inspect" USED TO HIDE, kept apart here because they are
+// THREE POWERS ONE WORD ("inspect") WOULD CONFLATE, kept apart here because they are
 // different and only the first one lives in this file:
 //
 //   TYPE KNOWLEDGE       which shape schemas can be described and composed

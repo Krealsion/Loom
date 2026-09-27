@@ -4,18 +4,12 @@
 #ifndef ZEN_CONSOLE_UI_HPP
 #define ZEN_CONSOLE_UI_HPP
 
-// UI-as-data (Stage 3), the CONSOLE side: the console emits its OWN interface as the Loom's
-// semantic widget tree (zen/ui/tree.hpp — the vocabulary lives there, in its own target; the
-// console is one consumer of it, not its owner). This header holds what is genuinely the
-// console's: its presentation state (UiState — focus, the in-progress command line, cursors),
-// the engine-produced guidance, the tree emission from the engine's public domain data, and the
-// renderer-agnostic ConsoleUi controller that maps semantic Actions onto engine calls.
-//
-// The tree is built in the engine LIBRARY from the engine's public domain data (weaves, the
-// reply buffer, the tap, the registry-derived guidance) — renderer-agnostic and fully testable
-// with no terminal. The TUI (console_tui.cpp) is one skin over that tree and deliberately not
-// a privileged one; the test-only outline walk (render_outline, in zen/ui) proves the tree
-// carries no medium, so a second skin needs nothing added here.
+// The console's own interface as data: it emits itself as Loom's semantic widget tree
+// (zen/ui/tree.hpp, which the console consumes and does not own). This header holds what is the
+// console's: its presentation state (UiState), the engine-produced guidance, the tree built from
+// the engine's public data, and the ConsoleUi controller that maps semantic Actions onto engine
+// calls. All of it is testable with no terminal; the terminal renderer is one skin over the
+// tree, not a privileged one, and a second skin needs nothing added here.
 
 #include <zen/console/console.hpp>
 #include <zen/ui/tree.hpp>

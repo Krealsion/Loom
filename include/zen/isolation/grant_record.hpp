@@ -4,18 +4,11 @@
 #ifndef ZEN_ISOLATION_GRANT_RECORD_HPP
 #define ZEN_ISOLATION_GRANT_RECORD_HPP
 
-// The first *policy* surface: where a real mod's authority above the floor comes
-// from. A mod lands on the floor with no ceremony; it may *ask* for more (the
-// manifest's CapabilityAsk — advice, gated, untrusted); and the host alone decides,
-// recording any grant *delta* here. This is the powerbox's ledger: the host holds
-// the pen. A declaration is never a grant — only a delta recorded here raises a
-// Weave above the floor.
-//
-// The record is keyed by the .so *content-hash* (stable across path moves; a rebuild
-// is a new identity, so a recompiled mod re-floors — the honest default). It is TCB
-// data: only the host writes it, never a Weave. It persists as a gated Value in
-// Zen's JSON (inspectable, editable per-install), funnelled through the same gate as
-// any other value.
+// Where a mod's authority above the floor comes from. A mod lands on the floor; it may ask for
+// more (its manifest's CapabilityAsk: advice, untrusted), and the host alone decides, recording
+// a grant delta here. Keyed by the .so content hash, so a rebuild is a new identity that starts
+// on the floor. Only the host writes it; it persists as a gated Value in Zen's JSON, editable
+// per install. docs/reference/capabilities.md#where-a-grant-comes-from-the-powerbox
 
 #include <zen/switchboard/grant.hpp> // (re-exported vocabulary; FsAccess names)
 
@@ -26,29 +19,26 @@
 
 namespace loom {
 
-// The storage protocol the floor pre-wires every mod to reach. The StorageBroker
-// (Part B) registers under kStorageRole and accepts these exact shapes; pinning the
-// names here keeps the floor least-privilege — storage shapes to the storage role,
-// not "any shape to anyone".
+// The storage protocol the floor pre-wires every mod to reach: the StorageBroker registers
+// under kStorageRole and accepts these exact shapes, so the floor grants storage shapes to the
+// storage role and not any shape to anyone.
 inline constexpr const char* kStorageRole = "storage";
 inline constexpr const char* kStoragePut = "StoragePut";
 inline constexpr const char* kStorageGet = "StorageGet";
 inline constexpr const char* kStorageValue = "StorageValue"; ///< the broker's reply shape
 inline constexpr std::uint32_t kStorageProtocolVersion = 1;
 
-// The network protocol the NetworkBroker (P2) registers under role "net" and accepts.
-// Unlike storage, the floor grants the net role to NO mod — only a recorded grant delta
-// does (network is dangerous; persistence is benign). A mod reaching "net" holds the
-// role send-rule only, NOT os_cap::Network — it stays OS-network-denied and reaches the
-// network solely through the broker. Same request-response shape as storage.
+// The network protocol the NetworkBroker, registered under role "net", accepts. The floor
+// grants the net role to no mod; only a recorded grant delta does. A mod that reaches "net"
+// holds the role send rule only, not os_cap::Network: it stays network-denied and reaches the
+// network solely through the broker. The same request-response shape as storage.
 inline constexpr const char* kNetRole = "net";
 inline constexpr const char* kNetRequest = "NetRequest";
 inline constexpr const char* kNetResponse = "NetResponse"; ///< the broker's reply shape
 inline constexpr std::uint32_t kNetProtocolVersion = 1;
 
-/// A capability *delta* the host has granted a specific Weave above the floor. Only
-/// the dimensions a delta can raise today are represented; an empty delta is the
-/// floor (no change).
+/// A capability delta the host has granted a specific weave above the floor, in the dimensions
+/// a delta can raise; an empty delta is the floor (no change).
 struct GrantDelta {
     bool network = false;             ///< grant os_cap::Network (the OS capability itself — rare)
     std::string filesystem{};         ///< an FsAccess level name (e.g. "read-only"); "" = none
@@ -69,8 +59,7 @@ public:
     /// The delta recorded for `content_hash`, or an empty delta (the floor) if none.
     GrantDelta lookup(const std::string& content_hash) const;
 
-    /// Record (replace) a delta for `content_hash` and persist immediately. This is
-    /// the host's pen — the stand-in for the consent UX (deferred to a later phase).
+    /// Record (replace) a delta for `content_hash` and persist it at once: the host's pen.
     void record(const std::string& content_hash, GrantDelta delta);
 
 private:
@@ -79,15 +68,11 @@ private:
     void persist() const;
 };
 
-/// A deterministic content-hash (SHA-256 truncated to 128 bits, lowercase hex) of the
-/// file at `so_path`. Stable across runs and machines, so a persisted key survives a
-/// host restart (unlike std::hash). Throws std::runtime_error if the file cannot be
-/// read. It is content-addressed AND collision-resistant: because this key alone
-/// decides a mod's authority above the floor, a weak hash would let an attacker forge a
-/// second build onto an existing grant — so it is a cryptographic digest, not FNV
-/// (audit F-1). It is still identity, not authentication: it names a build by its bytes;
-/// it does not vouch for its author. A persistent, *signed* author identity is the
-/// identity phase's job — unchanged by this.
+/// A deterministic content hash of the file at `so_path`: SHA-256 truncated to 128 bits,
+/// lowercase hex, stable across runs and machines, so a persisted key survives a restart. Throws
+/// std::runtime_error if the file cannot be read. Cryptographic, because this key alone decides
+/// a mod's authority above the floor; it names a build by its bytes and vouches for no author.
+/// The same identity as `file_content_id` (zen/content_id.hpp).
 std::string so_content_hash(const std::string& so_path);
 
 } // namespace loom

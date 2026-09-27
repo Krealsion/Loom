@@ -132,8 +132,7 @@ std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t versio
 /// inside one declaration (`Box v1 { Part v1 {a} }` beside `Box2 v1 { Part v1
 /// {a, b} }`) survives to meet whatever agreement check reads the result: a
 /// `Registry` claim refuses it with `SchemaConflict`, and a manifest carries both
-/// definitions for its loader to refuse. Suppressing the second by name is what
-/// once let such a weave load advertising a `Box2` it never declared
+/// definitions for its loader to refuse
 /// (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
 ///
 /// This is the one traversal every declaration shares — a weave's registration
@@ -148,9 +147,8 @@ std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t versio
 /// descended into again (it was carried after its own components), so each
 /// distinct identity is expanded once however many fields reach it. Each
 /// reference costs one scan of `out`, so the cost is proportional to the number
-/// of message references times the closure's size — small numbers for a
-/// declaration, and never the exponential a shared graph once cost when the
-/// descent came before the scan.
+/// of message references times the closure's size, never exponential in a
+/// shared graph.
 void collect_referenced(const Schema& root, std::vector<std::shared_ptr<const Schema>>& out);
 /// The same walk from a single type reference (a field's type, a list's element).
 void collect_referenced(const TypeRef& type, std::vector<std::shared_ptr<const Schema>>& out);

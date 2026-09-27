@@ -4,53 +4,23 @@
 #ifndef ZEN_HISTORY_RECORDER_HPP
 #define ZEN_HISTORY_RECORDER_HPP
 
-// WHAT ZEN KNOWS RIGHT NOW (RTH-1, corrected by RTH-1a).
+// The Recorder: the host's volatile working memory of bus traffic, answering "what does the
+// host know right now?". It owns no file. The durable selected record is the Logger
+// (zen/history/logger.hpp), which observes the bus for itself and never reads a Recorder, so a
+// durable fact outlives a window that has released its live copy.
+// docs/reference/history.md#recorder--volatile-working-memory
 //
-// RTH-1 gave this one component two jobs: remember, and persist. They are not the
-// same job and they wanted opposite things — a memory should be small, bounded and
-// cheap to throw away; a record should be selective, durable and never quietly
-// truncated by traffic that has nothing to do with it. RTH-1a separates them:
+//   LAST CALL   per shape, `last_n` deep (default 1): the last observations of each shape,
+//               which keep every observed shape discoverable.
+//   RECENT      one shared FIFO: what happened around now. A shape can be kept out of it
+//               by policy and still keep its last-call slot.
+//   PROTECTED   refusals, failed handlers, deaths and revivals: rare, and lost to ordinary
+//               traffic in seconds if they share a window with it.
 //
-//   Recorder (here)      volatile working memory.  What does Zen know right now?
-//   Logger (logger.hpp)  durable selected record.  What did Zen choose not to forget?
-//
-// THIS HALF OWNS NO FILE. `open_log`, `close_log` and `read_log` are gone from
-// here; they belong to the Logger, which observes the bus for itself and never
-// reads a Recorder. That independence is what makes a durable fact survive a
-// window that has already released its live copy.
-//
-// TWO COMPLEMENTARY KINDS OF WORKING MEMORY, and they answer different questions:
-//
-//   LAST CALL   per shape, `last_n` deep, default 1. "What was the last
-//               BuildFinished? Has a TimerFired ever actually occurred here?"
-//               It is what makes every observed shape DISCOVERABLE — a fact can
-//               leave recent context without becoming unrecordable.
-//
-//   RECENT      one shared FIFO. "What happened AROUND now?" A last-call slot can
-//               say `HandlerFailed happened`; only this can say what surrounded it.
-//               Heartbeat traffic is kept OUT of it by policy, and stays fully
-//               recordable in its last-call slot — that is the whole correction.
-//
-//   PROTECTED   the third window, and RTH-1's, kept for RTH-1's measured reason:
-//               a refusal, a failed handler and a death are rare, are exactly what
-//               a maker goes looking for afterwards, and are lost to ordinary
-//               traffic in seconds if they compete with it.
-//
-// ONE OWNING STORE, SEVERAL CLAIMS. A fact is stored once and the windows hold its
-// identity; it is released when the last window lets go. That is why a shape can
-// be muted in recent context without being made unrecordable, and it is also the
-// seam a future bounded forensic capture needs: such a capture is one more
-// claimant with its own budget and its own admission, not a redefinition of this.
-//
-// AUTHORITY. Exactly the ConsoleEngine's, and by exactly the same construction: it
-// takes a `Switchboard&`, and holding one is already root authority. It is not a
-// weave, it is not addressable, it accepts nothing, and it widens no ordinary
-// participant's observation by one shape.
-//
-// THE ONE SHARP EDGE, MEASURED. `BusEvent::payload` points into a Message that
-// dies when `deliver_one` returns. Anything retaining that pointer is a
-// use-after-free the ordinary lane calls green. This recorder therefore SERIALIZES
-// the payload inside the callback and keeps bytes.
+// A fact is stored once and each window holds its identity; it is released when the last
+// window lets go. The Recorder takes a `Switchboard&`, which is already root authority: it is
+// not a weave, accepts nothing, and widens no participant's observation. It serializes a
+// payload inside the tap callback, because `BusEvent::payload` dies with the delivery.
 
 #include <zen/history/record.hpp>
 #include <zen/switchboard.hpp>
@@ -231,7 +201,7 @@ public:
     // ---- policy -----------------------------------------------------------
     const RecorderPolicy& policy() const noexcept { return policy_; }
 
-    /// CHANGE WHAT ZEN REMEMBERS, and remember that it changed.
+    /// CHANGE WHAT THIS RECORDER REMEMBERS, and remember that it changed.
     ///
     /// It writes ONE `RecorderPolicy` record describing the transition, into the
     /// protected window, and sends NOTHING: a recorder that published its own
