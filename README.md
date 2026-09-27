@@ -94,7 +94,8 @@ found in the [evidence](docs/evidence/README.md). Every term is defined once, in
 
 ## Build and test
 
-CMake 3.16 or newer and a C++20 compiler (GCC 11.4 or newer; Linux is the reference platform).
+A C++20 compiler (GCC 11.4 or newer; Linux is the reference platform) and CMake 3.16 or newer to
+build and install, 3.22 or newer for the whole test lane.
 The build is clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
 -Werror`.
 
