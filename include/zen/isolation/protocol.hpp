@@ -4,14 +4,11 @@
 #ifndef ZEN_ISOLATION_PROTOCOL_HPP
 #define ZEN_ISOLATION_PROTOCOL_HPP
 
-// The parent<->child wire protocol for out-of-process Weave hosting. Frames are
-// length-prefixed: [u32 payload_len][u8 op][payload]. The payload sub-fields are
-// little-endian and read through a bounds-checked Cursor, so a hostile or
-// truncated frame is rejected, never over-read.
-//
-// Zen's serialized values are the IPC currency (exactly as for persistence and
-// the DLL boundary): every Value/message/snapshot/policy crosses as bytes and is
-// re-admitted host-side through the one gate.
+// The parent<->child wire protocol for out-of-process weave hosting. Frames are
+// [u32 payload_len][u8 op][payload], little-endian, read through a bounds-checked Cursor, so a
+// hostile or truncated frame is rejected, never over-read. Zen's serialized values are the
+// currency, as for persistence and the library boundary: every value, message, snapshot and
+// policy crosses as bytes and is re-admitted host-side through the one gate.
 
 #include <zen/wire.hpp>
 
@@ -35,8 +32,8 @@ enum class Op : std::uint8_t {
     Shutdown = 18, ///< (empty)
 };
 
-// The wire primitives -- put_u8/u32/u64, put_bytes, Cursor, kMaxFrameLen, the send kinds --
-// live in <zen/wire.hpp> since the two-host crossing, shared with the bridge protocol.
+// The wire primitives (put_u8/u32/u64, put_bytes, Cursor, kMaxFrameLen, the send kinds) are in
+// <zen/wire.hpp>, shared with the bridge protocol.
 
 } // namespace loom
 
