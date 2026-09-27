@@ -32,7 +32,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/gate[.]hpp$"
     "^include/zen/history/dump[.]hpp$"
     "^include/zen/isolation/channel[.]hpp$"
-    "^include/zen/isolation/grant_record[.]hpp$"
     "^include/zen/isolation/protocol[.]hpp$"
     "^include/zen/kind[.]hpp$"
     "^include/zen/switchboard[.]hpp$"
