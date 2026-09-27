@@ -31,7 +31,6 @@ set(ZEN_COMMENT_PENDING
     "^src/bridge/channel[.]cpp$"
     "^src/bridge/client[.]cpp$"
     "^src/bridge/remote_console[.]cpp$"
-    "^src/bridge/server[.]cpp$"
     "^src/console/console_remote[.]cpp$"
     "^src/console/console_term[.]cpp$"
     "^src/console/console_tui[.]cpp$"
