@@ -4,7 +4,7 @@
 #ifndef ZEN_SWITCHBOARD_HPP
 #define ZEN_SWITCHBOARD_HPP
 
-/// zen-switchboard: the first live boundary in Zen.
+/// zen-switchboard: Zen's live message boundary.
 ///
 /// An in-process message bus (the Switchboard) routes self-describing Values
 /// between Weaves and gates every delivery through loom's one validator —

@@ -30,7 +30,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/gate[.]hpp$"
     "^include/zen/isolation/channel[.]hpp$"
     "^include/zen/kind[.]hpp$"
-    "^include/zen/switchboard[.]hpp$"
     "^include/zen/value[.]hpp$"
     "^include/zen/weave[.]hpp$"
     "^include/zen/zen[.]hpp$"
