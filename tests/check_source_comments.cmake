@@ -62,7 +62,6 @@ set(ZEN_COMMENT_PENDING
     "^src/isolation/grant_record[.]cpp$"
     "^src/isolation/weave_host_main[.]cpp$"
     "^src/kernel/admission[.]cpp$"
-    "^src/registry[.]cpp$"
     "^src/runs/catalog[.]cpp$"
     "^src/runs/catalog[.]hpp$"
     "^src/runs/runs_weave[.]cpp$"
