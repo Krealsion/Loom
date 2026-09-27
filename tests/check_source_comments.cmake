@@ -58,7 +58,6 @@ set(ZEN_COMMENT_PENDING
     "^src/host/config_file[.]hpp$"
     "^src/host/history_reader[.]hpp$"
     "^src/host/secure_random[.]hpp$"
-    "^src/host/session_door[.]hpp$"
     "^src/host/session_files[.]hpp$"
     "^src/host/store_lock[.]cpp$"
     "^src/host/store_lock[.]hpp$"
