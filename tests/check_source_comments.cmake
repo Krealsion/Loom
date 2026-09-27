@@ -70,7 +70,6 @@ set(ZEN_COMMENT_PENDING
     "^src/registry[.]cpp$"
     "^src/runs/catalog[.]cpp$"
     "^src/runs/catalog[.]hpp$"
-    "^src/runs/process[.]cpp$"
     "^src/runs/runs_weave[.]cpp$"
     "^src/schema[.]cpp$"
     "^src/terminal/composer[.]cpp$"
