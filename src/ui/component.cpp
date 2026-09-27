@@ -83,17 +83,11 @@ namespace {
 
 std::string at(std::size_t i) { return "nodes[" + std::to_string(i) + "]"; }
 
-// Rebuild the ONE widget at nodes[index] INTO `out` — its own fields, none of its children.
+// Rebuild the one widget at nodes[index] into `out`: its own fields, none of its children.
 // Returns false after writing `error`, leaving `out` meaningless. `visited` is the
-// reached-exactly-once ledger: a revisit is a cycle or a shared child, both refused.
-//
-// `depth` is this node's own depth (the root's is 0) and it is checked FIRST, so an over-deep
-// node is refused before it is read, let alone materialized. Nothing here recurses; walking to
-// the children is build_tree's job, below.
-//
-// It fills a caller-owned Widget rather than returning one so that the rebuilt node is
-// constructed exactly where it will live, in its own traversal frame. Returning by value cost
-// two extra moves of a 19-field Widget per node, which measured ~1.8x on the whole decode.
+// reached-exactly-once ledger: a revisit is a cycle or a shared child, both refused. `depth` is
+// checked first, so an over-deep node is refused before it is read. It fills a caller-owned
+// Widget so the node is built where it will live (a returned value cost ~1.8x on the decode).
 bool build_node(const std::vector<UiNode>& nodes, std::size_t index, int depth,
                 std::vector<bool>& visited, std::string& error, Widget& out) {
     if (depth > kMaxUiDepth) {
@@ -196,42 +190,12 @@ struct Frame {
     Frame(std::size_t i, int d) : index(i), depth(d) {}
 };
 
-// Rebuild the tree rooted at node 0, or refuse. ITERATIVE ON PURPOSE.
-//
-// WHY THE WALK IS EXPLICIT. kMaxUiDepth is a bound this decoder claims over UNTRUSTED input,
-// and the recursive form it replaces could not keep that promise: a deliberate semantic bound
-// is not a real bound if an implementation resource fails first for input the bound claims to
-// admit or refuse safely. It did fail first. Measured on MSVC Debug (19.50, /Od, 1 MB stack),
-// the recursion died of STATUS_STACK_OVERFLOW at chain depth 240 against a cap that ACCEPTS
-// 257 — so every frame in the 240..257 window killed the host process instead of being either
-// rebuilt or refused, and the case named "a hostile deep chain is bounded by the depth cap,
-// not the C++ stack" was simply false there. GCC's thinner frames hid it: MinGW walked 4000
-// deep and refused exactly on the cap. The cap was never wrong; it was being enforced by
-// whichever compiler's frame size ran out first. Lowering it would only have re-calibrated it
-// against one more toolchain. This makes the native stack stop participating at all.
-//
-// THE WALK IS THE SAME WALK. Pre-order; children left to right; a child's whole subtree
-// finished before the next child's index is even looked at. Every refusal therefore still
-// fires on the same node, in the same order, with the same words as the recursion did — the
-// order is observable (a malformed tree usually has more than one thing wrong with it), so it
-// is preserved deliberately rather than incidentally.
-//
-// AND IT IS BOUNDED, TWICE OVER. At most kMaxUiDepth + 1 == 257 frames ever hold a rebuilt
-// node, however deep the input CLAIMS to be — a 200,000-node chain costs the same 257 as a
-// 258-node one, and gets the same sentence back. One more frame than that exists for exactly as
-// long as it takes the cap to refuse the node that overflowed it: a frame is claimed before
-// build_node is asked about it, so the ceiling is 258, and the reserve below says 258 for that
-// reason. The stack also cannot outgrow the node count, so one allocation covers a whole decode
-// and no frame is ever moved by a regrow. Width costs no frames at all: siblings are rebuilt
-// one at a time and each finished subtree moves straight into its parent, so the live widgets
-// are exactly the ones the recursion held (each node is materialized at most once, per
-// `visited`).
-//
-// Each node is built IN PLACE in its own frame and handed to its parent in a single move. That
-// is not incidental tidiness: the obvious form -- build_node returning a Widget, moved into a
-// Frame, moved into the vector -- cost five moves of a 19-field Widget per node against the
-// recursion's two, and measured ~1.8x slower on the whole decode under MSVC Release. This form
-// costs one.
+// Rebuild the tree rooted at node 0, or refuse; iterative on purpose. kMaxUiDepth is a bound
+// claimed over untrusted input, and a recursive walk lets a compiler's frame size fail first
+// (MSVC Debug's 1 MB stack overflows below the cap), so the native stack takes no part. It is
+// the recursion's walk: pre-order, children left to right, so every refusal fires on the same
+// node in the same order. At most kMaxUiDepth + 2 frames (258), reserved once; siblings cost no
+// frames, and each node is built in place and moved to its parent once.
 std::optional<Widget> build_tree(const std::vector<UiNode>& nodes, std::vector<bool>& visited,
                                  std::string& error) {
     std::vector<Frame> stack;
@@ -323,15 +287,10 @@ std::string stress_text() {
 }
 
 std::string stress_text_unicode() {
-    // The wide-glyph / multi-byte gauntlet, spelled as explicit UTF-8 byte escapes so the
-    // source file stays pure ASCII (no editor/codepage can silently reshape it):
-    //   - CJK run (wide glyphs):        织机の糸を編む (E7 BB 87 ...)
-    //   - emoji (4-byte sequences):     🧶🧵 (F0 9F A7 B6, F0 9F A7 B5)
-    //   - combining sequence:           cafe + U+0301 (combining acute -> "café")
-    //   - RTL run (bidi input):         مرحبا (Arabic "marhaba")
-    //   - an unbroken mixed-script word to defeat wrap the way the ASCII canon's word does.
-    // A pixel renderer must not break on any of it: no crash, no mid-codepoint split. What the
-    // glyphs LOOK like (shaping, bidi order) is the text stack's affair, not this pin's.
+    // The wide-glyph and multi-byte gauntlet, spelled as UTF-8 byte escapes so the source stays
+    // ASCII: a CJK run (wide glyphs), two 4-byte emoji, a combining sequence ("cafe" + U+0301),
+    // an Arabic RTL run, and an unbroken mixed-script word to defeat wrap. A pixel renderer must
+    // not crash or split a codepoint on any of it; how the glyphs look is the text stack's.
     return "Unicode stress: "
            "\xE7\xBB\x87\xE6\x9C\xBA\xE3\x81\xAE\xE7\xB3\xB8\xE3\x82\x92\xE7\xB7\xA8\xE3\x82\x80 "
            "\xF0\x9F\xA7\xB6\xF0\x9F\xA7\xB5 "
