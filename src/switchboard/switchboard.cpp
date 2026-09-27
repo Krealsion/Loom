@@ -339,7 +339,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
     }
     if (!role.empty() && roles_.count(role) != 0) {
         throw std::invalid_argument("register_weave: role '" + role +
-                                    "' is already held (roles are singletons in this phase)");
+                                    "' is already held (roles are singletons)");
     }
 
     // Record the accept-set, so all Weaves agree on what a given (name, version)

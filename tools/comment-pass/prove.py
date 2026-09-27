@@ -75,6 +75,8 @@ REWORDED = {
         '"\' is not supported in Stage 2"'),
     "src/console/console_term.cpp": (
         '"zen console (stage 2). commands: weaves | describe <Shape> <v> | "',),
+    "src/switchboard/switchboard.cpp": (
+        '"\' is already held (roles are singletons in this phase)"',),
 }
 WORKFLOWS = ".github/workflows/"
 # The manifests' reading in their checks, restated; the line it keys on must still be in each
