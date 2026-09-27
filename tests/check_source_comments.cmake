@@ -27,7 +27,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
     "^include/zen/admission[.]hpp$"
-    "^include/zen/bounded_history[.]hpp$"
     "^include/zen/bridge/client[.]hpp$"
     "^include/zen/console/ui[.]hpp$"
     "^include/zen/gate[.]hpp$"
