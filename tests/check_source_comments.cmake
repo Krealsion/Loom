@@ -35,7 +35,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/kernel/admission[.]hpp$"
     "^include/zen/kernel/control[.]hpp$"
     "^include/zen/kernel/export[.]hpp$"
-    "^include/zen/kernel/kernel[.]hpp$"
     "^include/zen/kernel/manager[.]hpp$"
     "^include/zen/kernel/schema_codec[.]hpp$"
     "^include/zen/switchboard/bus[.]hpp$"
