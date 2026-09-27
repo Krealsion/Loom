@@ -50,7 +50,6 @@ set(ZEN_COMMENT_PENDING
     "^src/detail/sha256[.]hpp$"
     "^src/gate[.]cpp$"
     "^src/history/dump[.]cpp$"
-    "^src/history/logger[.]cpp$"
     "^src/history/record[.]cpp$"
     "^src/host/boot_plan[.]cpp$"
     "^src/host/boot_plan[.]hpp$"
