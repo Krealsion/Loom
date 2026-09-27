@@ -1,12 +1,11 @@
 # From nothing to a running weave
 
 Install Loom, start it, build something of your own, and run it under authority you
-chose. No Zengine, no Workshop, no Builder, and no C++ host you have to write first.
+chose. Nothing built on top of Loom, and no C++ host you have to write first.
 
 You need a compiler and CMake — see [the tools you need](tools.md) — and nothing else.
 
-Every command below was run to write this page. Paths and prompts are what they actually
-print.
+Every command below is real, and what it prints is shown as it prints it.
 
 ---
 
@@ -195,12 +194,14 @@ Two things about the code, because they are the two a first weave gets wrong:
   checked against its author's grant for its shape: an admitted artifact's baseline covers the
   standard replies (`zen.Result`, `zen.Ack`, `zen.Refused`), one more reason the counter
   answers in one of them. An unsolicited send is speech, and speech is granted.
-- **The counter answers with `zen.Result`, not a shape of its own.** A shape reaches a
-  generic operator console only if the registry can resolve it, and the registry learns
-  shapes from weaves' *accept*-sets. A custom shape that only ever travels *to* the
-  console has nobody to declare it, and the send is refused `SeamUnresolved` before it
-  reaches any door. The standard reply shapes are always resolvable. (See
-  [known seams](../reference/known-seams.md).)
+- **The counter answers with `zen.Result`, not a shape of its own.** The baseline covers
+  the standard replies and nothing else, so a typed answer would need a rule of its own. And
+  a shape reaches a generic operator console only if the registry can resolve it: the
+  registry learns shapes from what weaves *accept* and what they declare they *emit*
+  (`Emit<...>`), so a custom shape a weave sends without declaring it has nobody to define
+  it, and the send is refused `SeamUnresolved` before it reaches any door. The standard
+  reply shapes are always resolvable. (See
+  [known seams](../reference/known-seams.md#a-manifest-says-what-a-weave-accepts-and-since-abi-v9-what-it-declares-it-says--never-what-it-asks-leave-to-send-where).)
 
 ## 4. Say what to start
 
@@ -563,8 +564,9 @@ Conversation `0` means "named none" — an announcement, not an answer to anythi
 
 ## 10. Link to another host
 
-A host can hold a connection to **another running Loom** — a Workshop, another
-`loom-host` — and put an office in front of it that your own weaves ask through. That is a
+A host can hold a connection to **another running Loom** — another `loom-host`, or an
+application built on Loom such as Zengine's Workshop — and put an office in front of it
+that your own weaves ask through. That is a
 `links` row in the boot plan:
 
 ```json
@@ -725,7 +727,7 @@ what debugging this is:
 | `admission refused at speak: …` | your policy again, but the code already ran — see [admission](../reference/capabilities.md#admitting-a-loaded-artifact) | the console |
 | `Refused … [CapabilityDenied]` on the tap | **authority.** The weave tried to say something it may not | `authority allow <name> <rule>` |
 | `Refused … [NotAccepted]` | **addressing.** That weave does not accept that shape | `weaves`, and send it to one that does |
-| `Refused … [SeamUnresolved]` | **vocabulary.** Nothing has ever declared that shape | have some weave accept it |
+| `Refused … [SeamUnresolved]` | **vocabulary.** Nothing has declared that shape | declare it in the sender's `Emit<...>`, or have some weave accept it |
 
 `authority pending` lists everything the policy refused and is waiting on, with the build
 it was asked about and the path it came from — but not what the artifact asks for, for the
