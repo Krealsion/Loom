@@ -28,7 +28,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^include/zen/[^/]*$"
     "^include/zen/(bridge|console|history|isolation|observe|runs|session|terminal|ui|weaver)/"
-    "^include/zen/host/terminal_wiring[.]hpp$"
     "^include/zen/weave/poke_weave[.]hpp$"
     "^include/zen/weave/role_request[.]hpp$"
     "^src/"
