@@ -26,7 +26,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # Files not yet brought to the standard, as regular expressions over the repository-relative
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
-    "^src/gate[.]cpp$"
     "^src/history/record[.]cpp$"
     "^src/host/store_lock[.]cpp$"
     "^src/runs/catalog[.]cpp$"
