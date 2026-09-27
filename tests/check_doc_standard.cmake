@@ -60,13 +60,10 @@ set(ZEN_DOC_STANDARD_PENDING
     "^docs/laws/replacement-laws[.]md$"
     "^docs/laws/sense-laws[.]md$"
     "^docs/reference/handoff[.]md$"
-    "^docs/reference/history[.]md$"
     "^docs/reference/kernel[.]md$"
     "^docs/reference/lifecycle[.]md$"
-    "^docs/reference/observation[.]md$"
     "^docs/reference/prepared-replacement[.]md$"
     "^docs/reference/senses[.]md$"
-    "^docs/reference/terminal[.]md$"
     "^docs/reference/values-and-admission[.]md$"
     "^docs/reference/weaver[.]md$")
 
