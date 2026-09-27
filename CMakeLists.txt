@@ -74,31 +74,12 @@ target_include_directories(loom
 
 target_compile_features(loom PUBLIC cxx_std_20)
 
-# THE PUBLIC MACRO SURFACE REQUIRES A CONFORMING PREPROCESSOR (MSVC-0).
-#
-# ZEN_EXPOSE / ZEN_HIDE dispatch on argument presence with C++20 `__VA_OPT__`
-# (include/zen/weave/shape.hpp). MSVC's TRADITIONAL preprocessor is still the
-# default in C++20 mode and does not implement it: `__VA_OPT__` survives as an
-# ordinary identifier and gets pasted, so `ZEN_EXPOSE(rate)` expands to a call to
-# `ZEN_DETAIL_EXPOSE___VA_OPT__(FIELD)(rate)` and the maker is told their own
-# field name is a syntax error. Measured on MSVC 19.50: without the flag the
-# probe fails with exactly that diagnostic family; with it, it compiles clean.
-# `/permissive-` (already on zen-warnings) does NOT imply it -- both arms of that
-# experiment had `/permissive-`.
-#
-# THIS IS PUBLIC, so it rides PUBLIC on `loom` -- the target whose public include
-# directory carries shape.hpp -- and therefore reaches a stranger through
-# find_package(loom) as INTERFACE_COMPILE_OPTIONS. A consumer must never have to
-# discover a Loom-private compiler requirement to use Loom's ordinary headers.
-# It deliberately does NOT go on zen-warnings (PRIVATE, and $<LINK_ONLY:> in the
-# export precisely so Loom's warning policy does not leak onto a consumer's
-# sources) nor in loom_weave_build_contract() (weave-only; this requirement binds
-# every consumer of the shape macros, whether or not they ever build a weave).
-#
-# `$<CXX_COMPILER_ID:MSVC>` is false for clang-cl, whose CMake compiler id is
-# Clang -- correct rather than incidental: clang-cl's preprocessor already
-# implements __VA_OPT__, so it needs nothing here. (The `MSVC` *variable* would
-# have been true for clang-cl; the generator expression is the precise one.)
+# The public shape macros need a conforming preprocessor: ZEN_EXPOSE and ZEN_HIDE dispatch on
+# C++20 `__VA_OPT__` (include/zen/weave/shape.hpp), which MSVC's default traditional preprocessor
+# does not implement, and `/permissive-` does not imply it. It rides PUBLIC on `loom`, so a
+# stranger gets it through find_package(loom), and not on zen-warnings or the weave contract,
+# since every user of the macros needs it. `$<CXX_COMPILER_ID:MSVC>` is false for clang-cl, whose
+# preprocessor already implements `__VA_OPT__`.
 target_compile_options(loom PUBLIC
     $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>)
 
@@ -125,34 +106,18 @@ target_link_libraries(zen-switchboard
 add_library(loom::switchboard ALIAS zen-switchboard)
 
 # ---- The substrate itself is built under the weave contract (KERN-05) ------------------
-#
-# These two are what a weave statically links, so their objects land INSIDE the loadable
-# image and their symbol bindings are the image's. Compiling them without the contract
-# was enough, on its own, to keep every weave in this tree resident after dlclose: R2F-E
-# measured 20 STB_GNU_UNIQUE symbols in libloom.a (std::piecewise_construct, the variant
-# vtables, _Sp_make_shared_tag's tag, the to_chars digit tables — libstdc++ inline
-# variables and template statics, instantiated here and vague-linkage by nature), and a
-# single one of those marks the whole image NODELETE. The flag on the weave author's own
-# translation unit could never have reached them.
-#
-# It rides the INSTALLED libraries too, which is the part that matters most: a stranger's
-# weave gets a unique-free substrate from find_package(loom) without doing anything, and
-# only has to contract their OWN sources. Applying it here is also strictly more correct
-# for hosts — the design already says a host and a library must never interpose (the
-# kernel opens with RTLD_LOCAL for exactly that reason), and unique binding is the one
-# thing that was quietly making them share anyway.
+# A weave statically links these two, so their objects land inside the loadable image. Their
+# libstdc++ inline variables and template statics bind STB_GNU_UNIQUE unless the contract
+# applies, and one such symbol keeps the whole image resident after dlclose, whatever the weave
+# author's own flags. It rides the installed libraries too: a stranger contracts only their own
+# sources.
 loom_weave_build_contract(loom)
 loom_weave_build_contract(zen-switchboard)
 
-# ---- The kernel + isolation (dynamic loading; namespaces/cgroups are Linux-only) ---------------
-#
-# The kernel's PRIMARY home is Linux (dlopen + the isolation stack beneath it). On Windows it is
-# available as an EXPLICIT OPT-IN development/demo backend (LoadLibrary) — the hook this gate
-# always appreciated, now pulled by its real trigger: makers on Windows wanting to run the Zengine
-# demos (the snake slice's three moments need live load/swap/reload). The Windows backend carries
-# NO isolation and never claims any (Kernel::containment_note() says so; the sandbox, namespaces,
-# cgroups, and the honesty-lattice guarantees remain Linux-only, and the security story remains
-# WSL-hosting). Default builds are unchanged on every platform: the option is OFF.
+# ---- The kernel and isolation (dynamic loading; namespaces and cgroups are Linux-only) ---------
+# The kernel's home is Linux (dlopen, with the isolation stack beneath it). On Windows it is an
+# explicit opt-in development backend (LoadLibrary) with no isolation, which it never claims
+# (Kernel::containment_note() says so). The option is off by default on every platform.
 option(LOOM_ENABLE_WINDOWS_KERNEL
        "Build the Windows kernel backend (LoadLibrary). Development/demo only — no isolation."
        OFF)
@@ -184,9 +149,8 @@ endif()
 endif() # kernel (Linux always; Windows under LOOM_ENABLE_WINDOWS_KERNEL)
 
 # ---- Linux-only substrate: isolation (fork, mount/pid/net namespaces, cgroup-v2) ---------------
-#
-# Isolation is the security story and it is deliberately NOT ported: the OS sandbox, the honesty
-# lattice's enforced rungs, and the out-of-process host exist only where the Linux facilities do.
+# Isolation is the security story and is deliberately not ported: the OS sandbox, its enforced
+# guarantees and the out-of-process host exist only where the Linux facilities do.
 if(NOT WIN32)
 
 # Isolation (out-of-process Weave hosting + crash supervision). The host-side library: the IPC
@@ -211,14 +175,10 @@ add_library(loom::isolation ALIAS zen-isolation)
 
 endif() # NOT WIN32 (isolation)
 
-# ---- The UI vocabulary (zen-ui) — the Loom's semantic tree, in its own target -----------
-#
-# The renderer-agnostic widget tree + the UI-Builder component vocabulary (components with
-# typed slots serializing as gated Values, zen.ui.*). Lifted out of the console (Phase B):
-# the vocabulary depends ONLY on the core (schemas/values/gate) — never on the console, the
-# bus, or any renderer. The console EMITS this tree; the TUI PROJECTS it; the outline walk
-# proves it carries no medium — the vocabulary owns no presentation, which is exactly why a
-# projection can arrive or leave without the tree changing. Everyone consumes; nobody owns.
+# ---- The UI vocabulary (zen-ui): the semantic widget tree, in its own target -----------
+# The renderer-agnostic widget tree and the component vocabulary (typed slots serialized as gated
+# Values, zen.ui.*). It depends only on the core, never on the console, the bus or a renderer: the
+# console emits this tree, the TUI projects it, and the vocabulary owns no presentation.
 add_library(zen-ui
     src/ui/tree.cpp
     src/ui/component.cpp)
@@ -242,18 +202,12 @@ target_link_libraries(zen-ui-pixel
     PRIVATE zen-warnings)
 add_library(loom::ui-pixel ALIAS zen-ui-pixel)
 
-# ---- The terminal core (TERM-0): an ordinary participant a presentation can drive --------
-#
-# The durable half of "a terminal". It holds NO Switchboard, NO tap, NO renderer and no
-# frontend: a TerminalSession is an ordinary weave with one identity, one grant, one supplied
-# vocabulary and its own transcript, and the typed composer underneath it is the console's
-# assumption ladder stopped one step before anything is sent. Two presentations already want
-# it (the zen-terminal REPL below, and a future Workshop pane), which is exactly why it is a
-# library rather than a frontend's private machinery.
-#
-# It links the bus for ONE reason and in ONE translation unit: the host-wiring channel
-# (src/terminal/host_channel.cpp) is where `Switchboard::send_as` lives, and keeping that in
-# a file no participant-side header includes is the same discipline grant_wiring.hpp keeps.
+# ---- The terminal core: an ordinary participant a presentation can drive --------
+# A TerminalSession holds no Switchboard, no tap, no renderer and no frontend: an ordinary weave
+# with one identity, one grant, a supplied vocabulary and its own transcript, over the typed
+# composer. It is a library because more than one presentation drives it. It links the bus for
+# one reason, in one file: the host-wiring channel (src/terminal/host_channel.cpp), where
+# `Switchboard::send_as` lives out of every participant-side header's reach.
 add_library(zen-terminal
     src/terminal/composer.cpp
     src/terminal/session.cpp
@@ -267,30 +221,16 @@ target_link_libraries(zen-terminal
     PRIVATE zen-warnings)
 add_library(loom::terminal ALIAS zen-terminal)
 
-# DELIBERATELY NOT loom_weave_build_contract(). This target took it in TERM-0's first draft, by
-# analogy with `loom` and `zen-switchboard` above, and the `weave_population` check refused it
-# (POP-05): those two are contracted because loadable weaves in tests/ statically link them, so
-# their objects land inside a reloadable image; nothing loadable links the terminal core today.
-# Contracting an artifact the required-population sweep does not require makes the roll and the
-# requirement diverge, which is precisely the drift that check exists to name. When a loadable
-# weave first links this target, the sweep will derive the requirement from the build graph and
-# say so — which is a better mechanism than a line here somebody has to remember.
+# Deliberately not loom_weave_build_contract(): nothing loadable links this target, and
+# contracting an artifact the build-graph sweep does not require makes the roll and the
+# requirement diverge, the drift `weave_population` names (POP-05). When a loadable weave links
+# it, the sweep derives the requirement.
 
-# ---- History (RTH-1, split by RTH-1a): what the host knows, and what it keeps -----------
-#
-# TWO OWNERS, ONE LIBRARY, AND NEITHER READS THE OTHER. `loom::Recorder` is volatile
-# working memory; `loom::Logger` is the durable selected record. Both are tap consumers
-# beside the console rather than inside the Switchboard, and `logger.hpp` deliberately does
-# not include `recorder.hpp` -- a durable fact that had to ask a volatile window for its
-# contents would be durable only as long as that window.
-#
-# It links the bus (for the tap) and the core (to serialize a payload and to write a stream
-# of canonical values) and NOTHING ELSE from this tree -- no console, no UI vocabulary, no
-# terminal. That absence is a claim being made in the build graph: a history lens that could
-# reach a presentation would eventually be one.
-#
-# It is EXPORTED and INSTALLED, unlike the console, because the first consumer is a Zengine
-# application that reaches this repository solely through find_package(loom).
+# ---- History: what the host knows, and what it keeps -----------
+# Two owners, one library, neither reading the other: `loom::Recorder` is volatile working
+# memory, `loom::Logger` the durable selected record, both tap consumers beside the console. It
+# links the bus and the core and nothing else from this tree, so a history lens cannot become a
+# presentation. Exported, because consumers reach it through find_package(loom).
 add_library(zen-history
     src/history/record.cpp
     src/history/recorder.cpp
@@ -309,28 +249,25 @@ add_library(loom::history ALIAS zen-history)
 # loadable links this target, so contracting it would put an artifact on the roll that the
 # build-graph sweep does not require, which is exactly the drift `weave_population` names.
 
-# ---- Console (the first doing-layer component: the engine, then a terminal) ------------
-#
-# A message-native bus participant — discover, compose, gate-send, receive replies into an
-# indexed buffer — built frontend-agnostic so the terminal (now) and a GUI (later) reuse
-# this engine unchanged. Stage 3 adds the UI-as-data layer (ui.cpp): the console emits its
-# own interface as the zen-ui semantic tree (a consumer of the vocabulary, not its owner).
-# Depends on the bus + core + the UI vocabulary.
+# ---- Console: the engine, then a terminal ------------
+# A message-native bus participant (discover, compose, gate-send, receive replies into an indexed
+# buffer), built frontend-agnostic so any frontend reuses the engine. It emits its own interface
+# as the zen-ui tree (ui.cpp), a consumer of the vocabulary and not its owner.
 add_library(zen-console
     src/console/console.cpp
     src/console/ui.cpp)
 target_include_directories(zen-console
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(zen-console PUBLIC cxx_std_20)
-# ...and zen-terminal, for the ONE typed composer both use (TERM-0). The dependency runs this
-# way and never the other: the terminal core knows nothing about a console, a tap or a UI tree.
+# ...and zen-terminal, for the one typed composer both use. The dependency runs this way only:
+# the terminal core knows nothing about a console, a tap or a UI tree.
 target_link_libraries(zen-console
     PUBLIC  loom zen-switchboard zen-terminal zen-ui zen-sanitize
     PRIVATE zen-warnings)
 add_library(loom::console ALIAS zen-console)
 
-# The terminal frontend — a thin, throwaway REPL over the engine (Stage 1-2; a GUI replaces
-# only this later). Exercises discovery / guided send / one-liner / buffer / tap as text.
+# The terminal frontend: a thin REPL over the engine that exercises discovery, guided send,
+# one-liners, the buffer and the tap as text.
 add_executable(zen-console-term src/console/console_term.cpp)
 target_link_libraries(zen-console-term
     PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
@@ -353,7 +290,7 @@ target_link_libraries(zen-tui
     PUBLIC  zen-ui zen-sanitize
     PRIVATE zen-warnings)
 
-# The first user seat, running (WEAVER-1): a host that boots an operator console, a Weaver
+# The first user seat, running: a host that boots an operator console, a Weaver
 # holding one GrantAuthority, one governed session and one service — and then gets out of the
 # way. It is a HOST, not a library: the durable artifacts are the header-only Weaver
 # (include/zen/weaver/) and the console engine it drives, both of which this file only mounts.
@@ -363,13 +300,11 @@ add_executable(zen-weaver-demo src/weaver/weaver_demo.cpp)
 target_link_libraries(zen-weaver-demo
     PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
-# TERM-0's console frontend: a REPL that is a PRESENTATION of the terminal core rather than the
-# owner of any terminal semantics. It boots its own Loom — it does not attach to another process —
-# mounts a governed session, a separate operator seat, a Weaver and a service, and lets a person
-# drive whichever participant they name. The host lens (`debug:`) is the host's own tap and
-# registry read, labelled as such, and deliberately NOT wired into either participant.
-# It links the terminal core and the bus, and NOTHING ELSE from this tree — no console engine,
-# no TUI renderer, no UI vocabulary. That absence is a claim being made in the build graph.
+# The terminal core's console frontend: a REPL that presents the terminal core and owns none of
+# its semantics. It boots its own Loom and mounts a governed session, a separate operator seat, a
+# Weaver and a service, and lets a person drive whichever participant they name; the `debug:`
+# host lens is the host's own tap and registry, labelled so. It links the terminal core and the
+# bus and nothing else from this tree.
 add_executable(zen-terminal-repl src/terminal/terminal_main.cpp)
 target_link_libraries(zen-terminal-repl
     PRIVATE zen-terminal zen-switchboard loom zen-warnings zen-sanitize)
@@ -379,33 +314,16 @@ add_executable(zen-console-tui src/console/console_tui.cpp)
 target_link_libraries(zen-console-tui
     PRIVATE zen-tui zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
-# ---- loom-host: THE SUPPLIED HOST, and the only executable this project installs -----
-#
-# Everything else with a main() in this tree is a demo with a fixed cast, useful from the
-# build directory and nowhere else. This one is the answer to "I installed Loom, now
-# what?": it reads a boot plan the person wrote, starts what that plan names in the
-# order it names them, and gives them a console with authority in it.
-#
-# It links the console engine and the terminal core (both already home-grown substrate)
-# and, WHERE THERE IS ONE, the kernel — which is every Linux build and a Windows build
-# that opted into the unsandboxed backend. ZEN_HOST_HAS_KERNEL is that fact as a compile
-# definition rather than as an assumption: a host without one still runs, still consoles,
-# and says in one sentence why it can host nothing loadable.
-# The host's DECIDING half, as a library, so the test suite can reach it. The two files a
-# person writes are parsed here -- a rule grammar and two schemas over hand-edited text --
-# and a parser nothing tests is a parser that will eventually accept the wrong thing
-# quietly.
-#
-# It also carries the two pieces of PLATFORM the host's loop and its ownership rest on:
-# `line_input` (can I read a command without stopping the bus?) and `store_lock` (does
-# anybody else own these decisions?). Both are here rather than in `main()` for the same
-# reason the grammar is: each one has a wrong answer that is invisible until a person is
-# already stuck, and each is reachable from the suite this way.
-#
-# `main()` stays in the executable, and is now driven by a REAL PROCESS from the suite
-# (`tests/host_process/`) rather than only by hand: the defects this host shipped were in
-# its glue -- which reply answers which question, when authority is installed, whether the
-# console can still be reached -- and no test of the deciding half can see any of them.
+# ---- loom-host: the supplied host, and the only executable this project installs -----
+# The answer to "I installed Loom, now what?": it reads a boot plan the person wrote, starts what
+# it names in order, and gives them a console with authority in it. It links the console engine,
+# the terminal core and, where there is one, the kernel; ZEN_HOST_HAS_KERNEL says which, and a
+# host without one still runs and says why it can load nothing.
+
+# The host's deciding half, as a library the suite reaches: the parsers of the two files a person
+# writes, `line_input` (reading a command without stopping the bus) and `store_lock` (who owns
+# these decisions). `main()` stays in the executable, driven as a real process by
+# tests/host_process/.
 add_library(zen-host-policy STATIC
     src/host/authority.cpp
     src/host/boot_plan.cpp
@@ -421,9 +339,9 @@ target_link_libraries(zen-host-policy
     PRIVATE zen-warnings)
 
 add_executable(loom-host src/host/host_main.cpp)
-# ...AND SINCE THE TWO-HOST CROSSING IT LINKS THE HISTORY PAIR AND THE BRIDGE: the host mounts
-# Loom's own Recorder and Logger (configured from the plan's `history` section) and holds a
-# LinkWeave per `links` row (src/host/link.hpp), which is host wiring over the exported client.
+# It links the history pair and the bridge: the host mounts Loom's own Recorder and Logger (from
+# the plan's `history` section) and holds a LinkWeave per `links` row (src/host/link.hpp), host
+# wiring over the exported client.
 target_link_libraries(loom-host
     PRIVATE zen-host-policy zen-console zen-terminal zen-history zen-bridge zen-switchboard loom
             zen-warnings zen-sanitize)
@@ -435,15 +353,10 @@ else()
 endif()
 
 # ---- loom-runs: the run manager a session host boots, and the Python session tooling ---------
-#
-# OPTIONAL TOOLING, AND SAID SO. `loom-host --serve` needs none of it: a session host serves
-# clients with or without a run manager. `loom-runs` is an ordinary loadable weave (task policy,
-# replaceable, approved by the operator like any artifact) that starts each run's worker as a
-# Python process; `python/loom_session` is the client library, the human CLI and that worker's
-# runtime. Building needs no Python -- the C++ is the manager, the Python is data it ships --
-# and only RUNNING a tool (or a Python client) needs an interpreter, found at run time and named
-# in the catalog when it is not on PATH (docs/guides/sessions.md). A loadable weave needs a host
-# that can load one, so this rides the kernel exactly as every loadable fixture in tests/ does.
+# Optional: `loom-host --serve` serves clients with or without it. `loom-runs` is an ordinary
+# loadable weave that starts each run's worker as a Python process; `python/loom_session` is the
+# client library, the CLI and the worker's runtime. Building needs no Python, only running a tool
+# does (docs/guides/sessions.md). A loadable weave needs the kernel, so this rides it.
 option(LOOM_BUILD_SESSION_TOOLS
        "Build the run manager (loom-runs) and install the Python session tooling" ON)
 if(LOOM_BUILD_SESSION_TOOLS AND TARGET zen-kernel)
@@ -482,22 +395,12 @@ if(LOOM_BUILD_SESSION_TOOLS AND TARGET zen-kernel)
     add_dependencies(loom-runs loom-session-runtime)
 endif()
 
-# ---- The remote-operator bridge (operator-protocol transport; server + remote console land here) --
-#
-# PORTABLE on purpose: the operator-protocol crosses the host boundary, so the transport builds on
-# BOTH the WSL host (POSIX sockets) and the Windows client (Winsock — ws2_32). AF_UNIX is the fast
-# WSL<->WSL inner loop; AF_INET 127.0.0.1 is the real Windows->WSL crossing (WSL2 forwards localhost).
-# The engine runs CLIENT-side (RemoteConsole, a Console impl over the wire); the host registers a
-# proxy-participant per operator and answers discovery / streams the tap / stamps + re-admits sends.
-#
-# TWO LIBRARIES SINCE THE TWO-HOST CROSSING, and the split is the export boundary. `zen-bridge`
-# is the CROSSING: the framed channel, the host side with its admission seam, the console-free
-# client a linking host holds, and the link envelope an ordinary weave asks through. It links the
-# bus and the core and NOTHING ELSE from this tree, which is what makes it exportable: a host that
-# links to another host reaches it through find_package(loom) exactly as Zengine reaches the
-# history pair. `zen-bridge-console` is the OPERATOR'S console over that crossing (RemoteConsole,
-# a `Console`), and it links the console engine -- unexported, with the console it needs. Nothing
-# of the console's dependency closure crosses the package boundary.
+# ---- The remote-operator bridge ----------------------------------------------------------
+# Portable: the operator protocol crosses the host boundary over POSIX sockets or Winsock
+# (ws2_32), AF_UNIX locally and AF_INET 127.0.0.1 across a machine boundary. `zen-bridge` is the
+# crossing (the framed channel, the host side with its admission seam, the console-free client
+# and the link envelope) and links only the bus and the core, so it is exported.
+# `zen-bridge-console` is the operator's console over it, and stays home with the console.
 add_library(zen-bridge
     src/bridge/channel.cpp
     src/bridge/server.cpp
@@ -524,22 +427,17 @@ target_link_libraries(zen-bridge-console
     PRIVATE zen-warnings)
 add_library(loom::bridge-console ALIAS zen-bridge-console)
 
-# The WSL-side host: a bus + one demo weave + the BridgeServer, listening for remote operators. The
-# WSL end of the Windows->WSL crossing. Portable (it is the bus side, all in-process), but in practice
-# run on the WSL host.
+# A host: a bus, one demo weave and the BridgeServer, listening for remote operators.
 add_executable(zen-bridge-host src/bridge/bridge_host_main.cpp)
 target_link_libraries(zen-bridge-host PRIVATE zen-bridge zen-switchboard loom zen-warnings zen-sanitize)
 
-# A NON-interactive remote operator that drives the protocol end-to-end and prints PASS/FAIL — the
-# crossing proof. PORTABLE on purpose: built via MinGW on Windows, it connects to a WSL-hosted
-# zen-bridge-host across the real boundary (TCP localhost).
+# A non-interactive remote operator that drives the protocol end to end and prints PASS or FAIL.
+# Portable, so it can cross a real boundary (TCP localhost).
 add_executable(zen-bridge-probe src/bridge/bridge_probe_main.cpp)
 target_link_libraries(zen-bridge-probe PRIVATE zen-bridge-console zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
-# The interactive remote-operator console: the SAME ConsoleUi + shared renderer as the in-process
-# TUI, with the engine behind a socket (RemoteConsole) and the loop an event-driven multiplexer over
-# {input, socket}. PORTABLE — built via MinGW on Windows, it is the Windows console driving a
-# WSL-hosted bus across the boundary.
+# The interactive remote console: the same ConsoleUi and renderer as the in-process TUI, with the
+# engine behind a socket (RemoteConsole) and a loop that multiplexes input and the socket.
 add_executable(zen-console-remote src/console/console_remote.cpp)
 target_link_libraries(zen-console-remote
     PRIVATE zen-tui zen-bridge-console zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)
@@ -570,53 +468,16 @@ if(ZEN_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-# ---- The consumer surface: install + export (find_package(loom)) ----------------------
-#
-# Zengine is the Loom's first external consumer, and it consumes by the STRANGER'S path — a
-# find_package() against an installed package, never a sibling include. That is the point of
-# the split: every rough edge in this surface hits the house before it hits a guest.
-#
-# Exported deliberately SMALLER than what the build tree offers: only the substrate that is
-# Loom's forever. The UI pair, the console, the TUI and the bridge are Zengine-destined (each
-# moves in its own port phase), so exporting them now would publish a surface we are about to
-# relocate. The kernel and isolation ARE Loom's, but they are Linux-only; the rule was that
-# each joins the export when a hosting consumer appears — and
-# for the KERNEL that trigger has now fired (Zengine's snake slice hosts .so weaves), so
-# loom::kernel rides the export on Linux. Isolation still waits for its first out-of-process
-# consumer. SEAM APPRECIATION: the export set is the honest answer to "what is public", and
-# the gap between it and the build tree is a visible, intentional seam — a consumer that
-# leans on an unexported target fails on the DEFAULT path, which is exactly where we want
-# that mistake to surface.
-#
-# THE UI PAIR'S TRIGGER HAS ALSO FIRED, AND THE ANSWER WAS STILL NO. W-1 sent a real hosting
-# consumer at it (Zengine's Workshop wanted an authored tree, a pixel resolution and a hit
-# test) and measured two independent blockers. Recording them here because the sentence above
-# reads like a promise that one packaging decision is all that stands in the way, and it is
-# not; the full measurement is in that phase's record, kept outside this repository.
-#
-#   1. THE CONSOLE IS A PRIOR HOSTING CONSUMER THAT NEVER LEFT. zen-ui is not waiting for its
-#      first host: zen-console emits its own interface as this tree (include/zen/console/
-#      ui.hpp), zen-tui renders it, and zen-bridge reaches it through the console — each with
-#      a live suite behind it (the counts belong to tests/suite_population.txt, not to this
-#      comment). The Loom cannot depend on Zengine, so relocating the tree means relocating
-#      the console, the TUI and the bridge with it. "Moves in its own port phase" is true;
-#      "moves when a hosting consumer appears" is not the trigger.
-#   2. IT IS A DIFFERENT MODEL FROM THE ONE AN APPLICATION CANVAS NEEDS, and would not have
-#      served the consumer even if it had moved. loom::Widget fences OUT the authored
-#      placement Workshop authors, `weight` is documented as a relative grow hint and never
-#      an absolute size (so neither "14 cells" nor "60% of the workspace" is expressible),
-#      stacks partition where authored elements overlap, and px_layout emits a PxTarget only
-#      for activatable rows, activatable Text and Fields — a Region would be unhittable.
-#      Zengine grew its own zengine::ui for the placement/extent model; this tree stays the
-#      relational one, and the two are not competitors.
-#
-# So nothing here changed in W-1: no target joined the export set, no PATTERN was dropped,
-# and the surface a stranger sees is byte-identical.
-#
-# EXPORT_NAME gives the installed targets the SAME spellings as the in-tree ALIASes
-# (loom::core, loom::switchboard). That identity is what makes a consumer's sibling-source
-# override a true drop-in: the same names resolve either way, so the two paths cannot silently
-# diverge in what they mean.
+# ---- The consumer surface: install and export (find_package(loom)) ----------------------
+# Exported: only the substrate that is Loom's for good and that a consumer outside this repository
+# needs: the core, the switchboard, the terminal core, history, the bridge crossing and, where
+# built, the kernel. The UI vocabulary, the console, the TUI and isolation stay home, so a
+# consumer that leans on one fails on the default path. The UI pair is a relational tree, not an
+# application canvas's model (no authored placement or absolute extent).
+
+# EXPORT_NAME gives the installed targets the same spellings as the in-tree ALIASes (loom::core,
+# loom::switchboard), so a build from source and a build against the package resolve the same
+# names.
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(loom_default_install ON)
@@ -637,40 +498,20 @@ if(LOOM_INSTALL)
     set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
     set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
 
-    # zen-sanitize is a PUBLIC dependency of both libraries, and zen-warnings survives in a
-    # static library's link interface as $<LINK_ONLY:>; both must therefore ride in the same
-    # export set or the export fails to generate. They are INTERFACE targets, so nothing is
-    # installed for them beyond the target definition — and LINK_ONLY is what keeps Loom's
-    # -Werror/-Wconversion from leaking onto a consumer's own sources.
-    # zen-terminal JOINS THE EXPORT, and it is the first target to do so on the strength of a
-    # SECOND PRESENTATION rather than a second host (TERM-0). The rule this export set follows is
-    # "only the substrate that is Loom's forever", and the terminal core qualifies on its
-    # contents: it is participant semantics — identity, vocabulary, typed composition, ask/answer
-    # correlation, a truthful transcript — with no renderer, no UI vocabulary and no frontend
-    # anywhere in it. Its whole purpose is to be presented by something that is not in this
-    # repository, and a core a stranger cannot reach is a core with exactly one presentation.
-    #
-    # The UI pair, the console, the TUI and the bridge still stay home for the reasons written
-    # at the top of this section; nothing about that changed, and the terminal core
-    # deliberately depends on NONE of them.
-    # zen-bridge JOINS THE EXPORT on the strength of a second HOST: a Loom host that links to a
-    # running Workshop reaches the crossing only this way, and a crossing a stranger cannot reach
-    # is a crossing with exactly one peer. It qualifies on its contents -- a framed channel, an
-    # admission seam and a stamped proxy -- with no console, no UI vocabulary and no renderer in
-    # it; the operator's console over it (zen-bridge-console) stays home with the console.
+    # zen-sanitize is a PUBLIC dependency of both libraries and zen-warnings survives in a static
+    # library's link interface as $<LINK_ONLY:>, so both ride the export set; they are INTERFACE
+    # targets, and LINK_ONLY keeps Loom's -Werror and -Wconversion off a consumer's sources.
+    # zen-terminal, zen-history and zen-bridge qualify on their contents: participant semantics,
+    # a history lens and a crossing, with no console, UI vocabulary or renderer in any of them.
     install(TARGETS loom zen-switchboard zen-terminal zen-history zen-bridge zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    # THE ONE INSTALLED EXECUTABLE, and deliberately not part of the export set: a
-    # consumer links libraries, it does not link a host. It installs so that a person
-    # who has installed Loom has something to RUN -- which, before it, they did not.
-    #
-    # The libraries it links but Loom does not export (zen-console, zen-ui) stay
-    # unexported, exactly as before. Nothing about the package boundary moved: a static
-    # host binary carries its own copy and a stranger still cannot reach those headers.
+    # The one installed executable, not in the export set: a consumer links libraries, not a
+    # host. The libraries it links and Loom does not export (zen-console, zen-ui) stay unexported;
+    # a static host binary carries its own copy.
     install(TARGETS loom-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     # THE SESSION TOOLING, WHERE IT WAS BUILT: the run manager and, beside it, the Python runtime

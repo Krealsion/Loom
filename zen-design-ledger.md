@@ -1,16 +1,10 @@
-# Zen design ledger — moved
+# Zen design ledger
 
-> **FROZEN COPY:** the complete pre-consolidation ledger (built vs. designed
-> vs. open, with every pillar's status) is preserved unabridged at
-> [`docs/history/pre-r2c/zen-design-ledger.md`](docs/history/pre-r2c/zen-design-ledger.md)
-> (commit `78d64ea`).
-
-Its current-facing jobs moved to the consolidated surfaces:
+The ledger of what was built, what was designed and what was open is kept frozen at
+[`docs/history/pre-r2c/zen-design-ledger.md`](docs/history/pre-r2c/zen-design-ledger.md); it
+describes the tree it was written against. What it tracked now lives here:
 
 - *what is built and how it behaves* → [`docs/reference/`](docs/reference/)
-- *what is designed-but-unbuilt, and its trigger* →
+- *what is designed but unbuilt, and what would trigger building it* →
   [`docs/reference/known-seams.md`](docs/reference/known-seams.md)
-- *the "proven means a test asserts it" rule* →
-  [`docs/laws/README.md`](docs/laws/README.md)
-
-This pointer stays at the old path so old links lead somewhere truthful.
+- *the rule that "proven" means a test asserts it* → [`docs/laws/README.md`](docs/laws/README.md)

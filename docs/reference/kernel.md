@@ -76,6 +76,19 @@ packages too — what you can *author* is not gated on what an install can *host
 which stays `if(TARGET loom::kernel)`. See
 [guides/dynamic-weaves](../guides/dynamic-weaves.md) for the authoring shape.
 
+Why it matters: a weave's shapes instantiate Loom's inline templates, such as
+`schema_of<T>()`'s function-local static, with vague linkage. On ELF, GCC built
+with `--enable-gnu-unique-object` emits those as `STB_GNU_UNIQUE`, and glibc
+resolves such symbols through a program-wide table that ignores `RTLD_LOCAL`,
+marks the defining image `NODELETE` and outlives `dlclose`. Unload then reports
+success (`dlclose()` returns 0, `unload()` returns true) while the image stays
+resident, and the next load of a different library sharing the same vocabulary
+binds to the old image's statics. Forgetting the contract is no build error;
+this is what it produces. It is a function rather than an interface target
+because an interface target's reach is the consumer's to choose (`PUBLIC` would
+spread the option downstream), cannot refuse a target type, and cannot fail on a
+compiler that cannot express the contract.
+
 Inside **this repo** the call is not optional and not remembered: the
 `weave_population` entry derives which of Loom's own artifacts must carry it from
 the build graph and names any that left the roll
