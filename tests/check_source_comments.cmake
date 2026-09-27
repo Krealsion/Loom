@@ -90,7 +90,6 @@ set(ZEN_COMMENT_PENDING
     "^src/runs/runs_weave[.]cpp$"
     "^src/schema[.]cpp$"
     "^src/serialize[.]cpp$"
-    "^src/switchboard/switchboard[.]cpp$"
     "^src/terminal/composer[.]cpp$"
     "^src/terminal/host_channel[.]cpp$"
     "^src/terminal/session[.]cpp$"
