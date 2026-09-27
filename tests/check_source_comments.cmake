@@ -84,7 +84,6 @@ set(ZEN_COMMENT_PENDING
     "^src/runs/catalog[.]hpp$"
     "^src/runs/process[.]cpp$"
     "^src/runs/process[.]hpp$"
-    "^src/runs/run_manager[.]hpp$"
     "^src/runs/runs_weave[.]cpp$"
     "^src/schema[.]cpp$"
     "^src/serialize[.]cpp$"
