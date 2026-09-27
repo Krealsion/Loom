@@ -1,21 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The Console's first, throwaway skin: a deliberately plain terminal REPL over the
-// ConsoleEngine. It calls the engine API and formats the returned DOMAIN DATA as plain
-// text — no cursor addressing, no panes (that is Stage 3). Its only job is to exercise
-// the engine; the engine, not this, is the durable artifact. A GUI later replaces only
-// this file, inheriting the engine whole.
-//
-// Stage 2 adds the dataflow surface to the skin: it lexes each argument to its narrowest
-// type, recognizes `$mN.field` references and `field=value` named args, and renders the
-// engine's NeedsInput as a plain prompt. The DECISIONS (resolution, the assumption ladder)
-// are the engine's; this file only turns text into structured Args and structured results
-// back into text.
-//
-// A demo "greeter" Weave is mounted at startup so a standalone terminal has something to
-// drive (discover, send, see a reply buffered). In a real deployment, Weaves arrive on the
-// bus by other means; the console drives whatever is there.
+// A deliberately plain terminal REPL over the ConsoleEngine: it calls the engine and formats
+// its domain data as text, with no cursor addressing or panes. It lexes each argument to its
+// narrowest type, recognizes `$mN.field` references and `field=value` named arguments, and
+// renders NeedsInput as a plain prompt; resolution and the assumption ladder are the engine's.
+// A demo greeter weave is mounted at startup so a standalone terminal has something to drive.
 
 #include "zen/weave/poke_weave.hpp"
 
@@ -281,7 +271,7 @@ int main() {
     bus.register_weave(std::make_unique<Greeter>(), loom::Grant{}.allow_any());
     bus.register_weave(std::make_unique<loom::PokeWeave>(), loom::Grant{}.allow_any());
 
-    std::cout << "zen console (stage 2). commands: weaves | describe <Shape> <v> | "
+    std::cout << "zen console. commands: weaves | describe <Shape> <v> | "
                  "send [<id> [<Shape> <v> [args ...]]] | buffer | show <mN> | tap | quit\n"
                  "args: a bare value is positional/type-directed; field=value names a field; "
                  "$mN.field references a buffered reply; quote to force Text (\"5\" is text, 5 is Int).\n";
