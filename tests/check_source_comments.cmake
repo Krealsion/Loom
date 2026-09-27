@@ -30,7 +30,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/(bridge|console|history|isolation|observe|runs|session|terminal|ui|weaver)/"
     "^include/zen/host/grant_wiring[.]hpp$"
     "^include/zen/host/lifecycle_wiring[.]hpp$"
-    "^include/zen/host/prepared_replacement[.]hpp$"
     "^include/zen/host/terminal_wiring[.]hpp$"
     "^include/zen/kernel/admission[.]hpp$"
     "^include/zen/kernel/schema_codec[.]hpp$"
