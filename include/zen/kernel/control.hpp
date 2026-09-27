@@ -4,66 +4,27 @@
 #ifndef ZEN_KERNEL_CONTROL_HPP
 #define ZEN_KERNEL_CONTROL_HPP
 
-// The kernel's message door: operate the kernel like everything else — by sending
-// it messages. A control Weave accepts LoadLibrary / ReloadLibrary / UnloadLibrary
-// / UnloadRole / ListLibraries / QueryRole and calls the kernel's existing load /
-// reload_from / unload / unload_role / loaded / query_role. The right to send
-// those shapes to the control
-// Weave is the **load capability** — the canonical dangerous grant. A Weave holding
-// it can drive the kernel by message; a Weave without it is denied at delivery
-// (CapabilityDenied), protecting the single most dangerous surface in the system
-// with the same capability-gating as everything else.
+// The kernel's message door: a control Weave accepts LoadLibrary, ReloadLibrary, UnloadLibrary,
+// UnloadRole, ListLibraries and QueryRole and calls the Kernel's load, reload_from, unload,
+// unload_role, loaded and query_role. The right to send those shapes to it is the load
+// capability, the most dangerous grant; a Weave without it is `CapabilityDenied` at delivery.
 //
-// THE DOOR ANSWERS. Every op replies with a standard shape (standard_shapes.hpp) to
-// the asker — reply_to if given, else the bus-stamped sender:
+// Every operation replies to the asker (reply_to if given, else the stamped sender):
 //   LoadLibrary    -> zen.Result{weave id}   | zen.Refused{why}
 //   ReloadLibrary  -> zen.Ack                | zen.Refused{why}
 //   UnloadLibrary  -> zen.Ack                | zen.Refused{why}
 //   UnloadRole     -> zen.Ack                | zen.Refused{why}
 //   ListLibraries  -> zen.Result{"a,b@role"} | (never refuses)
-//   QueryRole      -> RoleInfo{holder, converses}   (bespoke, by the razor)
-// Before this, all five outcomes were discarded at the door: the most dangerous
-// surface in the system was also the only one that answered nothing, so a
-// reload's state-schema mismatch — a real, deliberate, well-shaped refusal — died
-// as an unread C++ return value. The kernel now says what happened, and the
-// Weave Manager (kernel/manager.hpp) is the first participant to hear it.
+//   QueryRole      -> RoleInfo{holder, converses}
+// The door executes primitives only; composites such as a swap belong to an orchestrator (the
+// Weave Manager, kernel/manager.hpp), which another can replace.
 //
-// The door only *executes* primitives. Composites (swap = unload-the-role-holder
-// then load-the-successor) live in the orchestrator, never here — that is what
-// makes the orchestrator replaceable: a different Manager can compose the same
-// primitives into a different policy.
-//
-// ---------------------------------------------------------------------------
-// THE ACTIVATION FACT. The door also tells a freshly committed weave, in
-// one ordinary message, that it is live: zen.Activated (weave/lifecycle.hpp,
-// which states the fact's exact meaning and its long list of non-meanings).
-//
-// WHY THE DOOR OWNS THIS, and not the Manager, the Kernel, or the Switchboard.
-// LoadWeave/SwapWeave/ReloadWeave are Manager composites, but LoadLibrary and
-// ReloadLibrary are the primitives that actually call the Kernel — and a
-// participant holding load_capability may drive them with no Manager in the
-// path at all (the manager suite pins exactly that). A lifecycle fact emitted by
-// the Manager would therefore be FALSE ARCHITECTURE: two callers producing
-// identical kernel changes, only one of which produced the lifecycle result.
-// The door is the ordinary message participant sitting directly on the
-// successful kernel operation: it knows the outcome, can name the target, has a
-// bus-stamped identity, sends through ordinary Mail, and declares what it emits.
-// The Kernel stays a thing that answers questions and never speaks through a
-// privileged backchannel; the Switchboard stays routing.
-//
-// THERE IS NO SWAP-SPECIFIC ACTIVATION CODE ANYWHERE, and that absence is the
-// ownership proof. A swap — hard or graceful — eventually succeeds through
-// LoadLibrary, so its successor is activated for the same reason any dynamically
-// loaded weave is. Neither this file nor the Manager contains a line that knows
-// a swap is happening.
-//
-// WHAT IS NOT COVERED, said out loud: host-native mount<T>() weaves. This door
-// only sees dynamic load/reload, so native mounts are simply not activated —
-// not "activated silently", not "activated later". Nothing here claims them.
-//
-// The immediate downstream consumer is Zengine's Timer, which will author its
-// beat chain from an activation instead of a one-shot host wind — is deferred
-// and no line of it exists yet.
+// The door also tells a freshly committed weave it is live, with zen.Activated
+// (weave/lifecycle.hpp says what that means and does not). It owns this because a participant
+// holding the load capability can drive LoadLibrary and ReloadLibrary with no Manager in the
+// path, and the door is what sits on every successful kernel operation. A swap's successor is
+// activated because it arrived through LoadLibrary; nothing here knows a swap is happening.
+// Weaves mounted natively with mount<T>() never pass this door and are not activated.
 
 #include <zen/host/lifecycle_wiring.hpp> // host wiring: the one mint, not weave-facing
 #include <zen/weave.hpp>
@@ -81,12 +42,8 @@
 
 namespace loom {
 
-/// Load `path` under `name`; if `role` is non-empty, bind the loaded Weave to it.
-///
-/// v2: `role` joined the shape when the kernel learned to bind one at load (the
-/// only moment a role CAN be bound — Switchboard::register_weave is the sole
-/// binder). The version bump is the spine's immutable-published-schema rule paid
-/// honestly: (LoadLibrary, 1) meant {name, path} and still does, forever.
+/// Load `path` under `name`; a non-empty `role` binds the loaded Weave to it, and load is the
+/// only moment a role can be bound.
 struct LoadLibrary {
     std::string name;
     std::string path;
@@ -105,132 +62,80 @@ struct UnloadLibrary {
     ZEN_SHAPE(UnloadLibrary, 1, ZEN_FIELD(name));
 };
 
-/// Unload whichever loaded library currently holds `role`. Role-addressed, not
-/// name-addressed, so "replace the role holder" cannot mistake its victim: the
-/// only thing this can unload IS the role's holder.
+/// Unload whichever loaded library holds `role` now: the only thing it can unload is the role's
+/// holder.
 struct UnloadRole {
     std::string role;
     ZEN_SHAPE(UnloadRole, 1, ZEN_FIELD(role));
 };
 
-/// Ask what is loaded. Answered from the kernel's own live map, never a cache.
+/// Ask what is loaded, answered from the kernel's live map.
 struct ListLibraries {
     ZEN_SHAPE(ListLibraries, 1);
 };
 
-/// Ask about a role's holder: who it is, and whether it declares
-/// `zen.PrepareShutdown` — i.e. whether it will converse about its own
-/// succession. The steward asks this BEFORE asking anything of the incumbent,
-/// so a weave that never opted in is never waited on.
+/// Ask about a role's holder: who it is, and whether it declares `zen.PrepareShutdown`, that
+/// is, whether it will converse about its own succession. A steward asks this first, so it
+/// never waits on a weave that did not opt in.
 struct QueryRole {
     std::string role;
     ZEN_SHAPE(QueryRole, 1, ZEN_FIELD(role));
 };
 
-/// The answer. Bespoke rather than a standard reply, by the least-complete-
-/// information razor: BOTH fields are load-bearing and their absence breaks the
-/// image. `converses` alone cannot be acted on — a steward that asks an
-/// incumbent for its letter must know which weave's stamped sender to require on
-/// the way back, or it cannot tell the letter from a forgery. `holder` alone
-/// cannot be acted on either. Two facts, one decision.
-///
-/// `holder == 0` means no KERNEL-LOADED weave holds the role — unheld, or held
-/// by a native weave the kernel cannot see into (Kernel::query_role documents
-/// why the two are not worth distinguishing). Either way: non-participant.
+/// The answer, bespoke because both fields are needed to act: a steward asking an incumbent for
+/// its letter must know whose stamped sender to require on the reply. `holder == 0` means no
+/// weave this Kernel loaded holds the role: unheld, or held natively. Either way, not a
+/// participant.
 struct RoleInfo {
     std::int64_t holder;
     bool converses;
     ZEN_SHAPE(RoleInfo, 1, ZEN_FIELD(holder), ZEN_FIELD(converses));
 };
 
-/// The control Weave's state: how many operations it has performed, and the
-/// activation sequence it has reached.
+/// The control Weave's state: how many operations it has performed, and the activation sequence
+/// it has reached. `last_activation` is the highest sequence this lineage has sent (0 for
+/// none); in the state, so a revived control weave continues its lineage. It is not `ops`,
+/// which counts every command, refused ones included.
 ///
-/// `last_activation` is the highest sequence this control lineage has emitted;
-/// 0 means it has emitted none. Kept in the STATE, not in a live member, which
-/// is the whole point: it snapshots and revives like any other weave's
-/// bookkeeping, so a revived control weave continues its lineage instead of
-/// restarting it (pinned in the manager suite). It is deliberately NOT `ops`:
-/// operation count and activation identity are different facts that happen to
-/// move near one another today — `ops` counts every command including the ones
-/// that refuse or activate nobody.
-///
-/// IT IS A FINITE SIGNED INTEGER, AND THE CONTRACT IS BOUNDED BY THAT. The
-/// lineage's valid range is [0, INT64_MAX]: the last representable sequence is
-/// INT64_MAX, emitted exactly once, and every lifecycle operation after it is
-/// REFUSED rather than wrapped (activation_block()). A revived state outside
-/// that range — the gate admits any Int, so a negative value is constructible
-/// through the ordinary revival path — has no valid continuation and refuses the
-/// same way. Neither state is normalized, absolute-valued, or wrapped into an
-/// apparently-healthy lineage; a forged activation identity would be worse than
-/// a refused load.
-///
-/// v2: `last_activation` joined the shape. `zen.ControlState` v1 meant {ops} and
-/// still does, forever — the immutable-published-schema rule, paid as usual.
+/// Its valid range is [0, INT64_MAX]: INT64_MAX is sent once, and every lifecycle operation
+/// after it is refused, never wrapped (activation_block()). A revived negative value, which the
+/// gate admits, is refused the same way; neither is normalized into a healthy-looking lineage.
 struct ControlState {
     std::int64_t ops;
     std::int64_t last_activation;
     ZEN_SHAPE(ControlState, 2, ZEN_FIELD(ops), ZEN_FIELD(last_activation));
 };
 
-/// The two ways a control lineage can be unable to name another activation.
-/// Ordinary self-contained refusal reasons on the existing `zen.Refused` path —
-/// no new lifecycle vocabulary, and each says which boundary was hit rather than
-/// collapsing both into one half-true word.
+/// The two ways a control lineage cannot name another activation, sent as ordinary
+/// `zen.Refused` reasons.
 inline constexpr const char* kActivationExhausted =
     "activation sequence exhausted; lifecycle operation refused";
 inline constexpr const char* kActivationInvalid =
     "activation sequence state is invalid; lifecycle operation refused";
 
-/// WHAT THE HOST DOES ABOUT A LIFECYCLE CHANGE THIS DOOR JUST MADE — host-supplied
-/// wiring, exactly like the `LifecycleAuthority` beside it, and for the same reason.
+/// What the host does about a lifecycle change this door just made: host wiring, handed over at
+/// mount like the `LifecycleAuthority`. Delegated live authority can be installed only from
+/// inside a live delivery, and the one delivery between "committed" and "told it is live" is
+/// this handler, so installing what a person approved here puts it in force for the
+/// incarnation's first message; on the operation's answer it would arrive too late.
 ///
-/// IT EXISTS BECAUSE THERE IS EXACTLY ONE WINDOW, and a host cannot reach it from
-/// anywhere else. A host that keeps standing decisions about what a loaded artifact
-/// may SAY has to install them as delegated live authority, and delegated authority
-/// can only be installed from inside a live delivery
-/// (`Switchboard::delegate_authority_as` is private to the bus's own adapter). The
-/// only delivery that sits between "this incarnation is committed" and "this
-/// incarnation has been told it is live" is THIS handler: everything the door queues
-/// afterwards is FIFO, and the asker is always last to hear. So a host that adopted
-/// on the operation's ANSWER installed the person's approved authority strictly
-/// after the weave's own first breath, and a weave that spoke on activation was
-/// refused `CapabilityDenied` under a permission the person had already granted.
-///
-/// WHAT IT IS NOT. It is not a policy hook and it decides nothing: the door has
-/// already committed the operation when it calls, the callback's outcome cannot
-/// refuse it, and nothing here is consulted about whether to admit anything — that
-/// question belongs to `AdmissionPolicy`, two stages earlier, and stays there. It is
-/// not a notification bus either: it is one host's own wiring, handed over at mount,
-/// with no message that can add one.
-///
-/// THE `Mail&` IS THE POINT. The callback runs INSIDE this door's delivery and is
-/// handed that delivery's Mail, which is the standing a host's `main()` does not
-/// have. `delegate_authority` records the door as the caller for diagnostics and is
-/// authorized by possession of the capability, never by being anybody in particular
-/// (GATE-05) — so the host's administrator keeps being the single writer of a
-/// subject's delegated authority; what it gains is a moment early enough to matter.
-///
-/// Both halves are optional. A default-constructed one is the behaviour every host
-/// had before this existed.
+/// Not a policy hook: the operation is already committed and the callback cannot refuse it;
+/// admission is `AdmissionPolicy`'s, earlier. The `Mail&` is this delivery's, and
+/// `delegate_authority` is authorized by the capability, never by who calls (GATE-05). Both
+/// halves are optional.
 struct LifecycleAdoption {
-    /// A freshly committed incarnation, named and identified by the KERNEL — never
-    /// by a message payload — before `zen.Activated` is queued for it. Called for a
-    /// load and for a reload-in-place; a reload keeps its WeaveId, so a host that
-    /// re-installs the same authority is doing the right thing rather than a
-    /// redundant one (new code behind a stable id is still new code).
+    /// A freshly committed incarnation, named and identified by the Kernel, before
+    /// `zen.Activated` is queued for it. Called for a load and for a reload in place: a reload
+    /// keeps its WeaveId, and new code behind it is still new code.
     std::function<void(loom::Mail&, const std::string& name, loom::WeaveId id)> admitted;
 
-    /// `name` has left: unregistered, its library released. Called after the door's
-    /// own success, for `UnloadLibrary` and for `UnloadRole` alike — the second
-    /// resolves the artifact name from the role first, because a host's records are
-    /// kept under the name a person types.
+    /// `name` has left: unregistered, its library released. Called after `UnloadLibrary` and
+    /// `UnloadRole` succeed; for the second the name is resolved from the role first.
     std::function<void(loom::Mail&, const std::string& name)> retired;
 };
 
-/// A Weave whose handlers drive a Kernel. Its authority to *reach* the kernel is
-/// its accept-set being reachable, gated by the *sender's* load capability; its
-/// authority to *answer* is the ordinary Emit<...> grant any weave gets.
+/// A Weave whose handlers drive a Kernel. Reaching it takes the sender's load capability;
+/// answering takes only the ordinary Emit<...> grant.
 class ControlWeave
     : public loom::WeaveBase<ControlWeave, ControlState,
                              loom::Accept<LoadLibrary, ReloadLibrary, UnloadLibrary, UnloadRole,
@@ -238,27 +143,16 @@ class ControlWeave
                              loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo,
                                         loom::Activated>> {
 public:
-    /// The authority is HOST-SUPPLIED WIRING, exactly like the Kernel reference
-    /// beside it: the host decides which weave conducts lifecycle and hands it
-    /// the capability at mount. It is not derivable from the accept set, not
-    /// implied by the grant, and not constructible by any weave — so "who may
-    /// attest an activation" is a decision the host makes once and visibly,
-    /// rather than a property anyone can acquire by learning a shape.
+    /// The lifecycle authority is host-supplied wiring, like the Kernel reference: the host
+    /// decides which weave attests activations and hands it the capability at mount. No weave
+    /// acquires it by learning a shape.
     ControlWeave(Kernel& kernel, loom::LifecycleAuthority authority,
                  LifecycleAdoption adoption = {})
         : kernel_(&kernel), authority_(authority), adoption_(std::move(adoption)) {}
 
-    /// THE MESSAGE-DRIVEN LOAD, AND WHERE ITS AUTHORITY COMES FROM. This spends the
-    /// Kernel's POLICY-MEDIATED `load` deliberately: a load that arrived as a message
-    /// is precisely a load the host did not individually author, so the host's
-    /// admission policy is what decides it (`zen/kernel/admission.hpp`). Before that
-    /// policy existed, this line minted `Grant{}.allow_any()` for anything anyone
-    /// with the load capability could name a path to — the whole of P-WORK-18.
-    ///
-    /// The refusal needs no help from here. `LoadResult::error` already carries the
-    /// policy's own sentence, and it goes back as `zen.Refused` to the asker, by the
-    /// asker's own correlation — so whoever asked learns why, about the request they
-    /// made, and a person reading the console sees the same words the policy wrote.
+    /// A load that arrives as a message is one the host did not write, so it goes through the
+    /// Kernel's policy-mediated `load` (`zen/kernel/admission.hpp`). A refusal carries the
+    /// policy's own sentence back to the asker as `zen.Refused`, under its correlation.
     void on(const LoadLibrary& m, loom::Mail& mail) {
         ++state_.ops;
         if (const char* blocked = activation_block()) {
@@ -267,14 +161,8 @@ public:
         }
         const LoadResult r = kernel_->load(m.name, m.path, m.role);
         if (r.ok) {
-            // The weave is registered, its role (if any) bound, its manifest and
-            // initial state admitted — the incarnation is committed, so the fact
-            // is now true and may be said. Said BEFORE the asker's answer, so the
-            // activation is already queued when the operator hears "loaded".
-            //
-            // AND THE HOST GETS ITS ONE MOMENT FIRST. See LifecycleAdoption: this is
-            // the only point at which a host can install what a person already
-            // approved and have it be in force for the incarnation's first breath.
+            // The incarnation is committed. The host adopts it first (LifecycleAdoption), then
+            // the activation is queued, then the asker hears "loaded".
             adopt(mail, m.name, r.id);
             announce_activation(mail, r.id);
             answer(mail, loom::Result{std::to_string(r.id.value)});
@@ -290,15 +178,11 @@ public:
             return; // the incumbent is never touched: no snapshot, no rebind, no revive
         }
         const ReloadResult r = kernel_->reload_from(m.name, m.path);
-        // `reloaded` is the only success; every other outcome — not loaded, open
-        // failure, the state-schema mismatch, the accepted-contract mismatch, a
-        // refused revive — has already written its own self-contained reason
-        // into `error`. No almost-activated: only the success path speaks.
+        // `reloaded` is the only success; every other outcome has written its own reason into
+        // `error`, and only success is announced.
         if (r.reloaded) {
-            // A reload PRESERVES the logical WeaveId but is still a new code
-            // incarnation, so it earns its own, newer, activation. The id is
-            // resolved from the loaded name after success — the door does not
-            // have to have been told it.
+            // A reload keeps the WeaveId and is still a new incarnation, so it earns its own
+            // activation.
             const loom::WeaveId id = kernel_->weave_id(m.name);
             adopt(mail, m.name, id); // same window, same reason (see LifecycleAdoption)
             announce_activation(mail, id);
@@ -320,10 +204,8 @@ public:
 
     void on(const UnloadRole& m, loom::Mail& mail) {
         ++state_.ops;
-        // ASKED BEFORE THE UNLOAD, because afterwards there is nothing to ask. A host
-        // keeps its records under the artifact NAME a person typed, and the only thing
-        // that can map this role back to that name is the kernel, while the holder is
-        // still loaded.
+        // Resolved before the unload, while the holder is loaded: a host keeps its records
+        // under the artifact name.
         const std::string name = artifact_holding(m.role);
         if (kernel_->unload_role(m.role)) {
             if (!name.empty()) {
@@ -360,24 +242,10 @@ public:
     }
 
 private:
-    /// Why this lineage cannot name another activation, or nullptr if it can.
-    ///
-    /// THE PREFLIGHT, and it runs BEFORE the Kernel is called. The alternative
-    /// ordering is the one that lies: commit the load or reload, *then* discover
-    /// that the promised activation cannot be represented, and leave a freshly
-    /// installed participating incarnation reported as successful while its own
-    /// declared post-commit fact never happened. The door must be able to name an
-    /// activation before it starts an operation that may owe one.
-    ///
-    /// THE ACCEPTED CONSERVATISM, said out loud: at the boundary this refuses
-    /// without first learning whether the candidate would even participate. It
-    /// cannot know — a candidate's accepted schemas are unknown until the Kernel
-    /// inspects or loads it, and calling the Kernel to find out is exactly the
-    /// thing the before-Kernel boundary exists to prevent. So a lineage at the
-    /// limit refuses one final *non-participating* load it could in principle
-    /// have served. That is a deliberate trade: the limit is unreachable by any
-    /// natural operation, and correctness at the boundary is worth more than the
-    /// last load before it.
+    /// Why this lineage cannot name another activation, or nullptr. Checked before the Kernel is
+    /// called, so an operation never commits and then owes an activation it cannot name. At the
+    /// limit this also refuses a load that would not have participated, which cannot be known
+    /// without calling the Kernel.
     const char* activation_block() const {
         if (state_.last_activation < 0) {
             return kActivationInvalid;
@@ -388,11 +256,8 @@ private:
         return nullptr;
     }
 
-    /// The SOLE mutation point for the sequence, and it is total: it refuses
-    /// rather than wrapping, so no arithmetic path here can produce a
-    /// non-positive or reused activation identity. `++` is safe precisely because
-    /// the guard above it has already excluded the only two inputs that make it
-    /// unsafe. Nothing is consumed when nothing can be allocated.
+    /// The one place the sequence advances. It refuses rather than wraps, so no activation
+    /// identity is ever non-positive or reused; nothing is consumed when nothing is allocated.
     std::optional<std::int64_t> next_activation() {
         if (activation_block() != nullptr) {
             return std::nullopt;
@@ -400,58 +265,29 @@ private:
         return ++state_.last_activation;
     }
 
-    /// Tell a freshly committed incarnation that it is live — if, and only if, it
-    /// said it would listen.
-    ///
-    /// PARTICIPATION IS ASKED, NEVER ATTEMPTED. Sending blindly and calling the
-    /// resulting refusal "optional participation" would be a lie in two
-    /// directions: it manufactures refusal noise on the tap for weaves that did
-    /// nothing wrong, and it spends an activation sequence on a conversation that
-    /// never happened. So the accept-set is checked first, and a non-participant
-    /// costs exactly nothing — no message, no refusal, no sequence, no change to
-    /// the operation's own result.
-    ///
-    /// Correlation 0: an activation is an EVENT, not an answer to an ask. Nothing
-    /// is awaited and nothing may be inferred from silence — what a participant
-    /// does with the fact is its own business, and it does not owe the door a
-    /// reply.
+    /// Tell a freshly committed incarnation it is live, if its accept-set says it listens; a
+    /// non-participant costs nothing: no message, no refusal, no sequence. Correlation 0: an
+    /// activation is an event, not an answer, and nothing is owed back.
     void announce_activation(loom::Mail& mail, loom::WeaveId target) {
         if (!target.valid() ||
             !kernel_->accepts(target, loom::Activated::zen_name, loom::Activated::zen_version)) {
             return;
         }
-        // Allocated only now, for an activation that WILL be emitted. Monotonic
-        // within this lineage across snapshot and revival because it lives in
-        // the state — and never reused *because next_activation() refuses rather
-        // than wrapping* when the lineage has no valid continuation, which is the
-        // boundary that makes the word "never" true rather than aspirational.
+        // Allocated only for an activation that will be sent; monotonic across snapshot and
+        // revival because it lives in the state.
         const std::optional<std::int64_t> sequence = next_activation();
         if (!sequence) {
-            // UNREACHABLE TODAY — every handler that gets here preflighted
-            // activation_block() and refused. It is written anyway, and as a
-            // silent nothing rather than a wrap, so that a future reordering
-            // degrades into a visibly missing activation (a load that succeeded
-            // and told nobody) instead of a forged identity on the wire. A gap is
-            // recoverable; a lie about which incarnation this is, is not.
+            // Unreachable while every handler preflights activation_block(); a gap here is
+            // recoverable, a reused identity would not be.
             return;
         }
-        // ATTESTED, not merely sent (LIFE-04). The shape stays an ordinary declared
-        // message and the send stays gated by this door's ordinary grant; what
-        // the authority adds is Loom's word that this activation is a real
-        // lifecycle commit for THIS incarnation and THIS sequence. Before it, a
-        // consumer could check who spoke but not whether that speaker had any
-        // business announcing a lifecycle fact — so any weave granted the shape
-        // could manufacture a first breath for someone else's incarnation.
-        //
-        // The sequence is passed to Loom as well as carried in the payload, and
-        // that redundancy is the point: the consumer compares the two, so an
-        // attestation minted for one activation cannot authenticate another.
+        // Attested, not merely sent (LIFE-04): the send is still gated by the door's grant, and
+        // Loom's word says this is a real commit for this incarnation and this sequence. The
+        // sequence travels in the payload and to Loom, so the consumer can check they agree.
         mail.announce_lifecycle(authority_, target, loom::Activated{*sequence}, *sequence);
     }
 
-    /// Hand the host its one moment (LifecycleAdoption). Guarded rather than
-    /// required: the overwhelming majority of hosts in this tree wire none, and a
-    /// door that insisted on one would make an optional facility mandatory.
+    /// Hand the host its moment (LifecycleAdoption), if it wired one.
     void adopt(loom::Mail& mail, const std::string& name, loom::WeaveId id) {
         if (adoption_.admitted && id.valid()) {
             adoption_.admitted(mail, name, id);
@@ -464,9 +300,7 @@ private:
         }
     }
 
-    /// Which loaded artifact currently holds `role`, or empty. Derived from the
-    /// kernel's own live answers (`loaded()` + `role_of()`), so it cannot disagree
-    /// with what `unload_role` is about to do.
+    /// Which loaded artifact holds `role` now, or empty, from the kernel's live answers.
     std::string artifact_holding(const std::string& role) const {
         if (role.empty()) {
             return {};
@@ -479,10 +313,9 @@ private:
         return {};
     }
 
-    /// Answer the asker: reply_to if given, else the bus-stamped sender, echoing
-    /// the request's correlation. A request with neither (a root fire-and-forget)
-    /// has nowhere to answer — the asker chose not to listen. Mirrors the poke
-    /// doors' answer path exactly.
+    /// Reply to the asker, reply_to if given or else the stamped sender, echoing the request's
+    /// correlation. An ordinary send, not an authenticated answer. A request with neither address
+    /// gets no reply.
     template <class Answer>
     void answer(loom::Mail& mail, const Answer& a) {
         const loom::WeaveId to = mail.reply_to().valid() ? mail.reply_to() : mail.sender();
@@ -497,23 +330,18 @@ private:
     LifecycleAdoption adoption_;         ///< host-supplied; may be empty (see the type)
 };
 
-/// Register the control Weave on `bus` and return its id. mount() derives its
-/// grant from the declared Emit<...> — the three standard reply shapes — so the
-/// door can answer without any host-assembled authority.
-///
-/// The lifecycle authority is handed over HERE, by the host, at the one moment
-/// the host is choosing which weave sits on the kernel's operations. A different
-/// operator wired by a different host would need the host to hand it one too;
-/// nothing about accepting the control shapes confers it.
+/// Register the control Weave on `bus` and return its id. Its grant comes from its declared
+/// Emit<...>, the replies and zen.Activated. The lifecycle authority is handed over here, by the
+/// host choosing which weave sits on the kernel's operations; accepting the control shapes
+/// confers none.
 inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus,
                                    LifecycleAdoption adoption = {}) {
     return loom::mount<ControlWeave>(bus, kernel, loom::host_lifecycle_authority(bus),
                                      std::move(adoption));
 }
 
-/// The grant that lets a Weave drive the kernel: permission to send the six
-/// control shapes to the control Weave, and only to it. This is the dangerous
-/// grant — it is deliberately target-scoped, never allow_to_any.
+/// The grant that lets a Weave drive the kernel: the six control shapes, to the control Weave
+/// and nowhere else. The dangerous grant, so it is target-scoped, never allow_to_any.
 inline loom::Grant load_capability(loom::WeaveId control) {
     loom::Grant g;
     g.allow(LoadLibrary::zen_name, LoadLibrary::zen_version, control);

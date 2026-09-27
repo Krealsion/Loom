@@ -252,8 +252,8 @@ For an appended field **or a changed existing signature**:
    at load and at reload, where a refused candidate must leave the incumbent
    untouched. The manual previous/future-version fixtures pin the gate's
    ordering; a current image relabeled old does not replace evidence from an
-   actual pre-change artifact. The version notes in `abi.h` say what each
-   break carried.
+   actual pre-change artifact. The opening of this page says what each break
+   carried, and a new break adds its paragraph there.
 6. **State what the bus records for every status of a new callback slot** —
    including the one that is neither OK nor an error — and witness each with a
    loaded image whose callback answers it. A slot whose status the host

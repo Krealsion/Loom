@@ -4,17 +4,11 @@
 #ifndef ZEN_WEAVE_WEAVE_HPP
 #define ZEN_WEAVE_WEAVE_HPP
 
-// Low-ceremony Weave-making (the authoring layer; the raw contract it sugars
-// is zen/switchboard/weave_contract.hpp, and zen/weave.hpp is the umbrella).
-// A maker writes only their state struct, their message structs (as
-// ZEN_SHAPEs), and what to do per message — a typed handler
-// `void on(const Ping&, Mail&)`. Everything else is derived:
-//   - accepted_schemas() from the Accept<...> list (named once),
-//   - snapshot()/revive() from the State struct,
-//   - dispatch: a gated incoming Value is matched by content-id, converted to the
-//     right struct, and handed to the matching on(); the conversion happens only
-//     after the gate has blessed the Value.
-// No stringly-typed set(), no hand-built schema, no hand-written snapshot/revive.
+// The weave-authoring layer, over the raw contract in zen/switchboard/weave_contract.hpp
+// (zen/weave.hpp is the umbrella). A maker writes a state struct, message structs (ZEN_SHAPEs)
+// and a typed handler per message, `void on(const Ping&, Mail&)`. The accept-set comes from
+// the Accept<...> list, snapshot and revive from the State struct, and dispatch converts a
+// Value to its struct only after the gate has admitted it. docs/guides/writing-a-weave.md
 
 #include <zen/weave/describe.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
@@ -37,65 +31,37 @@
 
 namespace loom {
 
-/// The shapes a Weave accepts (its doors) and the shapes it declares it emits.
+/// The shapes a Weave accepts (its doors) and the shapes it declares it emits. Both register
+/// their definitions at mount, with everything they nest, so two weaves' `Pong v1` are
+/// compared when the second mounts, natively and across a library seam.
 ///
-/// BOTH LISTS REGISTER THEIR DEFINITIONS AT MOUNT, with every component they
-/// nest, in one transaction with the state shape and the claim-set: that is how
-/// a producer's `Pong v1` and an acceptor's `Pong v1` are compared at the door
-/// rather than at the first refused delivery, natively and across a library seam
-/// alike (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
-///
-/// What `Emit<...>` does NOT do: it grants nothing (a trusted `mount<>` derives
-/// the weave's send rules from it, `mount_granted` ignores it for authority, and
-/// a loaded artifact's grant is the host's decision either way), and it is not
-/// an exhaustive send list — publishing a shape absent from it is not refused
-/// for that reason, which keeps a router or forwarder that speaks shapes chosen
-/// at runtime authorable. The emit-enforcement seam stays open, see `Mail`.
+/// `Emit<...>` grants nothing (a trusted `mount<>` derives send rules from it; `mount_granted`
+/// and a loaded artifact's host decide authority themselves), and it is not an exhaustive send
+/// list: an undeclared shape is not refused for that reason.
+/// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
 template <class... S>
 struct Accept {};
 template <class... S>
 struct Emit {};
 
-/// THE SENSES A WEAVE DECLARES IT CAN CLAIM (SENSE-04) — its claim-set.
-///
-/// A third list, because a claim is neither of the other two: `Accept<...>` is
-/// what may be DELIVERED here, `Emit<...>` is what may be SENT from here, and
-/// `Claims<...>` is what this weave may say it currently observes to be so.
-/// Reusing `Emit<...>` was the obvious shortcut and was rejected twice over — a
-/// Sense is not an emitted message, and a shape declared as sendable would say
-/// nothing about what this weave may CLAIM.
-///
-/// All three lists register at mount (so every declared shape resolves, and a
-/// consumer can ask what this weave hears, says and can claim before anything
-/// has happened). What is particular to this one is that it is ENFORCED at the
-/// claim doors: claiming a shape that is not in this list is refused
-/// (`SenseRefusal::Undeclared`), where `Emit<...>` gates no send.
+/// The Senses a weave declares it can claim: its claim-set (SENSE-04). `Accept<...>` is what
+/// may be delivered here, `Emit<...>` what may be sent from here, and `Claims<...>` what this
+/// weave may say it observes. Registered at mount like the others, and, unlike `Emit<...>`,
+/// enforced: claiming an undeclared shape is refused `SenseRefusal::Undeclared`.
 template <class... S>
 struct Claims {};
 
-/// The Switchboard's fixed lifecycle grammar, typed. (Not a registered shape —
-/// it targets lifecycle_policy_schema() directly.)
+/// The Switchboard's lifecycle-policy grammar, typed. Not a registered shape: it targets
+/// lifecycle_policy_schema() directly.
 struct LifecyclePolicy {
     std::int64_t max_reloads = 4;
     bool revive_from_last_good = true;
 };
 
-/// The typed send context handed to a handler: it carries the inbound envelope
-/// and lets a Weave reply/send/publish with plain structs — no Value, no Cell,
-/// no Message construction.
-///
-/// Mail::send/reply/publish are the **sole** outbound path for a woven Weave's
-/// MAKER code. That makes Mail the single reserved chokepoint where
-/// emit-enforcement (gating a sent T against the Weave's declared Emit<...>)
-/// will one day live. It is deliberately NOT enforced now: it is not yet known
-/// whether every Weave's emit-set is statically enumerable (a router/forwarder
-/// may emit shapes chosen at runtime), so closing that gate before its shape is
-/// proven would couple the substrate to a guess. The declaration REGISTERS the
-/// shapes it names (vocabulary agreed at mount, see `Emit` above) and is kept
-/// honest by test; the send gate is left off with intent. (The construction layer's
-/// own poke answers go directly through the bus — substrate machinery, not a
-/// maker emission — so a future Mail emit-gate would not, and should not,
-/// govern them; their authority is still the grant, see allow_poke_answers.)
+/// The typed context a handler receives: the inbound envelope, and replies, sends and publishes
+/// of plain structs. It is the one outbound path a woven weave's own code takes. It does not
+/// check a send against `Emit<...>`: a router may emit shapes chosen at runtime, and that seam
+/// stays open (docs/decisions/declared-vocabulary-is-agreed-at-admission.md).
 class Mail {
 public:
     Mail(loom::Bus& bus, const loom::Message& in, loom::WeaveId self)
@@ -122,8 +88,8 @@ public:
     std::size_t publish(const T& msg, std::uint64_t correlation = 0) {
         return bus_.publish(loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
     }
-    /// Send `msg` to whichever Weave holds `role` (resolved at delivery). The grant
-    /// must permit the shape to that role (Grant::allow_to_role); reload-stable.
+    /// Send `msg` to whichever Weave holds `role`, resolved at delivery. The grant must permit
+    /// the shape to that role (Grant::allow_to_role).
     template <class T>
     loom::Ticket send_to_role(std::string_view role, const T& msg,
                                  std::uint64_t correlation = 0) {
@@ -132,42 +98,18 @@ public:
     }
 
     // ---- deliberate office authorship (MSG-07) ------------------------------
-    //
-    // THE LAW: a weave may hold an office and still speak personally. Holding is
-    // never speaking-for: `mail.send(...)` from a role holder arrives as
-    // personal speech, always. Speaking AS the office is one deliberate,
-    // per-statement act:
+    // Holding an office is never speaking for it: `mail.send(...)` from a holder is personal
+    // speech. Speaking as the office is a deliberate act per statement:
     //
     //     mail.as_role("matchmaker").send(player, MatchCreated{server});
     //     mail.as_role("worker.a").send_to_role("dispatcher", JobDone{...});
-    //     mail.as_role("worker.a").publish(WorkerOpen{...});
     //
-    // and Loom verifies AT THAT MOMENT that this weave holds the office, then
-    // carries the fact as delivery provenance the recipient reads back with
-    // `authored_from_role()`. The grammar keeps the two roles impossible to
-    // confuse: who I speak AS lives in as_role(), where I speak TO lives in the
-    // same verb it always did.
+    // Loom verifies the office then, and the recipient reads it with `authored_from_role()`.
 
-    /// The office view: this weave, deliberately speaking as `role` — for
-    /// exactly the statements made through it, each freshly verified.
-    ///
-    /// IT IS SYNTAX, NOT AUTHORITY. The view carries a role NAME and nothing
-    /// else — no verification result, no capability — so every send/publish
-    /// through it performs the full authorship request, membership check
-    /// included, exactly as if spelled longhand. Role tenure can change
-    /// between two statements; each statement answers for itself, at the bus.
-    ///
-    /// The type still refuses to be a convenient thing to keep: it cannot be
-    /// copied or passed onward, and its verbs are rvalue-qualified, so the
-    /// intended spelling is the one-expression form —
-    ///
-    ///     mail.as_role("worker.a").publish(WorkerOpen{...});
-    ///
-    /// A view wrestled into a named variable has no usable verbs without a
-    /// deliberate std::move — and even that gains nothing, because there is
-    /// nothing stored to gain: the check is fresh either way. (It also holds a
-    /// reference to this per-delivery Mail, which is the other reason not to
-    /// keep one.)
+    /// This weave speaking as `role`, for the statements made through the view. It carries a
+    /// name and no authority: every statement is verified at the bus. Not copyable or movable,
+    /// with rvalue-qualified verbs, so it is used in one expression:
+    /// `mail.as_role("worker.a").publish(WorkerOpen{...});`
     class Office {
     public:
         Office(const Office&) = delete;
@@ -175,10 +117,8 @@ public:
         Office(Office&&) = delete;
         Office& operator=(Office&&) = delete;
 
-        /// Office-authored direct send. An invalid Ticket means the authorship
-        /// was REFUSED — this weave does not hold the office — and nothing was
-        /// queued (the refusal is on the tap as RoleAuthorshipDenied). A valid
-        /// Ticket is a queued delivery, subject to every ordinary delivery law.
+        /// Office-authored direct send. An invalid Ticket means authorship was refused (this weave
+        /// does not hold the office; `RoleAuthorshipDenied` on the tap) and nothing was queued.
         template <class T>
         loom::Ticket send(loom::WeaveId target, const T& msg,
                           std::uint64_t correlation = 0) && {
@@ -187,9 +127,8 @@ public:
                                              correlation));
         }
 
-        /// Office-authored send to whoever holds `to_role`. The authored office
-        /// and the destination are separate facts and stay separate: authorship
-        /// is verified now, the destination resolves at delivery.
+        /// Office-authored send to whoever holds `to_role`: authorship is verified now, the
+        /// destination resolves at delivery.
         template <class T>
         loom::Ticket send_to_role(std::string_view to_role, const T& msg,
                                   std::uint64_t correlation = 0) && {
@@ -198,24 +137,17 @@ public:
                                               correlation));
         }
 
-        /// Office-authored publication. `authored` says whether the office
-        /// spoke at all; `recipients` is the fanout count only when it did —
-        /// so a denied publication can never be mistaken for an authorized one
-        /// that found no listeners.
+        /// Office-authored publication. `authored` says whether the office spoke; `recipients`
+        /// counts the fanout only when it did.
         template <class T>
         loom::OfficePublication publish(const T& msg, std::uint64_t correlation = 0) && {
             return mail_.bus_.office_publish(
                 role_, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{}, correlation));
         }
 
-        /// CLAIM `observation` DELIBERATELY AS THIS OFFICE (SENSE-04) — the same
-        /// law as office speech, in the same grammar, because it IS the same
-        /// law: holding the office is not claiming as the office.
-        ///
-        /// The claim-set must declare the shape, and this weave must hold the
-        /// office at this moment. A refusal stores nothing and is never
-        /// downgraded to a personal claim — the two are different keys, and
-        /// conflating them is exactly what MSG-04/MSG-07 refuse for speech.
+        /// Claim `observation` as this office (SENSE-04). The claim-set must declare the shape
+        /// and this weave must hold the office now. A refusal stores nothing, and is never made a
+        /// personal claim instead.
         template <class T>
         loom::SenseClaimResult claim(const T& observation) && {
             return mail_.bus_.office_claim(role_, to_value(observation));
@@ -229,102 +161,63 @@ public:
         std::string_view role_;
     };
 
-    /// Deliberately speak as `role` for the statement(s) chained onto the
-    /// result. Verification happens per statement, at the bus — this call
-    /// itself checks nothing and grants nothing.
+    /// Speak as `role` for the statements chained onto the result. This call checks and grants
+    /// nothing; each statement is verified at the bus.
     Office as_role(std::string_view role) { return Office(*this, role); }
 
-    // ---- Senses (SENSE-01..05) ----------------------------------------------
+    // ---- Senses (SENSE-01..05; docs/reference/senses.md) --------------------
 
-    /// CLAIM `observation` PERSONALLY — "this is what I most recently claim is
-    /// so". The shape must be declared in this weave's `Claims<...>`.
-    ///
-    /// VISIBLE IMMEDIATELY, at this call. Nothing waits for the handler to
-    /// return; there is no settlement step. A reader delivered later in FIFO
-    /// order observes this claim, and one delivered earlier observed the
-    /// previous one — which is the whole ordering guarantee, and it comes free
-    /// from single-threaded dispatch rather than from anything this repository
-    /// does.
-    ///
-    /// A personal claim by a role holder is NOT an office claim. Use
-    /// `as_role(R).claim(...)` to make one deliberately.
+    /// Claim `observation` personally: "this is what I most recently claim is so". `T` must be
+    /// in this weave's `Claims<...>`. Visible from this call on, so a reader dispatched later
+    /// sees it. A role holder's personal claim is not an office claim: use
+    /// `as_role(R).claim(...)`.
     template <class T>
     loom::SenseClaimResult claim(const T& observation) {
         return bus_.claim(to_value(observation));
     }
 
-    /// THE LATEST CLAIM `author` MADE PERSONALLY of shape `T`, read
-    /// synchronously — no ask, no answer, no queue.
-    ///
-    /// The value is a COPY this caller owns. There is no reference into the
-    /// claimant anywhere in the result, so a reader cannot mutate a producer
-    /// through it; mutation remains ordinary Loom traffic.
-    ///
-    /// A claim is not prophecy: this is the latest claim Loom has accepted from
-    /// that author, and queued work may already make it stale with respect to
-    /// what happens next. Loom will not apply queued work speculatively to make
-    /// it look current.
+    /// The latest claim `author` made personally of shape `T`, read synchronously: a copy the
+    /// caller owns, with no reference into the claimant. The latest claim Loom accepted, which
+    /// queued work may already make stale; nothing is applied speculatively.
     template <class T>
     loom::SenseReading latest(loom::WeaveId author) {
         return bus_.observe(author, schema_of<T>());
     }
 
-    /// THE LATEST CLAIM MADE AS THE OFFICE `role`.
-    ///
-    /// After a replacement moves the role, this still returns the PREDECESSOR's
-    /// claim, stamped `by.author = predecessor` and
-    /// `by.office_holder_is_current = false` — never relabelled as the
-    /// successor's, and the successor is not considered to have claimed anything
-    /// until it deliberately does. Ask `by.office_claim_is_stale()`; the
-    /// stricter reading is `if (r && r.by.office_holder_is_current)`.
+    /// The latest claim made as the office `role`. After the role moves this is still the
+    /// predecessor's, with `by.office_holder_is_current = false`; the successor has claimed
+    /// nothing until it does. The strict reading is `if (r && r.by.office_holder_is_current)`.
     template <class T>
     loom::SenseReading latest_from_office(std::string_view role) {
         return bus_.observe_office(role, schema_of<T>());
     }
 
-    /// Was THIS delivery deliberately authored as `role`, with Loom having
-    /// verified at the authorship moment that the sender held it? False for
-    /// personal speech from the very same holder — that is the entire point —
-    /// and false for empty `role`, which no delivery can be authored as.
-    ///
-    /// A historical fact about the statement, not about now: the office may
-    /// have moved since. It composes with, and never replaces, the ordinary
-    /// facts (`sender()`, `answers_ask()`): trust the OFFICE through this,
-    /// trust the exact WEAVE through the stamp.
+    /// Was this delivery deliberately authored as `role`, verified when it was authored? False
+    /// for the same holder's personal speech, and for an empty `role`. A fact about the
+    /// statement, not about now. Trust the office through this, the exact weave through
+    /// `sender()`.
     bool authored_from_role(std::string_view role) const {
         return in_.provenance.authored_from_role(role);
     }
 
-    /// The office this delivery was deliberately authored as — empty for
-    /// personal speech. Diagnostics-friendly form of the same stamped fact;
-    /// empty can never name a real office (an empty role is not bindable).
+    /// The office this delivery was deliberately authored as; empty for personal speech.
     std::string_view authored_role() const { return in_.provenance.authored_role(); }
 
     // ---- authenticated lifecycle conversation (ANS-01, LIFE-04) -------------
-    //
-    // THE LAW: a role tells Loom WHERE to deliver an ask; an authenticated
-    // conversation tells the asker WHO actually received it and who may answer.
+    // A role says where an ask is delivered; an authenticated conversation says who received it
+    // and who may answer.
 
-    /// Answer the message being handled — once, to whoever sent it, carrying
-    /// Loom's word that this is that answer.
-    ///
-    /// The recipient and the correlation are Loom's, not this weave's: an answer
-    /// cannot be aimed elsewhere or relabelled. Answering twice, or answering a
-    /// delivery that came from a root, is refused visibly rather than silently
-    /// downgraded to an ordinary send — a caller that meant to answer should not
-    /// discover it merely spoke.
+    /// Answer the message being handled, once, to its sender, with Loom's word that this is the
+    /// answer. Loom sets the recipient and correlation. Answering twice, or a root's delivery,
+    /// is refused visibly, never sent as ordinary speech instead.
     template <class T>
     loom::Ticket answer(const T& msg) {
         return bus_.answer(loom::Message(to_value(msg), self_));
     }
 
-    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (ANS-02) — for the responder whose
-    /// answer depends on messages it has not received yet.
-    ///
-    /// This CONVERTS the immediate opportunity rather than adding to it: after a
-    /// successful deferral `answer()` provides nothing and a second
-    /// `defer_answer()` fails, so one request still grants one answer. Store the
-    /// result, return from the handler, and spend it from a later handler:
+    /// Take the answer right away with you (ANS-02), for a responder whose answer depends on
+    /// messages not yet received. It converts the one opportunity: afterwards `answer()` provides
+    /// nothing and a second `defer_answer()` fails.
     ///
     ///     void on(const Prepare&, loom::Mail& mail) {
     ///         pending_ = mail.defer_answer();
@@ -334,28 +227,23 @@ public:
     ///         answer_deferred(pending_, mail, Prepared{c.result});
     ///     }
     ///
-    /// An invalid capability comes back when this delivery had no answer
-    /// authority to convert.
+    /// Invalid when this delivery had no answer authority to convert.
     loom::DeferredAnswer defer_answer() { return bus_.make_deferred_answer(); }
 
-    /// Is THIS delivery the one authorized answer to a request this weave sent?
-    ///
-    /// A consumer still owes the ordinary obligation of matching the correlation
-    /// against its own outstanding ask: this says the answer is genuine, not that
-    /// it is the one you are waiting for.
+    /// Is this delivery the authorized answer to a request this weave sent? It says the answer is
+    /// genuine, not that it is the one awaited: match the correlation against your own ask.
     bool answers_ask() const { return in_.provenance.answers_ask(); }
 
-    /// Does Loom attest a lifecycle commit for the incarnation receiving this?
-    /// (Bound to this target by Loom; a proof for another incarnation never
-    /// arrives here wearing this flag.)
+    /// Does Loom attest a lifecycle commit for the incarnation receiving this? Bound to this
+    /// target: an attestation for another incarnation never arrives with this flag.
     bool lifecycle_attested() const { return in_.provenance.lifecycle_activation(); }
 
-    /// The sequence Loom attested — to be compared against the payload's own, so
-    /// an attestation issued for one activation cannot authenticate another.
+    /// The sequence Loom attested, to compare with the payload's own, so an attestation for one
+    /// activation cannot authenticate another.
     std::int64_t attested_sequence() const { return in_.provenance.attested_sequence(); }
 
-    /// Announce a lifecycle commit for `target`, carrying Loom's attestation.
-    /// Requires the host-granted capability; still gated by the ordinary grant.
+    /// Announce a lifecycle commit for `target` with Loom's attestation. Needs the host-granted
+    /// capability, and is still gated by the ordinary grant.
     template <class T>
     loom::Ticket announce_lifecycle(const loom::LifecycleAuthority& authority,
                                     loom::WeaveId target, const T& msg, std::int64_t sequence) {
@@ -365,46 +253,38 @@ public:
                                        sequence);
     }
 
-    /// REPLACE THE DELEGATED LIVE AUTHORITY of the subject this capability
-    /// governs (GATE-05). Grant, revoke, widen and narrow are this one call.
-    ///
-    /// Available from inside an ordinary handler, on purpose: an administrator
-    /// decides policy the way every other weave decides anything — because a
-    /// message arrived — and this is what it does about it. Nothing is sent, and
-    /// the governed subject stays the sender of whatever it goes on to retry.
+    /// Replace the delegated live authority of the subject this capability governs (GATE-05):
+    /// grant, revoke, widen and narrow are this one call, made from an ordinary handler. Nothing
+    /// is sent; the subject stays the sender of whatever it retries.
     loom::GrantChange delegate_authority(const loom::GrantAuthority& authority,
                                          loom::LiveAuthority requested) {
         return bus_.delegate_authority(authority, std::move(requested));
     }
 
-    /// What that subject's baseline, delegated and effective authority currently
-    /// are — as the bus itself will read them, so an administrator never needs a
-    /// second map that only believes it agrees with the Kernel.
+    /// The subject's baseline, delegated and effective authority, as the bus itself reads them.
     loom::AuthorityView describe_authority(const loom::GrantAuthority& authority) {
         return bus_.describe_authority(authority);
     }
 
-    // ---- Joint publication (docs/reference/joint-publication.md) --------------
-    //
-    // See zen/switchboard/sense.hpp. A CLAIMANT offers the next value of a claim
-    // it declared, for the exact operation an operator named to it; an OPERATOR
-    // holding a host-minted `JointAuthority` binds, commits, cancels, reads and
-    // releases. Every verb is authenticated by the bus against the live delivery
-    // this Mail is. A loaded weave can offer; its operator verbs are refused
-    // `NoLiveDelivery` (loaded coordination is not carried across the ABI).
+    // ---- Joint publication -----------------------------------------------------
+    // A claimant offers the next value of a claim it declared, for the operation an operator
+    // named; an operator holding a host-minted `JointAuthority` binds, commits, cancels, reads
+    // and releases. The bus authenticates each verb against this Mail's live delivery. A loaded
+    // weave can offer; its operator verbs are refused `NoLiveDelivery`.
+    // docs/reference/joint-publication.md
 
-    /// CLAIMANT: offer `next` as my key's value for `op`. Not published here.
+    /// Claimant: offer `next` as my key's value for `op`; nothing is published yet.
     template <class T>
     loom::JointResult offer(std::uint64_t op, const T& next) {
         return bus_.offer_claim(op, to_value(next));
     }
 
-    /// OPERATOR: bind the exact claimants and revisions of `keys`.
+    /// Operator: bind the exact claimants and revisions of `keys`.
     loom::JointBegin begin_joint(const loom::JointAuthority& authority,
                                  std::vector<loom::ClaimKey> keys) {
         return bus_.begin_joint(authority, std::move(keys));
     }
-    /// OPERATOR: publish; `ok` is the commitment and nothing else is.
+    /// Operator: publish. `ok` is the commitment, and nothing else is.
     loom::JointResult commit_joint(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.commit_joint(authority, op);
     }
@@ -414,8 +294,8 @@ public:
     loom::JointStatus joint_status(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.joint_status(authority, op);
     }
-    /// OPERATOR: retire a terminal record whose outcome this weave has consumed; the
-    /// operation reads Missing afterwards and its slot is free (see bus.hpp).
+    /// Operator: retire a terminal record this weave has consumed; the operation then reads
+    /// Missing and its slot is free.
     loom::JointResult release_joint(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.release_joint(authority, op);
     }
@@ -426,8 +306,8 @@ private:
     loom::WeaveId self_;
 };
 
-/// Name one latest-claim key the way an operator binds it — by the exact weave,
-/// or by the office whose holder the bus resolves and binds at begin.
+/// Name one latest-claim key as an operator binds it: by the exact weave, or by the office whose
+/// holder the bus resolves at begin.
 template <class T>
 loom::ClaimKey claim_key(loom::WeaveId claimant) {
     const std::shared_ptr<const loom::Schema> s = schema_of<T>();
@@ -439,50 +319,36 @@ loom::ClaimKey claim_key(std::string_view role) {
     return loom::ClaimKey{loom::WeaveId{}, std::string(role), s->name(), s->version()};
 }
 
-/// Spend a deferred answer, or abandon it. Free functions rather than members of
-/// `DeferredAnswer` because the capability lives in `switchboard/message.hpp`,
-/// below the maker layer, and must not learn about `Mail` or `to_value` to be
-/// spendable — the shape-to-Value step is the maker layer's business.
-///
-/// THE CURRENT `Mail` IS THE SECOND HALF OF THE CHECK, not a convenience. It is
-/// what keeps a stored capability from becoming an ambient root-send door: the bus
-/// verifies that the weave speaking now IS the exact incarnation that earned the
-/// right, and refuses otherwise.
-///
-/// What it does NOT verify — deliberately — is that a delivery is in progress.
-/// `answer()` does, and that is how a stale `Bus&` is caught there; here,
-/// outliving the delivery is the entire feature, so there is nothing left to
-/// compare against. The identity of the speaker is the whole check.
+/// Spend a deferred answer, or abandon it. Free functions because `DeferredAnswer` lives
+/// below the authoring layer and knows nothing of `Mail`. The current `Mail` is half the
+/// check: the bus refuses unless the weave speaking now is the exact incarnation that earned
+/// the right. Unlike `answer()`, no delivery need be in progress, since outliving the delivery
+/// is the point.
 template <class T>
 loom::Ticket answer_deferred(const loom::DeferredAnswer& pending, Mail& mail, const T& msg) {
     return mail.bus().spend_deferred(pending, loom::Message(to_value(msg)));
 }
 
-/// Abandon it. Silent to the requester in V1 (there is no cancellation
-/// vocabulary); the bus-side slot is reclaimed at once rather than waiting for
-/// the respondent to die.
+/// Abandon it. The requester is not told (there is no cancellation vocabulary); the bus
+/// reclaims the slot at once.
 inline void release_deferred(const loom::DeferredAnswer& pending, Mail& mail) {
     mail.bus().release_deferred(pending);
 }
 
-/// CRTP base. A Weave is:
+/// The CRTP base. A Weave is
 ///   class Node : public WeaveBase<Node, Counter, Accept<Ping>, Emit<Pong>> {
 ///       void on(const Ping&, loom::Mail&) { ... }   // one per accepted shape
 ///   };
-/// State is a ZEN_SHAPE; the protected `state_` is the live state.
+/// with a ZEN_SHAPE State; the protected `state_` is the live state.
 template <class Self, class State, class AcceptList, class EmitList = Emit<>,
           class ClaimList = Claims<>>
 class WeaveBase;
 
 template <class Self, class State, class... A, class... E, class... C>
 class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>> : public loom::Weave {
-    // The zen.Poke* protocol shapes are the construction layer's own doors:
-    // every woven Weave answers them from its declared access model, and the
-    // maker cannot intercept them — which is what makes an answered structure
-    // trustworthy (a WeaveBase weave cannot lie about what it is). Listing one in
-    // Accept<...> would declare a handler that can never fire. The is_base_of
-    // terms also reject an inheriting alias (`struct D : PokeDescribe {}`), whose
-    // derived schema shares the protocol content-id.
+    // The zen.Poke* shapes are the construction layer's doors, answered from the declared
+    // access model so a woven Weave cannot misreport its structure; one listed in Accept<...>
+    // could never fire. The is_base_of terms reject a derived alias sharing the content id.
     static_assert((!is_poke_protocol_shape<A> && ...) &&
                       (!std::is_base_of_v<PokeDescribe, A> && ...) &&
                       (!std::is_base_of_v<PokeRead, A> && ...) &&
@@ -491,29 +357,18 @@ class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>> : public lo
                   "loom: the zen.Poke* protocol shapes are answered by the construction layer; "
                   "do not list them in Accept<...>");
 
-    // zen.DescribeAccepted is the same kind of door for the same reason, one
-    // subject over: it is answered from THIS class's accepted_schemas(), so a
-    // maker who could intercept it could answer with a vocabulary the gate does
-    // not enforce — the exact lie the poke rule above exists to prevent.
+    // zen.DescribeAccepted is answered from this class's accepted_schemas(); a maker who could
+    // intercept it could describe a vocabulary the gate does not enforce.
     static_assert((!std::is_same_v<DescribeAccepted, A> && ...) &&
                       (!std::is_base_of_v<DescribeAccepted, A> && ...),
                   "loom: zen.DescribeAccepted is answered by the construction layer from your "
                   "declared accept-set; do not list it in Accept<...>");
 
 public:
-    /// The maker's declared doors plus the five universal substrate doors: the
-    /// four poke doors (the inspect-the-structure floor — every woven Weave is
-    /// inspectable) and the self-description door (every woven Weave can say
-    /// what it accepts). `final`: a maker uses on()-handlers, never a
-    /// hand-rolled accept-set, and making this non-overridable is what keeps the
-    /// substrate doors honestly advertised (a weave that wants raw control
-    /// implements loom::Weave directly, and then transparently advertises no
-    /// doors it will not answer).
-    ///
-    /// THIS VECTOR IS THE ONE ACCEPTANCE TRUTH. The Switchboard copies it into
-    /// the record it matches every delivery against, and the self-description
-    /// door answers from it — one store, read twice, so a described vocabulary
-    /// and an enforced one cannot drift apart.
+    /// The maker's declared doors plus five substrate doors: four poke doors (every woven Weave
+    /// can be inspected) and the self-description door. `final`, so the substrate doors are
+    /// always truthfully advertised. The Switchboard matches deliveries against this vector and
+    /// the self-description door answers from it, so the two cannot differ.
     std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const final {
         std::vector<std::shared_ptr<const loom::Schema>> out{schema_of<A>()...};
         for (auto& s : poke_door_schemas()) {
@@ -525,22 +380,15 @@ public:
         return out;
     }
 
-    /// The shapes this Weave declares it emits — the maker's `Emit<...>` alone,
-    /// never the construction layer's own answers (those are granted by mount(),
-    /// not declared by the maker). Registered at mount by definition, with the
-    /// accept-set, so a divergent definition under a published (name, version)
-    /// refuses the registration rather than the first delivery. `final` for the
-    /// same reason the accept-set is: a woven weave must not be able to declare
-    /// one emit-set and register another. Not a send gate (see `Emit`).
+    /// The shapes this Weave declares it emits: the maker's `Emit<...>`, never the construction
+    /// layer's answers. Registered at mount with the accept-set, so a divergent definition
+    /// refuses registration. `final`, like the accept-set; not a send gate.
     std::vector<std::shared_ptr<const loom::Schema>> emitted_schemas() const final {
         return {schema_of<E>()...};
     }
 
-    /// The Senses this Weave declares it can claim (SENSE-04). Unlike the emit-set
-    /// this one is real: registered at mount, answerable as discovery, and
-    /// checked by the claim doors. `final` for the same reason the accept-set is
-    /// — a woven weave must not be able to advertise one claim-set and claim from
-    /// another.
+    /// The Senses this Weave declares it can claim (SENSE-04): registered at mount, answerable
+    /// as discovery, and checked by the claim doors. `final`, like the accept-set.
     std::vector<std::shared_ptr<const loom::Schema>> claimed_schemas() const final {
         return {schema_of<C>()...};
     }
@@ -557,32 +405,19 @@ public:
     }
 
     void handle(const loom::Message& in, loom::Bus& bus) final {
-        // `final` is load-bearing, not tidiness: the Switchboard dispatches every
-        // delivery through the loom::Weave vtable, so if a Self subclass could
-        // override handle() it would shadow this and bypass try_poke — answering
-        // pokes however it liked (or not at all). Sealing it makes "a WeaveBase
-        // weave answers its poke doors truthfully" a fact, not a hope. (A maker
-        // wanting custom dispatch implements loom::Weave directly; that weave
-        // simply advertises no poke doors — transparent, not a lie.)
-        //
-        // Caught here (Self is complete by the time this body is instantiated):
-        // a bare ZEN_EXPOSE();/ZEN_HIDE(); misplaced in the weave class instead
-        // of the State struct silently no-ops — a fail-open for HIDE. Refuse it.
+        // `final`: dispatch goes through the loom::Weave vtable, so an override would bypass
+        // the poke doors. A maker wanting its own dispatch implements loom::Weave directly and
+        // advertises no poke doors. A bare ZEN_EXPOSE(); or ZEN_HIDE(); in the weave class
+        // instead of the State struct would do nothing, and failing open for HIDE is refused.
         static_assert(!(has_whole_state_tag<Self>() && !has_whole_state_tag<State>()),
                       "loom: a bare ZEN_EXPOSE();/ZEN_HIDE(); belongs inside the State struct "
                       "(the ZEN_SHAPE type), not the weave class — it is read from the state type");
-        // The substrate's poke doors are answered here, before maker dispatch,
-        // from the state shape's declared access model (see poke.hpp).
+        // The poke doors are answered before maker dispatch, from the state's access model.
         Self* self = static_cast<Self*>(this);
         if (const PokeOutcome poked = try_poke(in, bus); poked != PokeOutcome::NotAPoke) {
-            // A SUBSTRATE DOOR THAT CHANGED THE MAKER'S STATE IS A DELIVERY THAT
-            // CHANGED THE MAKER'S STATE (docs/reference/senses.md#authority). A
-            // successful zen.PokeWrite or zen.PokeResetState wrote `state_` from outside
-            // every handler, so a weave that derives a claim or a mirror from its state
-            // must hear the end of THIS delivery too, or its claim stands behind what a
-            // poker wrote and an operation bound to the old revision commits over it.
-            // Exactly the doors that mutated: a describe, a read, a refused write, a
-            // refused reset and a bad literal changed nothing and invalidate nothing.
+            // A poke that wrote the state changed it like a delivery, so the maker's
+            // end-of-delivery hook runs; a read, a describe or a refused write does not
+            // (docs/reference/senses.md#authority).
             if (poked == PokeOutcome::Mutated) {
                 if constexpr (requires(Self* s, Mail& m) { s->after_delivery(m); }) {
                     Mail mail(bus, in, self_);
@@ -591,19 +426,14 @@ public:
             }
             return;
         }
-        // The self-description door, likewise before maker dispatch and from
-        // this class's own accept-set (see describe.hpp). It changes nothing.
+        // The self-description door, also before maker dispatch; it changes nothing.
         if (try_describe(in, bus)) {
             return;
         }
         Mail mail(bus, in, self_);
-        // A delivered message has passed the gate against one accepted schema, and
-        // the handler is selected by the same (name, version) the bus used to pick
-        // that door — so exactly one of these matches and the fold short-circuits
-        // there. A no-match is therefore impossible for a *delivered* message: it
-        // would require accepted_schemas() and the handler set to have drifted
-        // apart, which they cannot, since both are A.... Make that impossibility
-        // loud rather than a silent drop.
+        // A delivered message passed the gate against one accepted schema, and the handler is
+        // chosen by the same identity, so exactly one matches. No match means the accept-set and
+        // the handlers drifted apart, which cannot happen since both are A...; say so loudly.
         const bool routed = (dispatch_to<A>(self, in, mail) || ...);
         if (!routed) {
             throw std::logic_error(
@@ -612,47 +442,25 @@ public:
                 std::to_string(in.payload.schema().version()) +
                 "' matched no handler — accept-set and handler set are out of sync");
         }
-        // A maker's own end-of-delivery hook, run after the handler and inside
-        // the same delivery, so a weave
-        // that DERIVES a mirror or a latest claim from its native state can do so
-        // once per delivery mechanically rather than at every handler's tail.
-        // Also run after a substrate door that MUTATED the state (above); not run
-        // after the doors that only read or describe. A weave that declares none
-        // pays nothing.
+        // The maker's end-of-delivery hook, run after the handler inside the same delivery, so a
+        // weave deriving a mirror or claim from its state does it once; also after a poke that
+        // wrote the state.
         if constexpr (requires(Self* s, Mail& m) { s->after_delivery(m); }) {
             self->after_delivery(mail);
         }
     }
 
-    /// The bus published one of THIS weave's declared claims by a joint operation
-    /// (docs/reference/joint-publication.md#the-showing-and-its-three-answers).
-    /// Routed to `Self::on_claim_published(const T&)` for the `T` in `Claims<...>`
-    /// whose identity the value carries; a Self that declares no such handler for
-    /// that shape hears nothing, which is honest for a weave that derives nothing
-    /// from its own claims. `final`, for the reason `handle` is: the routing is
-    /// the construction layer's, and it is matched exactly as a delivery is.
+    /// The bus published one of this weave's declared claims by a joint operation. Routed to
+    /// `Self::on_claim_published(const T&)` for the `T` in `Claims<...>` the value carries; a
+    /// shape with no handler is applied as it stands. `final`, like `handle`.
     ///
-    /// WHAT THE MAKER'S HANDLER ANSWERS, and the only three return types it may
-    /// have. A handler returning `void` applied the value when it returned. One
-    /// returning `bool` answers `true` for applied and `false` for DECLINED: the
-    /// owner keeps or reconciles state of its own, is not broken, and re-claims its
-    /// truth at its next delivery -- the truthful word of a successor shown what
-    /// its predecessor prepared. One returning `loom::Weave::PublishedClaim` says
-    /// any of the three. ANY OTHER RETURN TYPE IS REFUSED AT COMPILE TIME: an
-    /// answer the construction layer cannot read would otherwise be read as
-    /// Applied, and "applied" is the one word this hook must never fabricate.
-    /// A handler that throws answers nothing -- the exception is the answer, and the
-    /// bus records the failed application before re-raising it (weave_contract.hpp).
-    /// A shape no handler is declared for is applied trivially: a weave that derives
-    /// nothing from its claim stands behind whatever the bus published under it.
-    ///
-    /// AUTHORING: the hook runs outside any delivery -- no Mail, no send, no
-    /// answer. Apply the value or decline it; do not begin work from it. A weave
-    /// that mirrors its state into its claim updates its "what the bus holds under
-    /// my key" bookkeeping here whatever it answers, so an owner that applied
-    /// claims nothing again and an owner that declined re-claims its own truth at
-    /// its next delivery. An exception here is a FAILURE that holds the weave;
-    /// expected non-application is `Declined`, never a throw.
+    /// The handler's return type is its answer: `void` applied it; `bool` is true for applied
+    /// and false for declined (the owner keeps state of its own and re-claims it at its next
+    /// delivery); `loom::Weave::PublishedClaim` says any of the three. A throw is a failure that
+    /// holds the weave, recorded by the bus before it is rethrown; expected non-application is
+    /// a decline, never a throw. The hook runs outside any delivery, with no Mail: apply or
+    /// decline, and begin no work from it.
+    /// docs/reference/joint-publication.md#the-showing-and-its-three-answers
     loom::Weave::PublishedClaim claim_published(const loom::Value& v) final {
         [[maybe_unused]] Self* self = static_cast<Self*>(this); // unused with an empty claim-set
         loom::Weave::PublishedClaim answer = loom::Weave::PublishedClaim::Applied;
@@ -666,14 +474,11 @@ public:
     /// Default lifecycle policy; a Self may declare its own policy_config().
     LifecyclePolicy policy_config() const { return LifecyclePolicy{}; }
 
-    /// The capabilities this Weave *asks* of the host — advice, never authority.
-    /// Defaults to nothing (the floor); a Self declares its own via ZEN_ASK. The
-    /// host reads the ask to know what to surface, but a declaration never becomes a
-    /// grant — the host alone decides (the floor-factory + grant-record).
+    /// The capabilities this Weave asks of the host: advice, never authority. Empty by default;
+    /// a Self declares its own with ZEN_ASK.
     loom::CapabilityAsk ask_config() const { return {}; }
 
-    /// The manifest hook the export layer calls. Returns the ask iff non-empty, so a
-    /// Weave with no ask produces a clean manifest with no requests section.
+    /// The manifest hook the export layer calls: the ask, or nothing when it is empty.
     std::optional<loom::CapabilityAsk> zen_requested_capabilities() const {
         loom::CapabilityAsk a = static_cast<const Self*>(this)->ask_config();
         if (!a.network && a.filesystem.empty() && a.roles.empty()) {
@@ -687,23 +492,10 @@ protected:
     loom::WeaveId self_{};
 
 private:
-    // Select the handler the same way the bus selected the door: by true schema
-    // identity, via the canonical same_identity helper (which now compares
-    // (name, version, content_id)) instead of re-deriving the comparison inline.
-    // The delivered payload already passed the gate against the accept-set entry
-    // the bus chose by (name, version), so matching the handler the same way makes
-    // from_value<S>'s precondition (every field present and well-typed) a
-    // guarantee, not a probability.
-    //
-    // The (name, version) terms are what make this collision-safe. Matching on
-    // content_id ALONE could, on a 64-bit FNV collision within one accept-set,
-    // select the wrong handler and call from_value<S> on a value the gate
-    // validated against a *different* schema — and since from_value reads
-    // *v.get(field) for each of S's fields, a field the colliding shape does not
-    // carry is a null dereference, not merely a mislabeled value. same_identity
-    // checks (name, version) too, so that path is unreachable; its content_id
-    // term is the redundant-but-true integrity check (post-gate the payload's
-    // content_id already equals the door's).
+    // Select the handler as the bus selected the door: by same_identity, which compares name,
+    // version and content id. Matching on content id alone could, on a hash collision within
+    // one accept-set, convert a value the gate checked against another schema; the name and
+    // version rule that out, so from_value<S>'s precondition holds.
     template <class S>
     bool dispatch_to(Self* self, const loom::Message& in, Mail& mail) {
         if (!loom::same_identity(*schema_of<S>(), in.payload.schema())) {
@@ -713,13 +505,9 @@ private:
         return true;
     }
 
-    /// `dispatch_to`'s twin for a joint-published claim — matched by the same true
-    /// identity, converted only after the match. The handler's return type is its
-    /// answer (see `claim_published`); `answer` is written only when a handler for
-    /// this shape ran. EXACTLY THREE RETURN TYPES ARE READ: `PublishedClaim`,
-    /// `bool`, `void`. Anything else fails to compile here, by name, rather than
-    /// being discarded and read as Applied -- the permissive fallback this branch
-    /// once had turned an unreadable answer into a fabricated success.
+    /// `dispatch_to`'s twin for a joint-published claim, matched by the same identity. Reads
+    /// three return types, `PublishedClaim`, `bool` and `void`; any other fails to compile, so an
+    /// unreadable answer is never recorded as Applied.
     template <class S>
     bool published_as(Self* self, const loom::Value& v, loom::Weave::PublishedClaim& answer) {
         if (!loom::same_identity(*schema_of<S>(), v.schema())) {
@@ -747,31 +535,26 @@ private:
         return true;
     }
 
-    // ---- the poke doors (substrate-answered; see poke.hpp) -----------------
+    // ---- the poke doors (answered by the substrate; see poke.hpp) ------------
 
-    /// Substrate answers use the same authority as maker-written answers. Replies
-    /// to the stamped requester use the authenticated answer door. Explicit
-    /// redirection to somebody else remains ordinary, grant-checked speech.
-    /// A root request with no reply address has nowhere to answer.
+    /// Substrate answers use the same authority as a maker's: a reply to the stamped requester
+    /// is an authenticated answer, one redirected elsewhere is ordinary grant-checked speech, and
+    /// a root request with no reply address gets none.
     template <class Answer>
     void answer_poke(const loom::Message& in, loom::Bus& bus, const Answer& answer) {
         answer_substrate(in, bus, to_value(answer));
     }
 
-    /// The same send, for a substrate answer whose shape is not a ZEN_SHAPE and
-    /// so arrives already built (zen.AcceptedShapes, whose fields are lists of
-    /// zen.SchemaDesc). One reply-addressing rule for every substrate answer,
-    /// rather than two that could drift.
+    /// The same send, for a substrate answer built as a Value (zen.AcceptedShapes): one
+    /// reply-addressing rule for every substrate answer.
     void answer_substrate(const loom::Message& in, loom::Bus& bus, loom::Value answer) {
         const loom::WeaveId to = in.reply_to.valid() ? in.reply_to : in.sender;
         if (!to.valid()) {
             return;
         }
-        // A reply to the actual requester spends this delivery's answer right.
-        // An explicitly redirected reply remains ordinary speech: it cannot attest
-        // a conversation with somebody who did not send the request. Likewise an
-        // answer does not seed another answer (ANS-01); never downgrade a refused
-        // answer attempt into an ordinary send.
+        // A reply to the requester spends this delivery's answer right; a redirected reply is
+        // ordinary speech, which cannot attest a conversation with somebody who did not ask. An
+        // answer seeds no answer (ANS-01), and a refused answer is never resent as ordinary speech.
         if (to == in.sender) {
             (void)bus.answer(loom::Message(std::move(answer), self_, self_, in.correlation));
             return;
@@ -779,15 +562,12 @@ private:
         bus.send(to, loom::Message(std::move(answer), self_, self_, in.correlation));
     }
 
-    /// What a poke door came to, for `handle`: not a poke at all; answered without
-    /// touching the state (a describe, a read, a refused write or reset); or
-    /// answered with an Ack that WROTE the state (a write or a reset that was
-    /// performed). Only the last is a change of the maker's state.
+    /// What a poke door came to: not a poke; answered without touching the state; or an Ack
+    /// that wrote the state, the only one that changes it.
     enum class PokeOutcome : std::uint8_t { NotAPoke, Answered, Mutated };
 
-    /// Answer the four protocol shapes from the declared access model. Matched
-    /// the same way dispatch_to matches (same_identity against the gated
-    /// payload), so a delivered poke request converts safely.
+    /// Answer the four protocol shapes from the declared access model, matched as dispatch_to
+    /// matches.
     PokeOutcome try_poke(const loom::Message& in, loom::Bus& bus) {
         const loom::Schema& shape = in.payload.schema();
         if (loom::same_identity(*schema_of<PokeDescribe>(), shape)) {
@@ -816,19 +596,10 @@ private:
         return PokeOutcome::NotAPoke;
     }
 
-    /// Answer zen.DescribeAccepted from THIS weave's accepted_schemas() — the
-    /// same vector the Switchboard holds as this weave's doors, not a copy of it
-    /// and not a second list. Matched the way dispatch_to matches.
-    ///
-    /// The answer necessarily includes the request's own shape, because the
-    /// target genuinely does accept it. That is truthful and it terminates: the
-    /// request is fieldless, so it contributes nothing to the dependency closure
-    /// and describes no shape that describes it back.
-    ///
-    /// Sent through answer_substrate, with the same attribution and addressing
-    /// rule as the poke answers. The grant mount() adds is
-    /// allow_describe_answers; a weave without it is CapabilityDenied at
-    /// delivery, visible on the tap, exactly as an ungranted poke answer is.
+/// Answer zen.DescribeAccepted from this weave's accepted_schemas(), the vector the
+/// Switchboard holds as its doors. The answer includes the request's own shape, which is
+/// accepted; being fieldless, it adds nothing to the closure. Sent like the poke answers; a
+/// weave without allow_describe_answers is `CapabilityDenied` at delivery.
     bool try_describe(const loom::Message& in, loom::Bus& bus) {
         if (!loom::same_identity(*schema_of<DescribeAccepted>(), in.payload.schema())) {
             return false;
@@ -838,12 +609,9 @@ private:
     }
 };
 
-/// The grant a Weave's declared Emit<...> implies: it may send each emitted shape
-/// to any accepter. This is the *trusted in-process* default — the Weave's
-/// self-declared outbound intent is taken as its authority — and it closes the
-/// previously-deferred emit-enforcement seam: delivery now checks a real grant
-/// that matches the declaration. An untrusted Weave must be given an explicit
-/// grant instead (mount_granted), where the declaration is not trusted.
+/// The grant a Weave's declared Emit<...> implies: each emitted shape to any accepter. The
+/// trusted in-process default, where the Weave's declaration is taken as its authority; an
+/// untrusted Weave is given an explicit grant instead (mount_granted).
 template <class Weave>
 loom::Grant emit_default_grant(const Weave& weave) {
     loom::Grant grant;
@@ -853,12 +621,8 @@ loom::Grant emit_default_grant(const Weave& weave) {
     return grant;
 }
 
-/// Construct a trusted Weave, grant it its declared Emit set plus the substrate
-/// answers — the poke answers and the self-description answer (the construction
-/// layer answers both; the trusted mount grants them delivery) — register it
-/// (its derived schemas flow into the registry as usual), wire its self-id, and
-/// return its WeaveId — registration + policy + lifecycle + authority in one
-/// call.
+/// Construct a trusted Weave, grant it its declared Emit set and the substrate answers (poke
+/// and self-description), register it and set its self-id; returns its WeaveId.
 template <class Self, class... Args>
 loom::WeaveId mount(loom::Switchboard& bus, Args&&... args) {
     auto weave = std::make_unique<Self>(std::forward<Args>(args)...);
@@ -871,15 +635,10 @@ loom::WeaveId mount(loom::Switchboard& bus, Args&&... args) {
     return id;
 }
 
-/// As mount(), but with an explicit host-supplied grant (for an untrusted Weave,
-/// whose self-declared Emit is not trusted as its authority). The grant is used
-/// AS GIVEN — including for the construction layer's poke answers: a host that
-/// wants this Weave's pokes answerable adds allow_poke_answers(grant), and one
-/// that wants it self-describing adds allow_describe_answers(grant); without
-/// them, those requests still arrive (and are answered) but the answers are
-/// CapabilityDenied at delivery, visible on the tap. Two calls rather than one,
-/// deliberately: a host may want a weave inspectable without it being
-/// self-describing, or the reverse.
+/// As mount(), with a host-supplied grant used as given, for a Weave whose declared Emit is not
+/// trusted as authority. Without allow_poke_answers(grant) or allow_describe_answers(grant),
+/// poke and describe requests are still answered but the answers are `CapabilityDenied` at
+/// delivery, on the tap; the two are separate so a host can allow either alone.
 template <class Self, class... Args>
 loom::WeaveId mount_granted(loom::Switchboard& bus, loom::Grant grant, Args&&... args) {
     auto weave = std::make_unique<Self>(std::forward<Args>(args)...);
@@ -891,11 +650,9 @@ loom::WeaveId mount_granted(loom::Switchboard& bus, loom::Grant grant, Args&&...
 
 } // namespace loom
 
-/// Declare the capabilities a Weave *asks* the host for — a ZEN_SHAPE-sibling that
-/// shadows the floor default (WeaveBase::ask_config) with designated initializers:
+/// Declare the capabilities a Weave asks the host for, shadowing WeaveBase::ask_config:
 ///   ZEN_ASK(.network = true, .filesystem = "write-scoped", .roles = {"storage"});
-/// It is advice only: the host reads the declaration, but the grant remains the
-/// host's decision. Omit it entirely to ask for nothing (the floor).
+/// Advice only: the grant stays the host's decision. Omit it to ask for nothing.
 #define ZEN_ASK(...)                                                                                \
     ::loom::CapabilityAsk ask_config() const {                                               \
         return ::loom::CapabilityAsk{__VA_ARGS__};                                           \

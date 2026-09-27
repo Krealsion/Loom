@@ -4,39 +4,23 @@
 #ifndef ZEN_SWITCHBOARD_GRANT_HPP
 #define ZEN_SWITCHBOARD_GRANT_HPP
 
-// The capability grant: what a Weave may do. It is the authority the bus checks
-// every Weave-originated send against, default nearly empty. A grant is attached
-// by the host (the root of trust) at admission, and no Weave can widen its own.
+// The capability grant: what a Weave may do. The bus checks every Weave-originated send against
+// it; it is nearly empty by default, attached by the host at admission, and no Weave can widen
+// its own. One grant is projected onto whatever boundaries the hosting mode provides, tiers B1
+// to B5: messages, process, OS capability, filesystem view and resources
+// (docs/reference/capabilities.md#hosting-and-enforcement-tiers).
 //
-// One grant is the single source of truth, projected onto whatever boundary the
-// hosting mode provides: in B1 the *message* boundary (send-permissions, enforced
-// here); in B2 the *process* boundary (crash containment); in B3 the *syscall*
-// boundary (the OS-capability flags, enforced by an out-of-process sandbox); in B4
-// the *filesystem view*; in B5 the *quantitative* one. Which mechanism enforces
-// each, why they are not a ladder, and what they do not claim (B2–B5 are Linux/WSL
-// only, and none of them is a claim of kernel-escape resistance) is owned by
-// docs/reference/capabilities.md#hosting-and-enforcement-tiers.
+// The projections answer at different moments (GATE-05):
 //
-// AND THE PROJECTIONS DO NOT ALL ANSWER AT THE SAME MOMENT (GATE-05). That was
-// always true and used not to matter, because nothing could change a grant after
-// admission. It matters now:
+//   SendRule       read at every delivery
+//   ObserveRule    read at every observation
+//   os_cap         read once, at IsolationHost::mount, to choose the child's network namespace
+//   FsAccess       read once, to build the child's mount-namespace view
+//   ResourceLimits read once, to write the child's cgroup leaf
 //
-//   SendRule       read at EVERY delivery, off the record the router just found
-//   ObserveRule    read at EVERY observation, off the record the reader named
-//   os_cap         read ONCE, at IsolationHost::mount, to choose the child's
-//                  network namespace before it is spawned
-//   FsAccess       read ONCE, to build the child's mount-namespace view, which
-//                  is pivot_root'ed into and then detached
-//   ResourceLimits read ONCE, to write the child's cgroup leaf
-//
-// The first two ARE the stored value: change it and enforcement changes with it.
-// The last three are consumed into kernel state the host cannot revisit — a
-// namespace already entered, a root already detached, a leaf already written. A
-// field rewritten in this process's memory afterwards would move no kernel at
-// all, so an API that let one be "changed live" would be describing a power that
-// does not exist. Hence `LiveAuthority`, below: the half that answers at the
-// moment of use, split out so the other half is not merely undocumented but
-// UNSAYABLE through the delegation door.
+// The first two are the stored value, so changing them changes enforcement. The last three are
+// consumed into kernel state no later write can move, so only the first two form a
+// `LiveAuthority`, the half the delegation door can change.
 
 #include <zen/switchboard/message.hpp> // WeaveId
 
@@ -48,29 +32,20 @@
 
 namespace loom {
 
-/// *Hard* (binary) OS-capability flags — enforce-or-refuse, no middle. They govern
-/// instruction-level behaviour a loaded .so can reach directly, which only process
-/// isolation can stop: `Network` is enforced out-of-process in B3 (a no-interface
-/// netns); `SpawnProcess` is reserved for a later phase. **Filesystem reach is NOT
-/// here** — it is a *graduated* capability expressed by `FsAccess` (below), the
-/// single source of truth for files; the old binary `FilesystemRead/Write` flags
-/// were removed in B4 to avoid two competing representations.
+/// Hard, binary OS-capability flags: enforced or refused. `Network` is enforced out of process
+/// (tier B3, a network namespace with no interface); `SpawnProcess` is declared and nothing
+/// enforces it. Filesystem reach is `FsAccess`, below.
 namespace os_cap {
 inline constexpr std::uint32_t None = 0;
 inline constexpr std::uint32_t Network = 1u << 0;
 inline constexpr std::uint32_t SpawnProcess = 1u << 1;
 } // namespace os_cap
 
-/// A *graduated* capability carries a level along a safe→dangerous axis, and its
-/// default is the safe end — a forgotten grant fails to the floor, never to the
-/// dangerous reach. Network and SpawnProcess are *hard* (binary: enforce-or-refuse,
-/// above). Filesystem is graduated: none → read-only → write-to-a-scoped-dir →
-/// write-with-no-exec-bit → write-anywhere, each step a more deliberate, louder
-/// choice. B3 introduced this *vocabulary*; B4 enforces it — all five levels — out
-/// of process, by building the child's filesystem view as a private mount namespace
-/// and pivot_root'ing into it (`build_view_plan`, `src/isolation/host.cpp`). The
-/// levels below are what that projection is built from, not a description of a
-/// future phase.
+/// A graduated capability: a level on a safe-to-dangerous axis whose default is the safe end,
+/// so a forgotten grant fails to the floor. Filesystem reach is graduated: none, read-only,
+/// write to a scoped directory, write without the exec bit, write anywhere. All five are
+/// enforced out of process (tier B4) by a private mount namespace built from them
+/// (`build_view_plan`, `src/isolation/host.cpp`).
 enum class FsAccess : std::uint8_t {
     None = 0,      ///< safe default: no filesystem reach
     ReadOnly,      ///< read within a scoped tree
@@ -106,28 +81,18 @@ struct SendRule {
     std::string target_role{}; ///< non-empty iff a role rule (see Grant::allow_to_role)
 };
 
-/// One observe rule: may read the latest claim of shapes matching the selector
-/// (SENSE-05). Deliberately NOT a `SendRule`: a send rule answers "may you emit this
-/// shape *there*", an observe rule answers "may you pull this shape". Reusing one
-/// for the other would be convenient and misleading, and an operator reading a
-/// refusal would go edit the wrong thing.
-///
-/// There is no author/office selector, on purpose: the SHAPE is what exposure is
-/// about, and shape-scoped authority is exactly the granularity `allow_to_any`
-/// already has for sending. Narrowing by claimant is a real future rule; it waits
-/// for a consumer that needs it rather than being guessed at now.
+/// One observe rule: may read the latest claim of matching shapes (SENSE-05). Not a `SendRule`:
+/// one says "may you send this there", the other "may you pull this". It selects by shape only,
+/// with no author or office selector.
 struct ObserveRule {
     bool any_shape = false;
     std::string shape_name; ///< used iff !any_shape
     std::uint32_t shape_version = 0;
 };
 
-/// Resource limits — a *quantitative* capability (B5, enforced via cgroup-v2). `0`
-/// means "use the host-computed conservative default" (bounded so one Weave can't
-/// starve the host); a positive value is an explicit raise. `unlimited_memory` is the
-/// only opt-out (a trusted compute Weave may use all RAM) and it removes the **memory**
-/// cap ONLY: **pids stays bounded** (no grant can license a fork bomb) and cpu stays a
-/// fair-share weight. There is no wholesale "no limits" opt-out.
+/// Resource limits, a quantitative capability (tier B5, a cgroup-v2 leaf). `0` means the host's
+/// conservative default; a positive value is an explicit raise. `unlimited_memory` lifts only
+/// the memory cap: pids stay bounded and cpu stays a fair-share weight.
 struct ResourceLimits {
     std::int64_t memory_bytes = 0;  ///< 0 = conservative default; >0 = explicit cap
     std::int64_t pids = 0;          ///< 0 = conservative default; >0 = explicit max (fork-bomb stop)
@@ -135,33 +100,18 @@ struct ResourceLimits {
     bool unlimited_memory = false;  ///< opt out of the MEMORY cap only; pids stays bounded
 };
 
-/// THE HALF OF AN AUTHORITY THAT ANSWERS AT THE MOMENT OF USE (GATE-05).
+/// The half of an authority that answers at the moment of use (GATE-05): send and observe rules,
+/// and nothing else. Each is read off the live record when needed, so replacing this value
+/// changes enforcement at once. The containment fields of a `Grant` are not here: they were
+/// consumed into kernel state when the child was spawned, and this type has no word for them.
+/// A value, owning nothing a subject's lifetime affects.
 /// docs/reference/capabilities.md#live-delegation
-///
-/// Send rules and observe rules, and deliberately NOTHING ELSE. Every rule here
-/// is consulted off the live record each time it is needed — a send rule in
-/// `deliver_one`, an observe rule in `observe_as` — so replacing this value
-/// replaces real, immediately-effective enforcement. That is what makes it the
-/// one authority a running subject's may be changed, and why the containment
-/// fields of a `Grant` are not in it: they were consumed into kernel state at
-/// spawn and a later write here would move nothing.
-///
-/// SO THE TYPE IS THE PROMISE. A delegation door that accepted a whole `Grant`
-/// would have to *refuse* requests naming `os_cap::Network` — and a refusal is a
-/// runtime check somebody can forget to write, or write and then delete. There
-/// is no `with_os_capabilities` on this class, so the escalation is not refused;
-/// it cannot be spelled. The strongest form of "you may not ask for that" is
-/// having no word for it.
-///
-/// It is a value: copyable, movable, comparable-by-containment, and owning
-/// nothing that a subject's lifetime affects.
 class LiveAuthority {
 public:
     LiveAuthority() = default;
 
-    /// The empty authority — permits nothing. What a subject holds as delegated
-    /// authority until an administrator installs something, and what installing
-    /// it again means: revoke.
+    /// The empty authority, which permits nothing: what a subject holds until an administrator
+    /// installs something, and what installing it again means (revoke).
     static LiveAuthority nothing() { return LiveAuthority{}; }
 
     /// May send shape (name, version) to a specific target.
@@ -215,10 +165,9 @@ public:
         return false;
     }
 
-    /// True iff some rule permits sending shape (name, version) to a Weave holding
-    /// `role`. Authorized only by a role rule for the same role (or an any-target
-    /// rule); a plain WeaveId rule never authorizes a role-targeted send, just as a
-    /// role rule never authorizes a direct WeaveId send (see permits).
+    /// True iff some rule permits sending the shape to the holder of `role`: only a role rule
+    /// for that role, or an any-target rule. A WeaveId rule never authorizes a role-addressed
+    /// send, and a role rule never a direct one.
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role) const {
         for (const SendRule& r : rules_) {
@@ -243,39 +192,19 @@ public:
         return false;
     }
 
-    /// ATTENUATION — is `inner` entirely within what this authority already says?
+    /// Attenuation: is `inner` entirely within this authority? Semantic, not textual. A rule is
+    /// a rectangle of shape selector by target selector, each "any" or one exact atom:
     ///
-    /// The security-critical relation, and it is SEMANTIC rather than textual or
-    /// countable. A rule denotes a rectangle (shape-selector × target-selector),
-    /// and each selector is either "any" or one exact atom:
+    ///   shape   Any contains Exact(name, version)
+    ///   target  Any contains ExactId(T), and Any contains Role(R)
+    ///           ExactId(T) and Role(R) contain one another in neither direction
     ///
-    ///   shape   Any  ⊒  Exact(name, version)
-    ///   target  Any  ⊒  ExactId(T)      and      Any  ⊒  Role(R)
-    ///           ExactId(T) and Role(R) are INCOMPARABLE — neither contains the
-    ///           other, whichever weave happens to hold R right now.
-    ///
-    /// THAT LAST LINE IS THE ONE WITH TEETH. A role rule follows whoever holds the
-    /// office at delivery; an id rule follows one weave forever. Reading "R is
-    /// held by T today" as "so an R rule contains a T rule" would freeze a routing
-    /// decision into permanent authority, and the reverse would hand a ceiling
-    /// scoped to one weave the standing to speak to every future occupant of an
-    /// office. Both are escalations, so the relation refuses to relate them at all
-    /// (`permits`/`permits_role` already keep the two apart at delivery; this is
-    /// the same wall, one level up).
-    ///
-    /// SEND AND OBSERVE ARE CHECKED IN THEIR OWN DIMENSIONS and never cross: an
-    /// `allow_any()` ceiling licenses no observation, and `allow_observe_any()`
-    /// licenses no speech. They answer different questions (see ObserveRule), and
-    /// one accidental wildcard relation between them would be a silent widening.
-    ///
-    /// A rule is covered when some SINGLE rule here contains it. Over the infinite
-    /// shape and target domains that is also complete — no finite set of exact
-    /// rules can cover an "any" rectangle, since a shape or a target outside the
-    /// set always remains — and where it is ever conservative it errs by refusing
-    /// a legal delegation, never by admitting an illegal one.
-    ///
-    /// The empty authority is contained by everything, which is what makes
-    /// revocation always representable regardless of ceiling.
+    /// The last line matters: a role rule follows whoever holds the office at delivery and an id
+    /// rule follows one weave, so relating them would turn today's routing into permanent
+    /// authority. Send and observe rules are checked in their own dimensions and never cross.
+    /// A rule is covered when one rule here contains it; where that is ever conservative it
+    /// refuses a legal delegation, never admits an illegal one. The empty authority is contained
+    /// by everything, so revocation is always possible.
     bool contains(const LiveAuthority& inner) const {
         for (const SendRule& want : inner.rules_) {
             bool covered = false;
@@ -304,7 +233,7 @@ public:
         return true;
     }
 
-    /// Does this authority say anything at all? An empty one permits nothing.
+    /// Does this authority say anything? An empty one permits nothing.
     bool empty() const noexcept { return rules_.empty() && observe_.empty(); }
 
     const std::vector<SendRule>& rules() const noexcept { return rules_; }
@@ -349,15 +278,9 @@ private:
     std::vector<ObserveRule> observe_;
 };
 
-/// What a Weave may do. Default-constructed = empty: may send nothing, holds no
-/// OS-capabilities. Minimal authority by default.
-///
-/// It is the ADMISSION ENVELOPE: the whole security posture a host names when it
-/// admits a subject, containment included. Its live half is a `LiveAuthority`
-/// held by composition rather than two loose vectors, so "the part that can
-/// change while the subject runs" is a thing with a name, a type and one
-/// definition of what containing another one means — instead of a convention
-/// that two files would eventually disagree about.
+/// What a Weave may do: the admission envelope a host names when it admits a subject,
+/// containment included. Default-constructed it is empty, sending nothing and holding no OS
+/// capability. Its live half is a `LiveAuthority`.
 class Grant {
 public:
     Grant() = default;
@@ -384,54 +307,45 @@ public:
         live_.allow_any();
         return *this;
     }
-    /// May send shape (name, version) to whichever Weave currently holds `role`.
-    /// The send names a role, not a WeaveId; the role is resolved to its holder at
-    /// delivery, so this rule survives the holder reloading (its WeaveId is stable).
-    /// A role rule authorizes only role-targeted sends (see permits_role); it never
-    /// authorizes a direct WeaveId send.
+    /// May send shape (name, version) to whichever Weave holds `role`, resolved at delivery, so
+    /// the rule survives the holder reloading. It authorizes only role-addressed sends.
     Grant& allow_to_role(std::string shape_name, std::uint32_t shape_version, std::string role) {
         live_.allow_to_role(std::move(shape_name), shape_version, std::move(role));
         return *this;
     }
-    /// MAY READ THE LATEST CLAIM of shape (name, version), from any claimant and
-    /// from any office (SENSE-05). Default-absent, like every other authority here:
-    /// no existing weave gains any reach from Senses existing, and a Sense
-    /// repository is therefore not a universal data-exfiltration rail — reading
-    /// it takes a deliberate host decision, out of band, exactly as sending does.
+    /// May read the latest claim of shape (name, version), from any claimant or office
+    /// (SENSE-05). Absent by default like every authority here, so reading Senses takes a
+    /// deliberate host decision, as sending does.
     Grant& allow_observe(std::string shape_name, std::uint32_t shape_version) {
         live_.allow_observe(std::move(shape_name), shape_version);
         return *this;
     }
-    /// May read the latest claim of ANY shape (permissive — an inspector, a
-    /// renderer, the host's own console).
+    /// May read the latest claim of any shape: for an inspector, a renderer, a console.
     Grant& allow_observe_any() {
         live_.allow_observe_any();
         return *this;
     }
-    /// Record OS-capability flags (hard capabilities; Network enforced out-of-process
-    /// in B3, the rest reserved for later phases). Not consulted in B1.
+    /// Record OS-capability flags, enforced out of process (tier B3); the in-process Switchboard
+    /// does not consult them.
     Grant& with_os_capabilities(std::uint32_t caps) {
         os_ |= caps;
         return *this;
     }
-    /// Set the graduated filesystem-access level (the single source of truth for
-    /// files; enforced out-of-process in B4). Defaults to the safe end
-    /// (`FsAccess::None`). `scoped_path` is the host tree that `ReadOnly` exposes
-    /// read-only in the restricted view; it is ignored by the other levels.
+    /// Set the graduated filesystem-access level, enforced out of process (tier B4); the default
+    /// is `FsAccess::None`. `scoped_path` is the host tree `ReadOnly` exposes; other levels
+    /// ignore it.
     Grant& with_filesystem(FsAccess level, std::string scoped_path = "") {
         fs_ = level;
         fs_path_ = std::move(scoped_path);
         return *this;
     }
-    /// Raise the Weave's resource limits (B5). Any `0` field keeps the host-computed
-    /// conservative default; positive fields are explicit raises.
+    /// Raise the Weave's resource limits (tier B5). A `0` field keeps the host's conservative
+    /// default.
     Grant& with_resources(ResourceLimits limits) {
         res_ = limits;
         return *this;
     }
-    /// Opt out of the **memory** cap only (a trusted compute Weave may use all RAM).
-    /// pids stays bounded (no grant can license a fork bomb) and cpu stays a fair-share
-    /// weight — there is no wholesale "no limits" opt-out.
+    /// Opt out of the memory cap only. pids stays bounded and cpu stays a fair-share weight.
     Grant& with_unlimited_memory() {
         res_.unlimited_memory = true;
         return *this;
@@ -442,28 +356,22 @@ public:
         return live_.permits(shape_name, shape_version, target);
     }
 
-    /// True iff some rule permits sending shape (name, version) to a Weave holding
-    /// `role`. Authorized only by a role rule for the same role (or an any-target
-    /// rule); a plain WeaveId rule never authorizes a role-targeted send, just as a
-    /// role rule never authorizes a direct WeaveId send (see permits).
+    /// True iff some rule permits sending the shape to the holder of `role`: only a role rule
+    /// for that role, or an any-target rule (see LiveAuthority::permits_role).
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role) const {
         return live_.permits_role(shape_name, shape_version, role);
     }
 
-    /// True iff some rule permits observing the latest claim of this shape
-    /// (SENSE-05). Send rules are never consulted: they answer a different question.
+    /// True iff some rule permits observing the latest claim of this shape (SENSE-05); send
+    /// rules are never consulted.
     bool permits_observe(std::string_view shape_name, std::uint32_t shape_version) const {
         return live_.permits_observe(shape_name, shape_version);
     }
 
-    /// THE BASELINE LIVE AUTHORITY this admission established (GATE-05).
-    ///
-    /// The half of this grant that is read at the moment of use, and therefore
-    /// the half a delegated overlay is measured against and added to. It is
-    /// exposed as a value to READ, never to write: the admission fact stays
-    /// exactly what the host said at `register_weave`, for the life of the
-    /// subject, and delegation is a second, separate authority beside it.
+    /// The baseline live authority this admission established (GATE-05): what a delegated overlay
+    /// is measured against and added to. Read-only: it stays what the host said at
+    /// `register_weave` for the subject's life.
     const LiveAuthority& live() const noexcept { return live_; }
 
     std::uint32_t os_capabilities() const noexcept { return os_; }
@@ -479,29 +387,19 @@ public:
     }
 
 private:
-    /// Speech and observation — the rules read at every delivery/observation.
+    /// Speech and observation: the rules read at every delivery and observation.
     LiveAuthority live_;
-    /// ...and below, the containment policy: consumed ONCE, out-of-process, into
-    /// kernel state (namespace, mount view, cgroup leaf) that this process cannot
-    /// revisit. Not reachable through the delegation door, because rewriting one
-    /// of these words here would change nothing a kernel enforces.
+    /// The containment policy, consumed once, out of process, into namespace, mount view and
+    /// cgroup state this process cannot revisit, so the delegation door cannot reach it.
     std::uint32_t os_ = 0;
     FsAccess fs_ = FsAccess::None; // safe default
     std::string fs_path_;          // the tree ReadOnly exposes (empty otherwise)
     ResourceLimits res_;           // bounded-by-default resource limits
 };
 
-/// EFFECTIVE AUTHORITY — the one expression that answers "may this be said?".
-///
-/// Baseline ∪ delegated, and deliberately a free function rather than a method on
-/// either: both `deliver_one` and capability-scoped inspection call THESE, so a
-/// Weaver reading what a subject may do is reading the same predicate the bus
-/// will apply, not a second store that merely believes it agrees. There is no
-/// third, materialized "effective authority" object to fall out of date.
-///
-/// Union, not override: a delegated rule can only ever ADD reach, so revoking
-/// delegated authority cannot remove what the host granted at admission, and no
-/// administrator can talk a subject out of its baseline.
+/// Effective authority, the one answer to "may this be said?": baseline union delegated. Free
+/// functions called by delivery and by capability-scoped inspection alike. A union can only add,
+/// so no administrator can take a subject's baseline away.
 inline bool effective_permits(const LiveAuthority& base, const LiveAuthority& delegated,
                               std::string_view shape_name, std::uint32_t shape_version,
                               WeaveId target) {
@@ -520,33 +418,18 @@ inline bool effective_permits_observe(const LiveAuthority& base, const LiveAutho
            delegated.permits_observe(shape_name, shape_version);
 }
 
-/// THE RIGHT TO ADMINISTER ONE SUBJECT'S DELEGATED LIVE AUTHORITY (GATE-05).
+/// The right to administer one subject's delegated live authority (GATE-05), so an
+/// administrator weave can exist without being a host. It carries three facts together:
 ///
-/// The capability that makes an administrator-shaped Weaver possible without
-/// making it a host. It carries three facts and no code path can supply them
-/// separately:
+///   board    the Loom that minted it, weakly, so it expires with that Loom
+///   subject  the one WeaveId it may administer: in the capability, not the call, so there is
+///            no argument to point at another weave; WeaveIds are never reused
+///   ceiling  the most it may ever install, named by the host; not the holder's own grant,
+///            since what a Weaver may say and what it may hand out are different questions
 ///
-///   BOARD    which Loom minted it — weakly, exactly as LifecycleAuthority does,
-///            so it expires with that board and has no standing in another
-///   SUBJECT  the ONE governed WeaveId it may administer
-///   CEILING  the most it may ever install on that subject
-///
-/// THE SUBJECT IS IN THE CAPABILITY, NOT IN THE CALL. There is no parameter to
-/// point at a different weave, so "administrator for A quietly administers B" is
-/// not a refusal that a future edit could drop — it is a sentence with nowhere to
-/// put B. WeaveIds are never reused, so a capability outliving its subject can
-/// never be inherited by a later one either; it simply stops naming anything.
-///
-/// THE CEILING IS NOT THE HOLDER'S OWN GRANT, deliberately. "You may only grant
-/// what you hold" sounds like the same rule and is not: a Weaver needs authority
-/// to ANSWER policy requests and, separately, authority to DELEGATE something it
-/// will never say itself. Conflating them would make every send rule a Weaver
-/// happens to own into a delegable right. The host names the ceiling here, once,
-/// out of band — which is the same shape as naming a grant at admission.
-///
-/// A default-constructed one is INERT: no board, no subject, nothing delegable.
-/// It exists so an administrator can hold one as a member before the host has
-/// handed it anything, and using it fails visibly rather than silently widening.
+/// A default-constructed one is inert, so an administrator can hold one as a member before the
+/// host hands it anything; using it fails visibly.
+/// docs/reference/capabilities.md#live-delegation
 class GrantAuthority {
 public:
     GrantAuthority() = default;
@@ -555,19 +438,16 @@ public:
     GrantAuthority(GrantAuthority&&) = default;
     GrantAuthority& operator=(GrantAuthority&&) = default;
 
-    /// Does this name a board and a subject at all? False for a default one.
-    /// It does NOT promise the board is alive or the subject still mounted —
-    /// only the issuing Switchboard can say that, and only at the moment of use.
+    /// Does this name a board and a subject? False for a default one. It does not promise the
+    /// board is alive or the subject still mounted; only the issuing Switchboard says that, at
+    /// the moment of use.
     bool valid() const noexcept { return subject_.valid(); }
 
-    /// The one governed subject. Readable because its holder is entitled to know
-    /// what it administers — and because a Weaver's diagnostics are worthless if
-    /// it cannot name the subject it just changed.
+    /// The one governed subject.
     WeaveId subject() const noexcept { return subject_; }
 
-    /// The most this capability may ever install. Readable for the same reason:
-    /// a Weaver that must refuse a user's request politely needs to be able to
-    /// see the boundary rather than discover it only as a refusal.
+    /// The most this capability may ever install, readable so a Weaver can see the boundary
+    /// before a request meets it.
     const LiveAuthority& ceiling() const noexcept { return ceiling_; }
 
 private:
@@ -575,20 +455,15 @@ private:
     GrantAuthority(std::weak_ptr<const LoomIdentity> issuer, WeaveId subject, LiveAuthority ceiling)
         : issuer_(std::move(issuer)), subject_(subject), ceiling_(std::move(ceiling)) {}
 
-    /// WEAK, for the reason LifecycleAuthority's is: an authority must not keep
-    /// its board alive, and an authority from a dead world must not validate
-    /// against a later board that landed on the same address. Expired is refused.
+    /// Weak, as LifecycleAuthority's is: it does not keep its board alive, and one from a dead
+    /// board never validates against a later board at the same address.
     std::weak_ptr<const LoomIdentity> issuer_;
     WeaveId subject_{};
     LiveAuthority ceiling_;
 };
 
-/// Why an administration attempt did or did not take effect (GATE-05).
-///
-/// Not a bool, because a Weaver that must tell a user "no" owes them which no it
-/// was — and because "your capability is from another Loom" and "the subject you
-/// govern has died" send an operator to entirely different places. Not an audit
-/// framework either: one enum, one struct, no log.
+/// Why an administration attempt did or did not take effect (GATE-05): each outcome sends an
+/// operator somewhere different.
 enum class GrantOutcome : std::uint8_t {
     Installed,      ///< the delegated authority is now exactly what was requested
     NoAuthority,    ///< a default-constructed / inert capability: it names no subject
@@ -600,10 +475,8 @@ enum class GrantOutcome : std::uint8_t {
 
 const char* name_of(GrantOutcome outcome) noexcept;
 
-/// The result of one administration act — enough for a Weaver's diagnostics
-/// without becoming a ledger. On any outcome but `Installed` nothing changed and
-/// `installed == previous`, so a caller that ignores the outcome still cannot
-/// misread the state.
+/// The result of one administration act. On any outcome but `Installed` nothing changed and
+/// `installed == previous`.
 struct GrantChange {
     GrantOutcome outcome = GrantOutcome::NoLiveDelivery;
     WeaveId subject{};          ///< which governed subject; from the capability, never a parameter
@@ -612,23 +485,10 @@ struct GrantChange {
     explicit operator bool() const noexcept { return outcome == GrantOutcome::Installed; }
 };
 
-/// WHAT A SUBJECT MAY DO, AS THE BUS WILL ACTUALLY DECIDE IT (GATE-05).
-///
-/// Capability-scoped inspection: only of the one subject the capability governs,
-/// and only of the message authority it can administer. Never the whole registry,
-/// never another subject, never the containment policy or anything else about the
-/// host — those are not this capability's business and the terminal's broad observation
-/// question is separate work.
-///
-/// It exists so an administrator never has to keep a second map that merely
-/// BELIEVES what the Kernel is enforcing. `permits*` here call the very same
-/// `effective_*` predicates `deliver_one` calls, over snapshots of the very same
-/// two values, so agreement is structural rather than maintained.
-///
-/// SNAPSHOTS, BY VALUE, deliberately: an administrator may hold this across the
-/// mutation that invalidates it, and a reference into a record whose vectors are
-/// about to be replaced would be a dangling read on the far side of exactly the
-/// operation this type is used around.
+/// What a subject may do, as the bus will decide it (GATE-05): only the one subject the
+/// capability governs, and only its message authority, never the registry, another subject or
+/// the containment policy. `permits*` call the same predicates delivery does, over copies of the
+/// same two values. Held by value, so it stays readable across the change it is used around.
 struct AuthorityView {
     /// False when the capability was inert, foreign, or names a subject that is
     /// gone — in which case every field below is empty rather than misleading.

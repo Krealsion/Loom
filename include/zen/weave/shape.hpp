@@ -4,24 +4,18 @@
 #ifndef ZEN_WEAVE_SHAPE_HPP
 #define ZEN_WEAVE_SHAPE_HPP
 
-// Schema-from-struct: write a shape once as a plain C++ struct, derive the rest.
-// This is pure sugar over loom — it adds no schema type, no value type, and
-// no validator. It emits schemas only through SchemaBuilder (so a derived schema
-// is byte-for-byte identical, same content-id, to the hand-built equivalent) and
-// converts struct <-> Value at the edges, handing Values to the same admit.
-//
-// A maker writes the struct's real members plus one in-class line:
+// Schema-from-struct: write a shape once as a plain C++ struct and derive the rest. It adds no
+// schema type, value type or validator: schemas are built through SchemaBuilder (so a derived
+// schema has the same content id as the hand-built one), and struct and Value convert at the
+// edges, the Value going to the same admit.
 //
 //   struct Ping {
 //       std::int64_t seq;
 //       ZEN_SHAPE(Ping, /*version=*/1, ZEN_FIELD(seq));
 //   };
 //
-// The field-registration block (the ZEN_FIELD list) names each member exactly
-// once more, so the macro can locate it and capture its name as a string. That
-// name-restatement is precisely and only what C++26 reflection will later remove
-// — it is confined to zen_fields(), and nothing downstream depends on how that
-// tuple is produced.
+// The ZEN_FIELD list names each member once more, to capture its name as a string; that
+// repetition is confined to zen_fields(). docs/guides/writing-a-weave.md
 
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
@@ -53,18 +47,17 @@ loom::Value to_value(const T& obj);
 template <Shape T>
 T from_value(const loom::Value& v);
 
-/// The two access-tag bits a field registration may carry (see the access
-/// model below). Authored metadata BESIDE the shape, never part of it.
+/// The two access-tag bits a field registration may carry: metadata beside the shape, never
+/// part of it.
 namespace access {
 inline constexpr std::uint8_t kNone = 0;
 inline constexpr std::uint8_t kExpose = 1; ///< opt IN to write (manipulation)
 inline constexpr std::uint8_t kHide = 2;   ///< opt OUT of raw read (value is message-only)
 } // namespace access
 
-/// One registered field: its wire name, a pointer to the member, and its
-/// access-tag bits. The bits are deliberately invisible to build_schema(): a
-/// tagged struct derives a byte-identical schema — same content-id — as an
-/// untagged one. The tags govern live-state access, not wire identity.
+/// One registered field: its wire name, a pointer to the member, and its access tags. The tags
+/// are invisible to build_schema(), so a tagged struct has the same content id as an untagged
+/// one: they govern access to live state, not wire identity.
 template <class C, class M>
 struct FieldEntry {
     const char* name;
@@ -219,35 +212,15 @@ T from_value(const loom::Value& v) {
 }
 
 // ---- the access model (ZEN_EXPOSE / ZEN_HIDE) -------------------------------
-//
-// Two author-control tags around a sensible default. With NO tag a field is
-// read-exposed (inspectable) and write-hidden (not manipulable):
-//   - ZEN_EXPOSE opts IN to write / manipulation,
-//   - ZEN_HIDE   opts OUT of raw read (the value becomes message-only: don't
-//     scrape my raw value, ask me — the weave's own message interface stays
-//     the sovereign front door regardless of tags).
-// Each tag works at field scope (replace ZEN_FIELD in the registration list)
-// and at whole-state scope (a bare `ZEN_EXPOSE();` / `ZEN_HIDE();` line inside
-// the STATE struct — the ZEN_SHAPE type, NOT the weave class). Whole-state scope
-// IS apply-to-all: shape_access_bits() is OR'd onto every field at derivation —
-// one primitive, two spellings.
-//
-// THE HONESTY BOUNDARY (load-bearing): the tags govern VALUE access only.
-// Neither tag can hide a field's existence, name, type, or its own tag-state —
-// access_of<T>() always returns every field, and nothing filters it. Hiding a
-// value is itself declared, inspectable metadata; there is no way to make
-// state invisible.
+// With no tag a field can be read by a poke and not written. ZEN_EXPOSE opts in to writing;
+// ZEN_HIDE opts out of raw reading, so the value is reached only by asking the weave. Each works
+// on one field or, bare in the state struct, on all of them (OR'd onto every field). The tags
+// govern values only: a field's existence, name, type and tags are always visible, and
+// access_of<T>() returns every field. docs/guides/diagnostics.md#5-live-inspection
 
-/// The whole-state tag bits of a shape (kNone if untagged): a bare
-/// `ZEN_EXPOSE();` / `ZEN_HIDE();` inside the struct applies to every field.
-///
-/// The nested requirement (`requires requires T::zen_expose_all;`) is
-/// deliberate: it demands the flag be a *true constant expression*, not merely a
-/// member that exists. A presence-only check (`requires { T::zen_expose_all; }`)
-/// would fail open in the widening direction — a hand-written
-/// `zen_expose_all = false`, or a state field that merely happens to be *named*
-/// `zen_expose_all`, would silently expose every field. The macros always emit
-/// `= true`, so idiomatic use is unaffected; the strictness closes the footgun.
+/// The whole-state tag bits of a shape (kNone if untagged). The flag must be a constant
+/// expression that is true, not merely a member that exists, so a hand-written
+/// `zen_expose_all = false`, or a field named `zen_expose_all`, never exposes every field.
 template <class T>
 constexpr std::uint8_t shape_access_bits() {
     std::uint8_t bits = access::kNone;
@@ -260,15 +233,14 @@ constexpr std::uint8_t shape_access_bits() {
     return bits;
 }
 
-/// True iff the shape carries either whole-state tag. Used to catch a bare
-/// `ZEN_EXPOSE();`/`ZEN_HIDE();` misplaced in the weave class (where it silently
-/// no-ops — a fail-open for HIDE) instead of the state struct.
+/// True iff the shape carries a whole-state tag; used to refuse a bare ZEN_EXPOSE(); or
+/// ZEN_HIDE(); placed in the weave class instead of the state struct.
 template <class T>
 constexpr bool has_whole_state_tag() {
     return (requires { requires T::zen_expose_all; }) || (requires { requires T::zen_hide_all; });
 }
 
-/// One field's derived access record — the complete, always-visible metadata.
+/// One field's access record, always visible.
 struct FieldAccess {
     std::string name;
     loom::TypeRef type;
@@ -276,8 +248,8 @@ struct FieldAccess {
     bool hidden = false;   ///< ZEN_HIDE (field- or whole-state scope): value is message-only
 };
 
-/// Derive the full access table of a shape: EVERY field, tagged or not, with
-/// its tag-state. This is the no-secret-state floor — nothing filters it.
+/// The full access table of a shape: every field, tagged or not, with its tags. Nothing filters
+/// it.
 template <Shape T>
 std::vector<FieldAccess> access_of() {
     std::vector<FieldAccess> out;
@@ -300,14 +272,11 @@ std::vector<FieldAccess> access_of() {
 /// Register a member of the enclosing ZEN_SHAPE struct (names it once more).
 #define ZEN_FIELD(member) ::loom::field_entry(#member, &ZenSelf::member)
 
-// The two access tags, one spelling each, two scopes (dispatch is on argument
-// presence via C++20 __VA_OPT__):
-//   field scope — replaces ZEN_FIELD in the registration list:
+// The two access tags each have two scopes, chosen by whether an argument is given:
+//   field scope, in place of ZEN_FIELD in the registration list:
 //       ZEN_SHAPE(S, 1, ZEN_EXPOSE(rate), ZEN_HIDE(raw_total), ZEN_FIELD(label));
-//   whole-state scope — a bare declaration inside the STATE struct (the
-//   ZEN_SHAPE type), apply-to-all. It MUST live in the state struct, not the
-//   weave class: the bits are read from the state type (WeaveBase static_asserts
-//   a misplacement, which would otherwise silently no-op — a fail-open for HIDE):
+//   whole-state scope, a bare line inside the state struct (the ZEN_SHAPE type, not the weave
+//   class, where it would do nothing; WeaveBase refuses that at compile time):
 //       ZEN_EXPOSE();   // every field manipulable
 //       ZEN_HIDE();     // every field's value message-only
 #define ZEN_DETAIL_CAT(a, b) a##b
@@ -328,10 +297,8 @@ std::vector<FieldAccess> access_of() {
     static constexpr bool zen_hide_all = true;                                                      \
     static_assert(true, "") /* swallow the trailing semicolon */
 
-/// Declare a struct as a Zen shape. The version is REQUIRED and becomes part of
-/// the identity: there is no way to evolve a shape in place — a new version is a
-/// new, distinct content-id by construction. The whole migration chain is keyed
-/// on these stable versions, so omitting one fails to compile.
+/// Declare a struct as a Zen shape. The version is required and part of the identity: a shape
+/// is never changed in place, and a new version is a new content id.
 #define ZEN_SHAPE(ShapeName, ShapeVersion, ...)                                                    \
     using ZenSelf = ShapeName;                                                                      \
     static constexpr const char* zen_name = #ShapeName;                                             \

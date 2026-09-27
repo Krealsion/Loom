@@ -14,53 +14,25 @@
 
 namespace loom {
 
-/// THE SELF-DESCRIPTION DOOR, NAMED HERE BECAUSE THE SWITCHBOARD HAS TO KNOW IT.
-///
-/// The shape itself lives a layer up (zen/weave/describe.hpp), where it is
-/// declared and answered. Its NAME lives here because `register_weave`'s
-/// accept-mode rule is stated in terms of it: a weave whose accept-set declares
-/// this door is promising to answer "these are the shapes I accept" from that
-/// declared set, and `AcceptMode::AnyRegistered` would make the promise false —
-/// the wildcard widens the door set at delivery, on the Switchboard's side,
-/// where the weave cannot see it and so cannot describe it.
-///
-/// So the two are refused together rather than left to produce a truthful-
-/// looking understatement. This is the same rule WeaveBase already keeps at
-/// compile time for the zen.Poke* shapes, one layer down and at runtime: a
-/// weave must not be able to advertise one vocabulary and enforce another.
-/// Nothing in Loom or Zengine registers both today — every AnyRegistered weave
-/// (the console, the bridge's operator proxy) is a raw loom::Weave that carries
-/// no substrate doors at all — so this pins a property rather than changing one.
-///
-/// A string rather than a schema pointer deliberately: this header is the
-/// bottom of the weave layering and must not reach up into it, and matching by
-/// (name, version) is exactly how every other door is keyed.
+/// The self-description door's name, here because `register_weave` refuses a weave that
+/// declares it together with `AcceptMode::AnyRegistered`: the wildcard widens the doors on the
+/// Switchboard's side, where the weave cannot see or describe them, so its description would
+/// understate what it accepts. A string, keyed by (name, version) like every door, because this
+/// header is below the weave layer (zen/weave/describe.hpp) that declares the shape.
+/// docs/reference/messaging.md#self-description--what-may-be-said-to-this-weave
 inline constexpr const char* kDescribeAcceptedShapeName = "zen.DescribeAccepted";
 
-/// The answer to `kDescribeAcceptedShapeName`. Declared beside it so the pair
-/// has one spelling; used only by the layer above.
+/// The answer to `kDescribeAcceptedShapeName`, spelled beside it.
 inline constexpr const char* kAcceptedShapesShapeName = "zen.AcceptedShapes";
 
-/// The Weave contract — the unit that lives behind a boundary on the bus.
+/// The Weave contract: the unit behind a boundary on the bus, and the raw interface the bus
+/// dispatches through (zen/weave/weave.hpp is the authoring layer over it, zen/weave.hpp the
+/// umbrella). The five pure methods are all dispatch needs; lifecycle events go to observers,
+/// not to the Weave. The optional parts are defaulted virtuals with empty defaults. Adding one
+/// changes the vtable, so a consumer compiled against another copy of this header must rebuild.
 ///
-/// (The three weave-layer headers, at a glance: THIS file is the raw contract
-/// the bus dispatches through; zen/weave/weave.hpp is the WeaveBase authoring
-/// sugar a maker writes against; zen/weave.hpp is the umbrella include.)
-///
-/// This is a deliberately minimal ABI surface (virtual dispatch): the five pure
-/// methods below are all the Switchboard needs to dispatch, and they are designed
-/// to survive a future move to per-Weave mailboxes and multi-threaded dispatch
-/// unchanged. Lifecycle notifications are delivered to bus *observers*, not via
-/// Weave callbacks, to keep this surface small. It has grown by defaulted
-/// virtuals only — `claimed_schemas` (2026-08-02), `claim_published` (ABI v8),
-/// `emitted_schemas` (2026-09-18) — each with the honest empty default, so a raw
-/// Weave that declares nothing still implements the whole contract; but a
-/// consumer compiled against an older copy of this header must rebuild, since
-/// the vtable layout is what changed.
-///
-/// A Weave never sees an unvalidated message: handle() is invoked only with a
-/// payload that has already passed the gate against one of this Weave's accepted
-/// schemas. revive() likewise receives an already-gated state value.
+/// A Weave never sees an unvalidated message: handle() receives only a payload that passed the
+/// gate against one of its accepted schemas, and revive() only a gated state.
 class Weave {
 public:
     virtual ~Weave() = default;
@@ -70,109 +42,65 @@ public:
     Weave(Weave&&) = delete;
     Weave& operator=(Weave&&) = delete;
 
-    /// The message schemas this Weave accepts (its accept-set). Consulted at
-    /// registration; each becomes one of this Weave's doors, keyed by
+    /// The accept-set: each schema becomes one of this Weave's doors at registration, keyed by
     /// (name, version).
     virtual std::vector<std::shared_ptr<const Schema>> accepted_schemas() const = 0;
 
-    /// Handle a delivered, already-gated message. May call back into `bus` to
-    /// send/publish — those calls enqueue; they never deliver synchronously. The
-    /// bus is the abstract send surface, so a Weave is agnostic to whether it is
-    /// hosted natively or loaded from a library.
+    /// Handle a delivered, gated message. Sends through `bus` enqueue and never deliver
+    /// synchronously; the same code runs natively or loaded from a library.
     virtual void handle(const Message& in, Bus& bus) = 0;
 
     /// The Weave's persistable state, as a self-describing Value.
     virtual Value snapshot() const = 0;
 
-    /// The Weave's lifecycle policy, as a Value the Switchboard validates against
-    /// its fixed lifecycle-policy schema (and reads only those fields from).
+    /// The lifecycle policy, as a Value the Switchboard validates against its fixed schema and
+    /// reads only those fields from.
     virtual Value policy() const = 0;
 
-    /// Restore from an already-gated state value (produced by a prior snapshot
-    /// that passed the gate).
+    /// Restore from a state value that has passed the gate.
     virtual void revive(const Value& state) = 0;
 
-    /// THE SENSES THIS WEAVE DECLARES IT CAN CLAIM (SENSE-04) — its claim-set.
-    /// Consulted at registration: each schema is registered (so the shape
-    /// resolves and is discoverable BEFORE any runtime claim), and the set is
-    /// what `claim` is checked against, so a weave cannot claim a shape it never
-    /// declared.
-    ///
-    /// Deliberately a virtual with a default rather than a sixth pure virtual:
-    /// this contract is a frozen surface every existing Weave implements, and a
-    /// weave that declares no Senses claims none — which is the honest default,
-    /// not a silent one. `Claims<...>` on `WeaveBase` writes it.
-    ///
-    /// Distinct from `accepted_schemas()` (what may be DELIVERED here) and from
-    /// `emitted_schemas()` (what may be SENT from here): a claim is neither a
-    /// door nor a message.
+    /// The Senses this weave declares it can claim: its claim-set (SENSE-04), registered at
+    /// registration so each shape is discoverable before any claim, and checked by `claim`.
+    /// Empty by default; `Claims<...>` writes it. Not a door, not a message.
     virtual std::vector<std::shared_ptr<const Schema>> claimed_schemas() const { return {}; }
 
-    /// THE MESSAGE SHAPES THIS WEAVE DECLARES IT MAY SEND — its emit-set, BY
-    /// DEFINITION. Consulted at registration and claimed in the same transaction
-    /// as the accept-set, the claim-set and the state shape, with every component
-    /// those shapes nest: so a producer's definition of a (name, version) meets
-    /// every acceptor's at the door, and a disagreement refuses the registration
-    /// (`SchemaConflict`) rather than surfacing as the first refused delivery.
-    /// `Emit<...>` on `WeaveBase` writes it; a library's manifest carries it
-    /// (`emits`, zen.Manifest v5); the host adapter answers from that.
+    /// The message shapes this weave declares it may send: its emit-set, registered with every
+    /// component they nest in the same transaction as the accept-set, claim-set and state shape,
+    /// so a producer's definition of a (name, version) meets every acceptor's and a disagreement
+    /// refuses the registration (`SchemaConflict`). `Emit<...>` writes it; a library's manifest
+    /// carries it (`emits`), and the host adapter answers from that.
     ///
-    /// VOCABULARY, NOT AUTHORITY. Declaring a shape here registers what the shape
-    /// MEANS and grants no send rule: authority stays with the grant the host
-    /// attached at admission (GATE-03/GATE-05), and a declared emitter with no
-    /// rule for a shape is still refused `CapabilityDenied` at delivery. Nor is
-    /// this an exhaustive send list: a router or forwarder may still speak shapes
-    /// chosen at runtime, which meet the seam and their existing authority rules
-    /// exactly as before (the deliberately open emit-enforcement seam, see
-    /// zen/weave/weave.hpp `Mail`).
-    ///
-    /// Defaulted, like `claimed_schemas`: a raw Weave or an adapter that declares
-    /// nothing claims nothing here, and defines no vocabulary it does not accept.
+    /// Vocabulary, not authority: it grants no send rule (GATE-03, GATE-05), so a declared
+    /// emitter with no rule for a shape is still `CapabilityDenied`. Not an exhaustive send list
+    /// either. Empty by default.
     /// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
     virtual std::vector<std::shared_ptr<const Schema>> emitted_schemas() const { return {}; }
 
-    /// WHAT A SHOWING CAME TO AT THIS WEAVE: the three answers `claim_published`
-    /// can give, and what the bus does with each (SENSE-06;
+    /// What a showing came to at this weave (SENSE-06;
     /// docs/reference/joint-publication.md#the-showing-and-its-three-answers).
     enum class PublishedClaim : std::uint8_t {
         /// The weave applied the value and stands behind it. Nothing is owed.
         Applied,
-        /// The weave, functioning, deliberately did NOT apply it: it keeps or
-        /// reconciles state of its own and re-claims that truth at its next delivery.
-        /// Recorded Declined against this participant and publication; not held;
-        /// the operator is told. Expected non-application, said as an answer.
+        /// Functioning, it did not apply the value: it keeps state of its own and re-claims it
+        /// at its next delivery. Recorded Declined against this weave and publication, not
+        /// held; the operator is told.
         Declined,
-        /// The weave could not complete the showing. Recorded Failed; HELD until it
-        /// is reloaded or removed; the operator is told. A native weave says this by
-        /// throwing (recorded, then re-raised) or by returning it (recorded, with no
-        /// exception to re-raise); a loaded weave's non-OK status crosses back as it.
+        /// It could not complete the showing: recorded Failed, and the weave is held until
+        /// reloaded or removed; the operator is told. Said by throwing (recorded, then rethrown)
+        /// or by returning it; a loaded weave's non-OK status crosses back as this.
         Failed,
     };
 
-    /// ONE OF THIS WEAVE'S OWN LATEST CLAIMS WAS PUBLISHED BY A JOINT OPERATION,
-    /// and this weave has not run since.
+    /// One of this weave's own latest claims was published by a joint operation and the weave
+    /// has not run since. Called before its next delivery and its next snapshot, outside any
+    /// dispatch: no Mail, no answer, no send. The weave folds the value into whatever state it
+    /// derives from its claims, so no reader sees it standing behind its own published claim. A
+    /// weave that never offers into a joint operation never hears this.
     ///
-    /// The bus calls it BEFORE the weave's next delivery and BEFORE its next
-    /// snapshot, outside any dispatch: there is no Mail, no answer right and no
-    /// send. The weave folds the published value into whatever native state it
-    /// derives from its claims, so that no reader — a poke, a snapshot, a message
-    /// handler — can observe the weave standing behind its own published claim.
-    /// A weave that never offers into a joint operation never hears this; the
-    /// default is the honest nothing. See zen/switchboard/sense.hpp.
-    ///
-    /// WHAT IT ANSWERS: `PublishedClaim`. Applied means the
-    /// weave now stands behind the published value. Declined means it does NOT and
-    /// is not broken: a functioning owner shown a value it will not or cannot make
-    /// its own -- a successor shown what its predecessor prepared -- keeps or
-    /// reconciles state of its own and re-claims that truth at its next delivery;
-    /// the bus records Declined against exactly this participant and publication,
-    /// holds nothing, and tells the operator. Failed -- returned, or an exception,
-    /// which the bus records the same way and re-raises afterwards for native code
-    /// (MSG-10's discipline) -- means the showing did not complete: the bus records
-    /// a FAILED application, holds the weave (no delivery, no ordinary snapshot, no
-    /// re-run of this hook) until it is reloaded or removed, and tells the operator.
-    /// A loaded weave answers through its ABI status, which the host does not
-    /// discard. The default applies nothing and owes nothing, truthfully.
+    /// It answers with `PublishedClaim`. A native exception is recorded as Failed and then
+    /// rethrown (MSG-10); a loaded weave answers through its ABI status. The default is
+    /// Applied, for a weave that derives nothing from its claims. See zen/switchboard/sense.hpp.
     virtual PublishedClaim claim_published(const Value& value) {
         (void)value;
         return PublishedClaim::Applied;

@@ -4,58 +4,20 @@
 #ifndef ZEN_HOST_PREPARED_REPLACEMENT_HPP
 #define ZEN_HOST_PREPARED_REPLACEMENT_HPP
 
-// HOST WIRING — one good handle, attached to the real machine.
+// Host wiring: one handle for a prepared replacement.
 // PR-02; docs/reference/prepared-replacement.md#the-authoring-handle
 //
-// The prepared-replacement substrate is complete and its laws are accepted:
-// a sealed candidate, one bounded transaction, one authenticated preparation
-// conversation, an admission that IS the activation, and exactly one terminal
-// outcome for the exact operator that began it. What it did not have was a
-// pleasant way to be driven. A normal host had to sequence eight primitives,
-// carry a TxnId into its coordinator's handlers, remember which operator owns
-// the outcome, and hand-build the lifecycle authority and the standard
-// `zen.Activated` message on every commit.
+// A handle that drives one prepared replacement: it resolves the role's holder into the
+// incumbent, pairs a candidate it loads with `begin` (unloading it once if begin refuses),
+// carries the TxnId, mints the lifecycle authority and spells the standard `zen.Activated`.
+// Every operation delegates to one Switchboard or Kernel primitive: no second state machine,
+// cached truth, pump, retry, thread or timeout. Every decision stays the author's: when to
+// step, what to ask, Ready or Refused, whether and when to commit or abort, and when to pump.
 //
-// This class is that sequencing, written once. It is SUGAR IN THE STRICT SENSE:
-//
-//   every semantic operation visibly delegates to one accepted Switchboard or
-//   Kernel primitive — no duplicated validation, no second state machine, no
-//   readiness authority, no cached truth, no hidden pump, no hidden retry, no
-//   thread, no timeout, and NO lifecycle decision the caller did not make.
-//
-// What it removes is plumbing: resolving the role's current holder into the
-// incumbent id, pairing a freshly loaded candidate with `begin` (and unloading
-// it exactly once if begin refuses), carrying the TxnId, minting the host
-// authority, spelling the standard activation, and the out-parameter ceremony
-// around the terminal outcome.
-//
-// What it deliberately KEEPS in the author's hands, because they are decisions
-// and not mechanics: when to spend a preparation step, what to ask, whether an
-// answer is offered as Ready or Refused, whether and when to COMMIT, whether to
-// abort, and when the bus is pumped. A candidate becoming Ready commits
-// nothing; a handle going out of scope changes nothing.
-//
-// WHY THIS IS A HOST HEADER. `commit()` mints this Loom's lifecycle authority,
-// and the constructor requires the `Switchboard&` itself — the same boundary
-// `host_lifecycle_authority` already draws: a weave holds a `Bus&`/`Mail&` and
-// can never construct one of these. A dynamic candidate participates fully in
-// its preparation; it does not thereby gain the right to manage the host
-// Loom's replacement transactions.
-//
-// THE HANDLE IS THE TRANSACTION'S PROXY, NEVER ITS OWNER. The transaction
-// lives in the Switchboard; dropping the handle mid-flight performs no
-// topology mutation, no transaction command, and pumps nothing — Zen does not
-// make lifecycle decisions because a C++ scope happened to end. The one thing
-// the handle does own is the START WINDOW of a candidate it loaded itself:
-// if `begin` then refuses, the facade unloads that candidate exactly once
-// (the caller never asked to manage an artifact separately). A candidate the
-// CALLER brought (`start_existing`) is never destroyed by a failed start —
-// and once a transaction exists, cleanup belongs to substrate law either way
-// (aborting discards a sealed candidate; the adapter's destructor releases
-// the artifact).
-//
-// Move-only, deliberately: a copied handle would be two objects that appear to
-// own one set of one-shot operations (commit, abort, take_outcome).
+// A host header: its constructor needs the `Switchboard&` and `commit()` mints the lifecycle
+// authority, neither of which a weave holds. The handle is the transaction's proxy, never its
+// owner: dropping it mid-flight does nothing. Move-only, since commit, abort and take_outcome
+// happen once.
 
 #include <zen/host/lifecycle_wiring.hpp>
 #include <zen/kernel/kernel.hpp>
@@ -71,9 +33,8 @@ namespace loom {
 
 class PreparedReplacement {
 public:
-    /// The dynamic start: the facade resolves the incumbent from the role,
-    /// loads the candidate SEALED through the Kernel, and begins the
-    /// transaction — or leaves the world exactly as it found it.
+    /// The dynamic start: resolve the incumbent from the role, load the candidate sealed through
+    /// the Kernel, and begin, or leave the world as it was.
     struct Start {
         WeaveId operator_id{};
         WeaveId coordinator{};
@@ -83,10 +44,8 @@ public:
         std::uint32_t budget = 0;
     };
 
-    /// The existing-candidate start: the caller already holds a sealed
-    /// candidate (native or loaded by its own arrangement). The facade begins
-    /// the transaction around it and owns NO artifact cleanup — the caller
-    /// brought the candidate, the caller keeps it if begin refuses.
+    /// The existing-candidate start: the caller holds a sealed candidate already, native or
+    /// loaded its own way. The facade begins around it and cleans nothing up.
     struct StartExisting {
         WeaveId operator_id{};
         WeaveId coordinator{};
@@ -105,12 +64,10 @@ public:
         BeginTransaction, ///< the substrate refused (see `begin_reason`)
     };
 
-    /// A start result that keeps the underlying words. `begin_reason` is the
-    /// substrate's own refusal when the stage is BeginTransaction; `error` is
-    /// the loader's own words when the stage is CandidateLoad. `cleanup_failed`
-    /// reports the facade-created candidate could not be removed after a begin
-    /// refusal — BOTH facts are reported, and the original failure is never
-    /// replaced by a cleanup story.
+    /// A start's result, keeping the underlying words: `begin_reason` is the substrate's refusal
+    /// at BeginTransaction, `error` the loader's at CandidateLoad. `cleanup_failed` reports that a
+    /// candidate the facade loaded could not be removed after a begin refusal, beside, never in
+    /// place of, the original failure.
     struct StartResult {
         bool ok = false;
         StartStage stage = StartStage::None;
@@ -121,8 +78,7 @@ public:
         explicit operator bool() const noexcept { return ok; }
     };
 
-    /// A handle that can only wrap an EXISTING sealed candidate — nothing to
-    /// load, so no Kernel is required or held.
+    /// A handle that can only wrap an existing sealed candidate; no Kernel is held.
     explicit PreparedReplacement(Switchboard& bus) noexcept : bus_(&bus) {}
     /// A handle that can also load a dynamic candidate through `kernel`.
     PreparedReplacement(Switchboard& bus, Kernel& kernel) noexcept
@@ -153,23 +109,17 @@ public:
         return *this;
     }
 
-    /// DELIBERATELY NOTHING. No abort, no unload, no pump: the transaction is
-    /// the Switchboard's, and a scope ending is not a lifecycle decision. The
-    /// destruction proof in the kernel suite exists to keep future "helpful
-    /// RAII" from changing this.
+    /// Does nothing: the transaction is the Switchboard's, and a scope ending is not a lifecycle
+    /// decision. The kernel suite's destruction case pins it.
     ~PreparedReplacement() = default;
 
     // ---- starting ----------------------------------------------------------
 
-    /// Resolve the incumbent from the role ONCE, load the candidate sealed,
-    /// begin the transaction. The incumbent is resolved here and bound by the
-    /// transaction as an exact life — the facade never re-follows the role, so
-    /// later drift remains a transaction failure, exactly as the substrate says.
-    ///
-    /// ATOMIC ON FAILURE: a refusal at any stage leaves the world as it was.
-    /// In particular, a candidate this call loaded is unloaded exactly once if
-    /// `begin` refuses — instance destroyed, library closed, name reusable —
-    /// and the begin refusal's own reason is preserved.
+    /// Resolve the incumbent from the role once, load the candidate sealed, and begin. The
+    /// transaction binds the incumbent's exact life, and the role is never re-followed, so later
+    /// drift is a transaction failure. A refusal at any stage leaves the world as it was: a
+    /// candidate this call loaded is unloaded once if `begin` refuses (instance destroyed,
+    /// library closed, name reusable), and the refusal's reason is kept.
     StartResult start(Start s) {
         if (id_.valid()) {
             return {false, StartStage::AlreadyStarted, TxnReason::None, false, {}};
@@ -178,8 +128,7 @@ public:
             return {false, StartStage::NoKernel, TxnReason::None, false,
                     "dynamic start needs the Kernel-taking constructor"};
         }
-        // The role is resolved BEFORE anything loads, so "nobody holds the
-        // role" costs nothing and leaks nothing.
+        // Resolved before anything loads, so an unheld role costs nothing.
         const WeaveId incumbent = bus_->role_holder(s.role);
         if (!incumbent.valid()) {
             return {false, StartStage::NoRoleHolder, TxnReason::None, false, {}};
@@ -193,9 +142,8 @@ public:
             s.operator_id, s.coordinator, incumbent, loaded.id, s.role, s.budget);
         if (!begun.ok) {
             StartResult r{false, StartStage::BeginTransaction, begun.why, false, {}};
-            // The one cleanup the facade owns: it loaded this candidate, and the
-            // caller never asked to manage an artifact separately. Exactly once,
-            // and the begin refusal above stays the headline.
+            // The one cleanup the facade owns, for a candidate it loaded; the begin refusal
+            // stays the reported failure.
             if (!kernel_->unload(s.candidate_name)) {
                 r.cleanup_failed = true;
                 r.error = "facade-created candidate could not be removed";
@@ -207,11 +155,9 @@ public:
         return {true, StartStage::None, TxnReason::None, false, {}};
     }
 
-    /// Begin around a candidate the CALLER brought. No Kernel involved, and on
-    /// a begin refusal the candidate is left exactly as it was — the facade
-    /// destroys nothing it did not create. (Once the transaction exists, the
-    /// substrate's own law applies as always: an abort discards the sealed
-    /// candidate, whoever loaded it.)
+    /// Begin around a candidate the caller brought, with no Kernel. On a begin refusal the
+    /// candidate is left as it was; once the transaction exists, an abort discards the sealed
+    /// candidate whoever loaded it.
     StartResult start_existing(StartExisting s) {
         if (id_.valid()) {
             return {false, StartStage::AlreadyStarted, TxnReason::None, false, {}};
@@ -232,14 +178,12 @@ public:
 
     // ---- the transaction, without carrying its id --------------------------
 
-    /// Spend exactly one unit of the preparation budget — the deterministic
-    /// step, not a clock. `PreparationExhausted` remains visible.
+    /// Spend one unit of the preparation budget: an explicit step, not a clock.
     TxnResult tick() { return bus_->tick_preparation(id_); }
 
-    /// Open this transaction's ONE preparation conversation with `payload` as
-    /// the ask. Domain payloads need not carry the transaction id: the handle
-    /// knows its transaction, and the BUS — not the payload — proves which
-    /// conversation an answer belongs to.
+    /// Open this transaction's one preparation conversation with `payload` as the ask. The
+    /// payload need not carry the transaction id: the bus proves which conversation an answer
+    /// belongs to.
     template <class T>
     TxnResult ask(const T& payload) {
         return ask(Message(to_value(payload)));
@@ -248,28 +192,19 @@ public:
         return bus_->ask_candidate_to_prepare(id_, std::move(msg));
     }
 
-    /// OFFER THE DELIVERY CURRENTLY BEING HANDLED to this transaction's
-    /// authenticated readiness gate. Named as what it is: the coordinator does
-    /// not assert readiness, it offers what it is holding, and the Switchboard
-    /// remains the judge — this is an authenticated answer, from the exact
-    /// candidate, to this transaction's exact ask, or it is refused. Called
-    /// outside a delivery, from the wrong delivery, from the wrong coordinator,
-    /// or on the wrong handle, it refuses exactly as the substrate does.
+    /// Offer the delivery being handled to this transaction's readiness gate. The Switchboard
+    /// judges: an authenticated answer from the exact candidate to this transaction's ask, or a
+    /// refusal, exactly as the substrate refuses outside a delivery, from the wrong one, from the
+    /// wrong coordinator or on the wrong handle.
     TxnResult offer_current_answer(PreparationAnswer answer) {
         return bus_->accept_preparation_answer(id_, answer);
     }
 
-    /// SCHEDULE the admission, with the standard activation. `ok` means the
-    /// admission is scheduled — NEVER that the replacement committed. After a
-    /// successful return, `state()` is `AdmissionPending` until the admission
-    /// envelope actually dispatches (pumping is the caller's, never this
-    /// method's); the transaction terminalizes `Committed` or aborts inside
-    /// that dispatch, and `take_outcome()` is how the result is collected.
-    ///
-    /// The sequence stays EXPLICIT: this layer does not own activation-sequence
-    /// allocation, and no host sequence owner exists to consume — the operator
-    /// supplies the number, exactly as with the raw primitive. Internally this
-    /// is the whole of the wiring a caller no longer writes:
+    /// Schedule the admission, with the standard activation. `ok` means scheduled, never
+    /// committed: `state()` is `AdmissionPending` until the admission envelope dispatches, when
+    /// the pumping the caller does ends it `Committed` or aborted; `take_outcome()` collects it.
+    /// The caller supplies the activation sequence
+    /// (docs/reference/known-seams.md#activation-sequence-ownership). It calls
     /// `commit_prepared_replacement(id, host_lifecycle_authority(bus),
     /// Message(to_value(Activated{sequence})), sequence)`.
     TxnResult commit(std::int64_t sequence) {
@@ -278,23 +213,16 @@ public:
             Message(to_value(Activated{sequence})), sequence);
     }
 
-    /// Abort, as the exact operator this handle was started with. Unloads
-    /// nothing itself (the substrate discards the sealed candidate), pumps
-    /// nothing, consumes no outcome, retries nothing.
+    /// Abort, as the operator this handle started with. Unloads, pumps, consumes and retries
+    /// nothing; the substrate discards the sealed candidate.
     TxnResult abort() { return bus_->abort_prepared_replacement(id_, operator_id_); }
 
-    /// The transaction's real state, asked of the Switchboard EVERY time.
-    /// There is no facade state machine and no cache to drift: this is
-    /// `transaction_state(id())`, nothing else. (After the terminal outcome
-    /// has been collected the substrate no longer remembers the transaction,
-    /// and answers as it does for any unknown id.)
+    /// The transaction's state, asked of the Switchboard each time (`transaction_state(id())`).
+    /// Once the outcome has been collected, the substrate answers as for an unknown id.
     TxnState state() const { return bus_->transaction_state(id_); }
 
-    /// Collect this transaction's terminal outcome — once, by the exact
-    /// operator life that began it, and only THIS transaction's: a handle
-    /// never consumes a sibling transaction's result even when the same
-    /// operator began both. `TxnReason` arrives exactly as the substrate
-    /// recorded it; twenty reasons are not flattened into two.
+    /// Collect this transaction's terminal outcome: once, by the exact operator life that began
+    /// it, and never a sibling transaction's. `TxnReason` arrives as the substrate recorded it.
     std::optional<TxnOutcome> take_outcome() {
         TxnOutcome out{};
         if (bus_->take_outcome(operator_id_, id_, out)) {
@@ -306,12 +234,11 @@ public:
     // ---- the useful facts --------------------------------------------------
 
     bool started() const noexcept { return id_.valid(); }
-    /// For diagnostics, logging, tests and unusual integration — ordinary
-    /// operations never need it.
+    /// For diagnostics, tests and unusual integration.
     TxnId id() const noexcept { return id_; }
     WeaveId candidate() const noexcept { return candidate_; }
-    /// The incumbent AS RESOLVED AT START — the exact participant the
-    /// transaction bound, deliberately never re-derived from the role table.
+    /// The incumbent as resolved at start: the participant the transaction bound, never
+    /// re-read from the role table.
     WeaveId incumbent() const noexcept { return incumbent_; }
     const std::string& role() const noexcept { return role_; }
     /// Non-empty exactly when this handle loaded the candidate itself.

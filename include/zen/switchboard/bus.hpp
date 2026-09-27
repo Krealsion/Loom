@@ -16,30 +16,19 @@
 
 namespace loom {
 
-/// Identifies a queued attempt for ordinary directed/role sends, including
-/// office-authored sends and ABI v7. It proves enqueue, not delivery.
-/// Switchboard::outcome() is a host journal query; opted-in participants learn
-/// selected later refusals through authenticated notifications (see
-/// docs/reference/messaging.md#sender-visible-dispatch-refusal).
-/// Dynamic answer doors retain success-sentinel tickets, not queued-attempt
-/// identities; see docs/reference/dynamic-abi.md. The zero ticket is invalid.
+/// A queued attempt, from an ordinary directed or role-addressed send (office-authored ones
+/// included, natively and across the ABI). It proves enqueue, not delivery; zero is invalid.
+/// A host reads the outcome with Switchboard::outcome(); an opted-in sender learns some later
+/// refusals by notice (docs/reference/messaging.md#sender-visible-dispatch-refusal). A loaded
+/// weave's answer doors return success markers, not attempts (docs/reference/dynamic-abi.md).
 struct Ticket {
     std::uint64_t seq = 0;
     bool valid() const noexcept { return seq != 0; }
 };
 
-/// The result of an office-authored publication (MSG-07) — two facts that a bare
-/// count would collapse and that are different problems:
-///
-///   authorship refused          the sender does not hold the office it asked
-///                               to speak for; NOTHING fanned out
-///   authorized, zero listeners  the office spoke; nobody currently accepts
-///                               the shape — the same honest 0 an ordinary
-///                               publish can return
-///
-/// `authored` answers the authorship question; `recipients` is meaningful only
-/// when it is true. Deliberately small: a publication result, not a Result
-/// framework.
+/// The result of an office-authored publication (MSG-07): `authored` says whether the office
+/// spoke at all, and `recipients` counts the fanout only when it did, so a refusal and an
+/// authorized publication nobody accepts stay distinct.
 struct OfficePublication {
     bool authored = false;
     std::size_t recipients = 0;
@@ -47,12 +36,9 @@ struct OfficePublication {
     explicit operator bool() const noexcept { return authored; }
 };
 
-/// The abstract send/publish surface a Weave's handle() sends through. The
-/// Switchboard implements it directly; a host adapter for a library Weave
-/// implements it by forwarding serialized messages across the C ABI. Because a
-/// Weave only ever sees this interface, the same Weave works whether it is
-/// compiled in or loaded from a .so — and survives a future move to per-Weave
-/// mailboxes unchanged.
+/// The send and publish surface a Weave's handle() uses. The Switchboard implements it
+/// directly; a host adapter for a library Weave forwards across the C ABI. A Weave sees only
+/// this, so the same Weave works compiled in or loaded.
 class Bus {
 public:
     virtual ~Bus() = default;
@@ -64,79 +50,45 @@ public:
     /// recipient count.
     virtual std::size_t publish(Message msg) = 0;
 
-    /// Enqueue a directed delivery to whichever Weave currently holds `role`. The
-    /// role is resolved to its holder at delivery (singleton in this phase), so a
-    /// grant of "shape -> role" survives the holder reloading. An unheld role
-    /// degrades like an unknown target: the delivery is refused, never gated.
+    /// Enqueue a directed delivery to whichever Weave holds `role`, resolved at delivery, so a
+    /// "shape to role" grant survives the holder reloading. An unheld role is refused like an
+    /// unknown target.
     virtual Ticket send_to_role(std::string_view role, Message msg) = 0;
 
-    /// ANSWER THE MESSAGE BEING HANDLED — once, to whoever sent it, carrying
-    /// Loom's word that this is that answer.
-    ///
-    /// THE LAW IT IMPLEMENTS: *a role tells Loom where to deliver an ask; an
-    /// authenticated conversation tells the asker who actually received it and
-    /// who may answer.* A weave that addresses a role cannot know which
-    /// incarnation the routing decision picked, so it cannot pre-bind an answer's
-    /// sender — which is precisely why a correlation and a shape were never
-    /// enough. This closes that gap from the other end: the authority to answer
-    /// is not something a weave *has*, it is something a DELIVERY confers, on
-    /// exactly the weave that received it, for exactly one reply.
-    ///
-    /// What Loom binds, and the sender therefore cannot choose: the recipient is
-    /// the request's stamped sender, and the correlation is the request's own.
-    /// The one-shot is consumed on the first call.
-    ///
-    /// It grants NO new reach: the answer is authorized against the answering
-    /// weave's ordinary grant at delivery, exactly like any other send. Holding
-    /// the grant for a shape has never been, and still is not, authority to
-    /// answer someone else's conversation.
-    ///
-    /// The default is "no authority here": a Bus that is not a live delivery
-    /// (a library-side shim, a future mailbox) truthfully answers nothing and
-    /// returns an invalid Ticket rather than pretending.
+    /// Answer the message being handled, once, to its sender, with Loom's word that this is the
+    /// answer. A weave that asked a role cannot know which incarnation received it, so the right
+    /// to answer comes with the delivery: Loom sets the recipient (the request's stamped sender)
+    /// and the correlation (the request's own). It grants no reach: the answer is authorized
+    /// against the answering weave's grant like any send. The default returns an invalid Ticket:
+    /// a Bus that is not a live delivery has no answer to give.
     virtual Ticket answer(Message msg) {
         (void)msg;
         return Ticket{};
     }
 
-    /// TAKE THE ANSWER RIGHT AWAY WITH YOU (ANS-02). Converts this delivery's
-    /// immediate answer opportunity into one that survives the handler's return.
-    ///
-    /// It CONSUMES the immediate opportunity rather than sitting beside it: after
-    /// a successful deferral `answer()` provides nothing and a second
-    /// `defer_answer()` fails, so a request still grants exactly one answer.
-    /// Returns an invalid capability when this delivery has no answer authority to
-    /// convert — an ordinary path that never earned one cannot be deferred into an
-    /// authenticated answer.
-    ///
-    /// The default is "no authority here", the same truthful answer a Bus that is
-    /// not a live delivery gives to `answer()`.
+    /// Take the answer right away with you (ANS-02): converts this delivery's answer
+    /// opportunity into one that outlives the handler. Afterwards `answer()` provides nothing and
+    /// a second deferral fails. Invalid when the delivery had no answer to convert. The default
+    /// refuses.
     virtual DeferredAnswer make_deferred_answer() { return DeferredAnswer{}; }
 
-    /// Spend a deferred answer. `token` names bus-private state; the bus checks it
-    /// against the bound requester, respondent, both incarnations and the original
-    /// correlation, and against the CURRENT speaker — which is why this lives on
-    /// the Bus a handler was handed rather than anywhere a capability could be
-    /// carried to. Consumed before queueing, so reentrancy cannot double it.
+    /// Spend a deferred answer. The bus checks it against the bound requester, respondent, both
+    /// incarnations and correlation, and against the current speaker, which is why it is spent
+    /// through the Bus a handler was handed. Consumed before queueing.
     virtual Ticket spend_deferred(const DeferredAnswer& answer, Message msg) {
         (void)answer;
         (void)msg;
         return Ticket{};
     }
 
-    /// Abandon a deferred answer without answering. The conversation ends; the
-    /// requester is told nothing (V1 has no cancellation vocabulary) and the
-    /// bus-side record is reclaimed immediately rather than waiting for death.
+    /// Abandon a deferred answer. The conversation ends, the requester is told nothing (there is
+    /// no cancellation vocabulary), and the record is reclaimed at once.
     virtual void release_deferred(const DeferredAnswer& answer) { (void)answer; }
 
-    /// Attach Loom's lifecycle attestation to a message about `target`'s freshly
-    /// committed incarnation. Requires the capability object — see
-    /// LifecycleAuthority — and is still authorized against the sender's grant.
-    ///
-    /// `sequence` is recorded by Loom from THIS call, not read out of the
-    /// payload, so an attestation issued for one sequence cannot authenticate
-    /// another. Loom also binds the attestation to `target`: a proof minted for
-    /// one incarnation is not a proof for a different one.
+    /// Attach Loom's lifecycle attestation to a message about `target`'s freshly committed
+    /// incarnation. Needs the capability (LifecycleAuthority) and is still authorized against the
+    /// sender's grant. Loom records `sequence` from this call, not the payload, and binds the
+    /// attestation to `target`.
     virtual Ticket announce_lifecycle(const LifecycleAuthority& authority, WeaveId target,
                                       Message msg, std::int64_t sequence) {
         (void)authority;
@@ -147,25 +99,14 @@ public:
     }
 
     // ---- deliberate office authorship (MSG-07) ------------------------------
-    //
-    // THE LAW: *a weave may deliberately author one statement in the capacity of
-    // a role it currently holds; Loom verifies that membership at the authorship
-    // moment and carries the resulting office fact as immutable delivery
-    // provenance. Merely holding the role attaches nothing.*
-    //
-    // Every `office_*` verb's FIRST parameter is the office being spoken for;
-    // the remaining parameters are exactly the ordinary verb's. Authorship
-    // changes why a receiver may trust WHO spoke — it never widens where the
-    // sender may speak or what it may emit, so the ordinary grant still
-    // authorizes the delivery afterwards, unchanged.
-    //
-    // The defaults refuse, truthfully: a Bus that is not a live speaking context
-    // has no membership to verify and no standing to stamp an office fact. An
-    // invalid Ticket / unauthored publication means NOTHING WAS QUEUED — a
-    // refused authorship is never silently downgraded to personal speech.
+    // A weave may author one statement as a role it holds; Loom verifies the membership then
+    // and stamps the fact on the delivery. Each `office_*` verb takes the office first and the
+    // ordinary verb's parameters after. The ordinary grant still authorizes the delivery. The
+    // defaults refuse: an invalid Ticket or unauthored publication means nothing was queued,
+    // and a refusal is never sent as personal speech instead.
 
-    /// Author `msg` deliberately as `as_role`, delivered to a direct target.
-    /// An invalid Ticket means authorship was refused and nothing was queued.
+    /// Author `msg` as `as_role`, to a direct target. An invalid Ticket means authorship was
+    /// refused and nothing was queued.
     virtual Ticket office_send(std::string_view as_role, WeaveId target, Message msg) {
         (void)as_role;
         (void)target;
@@ -173,10 +114,8 @@ public:
         return Ticket{};
     }
 
-    /// Author `msg` deliberately as `as_role`, delivered to whoever holds
-    /// `to_role`. The two roles are DIFFERENT FACTS carried separately: the
-    /// first is the office spoken for (verified at authorship), the second is
-    /// the destination slot (resolved at delivery, exactly as send_to_role).
+    /// Author `msg` as `as_role`, to whoever holds `to_role`: the office spoken for is verified
+    /// now, the destination resolved at delivery, and the two are carried separately.
     virtual Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
                                        Message msg) {
         (void)as_role;
@@ -185,10 +124,8 @@ public:
         return Ticket{};
     }
 
-    /// Author `msg` deliberately as `as_role`, published to every accepter.
-    /// The result keeps "authorship refused" and "authorized, zero recipients"
-    /// distinct — a publication's honest 0 must not be confusable with a
-    /// refusal, and vice versa.
+    /// Author `msg` as `as_role`, published to every accepter. "Authorship refused" and
+    /// "authorized, zero recipients" stay distinct.
     virtual OfficePublication office_publish(std::string_view as_role, Message msg) {
         (void)as_role;
         (void)msg;
@@ -196,56 +133,37 @@ public:
     }
 
     // ---- Senses (SENSE-01..05) -----------------------------------------------
-    //
-    // THE LAW: *a Sense is a deliberate immutable claim of the latest observation
-    // a participant has made available; reading one is synchronous, authorized,
-    // and shares no memory with the claimant.*
-    //
-    // Claiming sits beside send/publish because it is the same kind of act — a
-    // participant deliberately making something available — and the office form
-    // reuses the `as_role` grammar because it is the SAME law (MSG-07): holding
-    // an office is not speaking, or claiming, as one.
-    //
-    // Observing is the one verb on this surface that RETURNS DATA rather than
-    // queueing anything. It is synchronous by design: that is the whole point of
-    // the category. It confers nothing else — a reader cannot mutate the
-    // claimant through a reading, because a reading owns its value outright.
-    //
-    // The defaults refuse, truthfully, exactly as the answer and office doors do:
-    // a Bus that is not a live participating context has no identity to claim as
-    // and no standing to read on anyone's behalf.
+    // Claiming sits beside send and publish: a participant deliberately makes something
+    // available, personally or, deliberately, as an office it holds. Observing is the one verb
+    // here that returns data rather than queueing; it is synchronous, and the reading owns its
+    // value. The defaults refuse.
 
-    /// Claim `value` personally. The shape must be in this weave's declared
-    /// `Claims<...>` set; an undeclared shape is refused, never stored.
+    /// Claim `value` personally. The shape must be in this weave's `Claims<...>`; an undeclared
+    /// one is refused.
     virtual SenseClaimResult claim(Value value) {
         (void)value;
         return SenseClaimResult{};
     }
 
-    /// Claim `value` deliberately AS the office `as_role`. Membership is verified
-    /// at the claim moment; a refusal stores nothing and is never downgraded to a
-    /// personal claim.
+    /// Claim `value` as the office `as_role`, verified now; a refusal stores nothing and is never
+    /// made a personal claim.
     virtual SenseClaimResult office_claim(std::string_view as_role, Value value) {
         (void)as_role;
         (void)value;
         return SenseClaimResult{};
     }
 
-    /// The latest claim `author` made personally of `shape`.
-    ///
-    /// The SHAPE is passed, not just its (name, version), because a reading
-    /// crossing the dynamic seam must be re-admitted against the reader's own
-    /// definition of the shape on its own side. Handing back a value that passed
-    /// only the *other* side's gate would be the one place in Loom a value
-    /// arrived un-admitted.
+    /// The latest claim `author` made personally of `shape`. The schema is passed, not just its
+    /// name and version, so a reading crossing the dynamic seam is re-admitted against the
+    /// reader's own definition.
     virtual SenseReading observe(WeaveId author, std::shared_ptr<const Schema> shape) {
         (void)author;
         (void)shape;
         return SenseReading{};
     }
 
-    /// The latest claim made AS the office `role`. A predecessor's claim survives
-    /// role movement, stamped stale — never relabelled as the successor's.
+    /// The latest claim made as the office `role`. A predecessor's claim survives the role
+    /// moving, marked stale, never relabelled as the successor's.
     virtual SenseReading observe_office(std::string_view role, std::shared_ptr<const Schema> shape) {
         (void)role;
         (void)shape;
@@ -253,38 +171,17 @@ public:
     }
 
     // ---- administering another subject's live authority (GATE-05) ------------
-    //
-    // THE LAW: *baseline authority enters at admission and never changes;
-    // delegated live authority may be replaced at any time by a holder of a
-    // host-minted capability scoped to one subject and one ceiling; and EFFECTIVE
-    // authority — baseline ∪ delegated — is what the bus checks at delivery.*
-    //
-    // These sit on the Bus, not on the Switchboard, because that is the whole
-    // point: an administrator must be an ORDINARY WEAVE. Holding a `Switchboard&`
-    // is being the host, and a Weaver that had to hold one to do its job would be
-    // host root wearing a weave's name. What it holds instead is a capability
-    // object, presented here, through the same handle every other weave has.
-    //
-    // NEITHER IS A SEND. No message is queued, no sender is stamped, and nothing
-    // about the administrator appears in what the governed subject later says: the
-    // subject retries its own action, under its own identity, and the target sees
-    // the subject. That separation is the reason the administrator shape was
-    // chosen over a broker in the first place, so it is protected here by there
-    // being no message at all to carry an administrator's name.
-    //
-    // The defaults refuse, truthfully, exactly as the answer and office doors do:
-    // a Bus that is not a live participating context has no board to check the
-    // capability against, and says so (`NoLiveDelivery`) rather than pretending.
+    // Baseline authority enters at admission and never changes; delegated authority may be
+    // replaced by a holder of a host-minted capability for one subject and one ceiling; the
+    // bus checks their union at delivery. On the Bus, so an administrator is an ordinary weave
+    // with a capability, never a holder of the Switchboard. Neither verb sends anything: the
+    // subject retries its own action and the target sees the subject. The defaults refuse with
+    // `NoLiveDelivery`.
 
-    /// Replace, atomically, the delegated live authority of the subject this
-    /// capability governs. Grant, revoke, widen and narrow are all this one call:
-    /// pass what the subject should hold from now on, or `LiveAuthority::nothing()`
-    /// to take it all back. The request must be a semantic subset of the
-    /// capability's ceiling; if it is not, NOTHING changes.
-    ///
-    /// It never touches the admission grant, so a revocation cannot cost a subject
-    /// authority the host gave it — and it never reaches the containment fields,
-    /// which `LiveAuthority` has no words for.
+    /// Replace, atomically, the delegated live authority of the subject this capability
+    /// governs: grant, revoke, widen and narrow are this one call. Pass what the subject should
+    /// hold from now on, or `LiveAuthority::nothing()`. A request outside the ceiling changes
+    /// nothing. The admission grant and the containment fields are out of its reach.
     virtual GrantChange delegate_authority(const GrantAuthority& authority,
                                            LiveAuthority requested) {
         (void)authority;
@@ -292,86 +189,67 @@ public:
         return GrantChange{};
     }
 
-    /// Read the governed subject's baseline, delegated and effective message
-    /// authority — the same values, through the same predicates, that the bus
-    /// itself will use. Scoped to the one subject the capability names; there is
-    /// no argument by which to ask about another.
+    /// Read the governed subject's baseline, delegated and effective message authority, through
+    /// the predicates the bus itself uses. Only that subject: there is no argument for another.
     virtual AuthorityView describe_authority(const GrantAuthority& authority) {
         (void)authority;
         return AuthorityView{};
     }
 
     // ---- Joint publication of latest claims ------------------------------------
-    //
-    // The account is the section header in zen/switchboard/sense.hpp and the
-    // reference page docs/reference/joint-publication.md. Two roles, six verbs,
-    // on the Bus rather than the Switchboard for the reason the administration
-    // verbs are: an operator must be an ORDINARY WEAVE holding a capability, and
-    // a claimant offers from inside its own delivery like it claims.
-    //
-    // The defaults refuse, truthfully: a Bus that is not a live participating
-    // context has no board, no identity and no delivery to speak from. A LOADED
-    // weave's Bus overrides `offer_claim` only: the operator's five verbs keep
-    // these defaults across the ABI, so loaded coordination is refused by name
-    // rather than absent by accident.
+    // On the Bus, so an operator is an ordinary weave holding a capability and a claimant
+    // offers from its own delivery (zen/switchboard/sense.hpp,
+    // docs/reference/joint-publication.md). The defaults refuse with `NoLiveDelivery`. A loaded
+    // weave's Bus overrides `offer_claim` only, so its operator verbs are refused by name.
 
-    /// CLAIMANT: offer the next value of my own key `(me, value's shape)` for
-    /// the exact operation `op`. Admitted through the one gate against the
-    /// declared claim-set, checked against the revision the operation bound,
-    /// stored by the bus until commit or abort. NOTHING IS PUBLISHED HERE.
+    /// Claimant: offer the next value of my own key (me, the value's shape) for operation `op`:
+    /// admitted against the declared claim-set, checked against the bound revision, and kept
+    /// until commit or abort. Nothing is published here.
     virtual JointResult offer_claim(std::uint64_t op, Value value) {
         (void)op;
         (void)value;
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// OPERATOR: bind the exact claimants and current revisions of `keys` into
-    /// one operation. Every key must currently hold a claim whose claimant holds
-    /// a role in the authority's ceiling, and no other live operation may bind it.
-    /// The authority names THIS weave at the exact life and incarnation the host
-    /// minted it for; a successor behind the same id presents one the host minted
-    /// for it, or meets `NotOperator` (zen/switchboard/sense.hpp, `JointAuthority`).
+    /// Operator: bind the exact claimants and current revisions of `keys` into one operation.
+    /// Each key must hold a claim whose claimant holds a role in the authority's ceiling, and
+    /// no other live operation may bind it. The authority must name this weave's current life
+    /// and incarnation, or the call meets `NotOperator`.
     virtual JointBegin begin_joint(const JointAuthority& authority, std::vector<ClaimKey> keys) {
         (void)authority;
         (void)keys;
         return JointBegin{false, 0, JointRefusal::NoLiveDelivery};
     }
 
-    /// OPERATOR: publish. Revalidates everything, then exchanges every offered
-    /// value into its claim record in one protected step. `ok` IS the commitment:
-    /// false means nothing was published. A failed revalidation of THIS operator's
-    /// own Preparing operation ends it (Aborted, with `why`); a request that was not
-    /// this operator's to make -- another operator's operation (`NotOperator`), or
-    /// a capability naming a life or incarnation that is gone -- is refused with no
-    /// effect on the record it named.
+    /// Operator: publish. Revalidates everything, then exchanges every offered value into its
+    /// claim record in one step. `ok` is the commitment: false means nothing was published. A
+    /// failed revalidation of this operator's own Preparing operation aborts it with `why`; a
+    /// request that was not its to make (another operator's operation, or a capability for a
+    /// life or incarnation that is gone) is refused with no effect on that record.
     virtual JointResult commit_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// OPERATOR: end a Preparing operation without publishing; offers are released.
+    /// Operator: end a Preparing operation without publishing; its offers are released.
     virtual JointResult cancel_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// OPERATOR: the operation's state and, when terminal, why.
+    /// Operator: the operation's state and, when terminal, why.
     virtual JointStatus joint_status(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointStatus{JointState::Missing, JointRefusal::NoLiveDelivery};
     }
 
-    /// OPERATOR: RELEASE a terminal record this operator has consumed -- Committed,
-    /// its application settled or still owed, or Aborted with its reason -- so that
-    /// its slot may be reused (SENSE-07). The
-    /// operator's own explicit act: the bus never reuses a record under an operator
-    /// that has not released it, and a record the operator never releases is a slot
-    /// it keeps, up to the published bound. Afterwards the operation reads Missing;
-    /// the per-key facts stay on the claim records. Refused `WrongState` while the
-    /// operation is Preparing (cancel it instead) and `NoSuchOperation` once released.
+    /// Operator: release a terminal record it has consumed, Committed or Aborted, so its slot
+    /// may be reused (SENSE-07). The bus never reuses an unreleased record under its operator.
+    /// Afterwards the operation reads Missing; the per-key facts stay on the claim records.
+    /// Refused `WrongState` while Preparing (cancel it instead), `NoSuchOperation` once released.
     virtual JointResult release_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
