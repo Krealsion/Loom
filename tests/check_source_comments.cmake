@@ -32,7 +32,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/host/lifecycle_wiring[.]hpp$"
     "^include/zen/host/prepared_replacement[.]hpp$"
     "^include/zen/host/terminal_wiring[.]hpp$"
-    "^include/zen/kernel/abi[.]h$"
     "^include/zen/kernel/admission[.]hpp$"
     "^include/zen/kernel/control[.]hpp$"
     "^include/zen/kernel/export[.]hpp$"
