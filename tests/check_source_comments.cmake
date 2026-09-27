@@ -80,7 +80,6 @@ set(ZEN_COMMENT_PENDING
     "^src/isolation/sandbox[.]cpp$"
     "^src/isolation/weave_host_main[.]cpp$"
     "^src/kernel/admission[.]cpp$"
-    "^src/kernel/kernel[.]cpp$"
     "^src/registry[.]cpp$"
     "^src/runs/catalog[.]cpp$"
     "^src/runs/catalog[.]hpp$"
