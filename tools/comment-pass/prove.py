@@ -367,9 +367,10 @@ DEMO_EDITS = (("one-token change", True), ("literal change", True), ("comment-on
               ("a law pointer repeated", True), ("a law pointer dropped", True))
 
 
-def mutations(path, text):
-    """Edits to a file, each in its middle: one code token, one literal, one comment; and in a
-    manifest, the two comment edits only its CMake reading sees."""
+def mutations(path, text, start_text=""):
+    """Edits to a file, each in its middle: one code token, one literal, one comment; in a
+    manifest, the two comment edits only its CMake reading sees; and in a file with a law pointer
+    START had, that pointer repeated and dropped."""
     spans = lex.spans_of(path, text)
     out = {}
     if path in MANIFESTS:
@@ -385,8 +386,10 @@ def mutations(path, text):
     if lex.kind_of(path) == "cxx":
         lines = text.split("\n")
         classes = [c for c, _, _ in lex.line_bytes(text, spans)]
+        had = {k[1] for k in law_lines(path, start_text)}
         pointers = [k for k in range(len(classes))
-                    if classes[k] == "comment" and LAW_LINE.match(lines[k])]
+                    if classes[k] == "comment" and LAW_LINE.match(lines[k])
+                    and re.sub(r"^\s*//[/!]?\s*", "", lines[k]).rstrip() in had]
         if pointers:
             k = pointers[len(pointers) // 2]
             out["a law pointer repeated"] = "\n".join(lines[:k + 1] + [lines[k]] + lines[k + 1:])
@@ -432,7 +435,7 @@ def demo(repo, start_text, path):
             return 1
         print("demo: %d named literal(s) put back in %s first" % (len(pairs), path))
     new = new_lines_for(path, start_text[path])
-    edits = mutations(path, end_text)
+    edits = mutations(path, end_text, start_text[path])
     ok = tried = 0
     for what, want in DEMO_EDITS:
         if what not in edits:
