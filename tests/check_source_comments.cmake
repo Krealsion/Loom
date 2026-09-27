@@ -49,7 +49,6 @@ set(ZEN_COMMENT_PENDING
     "^src/history/dump[.]cpp$"
     "^src/history/record[.]cpp$"
     "^src/host/boot_plan[.]cpp$"
-    "^src/host/boot_plan[.]hpp$"
     "^src/host/config_file[.]cpp$"
     "^src/host/config_file[.]hpp$"
     "^src/host/secure_random[.]hpp$"
