@@ -17,8 +17,8 @@
 # rows in tests/entry_population.txt, when START lacks them; a failure message or exemption
 # reason named below by its START literal, reworded to show no private id; a CI workflow's
 # whole-line `#` comments. Every other changed file must be markdown or this directory's. Every law pointer
-# (`// MSG-09; docs/laws/messaging-laws.md`) must stand where it stood: the same file, above the
-# same code.
+# (`// MSG-09; docs/laws/messaging-laws.md`, after `//`, `///` or `//!`) must stand where it stood:
+# the same file, above the same code, and once. A pointer written over two lines is not one it sees.
 
 import argparse
 import collections
@@ -81,7 +81,9 @@ foreach(line IN LISTS manifest_lines)
     endif()
 endforeach()
 '''
-LAW_LINE = grammar_mod.POINTER
+# A law pointer in any line-comment form. The check's own grammar (grammar.POINTER) is the `//`
+# form alone, the one its block count skips.
+LAW_LINE = re.compile(r"^\s*//[/!]? [A-Z]+-[0-9]{2}(?:\.\.[0-9]{2}|, [A-Z]+-[0-9]{2})*; docs/")
 GRAMMAR = []
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 
@@ -212,8 +214,21 @@ def law_lines(path, text):
         if classes[k] == "comment" and LAW_LINE.match(line):
             nxt = next((re.sub(r"\s+", " ", lines[j]).strip() for j in range(k + 1, len(classes))
                         if classes[j] == "code"), "")
-            out[(path, line.strip(), nxt)] += 1
+            out[(path, re.sub(r"^\s*//[/!]?\s*", "", line).rstrip(), nxt)] += 1
     return out
+
+
+def law_changes(path, start_text, end_text):
+    """(failures, added, made single) for one file's law pointers. A pointer START had and END
+    lacks is a failure, and so is one END repeats above the same code."""
+    a, b = law_lines(path, start_text), law_lines(path, end_text)
+    failures = ["%s: law pointer dropped or moved: %s (above: %s)" % (k[0], k[1][:70], k[2][:50])
+                for k in sorted(a) if k not in b]
+    failures += ["%s: law pointer repeated %d times above the same code: %s (above: %s)" % (
+        k[0], n, k[1][:70], k[2][:50]) for k, n in sorted(b.items()) if n > 1]
+    added = sorted(k for k in b if k not in a)
+    single = sorted(k for k in b if a[k] > 1 and b[k] == 1)
+    return failures, added, single
 
 
 def new_lines_for(path, start_text):
@@ -280,12 +295,15 @@ def main():
             if MANIFEST_KEY_LINE not in f.read():
                 failures.append("%s: its manifest reading changed; restate it here" % check)
     compared = 0
-    laws_start, laws_end = collections.Counter(), collections.Counter()
+    laws_start, laws_added, laws_single = 0, [], []
     for p in sorted(start & end):
         with open(os.path.join(repo, p), encoding="utf-8", newline="") as f:
             end_text = f.read().replace("\r\n", "\n")
-        laws_start += law_lines(p, start_text[p])
-        laws_end += law_lines(p, end_text)
+        law_failures, added, single = law_changes(p, start_text[p], end_text)
+        failures.extend(law_failures)
+        laws_added.extend(added)
+        laws_single.extend(single)
+        laws_start += len(law_lines(p, start_text[p]))
         if p in INSTRUMENTS:
             a, _ = code_form(p, start_text[p])
             b, _ = code_form(p, end_text)
@@ -304,16 +322,16 @@ def main():
         why = compare(p, start_text[p], end_text, new)
         if why:
             failures.append("%s: %s" % (p, why))
-    dropped, added = laws_start - laws_end, laws_end - laws_start
-    for key in sorted(+dropped):
-        failures.append("%s: law pointer dropped or moved: %s (above: %s)" % (key[0], key[1][:70], key[2][:50]))
     print("prove: %d C/C++, CMake and manifest files compared, START %s against the working tree; "
-          "%d law pointers at START, each still above the same code" % (
-              compared, args.start, sum(laws_start.values())))
+          "%d law pointers at START, each still above the same code, once" % (
+              compared, args.start, laws_start))
     for p, n in workflows:
         print("prove: %s changed its whole-line comments only: %d other lines, identical" % (p, n))
-    for key in sorted(+added):
+    for key in laws_added:
         print("prove: law pointer added in %s: %s (above: %s)" % (key[0], key[1][:70], key[2][:50]))
+    for key in laws_single:
+        print("prove: a repeated law pointer made single in %s: %s (above: %s)" % (
+            key[0], key[1][:70], key[2][:50]))
     for d, n in sorted(left_to_git.items()):
         print("prove: set aside by name, left to Git: %s, %d code file(s) removed with it" % (d, n))
     for p in INSTRUMENTS:
@@ -341,7 +359,8 @@ def main():
 # What each demo edit must do: be caught (True) or pass as comment-only (False).
 DEMO_EDITS = (("one-token change", True), ("literal change", True), ("comment-only change", False),
               ("an open bracket in a manifest comment", True),
-              ("a non-ASCII byte in a manifest comment", True))
+              ("a non-ASCII byte in a manifest comment", True),
+              ("a law pointer repeated", True), ("a law pointer dropped", True))
 
 
 def mutations(path, text):
@@ -359,6 +378,15 @@ def mutations(path, text):
                 lines[:k] + [lines[k] + " [ still open"] + lines[k + 1:])
             out["a non-ASCII byte in a manifest comment"] = "\n".join(
                 lines[:k] + [lines[k] + " — then more"] + lines[k + 1:])
+    if lex.kind_of(path) == "cxx":
+        lines = text.split("\n")
+        classes = [c for c, _, _ in lex.line_bytes(text, spans)]
+        pointers = [k for k in range(len(classes))
+                    if classes[k] == "comment" and LAW_LINE.match(lines[k])]
+        if pointers:
+            k = pointers[len(pointers) // 2]
+            out["a law pointer repeated"] = "\n".join(lines[:k + 1] + [lines[k]] + lines[k + 1:])
+            out["a law pointer dropped"] = "\n".join(lines[:k] + lines[k + 1:])
     idents = []
     for kind, s, e in spans:
         if kind != lex.CODE:
@@ -408,7 +436,8 @@ def demo(repo, start_text, path):
                 print("demo: %s: %s has nothing to change" % (what, path))
             continue
         tried += 1
-        why = compare(path, start_text[path], edits[what], new)
+        why = compare(path, start_text[path], edits[what], new) or next(
+            iter(law_changes(path, start_text[path], edits[what])[0]), None)
         caught = why is not None
         print("demo: %s in %s: %s%s" % (what, path, "caught" if caught else "not a difference",
                                        (" -- " + why) if why else ""))
