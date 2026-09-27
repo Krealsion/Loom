@@ -54,7 +54,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/terminal/input_lex[.]hpp$"
     "^include/zen/terminal/vocabulary[.]hpp$"
     "^include/zen/ui/pixel[.]hpp$"
-    "^include/zen/ui/tree[.]hpp$"
     "^include/zen/value[.]hpp$"
     "^include/zen/weave[.]hpp$"
     "^include/zen/wire[.]hpp$"
