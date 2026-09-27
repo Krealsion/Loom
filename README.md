@@ -152,8 +152,9 @@ target_link_libraries(my_weave PRIVATE loom::core)          # values, schemas, t
 ```
 
 The exported surface is deliberately smaller than the build tree: `loom::core`,
-`loom::switchboard`, `loom::kernel`, and the `sanitize` and `warnings` interface targets, carried
-so that `-Werror` never reaches your sources. Exported names match the in-tree aliases exactly, so
+`loom::switchboard`, `loom::terminal`, `loom::history`, `loom::bridge`, `loom::kernel` where it was
+built, and the `sanitize` and `warnings` interface targets, carried so that `-Werror` never reaches
+your sources. Exported names match the in-tree aliases exactly, so
 a build from source and a build against the installed package use the same link lines.
 
 **MSVC consumers get the conforming preprocessor automatically.** `ZEN_SHAPE`'s access tags

@@ -1,36 +1,12 @@
-# A single test binary; the doctest framework is compiled exactly once in
-# doctest_main.cpp. Each suite is registered with CTest so `ctest` reports them
-# individually and `-R <suite>` can target one.
-#
-# Population honesty (R2F-D). Three mechanisms, none of which trusts the other two:
-#   * registration is DERIVED from the TEST_SUITE(...) declarations in the compiled
-#     sources, so there is no second list to drift out of sync with them;
-#   * doctest_main.cpp refuses a run that selected zero cases, so a registered name that
-#     no longer matches anything fails instead of passing in 0.00 s;
-#   * suite_population.txt + check_population.cmake pin the exact suite inventory per
-#     platform gate and a per-suite case floor, so a suite that VANISHES is caught even
-#     though a vanished suite registers nothing to fail.
-# The official lane that ties them together is tests/verify.cmake (see AGENTS.md).
-#
-# Gating: KERNEL-dependent pieces (the kernel/manager/capabilities suites and the portable
-# loadable-weave fixtures) ride `if(TARGET zen-kernel)` — the kernel exists on Linux always and
-# on Windows only under LOOM_ENABLE_WINDOWS_KERNEL (the opt-in development/demo backend), so the
-# suites follow the target wherever it is. ISOLATION-dependent pieces (the sandbox suites, the
-# probe/bomb fixtures, the policy mods, the child host, the cgroup-scoped registrations) stay
-# behind `if(NOT WIN32)` — the sandbox exists only there. On Linux every gate is taken — the full
-# source set, the full weavelib set, and the full suite list are exactly as before.
-#
-# Note: test_capabilities rides the kernel gate because it loads a real weave library via
-# ZEN_SO_WEAVE (it exercises capability enforcement through the kernel loader) — despite
-# "capabilities" reading as portable, it cannot build without the loader.
+# One test binary, zen-tests: doctest is compiled once (doctest_main.cpp) and each suite is its own
+# CTest entry, registered from the TEST_SUITE(...) declarations of the sources compiled here. What
+# holds that population honest is in docs/laws/population-laws.md; the lane is tests/verify.cmake.
+# The kernel suites and the loadable fixtures ride `if(TARGET zen-kernel)` (Linux, and Windows
+# under LOOM_ENABLE_WINDOWS_KERNEL); the sandbox suites ride `if(NOT WIN32)`. test_capabilities
+# rides the kernel gate because it loads a real weave library.
 
-# The test sources, kept in named lists rather than inline: they are the AUTHORITATIVE
-# suite inventory, and the CTest registration below is derived from them by reading the
-# TEST_SUITE(...) declarations out of exactly the sources this configuration compiles.
-# (R2F-D / POP-01. Before it, a hand-maintained ZEN_TEST_SUITES list sat beside them, and
-# a renamed suite left the old CTest name registered against nothing: `ctest -R switchboard`
-# reported Passed in 0.00 s having run 0 cases. Two lists that must agree, with nothing
-# making them agree, is the whole defect.)
+# The test sources, by gate. They are the suite inventory: the CTest registration below reads the
+# suite names out of exactly the sources compiled, so there is no second list to drift.
 set(ZEN_TEST_SOURCES_PORTABLE
     test_schema.cpp
     test_value.cpp
@@ -170,53 +146,32 @@ if(NOT WIN32)
     target_link_libraries(zen-tests PRIVATE zen-isolation)
 endif()
 
-# The independent required-weave-contract population (POP-05, C3): the build-graph sweep
-# and the exemption declaration. It reads target types and link closures, never the
-# contract roll — which is exactly what lets the `weave_population` entry at the bottom of
-# this file notice an artifact that quietly stopped taking the contract.
+# The required-contract population (POP-05): the build-graph sweep and the exemption declaration.
+# It reads target types and link closures, never the contract roll, which is what lets the
+# `weave_population` entry notice an artifact that stopped taking the contract.
 include(${CMAKE_CURRENT_SOURCE_DIR}/weave_population.cmake)
 
-# ---- Loadable test Weave libraries + the child host ----
-# The PORTABLE fixture set is loaded by the kernel/manager/capabilities suites and follows the
-# kernel target (Linux always; Windows under the opt-in backend, where they build as .dll).
-# The probe/bomb variants, the policy mods, and the child host are isolation/policy ground —
-# Linux-only, as ever.
+# ---- Loadable test weave libraries and the child host ----
+# The portable fixtures are loaded by the kernel, manager and capabilities suites and follow the
+# kernel target (built as .dll on Windows). The probe and bomb variants, the policy mods and the
+# child host are sandbox ground, and Linux-only.
 if(TARGET zen-kernel)
 
-# The weave-library law — a loadable weave's statics must live and die with its own
-# library (KERN-05) — comes from loom_weave_build_contract(), the same exported function
-# a stranger gets from find_package(loom). It was a local variable holding a literal
-# -fno-gnu-unique here until R2F-E; the house had the fix and the guest did not (COLD-1
-# F-22). Calling the exported surface is what stops the two paths meaning different
-# things: if the contract ever stops applying on the stranger's path, these fixtures stop
-# getting it too.
-#
-# WHAT SAYS SO WHEN A FIXTURE LOSES IT — corrected by COLD-2 finding C-3. This comment
-# used to claim "the kernel suite's own unload/reload cases say so". They do not, and the
-# audit measured it: deleting the one contract line below dropped twenty-three loadable
-# weaves off the roll, thirteen STB_GNU_UNIQUE symbols came back into
-# libzen_test_weave.so, and every kernel unload/reload case still passed. Those cases
-# exercise the LOADER's bookkeeping — exact-once teardown, refused reload, the handle
-# chain — which is correct either way; whether the image's statics actually died is a
-# build-artifact fact no in-process case observes. The truthful statement is narrower and
-# is now a mechanism rather than a hope: the `weave_population` entry compares this
-# directory's loadable weaves against the contract roll and NAMES any that left it, and
-# `weave_contract` then re-reads the built artifacts' symbol tables. Neither is a test
-# case; both run in every lane.
-#
+# A loadable weave's statics live and die with its own library (KERN-05). The fixtures take that
+# from loom_weave_build_contract(), the function a stranger gets from find_package(loom), so the
+# two paths cannot mean different things. No in-process case sees a fixture lose it (the kernel's
+# unload cases test the loader's bookkeeping, right either way), so `weave_population` and
+# `weave_contract` below say so from the build graph and the built symbol tables.
+
 # One configurable source compiled into several variants, plus a bad-ABI lib.
 function(zen_add_test_weave target)
     add_library(${target} SHARED weavelib/test_weave.cpp)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
     loom_weave_build_contract(${target})
     target_compile_definitions(${target} PRIVATE ${ARGN})
-    # C4702 (unreachable code) is an MSVC /W4 warning with no GCC counterpart, and here it
-    # is CORRECT rather than wrong: this one source is compiled into ~25 variants selected
-    # by #if, and a variant whose branch ends in an unconditional `return` (ZEN_WEAVE_DEFERS)
-    # genuinely leaves the shared Ping tail below it unreachable. That is the fixture's
-    # construction, not a defect in it, and rearranging a lifecycle fixture to satisfy a
-    # reachability warning would change test code for a compiler's benefit. Scoped to these
-    # variant targets only -- Zen's warning policy is untouched everywhere else.
+    # MSVC's C4702 (unreachable code) is right here and harmless: one source is compiled into
+    # many variants by #if, and a variant that returns early leaves the shared tail unreachable.
+    # Silenced for these variant targets only.
     target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4702>)
 endfunction()
 
@@ -225,48 +180,44 @@ zen_add_test_weave(zen_test_weave_b) # an identical "rebuild", for hot-reload
 zen_add_test_weave(zen_test_weave_badsnap ZEN_WEAVE_MALFORMED_SNAPSHOT)
 zen_add_test_weave(zen_test_weave_badmsg ZEN_WEAVE_MALFORMED_MESSAGE)
 zen_add_test_weave(zen_test_weave_v2 ZEN_WEAVE_STATE_V2)
-# RTH-1: a loaded handler that THROWS. Its exception is caught at the ABI seam and
-# returns as a status, which used to be discarded -- so the bus recorded and announced a
-# plain Delivered for a handler that never finished.
+# A loaded handler that throws: its exception is caught at the ABI seam and returns as a status,
+# which the bus must record rather than announce a plain Delivered.
 zen_add_test_weave(zen_test_weave_throws ZEN_WEAVE_THROW_ON_MAGIC)
-# 1b (the letter): a predecessor that declares zen.PrepareShutdown and writes a
-# Bequest, and a DIFFERENTLY-SHAPED heir (Counter v2) that claims by role on wake.
+# The letter: a predecessor that declares zen.PrepareShutdown and writes a Bequest, and a
+# differently shaped heir (Counter v2) that claims by role on wake.
 zen_add_test_weave(zen_test_weave_bequeaths ZEN_WEAVE_BEQUEATHS)
 zen_add_test_weave(zen_test_weave_heir ZEN_WEAVE_HEIR)
 # ...and one that declares the ceremony then never answers: the honest wedge.
 zen_add_test_weave(zen_test_weave_wedged ZEN_WEAVE_WEDGED)
-# R2A-1 (activation): a participant that declares zen.Activated and records what it
-# was told, its identical "rebuild" for reload-in-place, and a DRIFT twin whose state
-# schema is identical but whose door contract has one extra shape — the negative that
-# proves reload compares the whole contract, not just the state.
+# Activation: a participant that declares zen.Activated and records what it was told, its
+# identical "rebuild" for reload in place, and a drift twin whose state schema is identical but
+# whose door contract has one extra shape: reload compares the whole contract, not just the state.
 zen_add_test_weave(zen_test_weave_activates ZEN_WEAVE_ACTIVATES)
 zen_add_test_weave(zen_test_weave_activates_b ZEN_WEAVE_ACTIVATES)
 zen_add_test_weave(zen_test_weave_activates_drift ZEN_WEAVE_ACTIVATES ZEN_WEAVE_ACTIVATES_DRIFT)
-# R2A-1a: the drift twin whose extra door DISAGREES about Greet v1, so the agreement
-# wall makes a rejected candidate's schema admission observable from outside.
+# A drift twin whose extra door disagrees about Greet v1, so the agreement wall makes a rejected
+# candidate's schema admission observable from outside.
 zen_add_test_weave(zen_test_weave_activates_conflict
     ZEN_WEAVE_ACTIVATES ZEN_WEAVE_ACTIVATES_CONFLICT)
-# R2B-2: the DEFERRING STEWARD — a dynamically loaded weave that takes an ask's
-# answer right away with it, returns without answering, and answers from a LATER
-# handler. It is the central proof, and it must be a real .so: the whole question
-# is whether the right survives the handler that earned it, and a native lambda
-# holding the old Mail would answer a different question.
+# The deferring steward: a loaded weave that takes an ask's answer with it, returns without
+# answering, and answers from a later handler. It must be a real .so: the question is whether the
+# right survives the handler that earned it, and a native lambda holding the old Mail would answer
+# a different question.
 zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
-# R2B-3b-1a: the immediate-answer parity fixture, and its answer-twice twin.
+# The immediate-answer fixture, and its twin that answers twice.
 zen_add_test_weave(zen_test_weave_answers ZEN_WEAVE_ANSWERS)
 zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSWERS_TWICE)
-# R2E-0 / Night Lab III P-011: the silent-seam reproducer. Emits a shape only this
-# artifact knows, so the host seam cannot resolve it.
+# An artifact that emits a shape only it knows, so the host seam cannot resolve it (a silent
+# seam Night Lab found).
 zen_add_test_weave(zen_test_weave_seam_emit ZEN_WEAVE_SEAM_EMIT)
-# FRIC-0: the same unresolvable shape with no address on it. Publishes SeamOnly v1
-# (unheard, and therefore not a refusal) and then a resolvable Pong whose bytes fail
-# the gate (undelivered, and therefore still one).
+# The same unresolvable shape with no address on it: publishes SeamOnly v1 (unheard, so not a
+# refusal) and then a resolvable Pong whose bytes fail the gate (undelivered, so still one).
 zen_add_test_weave(zen_test_weave_seam_publish ZEN_WEAVE_SEAM_PUBLISH)
-# R2E-0/v6: the Sense parity fixture — claims, forged-office refusal, and a
-# synchronous read-back, all from the far side of the seam.
+# The Sense fixture: claims, a forged office refused, and a synchronous read-back, all from the
+# far side of the seam.
 zen_add_test_weave(zen_test_weave_senses ZEN_WEAVE_SENSES)
-# Schema admission (P-LOOM-07 / ABI v9): the declared EMITTER and its divergent twin —
-# the loaded half of the case that admitted a stale desktop against a newer Workshop.
+# Schema admission (ABI v9): the declared emitter and its divergent twin, the loaded half of the
+# case where a stale application was admitted against a newer peer's emitted shape.
 zen_add_test_weave(zen_test_weave_emits ZEN_WEAVE_EMITS_GREET)
 zen_add_test_weave(zen_test_weave_emits_conflict ZEN_WEAVE_EMITS_GREET ZEN_WEAVE_GREET_CONFLICT)
 # ...the nested-component cases: a disagreement only the component closure can see
@@ -280,10 +231,10 @@ zen_add_test_weave(zen_test_weave_nest_agree ZEN_WEAVE_NEST_OLD ZEN_WEAVE_NEST_A
 # ...and the guide's copied weave that kept `Ping v1`'s name and added a field.
 zen_add_test_weave(zen_test_weave_ping_drift ZEN_WEAVE_PING_DRIFT)
 
-# R2B-3b-3: the `versioned.service` pair — ONE source, two real artifacts. v1 is
-# the incumbent that answers "v1" throughout; v2 (ZEN_VERSIONED_CANDIDATE) is the
-# same production service plus the preparation conversation. Built from the same
-# source on purpose: the artifact that prepares must be the artifact that goes live.
+# The `versioned.service` pair: one source, two real artifacts. v1 is the incumbent that answers
+# "v1" throughout; v2 (ZEN_VERSIONED_CANDIDATE) is the same production service plus the
+# preparation conversation. One source on purpose: the artifact that prepares must be the one
+# that goes live.
 function(zen_add_versioned_service target)
     add_library(${target} SHARED weavelib/versioned_service.cpp)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
@@ -294,9 +245,9 @@ endfunction()
 zen_add_versioned_service(zen_test_versioned_v1)
 zen_add_versioned_service(zen_test_versioned_v2 ZEN_VERSIONED_CANDIDATE)
 
-# R2E-0: the Handoff Garden. Two REAL ledger artifacts whose state schemas are
-# genuinely incompatible (flat scalars vs nested messages + a list), plus the
-# temporary migrator that authors v1 -> v2 meaning and is unloaded afterwards.
+# The handoff ledgers: two real artifacts whose state schemas are genuinely incompatible (flat
+# scalars against nested messages and a list), and the temporary migrator that authors the v1 to
+# v2 meaning and is unloaded afterwards.
 function(zen_add_handoff_ledger target)
     add_library(${target} SHARED weavelib/handoff_ledger.cpp)
     target_link_libraries(${target} PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
@@ -318,20 +269,19 @@ target_link_libraries(zen_test_dispatch PRIVATE loom zen-switchboard zen-warning
 loom_weave_build_contract(zen_test_dispatch)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_DISPATCH=\"$<TARGET_FILE:zen_test_dispatch>\"")
 
-# Joint publication (ABI v8): a real loaded claimant that offers into a joint
-# publication across the seam and hears `claim_published` back across it, answering
-# all three ways (J7 Applied, J11 Failed, J21 Declined).
+# Joint publication (ABI v8): a real loaded claimant that offers into a joint publication across
+# the seam and hears `claim_published` back across it, answering all three ways: Applied, Failed,
+# Declined.
 add_library(zen_test_joint SHARED weavelib/joint_probe.cpp)
 target_link_libraries(zen_test_joint PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_joint)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_JOINT=\"$<TARGET_FILE:zen_test_joint>\"")
 
-# The supplied host's probe, in two variants from one source. It is the fixture the
-# `host_process` lane drives a REAL loom-host against: it counts authenticated
-# activations, sends itself a message on activation (the send an approved permission must
-# already cover), re-arms a Spin forever (the cooperative busy weave), and — in the FORGE
-# variant — authors an unasked `zen.Result` at the console, which is the value that once
-# became the subject of a host-minted administration capability.
+# The supplied host's probe, two variants from one source, for the `host_process` entries' real
+# loom-host: it counts authenticated activations, sends itself a message on activation (a send an
+# approved permission must already cover), re-arms a Spin forever (the cooperative busy weave),
+# and in the FORGE variant authors an unasked `zen.Result` the console must not take for an
+# answer.
 add_library(zen_host_probe SHARED weavelib/host_probe.cpp)
 target_link_libraries(zen_host_probe PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_host_probe)
@@ -340,9 +290,9 @@ target_link_libraries(zen_host_probe_forge PRIVATE loom zen-switchboard zen-warn
 target_compile_definitions(zen_host_probe_forge PRIVATE ZEN_PROBE_FORGE)
 loom_weave_build_contract(zen_host_probe_forge)
 
-# R2D-0: the office worker — dynamic office-authorship parity. Loaded in-process
-# under the role "worker.a" (kernel suite) and out-of-process (isolation suite),
-# where the pipe's fail-closed law is the thing under test.
+# The office worker: office authorship across the seam, loaded in process under the role
+# "worker.a" (kernel suite) and out of process (isolation suite), where the pipe's fail-closed
+# rule is what is under test.
 add_library(zen_test_office_worker SHARED weavelib/office_worker.cpp)
 target_link_libraries(zen_test_office_worker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_office_worker)
@@ -351,33 +301,27 @@ add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_badabi)
 
-# R2B-1: the artifact built against the PREVIOUS ABI. bad_abi declares a FUTURE
-# version (a host too old for it); this one declares version 1 — the real stale
-# artifact the provenance break creates — so "paid explicitly" has a witness.
+# An artifact built against the previous ABI: bad_abi declares a future version (a host too old
+# for it), this one declares version 1, a real stale artifact, so refusing it has a witness.
 add_library(zen_test_staleabi SHARED weavelib/stale_abi.cpp)
 target_link_libraries(zen_test_staleabi PRIVATE loom zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_staleabi)
 
-# R2F-E: the build contract's own pair. ONE source, two artifacts — one through
-# loom_weave_build_contract(), one deliberately bypassing it. The bypass twin is not a
-# defect: it is the positive control that keeps the question askable, exactly the way
-# the stale-ABI fixture keeps "the previous ABI refuses" askable after every bump. It
-# is also the only artifact in this tree built to be reload-UNSAFE on purpose, so it
-# links nothing — its one symbol cannot alias anything else in the process.
+# The build contract's own pair: one source, two artifacts, one through
+# loom_weave_build_contract() and one deliberately bypassing it. The bypass twin is the positive
+# control that keeps the question askable, as the stale-ABI fixture keeps "the previous ABI
+# refuses" askable. It is the only artifact here built to be reload-unsafe on purpose, so it links
+# nothing: its one symbol cannot alias anything else in the process.
 add_library(zen_test_contract_applied SHARED weavelib/contract_sentinel.cpp)
 loom_weave_build_contract(zen_test_contract_applied)
 
 add_library(zen_test_contract_bypass SHARED weavelib/contract_sentinel.cpp)
-# (no loom_weave_build_contract here — that absence IS the control)
-#
-# ...and the required-population sweep must be told so IN WRITING, because it classifies
-# every shared library in this directory as a loadable weave that owes the contract, and
-# it is right to. The exemption lives on the target rather than in a list elsewhere, so it
-# cannot outlive the artifact; the reason is mandatory; it is printed on every run; and
-# check_weave_population.cmake fails if an exempt target ever turns up ON the roll — which
-# is the one way this control could rot into a second contracted twin proving nothing.
+# (no loom_weave_build_contract here: that absence is the control)
+# The required-population sweep counts every shared library here as owing the contract, so the
+# exemption is written on the target with its reason, printed every run; and
+# check_weave_population.cmake fails if an exempt target ever turns up contracted.
 zen_weave_contract_exempt(zen_test_contract_bypass
-    "the F-22 negative control: same source as zen_test_contract_applied, contract "
+    "the negative control: same source as zen_test_contract_applied, contract "
     "deliberately withheld, so the unique-symbol sentinel it still carries is what keeps "
     "claim 1 of weave_contract falsifiable")
 
@@ -454,44 +398,43 @@ if(NOT WIN32)
 zen_add_test_weave(zen_test_weave_crasher
     ZEN_WEAVE_CRASH_ON_MAGIC ZEN_WEAVE_CRASH_ON_REVIVE ZEN_WEAVE_LOW_RELOADS)
 zen_add_test_weave(zen_test_weave_silent ZEN_WEAVE_SILENT)
-# B3: a child that reaches for the network directly, to prove the OS sandbox blocks it.
+# A child that reaches for the network directly, to prove the OS sandbox blocks it.
 zen_add_test_weave(zen_test_weave_netprobe ZEN_WEAVE_NET_PROBE)
-# B4: a child that reaches for the filesystem directly, to prove the mount-ns view.
+# A child that reaches for the filesystem directly, to prove the mount-namespace view.
 zen_add_test_weave(zen_test_weave_fsprobe ZEN_WEAVE_FS_PROBE)
-# C-2: a child that inventories the descriptors it actually inherited, tries to USE the
-# one the host parked, and independently attempts a fresh socket — so "the namespace is
-# real" and "ambient host descriptors were removed" are two answers, not one.
+# A child that inventories the descriptors it inherited, tries to use the one the host parked, and
+# independently attempts a fresh socket, so "the namespace is real" and "ambient host descriptors
+# were removed" are two answers, not one.
 zen_add_test_weave(zen_test_weave_fdprobe ZEN_WEAVE_FD_PROBE)
-# C-2a: a child that reports its COMPLETE environment, so "the host's ambient environment
-# did not cross" is an assertion about the whole set rather than about the one variable
-# somebody remembered to plant.
+# A child that reports its complete environment, so "the host's ambient environment did not
+# cross" is an assertion about the whole set rather than about one planted variable.
 zen_add_test_weave(zen_test_weave_envprobe ZEN_WEAVE_ENV_PROBE)
-# B5: a child that bombs memory (OOM-kill under memory.max, with a small reload budget so
-# it quarantines) and one that fork-bombs (bounded by pids.max).
+# A child that bombs memory (OOM-killed under memory.max, with a small reload budget so it
+# quarantines) and one that fork-bombs (bounded by pids.max).
 zen_add_test_weave(zen_test_weave_membomb ZEN_WEAVE_MEM_BOMB ZEN_WEAVE_LOW_RELOADS)
 zen_add_test_weave(zen_test_weave_forkbomb ZEN_WEAVE_FORK_BOMB)
 
-# Policy phase (P1): a woven mod that *asks* for network + filesystem write (via
-# ZEN_ASK), used to prove the ask is not a grant — it still lands on the floor.
+# A mod that asks for network and filesystem write (through ZEN_ASK), to prove an ask is not a
+# grant: it still lands on the floor.
 add_library(zen_test_mod_storage SHARED weavelib/mod_storage.cpp)
 target_link_libraries(zen_test_mod_storage PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 
-# Policy phase (P1, Part B): a storage-client mod that persists/retrieves purely by
-# messaging the "storage" broker (zero disk), and the StorageBroker itself.
+# A storage-client mod that stores and retrieves purely by messaging the "storage" broker (no
+# disk), and the StorageBroker itself.
 add_library(zen_test_storage_client SHARED weavelib/storage_client.cpp)
 target_link_libraries(zen_test_storage_client PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 add_library(zen_test_storage_broker SHARED weavelib/storage_broker.cpp)
 target_link_libraries(zen_test_storage_broker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 
-# Policy phase (P2, the NetworkBroker): a net-client mod that reaches the network only
-# through the broker, and the NetworkBroker itself (raw TCP, allow-list, no dependency).
+# A net-client mod that reaches the network only through the NetworkBroker, and the broker itself
+# (raw TCP, an allow-list, no dependency).
 add_library(zen_test_net_client SHARED weavelib/net_client.cpp)
 target_link_libraries(zen_test_net_client PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 add_library(zen_test_net_broker SHARED weavelib/net_broker.cpp)
 target_link_libraries(zen_test_net_broker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 
-# Confused-deputy proof (Part 3): a malicious mod that forges a role-send's wire reply_to to point
-# at a different Weave; the host must ignore it and reply to the stamped sender.
+# The confused deputy: a mod that forges a role-send's wire reply_to to point at a different
+# weave; the host must ignore it and reply to the stamped sender.
 add_library(zen_test_forge_client SHARED weavelib/forge_client.cpp)
 target_link_libraries(zen_test_forge_client PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 
@@ -506,8 +449,8 @@ set(ZEN_ISOLATION_WEAVE_LIBS zen_test_weave_crasher zen_test_weave_silent
     zen_test_weave_envprobe zen_test_weave_membomb
     zen_test_weave_forkbomb zen_test_mod_storage zen_test_storage_client
     zen_test_storage_broker zen_test_net_client zen_test_net_broker zen_test_forge_client
-    # R2B-2: the deferring steward is mounted out-of-process too, to pin that the
-    # capability FAILS CLOSED across the pipe rather than being faked across it.
+    # The deferring steward mounted out of process too, to pin that the capability fails closed
+    # across the pipe rather than being faked across it.
     zen_test_weave_defers)
 add_dependencies(zen-tests ${ZEN_ISOLATION_WEAVE_LIBS})
 
@@ -534,21 +477,11 @@ target_compile_definitions(zen-tests PRIVATE
 
 endif() # NOT WIN32 (isolation/policy fixtures + child host)
 
-# HOW THIS PROJECT CONSUMES DOCTEST, in one place because there are two test binaries
-# and two places that must agree is the drift this directory already refuses elsewhere.
-#
-#   * doctest's own header trips -Wsign-conversion etc.; it is third-party, so we do not
-#     hold it to Zen's warning policy. Mark its include dir as system.
-#   * DOCTEST_CONFIG_USE_STD_HEADERS makes doctest INCLUDE <ostream> and friends instead
-#     of forward-declaring them inside namespace std. Its forward declarations leave
-#     std::basic_ostream INCOMPLETE where doctest stringifies a value, so the class's
-#     MEMBER operator<<(const void*) is invisible and only free operators are candidates.
-#     With MSVC's STL that is fatal for any shared_ptr: std::operator<<(ostream&, const
-#     shared_ptr<T>&) is found by ADL, doctest's detector accepts it, and its body
-#     (`_Out << _Px.get()`) then hard-errors -- C2676 on eight ordinary
-#     `REQUIRE(some_schema_ptr != nullptr)` lines that libstdc++ compiles fine. doctest
-#     ships this macro for exactly this class of standard-library difference; it changes
-#     no assertion's meaning, only which declarations doctest relies on.
+# How this project consumes doctest, in one place for both test binaries. Its include directory is
+# a system one, so its own warnings are not held to Zen's policy. DOCTEST_CONFIG_USE_STD_HEADERS
+# makes it include <ostream> rather than forward-declare it: with MSVC's STL a forward-declared
+# ostream hides the member operator<<(const void*), and `REQUIRE(ptr != nullptr)` on a
+# shared_ptr fails to compile (C2676). The macro changes no assertion's meaning.
 add_library(zen-doctest INTERFACE)
 target_include_directories(zen-doctest SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -556,30 +489,16 @@ target_compile_definitions(zen-doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 
 target_link_libraries(zen-tests PRIVATE zen-doctest)
 
-# ---- CTest registration, DERIVED from the suite declarations in the sources ----------
-#
-# doctest returns the failed-assertion count as its exit code, and doctest_main.cpp turns a
-# zero-case run into exit 70, so CTest's exit-status check is the source of truth for both
-# "did it fail" and "was there anything to run at all" — no output-scraping needed.
-#
-# Reading the names out of the sources is what removes the F-2 drift by construction: there
-# is no second place to keep in sync, so a rename MOVES the registered test instead of
-# orphaning it. The three things a derivation cannot see on its own are covered elsewhere,
-# deliberately:
-#   * a suite compiled out by an #if, or one whose cases all vanish — the source still names
-#     it, so it still registers, and the run selects 0 cases → doctest_main.cpp fails it;
-#   * a source that disappears from the lists above — its suite leaves the built binary, and
-#     tests/suite_population.txt no longer matches → the `population` test fails;
-#   * a suite absent because its platform gate is off — declared absent in the manifest,
-#     reported as absent, never reported as passed.
-#
-# The derivation runs at CONFIGURE time, and deliberately does not add the sources to
-# CMAKE_CONFIGURE_DEPENDS: on the WSL/drvfs lane that would re-configure for minutes on every
-# test edit, and it buys nothing, because the stale window fails closed from both ends. Rename
-# a suite and merely rebuild: the old name is still registered, selects zero cases, and
-# doctest_main.cpp fails it. Re-configure: the registration moves to the truthful new name and
-# the `population` contract fails until the manifest is updated on purpose. Neither path can
-# produce a green.
+# ---- CTest registration, derived from the suite declarations in the sources ----------
+# doctest exits with the failed-assertion count and doctest_main.cpp turns a zero-case run into
+# exit 70, so CTest's exit status answers both "did it fail" and "was there anything to run". A
+# rename moves the registered entry instead of orphaning it; a suite compiled out, a source
+# dropped from the lists or a gate turned off is caught by doctest_main.cpp, the `population`
+# entry or a declared absence (docs/laws/population-laws.md).
+
+# Read at configure time, deliberately without the sources in CMAKE_CONFIGURE_DEPENDS: a stale
+# registration fails closed either way (an old name selects zero cases; a new one fails
+# `population` until the manifest says so), and re-configuring on every test edit is slow.
 function(zen_suites_from_sources out_var)
     set(discovered "")
     foreach(src IN LISTS ARGN)
@@ -608,11 +527,9 @@ foreach(suite IN LISTS ZEN_TEST_SUITES_DIRECT)
     add_test(NAME ${suite} COMMAND zen-tests --test-suite=${suite} --no-skipped-summary)
 endforeach()
 
-# The guard's own witnesses, and the reason they are two entries rather than one: CTest
-# ignores the exit code when PASS_REGULAR_EXPRESSION is set, so a single test could pin
-# either the refusal or the diagnostic but not both. This IS the F-2 control, run every
-# lane: a filter naming a suite that no compiled case belongs to (the shape a rename, an
-# #if or a deletion produces) must exit nonzero AND say why.
+# The guard's own witnesses, two entries because CTest ignores the exit code when
+# PASS_REGULAR_EXPRESSION is set: a filter naming a suite no compiled case belongs to (what a
+# rename, an #if or a deletion produces) must exit nonzero and say why.
 add_test(NAME empty_population_refused
     COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
 set_tests_properties(empty_population_refused PROPERTIES WILL_FAIL TRUE)
@@ -639,37 +556,25 @@ if(NOT WIN32)
         $<TARGET_FILE:zen-tests>)
 endif() # NOT WIN32 (isolation/policy/all suites)
 
-# ---- The population contract (POP-01 / POP-02) ---------------------------------------
-#
-# The registration above cannot see its own absences: a suite that is gone is simply not
-# registered, and a CTest listing that is short by six entries looks exactly like a
-# platform where six entries were never meant to exist. tests/suite_population.txt is
-# where the difference is written down, and this entry is what enforces it — exact suite
-# inventory per active gate, plus a per-suite case floor. It runs no cases (doctest query
-# modes only), so it costs a fraction of a second and can sit in every lane.
+# ---- The population contract (POP-01, POP-02) ------------------------------------------
+# A suite that is gone is simply not registered, and a short CTest listing looks like a platform
+# where those entries were never meant to exist. suite_population.txt writes the difference down
+# and this entry enforces it, the exact suites per active gate and a case floor for each, in
+# doctest's query modes without running a case.
 # Comma-separated: a ;-list would be split into separate arguments on the command line.
 string(REPLACE ";" "," zen_population_gates_arg "${ZEN_POPULATION_GATES}")
 
-# The same gate set, written where the OFFICIAL LANE can read it (VOLATILE-2a). The lane's
-# CTest-entry inventory needs to know which configuration this is, and it runs standalone
-# with nothing but a build directory. Written from the one variable the `population` entry
-# reads on the next line, so the two cannot come to disagree about which gates are on.
-#
-# It DESCRIBES the build; it never requires anything. suite_population.txt and
-# entry_population.txt are what require, and a description that got this wrong makes a
-# missing entry look declared-absent -- which is why the inventory refuses a gate set that
-# is empty or that has lost `portable`.
+# The same gate set, written where the official lane can read it: its entry inventory runs with
+# nothing but a build directory. It describes the build and requires nothing, so the inventory
+# refuses a gate set that is empty or has lost `portable`.
 file(WRITE ${CMAKE_BINARY_DIR}/zen-test-gates.cmake
      "# Written by tests/CMakeLists.txt at configure time. A description of this build\n"
      "# tree's active gates, read by tests/check_entry_population.cmake. Not an expectation.\n"
      "set(ZEN_ACTIVE_GATES \"${ZEN_POPULATION_GATES}\")\n")
 
-# ZEN_BUILD_DIR and ZEN_BUILD_CONFIG are what let this entry take the CTest-ENTRY inventory
-# for itself (VOLATILE-B1) rather than reading the lane's source text for the name of a
-# function. It asks `ctest -N` which entries this configured build registered, which is a
-# question about the build and not about this run's selection -- so it answers the same under
-# `ctest`, under the official lane, and under a subset run that happens to include it.
-# $<CONFIG> is empty under a single-configuration generator and is handled as such.
+# ZEN_BUILD_DIR and ZEN_BUILD_CONFIG let this entry take the CTest-entry inventory itself, by
+# asking `ctest -N` what this build registered, so it answers the same under `ctest`, the lane or
+# a subset run. $<CONFIG> is empty under a single-configuration generator and is handled so.
 add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_TESTS_EXE=$<TARGET_FILE:zen-tests>
     -DZEN_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/suite_population.txt
@@ -678,19 +583,11 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
     -DZEN_BUILD_CONFIG=$<CONFIG>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_population.cmake)
 
-# ---- The documentation-link contract (VOLATILE-2) -------------------------------------
-#
-# The only entry that interrogates the SOURCE TREE rather than a build: every repo-local
-# documentation reference this repository makes must still resolve -- markdown links and
-# their #anchors, and the repository-relative `docs/...md` paths written in first-party
-# C/C++ comments. It reads no build output, so it registers in every configuration and on
-# every platform, which is the point: the lanes most likely to notice a path that stopped
-# resolving are the ones a hand-run script never reaches.
-#
-# Pure CMake, like every other repository-owned check here, because a verifier may not
-# depend on a tool that merely happens to be installed. Its predecessor
-# `tools/check-doc-links.py` could not run at all on the native Windows host this
-# repository supports.
+# ---- The documentation checks -----------------------------------------------------------
+# They read the source tree, not a build, so they register in every configuration: `doc_links`
+# resolves every repository-relative reference, and `source_comments` and `doc_standard` hold the
+# comment and document standard (CONTRIBUTING.md#comments-and-documents). Pure CMake, as every
+# check here is: a verifier may not depend on a tool that merely happens to be installed.
 add_test(NAME doc_links COMMAND ${CMAKE_COMMAND}
     -DZEN_REPO=${CMAKE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_links.cmake)
@@ -702,21 +599,14 @@ add_test(NAME doc_standard COMMAND ${CMAKE_COMMAND}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_standard.cmake)
 
 # ---- The hook-return contract (SENSE-06) -------------------------------------------------
-#
-# A COMPILE-JUDGED entry: `on_claim_published` may return `void`, `bool` or
-# `loom::Weave::PublishedClaim`, and nothing else -- an answer the construction layer
-# cannot read must be refused at compile time rather than recorded as Applied. Four
-# positive controls and one negative, each a `try_compile` of a one-weave source against
-# this tree's public headers, in a project and a build tree OF ITS OWN
-# (tests/hook_return/CMakeLists.txt): a compile test builds something, which makes it a
-# writer of the tree it names, and the one tree it must never name is this one. Portable,
-# because the SDK header is; the same compiler, so the refusal is this build's.
-#
-# THE COMPILER'S ENVIRONMENT TRAVELS WITH THE ENTRY. An MSVC `cl.exe` finds its standard
-# headers through INCLUDE, which the dev shell exports at THIS configure and the fresh
-# shell an official lane runs in does not carry; captured here and handed to the witness
-# with `;` spelled `|` so the path list survives as one argument (empty on every other
-# toolchain). The witness links nothing, so PATH's rc/link/mt are never needed.
+# Compile-judged: `on_claim_published` may return `void`, `bool` or `loom::Weave::PublishedClaim`
+# and nothing else. Four positive controls and one negative, each a `try_compile` against this
+# tree's public headers in a project and build tree of its own (tests/hook_return/CMakeLists.txt),
+# since a compile test writes the tree it names.
+
+# MSVC's cl.exe finds its headers through INCLUDE, which this configure's shell has and the lane's
+# fresh shell does not, so INCLUDE and LIB travel with the entry, `;` spelled `|` to stay one
+# argument (empty on other toolchains). The witness links nothing.
 string(REPLACE ";" "|" zen_hook_env_include "$ENV{INCLUDE}")
 string(REPLACE ";" "|" zen_hook_env_lib "$ENV{LIB}")
 add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
@@ -728,22 +618,11 @@ add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
     "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
 
-# ---- The supplied host, as a real process (FRIC-1 / GATE-05 / LIFE-04) ----------------
-#
-# Loom's one INSTALLED executable had a suite for its grammar and none for its glue, and
-# every defect it shipped was in the glue: which arriving message answered which question,
-# when an approved permission became effective, whether the operator could still be heard
-# while a loaded weave kept the bus busy. None of those is visible to a test of the
-# deciding half, and all of them are visible in one console transcript.
-#
-# TWO ENTRIES, because two configurations can answer different parts. `host_console` needs
-# no kernel at all -- the broken-plan recovery route, decision-store ownership between two
-# REAL processes, repeated approval, and a failed write that must change nothing -- so it
-# runs in every configuration including a kernel-less Windows build. `host_process_weaves`
-# rides the kernel gate because its subject is loaded artifacts.
-#
-# The scenarios assert identities, counts and effective authority, never whole sentences:
-# see the header of tests/host_process/run.cmake for what that buys and what it gives up.
+# ---- The supplied host, as a real process (GATE-05, LIFE-04, MSG-09) --------------------
+# A defect in the host's glue (which message answered which question, when an approved permission
+# took effect, whether the operator is heard while a weave keeps the bus busy) is invisible to a
+# test of the deciding half and visible in one console transcript. `host_console` needs no kernel;
+# `host_process_weaves` rides the kernel gate. tests/host_process/run.cmake says what each holds.
 add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
     -DZEN_HOST_EXE=$<TARGET_FILE:loom-host>
     -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/console
@@ -751,13 +630,10 @@ add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
 
 # ---- The persistent session, as independent processes (docs/guides/sessions.md) ---------
-#
-# A real `loom-host --serve`, started once and kept; the real `loom-runs` artifact it boots; real
-# Python workers; and clients that attach, act and leave -- a run left pending with no client
-# attached and found finished by the next one, an edited tool run again without a restart, two
-# overlapping runs, failure, a tool bug, a refusal after work began, cancellation, a lost Start
-# answer recovered by name, pinned approval, the door's attenuation, and a restarted host that
-# refuses the old lifetime's handles. Rides the `python` gate: the workers are Python.
+# A real `loom-host --serve`, the `loom-runs` artifact it boots, real Python workers, and clients
+# that attach, act and leave: runs found finished, edited tools, overlapping runs, failures,
+# cancellation, a lost answer recovered by name, pinned approval, the door's attenuation and a
+# restarted host refusing old handles. Rides the `python` gate.
 if(zen_session_python)
     add_test(NAME session_journey COMMAND ${zen_session_python}
         ${CMAKE_CURRENT_SOURCE_DIR}/session/journey.py
@@ -774,13 +650,10 @@ if(zen_session_python)
         ${CMAKE_CURRENT_SOURCE_DIR}/session/test_client.py
         --runtime ${CMAKE_BINARY_DIR}/session-tools/python)
     set_tests_properties(session_client PROPERTIES TIMEOUT 60)
-    # THE OBSERVATION JOURNEY: a subscription across two real hosts. The session host links to a
-    # far host of this directory's own (observe_far/far_host.cpp: a bridge server, a relay whose
-    # policy admits one guest to two shapes, a producer it can be told to drive), boots the probe
-    # vocabulary (weavelib/observe_probe_vocab.cpp) so a tool's command can be encoded, and runs
-    # the probe package (session/observe_probe) as real workers. Refusals, readiness, cause,
-    # bursts, foreign publications, a replaced holder, revocation, cancellation, a client's wait,
-    # and the far host's death and return -- each read from the other process's behaviour.
+    # The observation journey: a subscription across two real hosts. The session host links to a
+    # far host (observe_far/far_host.cpp: a bridge server, a relay admitting one guest to two
+    # shapes, a producer it can drive), boots the probe vocabulary and runs the probe package
+    # (session/observe_probe) as real workers, reading each outcome from the other process.
     add_executable(zen-observe-far-host observe_far/far_host.cpp)
     target_link_libraries(zen-observe-far-host PRIVATE loom zen-switchboard zen-bridge zen-warnings
                                                        zen-sanitize)
@@ -801,22 +674,12 @@ if(zen_session_python)
     set_tests_properties(observe_journey PROPERTIES TIMEOUT 600)
 endif()
 
-# ---- The supplied host's input, through a REAL terminal --------------------------------
-#
-# The two host_process entries feed the host through a FILE, and on Windows a file is the one
-# kind of stdin whose reader was never wrong: the console reader blocked in a cooked read the
-# moment a person typed a character, so pausing halfway through a command stopped every weave
-# in the host, and a finished line behind 32 non-character records was never read. Neither is
-# visible through redirected input. `tests/host_terminal/witness.cpp` builds the terminal a
-# person types into — its own hidden console on Windows, a pseudo-terminal on POSIX — and types.
-#
-#   host_line_input       (portable) LineInput itself, on that terminal.
-#   host_line_streams     (portable) LineInput on a pipe and a file: the input limits, with the
-#                         same assertions on every platform — a producer held back while the host
-#                         takes nothing, every line then exact and in order, commands at and over
-#                         the limit, a line that never ends, the end, and stopping a reader while
-#                         its producer waits for room. Not a terminal, and not evidence about one.
-#   host_terminal_weaves  (kernel)   a real loom-host with the probe booted, typed at.
+# ---- The supplied host's input, through a real terminal --------------------------------
+# A file is the one stdin whose reader cannot show a console's defects, so
+# tests/host_terminal/witness.cpp builds the terminal a person types into (a hidden console on
+# Windows, a pseudo-terminal on POSIX) and types: `host_line_input` (portable) and
+# `host_terminal_weaves` (kernel, a real loom-host). `host_line_streams` (portable) feeds a pipe
+# and a file: the input limits, the same on every platform, and no evidence about a terminal.
 find_package(Threads REQUIRED)
 add_executable(zen-host-terminal-witness host_terminal/witness.cpp)
 target_link_libraries(zen-host-terminal-witness
@@ -828,45 +691,17 @@ add_test(NAME host_line_streams COMMAND zen-host-terminal-witness streams
     ${CMAKE_BINARY_DIR}/host-process-work/streams)
 set_tests_properties(host_line_streams PROPERTIES TIMEOUT 240)
 
-# ---- The weave build contract: two populations, two entries (KERN-05 / POP-05) --------
-#
-# What the `population` entry does for the test population, these do for the loadable
-# weave artifacts. TWO questions, deliberately not one:
-#
-#   weave_population   is every artifact that MUST carry the contract on the roll?
-#                      Expectation from the BUILD GRAPH (weave_population.cmake: target
-#                      types + link closures), evidence from the roll. C3/COLD-2 C-3.
-#   weave_contract     does every artifact on the roll actually have the properties?
-#                      Read out of the built files' symbol tables. R2F-E.
-#
-# Neither subsumes the other and neither derives from the other. The roll of contracted
-# targets is what loom_weave_build_contract() recorded about itself — the right thing to
-# check compile options and symbols against, and precisely the wrong thing to ask whether
-# somebody left. So the required side never touches it (POP-01: a derived list cannot
-# detect its own absences), and the compile options still come out of each target's real
-# COMPILE_OPTIONS rather than from the function's verdict string.
-#
-# THE GATE IS THE SWEEP'S OWN ANSWER, not a named fixture. `if(TARGET
-# zen_test_contract_applied)` would have deregistered both entries the day that fixture
-# was renamed — a check that silently stops existing is the failure mode one directory up
-# from the one C3 closes. So: if this configuration builds loadable weaves at all, both
-# entries register; if it builds none (the default Windows package, where the kernel gate
-# is off and tests/ has no shared libraries), there is no population and their absence is
-# declared, not disguised (POP-03).
-#
-# ...WHICH MOVES THE SAME HAZARD ONTO THE SWEEP, so the gate is asked in BOTH directions
-# against a fixed canary. zen_test_contract_applied and zen_test_contract_bypass are the
-# contract's own fixtures: where they exist, this configuration builds loadable weaves by
-# construction, one required and one exempt. Asking only "weaves imply the pair" left a
-# blinded sweep — one that stops recognising SHARED libraries at all — quietly
-# deregistering BOTH entries and passing the lane at 32 of 32. Measured during C3: the
-# first version of this guard had exactly that hole.
+# ---- The weave build contract: two populations, two entries (KERN-05, POP-05) --------
+# `weave_population`: is every artifact that must carry the contract on the roll? Its expectation
+# comes from the build graph (weave_population.cmake), never from the roll. `weave_contract`: does
+# every artifact on the roll have the properties, read from the built symbol tables? Both
+# register when this configuration builds loadable weaves and are declared absent when it builds
+# none (POP-03); the contract's own two fixtures are the canary, in both directions.
 zen_required_weave_population(zen_weave_required_rows zen_weave_targets zen_weave_exempt)
 
 if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_contract_bypass)
-    # The R2F-E pair is load-bearing for the ARTIFACT check — claim 2 asks whether the
-    # bypass twin still reproduces F-22, and without the twin the contracted artifacts
-    # prove nothing. Losing it must therefore be loud rather than quiet.
+    # The contract's own pair is load-bearing for `weave_contract`: without the bypass twin still
+    # carrying the unique binding, the contracted artifacts prove nothing. Losing it is loud.
     foreach(zen_control IN ITEMS zen_test_contract_applied zen_test_contract_bypass)
         if(NOT TARGET ${zen_control})
             message(FATAL_ERROR
