@@ -40,7 +40,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/isolation/grant_record[.]hpp$"
     "^include/zen/isolation/protocol[.]hpp$"
     "^include/zen/kind[.]hpp$"
-    "^include/zen/observe/vocabulary[.]hpp$"
     "^include/zen/schema[.]hpp$"
     "^include/zen/serialize[.]hpp$"
     "^include/zen/switchboard[.]hpp$"
