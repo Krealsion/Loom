@@ -1,63 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// loom-host — THE SUPPLIED HOST.
-//
-// Install Loom and you get a program. That sentence is the whole point of this file:
-// before it, every host in this tree was a fixed-cast demo in the build directory, and
-// the only route to a running Loom was to write C++ first.
-//
-// WHAT IT IS. A boot walk the person authors, an operator console, and the two files
-// that carry their decisions across restarts:
-//
-//   the boot plan       what to start and in what order          host/boot_plan.hpp
-//   the authority store what may run, and what it may say        host/authority.hpp
-//
-// WHAT IT IS NOT. It is not a framework and it is not privileged. Everything it mounts
-// is an ordinary participant: the console is `loom::ConsoleEngine` (a deliberately
-// trusted host lens, and labelled as one), the lifecycle steward is
-// `loom::WeaveManager`, the kernel door is `loom::ControlWeave`, and the authority hand
-// is `loom::host::HostWarden`. Every one of them is replaceable by something a person
-// writes, because none of them is a kernel primitive — being the default that ships is
-// not the same as being the only thing that fits.
-//
-// ---- THE THREE RULES THIS HOST IS BUILT AROUND ------------------------------
-//
-// They are written here because each one replaced a defect that a green test lane could
-// not see, and each one is easy to lose again by writing the obvious thing.
-//
-// 1. AN ANSWER IS SOMETHING LOOM ATTRIBUTED, NEVER THE NEWEST THING IN THE WINDOW.
-//    Every operator-initiated conversation goes through `HostSession::ask`, which opens
-//    it in the console's own `loom::AskBook` and settles it only on the pair
-//    (correlation this console minted, bus-stamped sender). The console is registered
-//    `AcceptMode::AnyRegistered` and every admitted artifact may send `zen.Result` under
-//    the ordinary poke-answer baseline, so "the newest buffer entry" is a value any
-//    loaded weave can author. It once decided which weave this host administered.
-//
-// 2. A LOADED ARTIFACT IS ADOPTED INSIDE THE LOAD, NOT AFTER IT. `LifecycleAdoption`
-//    (zen/kernel/control.hpp) hands this host the one moment between "the incarnation is
-//    committed" and "the incarnation has been told it is live". Everything after that is
-//    queue order and the asker hears last, so a host that adopted on the answer installed
-//    the person's approved authority strictly after the weave's first breath. Because the
-//    door owns that moment, EVERY route through it — the boot walk, `start`, and an
-//    ordinary `zen.LoadWeave` a weave sends to the Manager itself — produces the same
-//    governed participant. There is no adoption anywhere else in this file.
-//
-// 3. THE BUS AND THE PERSON BOTH GET SERVED, EVERY TURN. The loop is
-//    `pump_pending()` (bounded at the backlog it found — MSG-09) plus a line read with a
-//    deadline (host/line_input.hpp). It is never `drain_until_idle()`, which is unbounded
-//    BY CONTRACT: one approved self-addressed message from a loaded weave used to make
-//    `stop` and `quit` unreadable forever. A conversation that has not settled is
-//    reported as PENDING and stays open; the host never invents a completion to get its
-//    prompt back.
-//
-// SHUTDOWN HAS TWO MEANINGS AND THEY ARE DIFFERENT COMMANDS.
-//   `stop <name>`  ends one APPLICATION: its weave leaves the bus, its library closes,
-//                  the host keeps running and the console stays up.
-//   `quit`         ends the HOST: the console loop returns and everything comes down in
-//                  reverse construction order.
-// A boot failure is neither. It leaves the console up, which is the only state from
-// which a person can find out what went wrong and fix it.
+// loom-host, the supplied host: a boot walk the person authors (host/boot_plan.hpp), an
+// operator console, and the authority store that carries their decisions across restarts
+// (host/authority.hpp). Every part is an ordinary, replaceable participant: ConsoleEngine,
+// WeaveManager, ControlWeave and HostWarden. The three rules it is built around (attributed
+// answers, adoption inside the load, a bounded turn) are in AGENTS.md, beside the code here.
+// `stop <name>` ends one application, `quit` ends the host, and a failed boot neither.
 
 #include "authority.hpp"
 #include "boot_plan.hpp"
@@ -116,17 +65,11 @@ using loom::tokenize;
 
 constexpr const char* kVersion = "loom-host 0.1.0";
 
-/// HOW LONG THE HOST WAITS BEFORE CALLING A CONVERSATION PENDING, in bounded turns.
-///
-/// It is a number of TURNS, not a clock and not a message budget: each turn is one
-/// `pump_pending()`, which services exactly the backlog it found, so a weave that
-/// re-arms itself inside a turn cannot extend it. A load conversation is four turns
-/// (ask -> Manager -> door -> activation + answer -> relay), so sixteen is roomy for
-/// everything this host composes and still finite for everything it does not.
-///
-/// EXCEEDING IT IS NOT A FAILURE AND NOT A TIMEOUT. Nothing is cancelled, nothing at the
-/// far end is told anything, and the conversation stays open in the console's book: the
-/// command says PENDING, the loop keeps turning, and the answer prints when it arrives.
+/// How long the host waits before calling a conversation pending, in bounded turns: each is
+/// one `pump_pending()`, so a weave that re-arms itself cannot extend it. A load is four turns
+/// (ask, Manager, door, activation and answer, relay), so sixteen is roomy and still finite.
+/// Exceeding it is not a failure or a timeout: nothing is cancelled, the conversation stays
+/// open, the command says PENDING, and the answer prints when it arrives.
 constexpr int kSettleTurns = 16;
 
 /// How long an idle host waits on the person before turning the bus again. Only reached
@@ -318,16 +261,10 @@ public:
             selection.shapes.push_back(loom::LogRule{k.shape, static_cast<std::size_t>(k.cap)});
         }
         journal_ = std::make_unique<loom::Logger>(bus_, std::move(selection));
-        // The console first: the warden needs its id as the operator seat, and the
-        // seat has to exist before anything that obeys it.
-        //
-        // AND IT DECLARES ITS VOCABULARY, which is not a formality. A console's
-        // wildcard accept means "any shape the REGISTRY can resolve", and the registry
-        // learns a shape from some weave's ACCEPT-set — so a shape that only ever
-        // travels TO the operator has nobody to declare it and is refused
-        // `SeamUnresolved` before it reaches any door. `zen.AuthorityDescription` is
-        // exactly such a shape here: the warden emits it, nothing accepts it, and
-        // without this line `authority show` silently got no answer. Found by using it.
+        // The console first: the warden needs its id as the operator seat. It declares its
+        // vocabulary because its wildcard accept means "any shape the registry can resolve",
+        // and a shape that only travels to the operator (`zen.AuthorityDescription`, which
+        // the warden emits and nothing accepts) would otherwise be refused `SeamUnresolved`.
         console_ = std::make_unique<loom::ConsoleEngine>(
             bus_, std::vector<std::shared_ptr<const loom::Schema>>{
                       loom::schema_of<loom::AuthorityDescription>()});
@@ -338,29 +275,17 @@ public:
         warden_->zen_set_self(warden_id_);
 #if ZEN_HOST_HAS_KERNEL
         kernel_ = std::make_unique<loom::Kernel>(bus_, store_.policy());
-        // THE ADOPTION SEAM, AND THE WHOLE OF THIS HOST'S LIFECYCLE OWNERSHIP.
-        //
-        // The door calls these from inside its own delivery — the one window between an
-        // incarnation being committed and being told it is live (see `LifecycleAdoption`
-        // and rule 2 in the file header). Every route that can load or unload anything in
-        // this process goes through that door, so putting the host's bookkeeping here is
-        // what makes the boot walk, the `start` command and a `zen.LoadWeave` a weave
-        // sends of its own accord produce the SAME governed participant. Nothing else in
-        // this file governs, releases, or mints a `GrantAuthority`.
+        // The adoption seam, and the whole of this host's lifecycle ownership: the door calls
+        // these inside its own delivery, between an incarnation being committed and being
+        // told it is live (`LifecycleAdoption`). Every load and unload here goes through that
+        // door, so the boot walk, `start` and a weave's own `zen.LoadWeave` produce the same
+        // governed participant. Nothing else in this file governs, releases or mints authority.
         loom::LifecycleAdoption adoption;
         adoption.admitted = [this](loom::Mail& mail, const std::string& name, loom::WeaveId id) {
-            // THE CEILING IS FULL, AND THAT IS NOT A CONTROL BEING SKIPPED. A ceiling
-            // bounds a DELEGATE — it is how a host limits a Weaver acting on somebody
-            // else's behalf. The delegate here is the host's own warden, obeying the
-            // person at this console directly, so the thing that actually bounds what
-            // gets installed is the file the person wrote. Naming a narrower ceiling
-            // would look like a second control while being nothing but a cap on what the
-            // person could later approve without a restart.
-            //
-            // `id` is the KERNEL'S fact about what it just registered. It is never a
-            // message payload, which is the distinction that failed before: a host that
-            // read the subject off a `zen.Result` administered whichever weave authored
-            // the newest one.
+            // The ceiling is full on purpose: a ceiling bounds a delegate acting for somebody
+            // else, and this delegate is the host's own warden obeying the person here, so
+            // what bounds the install is the file the person wrote. `id` is the Kernel's fact
+            // about what it registered, never a message payload, which any weave could author.
             const loom::host::Installed done = warden_->adopt(
                 mail, name,
                 loom::host_grant_authority(
@@ -559,10 +484,9 @@ public:
 
     // ---- turning the world ---------------------------------------------------
 
-    /// ONE BOUNDED HOST TURN. `pump_pending` services exactly the backlog it found and
-    /// hands control back, so work a handler queues during the turn waits for the next
-    /// one — which is precisely what a self-re-arming producer cannot get around, and
-    /// why this host no longer has a call that can fail to return.
+    /// One bounded host turn: `pump_pending` services exactly the backlog it found, so work
+    /// a handler queues waits for the next turn, a self-re-arming producer cannot get around
+    /// it, and this host has no call that can fail to return.
     std::size_t turn() {
         // THE SOCKETS FIRST, then the bus: a far answer read here is delivered in this turn --
         // and so is a client's request the session door read.
@@ -591,13 +515,10 @@ public:
         return ask != 0 && console_->settled(ask).has_value();
     }
 
-    /// COMPOSE A MESSAGE FROM THE OPERATOR SEAT, DELIVER IT, AND SETTLE ITS ANSWER.
-    ///
-    /// One helper, so every operator-initiated conversation in this file is the same
-    /// public path: the console's own weave speaks, as itself, under its own grant, and
-    /// what comes back is an arrival Loom attributed to THIS conversation — the
-    /// correlation this console minted plus the bus's own stamp of who spoke. Nothing
-    /// here reads the newest thing in a window.
+    /// Compose a message from the operator seat, deliver it, and settle its answer: the one
+    /// public path for every operator-initiated conversation here. The console's weave speaks
+    /// as itself under its own grant, and what comes back is an arrival Loom attributed to
+    /// this conversation (the correlation it minted, the bus's stamp of who spoke).
     Answer ask(loom::WeaveId target, const char* shape, std::uint32_t version,
                const std::map<std::string, loom::FieldValue>& fields, int turns = kSettleTurns) {
         Answer a;
@@ -608,8 +529,8 @@ public:
         const loom::Submitted sent = console_->submit(target, shape, version, fields,
                                                       loom::ConsoleTracking::Tracked, &error);
         if (!error.empty()) {
-            // A shape this console could not even compose and a weave that chose not to
-            // answer looked identical once; they are completely different problems.
+            // A shape this console could not compose and a weave that chose not to answer
+            // are different problems.
             a.state = Answer::State::Unsendable;
             a.trouble = std::string("could not compose ") + shape + ": " + error;
             return a;
@@ -672,9 +593,8 @@ public:
         if (value != nullptr && value->kind() == loom::Kind::Text) {
             return value->as_text();
         }
-        // A `zen.Ack` carries nothing and that IS the answer. Repeating its own name
-        // back ("zen.Ack v1  zen.Ack v1", which is what this used to print in the
-        // buffer) says less than one plain word.
+        // A `zen.Ack` carries nothing, and that is the answer: one plain word says more than
+        // repeating its name.
         if (e.name == loom::Ack::zen_name) {
             return "ok";
         }
@@ -683,16 +603,10 @@ public:
 
     // ---- the boot walk -------------------------------------------------------
 
-    /// Walk the plan in the person's order. Never throws a row away and never stops the
-    /// host: a row that fails is a row with a state and a reason, and the console comes
-    /// up either way.
-    ///
-    /// EVERY ROW GOES OUT AS `zen.LoadWeave` THROUGH THE STEWARD, exactly as `start`
-    /// does. It used to call `Kernel::load` directly, which is a different door: no
-    /// authenticated `zen.Activated` was announced, so a participating weave was
-    /// started and never told it was live (a probe reported `activations=0` after a boot
-    /// this host called COMPLETE), and adoption had to be repeated in a second place.
-    /// One door, one set of refusals, one set of words, one adoption.
+    /// Walk the plan in the person's order. A failing row gets a state and a reason, and the
+    /// console comes up either way. Every row goes out as `zen.LoadWeave` through the steward,
+    /// as `start` does, so a participating weave is told it is live and is adopted at the one
+    /// door: one set of refusals, one set of words, one adoption.
     void boot(const loom::host::BootPlan& plan) {
         bool walking = !opt_.no_boot;
         for (const loom::host::BootEntry& e : plan.entries) {
@@ -780,11 +694,10 @@ public:
         return out;
     }
 
-    /// CROSS-CHECK: does the id a lifecycle answer reported match the subject this host
-    /// is actually administering under that name? They are two independent facts — one
-    /// came over the bus as a payload, one is the capability this host minted from the
-    /// Kernel's own answer — and the whole of finding 1 was a host that had only the
-    /// first. An empty string means they agree.
+    /// Cross-check: does the id a lifecycle answer reported match the subject this host
+    /// administers under that name? One came over the bus as a payload, the other is the
+    /// capability this host minted from the Kernel's own answer; a host with only the first
+    /// would administer whoever authored the payload. An empty string means they agree.
     std::string governed_note(const std::string& artifact, const loom::BufferEntry& reply) const {
         const loom::WeaveId governed = warden_->subject_of(artifact);
         const loom::Cell* value = reply.value.get("value");
@@ -894,10 +807,9 @@ void print_notes(const loom::host::AuthorityStore& store) {
     }
 }
 
-/// ...AND SAID WHEN IT HAPPENS, not only when somebody thinks to type `status`. A `start`
-/// that came up on rebuilt code, or whose build could not be recorded, used to print only
-/// the steward's answer; the note waited for a `status` the person had no reason to ask
-/// for. `*shown` is how many notes this console has already printed.
+/// ...and said when it happens, not only when somebody types `status`: a `start` that came
+/// up on rebuilt code, or whose build could not be recorded, says so with its answer.
+/// `*shown` is how many notes this console has already printed.
 void print_new_notes(const loom::host::AuthorityStore& store, std::size_t* shown) {
     const std::vector<std::string>& all = store.notes();
     for (std::size_t i = *shown; i < all.size(); ++i) {
@@ -923,8 +835,8 @@ void print_too_long(const loom::host::TooLongLine& refused) {
               << "  send it again, shorter; the lines after it are read as usual.\n";
 }
 
-/// The boot plan's own state, for `status`. A plan that did not parse is not the same
-/// thing as a plan with no rows, and `--no-boot` now comes up over the first one.
+/// The boot plan's own state, for `status`. A plan that did not parse is not a plan with no
+/// rows, and `--no-boot` comes up over the first one.
 struct PlanSource {
     std::string path;
     std::string parse_error; ///< empty when the plan was read
@@ -1110,9 +1022,8 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
             if (tok[i].text == "--rebuilds") {
                 rule.trust_rebuilds = true;
             } else if (tok[i].text == "--ask-again") {
-                // THE WAY BACK. Without it, turning `--rebuilds` off meant hand-editing
-                // the file — a poor answer for the one switch here that lets new code run
-                // without asking.
+                // The way back: without it, turning `--rebuilds` off would mean hand-editing
+                // the file, a poor answer for the one switch that lets new code run unasked.
                 rule.trust_rebuilds = false;
             } else {
                 std::cout << "  unknown option '" << tok[i].text << "'\n";
@@ -1181,10 +1092,9 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
         }
         const bool observe = text.rfind("observe", 0) == 0;
         const std::string canonical = loom::host::canonical_rule(text, observe);
-        // ALREADY GRANTED IS SAID, NOT STORED TWICE. A repeated approval used to append a
-        // second copy of the same permission, and one `revoke` then removed one copy,
-        // reported a revocation, and left the permission installed. A person retrying a
-        // command must not be able to make their own decision unrevokable.
+        // Already granted is said, not stored twice: a second copy would survive one
+        // `revoke`, which would report a revocation and leave the permission installed, and a
+        // person retrying a command must not make their own decision unrevokable.
         std::vector<std::string>& into = observe ? rule.observe : rule.send;
         for (const std::string& r : into) {
             if (loom::host::canonical_rule(r, observe) == canonical) {
@@ -1218,10 +1128,9 @@ void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
             for (std::size_t i = 3; i < tok.size(); ++i) {
                 text += (i == 3 ? "" : " ") + tok[i].text;
             }
-            // EVERY COPY, not the first one. The store collapses duplicates now, so
-            // there should never be a second — but a file a person hand-edited between
-            // two runs is exactly the case where "should" is not a guarantee, and a
-            // revoke that leaves one behind is the defect this loop exists to prevent.
+            // Every copy, not the first: the store collapses duplicates, but a file edited by
+            // hand between two runs may still hold two, and a revoke that leaves one behind
+            // leaves the permission.
             std::size_t removed = 0;
             const auto drop = [&removed](std::vector<std::string>& v, const std::string& want,
                                          bool observe) {
@@ -1515,10 +1424,9 @@ void cmd_lifecycle(HostSession& s, const std::vector<Token>& tok) {
             return;
         }
         std::cout << "  " << HostSession::describe_reply(*a.reply) << '\n';
-        // THE HOST DOES NOT ADOPT HERE, and that absence is the repair. Adoption happened
-        // inside the load, before the weave was told it was live (see rule 2 in the file
-        // header); what is printed below is what the warden actually installed, not
-        // something this command decided from a payload.
+        // The host does not adopt here: adoption happened inside the load, before the weave
+        // was told it was live (`LifecycleAdoption`); what is printed below is what the
+        // warden installed, not something this command decided from a payload.
         print_adoption();
         const std::string mismatch = s.governed_note(name, *a.reply);
         if (!mismatch.empty()) {
@@ -1547,11 +1455,8 @@ void cmd_lifecycle(HostSession& s, const std::vector<Token>& tok) {
         // THIS ENDS AN APPLICATION, NOT THE HOST — the one place a person might
         // reasonably expect otherwise, so the answer says which ended.
         const std::string name = tok[1].text;
-        // The control door's primitives are ZEN_SHAPE-named and therefore carry NO
-        // `zen.` prefix — `UnloadLibrary`, not `zen.UnloadLibrary`. Spelling one of these
-        // as a literal is how this file first shipped a command that silently did
-        // nothing, so they are all the types' own constants now and the compiler checks
-        // them.
+        // The control door's primitives are ZEN_SHAPE-named and carry no `zen.` prefix
+        // (`UnloadLibrary`); the types' own constants are used, so the compiler checks them.
         const Answer a = s.ask(s.control(), loom::UnloadLibrary::zen_name,
                                loom::UnloadLibrary::zen_version, {{"name", name}});
         if (!a.settled()) {
@@ -1746,14 +1651,10 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
     return true;
 }
 
-/// Print, and COLLECT, every conversation that settled between commands. This is what makes
-/// PENDING an honest answer rather than a dropped one: a load, a send or a sync that took
-/// longer than the host's patience still reports, in the order the conversations were opened.
-///
-/// Every command takes the answer it can take before it returns, so an answer still held
-/// when the loop turns is by definition a late one, and this host's to report — including a
-/// boot row's, left pending before anybody typed anything. Taking it returns its slot, which
-/// is why a host that has served a million commands holds exactly what is still open.
+/// Print, and collect, every conversation that settled between commands, in the order they
+/// were opened, so PENDING is an honest answer rather than a dropped one. An answer still
+/// held when the loop turns is a late one, including a boot row's; taking it returns its
+/// slot, so a long-running host holds exactly what is still open.
 void report_late_answers(HostSession& session, bool& prompt_shown) {
     for (std::uint64_t id : session.console().answered_asks()) {
         std::optional<loom::BufferEntry> reply = session.console().take_settled(id);
@@ -1872,11 +1773,10 @@ int main(int argc, char** argv) {
         std::cerr << "loom-host: " << error << '\n';
         return 3;
     }
-    // A malformed BOOT PLAN is a different thing, and `--no-boot` is documented as the
-    // way back in when the plan is what is broken. It used to parse the plan before
-    // applying `--no-boot`, so the advertised recovery route exited 3 without ever
-    // opening a console — the one state from which a person could have fixed the file.
-    // The plan is still not RUN, and `--check` still fails: validating is what it is for.
+    // A malformed boot plan is different: `--no-boot` is the documented way back in when the
+    // plan is what is broken, so under it a parse failure still opens the console, the one
+    // state from which a person can fix the file. The plan is not run, and `--check` still
+    // fails: validating is what it is for.
     PlanSource plan_source;
     plan_source.path = opt.boot_plan;
     loom::host::BootPlan plan;
@@ -2026,10 +1926,10 @@ int main(int argc, char** argv) {
     loom::host::LineInput input;
     bool prompt_shown = false;
     bool running = true;
-    // SERVE MODE SEPARATES THE CONSOLE FROM THE HOST'S LIFE. An interactive host ends when its
-    // console closes, as it always has. A session host keeps serving: its console (if it was
-    // started with one) is one more way in, and closing it closes only that way. The session
-    // ends when a client asks it to (`loom.session.Shutdown`) or when someone types `quit`.
+    // Serve mode separates the console from the host's life. An interactive host ends when
+    // its console closes; a session host keeps serving, and closing its console (if it has
+    // one) closes only that way in. The session ends when a client asks it to
+    // (`loom.session.Shutdown`) or when someone types `quit`.
     loom::host::SessionDoor* const door = session.door();
     bool console_open = true;
     while (running) {
