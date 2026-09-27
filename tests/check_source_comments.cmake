@@ -37,7 +37,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/kind[.]hpp$"
     "^include/zen/serialize[.]hpp$"
     "^include/zen/switchboard[.]hpp$"
-    "^include/zen/terminal/vocabulary[.]hpp$"
     "^include/zen/value[.]hpp$"
     "^include/zen/weave[.]hpp$"
     "^include/zen/wire[.]hpp$"
