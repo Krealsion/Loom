@@ -68,7 +68,6 @@ set(ZEN_COMMENT_PENDING
     "^src/schema[.]cpp$"
     "^src/terminal/composer[.]cpp$"
     "^src/terminal/host_channel[.]cpp$"
-    "^src/ui/pixel[.]cpp$"
     "^src/ui/tree[.]cpp$"
     "^src/value[.]cpp$"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
