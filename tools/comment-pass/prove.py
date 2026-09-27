@@ -54,9 +54,9 @@ MANIFESTS = {
     "tests/entry_population.txt": ("tests/check_entry_population.cmake",
                                    ("source_comments portable", "doc_standard portable")),
 }
-# The failure messages and the exemption reason that showed a reader a private id or a plan's
-# stage name, named by their START literals. Each may be reworded, and the rewording may show no
-# id.
+# The failure messages, runtime messages and exemption reason that showed a reader a private id
+# or a plan's stage name, named by their START literals. Each may be reworded, its meaning
+# unchanged, and the rewording may show no id.
 REWORDED = {
     "tests/CMakeLists.txt": (
         '"the F-22 negative control: same source as zen_test_contract_applied, contract "',),
@@ -70,6 +70,11 @@ REWORDED = {
         '"A lane that proceeded without it would be the lane VOLATILE-2a closed: one that "',),
     "include/zen/ui/tree.hpp": (
         '"of Stage 3: intent and relationship, never coordinates)."',),
+    "src/console/console.cpp": (
+        '" — Stage 1 compose sets only scalar fields (the gate backstops a required one)"',
+        '"\' is not supported in Stage 2"'),
+    "src/console/console_term.cpp": (
+        '"zen console (stage 2). commands: weaves | describe <Shape> <v> | "',),
 }
 WORKFLOWS = ".github/workflows/"
 # The manifests' reading in their checks, restated; the line it keys on must still be in each
