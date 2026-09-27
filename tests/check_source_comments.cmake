@@ -33,7 +33,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/switchboard[.]hpp$"
     "^include/zen/value[.]hpp$"
     "^include/zen/weave[.]hpp$"
-    "^include/zen/wire[.]hpp$"
     "^include/zen/zen[.]hpp$"
     "^src/"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
