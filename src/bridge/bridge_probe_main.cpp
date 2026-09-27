@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// zen-bridge-probe: a NON-interactive remote operator that proves the operator-protocol end-to-end
-// over a real socket — the Windows end of the crossing. It connects (TCP), discovers the bus, fetches
-// a shape, composes + gate-sends a message, waits for the echoed reply to buffer, prints PASS, then
-// disconnects (graceful). Run it against zen-bridge-host: locally (WSL<->WSL) for the inner loop, and
-// from Windows (built via MinGW) against a WSL-hosted zen-bridge-host for the real cross-kernel proof.
-//
+// zen-bridge-probe: a non-interactive remote operator that proves the bridge protocol end to
+// end over a real socket: it connects, discovers the bus, fetches a shape, composes and sends a
+// message, waits for the echoed reply, prints PASS and disconnects. Run it against
+// zen-bridge-host from another process, or from a Windows client that reaches its loopback port.
 // Usage: zen-bridge-probe [host=127.0.0.1] [port=7654] [message="hello from the remote operator"]
 
 #include <zen/bridge/remote_console.hpp>
