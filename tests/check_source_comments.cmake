@@ -29,7 +29,6 @@ set(ZEN_COMMENT_PENDING
     "^src/bridge/bridge_host_main[.]cpp$"
     "^src/bridge/bridge_probe_main[.]cpp$"
     "^src/bridge/client[.]cpp$"
-    "^src/bridge/remote_console[.]cpp$"
     "^src/console/console_remote[.]cpp$"
     "^src/console/console_tui[.]cpp$"
     "^src/console/terminal[.]hpp$"

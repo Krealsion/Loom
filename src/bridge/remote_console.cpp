@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The client side: a Console/LadderHost over the operator-protocol socket. The frontend drives this
+// The client side: a Console/LadderHost over the bridge protocol's socket. The frontend drives this
 // exactly as it drives the in-process ConsoleEngine; only the transport differs. Compose runs the
 // SHARED ladder client-side against a wire-fetched schema and the local buffer, then ships the
 // assembled message bytes as a Send frame the host re-admits + stamps.
@@ -214,9 +214,9 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         break;
     }
     case BridgeOp::Delivered: {
-        // [u64 sender][u64 correlation][u8 flags][bytes authored_role][bytes payload] -- the
-        // stamped context rides ahead of the bytes (v4). This console's buffer keeps the value;
-        // the context is what `show mN` would print, and is read past here.
+        // [u64 sender][u64 correlation][u8 flags][bytes authored_role][bytes payload]: the
+        // stamped context rides ahead of the bytes. This console's buffer keeps the value; the
+        // context is what `show mN` would print, and is read past here.
         Cursor cur(f.payload);
         std::uint64_t sender = 0;
         std::uint64_t correlation = 0;
@@ -368,7 +368,7 @@ loom::Ticket RemoteConsole::assemble_and_send(loom::WeaveId target,
     put_u64(frame, target.value);
     put_u64(frame, 0);            // wire_reply_to: the honest client sets 0 — the bridge stamps c.id
     put_u64(frame, ++correlation_);
-    put_bytes(frame, ""); // v4: no office address -- this console sends to WeaveIds
+    put_bytes(frame, ""); // no office address: this console sends to WeaveIds
     try {
         frame.append(loom::serialize(v)); // a Ready compose is complete + type-checked, so this holds
     } catch (...) {
