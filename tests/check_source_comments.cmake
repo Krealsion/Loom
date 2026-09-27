@@ -34,7 +34,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/bridge/protocol[.]hpp$"
     "^include/zen/bridge/remote_console[.]hpp$"
     "^include/zen/bridge/server[.]hpp$"
-    "^include/zen/console/console[.]hpp$"
     "^include/zen/console/ui[.]hpp$"
     "^include/zen/content_id[.]hpp$"
     "^include/zen/gate[.]hpp$"
