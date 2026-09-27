@@ -4,15 +4,11 @@
 #ifndef ZEN_DETAIL_BINARY_HPP
 #define ZEN_DETAIL_BINARY_HPP
 
-// Internal to loom. The low-level primitives of the native binary wire
-// format: little-endian fixed integers, canonical (minimal) LEB128 varints,
-// zigzag for signed ints, and a canonical IEEE-754 binary64 codec. Writers
-// produce the one canonical encoding; readers are total and bounds-checked —
-// every read is validated against the remaining input before it touches memory,
-// so any byte string is safe to feed in.
-//
-// These bytes are a permanent, on-the-wire commitment. The layout and the
-// canonicality rules here are frozen.
+// Internal to loom: the native binary wire format's primitives: little-endian fixed integers,
+// canonical (minimal) LEB128 varints, zigzag signed ints and a canonical IEEE-754 binary64
+// codec. Writers produce the one canonical encoding; readers are total and bounds-checked, so
+// any byte string is safe to feed in. The layout and canonicality rules are a frozen,
+// on-the-wire commitment.
 
 #include <cstdint>
 #include <string>
@@ -25,25 +21,11 @@ inline constexpr int kMaxBinaryDepth = 64;            // nested message/list dep
 inline constexpr std::uint64_t kMaxListCount = 1u << 20; // elements in one list
 inline constexpr std::uint64_t kMaxFieldBytes = 1u << 28; // bytes in one Text/Bytes
 
-// The total decoded structure ONE top-level decode may materialise, shared by
-// every nested message and list inside it.
-//
-// The three caps above bound the *serialized* side — how deep, how many per
-// container, how many bytes in one field. None of them bounds the *decoded*
-// side, and the two are different facts: a zero-field Message has a zero-byte
-// presence bitmask, so it consumes no body bytes at all, and a list of them
-// commands a host-side population entirely unrelated to the input's length.
-//
-// The unit is one decoded cell: one Cell-sized slot the decoder materialises —
-// one per DECLARED field of every message it enters (a Value allocates exactly
-// that many std::optional<Cell> slots, present or not) and one per element of
-// every list it decodes. Text/Bytes payload bytes are not counted here; they are
-// bounded by kMaxFieldBytes and by the remaining input.
-//
-// Host-owned and automatic: no message, schema, payload, or caller may widen it;
-// changing it is a build decision. 65,536 cells is roughly 6 MiB of worst-case
-// decoded structure, an order of magnitude above the largest value any current
-// consumer sends. See docs/reference/bounds.md.
+// The total decoded structure one top-level decode may materialise, shared by every nested
+// message and list in it. The caps above bound the serialized side; this bounds the decoded
+// side, which input length does not (a zero-field Message costs no body bytes). The unit is one
+// cell slot: one per declared field of every message entered, one per list element. Host-owned:
+// nothing on the wire widens it; 65,536 cells is about 6 MiB. See docs/reference/bounds.md.
 inline constexpr std::uint64_t kMaxDecodedCells = 1u << 16; // cells in one decode
 
 // The single canonical quiet-NaN bit pattern (sign 0, exponent all ones, only the

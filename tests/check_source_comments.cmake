@@ -38,7 +38,6 @@ set(ZEN_COMMENT_PENDING
     "^src/detail/base64[.]cpp$"
     "^src/detail/base64[.]hpp$"
     "^src/detail/binary[.]cpp$"
-    "^src/detail/binary[.]hpp$"
     "^src/detail/gate_internal[.]hpp$"
     "^src/detail/hash[.]hpp$"
     "^src/detail/json[.]cpp$"
