@@ -28,7 +28,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^src/bridge/bridge_host_main[.]cpp$"
     "^src/bridge/bridge_probe_main[.]cpp$"
-    "^src/bridge/channel[.]cpp$"
     "^src/bridge/client[.]cpp$"
     "^src/bridge/remote_console[.]cpp$"
     "^src/console/console_remote[.]cpp$"

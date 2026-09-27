@@ -78,14 +78,10 @@ void set_nonblocking(socket_t s) {
         (void)::fcntl(s, F_SETFL, flags | O_NONBLOCK);
     }
 }
-/// DEFENCE IN DEPTH, not the boundary. Loom's own sockets should not walk into
-/// any child anyone spawns — including a child spawned by an embedding host that has
-/// never heard of the isolation sandbox. What this can NEVER do is make the sandbox
-/// safe, because the embedding host's own descriptors are not Loom's to annotate;
-/// that is what the exec-boundary sweep in the isolation host is for. fcntl rather
-/// than SOCK_CLOEXEC/accept4 so this stays plain POSIX (no Linux-only entry point in
-/// a file that also builds for Windows and could build for other POSIX hosts); the
-/// window between create and flag is not a race here because Loom is single-threaded.
+/// Defence in depth, not the boundary: Loom's own sockets should not walk into any child
+/// anyone spawns, but the embedding host's descriptors are not Loom's to annotate, which is
+/// what the isolation host's exec-boundary sweep is for. fcntl rather than SOCK_CLOEXEC keeps
+/// this plain POSIX, and the window between create and flag is no race: Loom is single-threaded.
 void set_cloexec(socket_t s) {
     const int flags = ::fcntl(s, F_GETFD, 0);
     if (flags >= 0) {
@@ -137,16 +133,11 @@ void BridgeChannel::flush() {
             return;
         }
     }
-    // Reclaim the prefix already handed to the kernel: those bytes are history, not live channel
-    // storage. Clearing ONLY on a complete drain is not enough -- a peer that keeps up but never
-    // lets the socket run dry leaves a standing residue at every flush, so the reset never fires
-    // and the buffer grows by the session's whole byte volume (kMaxBacklog measures the *unsent*
-    // residue, so it never notices). Compacting whenever the sent prefix is at least as large as
-    // the unsent remainder keeps this amortized: the move costs no more than the bytes it drops,
-    // so total copying stays linear in the bytes ever queued rather than quadratic in the frame
-    // count. Live storage is therefore bounded by twice the backlog still owed to the peer, never
-    // by how long the channel has been alive. Both branches keep the allocation for reuse.
-    // (Mirrors src/isolation/channel.cpp; the two framers are deliberate siblings.)
+    // Reclaim the prefix already handed to the kernel. Clearing only on a complete drain is not
+    // enough: a peer that keeps up but never lets the socket run dry leaves a residue at every
+    // flush, and the buffer would grow by the session's whole volume (kMaxBacklog counts only
+    // the unsent part). Compacting once the sent prefix is at least the unsent remainder keeps
+    // copying linear and live storage within twice the owed backlog. As src/isolation/channel.cpp.
     if (out_pos_ == outbox_.size()) {
         outbox_.clear();
         out_pos_ = 0;
