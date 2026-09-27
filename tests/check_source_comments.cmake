@@ -81,7 +81,6 @@ set(ZEN_COMMENT_PENDING
     "^src/serialize[.]cpp$"
     "^src/terminal/composer[.]cpp$"
     "^src/terminal/host_channel[.]cpp$"
-    "^src/terminal/session[.]cpp$"
     "^src/ui/pixel[.]cpp$"
     "^src/ui/tree[.]cpp$"
     "^src/value[.]cpp$"
