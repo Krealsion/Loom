@@ -46,7 +46,7 @@ private:
 /// A well-shaped `zen.Bequest` from a weave that merely holds the grant for it passes the first
 /// two and not the third. Provenance has two independent axes: `Kind` (none, an answer, an
 /// activation, a dispatch refusal) and the authored office (empty for personal speech), so a
-/// delivery may carry both, though no public door produces that yet.
+/// delivery may carry both, though no public door produces that combination.
 /// MSG-07, ANS-01; docs/laws/messaging-laws.md
 ///
 /// Not a payload field: never serialized, in no schema, and overwritten with nothing by every
