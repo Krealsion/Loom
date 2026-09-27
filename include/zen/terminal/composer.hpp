@@ -4,31 +4,16 @@
 #ifndef ZEN_TERMINAL_COMPOSER_HPP
 #define ZEN_TERMINAL_COMPOSER_HPP
 
-// THE TYPED COMPOSER — turning a handful of loose values into one exact Loom
-// message, from the real schema, with every refusal saying which rung it fell
-// off.
+// The typed composer: turns a handful of loose values into one exact Loom message from the real
+// schema, with every refusal saying which rung it fell off. The ladder (named, positional,
+// type-directed, prompt) composes and stops; whoever wants the message sent sends it: the
+// console through its `LadderHost`, a terminal participant through its own identity-bound
+// channel, a presentation after showing it to a person. So one ladder serves every sender, and
+// a message can be shown before it goes.
 //
-// It is the console's assumption ladder, moved down a layer and stopped one step
-// earlier. The ladder itself (named wins -> positional -> type-directed ->
-// prompt) is unchanged in behaviour, unchanged in ordering, and unchanged in
-// what it refuses. COMPOSING and SENDING are deliberately two
-// operations instead of one. `compose_message` assembles and stops. Whoever
-// wants the message sent sends it — the console engine through its
-// `LadderHost`, a terminal participant through its own identity-bound channel, a
-// future Workshop pane by showing it to a person first and sending it if they
-// say so.
-//
-// THAT SPLIT IS THE WHOLE REASON THIS FILE EXISTS. A composer that sends cannot
-// be reused by a presentation that wants to display a message before it goes,
-// and a composer wired to one sender cannot be reused by a second participant
-// with a different identity. Both were true of the old shape, and neither is a
-// property of the LADDER — only of where it stopped.
-//
-// WHAT IT DOES NOT DO, and must never learn to: it does not know what a shape
-// MEANS, does not know who is running, does not resolve a role, and does not
-// decide whether the composer may send what it just composed. It reads a schema
-// and places values into fields. Authority is the Kernel's answer, given later,
-// at delivery.
+// It does not know what a shape means, who is running or who holds a role, and it does not
+// decide whether its caller may send what it composed: it reads a schema and places values into
+// fields. Authority is the Kernel's answer, at delivery.
 
 #include <zen/schema.hpp>
 #include <zen/value.hpp>

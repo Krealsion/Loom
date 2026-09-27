@@ -4,63 +4,12 @@
 #ifndef ZEN_UI_COMPONENT_HPP
 #define ZEN_UI_COMPONENT_HPP
 
-// The UI-Builder component vocabulary (Phase A — the shapes only; no renderer, no Builder UI,
-// no live binding, no routing/presenter runtime).
-//
-// A COMPONENT is a schematic with typed slots: a reusable piece of UI, incomplete BY DESIGN. It
-// declares the data shape it consumes (its CONTRACT), pulls fields from that shape (a node's
-// `from_field` binding), and leaves typed open holes (Slot nodes) to be filled later — by data,
-// by a route, by a child component. Design-time display uses PLACEHOLDER data, and the default
-// placeholders are deliberately adversarial stress-values (see the stress canon below): a
-// component self-stress-tests its layout the moment it is previewed.
-//
-// A COMPONENT IS DATA. It serializes as a gated Value like any message in Zen — same schemas,
-// same registry, same serialize/parse/admit, no second format. That is what makes "a schematic
-// shared is a toy others can play with" literal: save it, send it, load it, and the SAME gate
-// that guards every boundary validates it.
-//
-// ONE TREE, NOT TWO. The nodes here ARE the console's widget tree (loom::Widget, ui.hpp) — this
-// header adds the component concept AROUND that tree and a wire form OF it; it does not invent a
-// second vocabulary. The TUI keeps rendering the same tree — the standing renderer-agnosticism
-// proof.
-//
-// THE WIRE FORM IS FLAT. A schema cannot reference itself (published schemas are immutable, so
-// a "node containing a list of nodes" is unbuildable), and nested-Message decoding is depth-
-// capped — so the tree crosses the wire as a FLAT list of zen.ui.Node values whose `children`
-// are indices into that list (node 0 is the root). flatten() and tree_of() are the lossless
-// pair between the two representations of the ONE vocabulary — lossless FOR TREES WITHIN
-// kMaxUiDepth (flatten of a deeper tree produces a component tree_of refuses; that bound is
-// pinned, not hidden) — with the round-trip pinned by Widget's structural operator==. flatten's
-// output is pre-order and is the canonical layout; tree_of deliberately accepts any layout that
-// forms a valid tree (rebuild is deterministic and both renderers see the identical result), so
-// ordering is a canonical-authoring convention, not a decode requirement.
-//
-// HONEST LAYERING (load-bearing): the gate validates SHAPE-conformance — kinds, required
-// fields, nesting — but it cannot see TREE-ness. Whether the flat node list is actually a tree
-// (indices in range, every node reachable exactly once, no cycles, sane enum spellings and
-// numeric ranges) is the vocabulary's own decode check, done by tree_of(), which REFUSES with a
-// reason instead of trusting. Passing the gate does NOT mean tree_of() will accept; tests forge
-// hostile Values to pin exactly that seam. Per-kind-unused fields (e.g. a `title` on a Text
-// node) are NOT refused: the wire carries the full flat struct and round-trips it verbatim —
-// canonical authoring zeroes them (the named constructors do); a strict canonicality check is a
-// named seam, not built until a consumer needs it.
-//
-// THE VIEW / PRESENTER SPLIT. A component is pure DISPLAY data: it declares what it consumes
-// (the contract) but never names what FEEDS it. The feeding is a separate value — zen.ui.
-// Presenter binds a source (by role) to a view (by name/address). Because the two are separable
-// data, a crashed program-weave can never take the UI down with it: the display tree keeps
-// existing, the presenter's source dying is just an EVENT the UI can render gracefully (or open
-// into the poke-weave debugger). The presenter RUNTIME is a later phase; the split exists now.
-//
-// ROUTES. A component's `name` IS its address. A node's `route_to` declares navigation intent
-// ("activating this goes to that view"); a Slot with accepts="Route" is an unbound navigation
-// target. The routing RUNTIME (actually navigating) is a later phase — only addressability
-// lives in the vocabulary.
-//
-// Every field below survived the least-complete-information razor: it stays only if removing it
-// leaves a renderer unable to project or the Builder unable to compose. Sediment was cut —
-// starting with Widget::focusable, which no renderer ever read (focus-eligibility is derivable
-// from interaction intent).
+// The UI component vocabulary: a component is a named, reusable piece of UI with typed open
+// slots, built from the same `loom::Widget` tree the console renders (zen/ui/tree.hpp) and
+// carried as ordinary gated Values (zen.ui.Node, zen.ui.Component, zen.ui.Presenter) through
+// the registry, serializer and gate every message uses. Design-time placeholders default to
+// stress values, so a preview tests its own layout. These are the shapes and their checks:
+// nothing here binds live data, runs a presenter or navigates a route.
 
 #include <zen/ui/tree.hpp>
 #include <zen/kind.hpp>
@@ -75,15 +24,13 @@
 
 namespace loom {
 
-// ---- The wire shapes (hand-written registration blocks, like the standard reply shapes, so
-// ---- the names carry the substrate's "zen." prefix — a maker's macro-declared struct cannot
-// ---- produce a dotted name, which is exactly what keeps "zen.ui.*" the Loom's to speak) ----
+// ---- The wire shapes: registered by hand, like the standard reply shapes, so their names carry
+// ---- the "zen." prefix a macro-declared struct cannot have -----------------------------------
 
-/// One tree node, flat on the wire. Field-for-field the SAME vocabulary as loom::Widget
-/// (ui.hpp) with three mechanical differences: enums travel as their stable spellings (so a
-/// serialized component READS as intent — "List", "Scroll" — and an unknown spelling is refused
-/// on decode, never a silent blank), integers travel as Int (range-checked back by tree_of),
-/// and `children` are indices into the component's node list instead of nested values.
+/// One tree node, flat on the wire: a schema cannot contain itself, so a component carries a
+/// flat node list whose `children` are indices into it (node 0 is the root). Otherwise it is
+/// field-for-field `loom::Widget`, with enums as their spellings and integers as Int, both
+/// checked back by tree_of().
 struct UiNode {
     std::string kind;                   ///< name_of(WidgetKind) spelling
     std::string region_id;
@@ -132,14 +79,10 @@ static_assert(!detail::has_x<UiNode>::value && !detail::has_y<UiNode>::value &&
               "zen.ui.Node must not carry absolute geometry — position is the renderer's job "
               "(the wire form is the same intent-only vocabulary as Widget).");
 
-/// A component: a schematic with typed slots. `name` is its identity AND its address (routes
-/// point at it). The contract — the shape this component is built to consume — is part of that
-/// identity: a row-for-shape-X knows X's fields, which is what makes its bindings checkable
-/// (see check_bindings). contract_name "" (with version 0) means "consumes nothing" (a static
-/// component — a title card, a button panel). The tree is the flat node list; node 0 is the
-/// root. Agreement on the contract is by (name, version) against the registry, consistent with
-/// how every schema in Zen is resolved; pinning the contract's content-id into the component is
-/// the migration/identity layer's business — a named seam, not built here.
+/// A component: `name` is its identity and its address (a route points at it); the contract is
+/// the shape it is built to consume, by (name, version) against the registry, which is what
+/// makes its bindings checkable (check_bindings). An empty contract_name, with version 0,
+/// consumes nothing. `nodes` is the flat tree, node 0 the root, pre-order as flatten() writes.
 struct UiComponent {
     std::string name;                   ///< identity + route address
     std::string contract_name;          ///< the consumed shape's registered name ("" = none)
@@ -155,12 +98,9 @@ struct UiComponent {
     }
 };
 
-/// The OTHER half of the view/presenter split: the declaration of what FEEDS a view. Separate
-/// data on purpose — a component never names its source, so display survives the source. The
-/// source is addressed by ROLE (the persistable participant-addressing the powerbox already
-/// speaks), never by a session-scoped WeaveId. Two fields is the complete image: remove `view`
-/// and you cannot tell which view is fed; remove `source_role` and you cannot tell what feeds
-/// it. The subscription/update/crash-handling RUNTIME is a later phase.
+/// What feeds a view, kept apart from it: a component never names its source, so the view
+/// outlives the source, and the source's death is an event a renderer can show. The source is
+/// addressed by role, never by a WeaveId. This is the declaration only; nothing runs it.
 struct UiPresenter {
     std::string view;        ///< the component name (address) this presenter feeds
     std::string source_role; ///< the role whose values feed it (and whose death is an event)
@@ -173,9 +113,9 @@ struct UiPresenter {
 
 // ---- The lossless pair between the two representations of the ONE tree ----
 
-/// Flatten a Widget tree to the wire's flat node list (pre-order; the returned nodes[0] is
-/// `root`; children become indices). Lossless: tree_of() rebuilds the identical tree (pinned by
-/// Widget's structural ==).
+/// Flatten a Widget tree to the wire's node list, pre-order, `root` at nodes[0], children as
+/// indices. Within kMaxUiDepth, tree_of() rebuilds the identical tree (Widget's ==); a deeper
+/// tree flattens into a component tree_of() refuses.
 std::vector<UiNode> flatten(const Widget& root);
 
 /// Convenience: a component wrapping a flattened tree.
@@ -189,44 +129,24 @@ struct TreeResult {
     std::string error;
 };
 
-/// Maximum tree depth tree_of() will rebuild. A UI deeper than this is pathological; the cap
-/// keeps hostile deep-chain components from exhausting the C++ stack (the decode-side analogue
-/// of the binary codec's own nesting cap).
-///
-/// THE CONVENTION, exactly: the root is at depth 0 and the refusal is `depth > kMaxUiDepth`, so
-/// the deepest legal node sits at depth kMaxUiDepth and the longest legal CHAIN is
-/// kMaxUiDepth + 1 nodes.
-///
-/// AND IT IS THE FIRST BOUND, which the traversal has to be written to keep true. tree_of() walks the
-/// nodes with an explicit work stack, never native recursion, so this cap is what stops a deep
-/// frame on every toolchain. While the walk was recursive the cap was only nominal: MSVC Debug
-/// ran out of C++ stack at chain depth 240 — inside the window the cap says it accepts — and
-/// killed the process rather than rebuilding or refusing, while GCC's thinner frames reached
-/// the cap and hid it. Changing this number changes which frames are ACCEPTED (a wire-admission
-/// decision); it is no longer a guess about anyone's frame size.
+/// The deepest tree tree_of() rebuilds: the root is at depth 0 and the refusal is
+/// `depth > kMaxUiDepth`, so the longest legal chain is kMaxUiDepth + 1 nodes. tree_of() walks
+/// with an explicit stack, never native recursion, so this number decides which frames are
+/// accepted and does not depend on a toolchain's stack frame size.
 inline constexpr int kMaxUiDepth = 256;
 
-/// Rebuild the Widget tree from a component's flat nodes — the vocabulary's own decode check,
-/// one honest layer AFTER the gate. The gate proved shape-conformance; this proves TREE-ness:
-/// node 0 is the root, every child index is in range, every node is reached exactly once (no
-/// cycles, no sharing, no orphans), depth <= kMaxUiDepth, kind/overflow spellings are known,
-/// integer fields are in range (selected_index >= -1, weight in [0, 65535], contract_version a
-/// u32), and per-kind CHILD ARITY holds (a Region wraps exactly one child; List/Log/Text/Field
-/// carry none — child structure is where the renderers would otherwise silently diverge, so it
-/// is tree structure, refused here; per-kind-unused SCALAR fields stay lenient and round-trip
-/// verbatim). Anything else is refused with a reason — never a silent blank. NOTE:
-/// selected_index is deliberately NOT checked against items.size() — a live tree legitimately
-/// carries a cursor over an empty list (renderers treat it as no-selection).
+/// Rebuild the Widget tree from a component's flat nodes. The gate proved the Values' shape;
+/// this proves a tree: node 0 the root, every index in range and reached once (no cycle, share
+/// or orphan), depth within kMaxUiDepth, known spellings, integers in range, and child arity
+/// (a Region wraps one child; List, Log, Text and Field wrap none). It refuses with a reason.
+/// Any valid layout is accepted, not only flatten()'s; unused per-kind scalars round-trip, and
+/// selected_index is not checked against items (a cursor over an empty list is legitimate).
 TreeResult tree_of(const UiComponent& component);
 
-// ---- The stress canon (adversarial placeholder defaults) ----
-//
-// Design-time previews default to the value that REVEALS the seam, not the happy value: a
-// too-long text (width blowout / wrap), the widest number, the empty list (zero-case layout),
-// a deep ladder (nesting). The DEFAULTS stay ASCII on purpose — the TUI is a byte-per-cell
-// renderer and the default placeholder must stress layout in EVERY projection, not mojibake
-// one of them. The Unicode case is the graphical renderers' ADDITIONAL stress value, provided
-// here (the canon is shared vocabulary) and exercised by the pixel projection.
+// ---- The stress canon: design-time placeholders default to the value that reveals a layout
+// seam (a too-long text, the widest number, the empty list, a deep ladder), not a happy one.
+// The defaults are ASCII so a byte-per-cell terminal renderer is stressed too; the Unicode
+// case is the graphical renderers' extra value, exercised by the pixel projection.
 
 /// A long paragraph plus one unbroken 64-char word: overflow + unbreakable-width stress.
 std::string stress_text();
@@ -258,18 +178,13 @@ Widget bound_field(std::string prompt, std::string from_field, Kind field_kind);
 /// A List node bound to a (list-kinded) contract field, previewing the EMPTY rows stress case.
 Widget bound_list(std::string region_id, std::string title, std::string from_field);
 
-// ---- The contract check (what makes a typed slot TYPED) ----
+// ---- The contract check ----
 
-/// Check a component's bindings and slot/intent declarations against its contract's actual
-/// schema: every `from_field` must name a contract field; Text/Field nodes display scalars
-/// (Int/Float/Text/Bool); List/Log nodes bind List fields whose ELEMENTS are displayable
-/// scalars (rows are text — a List of Bytes/Message has no row form); container/Slot nodes
-/// cannot bind data; a Slot's `accepts` must be "Component", "Route", or a scalar Kind
-/// spelling; a Slot must be named, uniquely (slots are filled BY NAME later — nameless or
-/// duplicate holes cannot be filled unambiguously); and `route_to` requires `activatable`
-/// (navigation fires on activation — a route that can never fire is a dead declaration).
-/// Returns one problem string per offense (empty = the component fits its contract). The
-/// caller resolves the contract schema (registry lookup by the declared (name, version)).
+/// Check a component against its contract's schema, one problem string per offense (empty when
+/// it fits): `from_field` names a contract field; Text and Field bind scalars, List and Log a
+/// List of scalars, containers and Slots nothing; a Slot is named uniquely and accepts
+/// "Component", "Route" or a scalar Kind spelling; `route_to` needs `activatable`. The caller
+/// resolves the contract by its (name, version).
 std::vector<std::string> check_bindings(const UiComponent& component, const Schema& contract);
 
 } // namespace loom

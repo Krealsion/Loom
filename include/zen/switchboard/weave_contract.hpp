@@ -88,7 +88,8 @@ public:
         Declined,
         /// It could not complete the showing: recorded Failed, and the weave is held until
         /// reloaded or removed; the operator is told. Said by throwing (recorded, then rethrown)
-        /// or by returning it; a loaded weave's non-OK status crosses back as this.
+        /// or by returning it. A loaded weave's slot answering neither `ZEN_OK` nor
+        /// `ZEN_CLAIM_DECLINED` crosses back as this.
         Failed,
     };
 

@@ -66,17 +66,13 @@ inline std::vector<Token> tokenize(const std::string& line) {
     return out;
 }
 
-/// A WHOLE UNSIGNED DECIMAL NUMBER, or a refusal.
+/// A whole unsigned decimal number, or a refusal. It refuses a sign: `std::stoull` accepts a
+/// leading `-` and returns the wrapped value, so `-1` would be 18446744073709551615, `#-1` a
+/// weave that cannot exist and `await -1` eighteen quintillion turns. A `std::uint64_t` cannot
+/// say negative, so the only true answer to one is no.
 ///
-/// IT REFUSES A SIGN, and that is a repair rather than a nicety (WT-1). `std::stoull` accepts
-/// a leading `-` and returns the WRAPPED value, so `-1` parsed as 18446744073709551615 and
-/// every caller believed it: `#-1` addressed a weave that cannot exist, and `await -1` was
-/// eighteen quintillion turns of the host loop. A `std::uint64_t` has no way to SAY negative,
-/// so the only honest answer to one is no -- and refusing is the safe direction to move a
-/// parser every frontend already tests the bool of.
-///
-/// `is_int` / `is_float` below deliberately keep their signs. A VALUE may be negative; a
-/// count, a version and a weave id may not, and that is the whole difference.
+/// `is_int` / `is_float` below keep their signs: a value may be negative; a count, a version
+/// and a weave id may not.
 inline bool parse_u64(const std::string& s, std::uint64_t& out) {
     if (s.empty() || s[0] < '0' || s[0] > '9') {
         return false; // a sign, a space, or anything else that is not a digit
@@ -150,12 +146,9 @@ inline std::variant<FieldValue, Ref> lex_value(const std::string& s, bool quoted
 /// delivery, `*` publish. There is deliberately no fourth form and no default: an unaddressed
 /// send is not a mode, it is a mistake, and `Address` itself has no way to spell one.
 ///
-/// IT LIVES HERE, BESIDE `lex_arg`, BECAUSE IT IS THE OTHER HALF OF ONE GRAMMAR. A terminal
-/// command line is an address and then values; the value half has been shared by every text
-/// frontend in this tree since TERM-0, while the address half sat in one REPL's anonymous
-/// namespace. A second presentation of the same core -- Zengine's Workshop overlay is the
-/// first -- would then have had to re-author the syntax, and two authors of one grammar is
-/// two grammars: the day `#12` grew a second form, only one of them would learn it.
+/// It lives here, beside `lex_arg`, because it is the other half of one grammar: a terminal
+/// command line is an address and then values, and every presentation of the same core shares
+/// this one copy rather than authoring the syntax again.
 ///
 /// Returns false for anything else, INCLUDING a bare number: `12` is not an address, because
 /// the sigil is what says which of the three kinds this is, and guessing "probably a weave

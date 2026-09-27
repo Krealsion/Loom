@@ -29,12 +29,11 @@
 // The console can say "delivered" because a console holds a `Switchboard&` and
 // reads the journal. This cannot, and does not.
 //
-// A MODEL, NOT OUTPUT. Entries carry structured facts — kind, shape identity,
-// the bus-stamped sender, the authored office, the correlation, a stable id for
-// the received value — so a terminal renderer, a graphical pane and a future
-// executor can each present the same record without one of them having to parse
-// another's strings. Nothing here is coloured, wrapped, or escaped; escaping is
-// the business of whichever renderer has a terminal to protect.
+// A model, not output. Entries carry structured facts (kind, shape identity, the bus-stamped
+// sender, the authored office, the correlation, a stable id for the received value), so a
+// terminal renderer and a graphical pane present the same record without parsing each other's
+// strings. Nothing here is coloured, wrapped or escaped; escaping is the business of whichever
+// renderer has a terminal to protect. docs/reference/terminal.md#the-transcript
 
 #include <zen/bounded_history.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
@@ -102,24 +101,18 @@ enum class Addressing : std::uint8_t {
 
 const char* name_of(Addressing mode) noexcept;
 
-/// ONE OBSERVATION, WITH ITS PROVENANCE KEPT APART FROM ITS PAYLOAD.
-///
-/// The trusted fields below come from Loom and cannot be written by a sender:
-/// `sender` is the bus stamp, `authored_role` is an office Loom verified at the
-/// authorship moment, and `answers_ask` is provenance no ordinary enqueue can
-/// produce. A payload field that happens to be called "requester" is NOT one of
-/// them and never gets copied into one — that conflation is the exact mistake the
-/// Weaver vocabulary is shaped to prevent, and re-making it one layer up would
-/// undo it.
-/// Authenticated detail of a received Loom dispatch-refusal notice. The outer
-/// entry retains the actual received shape and its message id; this record
-/// describes the original send. Existing presentations can still show the
-/// receipt honestly, without mistaking the original shape for a new arrival.
+/// Authenticated detail of a received Loom dispatch-refusal notice: the outer entry keeps the
+/// shape that actually arrived and its message id, and this describes the original send, so a
+/// presentation never mistakes the original shape for a new arrival.
 struct TranscriptDispatchRefusal {
     DispatchRefused send;
     std::uint64_t retired_ask = 0;
 };
 
+/// One observation, with its provenance kept apart from its payload. The trusted fields come
+/// from Loom and no sender can write them: `sender` is the bus stamp, `authored_role` an office
+/// Loom verified at authorship, `answers_ask` provenance no ordinary enqueue produces. A payload
+/// field that happens to be called "requester" is never copied into one of them.
 struct TranscriptEntry {
     /// This presentation's observation order (see ObservationOrder).
     std::uint64_t seq = 0;

@@ -9,9 +9,8 @@
 // A development and test instrument, not a user-facing surface, and it lives in
 // its own header for one reason: FORMATTING IS NOT THE API. Everything below reads
 // the structured records `Recorder` and `Logger` return and turns them into text;
-// nothing in `recorder.hpp` or `logger.hpp` returns a line, so a Terminal, a
-// Workshop panel, a debugger and a test each format for themselves and none of
-// them is downstream of this file's choices.
+// nothing in `recorder.hpp` or `logger.hpp` returns a line, so a terminal, a panel, a debugger
+// and a test each format for themselves and none of them is downstream of this file's choices.
 //
 // Deliberately NOT here: filtering, a query grammar, colour, paging, a widget tree,
 // or anything that would make this a UI. It prints what is retained, in order, and

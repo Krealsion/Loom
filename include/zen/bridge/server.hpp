@@ -4,47 +4,23 @@
 #ifndef ZEN_BRIDGE_SERVER_HPP
 #define ZEN_BRIDGE_SERVER_HPP
 
-// The host side of the crossing. A BridgeServer accepts connections and, for each one its host's
-// ADMISSION POLICY admits, registers a proxy-participant on the bus (the EXACT pattern an
-// out-of-process weave uses -- a proxy that IS a participant, bridging a socket to the bus) under
-// the grant that policy chose, and serves the crossing: discovery answered, sends re-admitted
-// through the one gate with the sender STAMPED FROM THE CONNECTION (never the wire), and every
-// delivery to the proxy shipped back with the facts Loom stamped on it.
+// The host side of the crossing. A BridgeServer accepts connections and, for each one its
+// host's admission policy admits, registers a proxy participant on the bus under the grant that
+// policy chose, then serves it: discovery answered, sends re-admitted through the one gate with
+// the sender stamped from the connection (never the wire), and every delivery to the proxy
+// shipped back with the facts Loom stamped on it. docs/reference/bridge.md
 //
-// ---- WHO DECIDES, AND WHEN -------------------------------------------------------------
+// Reaching the socket is not authority. A connection has no proxy, and acts on nothing, until
+// the host's `BridgeAdmission` policy answers its Hello: Admit (a grant, an accept mode, the
+// name the host establishes, whether it may observe the bus), Refuse (a reason the peer is told
+// before it is severed), or Defer (decided later through `decide()`; its sends are refused
+// aloud meanwhile, never queued). The proxy's WeaveId is the session's identity and is never
+// reused, so a reconnect is a new session. docs/reference/bridge.md#admission-who-decides-and-when
 //
-// Reaching the socket is not authority here. A connection has no proxy -- and so can act on
-// nothing -- until the host's `BridgeAdmission` policy has answered its Hello. The policy sees
-// what the peer CLAIMED (a name, a credential, a protocol version) and where it came from, and
-// answers one of three things: ADMIT, with a `loom::Grant` (what this session may say), an accept
-// mode (what it may be told), the name the host ESTABLISHED for it, and whether it may observe
-// the bus; REFUSE, with a reason the peer is told before it is severed; or DEFER, which leaves
-// the connection waiting for a decision made later -- by a person, a popup, a file -- through
-// `decide()`. A deferred connection's sends are refused aloud, never queued for later.
-//
-// `operator_admission()` is the old model kept honest: every connection is the operator,
-// `allow_any()`, accept-any, observing the whole bus. The in-tree consoles use it; a host that
-// serves guests writes a policy of its own.
-//
-// ---- IDENTITY ----------------------------------------------------------------------------
-//
-// The proxy's WeaveId is the session's identity on this bus, minted at admission and never
-// reused: a reconnect is a new session, and a late answer to an old proxy reaches nobody. What
-// the peer claimed and what the policy established are kept as two facts (`Connection`), and
-// only the second is ever a host's own word.
-//
-// ---- SERVICING ---------------------------------------------------------------------------
-//
-// Single-threaded by construction: the multiplexer is the SERVER'S readiness-to-receive-from-many-
-// sources, NOT bus concurrency. `service()` does the I/O half and nothing else -- accept, read and
-// dispatch frames (each Send is one `send_as`), flush, reap -- so a host whose loop is a
-// delivery-driven drain can service the crossing from INSIDE a delivery. `step()` is `service()`
-// plus one bus turn, the contract every existing caller has. The Switchboard must outlive the
-// server.
-//
-// Honest containment: threat tier abuse, not escape. A misbehaving peer is contained -- bounded
-// frames, bounded backlog, an event-driven loop that never blocks on it -- and a grant bounds
-// what an admitted session may SAY, never what this process's native code may touch.
+// Single-threaded: `service()` does the I/O and takes no bus turn, so a host whose loop is a
+// drain can service the crossing from inside a delivery; `step()` adds one bus turn. A
+// misbehaving peer is contained (bounded frames and backlog, a loop that never blocks on it),
+// and a grant bounds what a session may say, never what this process's native code may touch.
 
 #include <zen/bridge/channel.hpp>
 #include <zen/switchboard/switchboard.hpp>
@@ -133,10 +109,10 @@ struct ConnectionVerdict {
 /// `BridgeServer::decide` when the answer is known.
 using BridgeAdmission = std::function<ConnectionVerdict(const ConnectionRequest&)>;
 
-/// The old model, stated as a policy: every connection is the operator -- `allow_any()`,
-/// accept-any, observing the whole bus -- and its established name is whatever it claimed.
-/// Reachability of the socket IS authority under this policy, so a listener served with it must
-/// not be exposed to an untrusted network. The in-tree consoles and probe use it.
+/// Every connection is the operator: `allow_any()`, accept-any, observing the whole bus, and
+/// established under whatever name it claimed. Reaching the socket is authority under this
+/// policy, so a listener served with it must not be exposed to an untrusted network. Loom's own
+/// consoles and bridge host use it; a host that serves guests writes a policy of its own.
 BridgeAdmission operator_admission();
 
 /// Where a connection stands. Exactly one of these at a time, and the order is the lifecycle.
@@ -172,7 +148,7 @@ public:
     /// Serve connections arriving on `listener` (a listening socket from bridge_listen_*), each
     /// admitted or refused by `admission`. The Switchboard must outlive the server.
     BridgeServer(loom::Switchboard& bus, socket_t listener, BridgeAdmission admission);
-    /// The operator model, for the consoles that always were one principal.
+    /// The operator model (`operator_admission()`).
     BridgeServer(loom::Switchboard& bus, socket_t listener)
         : BridgeServer(bus, listener, operator_admission()) {}
     ~BridgeServer();
@@ -188,18 +164,15 @@ public:
     /// a host whose loop is a drain -- the crossing is then serviced on that host's own beat.
     void service();
 
-    /// One server iteration: `service()` plus one bus turn. Drain-to-idle by default, which keeps
-    /// the contract every existing caller has; a host serving a perpetual in-process service asks
-    /// for the bounded turn below.
+    /// One server iteration: the I/O of `service()` with one bus turn after the frames are
+    /// dispatched. The turn drains to idle unless `set_bounded_dispatch()` was called.
     void step();
 
-    /// DISPATCH ONLY THE BACKLOG THAT EXISTED WHEN THE TURN BEGAN (MSG-09). Off by default.
-    ///
-    /// A host serving a PERPETUAL in-process service -- a repeating Zengine Timer re-arms itself
-    /// inside its own handler, so the queue never empties -- must set this, or `step()` never
-    /// returns to poll its sockets again. It takes NO NUMBER, deliberately: the numeric version
-    /// was shipped, measured 17x slower by a real consumer, and withdrawn. The bound is
-    /// `Switchboard::pump_pending`'s snapshot.
+    /// Make `step()`'s bus turn dispatch only the backlog that existed when it began
+    /// (`Switchboard::pump_pending`, MSG-09). Off by default. A host serving a perpetual
+    /// in-process service, one that re-arms itself inside its own handler so the queue never
+    /// empties, must set it, or `step()` never returns to poll its sockets. It takes no number:
+    /// the bound is the turn's snapshot of the queue.
     void set_bounded_dispatch() noexcept { bounded_dispatch_ = true; }
     bool bounded_dispatch() const noexcept { return bounded_dispatch_; }
 
@@ -314,7 +287,7 @@ private:
     std::size_t refused_ = 0;   ///< connections the policy refused
     bool weaves_dirty_ = false; ///< a Died/Revived seen in the tap; push a fresh Weaves after pump
     bool stop_ = false;
-    bool bounded_dispatch_ = false; ///< false = drain to empty, the original contract
+    bool bounded_dispatch_ = false; ///< false: the turn drains to empty
 };
 
 } // namespace loom
