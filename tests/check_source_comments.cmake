@@ -29,7 +29,6 @@ set(ZEN_COMMENT_PENDING
     "^src/detail/json[.]cpp$"
     "^src/gate[.]cpp$"
     "^src/history/record[.]cpp$"
-    "^src/host/config_file[.]cpp$"
     "^src/host/secure_random[.]hpp$"
     "^src/host/session_files[.]hpp$"
     "^src/host/store_lock[.]cpp$"
