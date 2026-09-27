@@ -75,6 +75,8 @@ REWORDED = {
         '"\' is not supported in Stage 2"'),
     "src/console/console_term.cpp": (
         '"zen console (stage 2). commands: weaves | describe <Shape> <v> | "',),
+    "src/terminal/terminal_main.cpp": (
+        '"zen terminal (TERM-0).\\n"',),
     "src/switchboard/switchboard.cpp": (
         '"\' is already held (roles are singletons in this phase)"',),
 }

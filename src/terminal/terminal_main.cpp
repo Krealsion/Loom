@@ -427,7 +427,7 @@ debug lens only (the HOST looking - powers no participant has):
 )";
     };
 
-    std::cout << "zen terminal (TERM-0).\n"
+    std::cout << "zen terminal.\n"
                  "  This executable hosts its OWN Loom. It does not attach to another process:\n"
                  "  there is no socket, no login, and no remote anything here.\n\n";
     print_who();
