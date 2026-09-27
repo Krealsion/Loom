@@ -1,67 +1,18 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE REQUIRED WEAVE-CONTRACT POPULATION (POP-05, C3) -- computed at CONFIGURE time,
-# because target types and link graphs only exist there.
-#
-# WHY THIS EXISTS. `loom_weave_build_contract()` records every target it touches on the
-# global LOOM_WEAVE_CONTRACT_TARGETS roll, and check_weave_contract.cmake then proves each
-# of those artifacts really is unique-symbol-free. That is a complete answer to "is every
-# contracted artifact reload-safe" and NO answer at all to "is every artifact that must be
-# reload-safe contracted". COLD-2 finding C-3 measured the gap: deleting one line from
-# zen_add_test_weave() dropped twenty-three loadable weaves off the roll, thirteen
-# STB_GNU_UNIQUE symbols came back into libzen_test_weave.so, and the official lane stayed
-# green at 33/33 -- because a derived list cannot detect its own absences (POP-01).
-#
-# WHAT MAKES THIS INDEPENDENT. Nothing in this file reads LOOM_WEAVE_CONTRACT_TARGETS or
-# LOOM_WEAVE_BUILD_CONTRACT. It reads the build graph: a target's TYPE, and the STATIC and
-# OBJECT libraries reachable through its link closure. Those are facts about what the
-# artifact IS, authored where the artifact is declared; the roll is evidence of what opted
-# in. Green requires the two to agree, and the mutation that empties one leaves the other
-# untouched -- which is the whole point.
-#
-# THE SEMANTIC POPULATION, and why it is not "all shared libraries" in general:
-#
-#   loadable weave artifact   a SHARED or MODULE library declared in Loom's tests/
-#       REQUIRED                  directory. This is a measured claim about THIS
-#                                 directory, not a universal one: every SHARED library
-#                                 in tests/ is a weavelib fixture that some suite
-#                                 dlopen's, and there is no other kind here. A future
-#                                 non-weave shared library in tests/ does not slip
-#                                 through -- it lands in the required set and forces a
-#                                 deliberate decision (contract it, or exempt it in
-#                                 writing), which is the correct outcome either way.
-#
-#   static/object library     STATIC or OBJECT libraries in a required weave's link
-#   inside a weave image      closure (loom, zen-switchboard). The contract covers a
-#       REQUIRED                  COMPILATION, not a file (KERN-05): R2F-E measured
-#                                 libloom.a dragging 20 unique symbols into every weave
-#                                 that linked it while the weave's own sources were
-#                                 spotless. Deriving these from the closure rather than
-#                                 naming them is what keeps that lesson a mechanism.
-#
-#   host binary               EXECUTABLE targets (zen-tests, zen-weave-host). Never
-#       NOT REQUIRED              dlopen'ed; loom_weave_build_contract() refuses them.
-#
-#   interface library         zen-warnings, zen-sanitize: no compilation of their own,
-#       NOT REQUIRED              and the contract function refuses them too. Walked
-#                                 THROUGH, so a static library reachable only via an
-#                                 interface target is still found.
-#
-#   shared library in the     a separate image whose statics live and die with it. Its
-#   closure                   own reload-safety is its own question, not this image's.
-#       NOT REQUIRED (here)
-#
-#   declared exemption        a target carrying ZEN_WEAVE_CONTRACT_EXEMPT. Today exactly
-#       EXEMPT, IN WRITING        one: zen_test_contract_bypass, the negative control
-#                                 whose uncontracted-ness IS the proof. The reason string
-#                                 is mandatory, it is printed on every run, and the check
-#                                 fails if an exempt target ever appears on the roll --
-#                                 an exemption is a documented position, never a mute.
-#
-# A stranger is not enumerated by any of this. Loom's required population is Loom's own
-# tree; a third-party build system opts into the installed contract function and is never
-# listed here (KERN-05: it defines a correct path, it is not a cage).
+# The required weave-contract population (POP-05), computed at configure time from the build
+# graph, because target types and link closures exist only there. The roll
+# LOOM_WEAVE_CONTRACT_TARGETS says which artifacts opted in; this file says which must have, and
+# reads neither the roll nor LOOM_WEAVE_BUILD_CONTRACT, so emptying one leaves the other intact.
+# Green requires the two to agree (docs/laws/population-laws.md).
+
+# Required: every SHARED or MODULE library declared in tests/ (each is a fixture some suite
+# dlopens, and a new one forces a decision: contract it, or exempt it in writing), every weave
+# Loom itself ships, and the STATIC or OBJECT libraries in their link closures, since the contract
+# covers a compilation, not a file (KERN-05). Not required: executables, interface libraries
+# (walked through), and shared libraries in a closure, each its own image. A stranger's build is
+# never listed here.
 
 if(COMMAND zen_required_weave_population)
     return()
@@ -85,13 +36,9 @@ function(zen_weave_contract_exempt target)
             "reloadable-weave build contract is a position this project takes on purpose; "
             "it is written down or it is not taken.")
     endif()
-    # The reason travels to the -P check as one field of a `|`-delimited row, and a
-    # semicolon in it would become a CMake list separator on the way -- splitting the row
-    # and desynchronising the reason from the target it belongs to. Refused at the source
-    # rather than repaired downstream. (Measured: a plain `a;b` argument never gets this
-    # far -- the unquoted ${ARGN} expansion above eats the separator and the join loses the
-    # character. An ESCAPED `a\;b` does survive into `reason`, which is the shape this
-    # refuses.)
+    # The reason travels to the -P check as one field of a `|`-delimited row, where a `;` would
+    # split the row and part the reason from its target, so it is refused here. (A plain `a;b`
+    # never arrives: the unquoted ${ARGN} expansion eats it. An escaped `a\;b` does.)
     if(reason MATCHES ";")
         message(FATAL_ERROR
             "zen_weave_contract_exempt: '${target}' has a reason containing a semicolon, "
@@ -133,10 +80,9 @@ function(_zen_wp_dealias name out)
 endfunction()
 
 # A link entry is not always a bare target name: a static library's PRIVATE dependency
-# survives in its interface as $<LINK_ONLY:x>. Unwrap that one shape, and REFUSE anything
-# else still carrying a generator expression rather than skipping it quietly -- a link
-# entry this sweep cannot read could be exactly the static library whose objects land
-# inside the image, and a silent skip there is the failure mode C3 exists to end.
+# survives in its interface as $<LINK_ONLY:x>. Unwrap that one shape, and refuse anything else
+# still carrying a generator expression rather than skipping it: an unreadable link entry could
+# be exactly the static library whose objects land inside the image.
 function(_zen_wp_link_name entry owner out)
     set(name "${entry}")
     if(name MATCHES "^\\$<LINK_ONLY:(.+)>$")

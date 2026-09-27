@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// Answers, immediate and deferred — the compiled twin of docs/guides/messaging.md.
-//
-// The Chef asks a Station to prepare. If the oven is already hot the Station
-// answers at once; otherwise it CONVERTS its one answer right into a deferred
-// one and spends it when the oven catches up. The answer is delivered to the
-// asker — the Chef — who checks `answers_ask()`, Loom's own word, rather than
-// trusting shapes or correlations.
+// Answers, immediate and deferred: the compiled twin of docs/guides/messaging.md. The Chef asks
+// a Station to prepare. If the oven is already hot the Station answers at once; otherwise it
+// turns its one answer right into a deferred one and spends it when the oven catches up. The
+// Chef checks `answers_ask()`, Loom's own word, rather than trusting shapes or correlations.
 
 #include <zen/switchboard.hpp>
 #include <zen/weave.hpp>

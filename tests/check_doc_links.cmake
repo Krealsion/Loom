@@ -1,59 +1,15 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE DOCUMENTATION-LINK CHECK (VOLATILE-2) -- the `doc_links` CTest entry.
-#
-# It answers one question: does every repo-local documentation reference this repository
-# currently makes still resolve? Two populations, one rule -- and a third population under
-# the external-reader rule (CONTRIBUTING.md states it; this entry enforces it): a public
-# repository names no path outside itself.
-#
-#   markdown          every relative link in a current-facing *.md, plus its #anchor
-#   source comments   every repository-relative *.md path written in a first-party
-#                     C/C++ comment, plus its #anchor
-#   outside paths     every current-facing file of a text kind, read whole, names no path
-#                     outside this repository -- not the maintainers' workspace or its
-#                     private siblings, not the drive or mount it sits on, not a tool's
-#                     scratch directory, not a build root beyond the tree, not a home
-#
-# WHY IT IS MECHANICAL. The reference itself was already the project's convention -- laws
-# cite reference pages, reference pages cite tests, AGENTS cites both. What was missing is
-# that a rename or a consolidation broke them silently, and the only thing standing between
-# a reader and a dead pointer was an executor remembering to run a script by hand. A rule
-# nobody enforces is a hope; this is the mechanism, and it rides the official lane so a red
-# reaches whoever moved the file rather than whoever reads the docs six phases later.
-#
-# WHY CMAKE AND NOT PYTHON. Every repository-owned check here is a CMake script for the same
-# reason: CMake is a dependency this project already has on every lane by construction, and
-# a verifier may not depend on a tool that merely happens to be installed. The predecessor
-# `tools/check-doc-links.py` could not run at all on the native Windows host this repository
-# supports, which is precisely the failure mode -- a check that is absent on the lane most
-# likely to break paths is not a weaker check, it is no check.
-#
-# WHY THE SOURCE-COMMENT HALF IS REPOSITORY-RELATIVE. A comment has no stable directory to
-# be relative to: it moves when the code moves, and the same sentence gets copied between
-# src/ and include/. `docs/reference/messaging.md` means the same thing from anywhere in the
-# tree, so that is the accepted form and this check is what makes it one.
-#
-# WHAT IT DELIBERATELY DOES NOT DO
-#
-#   * it does not require a comment to carry a reference. It verifies references that
-#     exist; there is no comment-density gate and no phase-code linter here;
-#   * it does not reach outside this repository. A reference that resolves above the
-#     repository root is counted and skipped, never demanded -- a standalone clone has no
-#     sibling to look at, and a check that passes only inside one workspace layout is a
-#     check that a consumer cannot run (POP-03's reasoning, applied to documentation);
-#   * it does not police frozen history. `docs/history/` and the dated `docs/audits/`
-#     describe the tree they were written against, and forcing their links to resolve here
-#     would mean editing history to satisfy a checker. They are excluded BY RULE, below,
-#     and the exclusion is a written position rather than a per-file silence.
-#
-# THE SELF-TEST IS NOT OPTIONAL. A tree with no broken links and a checker that finds
-# nothing produce byte-identical output, so before answering it makes the real predicate say
-# NO -- a path that does not exist and an anchor that does not exist, both refused -- and say
-# YES to a live document and to a heading read out of that document at runtime. Nothing in
-# the self-test is a hardcoded value that could go stale into a false green.
-#
+# The `doc_links` entry: does every repository-local documentation reference resolve -- each
+# relative link and #anchor in a current-facing *.md, each repository-relative *.md path in a
+# first-party C/C++ comment -- and does no current-facing text file name a path outside this
+# repository (CONTRIBUTING.md#comments-and-documents)? It requires no reference, demands nothing
+# above the repository root (counted and declined), and excludes frozen history by written rule.
+
+# A comment's path is read from the repository root, because a comment moves with its code. The
+# self-test makes the real predicate say no (a missing path, a missing anchor) and yes (a live
+# document and a heading read from it at runtime) before it answers.
 #   cmake -P tests/check_doc_links.cmake              (from the repository root)
 #   cmake -DZEN_REPO=<repo> -P tests/check_doc_links.cmake
 
@@ -102,22 +58,11 @@ set(ZEN_DOC_SOURCE_GLOBS *.h *.hpp *.ipp *.c *.cc *.cpp *.cxx)
 set(ZEN_DOC_SELFTEST_FILE "AGENTS.md")
 
 # ---- paths outside this repository ----------------------------------------------------
-#
-# The external-reader rule made mechanical: a public repository names no path outside
-# itself. These are the spellings that have leaked into this tree or its sibling and were
-# reworded out -- the maintainers' workspace root (which is also where its report and prompt
-# directories live), the drive letter and the mount that workspace sits on, a harness's
-# scratch directory, a build root beyond the tree, the maintainer's home. A leak is a
-# substring wherever it sits, comment or code, so every current-facing file of a text kind
-# is read whole and raw (no escape stripping: `G:\` must be found as written); binaries are
-# not text and are skipped by extension. The file that DECLARES these spellings -- this one
-# -- is the only file allowed to carry them, and the self-test asserts it carries every one
-# of them. The list is the same as the sibling repository's, on purpose: the two trees were
-# swept together and a spelling that leaked into one had leaked into the other.
-#
-# The spelling ending in a backslash is LAST on purpose: `\` before a `;` escapes CMake's
-# list separator, so anywhere else it would weld itself to the next spelling. The self-test
-# counts the list against the number written here so that a reorder is a red, not a silence.
+# The spellings of paths outside the tree: a workspace root, a drive and its mount, a harness's
+# scratch directory, a build root beyond the tree, a home. Every current-facing text file is read
+# whole and raw (`G:\` is found as written); this file alone declares them and may carry them, and
+# the self-test checks it carries each. The backslash spelling is last, since `\` before a `;`
+# escapes CMake's list separator; the self-test counts the list, so a reorder is a red.
 set(ZEN_DOC_OUTSIDE_SPELLINGS
     "Zen/" "reportbacks/" "/mnt/g/" "G:/" "programming/cpp" "scratchpad" "zen-build"
     "Temp/claude" "/home/joshua" "Users/Joshua" "G:\\")
@@ -126,12 +71,9 @@ set(ZEN_DOC_OUTSIDE_DECLARERS tests/check_doc_links.cmake)
 set(ZEN_DOC_TEXT_EXTENSIONS md h hpp ipp c cc cpp cxx cmake txt json in yml yaml py sh)
 
 # ---- the slug, GitHub's convention ---------------------------------------------------
-#
-# Lowercase, drop the punctuation GitHub drops, keep word characters and hyphens, and turn
-# EACH remaining whitespace character into one hyphen -- consecutive spaces stay consecutive
-# hyphens, which is what makes `## POP-01 -- a law` anchor as `pop-01----a-law` rather than
-# collapsing. Getting this wrong in the lenient direction would accept anchors GitHub does
-# not serve, which is the same defect as not checking at all.
+# Lowercase, drop the punctuation GitHub drops, keep word characters and hyphens, and turn each
+# whitespace character into one hyphen (`## POP-01 -- a law` anchors as `pop-01----a-law`): a
+# lenient slug would accept anchors GitHub does not serve.
 function(zen_doc_slug text out)
     string(STRIP "${text}" s)
     string(TOLOWER "${s}" s)
@@ -141,18 +83,9 @@ function(zen_doc_slug text out)
     set(${out} "${s}" PARENT_SCOPE)
 endfunction()
 
-# READING A FILE WITHOUT LETTING ITS PUNCTUATION RESHAPE A CMAKE LIST.
-#
-# Two characters would otherwise decide the answer for us. `;` is CMake's list separator, so
-# a semicolon anywhere in the prose splits an element; `\` escapes the next character, so a
-# line ending in one swallows the separator that follows and silently welds two lines
-# together. The first version of this file kept them and lost two thirds of
-# reference/bounds.md -- every anchor into it read as broken, which is a false RED, and the
-# same defect one edit away from being a false GREEN.
-#
-# Both are dropped at the door. Neither can change an answer: `;` and `\` are punctuation
-# that the heading slug discards anyway (GitHub discards it too), and no path or anchor
-# contains either.
+# Reading a file without letting its punctuation reshape a CMake list: `;` would split an element
+# and a trailing `\` would weld two lines, so both are dropped at the door. Neither can change an
+# answer: the heading slug discards both, as GitHub does, and no path or anchor contains either.
 function(zen_doc_read_markdown path out)
     file(READ "${path}" content)
     string(REPLACE "\r" "" content "${content}")
@@ -173,23 +106,12 @@ function(zen_doc_read_source path out)
     set(${out} "${content}" PARENT_SCOPE)
 endfunction()
 
-# EVERY COMMENT IN A C/C++ TRANSLATION UNIT, AS ONE BLOB OF TEXT.
-#
-# Whole-content pattern extraction rather than a line-by-line state machine, and the reason
-# is measured: CMake stops treating `;` as an element boundary after a few dozen of them, so
-# a file split into a list of lines silently arrives with its tail welded into one element.
-# The pattern form has no list in it to go wrong, and it is an order of magnitude faster.
-#
-# String literals go first so that the `//` in "https://example.org" cannot open a comment --
-# bounded to one line, so an unbalanced quote can never eat the file. Character literals are
-# deliberately NOT stripped: `'/'` is one slash and two of them cannot be adjacent, so no
-# character literal can forge a marker, while `'[^']*'` would happily pair the apostrophe in
-# "the host's" with a later one and delete the sentence between them.
-#
-# Honest limits, both in the direction of scanning MORE text rather than less: a `//` inside
-# a block comment re-matches as a line comment, and a raw string literal on one line may be
-# stripped as an ordinary one. Neither can hide a reference; at worst a reference is seen
-# twice, which is why the caller de-duplicates.
+# Every comment in a C/C++ translation unit, as one blob: a file split into a list of lines
+# arrives with its tail welded, so the extraction is by pattern over the whole content. String
+# literals go first, bounded to a line, so the `//` in a URL opens no comment; character literals
+# stay, since `'/'` cannot forge a marker and `'[^']*'` would pair apostrophes in prose. Its limits
+# all read more text, never less, so a reference is at worst seen twice and the caller
+# de-duplicates.
 function(zen_doc_comments content out)
     string(REGEX REPLACE "\"[^\"\n]*\"" "" code "${content}")
     string(REGEX MATCHALL "//[^\n]*" line_comments "${code}")
@@ -197,15 +119,9 @@ function(zen_doc_comments content out)
     set(${out} "${line_comments} ${block_comments}" PARENT_SCOPE)
 endfunction()
 
-# Every heading slug in a markdown file. An empty answer is itself meaningful -- see the
-# self-test, which requires a real document to yield a real heading.
-#
-# MEMOISED, because a hub document is the target of dozens of anchors and re-reading and
-# re-slugging it once per anchor made this the slowest entry in the lane. The cache key is
-# the resolved path; the cached value is the slug list, which contains no `;` because the
-# slug drops it. A GLOBAL property rather than a variable: a function cannot write its
-# caller's scope, and threading a cache through every call site would put the memoisation in
-# the predicate the self-test exercises.
+# Every heading slug in a markdown file; the self-test requires a real document to yield one.
+# Memoised in a GLOBAL property keyed by the resolved path, because a hub document is the target
+# of dozens of anchors and a function cannot write its caller's scope.
 function(zen_doc_headings path out)
     string(MAKE_C_IDENTIFIER "${path}" key)
     get_property(cached GLOBAL PROPERTY "zen_doc_headings_${key}" SET)
@@ -392,18 +308,10 @@ function(zen_doc_excluded rel out)
     set(${out} 0 PARENT_SCOPE)
 endfunction()
 
-# Excluded top-level directories are pruned BEFORE the walk, not filtered after it. The
-# result is identical -- every file under them is excluded by the same rule either way -- but
-# a repository with three dozen build trees on a slow filesystem spends over a minute
-# enumerating files it is going to throw away, which is a real cost on every local run.
-# Anything NOT excluded is still walked recursively, so a new documentation folder is covered
-# the moment it exists.
-#
-# The two globs are separate for a sharp reason. `file(GLOB_RECURSE)` recurses from the last
-# directory component of its expression, so handing it `<repo>/README.md` -- an expression
-# with no wildcard in the directory part -- makes it walk the ENTIRE repository looking for
-# files by that name, once per root-level document. Measured: seven root documents turned one
-# tree walk into seven. Root files come from a plain, non-recursive `file(GLOB)`.
+# Excluded top-level directories are pruned before the walk rather than filtered after it: the
+# result is the same, and a tree with many build directories is not enumerated. Root files come
+# from a plain file(GLOB): file(GLOB_RECURSE) given `<repo>/README.md` walks the whole repository
+# looking for that name.
 file(GLOB root_md RELATIVE "${ZEN_REPO}" "${ZEN_REPO}/*.md")
 
 set(md_globs "")
@@ -541,13 +449,8 @@ endif()
 set(md_checked "${checked}")
 
 # ---- population 2: repository-relative doc paths in first-party C/C++ comments ---------
-#
-# Comment text only, and resolved against the REPOSITORY ROOT rather than the file: a
-# comment travels with the code it explains, so a file-relative reference in one would break
-# on the next move for a reason that has nothing to do with documentation.
-#
-# Files mentioning no `.md` at all are skipped whole, which is nearly all of them -- the
-# scan costs nothing where there is nothing to say.
+# Comment text only, resolved against the repository root rather than the file, since a comment
+# travels with its code. A file that mentions no `.md` is skipped whole.
 
 set(src_scanned 0)
 set(src_refs 0)

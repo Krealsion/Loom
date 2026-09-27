@@ -1,56 +1,16 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE COMMIT-ATTRIBUTION CHECK (HIST-1) -- the `attribution` CI job.
-#
-# The standing rule is that no AI assistant is ever recorded as a co-author of a Loom
-# commit. The rule is a human instruction, and it has now failed in practice twice: a
-# first wave was removed by HIST-0, and HIST-1 removed a second wave of 14 commits. A
-# rule that has failed twice is not a rule, it is a hope. This is the mechanism.
-#
-# WHAT IT MATCHES, AND WHAT IT DELIBERATELY DOES NOT
-#
-# It asks git's OWN trailer parser for the Co-authored-by trailers of each commit and
-# looks at their VALUES only. It therefore matches the thing that actually causes the
-# attribution -- a real trailer in the trailer block, which is what GitHub reads -- and
-# it cannot be tripped by prose. Discussing Claude in a commit message is normal and
-# stays legal; the sentence you are reading would not trip it, and neither would a
-# commit message describing this very check. Only the attribution itself is forbidden.
-#
-# It is keyed on the trailer VALUE, never on the trailer's presence: a Co-authored-by
-# naming a human being is legitimate and must survive. [[marker-sniff-value-not-name]]
-# is the same lesson from the other direction -- a check that fired on the bare key
-# would fail in the widening direction, refusing honest human collaborators.
-#
-# WHOLE HISTORY, NOT JUST THE NEW COMMITS
-#
-# It scans everything reachable from the ref rather than the commits an event happened
-# to introduce. That is stronger and much simpler: no event-payload range arithmetic, no
-# force-push or first-push edge cases, and the invariant it states is the one actually
-# wanted -- NO commit reachable from this ref carries the attribution, not merely none
-# of the ones pushed today. HIST-1 made that invariant true across all of main, so it is
-# a floor the repository can hold from here rather than an aspiration. Narrow it with
-# -DZEN_RANGE=<base>..<head> if a deliberately-retained attribution is ever adopted.
-#
-# WHY IT IS A CI JOB AND NOT A CTEST ENTRY
-#
-# The other repository-owned checks run under CTest because they interrogate a BUILD.
-# This one interrogates the repository's history, which a source export does not carry:
-# as a CTest entry it would fail in any tarball or non-git checkout, for a reason that
-# has nothing to do with the tree being wrong. It is also not a local git hook, because
-# a hook that exists on one developer machine is a rule with the same failure mode as
-# the one that already failed. It runs where the history is: in CI, on the hosted clone.
-#
-# THE SELF-TEST IS NOT OPTIONAL
-#
-# A clean repository and a broken detector produce byte-identical output, and after
-# HIST-1 the repository IS clean -- so a passing run proves nothing at all unless the
-# check has first been made to say NO. Before scanning anything real it manufactures two
-# throwaway commit objects and requires the real code path to reach opposite verdicts on
-# them: one carrying the forbidden attribution (must be caught) and one carrying a human
-# co-author plus prose mentioning Claude (must NOT be caught, or the check has started
-# refusing honest collaborators). Both are dangling objects -- no ref, no index, no
-# working-tree change -- and git discards them at the next gc.
+# The commit-attribution check, run as a CI job: no commit reachable from the ref records an AI
+# assistant as a co-author. It asks git's own trailer parser for each commit's Co-authored-by
+# trailers and judges their values only, so prose about an assistant passes and a human
+# co-author passes. The whole reachable history is scanned; narrow it with
+# -DZEN_RANGE=<base>..<head> if a deliberately retained attribution is ever adopted.
+
+# A CI job, not a CTest entry, because it reads history, which a source export does not carry.
+# Before scanning, it makes two dangling commits and requires opposite verdicts on them: one with
+# the forbidden trailer (caught) and one with a human co-author and prose naming an assistant (not
+# caught). They have no ref, and git discards them at its next gc.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -114,13 +74,13 @@ if(NOT rc EQUAL 0)
 endif()
 
 zen_throwaway_commit(
-    "Self-test: the wave HIST-1 removed\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+    "Self-test: a forbidden attribution\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
     caught_sha)
 zen_attribution_verdict("${caught_sha}" caught)
 if(caught STREQUAL "")
     message(FATAL_ERROR
         "attribution: SELF-TEST FAILED -- the check did not catch a commit carrying the "
-        "exact trailer HIST-1 removed from 14 commits. It would have reported a clean "
+        "forbidden trailer. It would have reported a clean "
         "history over a dirty one, which is the only outcome worse than not running.")
 endif()
 
@@ -175,7 +135,7 @@ if(NOT offenders STREQUAL "")
         "attribution FAILED: ${offender_count} of ${commit_count} commit(s) reachable from "
         "'${ZEN_RANGE}' record an AI assistant as co-author.\n${text}\n\n"
         "  Loom records no AI co-authors. Remove the trailer from the commit message -- "
-        "amend if it is the tip, otherwise rewrite the affected messages as HIST-1 did "
+        "amend if it is the tip, otherwise rewrite the affected messages "
         "(message-only, final tree unchanged) and force-push with an exact lease.")
 endif()
 

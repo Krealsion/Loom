@@ -1,57 +1,20 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE CTEST-ENTRY INVENTORY (POP-01, VOLATILE-2a; behavioural mutual custody, VOLATILE-B1).
-#
-# One question: are the CTest entries this configuration registered exactly the ones the
-# repository declared it would register? Not how many -- WHICH.
-#
-# IT IS ASKED THROUGH TWO INDEPENDENTLY EXECUTED DOORS, both calling the one implementation
-# below, so there is one authored expectation rather than two copies of it:
-#
-#   tests/verify.cmake     the official lane's preflight, before it runs anything
-#   the `population` entry inside the run, as part of its own work
-#
-# ONE DOOR WAS NEVER ENOUGH, and why is the defect VOLATILE-B1 repaired. The inventory cannot
-# be only a CTest entry: an entry that has been deleted cannot complain about its own
-# deletion. It cannot be only the lane either: a file cannot check itself. The first answer to
-# that was a source-text tripwire -- the `population` entry read verify.cmake and required the
-# text `zen_check_entry_population(` to appear in it. VOLATILE-COLD removed the call in one
-# ordinary edit and the lane still reported PASSED, because the surviving match was a string
-# literal inside verify.cmake's own explanatory error message. Prose about a check satisfied
-# the guard on the check. Nothing here greps for a name any more.
-#
-# WHAT REPLACED IT. Each door asks the build itself and compares by name, both directions. On
-# top of that the lane leaves a WITNESS of having asked -- a receipt naming this run, this
-# build directory, these gates, and the exact expected and registered identity sets it
-# validated. The `population` entry measures all of that again for itself and refuses a
-# receipt that disagrees with what it just measured, so the receipt cannot become a rubber
-# stamp, and refuses a receipt that does not name the run it is part of, so it cannot be a
-# leftover. A lane that stopped taking the inventory leaves no receipt for its own run.
-#
-# TWO MANIFESTS, ONE EXPECTATION, NO DUPLICATED FACT:
-#
-#   suite_population.txt    the doctest suites: name + gate (+ a case floor this check
-#                           never reads -- floors belong to the `population` entry)
-#   entry_population.txt    the entries that are not suites: name + gate
-#
-# The union, resolved against the gates this configuration actually has, is the expected
-# set. Neither manifest is derived from the add_test() calls it judges, which is the whole
-# mechanism: a list generated from the registrations cannot notice a registration that is
-# gone (POP-01).
-#
-# WHY A COUNT WOULD NOT HAVE DONE. `EXPECTED_CTEST_COUNT 39` detects a deletion only while
-# no unrelated addition compensates, and it can never say which entry vanished, whether one
-# was renamed, or whether a gate registered the wrong thing. Named identity answers all
-# three; the totals below are printed as derived diagnostics and are never the contract.
+# The CTest-entry inventory (POP-01): are the entries this configuration registered exactly the
+# ones declared -- which, not how many? The expectation is the union of suite_population.txt (the
+# suites) and entry_population.txt (every other entry) for the active gates, never derived from
+# the add_test() calls it judges. Two doors ask it through this one implementation:
+# tests/verify.cmake before the lane runs anything, and the `population` entry.
+
+# Each door asks the build (`ctest -N`) and compares by name in both directions; the lane leaves
+# a receipt of what it compared, which the entry re-measures and refuses if it disagrees or names
+# another run. Why one door is not enough is in docs/laws/population-laws.md (POP-01).
 
 cmake_minimum_required(VERSION 3.16)
 
-# The manifests sit beside THIS file, and that has to be captured here rather than read from
-# inside a function: CMAKE_CURRENT_LIST_DIR is dynamically scoped to whatever file is being
-# processed, so a function that read it would resolve against its CALLER's directory. Both
-# callers happen to live in tests/ today, which is exactly how that stays true by accident
-# until it does not.
+# The manifests sit beside this file, captured here: CMAKE_CURRENT_LIST_DIR read inside a
+# function resolves against its caller's file.
 set(ZEN_ENTRY_MANIFEST_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 # Name + gate rows out of a manifest, ignoring any further fields (suite_population.txt's
@@ -138,23 +101,11 @@ function(zen_entry_resolve names gates active out_present out_absent)
 endfunction()
 
 # ---- asking the build what it actually registered ---------------------------------
-#
-# `ctest -N` is the only authority on that: a list generated from the add_test() calls could
-# not notice one that is gone (POP-01), and CTestTestfile.cmake re-parsed by hand would be a
-# second implementation of CTest free to disagree with it.
-#
-# IT IS ASKED INDIRECTLY, from a one-line scratch project that does nothing but name the real
-# build tree, because EVERY ctest listing mode (`-N`, `--show-only=human`,
-# `--show-only=json-v1`) truncates <build>/Testing/Temporary/LastTest.log as a side effect of
-# opening its own log. Measured, not assumed: 942 bytes of a run's log became 121 without the
-# indirection. The `population` entry asks this question from inside a running lane, and a
-# check that destroys the log of the run it is checking is not one anybody wants. The scratch
-# project's own Testing/ absorbs it instead.
-#
-# The scratch file names the build directory and nothing else, so there is no generated CMake
-# text being rewritten here and nothing to keep in step with CMake's output format. If the
-# indirection ever stopped resolving, it would list ZERO entries -- and zero is refused below,
-# loudly, rather than quietly agreeing with an empty expectation.
+# `ctest -N` is the only authority: a list generated from the add_test() calls cannot notice one
+# that is gone (POP-01). It is asked from a one-line scratch project naming the real build tree,
+# because every ctest listing mode truncates <build>/Testing/Temporary/LastTest.log, the log of
+# the run the `population` entry is part of. A scratch project that stopped resolving would list
+# zero entries, and zero is refused below.
 function(zen_ctest_entry_listing build_dir config selector out_listing)
     if(NOT EXISTS "${build_dir}/CTestTestfile.cmake")
         message(FATAL_ERROR
@@ -225,15 +176,10 @@ function(zen_entry_names_from_listing listing label out_names out_total)
     set(${out_total} "${total}" PARENT_SCOPE)
 endfunction()
 
-# ---- THE COMPARISON: one implementation, called by both doors ----------------------
-#
-#   registered   the names read out of an UNFILTERED `ctest -N`
-#   build_dir    the configured build tree
-#   label        which door is speaking, so a diagnostic says which one found it
-#
-# It reports the gates and the expected set back to its caller, because the witness below
-# records exactly what was compared and the `population` entry compares that record against
-# its own measurement.
+# ---- The comparison: one implementation, called by both doors ----------------------
+# `registered` is the names from an unfiltered `ctest -N`; `label` says which door is speaking.
+# It returns the gates and the expected set, because the receipt records exactly what was
+# compared.
 function(zen_entry_identity_check registered build_dir label out_gates out_expected)
     # ---- which configuration is this? ------------------------------------------------
     #
@@ -396,19 +342,10 @@ function(zen_entry_normalise names out_text)
     set(${out_text} "${text}" PARENT_SCOPE)
 endfunction()
 
-# THE LANE'S DOOR.
-#
-#   listing     the raw stdout of `ctest -N` for this run's selection
-#   selector    the value of ZEN_SELECT, empty for the full lane
-#   build_dir   the configured build tree
-#   run_token   this lane run's token, exported to the ctest run as
-#               ZEN_ENTRY_INVENTORY_RUN -- empty for a subset run
-#   out_count   receives the number of entries the selector matched
-#
-# It also owns the two things the lane needs from that listing anyway -- the count, and the
-# refusal of a zero -- so that removing the call does not quietly leave a lane that still
-# runs. tests/verify.cmake refuses to continue without an answer from here, and the
-# `population` entry refuses to pass without the receipt written at the end of this function.
+# The lane's door. `listing` is the raw `ctest -N` for this run's selection, `selector` is
+# ZEN_SELECT (empty for the full lane), `run_token` is exported to the ctest run as
+# ZEN_ENTRY_INVENTORY_RUN (empty for a subset run). It also returns the count and refuses zero,
+# so tests/verify.cmake cannot continue without an answer from here.
 function(zen_check_entry_population listing selector build_dir run_token out_count)
     zen_entry_build_dir("${build_dir}" build_abs)
     zen_entry_names_from_listing("${listing}" "entries" registered total)
@@ -429,13 +366,10 @@ function(zen_check_entry_population listing selector build_dir run_token out_cou
 
     zen_entry_identity_check("${registered}" "${build_abs}" "entries" gates expected)
 
-    # ---- the receipt, written only now, having actually done the work ------------------
-    #
-    # This is what the `population` entry requires of a lane that claims to be the official
-    # one. It is not "a file exists": it names THIS run, and it records the two identity sets
-    # this call just compared, which the entry re-measures for itself before believing any of
-    # it. A lane that stopped taking the inventory never reaches this line, so its run has no
-    # receipt and the entry inside it says so.
+    # ---- the receipt, written only now, having done the work ------------------
+    # It names this run and records the two identity sets just compared, which the `population`
+    # entry re-measures before believing any of it. A lane that stopped taking the inventory
+    # never reaches this line, so its run has no receipt.
     zen_entry_witness_file("${build_abs}" witness)
     zen_entry_normalise("${expected}" expected_text)
     zen_entry_normalise("${registered}" registered_text)
@@ -464,25 +398,12 @@ function(zen_entry_witness_field text key out_value)
     endif()
 endfunction()
 
-# The custody the `population` entry carries, in addition to the suite/floor contract that
-# has always been its own work. TWO INDEPENDENT THINGS, in this order:
-#
-#   1. it asks the build what it registered and compares that against the manifests ITSELF.
-#      This is the custody that matters: after it, deleting any declared registration is red
-#      whether or not the lane ever looks.
-#   2. if this run was launched by the official full lane, it requires that lane's inventory
-#      to have left a receipt FOR THIS RUN which agrees with the measurement it just made.
-#      This is what makes removing the lane's own door visible from outside the lane.
-#
-# Step 2 is skipped, and says so, when no run token reaches it: a bare `ctest` is a supported
-# way to work (AGENTS.md), and a developer running one owes no receipt. The lane exports the
-# token beside its ctest invocation, structurally apart from the call in step 1 that earns
-# the receipt -- so the ordinary edit that removes the inventory leaves the announcement
-# standing and the entry finds a run that claims the lane and cannot show its work.
-#
-# The stated ceiling, which is real: an edit that removes BOTH the call and the lane's
-# announcement of itself escapes both doors' notice of each other. It does not escape step 1,
-# which is why step 1 is first and does not depend on any of this.
+# The custody the `population` entry carries beside its suite and floor contract, in order:
+# 1. it asks the build what it registered and compares that with the manifests itself, so a
+#    deleted registration is red whether or not the lane looks;
+# 2. when the official full lane launched the run (a run token reaches it), it requires that
+#    lane's receipt for this run to agree with its own measurement. A bare `ctest` carries no
+#    token, owes no receipt, and says so.
 function(zen_entry_population_custody build_dir config)
     zen_entry_build_dir("${build_dir}" build_abs)
     zen_ctest_entry_listing("${build_abs}" "${config}" "" listing)

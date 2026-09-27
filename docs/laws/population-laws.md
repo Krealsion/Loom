@@ -66,8 +66,8 @@ MEANS
   entries, and passes `--no-tests=error` so CTest refuses it too;
 - **the entries themselves are a declared population, not only the suites** (VOLATILE-2a).
   `tests/entry_population.txt` names the CTest entries that are not suites — the population
-  checks, the empty-population witnesses, the weave-artifact checks, the documentation-link
-  check, the aggregate runner — with the gate each rides; the expected set is that union
+  checks, the empty-population witnesses, the weave-artifact checks, the documentation
+  checks, the aggregate runner — with the gate each rides; the expected set is that union
   with the gate-resolved suites, compared to `ctest -N` **by name, both directions**, by
   two independently executed doors (the lane, and the `population` entry). Until it
   existed, deleting one `add_test` left the lane registering one

@@ -1,22 +1,13 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE INSTALLED-PACKAGE WITNESS (MSVC-0).
-#
-# A STANDALONE project -- not add_subdirectory'd by Loom, never part of Loom's own
-# build tree. It is configured against an INSTALL PREFIX and reaches Loom only through
-# find_package(loom), which is the whole point: the build tree can satisfy a target the
-# export set never published, and that is exactly the mistake that reaches a guest
-# instead of the house.
-#
-# THE LOAD-BEARING PROPERTY OF THIS FILE IS WHAT IT DOES NOT CONTAIN.
-# No target_compile_options. No /Zc:preprocessor. No -I into a Loom source tree. No
-# CMAKE_CXX_STANDARD. If any of those become necessary to build these three targets,
-# the package has stopped carrying its own requirements and this witness must go red --
-# so do not "fix" a failure here by adding a flag. Fix it in Loom's exported targets.
-#
-# Drive it with tests/package/run.cmake, which configures, builds and runs it against a
-# freshly installed prefix.
+# The installed-package witness: a standalone project, configured against an install prefix,
+# that reaches Loom only through find_package(loom), since a build tree can satisfy a target the
+# export set never published. What it must not contain is the point: no compile option, no
+# /Zc:preprocessor, no include path into Loom, no CMAKE_CXX_STANDARD. If one becomes necessary
+# the package has stopped carrying its requirements: fix Loom's exported targets, not this file.
+
+# Driven by tests/package/run.cmake against a freshly installed prefix.
 
 cmake_minimum_required(VERSION 3.16)
 project(loom-package-witness LANGUAGES CXX)
@@ -64,30 +55,20 @@ add_executable(witness-macros macro_surface.cpp)
 target_link_libraries(witness-macros PRIVATE loom::core)
 
 # ---- 2. the terminal core, reached the way a second presentation reaches it -------
-#
-# TERM-0 exported `loom::terminal` on the strength of a second PRESENTATION rather than a
-# second host, so the claim that a stranger can build one has to be measured here rather
-# than asserted in a report. Links loom::terminal + loom::switchboard and nothing else --
-# no console, no UI vocabulary, no renderer, none of which is exported.
+# Links loom::terminal and loom::switchboard and nothing else: no console, UI vocabulary or
+# renderer, none of which is exported.
 add_executable(witness-terminal stranger_terminal.cpp)
 target_link_libraries(witness-terminal PRIVATE loom::terminal loom::switchboard loom::core)
 
-# ---- 2b. the history pair, reached the way a Zengine application reaches it ------
-#
-# RTH-1 exported `loom::recorder` on the strength of a Zengine application that consumes
-# this repository solely through find_package -- and shipped with no witness that the
-# claim held. RTH-1a renamed the target to `loom::history` and put a SECOND owner behind
-# it, so the surface is measured here at the moment it changed. Links loom::history +
-# loom::switchboard + loom::core and nothing else; none of the console, UI or terminal is
-# reachable and none is wanted.
+# ---- 2b. the history pair, reached the way an application outside this repository reaches it --
+# Links loom::history, loom::switchboard and loom::core and nothing else: the Recorder and the
+# Logger are reachable, and no console, UI vocabulary or terminal is.
 add_executable(witness-history stranger_history.cpp)
 target_link_libraries(witness-history PRIVATE loom::history loom::switchboard loom::core)
 
 # ---- 2c. the crossing, reached the way a linking host reaches it -------------------
-#
-# The two-host crossing exported `loom::bridge` on the strength of a second HOST: a Loom host
-# that links to a running Workshop. Links loom::bridge + loom::switchboard + loom::core and
-# nothing else -- no console and no remote console, neither of which is exported.
+# Links loom::bridge, loom::switchboard and loom::core and nothing else: no console and no remote
+# console, neither of which is exported.
 add_executable(witness-bridge stranger_bridge.cpp)
 target_link_libraries(witness-bridge PRIVATE loom::bridge loom::switchboard loom::core)
 

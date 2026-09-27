@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The kernel is alive: two Weaves on the Switchboard exchange a gated message
-// and a reply, a publish reaches only its accepters, a malformed message is
-// refused at the boundary, and a Weave dies and revives through native bytes —
-// all witnessed by an observer. Public API only.
+// The bus at work: two weaves on the Switchboard exchange a gated message and a reply, a publish
+// reaches only its accepters, a malformed message is refused at the boundary, and a weave dies
+// and revives through native bytes, all witnessed by an observer. Public API only.
 
 #include <zen/switchboard.hpp>
 #include <zen/zen.hpp>

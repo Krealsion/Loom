@@ -1,60 +1,18 @@
-# The suite population contract (POP-01 / POP-02, R2F-D).
-#
-# This file is the INVENTORY half of "green means the named population ran". It is
-# checked by tests/check_population.cmake, which CTest runs as the `population` test.
-#
-# The check is two claims, both of them fail-closed:
-#
-#   1. INVENTORY, exact.  For every gate active in this configuration, the set of
-#      suites listed here must equal, exactly, the set of suites present in the built
-#      test binary (`zen-tests --list-test-suites`). A suite that vanished fails. A
-#      suite that appeared and was never declared here fails too. Adding or renaming a
-#      SUITE is therefore a deliberate act with a line in this file; it can never
-#      happen silently.
-#
-#   2. FLOOR, per suite.  Each suite must select at least `min-cases` test cases.
-#      The floors below are the R2F-D measured baseline, so they carry ZERO downward
-#      slack -- deleting a single case from any suite crosses its floor -- while
-#      leaving healthy ADDITIONS free, which is the traffic this project actually
-#      generates (most phases add regression cases and change nothing else).
-#      Raise a floor when a phase's new cases should become permanent.
-#
-#      This is deliberately NOT the same policy as the OS-enforcement tallies in
-#      tests/enforcement_gate.hpp, which are EXACT counts: those populations are small,
-#      security-relevant and intentionally stable, so an unexplained extra witness
-#      there should be noticed as loudly as a missing one.
-#
-# `gate` says WHY a suite may be legitimately absent -- the conditional subpopulation,
-# modelled explicitly instead of hidden behind a slack floor:
-#
-#   portable  compiled everywhere; absence is always a defect.
-#   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
-#             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
-#   posix     rides `NOT WIN32`; the OS sandbox exists only there.
-#   runs      rides the run manager having been built (`TARGET zen-runs`: the kernel AND
-#             LOOM_BUILD_SESSION_TOOLS, default ON). Absent => declared absent, never "passed".
-#
-# A suite may carry MORE THAN ONE row, and its floor is the SUM of the rows whose gate is
-# active. That is how a conditional subpopulation INSIDE a suite is stated exactly instead
-# of being papered over: `bridge` is 19 cases everywhere plus 8 more behind `#ifndef _WIN32`
-# (test_bridge.cpp:370-825 and :1647-1706 -- the unix-socket pair and its lifetime cases),
-# so its contract reads 27 on Linux and 19 on Windows and neither number has any give. The
-# native Windows lane is what found this: a single portable floor of 25 was wrong there, and
-# a slack floor would have hidden the fact rather than stated it.
-#
-# `kernel` carries the same split for the same reason, and the Windows lane found it the
-# same way (BL-0): 135 cases wherever zen-kernel exists, plus 2 behind `#ifndef _WIN32`
-# (test_kernel.cpp:7094-7156 -- the RTLD_NOLOAD unload observations, which have no PE
-# equivalent to ask). The single floor it replaced was 132: two cases of slack that hid
-# exactly this, until raising it to the Linux count made Windows say so.
-#
-# Counts are `--test-suite=<name> --count`: test CASES, not assertions. Assertion
-# totals are not a population (COLD-1 section 8: ~90% of this tree's assertion headline
-# came from one fuzz branch), so they are reported but never an acceptance oracle.
-#
-# Keep this file plain ASCII: it is read with file(STRINGS), which treats a non-ASCII
-# byte as a string terminator and would silently split the line around it.
-#
+# The suite population contract (POP-01, POP-02), checked by tests/check_population.cmake as the
+# `population` entry. For every active gate, the suites listed here must equal the suites the
+# built binary holds (`zen-tests --list-test-suites`), so adding or renaming a suite is a line
+# here; and each suite must select at least `min-cases` cases (`--count`: cases, never
+# assertions). A floor is the measured count with no slack: deleting a case crosses it, adding
+# one is free. The OS-enforcement tallies are exact instead (tests/enforcement_gate.hpp).
+
+# `gate` says why a suite may be absent: `portable` never; `kernel` rides `TARGET zen-kernel`
+# (Linux, and Windows under LOOM_ENABLE_WINDOWS_KERNEL); `posix` rides `NOT WIN32`; `runs` rides
+# `TARGET zen-runs` (the kernel and LOOM_BUILD_SESSION_TOOLS). An absent gate's suites are
+# declared absent, never passed. A suite's floor is the sum of its rows whose gate is active, so
+# a suite smaller on Windows says so with a second row: `bridge` (the unix-socket cases) and
+# `kernel` (the RTLD_NOLOAD unload observations) each have cases behind `#ifndef _WIN32`.
+
+# Keep this file plain ASCII: file(STRINGS) splits a line at a non-ASCII byte.
 # suite            gate      min-cases
 schema             portable  8
 value              portable  8
