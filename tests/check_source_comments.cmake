@@ -32,7 +32,6 @@ set(ZEN_COMMENT_PENDING
     "^src/host/store_lock[.]cpp$"
     "^src/runs/catalog[.]cpp$"
     "^src/runs/runs_weave[.]cpp$"
-    "^src/ui/tree[.]cpp$"
     "^src/value[.]cpp$"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
