@@ -54,7 +54,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/weave/role_request[.]hpp$"
     "^include/zen/weave/shape[.]hpp$"
     "^include/zen/weave/standard_shapes[.]hpp$"
-    "^include/zen/weave/weave[.]hpp$"
     "^src/"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
