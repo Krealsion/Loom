@@ -1,84 +1,81 @@
 # Known seams — reference
 
 Current limitations and open design candidates, stated precisely so shorthand
-cannot harden into false guarantees. Statuses used here: **KNOWN SEAM**
-(a real, current limitation), **EVIDENCE-BACKED CANDIDATE** (core work an
-application portfolio motivates), **GUIDELINE** (a design rule for
-applications), **KNOWN AUTHORING FRICTION** (ergonomics, not missing truth),
-**SPECULATIVE** (a sketch, not an API).
+cannot harden into false guarantees. Statuses used here include **KNOWN SEAM**
+(a real, current limitation), **CLOSED** (a former seam, kept here with what
+still lies outside it), **GUIDELINE** (a design rule for applications),
+**KNOWN AUTHORING FRICTION** (ergonomics, not missing truth), **WATCHING** (a
+pattern seen, deliberately not yet answered).
 
 ## Role-authored provenance
 
-**Status: CLOSED (R2D-0) — current, law-backed.**
+**Status: CLOSED — current, law-backed.**
 
-The fourth fact exists. All four now:
+Four facts about a message, and each exists:
 
 ```text
-sender identity          who the exact weave was            EXISTS (the bus stamp)
-role-addressed delivery  where the message was routed       EXISTS (send_to_role)
-role membership          which office the weave holds now   EXISTS (role_holder lookup)
+sender identity          who the exact weave was            the bus stamp
+role-addressed delivery  where the message was routed       send_to_role
+role membership          which office the weave holds now   role_holder lookup
 role-authored provenance which office the weave
-                         DELIBERATELY SPOKE AS              EXISTS (mail.as_role /
-                                                            authored_from_role, MSG-07)
+                         DELIBERATELY SPOKE AS              mail.as_role /
+                                                            authored_from_role (MSG-07)
 ```
 
 Both load-bearing halves are carried: *authorization* (Loom verified the
 sender held R at the authorship moment) and *intent* (this statement was
-deliberately spoken as R). Holding remains insufficient by law — the same
+deliberately spoken as R). Holding is insufficient by law — the same
 holder's personal speech arrives unauthored — and **publications are
-first-class** (the forged-`WorkerOpen` case is exactly what
-`as_role(R).publish` closes). Current semantics:
+first-class** (a forged `WorkerOpen` announcement is exactly what
+`as_role(R).publish` answers). Current semantics:
 [messaging](messaging.md#office-authorship-role-authored-provenance); law:
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
-why explicit-not-inferred won:
-[decision](../decisions/office-authorship-is-deliberate.md); the discovery and
-pricing of the seam:
-[evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced)
-and the focused replay `playground/night-lab/followups/role-authorship/`.
+why explicit-not-inferred:
+[decision](../decisions/office-authorship-is-deliberate.md); the applications
+that priced the seam:
+[evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced).
 
-What remains deliberately out of scope (seams, not gaps): office authorship
-across the **out-of-process pipe** fails closed in both directions (the pipe
-carries no attestation in V1; the first out-of-process office pulls the
-verified control-protocol frame), and no public door yet produces a combined
-answer+office fact (the representation admits it; `answer_as_role` waits for a
-consumer).
+Deliberately outside it: office authorship across the **out-of-process pipe**
+fails closed in both directions (the pipe carries no attestation; the first
+out-of-process office needs a verified control-protocol frame), and no public
+door produces a combined answer+office fact (the representation admits it; an
+`answer_as_role` waits for a consumer).
 
-## Live authority administration — what GRANT-0 deliberately did not build
+## Live authority administration — what delegation deliberately does not do
 
 **Status: KNOWN SEAM** (three of them, kept apart on purpose). The primitive
 itself is current and law-backed
 ([GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides),
 [capabilities](capabilities.md#live-delegation)); these are the edges
-around it, stated so shorthand cannot harden into a guarantee.
+around it.
 
 ```text
-CONTAINMENT IS STILL ADMISSION-TIME.  os_cap / FsAccess / ResourceLimits are
+CONTAINMENT IS ADMISSION-TIME.  os_cap / FsAccess / ResourceLimits are
     consumed once, at IsolationHost::mount, into a network namespace, a
     pivot_root'ed mount view and a cgroup leaf. Nothing in this process can
     revisit them, in EITHER direction: a live grant would not open a namespace,
     and a live revocation would not claw back an already-open socket, an
     inherited descriptor or a spawned child. `LiveAuthority` therefore has no
     vocabulary for them, and that absence is the guarantee. Narrowing them live
-    would need the isolation backend to prove it, and it does not today.
+    would need the isolation backend to prove it, and it does not.
 
 AN ADMINISTRATION ACT IS NOT ON THE TAP.  Delegation queues no message and emits
     no BusEvent, so an operator watching traffic sees the CONSEQUENCES of an
     authority change (a send that now lands, or now refuses `CapabilityDenied`)
     and never the change itself. A `GrantChange` result is returned to the
-    caller and nowhere else. A future operator surface that must show "who
-    granted what, when" needs its own answer; this is deliberately not an audit
-    log, and it meets the same wall the delivery tap does — whole-bus
-    observation is host authority, not a grant.
+    caller and nowhere else. An operator surface that must show "who granted
+    what, when" needs its own answer; this is deliberately not an audit log,
+    and it meets the same wall the delivery tap does — whole-bus observation is
+    host authority, not a grant.
 
-    STILL TRUE AFTER WEAVER-1, and worth stating precisely, because the Weaver
-    looks like it closed this and did not. An operator sees the workflow it is
-    ITSELF PART OF — its own prompts, its own acks, its own refusals — because
-    the Weaver deliberately sends it those messages. It does not see an
-    authority change made by any other holder of a capability over the same
-    subject, and there is no event it could subscribe to that would show one.
-    A Weaver reading `describe_authority` afterwards reports the truth (it keeps
-    no picture of its own to be stale), so the gap is NOTIFICATION, not
-    correctness.
+    The Weaver does not close this, though it can look as if it does. An
+    operator sees the workflow it is ITSELF PART OF — its own prompts, its own
+    acks, its own refusals — because the Weaver deliberately sends it those
+    messages. It does not see an authority change made by any other holder of a
+    capability over the same subject, and there is no event it could subscribe
+    to that would show one. A Weaver reading `describe_authority` afterwards
+    reports the truth (it keeps no picture of its own to be stale), so the gap
+    is NOTIFICATION, not correctness.
 
 THE CAPABILITY IS NOT ATTENUABLE BY ITS HOLDER.  A `GrantAuthority` governs one
     subject with one ceiling, and there is no verb by which its holder mints a
@@ -91,32 +88,31 @@ There is also no time-based expiry and no one-shot authority: a delegated rule
 is reusable until it is explicitly replaced or the subject dies. "Allow while
 this session lives" and "allow until revoked" are both real; **"allow once" is
 not claimed**, and a policy that needs it must broker the action rather than
-pretend a reusable grant is consumable. [WEAVER-1](weaver.md) says exactly that
-to the human, in the prompt's own words, rather than leaving them to assume.
+pretend a reusable grant is consumable. The [Weaver](weaver.md) says exactly
+that to the human, in the prompt's own words, rather than leaving them to assume.
 
 ## A policy delegate's death does not revoke what it granted
 
-**Status: KNOWN SEAM** (WEAVER-1), and it follows from the line above rather
-than from anything the Weaver does: an installed grant is not a lease. If the
+**Status: KNOWN SEAM**, and it follows from the line above rather than from
+anything the Weaver does: an installed grant is not a lease. If the
 [Weaver](weaver.md) dies after an approval, the governed session **keeps** the
-delegated authority, and there is now no message by which anyone can take it
+delegated authority, and there is then no message by which anyone can take it
 back — the seat that could revoke it is the seat that is gone. Only the host,
 holding a capability of its own, can.
 
 That is stated rather than solved. Session-death-on-Weaver-failure, leases,
 supervisor restart and a host emergency revoke are all real answers and all
-speculative today; adding RAII revocation would silently change GRANT-0's
-"a capability is not a lease" into its opposite for one caller.
+speculative; adding RAII revocation would silently turn "a capability is not a
+lease" into its opposite for one caller.
 
 ## What an ordinary participant may observe
 
-**Status: KNOWN SEAM — narrowed and classified by TERM-0.** Whole-bus
-observation remains host authority, not a grant.
+**Status: KNOWN SEAM — narrowed.** Whole-bus observation remains host
+authority, not a grant.
 
-TERM-0 asked the question this note existed to hold open — *what does an ordinary
-terminal actually need to observe?* — and the answer turned out to be: **less
-than the old console had, and nothing that needs a new primitive.** The nine
-categories, measured against the landed source:
+What does an ordinary terminal actually need to observe? **Less than a
+whole-bus console has, and nothing that needs a new primitive.** Nine
+categories, measured against the source:
 
 ```text
 A own inbound messages              ORDINARY   the weave's own doors
@@ -144,62 +140,60 @@ or a tap through hidden privileges: an honest terminal says *watching traffic is
 not available to an ordinary participant*, because power includes saying no
 truthfully. Closing this needs a real scoped observation law (what may be
 observed, by whom, authorized how) — the same shape `ObserveRule` gave Senses,
-and it has no consumer yet. F and I are separate entries above and below.
+and it has no consumer yet. The relay in [observation](observation.md) is the
+narrower thing that does exist: an office's own publications, under a policy.
+F and I are separate entries above and below.
 
 ## Service discovery is not a participant's power
 
-**Status: KNOWN SEAM — recorded by TERM-0, and NARROWED IN ONE HALF by MSG-1.**
+**Status: KNOWN SEAM in one half; the other half is answered.**
 
-The note used to hold two different questions in one sentence. They have come
-apart:
+Two different questions:
 
 ```text
-WHO IS RUNNING?              still HOST ONLY   Switchboard::list_weaves
-WHAT DOES THAT ONE ACCEPT?   CLOSED by MSG-1   ask the target: zen.DescribeAccepted
+WHO IS RUNNING?              HOST ONLY   Switchboard::list_weaves
+WHAT DOES THAT ONE ACCEPT?   answered    ask the target: zen.DescribeAccepted
 ```
 
-**Closed.** A participant holding a role name and an ordinary grant can ask one
+**Answered.** A participant holding a role name and an ordinary grant can ask one
 target what it accepts and get back enough schema truth to reconstruct those
 shapes and inspect their fields — see
 [self-description](messaging.md#self-description--what-may-be-said-to-this-weave).
-It took the shape this note prescribed: an ordinary ask under an ordinary grant,
-answered by an ordinary participant. What it did *not* need was the directory —
-the target is the natural owner of "what I accept", so no third party has to
-hold the fact and no new authority type appeared.
+It is an ordinary ask under an ordinary grant, answered by an ordinary
+participant. It needs no directory: the target is the natural owner of "what I
+accept", so no third party has to hold the fact and no new authority type
+exists for it.
 
-**Still open, and deliberately.** `ConsoleEngine::weaves()` enumerates the bus's
-registry and needs a `Switchboard&`; a [terminal session](terminal.md) does not
-have it, and neither does anything else. Enumerating live weaves is a fact about
-the running world rather than about the participant, and handing it to every
+**Open, deliberately.** `ConsoleEngine::weaves()` enumerates the bus's registry
+and needs a `Switchboard&`; a [terminal session](terminal.md) does not have it,
+and neither does anything else. Enumerating live weaves is a fact about the
+running world rather than about the participant, and handing it to every
 terminal would give an ordinary weave a power nothing granted it. `send_to_role`
-already addresses an office without resolving it, which is why no consumer has
-needed the list yet.
+addresses an office without resolving it, which is why no consumer has needed
+the list.
 
-**Also still absent, and not wanted:** global schema enumeration. Nothing in
-Loom can enumerate schemas — `Registry` offers lookup/contains/size and the
-`Switchboard` publishes no `registry()` accessor — so even the console's
-"catalog" is derived from accept-sets. A `ListSchemas` would have no owner, no
-natural authority scope, and no consumer: the product question is *what can I
-say to THIS thing*, which is now answered directly.
+**Absent, and not wanted:** global schema enumeration. Nothing in Loom can
+enumerate schemas — `Registry` offers lookup/contains/size and the `Switchboard`
+publishes no `registry()` accessor — so even the console's "catalog" is derived
+from accept-sets. A `ListSchemas` would have no owner, no natural authority
+scope, and no consumer: the product question is *what can I say to THIS thing*,
+which is answered directly.
 
 ## The operator seat is a WeaveId, not a person
 
-**Status: KNOWN SEAM** (WEAVER-1), **narrowed in one half by TERM-0.** A Weaver
-treats one exact WeaveId's decisions as the user's. That check is real and
-enforced against the bus stamp — reachability is emphatically not identity — but
-it authenticates a *weave*, not a human.
+**Status: KNOWN SEAM**, in its human half. A Weaver treats one exact WeaveId's
+decisions as the user's. That check is real and enforced against the bus stamp
+— reachability is emphatically not identity — but it authenticates a *weave*,
+not a human.
 
-WEAVER-1 recorded two things in one sentence, and only one of them has moved.
-The **bootstrap operator** half is closed: that console held `allow_any()`,
-host-wired discovery and the tap, and TERM-0 measured that none of the three was
-necessary to be the user. The [terminal](terminal.md)'s operator seat is an
-ordinary participant holding four rules — approve / refuse / revoke / describe,
-each to one office — with no wildcard, no registry read and no tap, and it drives
-the whole WEAVER-1 workflow unchanged.
+The seat needs no special powers: the [terminal](terminal.md)'s operator seat is
+an ordinary participant holding four rules — approve / refuse / revoke /
+describe, each to one office — with no wildcard, no registry read and no tap,
+and it drives the whole Weaver workflow.
 
-The **human** half is untouched and is the seam. A host still designates a
-WeaveId; there is no account, no login, no credential and no authenticated person
-anywhere in this, and remote/external authentication does not exist at all (see
+The **human** half is the seam. A host designates a WeaveId; there is no account,
+no login, no credential and no authenticated person anywhere in this, and
+remote/external authentication does not exist at all (see
 [bridge](bridge.md#authentication-posture)). A terminal presentation must
 therefore label that identity as a seat and never as a person.
 
@@ -207,16 +201,16 @@ therefore label that identity as a seat and never as a person.
 
 **Status: PARTLY SUPPLIED — dispatch refusal only.**
 
-An explicit notice acceptor can now receive an authenticated pre-handler refusal
-of an ordinary addressed send, native or in-process loaded. TerminalSession is
-the first ordinary consumer. Current contract:
+An explicit notice acceptor can receive an authenticated pre-handler refusal
+of an ordinary addressed send, native or in-process loaded; `TerminalSession`
+is one such consumer. Contract:
 [sender-visible dispatch refusal](messaging.md#sender-visible-dispatch-refusal).
 
 Absence of a notice proves nothing. Delivered-but-unanswered work, later released
 or invalidated answer rights, timeout, cancellation, progress/closing answers,
 retry and publication aggregation remain separate questions. AskBook stays local
 bookkeeping and creates no global obligation. The isolated pipe does not carry
-the new attestation and refuses a manifest requesting its notice door.
+this attestation and refuses a manifest requesting its notice door.
 
 ## Loaded coordination of a joint publication
 
@@ -232,77 +226,69 @@ by the adapter and checking the operator's exact incarnation at every verb,
 with its own witnesses. That is a design of its own, wanted by no consumer yet
 ([joint publication](joint-publication.md#what-crosses-the-abi)).
 
-## The silent dynamic seam
+## Rejections at the dynamic seam
 
-**Status: CLOSED (R2E-0) — current, law-backed
-([MSG-08](../laws/messaging-laws.md)).**
+**Status: CLOSED — current, law-backed ([MSG-08](../laws/messaging-laws.md)).**
 
-Night Lab III (P-011) found the one place a Loom-owned rejection was silence: a
-loaded weave emits a shape whose registrar was never loaded, the host seam cannot
-resolve it, and the emission disappeared — no recipient, no `BusEvent`, no
-journal entry, and the shim is fire-and-forget by design. The identical intent
-from a native weave refused loudly (`NoSuchTarget`), so the observability floor
-differed **by tier**.
+A loaded weave's emission is admitted host-side before routing, so a rejection
+there happens before any delivery-time refusal could report it. Each such
+rejection leaves a host-side fact at the same altitude a capability refusal
+has: `SeamUnresolved` for a claimed shape the host cannot resolve (its
+registrar was never loaded), `GateRefused` for bytes that fail the gate, each
+carrying the claimed (name, version), the sending artifact, a target only where
+one was actually named, and the role where the library named one. Without that,
+a loaded weave's emission would vanish where the identical native send refuses
+loudly.
 
-Seam rejections now leave a host-side fact at the same altitude a capability
-refusal already had: `SeamUnresolved` for an unresolvable claimed shape,
-`GateRefused` for bytes that fail the gate, carrying the claimed (name, version),
-the sending artifact, a target only where one was actually named, and the role
-where the library named one.
-
-**Corrected by FRIC-0 for publications.** The rule is about an emission that
+**A publication is not one of these.** The rule is about an emission that
 expected to ARRIVE somewhere. A publication expects nothing of the sort, and an
 unresolvable shape has no accepter by construction, so it reached zero recipients
-— which native `publish` does in silence. Reporting only the loaded tier made the
-seam louder than the floor this closed. A publication whose shape resolves and
-whose bytes fail the gate is still refused. Reproducer:
-`playground/night-lab/workshop-marathon/repros/core/silent-seam-emission/`, and a
-real-artifact regression fixture in suite `kernel`.
+— which native `publish` does in silence. A publication whose shape resolves and
+whose bytes fail the gate is still refused. A real-artifact regression fixture is
+in suite `kernel`.
 
-This seam diagnostic remains synchronous. The narrower later
-[dispatch-refusal contract](messaging.md#sender-visible-dispatch-refusal) now
+This diagnostic is synchronous. The narrower
+[dispatch-refusal contract](messaging.md#sender-visible-dispatch-refusal)
 returns authenticated refusal to an opted-in native or loaded sender and carries
-the real attempt ticket across ABI v7. It does not turn seam rejection into a
-queued attempt or supply general delivery/success knowledge.
+the real attempt ticket across ABI v7. It does not turn a seam rejection into a
+queued attempt or supply general delivery or success knowledge.
 
 ## A manifest says what a weave accepts, and since ABI v9 what it declares it says — never what it asks leave to send where
 
-**Status: the descriptive half CLOSED on 2026-09-18 (ABI v9, `zen.Manifest` v5;
+**Status: the descriptive half CLOSED (ABI v9, `zen.Manifest` v5;
 [declared vocabulary is agreed at
 admission](../decisions/declared-vocabulary-is-agreed-at-admission.md)); the
-authority-request half OPEN, and named by the standalone-hosting phase.**
+authority-request half a KNOWN SEAM.**
 
 `encode_manifest` (`zen/kernel/schema_codec.hpp`) publishes `referenced`,
-`accepted`, `state`, `requests`, `claims` and, since v5, `emits`: the shapes the
+`accepted`, `state`, `requests`, `claims` and, from v5, `emits`: the shapes the
 weave declares it may send, by definition. A host reading a loaded artifact can
-now discover what it will *receive* and what it *says* it will say — the same
-two lists a native weave declares — and `Switchboard::emitted_schemas(id)`
-answers the second question for any live participant. What closed with it:
+discover what it will *receive* and what it *says* it will say — the same two
+lists a native weave declares — and `Switchboard::emitted_schemas(id)` answers
+the second question for any live participant.
 
-**A shape only its emitter knows now has a registrar.** The registry used to
-learn shapes from accept-sets alone, so a reply shape that only ever travelled
-*to* a generic operator console had no registrar and the send was refused
-`SeamUnresolved` (above) before it reached any door. An emitter's declaration
-now publishes that shape's definition for as long as the emitter lives, so a
+**A shape only its emitter knows has a registrar.** An emitter's declaration
+publishes that shape's definition for as long as the emitter lives, so a
 directed send of it to an `AcceptMode::AnyRegistered` console is admitted
-against the emitter's own definition. The two older ways out — a standard reply
-shape (`zen.Result` / `zen.Ack` / `zen.Refused`), or the receiving side declaring
-the shape through `ConsoleEngine`'s `vocabulary` parameter — remain ordinary and
-remain necessary for a shape the sender never declared, because `Emit<...>` is
-not an exhaustive send list and a runtime-chosen shape still meets the seam.
+against the emitter's own definition rather than refused `SeamUnresolved`
+(above). Two other ways remain ordinary, and are necessary for a shape the
+sender never declared: a standard reply shape (`zen.Result` / `zen.Ack` /
+`zen.Refused`), or the receiving side declaring the shape through
+`ConsoleEngine`'s `vocabulary` parameter — because `Emit<...>` is not an
+exhaustive send list and a runtime-chosen shape still meets the seam.
 
 What stays open, and why the closed half does not close it:
 
 **A schema list is not a request for authority to a destination.** `emits`
-says what `Noted v1` means; `requests` is still a `zen.CapabilityAsk` — network,
+says what `Noted v1` means; `requests` is a `zen.CapabilityAsk` — network,
 filesystem, roles — with no word for "shape `Noted v1` to role `logbook`". The
 admission policy ([admitting a loaded
 artifact](capabilities.md#admitting-a-loaded-artifact)) is handed the ask as
-advice and can now also read the artifact's declared vocabulary from its manifest,
+advice and can also read the artifact's declared vocabulary from its manifest,
 but a person approving speech still has to name the *destinations* themselves.
 That is *correct* on the authority question — a declaration never becomes a
 grant, and the source of send authority is the person's own policy either way —
-and it is still worse ergonomics than it needs to be.
+and it is worse ergonomics than it needs to be.
 
 **And metadata alone is not an approval interface.** "This weave would like to
 say `Noted v1` to role `logbook`, allow it?" needs a destination-bearing ask and
@@ -316,113 +302,93 @@ that wants to offer a one-click approval of what an artifact asked for.
 
 ## Event-loop composition
 
-**Status: CLOSED (R2E-0, corrected R2E-0a) — current, law-backed
-([MSG-09](../laws/messaging-laws.md)).**
+**Status: CLOSED — current, law-backed ([MSG-09](../laws/messaging-laws.md)).**
 
 A drain-to-empty turn does not compose with a perpetual in-process service: a
 repeating Timer re-arms itself inside its own handler, so the queue never empties
-and a single-threaded host never returns to poll its sockets. Found by the Codex
-Rule Garden, whose workaround was a fake application message whose handler called
-`Switchboard::stop()`.
+and a single-threaded host never returns to poll its sockets.
 
 `pump_pending()` is the bounded turn, and the only one: it dispatches the backlog
 present at entry and leaves work enqueued during the turn for the next one. The
-drain is unchanged for every existing caller — FRIC-1 renamed it
-`drain_until_idle()` so the call site says which promise it makes, and retired
-the `pump()`/`run()` spellings that made the expensive one look like the ordinary
-one. `BridgeServer::set_bounded_dispatch()` is off by default (drain to idle).
-The Rule Garden's fake yield message is deleted and replaced by that surface in
-suite `bridge`.
+drain is `drain_until_idle()`, named so the call site says which promise it
+makes. `BridgeServer::set_bounded_dispatch()` is off by default (drain to idle);
+suite `bridge` pins the bounded server loop.
 
-**The first attempt is kept as evidence, not as API.** R2E-0 shipped a *numeric*
-bound first — `pump_bounded(n)` and `BridgeServer::set_dispatch_budget(n)` — and
-the same consumer that found the seam disproved it: `pump_bounded(64)` made the
-Rule Garden's live round-trip 17× slower, and a budget large enough not to
-throttle was drain-to-empty again. Asking a host to size its turn against a
-producer's rate is a number nobody can pick. R2E-0a removed both surfaces; what
-survives is the work boundary, not the quota.
+**A numeric bound is not the answer.** A turn budget asks a host to size its turn
+against a producer's rate, which is a number nobody can pick: a budget of 64
+made a timer-driven application's live round-trip seventeen times slower, and a
+budget large enough not to throttle is drain-to-empty again. What Loom offers is
+the work boundary, not a quota.
 
 ## Continuity is authored
 
-**Status: NARROWED (R2E-0) — the pattern is now law-backed
-([HANDOFF-01..03](../laws/handoff-laws.md)) and worked end to end in
-[reference/handoff](handoff.md); the negative half remains law
-([PR-09](../laws/replacement-laws.md)). No Loom API was added.**
-
-R2E-0 built the case this note said the substrate did not have: two real
-artifacts with genuinely incompatible state schemas, a temporary migrator, an
-exact FIFO boundary, and a full prepared replacement across them. The conclusion
-is the one below, sharpened rather than replaced — **what crosses is still a
-domain decision**, and the migration that carries it is authored, refusable and
-attributable. What is new is that the *shape* of the authoring is now written
-down and pinned, and that the migration layer trigger in the standing map below
-has fired and been answered without a migration registry.
+**Status: GUIDELINE — law-backed ([HANDOFF-01..03](../laws/handoff-laws.md)),
+worked end to end in [reference/handoff](handoff.md); the negative half is law
+([PR-09](../laws/replacement-laws.md)). There is no Loom API for it.**
 
 Prepared replacement verifies the successor and **does not create an atomic
 continuity handoff from the incumbent**; graceful swap preserves authored work
 and verifies nothing. The two ceremonies are disjoint. What applications do
 about it is a **domain pattern, not a substrate ceremony**: ask the incumbent
 to *describe* itself with an ordinary, non-mutating question, and supply that
-description to the candidate's preparation. The staging varies — several Night
-Lab projects captured the description *before* the successor was even loaded,
+description to the candidate's preparation. The staging varies — some
+applications capture the description *before* the successor is even loaded,
 others during preparation — and either way the description is a **snapshot
 taken while the incumbent remains live**: the incumbent may change after it,
 unless the application or package establishes a stronger boundary. The
 application decides whether stale, replayed, restarted, degraded, or exactly
 transferred state is acceptable. **What crosses is a domain decision** — six
-Night Lab applications carried six different things (work / obligation /
-intent / a reopened question / a waiting-fact / a fleet tally) — so the
-repeated thing is a *hole the domain fills*, not a missing Loom primitive. The
-Timer package is the counterexample that proves why generic snapshot
-continuity is insufficient: it could not tolerate a stale moving snapshot, so
-it built an exact final boundary on the substrate (its letter is written
-*after* admission freezes the incumbent).
+[Night Lab](../evidence/night-lab.md) applications carried six different things
+(work / obligation / intent / a reopened question / a waiting-fact / a fleet
+tally) — so the repeated thing is a *hole the domain fills*, not a missing Loom
+primitive. A timer is the counterexample that shows why generic snapshot
+continuity is insufficient: it cannot tolerate a stale moving snapshot, so
+Zengine's Timer builds an exact final boundary on the substrate (its letter is
+written *after* admission freezes the incumbent).
+
+Where two versions' state schemas genuinely differ, the pattern still holds:
+a temporary migrator, an exact FIFO boundary and a full prepared replacement
+carry it, and the migration is authored, refusable and attributable
+([handoff](handoff.md),
+[the decision](../decisions/migration-is-authored-not-inferred.md)).
 
 ## Minted identity needs a surviving namespace
 
-**Status: GUIDELINE — reinforced (R2E-0), still no allocator.**
-
-R2E-0 added a fourth sighting and, for the first time, a **control case**: the
-handoff witness carries a high-water mark across an incompatible state schema (47
-issued → 48 next), and its twin drops it deliberately and mints a duplicate id.
-The difference is the migration's. No Loom identity allocator exists, and none is
-planned by this note.
+**Status: GUIDELINE — no allocator.**
 
 An identity may be minted by one incarnation, but its **namespace must live at
 least as long as references to it may live** — in practice, cross a
 replacement (carry a high-water mark, or derive names from durable facts). The
 paired failure: multiple independent authors of one namespace require explicit
-coordination (two authors of a build-attempt number collided in Night Lab).
-Three sightings, two of them defects. No Loom identity allocator exists, and
-none is planned by this note.
+coordination (two authors of a build-attempt number collided in
+[Night Lab](../evidence/night-lab.md)). The handoff witness shows both sides: it
+carries a high-water mark across an incompatible state schema (47 issued, 48
+next), and its twin drops it deliberately and mints a duplicate id — the
+difference is the migration's. No Loom identity allocator exists, and none is
+planned by this note.
 
 ## PreparedReplacement host/coordinator friction
 
-**Status: KNOWN AUTHORING FRICTION — not missing truth. Sighting count rose at
-R2E-0; still not extracted.**
+**Status: KNOWN AUTHORING FRICTION — not missing truth, not extracted.**
 
 The handle is host-owned; `offer_current_answer()` must run inside the
 coordinator's current delivery. Applications bridge it with a host-provided
-handle reference in the coordinator. Ubiquitous in Night Lab, harmless in
-practice, recorded so the pattern is recognized rather than re-derived.
-
-R2E-0's Handoff Garden hit it once more, and the phase deliberately did **not**
-fix it: the friction was the same single `PreparedReplacement*` member the
-existing evidence describes, and one more instance of a known pattern is not
-repeated *independent* friction. What would earn an extraction is a coordinator
-needing to pass something the handle cannot reach — and the authored handoff did
-not: the migration result travelled as an ordinary domain message, and the
-transaction handle carried only what it always carried.
+handle reference in the coordinator — one `PreparedReplacement*` member. It is
+common and harmless in practice, and recorded so the pattern is recognized
+rather than re-derived. What would earn an extraction is a coordinator needing
+to pass something the handle cannot reach; an authored handoff does not (its
+migration result travels as an ordinary domain message, and the transaction
+handle carries only what it always carries).
 
 ## A construction-layer reply is not an attested answer
 
-**Status: CLOSED for replies to the requester.** Poke and self-description replies now use
+**Status: CLOSED for replies to the requester.** Poke and self-description replies use
 the answer door when replying to the request's stamped sender. An explicit `reply_to` naming
-somebody else retains ordinary forwarding, without answer provenance. A strict role asker
-requires `answers_ask()` before settling its book; correlation alone still authenticates
-nothing. This is authoring-header behavior: already-built artifacts must be rebuilt to gain it.
-See [messaging](messaging.md#substrate-answer-attribution); the `poke` suite pins direct and
-redirected replies, including the self-description door.
+somebody else keeps ordinary forwarding, without answer provenance. A strict role asker
+requires `answers_ask()` before settling its book; correlation alone authenticates
+nothing. This is authoring-header behaviour: an artifact built against older headers must be
+rebuilt to gain it. See [messaging](messaging.md#substrate-answer-attribution); the `poke`
+suite pins direct and redirected replies, including the self-description door.
 
 ## `reply_to` — low observed use
 
@@ -433,21 +399,20 @@ See [messaging](messaging.md#answers).
 ## The bridge carries no transport security, and a credential is a shared secret
 
 **Status: KNOWN SEAM — current and deliberate. Admission is the host's
-policy; the transport is still plain.**
+policy; the transport is plain.**
 
-The connect-authority chokepoint became a seam with three answers: a host's
-`BridgeAdmission` admits a connection under a grant of its choosing, refuses
-it in words, or defers it for a later decision, and a connection has no proxy
-— acts on nothing — until that answer comes
+A host's `BridgeAdmission` admits a connection under a grant of its choosing,
+refuses it in words, or defers it for a later decision, and a connection has no
+proxy — acts on nothing — until that answer comes
 ([bridge](bridge.md#admission-who-decides-and-when)). What a policy judges is
 what the peer *presented*: a credential in the Hello is bytes, compared to
-something the host holds (a Workshop's guests file). There is no TLS, no
-challenge and no peer-credential check in the mechanism, so a credential
-crosses in the clear, and `operator_admission()` still admits everything that
-reaches the socket as the operator. **Do not bind a bridge listener where an
-untrusted party can reach it.**
+something the host holds (a guests file, say). There is no TLS, no challenge and
+no peer-credential check in the mechanism, so a credential crosses in the clear,
+and `operator_admission()` admits everything that reaches the socket as the
+operator. **Do not bind a bridge listener where an untrusted party can reach
+it.**
 
-Two smaller current facts at the same boundary. `bridge_listen_tcp` binds
+Two smaller facts at the same boundary. `bridge_listen_tcp` binds
 `INADDR_LOOPBACK` unconditionally, so the shipped helper cannot be aimed
 off-host — a real mitigation, and still a *reachability* property rather than an
 authentication one (`BridgeServer` accepts any socket an embedder hands it,
@@ -455,16 +420,15 @@ and any forward re-exposes the port). `bridge_listen_unix` sets no explicit
 socket-file permissions, so the ambient `umask` decides who can open the node —
 which under this seam is an access-control decision rather than a hygiene one,
 since whoever reaches it holds operator authority. Nothing here adds permission
-handling or authentication; the point is that the umask is currently part of the
+handling or authentication; the point is that the umask is part of the
 boundary. Full model: [bridge](bridge.md).
 
 ## A remote console's learned schema mirror is still append-only
 
-**Status: KNOWN SEAM — narrowed by BL-0, deliberately not closed. The
-authoritative host registries are fixed; this one client-side mirror is not.**
+**Status: KNOWN SEAM — deliberately not closed. The authoritative host
+registries are bounded; this one client-side mirror is not.**
 
-C-10/F-9 was one shape in four places, and BL-0 closed three of them. What a
-host retains is now bounded by live claims
+What a host retains is bounded by live claims
 ([LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered)):
 the Switchboard's registry (the vocabulary every raw emission is gated against),
 the Kernel's manifest dependency registry, and an isolation host's all shrink
@@ -477,18 +441,18 @@ has a lifetime that means "this shape is still needed" — the console's other
 windows (`kConsoleTapCapacity`, `kConsoleBufferCapacity`, `kMaxPendingDelivered`,
 `kMaxAbsentSchemas`) are each bounded on their own terms, and a schema outlives
 all of them because its whole point is to be reusable. So a console session
-attached to a host with genuinely churning shape diversity still learns one
-entry per distinct shape it ever sees, for as long as that session lasts.
+attached to a host with genuinely churning shape diversity learns one entry per
+distinct shape it ever sees, for as long as that session lasts.
 
 ```text
-FIXED       host: Switchboard / Kernel / IsolationHost registries
-            bounded by live claims
+BOUNDED     host: Switchboard / Kernel / IsolationHost registries
+            by live claims
 
-STILL GROWS RemoteConsole::registry_ (client process, one console session)
+GROWS       RemoteConsole::registry_ (client process, one console session)
             one entry per distinct shape observed
 
-BOUNDED TODAY BY  the session's own lifetime — a fresh console starts empty —
-                  and by how many distinct shapes a host actually publishes
+BOUNDED BY  the session's own lifetime — a fresh console starts empty —
+            and by how many distinct shapes a host actually publishes
 ```
 
 Deliberately not solved here: the natural fixes are a bounded memo with
@@ -509,9 +473,9 @@ deferrals anywhere exhaust the 65th everywhere
 **Status: WATCHING — two sightings, deliberately unsolved.**
 
 `commit(sequence)` takes a number the operator supplies, and no host sequence
-owner exists to consume. The Codex Rule Garden invented `++activation_sequence`
-solely to satisfy the call; R2E-0's Handoff Garden passed a literal `1` for the
-same reason. Two sightings whose only meaning is *"the API needs a number"*.
+owner exists to consume. Two applications built on Loom have each invented one
+solely to satisfy the call — an incrementing counter in one, a literal `1` in the
+other: two sightings whose only meaning is *"the API needs a number"*.
 
 Not solved here, on purpose: the number is real authority (it is what Loom
 attests, and what consumers order their lineage by), so an allocator would have
@@ -519,8 +483,8 @@ to decide *whose* lineage it belongs to — and neither sighting has an opinion
 about that. What would earn a fix is a consumer for which the sequence carries
 domain meaning, rather than one that needs any monotonic integer.
 
-Notably, Senses did **not** add a third: a claim's `revision` is minted by Loom
-per key and never passed in by a caller, so it created no synthetic counter.
+Senses did **not** add a third: a claim's `revision` is minted by Loom per key
+and never passed in by a caller, so it needs no synthetic counter.
 
 ## Leak checking stops at the sandbox boundary
 
@@ -532,8 +496,8 @@ children: LeakSanitizer cannot introspect a process inside the restricted view,
 because the view mounts no `/proc` for it to read. The isolation suite's runs
 print `LeakSanitizer has encountered a fatal error` and
 `Can't open /proc/<pid>/task for reading` for exactly that reason — LSan failing
-to run, not a leak it found (BL-VER-08 measured this against an untouched case,
-so it is a property of the boundary and not of any one change).
+to run, not a leak it found; an untouched case prints the same, so it is a
+property of the boundary and not of any one change.
 
 The distinction that matters: **child-side leak checking is ABSENT, not clean.**
 A run with no leak report says nothing about the children, so "the sanitizer
@@ -562,17 +526,15 @@ the host did not just move it into.
 
 ## Deferred-with-intent (the standing trigger map)
 
-Certain triggers (hooks left deliberately): **weaver identity** (first
-cross-restart persistence / author-trust decision); the **role→protocol
-registry** (the third broker). Maybe/never: native Windows containment
-(WSL-hosting dominates), seccomp (escape-tier threat model), multi-threaded
-dispatch, production broker hardening. History holds the reasoning
-([history](../history/README.md)).
+Hooks left deliberately, each with its trigger: **weaver identity** (the first
+cross-restart persistence or author-trust decision) and the **role→protocol
+registry** (a third broker). Maybe or never: native Windows containment (Linux,
+including under WSL, is where containment runs), seccomp (the escape-tier threat
+model), multi-threaded dispatch, production broker hardening.
 
-**The migration layer trigger has fired and been answered (R2E-0)** — by an
-authored pattern and two laws, not by a migration registry. See
-[handoff](handoff.md) and the
-[ADR](../decisions/migration-is-authored-not-inferred.md).
+Migration between incompatible state schemas is answered by an authored pattern
+and two laws, not by a migration registry — see [handoff](handoff.md) and the
+[decision](../decisions/migration-is-authored-not-inferred.md).
 
 ## A worker does not end with a host that was KILLED — except on Windows, and not because of Loom
 
@@ -586,8 +548,8 @@ each of them actually end so that the record it leaves reports a code it read
 (`kShutdownObserveMs`, [bounds](bounds.md#sessions-and-runs); what it does not
 see is recorded `killing`, which promises no code). A host that is **killed
 outright** runs no destructor, and what happens then is the operating system's
-answer rather than this manager's. The two platforms answer differently and both
-are tested (`tests/session/journey.py`, section R):
+answer rather than this manager's. The two platforms answer differently, and the
+session journey (`tests/session/journey.py`) tests both:
 
 ```text
 Windows   the execution group is a JOB OBJECT, opened with
