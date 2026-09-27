@@ -4,16 +4,12 @@
 #ifndef ZEN_BRIDGE_REMOTE_CONSOLE_HPP
 #define ZEN_BRIDGE_REMOTE_CONSOLE_HPP
 
-// The client side of the bridge: a Console (and LadderHost) implemented over the operator-protocol
-// socket instead of a Switchboard&. This IS "a remote console cannot hold a Switchboard& across a
-// socket" made concrete — the SAME frontend (ConsoleUi + emit_ui_tree + draw) drives this exactly as
-// it drives the in-process ConsoleEngine; only the transport differs (decision #2's unification).
-//
-// The engine logic runs CLIENT-side: compose runs the SHARED assumption ladder (run_compose_ladder)
-// against the schema fetched over the wire (Describe -> Schema, decoded with schema_codec — the IPC
-// currency) and the local reply buffer (filled by Delivered frames); the assembled message is
-// serialized and shipped as a Send frame, which the host re-admits + stamps. Discovery and the tap
-// are answered/streamed by the host and cached here. The bus stays entirely host-side.
+// The client side of the bridge: a Console (and LadderHost) over a bridge socket instead of a
+// Switchboard&, so the same frontend drives it as drives the in-process ConsoleEngine. Compose
+// runs the shared assumption ladder client-side, against schemas fetched over the wire and the
+// local reply buffer, and ships the assembled message as a Send the host re-admits and stamps.
+// Discovery and the tap are answered or streamed by the host and cached here; the bus stays on
+// the host. docs/reference/bridge.md#the-connecting-side
 
 #include <zen/bridge/channel.hpp>
 #include <zen/console/console.hpp>
@@ -73,14 +69,10 @@ public:
                                    const std::shared_ptr<const loom::Schema>& schema,
                                    const std::map<std::string, loom::Cell>& cells) override;
 
-    /// The most Delivered frames whose schema is not yet known that the client will hold at once. Same
-    /// principle as the transport's kMaxBacklog: bound what a peer can make you hold — even a
-    /// more-trusted peer (a host). Past it, a Delivered is dropped and surfaced, never silently kept.
-    ///
-    /// This is an ACTIVE BACKLOG, not history: each entry is a reply still owed a schema, and it
-    /// leaves by being admitted (Schema) or refused aloud (SchemaNone / overflow). That is why it is
-    /// bounded by refusal rather than by eviction — dropping the oldest here would discard an
-    /// obligation, which the bounded history windows beside it never do.
+    /// The most Delivered frames whose schema is not yet known that the client holds at once:
+    /// bound what any peer can make you hold. A backlog, not history (each entry is a reply still
+    /// owed a schema, leaving when admitted or refused aloud), so past the bound a Delivered is
+    /// dropped and surfaced, never an older one evicted.
     static constexpr std::size_t kMaxPendingDelivered = 64;
 
     /// The most "the host has no such schema" answers the client remembers. A pure memo: its only
