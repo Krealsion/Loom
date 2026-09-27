@@ -28,21 +28,7 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^include/"
     "^src/"
-    "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$"
-    "^cmake/loom-weave[.]cmake$"
-    "^cmake/loomConfig[.]cmake[.]in$"
-    "^examples/CMakeLists[.]txt$"
-    "^examples/answering[.]cpp$"
-    "^examples/heartbeat[.]cpp$"
-    "^examples/heartbeat_woven[.]cpp$"
-    "^examples/quickstart[.]cpp$"
-    "^tests/check_weave_contract[.]cmake$"
-    "^tests/check_weave_population[.]cmake$"
-    "^tests/entry_population[.]txt$"
-    "^tests/hook_return/CMakeLists[.]txt$"
-    "^tests/package/CMakeLists[.]txt$"
-    "^tests/package/run[.]cmake$"
-    "^tests/suite_population[.]txt$")
+    "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer

@@ -1,30 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE REQUIRED-vs-ACTUAL WEAVE-CONTRACT POPULATION CHECK (POP-05, C3) -- the
-# `weave_population` CTest entry.
-#
-# `weave_contract` proves that every artifact ON the roll has the reload-safe build
-# properties. This proves that every artifact that MUST be on the roll is on it. The two
-# entries are deliberately separate, and neither subsumes the other: a target can be
-# required, present on the roll, and still compiled wrong (weave_contract catches that),
-# and a target can quietly leave the roll while still being built and dlopen'ed
-# (this catches that, and nothing else did -- COLD-2 finding C-3).
-#
-# The two inputs come from structurally independent places:
-#
-#   ZEN_REQUIRED     tests/weave_population.cmake, from the BUILD GRAPH -- target types
-#                    and link closures. It never reads the contract roll or the verdict
-#                    property, so a mutation that empties the roll leaves this untouched.
-#
-#   ZEN_CONTRACTED   the manifest generated from LOOM_WEAVE_CONTRACT_TARGETS, i.e. the
-#                    roll loom_weave_build_contract() wrote for itself. This is the
-#                    EVIDENCE side: what actually opted in.
-#
-# Green means they agree. Both directions are failures, and they are different failures:
-# a required artifact missing from the roll is a live reload-safety hazard; a contracted
-# artifact nobody declared required means the two concepts have drifted and one of them is
-# now describing something else.
+# The `weave_population` entry (POP-05): is every artifact that must carry the weave contract on
+# the roll? `weave_contract` proves the roll's artifacts are built right; this proves none that
+# must be is missing. ZEN_REQUIRED comes from the build graph (tests/weave_population.cmake) and
+# never reads the roll; ZEN_CONTRACTED is the roll loom_weave_build_contract() wrote. Both
+# directions fail: a required artifact off the roll is a reload hazard, an unrequired one drift.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -105,7 +86,7 @@ if(contracted_count EQUAL 0)
         "configuration.")
 endif()
 
-# ---- required but not contracted: the C-3 failure ----------------------------------
+# ---- required but not contracted: a reload hazard ----------------------------------
 
 set(missing "")
 math(EXPR last "${required_count} - 1")

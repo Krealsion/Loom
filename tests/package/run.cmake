@@ -1,24 +1,15 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE INSTALLED-PACKAGE WITNESS DRIVER (MSVC-0).
-#
+# The installed-package witness's driver: configures, builds and runs tests/package as a stranger
+# against an installed Loom, and asks the produced artifact what it exports. CI and a person run
+# the same command, so a hosted lane and a local check mean the same thing.
 #   cmake -DZEN_PREFIX=<install prefix> -DZEN_WORK=<scratch dir> [-DZEN_CONFIG=Debug]
 #         [-DZEN_CMAKE_ARGS=...] -P tests/package/run.cmake
-#
-# Configures, builds and runs tests/package as a STRANGER against an installed Loom, and
-# asks the produced artifact what it actually exports. It is the one command CI runs and
-# the one a human runs, so the hosted lane and a local check cannot come to mean
-# different things.
-#
-# WHY THE EXPORT TABLE IS ASKED SEPARATELY FROM "IT LOADED". A weave that loads proves
-# the symbol was findable by SOME spelling the loader accepted. The host looks the name
-# up as the literal string "zen_weave_abi" (src/kernel/kernel.cpp), so the artifact must
-# carry exactly that -- not `?zen_weave_abi@@YAPEBUZenWeaveAbi@@XZ`, not
-# `_zen_weave_abi@0`. Those would be a different ABI wearing the same source.
-#
-# Absence of an inspection tool is a FAILURE, never a skip: a proof that cannot run has
-# not passed. Same rule tests/check_weave_contract.cmake keeps for nm.
+
+# A weave that loads proves only that some spelling of its entry point was found. The kernel
+# looks up the literal "zen_weave_abi" (src/kernel/kernel.cpp), so the export table is asked for
+# exactly that, and not a decorated form. A missing inspection tool is a failure, never a skip.
 
 foreach(v ZEN_PREFIX ZEN_WORK)
     if(NOT DEFINED ${v})
@@ -39,16 +30,10 @@ function(zen_run label)
     message(STATUS "package witness: ${label} ok")
 endfunction()
 
-# ---- configure / build, with NOTHING added to the consumer's flags ------------------
-#
-# ZEN_CMAKE_ARGS carries only what selects a TOOLCHAIN (compiler, generator program) --
-# never a compile option. If a compile option is ever needed here, the package has
-# stopped carrying its own requirements and this witness is supposed to go red.
-#
-# The generator is CHOSEN, not assumed: -DZEN_GENERATOR=... wins, else Ninja when it is
-# actually on PATH, else CMake's platform default. Hard-coding Ninja would make this
-# witness unrunnable on an ordinary Makefiles host -- and a proof a consumer cannot run
-# is not much of a proof.
+# ---- configure / build, with nothing added to the consumer's flags ------------------
+# ZEN_CMAKE_ARGS carries only what selects a toolchain, never a compile option: needing one would
+# mean the package stopped carrying its requirements. The generator is chosen, not assumed:
+# -DZEN_GENERATOR wins, else Ninja when it is on PATH, else CMake's platform default.
 set(gen_args "")
 if(DEFINED ZEN_GENERATOR AND NOT ZEN_GENERATOR STREQUAL "")
     set(gen_args -G "${ZEN_GENERATOR}")
@@ -85,7 +70,7 @@ if(NOT ZEN_WITNESS_TERMINAL)
 endif()
 zen_run("terminal core as a stranger sees it" "${ZEN_WITNESS_TERMINAL}")
 
-# ---- 1c. the history pair, as a Zengine application reaches it ----------------------
+# ---- 1c. the history pair, as an application outside this repository reaches it ------
 find_program(ZEN_WITNESS_HISTORY witness-history PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
              NO_DEFAULT_PATH)
 if(NOT ZEN_WITNESS_HISTORY)

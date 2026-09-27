@@ -1,82 +1,18 @@
-# The NON-SUITE CTest entry contract (POP-01, VOLATILE-2a).
-#
-# Loom's official lane registers two kinds of CTest entry. One kind is a doctest suite,
-# and tests/suite_population.txt has always owned those: which suites exist per gate, and
-# what each one's case floor is. The other kind is a check that is not a suite at all --
-# the population checks, the empty-population witnesses, the weave-artifact checks, the
-# documentation-link check, the aggregate runner. Nothing owned those.
-#
-# So they could be deleted. Removing one `add_test(...)` line from tests/CMakeLists.txt
-# left the official lane registering one fewer entry, running everything that remained,
-# and reporting green at a smaller number -- including for entries whose entire job is to
-# notice absences. That is the same sentence POP-01 already forbids one layer down:
-#
-#   Absence of evidence must not become successful evidence merely because the thing
-#   that would have complained was itself the thing deleted.
-#
-# THIS FILE IS HALF OF THE EXPECTED SET, NOT ALL OF IT. The complete expectation the
-# official lane checks is:
-#
-#   the suites declared in suite_population.txt, for the gates active here
-#     UNION
-#   the entries declared below, for the gates active here
-#
-# One fact, one owner. A suite's name and gate are stated once, in suite_population.txt,
-# beside the floor that belongs to it; this file never repeats a suite and never carries a
-# case floor. `tests/check_entry_population.cmake` reads both and compares the union
-# against `ctest -N`, in BOTH directions -- an entry declared and not registered fails, and
-# an entry registered and not declared fails, because an undeclared entry means this
-# contract has stopped being the complete one.
-#
-# WHERE THE CHECK LIVES: TWO DOORS THAT DO NOT LEAN ON EACH OTHER (VOLATILE-B1). It runs
-# inside tests/verify.cmake, the official lane, before the lane runs anything -- and again
-# inside the `population` CTest entry, as part of that entry's own work. One implementation
-# (tests/check_entry_population.cmake), one authored expectation (this file and
-# suite_population.txt), two independent executions.
-#
-# Neither door alone was enough. An entry cannot be the ONLY thing that notices entries going
-# missing: delete its registration and it never runs, so it never complains -- the hole this
-# file exists to close, reproduced inside the fix. That is what the lane's door covers. And a
-# lane cannot check itself: the first attempt had the `population` entry read verify.cmake and
-# require the inventory's NAME to appear in it, and VOLATILE-COLD removed the call in one
-# ordinary edit while the lane's own prose ABOUT the call kept the guard satisfied. So the
-# entry's door asks the build what it registered instead of asking the lane what it says.
-#
-# WHAT NEITHER DOOR CAN SEE ON ITS OWN is the other one going missing. So the lane's inventory
-# leaves a RECEIPT -- this run's token, the build, the gates, and the two identity sets it
-# compared -- and the entry, having measured all of that for itself, refuses a run that
-# carries the lane's token and shows no matching receipt. One ordinary deletion on either side
-# is red. The ceiling, stated rather than hidden: removing the lane's call AND the lane's
-# announcement of itself escapes the two doors' notice of each other -- and still does not
-# escape the entry's own inventory, which is the door that catches the deleted registration.
-#
-# `gate` uses the SAME vocabulary as suite_population.txt, deliberately -- one taxonomy,
-# and it is the one the build already computes:
-#
-#   portable  registered in every configuration; absence is always a defect.
-#   kernel    rides `TARGET zen-kernel` (Linux always; Windows only under the opt-in
-#             LOOM_ENABLE_WINDOWS_KERNEL). Absent => declared absent, never "passed".
-#   posix     rides `NOT WIN32`.
-#   python    rides the run manager having been built (the kernel and
-#             LOOM_BUILD_SESSION_TOOLS) AND a Python 3.8+ interpreter found at configure
-#             (or named by LOOM_SESSION_PYTHON): the session journey's workers are Python.
-#             Optional tooling, never a baseline prerequisite -- absent, it is declared absent.
-#
-# The gates that are actually on are written into the build tree at configure time from
-# the one variable the `population` entry also reads, so the two cannot disagree about
-# which configuration this is.
-#
-# WHY `weave_contract` AND `weave_population` ARE DECLARED `kernel`. Their registration
-# condition is the build-graph sweep's own answer -- does this configuration build loadable
-# weaves at all -- and today that is exactly the kernel gate, because every loadable weave
-# fixture in this directory (including the contract's applied/bypass canary pair) is
-# declared inside `if(TARGET zen-kernel)`. Declaring the gate rather than re-deriving the
-# condition is the point: if those two ever come apart, this check names it instead of
-# quietly agreeing with whatever registered.
-#
-# Keep this file plain ASCII: it is read with file(STRINGS), which treats a non-ASCII byte
-# as a string terminator and would silently split the line around it.
-#
+# The CTest entries that are not suites (POP-01): the population checks, the empty-population
+# witnesses, the documentation checks, the weave-artifact checks, the host and session witnesses
+# and the aggregate runner. The lane's expected set is these, for the active gates, together with
+# the suites of suite_population.txt; tests/check_entry_population.cmake compares it with
+# `ctest -N` by name in both directions. No suite and no case floor is listed here; the two doors
+# that take this inventory are described in docs/laws/population-laws.md.
+
+# `gate` uses suite_population.txt's words: `portable` (every configuration), `kernel` (TARGET
+# zen-kernel), `posix` (NOT WIN32), `python` (the run manager built and a Python 3.8+ interpreter
+# found at configure, or named by LOOM_SESSION_PYTHON: optional tooling, declared absent without
+# one). `weave_contract` and `weave_population` are `kernel` because every loadable fixture is
+# declared inside `if(TARGET zen-kernel)`; if their registration ever parts from that gate, this
+# check says so.
+
+# Keep this file plain ASCII: file(STRINGS) splits a line at a non-ASCII byte.
 # entry                      gate
 host_console                 portable
 host_process_weaves          kernel

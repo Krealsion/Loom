@@ -1,27 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE RELOADABLE-WEAVE BUILD CONTRACT CHECK (KERN-05, R2F-E) -- the `weave_contract`
-# CTest entry.
-#
-# It reads the BUILT ARTIFACTS, not the build system's opinion of them. The manifest it
-# consumes is generated from each target's real COMPILE_OPTIONS and TARGET_FILE, and on
-# ELF every claim below is then confirmed against the symbol table itself. A check that
-# only re-read the verdict string loom_weave_build_contract() wrote would be asking the
-# mechanism whether it worked.
-#
-# Four claims, and the second is the one that keeps the other three honest:
-#
-#   1. every artifact that took the contract carries ZERO STB_GNU_UNIQUE symbols;
-#   2. the BYPASS twin -- same source, contract deliberately not applied -- still comes
-#      out WITH the unique sentinel. Without this, claim 1 could pass because the
-#      sentinel stopped being able to express F-22 at all (a compiler default moved, the
-#      source drifted into an anonymous namespace) and nothing would say so;
-#   3. no contracted target's options leaked onto the host binary, and the host still
-#      shows the unique binding it would lose if they had;
-#   4. on PE-COFF the ELF-only option is applied to NOTHING. A compiler accepting a flag
-#      is not a platform needing it -- MinGW GCC takes -fno-gnu-unique happily, which is
-#      exactly the mistake this claim exists to catch.
+# The `weave_contract` entry (KERN-05) reads the built artifacts, not the build system's opinion
+# of them, and on ELF confirms each claim against the symbol table: (1) no contracted artifact
+# carries an STB_GNU_UNIQUE symbol; (2) the uncontracted twin still carries its unique sentinel,
+# so claim 1 cannot pass because the sentinel stopped being able to fail; (3) the host binary
+# caught no contracted target's options; (4) on PE-COFF the ELF-only option was applied to nothing.
 
 foreach(v ZEN_MANIFEST ZEN_HOST_EXE ZEN_HOST_OPTIONS ZEN_BYPASS_LIB ZEN_PLATFORM)
     if(NOT DEFINED ${v})
@@ -55,17 +39,10 @@ function(zen_unique_symbols path kind out_count out_names)
             "use-after-free on unload; it fails rather than skips. Install binutils, or "
             "run this lane on a host that has it.")
     endif()
-    # `nm` spells STB_GNU_UNIQUE as the type letter `u` (its own documented GNU
-    # extension), and agrees symbol-for-symbol with `readelf -s | grep UNIQUE` -- it is
-    # simply ~100x cheaper here, which is what lets this check sit in every lane.
-    #
-    # For anything the dynamic linker loads, .dynsym IS the question: glibc's unique
-    # table is populated from what it resolves there, so a binding present only in
-    # .symtab cannot mark an image NODELETE. An archive has no .dynsym at all, so a
-    # static library is read whole -- and it must be, since its objects become part of
-    # some other image's .dynsym later. That distinction is not cosmetic: it is exactly
-    # the hole R2F-E found, where libloom.a's 20 unique symbols were pinning every weave
-    # that linked it while the weave's own sources were spotless.
+    # `nm` spells STB_GNU_UNIQUE as the type letter `u` and agrees with `readelf -s`, at a
+    # fraction of the cost. A loaded image is judged by its .dynsym, from which glibc's unique
+    # table is filled; an archive has none and is read whole, since its objects join another
+    # image's .dynsym later.
     set(nm_args --defined-only)
     if(NOT kind STREQUAL "STATIC_LIBRARY" AND NOT kind STREQUAL "OBJECT_LIBRARY")
         list(APPEND nm_args -D)
