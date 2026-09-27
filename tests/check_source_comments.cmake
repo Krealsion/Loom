@@ -30,7 +30,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/bounded_history[.]hpp$"
     "^include/zen/bridge/channel[.]hpp$"
     "^include/zen/bridge/client[.]hpp$"
-    "^include/zen/bridge/link[.]hpp$"
     "^include/zen/bridge/remote_console[.]hpp$"
     "^include/zen/console/ui[.]hpp$"
     "^include/zen/content_id[.]hpp$"
