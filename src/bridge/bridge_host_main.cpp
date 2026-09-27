@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// zen-bridge-host: a minimal WSL-side host that stands up a bus with one demo weave (a Greeter that
-// echoes Greet), listens for remote operators on 127.0.0.1:<port>, and runs the BridgeServer's
-// event-driven multiplexer. This is the WSL end of the real Windows->WSL crossing: a Windows console
-// (zen-console-remote) or the probe connects across the boundary and drives THIS bus.
-//
-// Honest containment, stated where it is imposed: the security boundary is the REACHABILITY of this
-// socket — a party that can reach 127.0.0.1:<port> holds operator power, exactly as a local operator
-// at this host does. Securing that reachability is a DEPLOYMENT responsibility (don't expose it to an
-// untrusted network); the bridge does NOT authenticate connectors. Threat tier: abuse, not escape.
+// zen-bridge-host: a minimal host that stands up a bus with one demo weave (a Greeter that
+// echoes Greet), listens on 127.0.0.1:<port> and runs the BridgeServer's multiplexer, so a
+// remote console or the probe, from another process or a Windows client, drives this bus. It
+// uses the operator admission policy, so reaching this socket is operator authority: keeping it
+// unreachable is a deployment's responsibility, and the bridge adds no transport security.
 
 #include <zen/bridge/server.hpp>
 #include <zen/switchboard.hpp>
