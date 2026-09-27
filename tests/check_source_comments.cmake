@@ -75,7 +75,6 @@ set(ZEN_COMMENT_PENDING
     "^src/host/warden[.]hpp$"
     "^src/isolation/channel[.]cpp$"
     "^src/isolation/grant_record[.]cpp$"
-    "^src/isolation/host[.]cpp$"
     "^src/isolation/sandbox[.]cpp$"
     "^src/isolation/weave_host_main[.]cpp$"
     "^src/kernel/admission[.]cpp$"
