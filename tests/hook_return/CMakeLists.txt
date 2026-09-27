@@ -1,27 +1,17 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE HOOK-RETURN WITNESS (the `hook_return_types` CTest entry).
-#
-# `WeaveBase::claim_published` routes a joint-published claim to the maker's
-# `on_claim_published(const T&)` and reads the handler's RETURN TYPE as its answer:
-# `void` is Applied, `bool` is Applied/Declined, `loom::Weave::PublishedClaim` says any
-# of the three (docs/reference/joint-publication.md#the-showing-and-its-three-answers).
-# Any other return type must be REFUSED AT COMPILE TIME. The construction layer once
-# carried a permissive fallback -- "anything else ran, so it applied" -- which would have
-# read an answer it cannot understand as the one word the hook must never fabricate.
-#
-# This is a project of its own, configured by the CTest entry into a tree of its own,
-# because `try_compile` needs a project context and a compile test is a writer of the
-# tree it builds in -- so it never names the repository's shared build tree. Four
-# positive controls prove the harness compiles the supported forms (and would say so if
-# the include path were wrong); one negative proves the unsupported form is refused FOR
-# THE STATED REASON, not for any reason.
-#
+# The hook-return witness (the `hook_return_types` entry). `WeaveBase::claim_published` reads the
+# return type of `on_claim_published(const T&)` as its answer: `void` is Applied, `bool` is
+# Applied or Declined, `loom::Weave::PublishedClaim` says any of the three
+# (docs/reference/joint-publication.md#the-showing-and-its-three-answers). Any other return type
+# must be refused at compile time, never read as Applied.
+
+# A project of its own, in a tree of its own, because `try_compile` needs a project and writes the
+# tree it builds in. Four positive controls prove the harness compiles the supported forms; one
+# negative proves the unsupported form is refused for the stated reason. The configure step is
+# the test: it exits nonzero, naming the source, when an expectation is not met.
 #   cmake -S tests/hook_return -B <own tree> -DZEN_LOOM_INCLUDE=<repo>/include
-#
-# The configure step IS the test: it exits nonzero, naming the source, when an
-# expectation is not met.
 
 cmake_minimum_required(VERSION 3.22)
 
@@ -62,10 +52,9 @@ if(MSVC)
 endif()
 
 function(zen_hook_try name out_ok out_text)
-    # `try_compile` CACHES its result variable and SKIPS the compile when that
-    # variable is already set -- so a shared name would compile the first source
-    # only and report its verdict five times (measured: every source "compiled",
-    # the negative included). One name per source, cleared before every run.
+    # `try_compile` caches its result variable and skips the compile when it is already set, so a
+    # shared name would compile the first source only and report its verdict five times. One
+    # name per source, cleared before every run.
     unset(zen_hook_ok_${name} CACHE)
     try_compile(zen_hook_ok_${name} "${CMAKE_BINARY_DIR}/try-${name}"
         SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp"

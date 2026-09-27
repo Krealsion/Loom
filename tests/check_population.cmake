@@ -1,27 +1,14 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The population verifier (POP-01 / POP-02, R2F-D). CTest runs this as the `population`
-# test; it is also the one place that reads tests/suite_population.txt.
-#
-# It answers the question a green run cannot answer for itself: *did the population this
-# project claims to verify actually exist in the binary that was built?* It executes no
-# test cases -- it takes an inventory. `--list-test-suites` and `--count` are doctest
-# QUERY modes, so nothing runs and the whole check costs a fraction of a second.
-#
-# It carries a SECOND, independent question since VOLATILE-B1 -- the CTest-ENTRY inventory,
-# below -- because the suite population is not the only population a green run can silently
-# shrink. That half is implemented once, in tests/check_entry_population.cmake, and executed
-# from two places that do not depend on each other.
-#
-# Usage (all arguments required except ZEN_BUILD_CONFIG):
-#   cmake -DZEN_TESTS_EXE=<path>
-#         -DZEN_MANIFEST=<path> -DZEN_GATES=portable,kernel,posix
-#         -DZEN_BUILD_DIR=<build dir> -DZEN_BUILD_CONFIG=<config-or-empty>
-#         -P check_population.cmake
-#
-# ZEN_GATES is COMMA-separated on purpose: a semicolon list would be split into separate
-# arguments by the command line before this script ever saw it.
+# The population verifier (POP-01, POP-02), run by CTest as the `population` entry and the one
+# reader of tests/suite_population.txt: did the population this project claims to verify exist
+# in the binary that was built? It runs no case (`--list-test-suites` and `--count` are doctest
+# query modes). It also takes the CTest-entry inventory (tests/check_entry_population.cmake).
+
+#   cmake -DZEN_TESTS_EXE=<path> -DZEN_MANIFEST=<path> -DZEN_GATES=portable,kernel,posix
+#         -DZEN_BUILD_DIR=<build dir> [-DZEN_BUILD_CONFIG=<config>] -P check_population.cmake
+# ZEN_GATES is comma-separated: a ;-list would be split into separate arguments on the way in.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -96,24 +83,11 @@ if(NOT EXISTS "${ZEN_MANIFEST}")
     message(FATAL_ERROR "population: the suite manifest is missing: ${ZEN_MANIFEST}")
 endif()
 
-# ---- the CTest-ENTRY inventory, taken here too (VOLATILE-2a, VOLATILE-B1) ---------
-#
-# tests/verify.cmake takes this same inventory before it runs anything -- the check that
-# notices when an add_test() disappears, THIS registration included. That door cannot be an
-# entry: an entry that has been deleted cannot complain about its own deletion. This door
-# cannot replace it for the same reason. So there are two, and they do not lean on each
-# other: each asks the build what it registered and compares it against the two manifests,
-# through one implementation in tests/check_entry_population.cmake.
-#
-# WHAT THIS REPLACED, and why it had to be replaced. Until VOLATILE-B1 this entry did not ask
-# the question at all. It READ tests/verify.cmake and required the text
-# `zen_check_entry_population(` to appear in it, comments stripped. VOLATILE-COLD removed the
-# call in one ordinary edit; the surviving match was a string literal inside the lane's own
-# explanatory error message, so the tripwire passed, the lane reported PASSED, and deleting
-# the `doc_links` registration on top of that reported PASSED at a smaller number. Prose
-# about a check satisfied the guard on the check. This entry no longer asks what the lane
-# SAYS; it asks what the build IS, and then whether the lane's own inventory left a receipt
-# for this run.
+# ---- the CTest-entry inventory, taken here too ---------
+# tests/verify.cmake takes the same inventory before it runs anything; a deleted entry cannot
+# complain about its own deletion, so neither door can replace the other. This one asks what the
+# build registered, not what the lane says, and then whether the lane's inventory left a receipt
+# for this run (docs/laws/population-laws.md).
 get_filename_component(zen_tests_dir "${ZEN_MANIFEST}" DIRECTORY)
 include("${zen_tests_dir}/check_entry_population.cmake")
 zen_entry_population_custody("${ZEN_BUILD_DIR}" "${ZEN_BUILD_CONFIG}")
@@ -125,13 +99,10 @@ set(declared_absent "")   # suites no active gate reaches: absent BY DECLARATION
 set(problems "")
 set(manifest_suites "")   # every suite named, in file order
 
-# A suite may carry MORE THAN ONE row, and its floor is the sum of the rows whose gate is
-# active. That is how a conditional subpopulation INSIDE a suite gets modelled explicitly
-# rather than hidden under a slack floor: a suite that is smaller on Windows says so with a
-# second row instead of buying portability with a floor that has downward slack on Linux.
-# The worked examples, with their values, are in suite_population.txt beside the rows they
-# describe -- one place, so the numbers cannot drift apart from the contract they explain.
-# A suite is present if any of its rows' gates are active.
+# A suite may carry more than one row, and its floor is the sum of the rows whose gate is active:
+# a suite smaller on Windows says so with a second row rather than a floor with slack on Linux.
+# The worked examples are in suite_population.txt beside their rows. A suite is present if any of
+# its rows' gates are active.
 foreach(line IN LISTS manifest_lines)
     string(REGEX REPLACE "#.*$" "" line "${line}")
     string(REPLACE "\t" " " line "${line}")
@@ -186,15 +157,9 @@ endforeach()
 
 # ---- the comparison --------------------------------------------------------------
 
-# One binary's worth of contract: the declared set must equal the built set exactly,
-# and every declared suite must clear its floor.
-#
-# It takes the binary as a PARAMETER, and it keeps doing so with one call site below. That is
-# deliberate: "which suites live in which binary" is a question this project has answered with
-# more than one binary before and may again, and the empty-exe arm -- suites declared for an
-# active gate with no binary handed over -- is the failure that arm exists to name. Collapsing
-# this into the one binary that happens to exist today would delete a check nobody would think
-# to re-derive, in exchange for no behaviour at all.
+# One binary's worth of contract: the declared set must equal the built set exactly, and every
+# declared suite must clear its floor. The binary is a parameter, with one call site, so the
+# empty-binary arm (suites declared for an active gate and no binary to hold them) stays named.
 function(zen_check_binary label exe expected out_problems out_report)
     set(local_problems "")
     set(local_report "")

@@ -1,10 +1,9 @@
-# loom — design
+# Loom — design
 
-> **This manuscript moved.** The complete pre-consolidation design document —
-> every subsystem's rationale, alternatives, intermediate laws and phase-by-
-> phase reasoning, ~3,900 lines — is preserved **unabridged** at
-> [`docs/history/pre-r2c/DESIGN.md`](docs/history/pre-r2c/DESIGN.md)
-> (frozen at commit `78d64ea`). This file is now the concise map.
+This is the map of Loom's design. The earlier complete design manuscript — every subsystem's
+rationale and the alternatives weighed, about 3,900 lines — is kept frozen at
+[`docs/history/pre-r2c/DESIGN.md`](docs/history/pre-r2c/DESIGN.md); it describes the tree it was
+written against, not this one.
 
 ## The architecture, in one screen
 
@@ -22,11 +21,11 @@
                     the host layer:  lifecycle authority · PreparedReplacement
 ```
 
-Dispatch is single-threaded FIFO and non-reentrant; authority is minimal by
-default and distinct from conformance; provenance (answers, lifecycle facts)
-is a delivery fact with no wire form; a service is replaced by admitting a
-**verified, sealed** successor whose admission and first breath are one queue
-event.
+Dispatch is single-threaded, first-in first-out and never re-entrant. Authority is minimal by
+default and separate from conformance: passing the gate grants nothing. Provenance — that a
+message answers an ask, or states a lifecycle fact — is a fact of delivery with no wire form a
+sender could forge. A service is replaced by admitting a **verified, sealed** successor, whose
+admission and first delivery are one queue event.
 
 ## Where the truth lives now
 
@@ -40,5 +39,5 @@ event.
 | every term, defined once | [docs/terminology.md](docs/terminology.md) |
 | machine routing | [docs/CONTEXT.md](docs/CONTEXT.md) |
 
-There is deliberately **one** normative current surface (reference + laws);
-this file and the frozen manuscript are not it.
+There is deliberately **one** normative current surface, the reference and the laws; this map
+and the frozen manuscript are not it.

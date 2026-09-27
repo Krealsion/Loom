@@ -1,42 +1,15 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE OFFICIAL LOCAL VERIFICATION LANE (POP-01 / POP-03, R2F-D).
-#
-# Run this, not a bare `ctest`, when a result is going to be quoted as evidence:
-#
+# The official verification lane (POP-01, POP-03). Run this, not a bare `ctest`, when a result
+# is to be quoted: CTest treats "I selected zero tests" as success (`ctest -R "^none$"` exits 0),
+# and this lane refuses a zero twice, independently: by counting `ctest -N`'s selection, and by
+# passing --no-tests=error. It refuses to run under the OS-enforcement opt-out
+# (ZEN_ALLOW_UNENFORCEABLE=1), whose runs are not enforcement evidence; a bare `ctest` serves them.
+
 #   cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake
 #   cmake -DZEN_BUILD_DIR=build -DZEN_SELECT="^policy$" -P tests/verify.cmake
-#
-# On a MULTI-CONFIGURATION build tree (Ninja Multi-Config, Visual Studio, Xcode) the
-# configuration has to be named, because the tree holds several of them:
-#
-#   cmake -DZEN_BUILD_DIR=build-mc -DZEN_BUILD_CONFIG=Debug -P tests/verify.cmake
-#
-# It exists because CTest's own default is to treat "I selected zero tests" as success:
-#
-#   $ ctest -R "^no_such_suite$"
-#   No tests were found!!!
-#   $ echo $?
-#   0
-#
-# A verification path that answers 0 to a question it never asked is the same lie as a
-# suite that passes having run nothing (F-2), one layer up. This wrapper closes it twice
-# over, on purpose -- the two guards fail independently:
-#
-#   1. it asks `ctest -N` how many entries the selector matched, and refuses a zero;
-#   2. it passes --no-tests=error, so CTest itself refuses a zero as well.
-#
-# CMake's own semantics are untouched: this is a project-owned lane, not a patch to CTest.
-#
-# It also refuses to run under the OS-enforcement opt-out. `ZEN_ALLOW_UNENFORCEABLE=1`
-# has a real portability purpose (a host that genuinely cannot enforce), but a run made
-# under it is NOT evidence that the enforcement population executed -- so the lane whose
-# whole job is to produce quotable evidence will not produce it in that mode. Run a bare
-# `ctest` for that; it will say NON-ENFORCEMENT MODE in its own output.
-#
-# R2F-D deliberately does NOT automate this (F-21 / CI is R2F-G). First make the
-# measurement truthful; then automate the truthful measurement.
+#   cmake -DZEN_BUILD_DIR=build-mc -DZEN_BUILD_CONFIG=Debug -P tests/verify.cmake  (multi-config)
 
 cmake_minimum_required(VERSION 3.18) # --no-tests=error
 
@@ -57,20 +30,11 @@ if(NOT EXISTS "${ZEN_BUILD_DIR}/CMakeCache.txt")
         "here. Point ZEN_BUILD_DIR at the directory you configured.")
 endif()
 
-# ---- which configuration is being verified? (QR-0) -------------------------------
-#
-# A MULTI-CONFIGURATION build tree holds Debug, Release and RelWithDebInfo side by side, and
-# CTest has to be told which one: without `-C` it reports every test `Not Run` -- 29 of 29 on
-# the tree this was measured against, while `ctest -C Debug` on the same tree passed 29 of 29.
-# A SINGLE-CONFIGURATION tree has exactly one, and asking a caller to name it would be asking
-# them to repeat what the tree already says.
-#
-# The build tree answers which kind it is. CMAKE_CONFIGURATION_TYPES is written into the cache
-# by multi-config generators and by no others; CMAKE_BUILD_TYPE is the single-config record.
-# This lane reads that and NEVER picks a configuration on a caller's behalf -- not Debug, not
-# the most recently built, not the first in the list. A verifier that chose would be minting
-# evidence about a configuration nobody asked about, which is the same class of lie as
-# answering a question that was never asked.
+# ---- which configuration is being verified? -------------------------------
+# A multi-configuration tree holds several, and CTest without `-C` reports every test Not Run; a
+# single-configuration tree has one. The tree says which kind it is (CMAKE_CONFIGURATION_TYPES is
+# cached by multi-config generators only, CMAKE_BUILD_TYPE by single-config ones), and this lane
+# never picks a configuration on a caller's behalf: that would mint evidence nobody asked for.
 
 file(READ "${ZEN_BUILD_DIR}/CMakeCache.txt" cache_text)
 string(REPLACE "\r" "" cache_text "${cache_text}")
@@ -141,33 +105,12 @@ elseif(NOT ZEN_BUILD_CONFIG STREQUAL "")
     set(config_note " in configuration ${cache_build_type}")
 endif()
 
-# ---- ONE configuration authority (QR-1) ------------------------------------------
-#
-# ZEN_CTEST_ARGS is appended to the ctest command below, after the configuration this lane
-# validated. CTest takes the LAST configuration argument it is given -- measured on CTest
-# 4.1.0: `-C Debug -C Release` runs Release, `-C Release -C Debug` runs Debug -- so a
-# configuration smuggled in here would silently replace the validated one. Measured before
-# this guard existed: `-DZEN_BUILD_CONFIG=Debug -DZEN_CTEST_ARGS=-C;Release` reported
-# `PASSED ... in configuration Debug` at exit 0 while every one of the 29 entries ran out of
-# tests/Release/. The lane named one configuration and proved another.
-#
-# Argument ORDER is not the fix. Putting ours last would work only until somebody appended
-# something after it, and it would leave two things able to choose while only one of them is
-# checked. The rule is that there is one authority, so a second one is refused rather than
-# out-ranked -- including when the two agree, because a lane that happens to be right is not
-# the same as a lane that cannot be wrong.
-#
-# The spellings are CTest's own, read out of `ctest --help` rather than guessed:
-#
-#   -C <cfg>              -C is the ONLY option in ctest's -C namespace, so anything
-#                         starting with -C is a configuration argument (the joined -CDebug
-#                         is rejected by ctest itself today; refusing it costs nothing and
-#                         does not depend on that staying true)
-#   --build-config <cfg>
-#   --build-config=<cfg>
-#
-# `--build-config-sample` is a DIFFERENT flag (it belongs to --build-and-test) and is
-# deliberately not caught: this refuses configuration selection, not a flag namespace.
+# ---- one configuration authority ------------------------------------------
+# ZEN_CTEST_ARGS is appended after the configuration this lane validated, and CTest takes the last
+# configuration argument it is given, so one passed through it would silently replace the
+# validated one. A second authority is refused, even when it agrees. The spellings are CTest's own:
+# anything starting with -C (the only option in that namespace), `--build-config <cfg>` and
+# `--build-config=<cfg>`; `--build-config-sample` belongs to --build-and-test and is not one.
 
 foreach(passthrough IN LISTS ZEN_CTEST_ARGS)
     if(passthrough MATCHES "^-C"
@@ -202,22 +145,11 @@ if(NOT optout STREQUAL "")
 endif()
 
 # ---- which run is this, and what does it owe? ------------------------------------
-#
-# A FULL run stamps itself with a token, exports it to the ctest invocation at the bottom of
-# this file, and clears any earlier inventory receipt out of the build tree. The CTest-entry
-# inventory below writes a receipt for this token once it has actually taken the inventory;
-# the `population` entry, running inside that ctest invocation, refuses to pass a run that
-# carries the token and has no matching receipt (VOLATILE-B1).
-#
-# That is deliberately not beside the call it watches. A lane cannot check itself -- the
-# first attempt tried, by having the `population` entry grep this file for the inventory's
-# NAME, and the sentence you are reading would have satisfied it. What the entry can check is
-# what this lane actually DID, and a run that stopped taking the inventory does no work to
-# leave behind.
-#
-# A SUBSET RUN OWES NO RECEIPT: it deliberately does not assert the whole-lane identity
-# contract (see below), so it stamps no token and the entry, if the subset includes it, says
-# the lane's half was not asked rather than failing for a receipt this run never owed.
+# A full run stamps itself with a token, exports it to the ctest invocation below and clears any
+# earlier receipt; the entry inventory writes a receipt for this token once it has done the work,
+# and the `population` entry refuses a run that carries the token and shows none
+# (docs/laws/population-laws.md). A subset run does not assert the whole-lane contract, so it
+# stamps no token and owes no receipt.
 
 set(select_args "")
 set(selection "everything registered")
@@ -244,23 +176,11 @@ if(ZEN_SELECT STREQUAL "")
 endif()
 
 # ---- guard 1: the selection must be the one this repository declared -------------
-#
-# WHY THIS RUNS HERE AS WELL AS IN AN ENTRY (VOLATILE-2a, VOLATILE-B1). The suite manifest
-# has always pinned which doctest suites exist. Nothing pinned the CTest entries that are NOT
-# suites -- the population checks, the empty-population witnesses, the weave-artifact checks,
-# the documentation-link check, the aggregate runner -- so deleting one `add_test` left the
-# lane registering one fewer entry, running everything that remained, and reporting green at
-# a smaller number. Including for entries whose entire job is to notice absences.
-#
-# An entry alone could not close that: an entry that has been deleted cannot complain about
-# its own deletion, so this door -- outside the population it inventories -- is what notices
-# a `population` that is gone. And a lane alone could not close it either, which is why the
-# `population` entry now asks the same question independently rather than reading this file.
-# Two doors, one implementation, one authored expectation.
-#
-# It is also on this lane's critical path on purpose: zen_check_entry_population() owns the
-# count and the zero-refusal everything below depends on, so removing the call leaves a lane
-# with no answer rather than a lane that quietly runs less.
+# Taken here, outside the population it inventories, because a deleted entry cannot complain
+# about its own deletion: this door notices a `population` that is gone, and that entry asks the
+# same question independently. zen_check_entry_population() owns the count and the zero-refusal
+# everything below depends on, so removing the call leaves a lane with no answer rather than one
+# that quietly runs less.
 
 zen_ctest_entry_listing("${ZEN_BUILD_DIR}" "${config_selected}" "${ZEN_SELECT}" listing)
 zen_check_entry_population("${listing}" "${ZEN_SELECT}" "${ZEN_BUILD_DIR}" "${run_token}" selected)
@@ -270,7 +190,7 @@ if(NOT DEFINED selected OR selected STREQUAL "")
         "verify: the CTest-entry inventory did not answer. This lane does not count its own "
         "tests -- zen_check_entry_population() in tests/check_entry_population.cmake does, "
         "because the count and the declared-versus-registered comparison are one question. "
-        "A lane that proceeded without it would be the lane VOLATILE-2a closed: one that "
+        "A lane that proceeded without it would be one that "
         "runs whatever is left and calls the smaller number green.")
 endif()
 message(STATUS "verify: ${selected} CTest entries selected (${selection})${config_note}")

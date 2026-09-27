@@ -1,7 +1,8 @@
 # Terminology — the canonical vocabulary
 
-One definition per term; every other document links here rather than redefining.
-Bold marks the normative reference for each.
+One definition per term; every other document links here rather than redefining it. Each row
+names the page that holds the term's exact meaning. Terms of packages built on Loom, such as
+Zengine's Timer, are defined in their own repositories.
 
 | Term | Meaning | Normative home |
 |---|---|---|
@@ -45,6 +46,4 @@ Bold marks the normative reference for each.
 | **migrator** | an ordinary, temporary weave that transforms one schema identity into another; inspectable, testable, versioned, refusable, attributable, and unloaded afterwards | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-01) |
 | **handoff boundary** | an ordinary domain message at an exact FIFO position, after which the domain's declared policy applies. Loom gives it no standing | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-02) |
 | **bounded turn** | `pump_pending()`: exactly the backlog present at entry, then control returns; work enqueued during the turn waits for the next. The ordinary host-loop operation | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-09) |
-| **drain** | `drain_until_idle()`: keep dispatching until the queue is empty, counting work enqueued mid-turn as its own. Unbounded by contract — under a perpetual service it does not return, and the name is where that is said. Spelled `pump()`/`run()` until FRIC-1 | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-09) |
-| **handoff / remaining duration** | the Timer's letter: schedule progress as durations, never due times | TIMER-03 — Zengine repo, `docs/laws/timer-laws.md` |
-| **`TimerReady`** | the Timer package's service announcement, after its continuity decision | TIMER-04 — Zengine repo, `docs/laws/timer-laws.md` |
+| **drain** | `drain_until_idle()`: keep dispatching until the queue is empty, counting work enqueued mid-turn as its own. Unbounded by contract — under a perpetual service it does not return, and the name is where that is said. There is no `pump()` or `run()` | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-09) |

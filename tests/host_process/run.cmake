@@ -1,30 +1,16 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# THE SUPPLIED HOST, AS A REAL PROCESS.
-#
-# WHY THIS LANE EXISTS. `loom-host`'s deciding half has a suite (`host_policy`), and it
-# could not have caught a single one of the defects this file now pins. Every one of them
-# lived in the GLUE — which arriving message answers which question, when an approved
-# permission becomes effective, whether the operator can still be heard — and glue is only
-# observable from outside, with a real process, a real console and a real loaded artifact.
-# The alternative that was tried and is not enough is "a REPL is driven by hand".
-#
-# WHAT IT ASSERTS, AND WHAT IT DELIBERATELY DOES NOT. It asserts identities (which weave is
-# governed), lifecycle facts (how many authenticated activations a participant saw),
-# effective authority (what the bus actually permits, read back through the warden), and
-# responsiveness (that commands typed during sustained traffic are executed and the host
-# exits 0). It does NOT pin the host's sentences: every match below is a distinguishing
-# fragment or a number, never a whole line of prose, so ordinary rewording does not fail
-# this lane and a changed MEANING does.
-#
-# TWO GROUPS, because two different configurations can run them:
-#   console   needs no kernel: the recovery route, decision ownership between two real
-#             processes, repeated approval, and a failed write that must change nothing.
-#   weaves    needs loadable artifacts: attribution, activation, adoption by every route.
-#
+# The supplied host, as a real process: the defects of loom-host's glue (which message answers
+# which question, when an approved permission takes effect, whether the operator is still heard)
+# are observable only from outside, with a real process, console and loaded artifact.
 # Parameters: ZEN_HOST_EXE, ZEN_WORK, ZEN_GROUP, and for `weaves` also ZEN_PROBE_LIB and
 # ZEN_PROBE_FORGE_LIB.
+
+# It asserts identities, lifecycle counts, effective authority read back through the warden, and
+# responsiveness; never the host's sentences, only distinguishing fragments and numbers, so a
+# rewording passes and a changed meaning fails. Group `console` needs no kernel; group `weaves`
+# needs loadable artifacts.
 
 cmake_minimum_required(VERSION 3.22)
 
@@ -51,13 +37,9 @@ function(zen_scenario_dir name out)
     set(${out} "${dir}" PARENT_SCOPE)
 endfunction()
 
-# Run the host with a scripted stdin. Captures stdout and stderr TOGETHER (the host writes
-# refusals to stderr and answers to stdout, and a person sees one stream), and the real
-# exit code — never a pipeline's.
-#
-# TIMEOUT IS A FAILURE, NOT A CONVENIENCE. The responsiveness scenario's whole claim is
-# that the host comes back; a run that had to be killed is the defect, so the timeout is
-# reported as one rather than swallowed.
+# Run the host with a scripted stdin, capturing stdout and stderr together (as a person sees
+# them) and the real exit code, never a pipeline's. A timeout is reported as a failure: the
+# responsiveness scenario's claim is that the host comes back.
 function(zen_run_host dir script args out_text out_code)
     set(in "${dir}/stdin.txt")
     file(WRITE "${in}" "${script}")
@@ -77,11 +59,9 @@ function(zen_run_host dir script args out_text out_code)
          "--- stdin:\n${script}--- output:\n${out}${err}\n--- exit: ${code}\n\n")
 endfunction()
 
-# The condition is taken as ARGN and handed to if() as separate arguments. Written the
-# obvious way first -- one `condition` parameter -- it arrived at if() as a single string
-# with spaces in it, which CMake reads as a variable NAME: every check then tested whether
-# some undefined variable was set, and a run where nothing worked reported eleven passes.
-# A check harness gets its own canary below for exactly that reason.
+# The condition is taken as ARGN and handed to if() as separate arguments: one string parameter
+# reaches if() as a variable name, so every check would test an undefined variable and pass. The
+# canary below proves a false condition is reported.
 macro(zen_check what)
     math(EXPR zen_checks "${zen_checks} + 1")
     if(${ARGN})
@@ -92,9 +72,8 @@ macro(zen_check what)
     endif()
 endmacro()
 
-# THE HARNESS'S OWN CANARY, run before anything it is supposed to judge. It proves that a
-# false condition is actually reported as a failure -- which the first version of
-# `zen_check` did not do, and could not have been noticed from a green run.
+# The harness's own canary, run before anything it judges: a false condition must be reported as
+# a failure.
 set(zen_canary_failures "")
 set(zen_canary_saved "${zen_failures}")
 zen_check("canary: THIS LINE MUST READ 'FAILED' -- a false condition" 1 EQUAL 2)
@@ -117,14 +96,9 @@ set(zen_checks 0)
 
 if(ZEN_GROUP STREQUAL "console")
 
-    # 1. THE ADVERTISED RECOVERY ROUTE REACHES A CONSOLE.
-    #
-    # `--no-boot` is documented as the way back in when the boot plan is what is broken.
-    # It used to parse and validate the plan BEFORE applying --no-boot, so malformed JSON
-    # exited 3 without ever opening the console — the one surface from which a person
-    # could have fixed the file. `--check` must still fail on the same file: validating is
-    # what --check is for, and a recovery route that softened it would have removed the
-    # only command that answers "is my file right?".
+    # 1. The advertised recovery route reaches a console. `--no-boot` is the way back in when the
+    # boot plan is what is broken, so a malformed plan must not stop the host before the console
+    # opens. `--check` must still fail on the same file: validating is what it is for.
     message(STATUS "host_process/console: broken boot plan")
     zen_scenario_dir(broken-plan dir)
     file(WRITE "${dir}/loom-boot.json" "{broken")
@@ -144,17 +118,11 @@ if(ZEN_GROUP STREQUAL "console")
     zen_run_host("${dir}" "" "--check" text code)
     zen_check("--check still refuses the same broken plan" NOT code EQUAL 0)
 
-    # 2. TWO REAL HOSTS CANNOT BOTH OWN ONE DECISION STORE.
-    #
-    # Decisions are written whole, so a second host holding a stale copy does not merely
-    # lose its own approval: it RESTORES what the first host revoked. Reproduced by one
-    # person with two terminals, so it is pinned with two real processes.
-    #
-    # THE PIPELINE IS THE TRICK AND IT IS HONEST. CMake's execute_process starts every
-    # COMMAND of a pipeline at once; `cmake -E sleep` holds the first host's stdin open
-    # (and produces nothing) so it stays alive, and the second host runs beside it. Which
-    # of the two wins the claim is a race and is NOT asserted — what is asserted is that
-    # exactly one of them owns it, which is the property.
+    # 2. Two real hosts cannot both own one decision store. Decisions are written whole, so a
+    # second host with a stale copy would restore what the first revoked. execute_process starts
+    # every command of a pipeline at once: `cmake -E sleep` holds the first host's stdin open so it
+    # stays alive while the second runs. Which one wins is a race and is not asserted; that exactly
+    # one owns the store is.
     message(STATUS "host_process/console: two hosts, one decision store")
     zen_scenario_dir(shared-store dir)
     execute_process(
@@ -192,14 +160,9 @@ if(ZEN_GROUP STREQUAL "console")
     zen_run_host("${dir}" "quit\n" "--no-boot;--authority;${dir}/shared.json" text code)
     zen_check("a later host takes the store over once the owner is gone" code EQUAL 0)
 
-    # 3. A FAILED WRITE CHANGES NOTHING — LIVE OR REMEMBERED.
-    #
-    # The store used to mutate its map and then try to write, so an unwritable file
-    # printed `cannot write` and changed what the host permitted anyway: the approval was
-    # good for that session and the next boot had never heard of it. The candidate is
-    # written first now, so a failed command is a command that did not happen.
-    #
-    # The injection is the temp path being a DIRECTORY, which no rename can replace.
+    # 3. A failed write changes nothing, live or remembered: the candidate is written before the
+    # map changes, so a store that cannot be written leaves the host permitting what it did.
+    # The injection is the temp path being a directory, which no rename can replace.
     message(STATUS "host_process/console: a failed write changes nothing")
     zen_scenario_dir(write-failure dir)
     file(MAKE_DIRECTORY "${dir}/decisions.json.tmp")
@@ -212,10 +175,8 @@ if(ZEN_GROUP STREQUAL "console")
               NOT text MATCHES "run +probe")
     zen_check("...and nothing was written" NOT EXISTS "${dir}/decisions.json")
 
-    # 4. REPEATING AN APPROVAL DOES NOT DEFEAT TAKING IT BACK.
-    #
-    # `allow` twice used to append two copies of one permission; one `revoke` removed one,
-    # reported a revocation, and left the permission delegated and remembered.
+    # 4. Repeating an approval does not defeat taking it back: two `allow`s of one permission
+    # store it once, so one `revoke` removes it.
     message(STATUS "host_process/console: repeated approval, one revoke")
     zen_scenario_dir(duplicate dir)
     zen_run_host("${dir}"
@@ -289,14 +250,10 @@ quit
                  "--no-boot;--authority;${dir}/decisions.json" text code)
     zen_check("a restarted host still has it" text MATCHES "run +probe")
 
-    # 6. A LINE LONGER THAN ANY COMMAND IS REFUSED WHERE IT STANDS, AND NONE OF IT RUNS.
-    #
-    # Both over-long lines are built so that running any PART of one would show: the first is
-    # `quit` and spaces, which a reader that cut it down to the limit would execute; the second
-    # is spaces and then `quit`, which a reader that split it would execute as a command of its
-    # own. Either way the host would exit before the commands after them. A command of exactly
-    # the limit (`status` and its trailing spaces) runs. The limit is 4000 bytes
-    # (src/host/line_input.hpp); the lengths below are written against it.
+    # 6. A line longer than any command is refused whole, and none of it runs. The first is `quit`
+    # and spaces (a reader that cut it to the limit would run it), the second spaces and then
+    # `quit` (a reader that split it would); either would exit before the commands after them. A
+    # command of exactly the limit runs. The limit is 4000 bytes (src/host/line_input.hpp).
     message(STATUS "host_process/console: over-long lines are refused, and the host reads on")
     zen_scenario_dir(long-lines dir)
     string(REPEAT " " 4000 zen_pad_4000)
@@ -340,18 +297,11 @@ if(ZEN_GROUP STREQUAL "weaves")
              "\"enabled\":true,\"on_failure\":\"stop\"}]}\n")
     endfunction()
 
-    # 1. A BOOT-STARTED PARTICIPANT IS ACTIVATED, AND ITS APPROVED AUTHORITY IS ALREADY
-    #    IN FORCE WHEN IT USES IT.
-    #
-    # Two numbers, and each one is a separate finding:
-    #   activations=1  the boot walk goes through the same door `start` does, so an
-    #                  authenticated `zen.Activated` is announced. It called Kernel::load
-    #                  directly before, and a participating probe reported activations=0
-    #                  under a boot this host printed as COMPLETE.
-    #   startups=1     the permission the person had already approved was installed
-    #                  BEFORE the weave was told it was live. Installed one turn later —
-    #                  which is where adoption-on-the-answer necessarily puts it — this is
-    #                  0 and `refusals` is 1 instead.
+    # 1. A boot-started participant is activated, and its approved authority is in force when it
+    # uses it. activations=1: the boot walk goes through the same door `start` does, so an
+    # authenticated `zen.Activated` is announced. startups=1: the approved permission is
+    # installed before the weave is told it is live; installed a turn later, as adoption on the
+    # answer would, this is 0 and `refusals` is 1.
     message(STATUS "host_process/weaves: boot activates, and approved authority is in force")
     zen_scenario_dir(boot-activation dir)
     zen_write_decisions("${dir}/decisions.json" "\"Startup v1 -> role probe\"")
@@ -375,14 +325,10 @@ if(ZEN_GROUP STREQUAL "weaves")
     zen_check("the remembered permission is delegated, not baseline"
               text MATCHES "revocable.: Startup v1 -> role probe")
 
-    # 2. AN UNRELATED `zen.Result` IS NOT THIS HOST'S ANSWER.
-    #
-    # The forge variant authors a `zen.Result{"1"}` at the console, unasked, timed to land
-    # after the genuine answer. It needs no extra approval to do it. What must hold: the
-    # operator's `start` reports the weave the steward actually loaded, and the subject
-    # this host administers is that weave — not weave 1, the console, whose baseline is
-    # `any shape -> any target` and whose adoption would have handed a loaded artifact the
-    # operator's own reach.
+    # 2. An unrelated `zen.Result` is not this host's answer. The forge variant authors
+    # `zen.Result{"1"}` at the console, unasked, landing after the genuine answer. `start` must
+    # report the weave the steward loaded and administer that weave, not weave 1, the console,
+    # whose `any shape -> any target` baseline would hand a loaded artifact the operator's reach.
     message(STATUS "host_process/weaves: an unrelated Result is not an answer")
     zen_scenario_dir(unrelated-reply dir)
     zen_write_decisions("${dir}/decisions.json" "\"Startup v1 -> role probe\"")
@@ -408,12 +354,9 @@ quit
     zen_check("the unrelated Result really was delivered to the console"
               text MATCHES "zen.Result v1  from weave 5  1")
 
-    # 3. AN ORDINARY `zen.LoadWeave` PRODUCES THE SAME GOVERNED PARTICIPANT.
-    #
-    # A weave (or an operator) sending the steward's own shape used to load the artifact
-    # and bypass adoption entirely: `authority show` then said nothing was loaded under
-    # that name and the remembered permissions were never installed. Adoption lives in the
-    # door now, so there is no route that can miss it.
+    # 3. An ordinary `zen.LoadWeave` produces the same governed participant: adoption lives in the
+    # door, so a weave or an operator sending the steward's own shape cannot load an artifact that
+    # `authority show` does not know and whose remembered permissions were never installed.
     message(STATUS "host_process/weaves: a message-driven load is governed too")
     zen_scenario_dir(message-load dir)
     zen_write_decisions("${dir}/decisions.json" "\"Startup v1 -> role probe\"")
@@ -430,15 +373,10 @@ quit
     zen_check("...and it was activated and its startup send permitted"
               text MATCHES "activations=1 startups=1 refusals=0")
 
-    # 4. THE CONSOLE STAYS REACHABLE WHILE THE BUS IS BUSY FOREVER.
-    #
-    # `Spin` re-arms itself in its own handler, so the queue is never empty again. Under an
-    # unbounded drain the host never read another command: `stop probe` and `quit` were
-    # already in the pipe and were never executed, and the review had to kill it. Every
-    # handler returned; nothing was stuck in native code.
-    #
-    # The `Inspect` between them is the other half: useful progress DID happen — the ticks
-    # are real work — while the operator kept being served.
+    # 4. The console stays reachable while the bus is busy forever. `Spin` re-arms itself in its
+    # own handler, so the queue is never empty again; under an unbounded drain `stop probe` and
+    # `quit` would wait in the pipe forever although every handler returns. The `Inspect` between
+    # them shows useful work continuing while the operator is served.
     message(STATUS "host_process/weaves: the console survives an endlessly busy bus")
     zen_scenario_dir(busy-weave dir)
     zen_write_decisions("${dir}/decisions.json"
@@ -520,14 +458,11 @@ quit
     zen_check("the revoked send is refused on the next activation"
               text MATCHES "startups=1 refusals=1")
 
-    # 8. A BUILD WHOSE PIN CANNOT BE WRITTEN IS REFUSED, AND SO IS EVERY OTHER BUILD.
-    #
-    # An approval without `--rebuilds` means "this build; ask me again when it changes", and
-    # the pin is the only record that can notice a change. With the store's temp path blocked
-    # the host used to admit build A with a note nobody saw until `status`, leave the rule
-    # unpinned, and then admit a DIFFERENT build B the same way. The two builds are the two
-    # probe variants: one artifact name, different bytes. The approval is made at the console,
-    # which is the person's route and the one that leaves the rule unpinned.
+    # 8. A build whose pin cannot be written is refused, and so is every other build. An approval
+    # without `--rebuilds` means "this build; ask me again when it changes", and the pin is the
+    # only record that can notice a change: a host that admitted build A unpinned would admit a
+    # different build B the same way. The two builds are the two probe variants (one name,
+    # different bytes); the approval is made at the console, the route that leaves a rule unpinned.
     message(STATUS "host_process/weaves: a pin that cannot be written refuses the build")
     zen_scenario_dir(failed-pin dir)
     zen_run_host("${dir}" "authority trust probe\nquit\n"
