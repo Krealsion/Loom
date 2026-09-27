@@ -32,7 +32,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/host/lifecycle_wiring[.]hpp$"
     "^include/zen/host/terminal_wiring[.]hpp$"
     "^include/zen/weave/poke_weave[.]hpp$"
-    "^include/zen/weave/relay[.]hpp$"
     "^include/zen/weave/role_request[.]hpp$"
     "^src/"
     "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
