@@ -45,7 +45,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/registry[.]hpp$"
     "^include/zen/schema[.]hpp$"
     "^include/zen/serialize[.]hpp$"
-    "^include/zen/session/vocabulary[.]hpp$"
     "^include/zen/switchboard[.]hpp$"
     "^include/zen/terminal/composer[.]hpp$"
     "^include/zen/terminal/input_lex[.]hpp$"
