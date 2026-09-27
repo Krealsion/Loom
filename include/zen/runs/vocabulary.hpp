@@ -4,64 +4,47 @@
 #ifndef ZEN_RUNS_VOCABULARY_HPP
 #define ZEN_RUNS_VOCABULARY_HPP
 
-// A RUN MANAGER'S VOCABULARY: the catalog of editable tools, named runs, and what a run's worker
-// reports. Loom ships one run manager (`loom-runs`, a loadable weave a session host boots like any
-// other artifact, docs/guides/sessions.md) and publishes its vocabulary here, so a client written
-// in any language speaks one contract and another manager can replace this one by answering it.
+// A run manager's vocabulary: the catalog of editable tools, named runs, and what a run's worker
+// reports. Loom ships one run manager (`loom-runs`, a loadable weave a session host boots like
+// any other artifact) and publishes its vocabulary here, so a client in any language speaks one
+// contract and another manager can replace this one by answering it.
+// docs/guides/sessions.md#4-runs
 //
-// THREE PARTIES, THREE KINDS OF SPEECH, NONE OF IT AUTHORITY BY BEING KNOWN:
+// Three parties, and none of their speech is authority by being known:
 //
 //   a CLIENT       lists and describes tools, starts named runs, reads them back, asks for a
-//                  cancellation, releases a finished run. It learns everything from the manager's
-//                  answers; it holds no private state the next client would need.
-//   the MANAGER    owns run state: which tool, which revision of it actually ran, the inputs, the
-//                  run's own directory, the worker process, what the worker reported, and the
-//                  artifacts it verified on disk. It answers; it never acts as a client's agent.
-//   a WORKER       one process per run, admitted by the session door as its own session under the
-//                  rules its manager was itself allowed to pass on. It reports to the manager and
-//                  asks whatever it was granted; it is the actor of its own asks.
+//                  cancellation, releases a finished run. It holds no state the next client
+//                  would need.
+//   the MANAGER    owns run state: the tool, the revision that ran, the inputs, the run's
+//                  directory, the worker process, its reports, the artifacts verified on disk.
+//                  It answers; it never acts as a client's agent.
+//   a WORKER       one process per run, admitted by the session door as its own session under
+//                  rules its manager was allowed to pass on. It reports to the manager and is
+//                  the actor of its own asks.
 //
-// A RUN HANDLE IS (lifetime, name). The name is the client's choice, unique within one host
-// lifetime; the lifetime is the session door's (`zen/session/vocabulary.hpp`). A Start whose
-// answer was lost is recovered by asking for that name again -- never by starting another -- and
-// a handle from an ended lifetime is refused by name, never applied to new work.
+// A run handle is (lifetime, name): the name is the client's, unique within one host lifetime;
+// the lifetime is the session door's (zen/session/vocabulary.hpp). A Start whose answer was lost
+// is recovered by asking for that name again, never by starting another, and a handle from an
+// ended lifetime is refused by name.
 //
-// WHAT A STATE MEANS. `starting` (the process is being started or has not connected yet),
-// `running` (its session is admitted), and then exactly one final state: `passed` / `failed` (the
-// tool's own verdict), `error` (the tool raised), `cancelled` (a cancellation was requested while
-// a worker was there to hear it, and that worker ended), `crashed` (the worker ended without a
-// verdict, unasked -- whatever was then done about what it left behind), `interrupted` (the host
-// is ending). A client that stops waiting has stopped waiting; the run's state is the manager's.
+// A run says three separate things, and none stands for another
+// (docs/guides/sessions.md#three-things-a-run-says-and-why-none-stands-for-another):
 //
-// A RUN SAYS THREE SEPARATE THINGS, and none of them stands for another:
-//
-//   `state`    THE VERDICT -- what the tool concluded, or what the manager concluded for it.
-//              It is settled once and never rewritten: a run that passed and was then stopped
-//              still passed.
-//   `process`  THE EXECUTION -- `not-started`, `running` (the worker leads it), `descendants`
-//              (the worker has exited and left processes this manager still owns), `killing` (a
-//              stop was issued and the group has not been seen to go), `exited`, `killed`,
-//              `unknown` (the execution is over and no exit code was ever readable for it).
-//              A verdict does NOT end an execution, and an execution that is still alive still
-//              counts against this manager's active capacity, can still be stopped by `Cancel`,
-//              and blocks `Release` until it is.
-//
-//              `exit_code` IS THE LEADER'S OWN, and it means something only at `exited` or
-//              `killed` -- the two words this manager writes only once it has WATCHED THE
-//              EXECUTION END (the group, never just its leader) and actually read one. It is
-//              never a descendant's, never an aggregate for the group, and never a
-//              default standing in for an observation that was not made: a leader whose code is
-//              already known keeps it when the group it left behind is stopped later, and a
-//              host that ends an execution without seeing it finish records `killing`, which
-//              promises no code at all. `unknown` is the same refusal after the fact. A code
-//              this manager DID read is kept wherever it reads it -- at `descendants`, and at
-//              `killing` when the shutdown's own moment of watching was the first to see it --
-//              and there the run's NOTE, not the field, is what says whether one was read.
-//   `record`   THE EVIDENCE -- `saved` (`run.json` holds this view, as of `record_ms`), `stale`
-//              (it does not, and `record_error` says why and what is still there), `unknown` (a
-//              record written before this manager said). Every change to a run's view is
-//              covered: `saved` is not a promise about the last interesting change, it is a
-//              promise about this answer. Failing to save evidence is not a failure of the tool.
+//   `state`    `starting` (the worker has not connected), `running` (its session is admitted),
+//              then one final verdict, never rewritten: `passed` / `failed` (the tool's own),
+//              `error` (the tool raised), `cancelled` (asked while a worker could hear it, and
+//              that worker ended), `crashed` (the worker ended without a verdict, unasked),
+//              `interrupted` (the host is ending). A run that passed and was then stopped still
+//              passed.
+//   `process`  the execution: `not-started`, `running`, `descendants` (the worker exited and
+//              left processes this manager owns), `killing`, `exited`, `killed`, `unknown`. A
+//              live execution counts against capacity, can be stopped by `Cancel`, and blocks
+//              `Release`. `exit_code` is the worker leader's own and means something only at
+//              `exited` or `killed`, written once the whole group was watched end and a code
+//              read; at `descendants` and `killing` the run's note says whether one was read.
+//   `record`   the evidence: `saved` (`run.json` holds this view, as of `record_ms`), `stale`
+//              (it does not; `record_error` says why), `unknown` (written before this manager
+//              said). Failing to save evidence is not a failure of the tool.
 
 #include <zen/weave/shape.hpp>
 

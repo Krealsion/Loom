@@ -24,9 +24,9 @@
 //
 // `AdmissionRequest::declared` is the manifest's capability ask (zen.CapabilityAsk: network,
 // filesystem, roles): what the artifact says it would like, shown as advice and never used to
-// make a grant. The policy is shown nothing else the artifact declares, its emit-set included,
-// and the ask has no send section, so send authority comes from the policy's own
-// configuration.
+// make a grant. The policy is shown nothing else the artifact declares, its emit-set included.
+// The ask names no shape to send, so what the artifact may send, even to a role it asks for,
+// comes from the policy's own configuration.
 
 #include <zen/content_id.hpp>           // BuildIdentity
 #include <zen/kernel/schema_codec.hpp> // CapabilityAsk

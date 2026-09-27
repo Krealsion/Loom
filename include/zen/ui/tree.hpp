@@ -4,23 +4,12 @@
 #ifndef ZEN_UI_TREE_HPP
 #define ZEN_UI_TREE_HPP
 
-// The renderer-agnostic semantic widget tree — the Loom's UI vocabulary. A UI is emitted as a
-// tree of INTENT and RELATIONSHIP — never absolute position or size. The SAME tree a terminal
-// renderer resolves to box-characters and arrow-key focus, a graphical renderer resolves to
-// rectangles and a mouse (like HTML: one semantic description, many renderers — a screen reader
-// produces zero pixels from the same DOM). Widget's member set is closed and geometry-free (no
-// x/y/width/height member exists to write), so layout can only ever happen in a renderer. A
-// name-based compile-time fence below additionally blocks the common coordinate spellings from
-// being re-added by accident — defense in depth, not unrepresentability (int x fails to build,
-// int px compiles clean); see the note at the fence for its limits.
-//
-// Lifted out of the console (Phase B): the vocabulary lives here, in its own target (zen-ui),
-// with NO console dependency — the console is one consumer (it emits its own interface as this
-// tree; see zen/console/ui.hpp), the TUI renderer another, and a pixel projection a third
-// (zen/ui/pixel.hpp). The ~50-line outline walk (render_outline) is the standing
-// renderer-agnosticism proof: it consumes the same tree and shows it carries meaning, not
-// medium. The proof is what is load-bearing, not the roll of projections that happen to exist
-// — one can be retired without this vocabulary owing it a line.
+// The semantic widget tree, Loom's UI vocabulary: a UI is a tree of intent and relationship,
+// never position or size, so a terminal renderer resolves it to box characters and arrow-key
+// focus and a graphical one to rectangles and a pointer. Widget has no geometry member, so
+// layout happens only in a renderer. It lives in its own target (zen-ui) with no console
+// dependency; the console (zen/console/ui.hpp), the terminal renderer and the pixel projection
+// (zen/ui/pixel.hpp) consume it, and render_outline shows it carries meaning, not medium.
 
 #include <concepts>
 #include <cstdint>
@@ -58,18 +47,11 @@ const char* name_of(Overflow o) noexcept;
 /// Parse a stable spelling back to its policy; nullopt for an unknown spelling.
 std::optional<Overflow> overflow_from(std::string_view spelling) noexcept;
 
-/// One node of the widget tree. A single value type: copyable and DEEPLY comparable (defaulted
-/// ==), so the whole tree is one value — trivially asserted in tests and diffable by region for
-/// retained-mode partial redraw. CONSTRUCT ONLY via the named constructors below, so per-kind-
-/// unused fields are zero-initialized consistently (otherwise two logically-identical nodes
-/// could differ on leftover junk and pollute the == proof and the dirty-by-diff backstop).
-///
-/// THE BET, MADE STRUCTURAL: there is NO x/y/width/height/row/col member here — a closed,
-/// geometry-free member set, with no positional field to write (a name-based fence below also makes
-/// adding one of those names fail to build; defense in depth, not unrepresentability). A renderer
-/// alone decides position. `weight` is a RELATIVE grow hint (0 = natural), never an ABSOLUTE size —
-/// the outline renderer ignores it (proving it not tree content); the TUI resolves it as relative
-/// cells.
+/// One node of the widget tree: a copyable value with a defaulted, deep ==, so a whole tree is
+/// one value, compared in tests and diffed by region for partial redraw. Build it only through
+/// the named constructors below, which zero every field its kind does not use. It has no
+/// x/y/width/height/row/col member; `weight` is a relative grow hint (0 = natural), never a
+/// size, which the outline renderer ignores and the terminal renderer resolves to cells.
 struct Widget {
     WidgetKind kind = WidgetKind::Text;
     std::string region_id;          ///< stable key for dirty/diff (empty = pure decoration)
@@ -82,14 +64,13 @@ struct Widget {
                                     ///< in a schematic: the design-time placeholder rows)
     int selected_index = -1;        ///< List selection: an index INTO items, never a y (-1 = none)
 
-    // Abstract interaction INTENT — what the operator may DO here, never which key/gesture does
-    // it (the renderer maps its medium onto these: the TUI keys, a GUI clicks/drags). These
-    // replaced `focusable`: no renderer ever read it, and focus-eligibility is derivable
-    // (a node you can act on is a node you can focus) — the intent is the load-bearing fact.
+    // Abstract interaction intent: what the operator may do here, never which key or gesture
+    // does it; each renderer maps its medium onto these. A node that can be acted on can be
+    // focused, so focus eligibility needs no field of its own.
     bool activatable = false;       ///< the node can be acted on (Activate on its selection)
     bool editable = false;          ///< the node accepts text editing (a Field's nature)
     bool reorderable = false;       ///< the node's items may be reordered (declared intent;
-                                    ///< no built renderer consumes it yet — the Builder composes it)
+                                    ///< no renderer consumes it)
 
     bool focused = false;           ///< the focus MARKER (a flag, never a coordinate)
     std::uint16_t weight = 0;       ///< relative grow hint (0 = natural); never an absolute size
@@ -97,10 +78,10 @@ struct Widget {
 
     // Component-vocabulary fields (see component.hpp; all default-empty on live console trees).
     std::string from_field;         ///< data binding: the contract field feeding this node's
-                                    ///< content/items ("" = static). Declared, not yet resolved —
-                                    ///< live binding is a later phase; design-time shows placeholder.
+                                    ///< content/items ("" = static). Declared only: nothing
+                                    ///< resolves it, and design time shows the placeholder.
     std::string route_to;           ///< navigation intent: the view address an Activate should
-                                    ///< route to ("" = none). The routing RUNTIME is a later phase.
+                                    ///< route to ("" = none). Declared only: nothing routes.
     std::string slot_name;          ///< Slot: the open hole's name ("" on non-slots)
     std::string slot_accepts;       ///< Slot: what may fill it — "Component", "Route", or a
                                     ///< scalar Kind spelling ("Int"/"Float"/"Text"/"Bool")
@@ -141,7 +122,7 @@ static_assert(!detail::has_x<Widget>::value && !detail::has_y<Widget>::value &&
                   !detail::has_row<Widget>::value && !detail::has_col<Widget>::value &&
                   !detail::has_top<Widget>::value && !detail::has_left<Widget>::value,
               "Widget must not carry absolute geometry — position is the renderer's job (the bet "
-              "of Stage 3: intent and relationship, never coordinates).");
+              "here: intent and relationship, never coordinates).");
 static_assert(std::equality_comparable<Widget>,
               "Widget must stay value-comparable — the headless structural-equality proof and the "
               "dirty-by-diff backstop rely on operator==.");
@@ -189,9 +170,8 @@ enum class Action : std::uint8_t {
 };
 
 /// One input event: a semantic action, plus a character for Edit and a row index for SelectAt.
-/// (Edit is byte-oriented: multi-byte UTF-8 input arrives as one Edit per byte, appended in
-/// order — a std::string target reassembles the sequence; codepoint-aware editing is a named
-/// seam for the phase that needs it.)
+/// Edit is byte-oriented: multi-byte UTF-8 input arrives as one Edit per byte, in order, and a
+/// std::string target reassembles it; editing is not codepoint-aware.
 struct InputEvent {
     Action action = Action::None;
     char ch = 0;

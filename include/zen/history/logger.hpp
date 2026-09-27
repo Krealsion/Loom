@@ -4,41 +4,17 @@
 #ifndef ZEN_HISTORY_LOGGER_HPP
 #define ZEN_HISTORY_LOGGER_HPP
 
-// WHAT ZEN CHOSE NOT TO FORGET (RTH-1a).
+// The Logger: the host's durable selected record, answering "what did the host choose not to
+// forget?". Where the Recorder (zen/history/recorder.hpp) admits by default, keeps a little of
+// everything and forgets fast, the Logger refuses by default, keeps almost nothing, and keeps
+// it for good. docs/reference/history.md#logger--the-durable-selected-record
 //
-// The other half of the split RTH-1a makes. The Recorder answers "what do I know
-// right now?" out of bounded, volatile windows that traffic pushes through in
-// seconds. This answers a different question, and it must not be a bigger version
-// of the first one:
-//
-//   RECORDER   admits by default, keeps a little of everything, forgets fast.
-//   LOGGER     REFUSES by default, keeps almost nothing, and keeps it for good.
-//
-// A WHITELIST, NOT A BUDGET. RTH-1's persistence was the recorder's window written
-// to a file behind a global 8 MiB ceiling — which meant an idle application's
-// heartbeat could consume the horizon in about three minutes and a weave
-// replacement an hour later would be silently unwritable. That is the exact
-// failure this half exists to prevent: nothing is durable unless it was NAMED, and
-// what was named is not capped by traffic that was not.
-//
-// IT DOES NOT READ THE RECORDER. It takes its own tap on the same Switchboard and
-// captures a selected fact from the OBSERVATION, on the dispatch that produced it.
-// Hoping a Recorder entry still exists at write time would make durability depend
-// on a volatile window's mood — so there is no `Recorder&` here, on purpose, and a
-// Logger works in a process that has no Recorder at all.
-//
-// NOT IN THE DELIVERY PATH. Like the Recorder, it is a tap consumer: a message
-// reaches its recipient without passing through this, and turning logging on
-// changes what is remembered and nothing about what is delivered.
-//
-// THREE ORIGINS, AND THE RULE THAT MATTERS. A durable record may come from
-// somewhere other than the bus — the host says something directly, or this
-// Logger's own selection changes — but it must NEVER pretend to have been a Loom
-// message. Nothing here manufactures bus traffic to get a fact written down.
-//
-// DELIBERATELY NOT HERE, and each is a later bounded phase, not an omission:
-// rotation, compaction, batching, a background writer, a scheduler, a database, a
-// query grammar, display filters, crash bundles, stack walking.
+// A whitelist, not a budget: nothing is durable unless it was named, and what was named is not
+// capped by traffic that was not. It takes its own tap and captures a selected fact on the
+// dispatch that produced it; it never reads a Recorder and works where there is none. It is not
+// in the delivery path. A record comes from the bus, the host or the Logger's own selection
+// change (`LogOrigin`), and never pretends to be a Loom message. It has no rotation,
+// compaction, batching, background writer, database or query grammar.
 
 #include <zen/history/record.hpp>
 #include <zen/schema.hpp>
@@ -116,11 +92,10 @@ struct LogRecord {
 /// ONE WHITELIST ENTRY: a shape that is worth keeping for good.
 struct LogRule {
     std::string shape;
-    /// How many records of this shape to append before stopping, or 0 for
-    /// UNCAPPED — the default, and the point of §11: a rare durable fact should not
-    /// need a number, and a global ceiling shared with traffic nobody selected is
-    /// exactly the horizon RTH-1a removes. A cap that is reached is stated once, as
-    /// a `PolicyChange` record, so a reader can never mistake a cap for an ending.
+    /// How many records of this shape to append before stopping, or 0 for uncapped, the
+    /// default: a rare durable fact should not need a number, and no ceiling is shared with
+    /// traffic nobody selected. A cap reached is stated once, as a `PolicyChange` record, so a
+    /// reader never mistakes a cap for an ending.
     std::size_t cap = 0;
 };
 
@@ -135,9 +110,8 @@ struct LoggerSelection {
     bool log_handler_failures = true;
     /// Died / Revived: a participant left or came back. Rare by construction.
     bool log_lifecycle = true;
-    /// Refusals are OFF by default and that is measured, not assumed: RTH-1's live
-    /// Workshop run found every `KeyReleased` reaching nobody, so ordinary refusals
-    /// are neither rare nor severe. A host that wants them says so.
+    /// Refusals are off by default: ordinary refusals (a key event nobody accepts, say) are
+    /// neither rare nor severe. A host that wants them says so.
     bool log_refusals = false;
     std::vector<LogRule> shapes;
 
@@ -157,14 +131,11 @@ struct LoggerSelection {
 ///
 /// Plus, structurally, every handler failure and every lifecycle transition.
 ///
-/// DELIBERATELY ABSENT, and each for a stated reason: the QUERIES beside those
-/// changes (`ListLibraries`, `QueryRole`, `ListLoaded`, `DescribeAuthority`,
-/// `AuthorityDescription`, `ManagerState`) — a read is not a change; the handoff
-/// vocabulary (`zen.PrepareShutdown`, `zen.Bequest`, `zen.ClaimBequest`) — the
-/// replacement it belongs to is already marked by `zen.SwapWeave` and by the
-/// structural Died/Revived, and a smaller default is the instruction; and every
-/// application shape, because this list is Loom's and a host's traffic is the
-/// host's to name.
+/// Deliberately absent: the queries beside those changes (`ListLibraries`, `QueryRole`,
+/// `ListLoaded`, `DescribeAuthority`, `AuthorityDescription`, `ManagerState`), since a read is
+/// not a change; the handoff vocabulary (`zen.PrepareShutdown`, `zen.Bequest`,
+/// `zen.ClaimBequest`), since `zen.SwapWeave` and the structural Died/Revived already mark the
+/// replacement; and every application shape, which is the host's to name.
 LoggerSelection default_selection();
 
 // ---------------------------------------------------------------------------
@@ -246,10 +217,10 @@ public:
     /// reader can admit them through the one gate rather than parse them.
     static const std::shared_ptr<const Schema>& record_schema();
 
-    /// Read a stream written by `open` back into records. It re-admits every record
-    /// through the gate, so a corrupt or forged file is refused rather than trusted
-    /// (Arena's rule, and the reason the stream is values and not text). Returns
-    /// false and sets `*error` on an unreadable or malformed file.
+    /// Read a stream written by `open` back into records. It re-admits every record through
+    /// the gate, so a corrupt or forged file is refused rather than trusted, which is why the
+    /// stream is values and not text. Returns false and sets `*error` on an unreadable or
+    /// malformed file.
     static bool read(const std::string& path, std::vector<LogRecord>* out,
                      std::string* error = nullptr);
 

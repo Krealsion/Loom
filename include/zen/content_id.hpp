@@ -4,22 +4,14 @@
 #ifndef ZEN_CONTENT_ID_HPP
 #define ZEN_CONTENT_ID_HPP
 
-// NAMING A FILE BY ITS BYTES.
+// Naming a file by its bytes. One function, in the core, because two security-relevant records
+// key themselves by exactly this identity and must not drift: the isolation host's persisted
+// grant record (`so_content_hash`, zen/isolation/grant_record.hpp) and the admission policy's
+// view of an artifact (zen/kernel/admission.hpp).
 //
-// One function, in the core, because two different security-relevant records key
-// themselves by exactly this identity and must not drift: the isolation host's
-// persisted grant ledger (`so_content_hash`, zen/isolation/grant_record.hpp) and the
-// in-process admission policy's view of an artifact (zen/kernel/admission.hpp). A
-// second implementation of "hash the file" is a second answer to "is this the build I
-// approved", and the two would eventually disagree about a truncation, an encoding or
-// an error case.
-//
-// IT IS REAL WORK, AND ONLY THE ONE WHO NEEDS THE ANSWER PAYS FOR IT. The whole file is
-// read and hashed — for a multi-megabyte Debug image, a large fraction of a second. The
-// Kernel once did that for every load it put to a policy, including a policy that never
-// looks at the answer, and that alone failed Zengine's replacement-timing tests. So an
-// admission question carries a `BuildIdentity`, below, which does the work the first time
-// somebody asks for it and never otherwise.
+// It is real work: the whole file is read and hashed, a large fraction of a second for a
+// multi-megabyte Debug image. So an admission question carries a `BuildIdentity`, below, which
+// does the work the first time somebody asks and never otherwise.
 
 #include <cstdint>
 #include <memory>
@@ -31,15 +23,12 @@ namespace loom {
 /// characters. Deterministic across runs and machines, so a persisted key survives a
 /// host restart.
 ///
-/// COLLISION-RESISTANT ON PURPOSE. This keys decisions about authority, so a fast
-/// non-cryptographic name is not enough: FNV-1a's ~2^32 birthday resistance was cheap
-/// enough for a determined attacker to forge a second artifact onto an existing
-/// approval (audit F-1). Truncated SHA-256 raises that to ~2^128 second-preimage and
-/// ~2^64 collision.
+/// Collision-resistant on purpose: this keys decisions about authority, so a fast
+/// non-cryptographic hash is not enough to stop a forged second artifact landing on an existing
+/// approval. Truncated SHA-256 gives ~2^128 second-preimage and ~2^64 collision resistance.
 ///
-/// IT IS CONTENT-ADDRESSING, NOT AUTHENTICATION. It names a build by its bytes; it
-/// vouches for nobody. It is not a MAC, it is not constant-time, and a signed author
-/// identity remains the identity phase's job.
+/// It is content addressing, not authentication: it names a build by its bytes and vouches for
+/// nobody. It is not a MAC and not constant-time, and it identifies no author.
 ///
 /// Throws `std::runtime_error` if the file cannot be read.
 std::string file_content_id(const std::string& path);

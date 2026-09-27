@@ -4,32 +4,12 @@
 #ifndef ZEN_UI_PIXEL_HPP
 #define ZEN_UI_PIXEL_HPP
 
-// The PIXEL projection's logic — one renderer's brain, owning no window, font library or
-// display, so it is provable everywhere the suite runs. This is NOT part of the tree
-// vocabulary: pixel-space geometry exists ONLY here and below (in whatever executes these
-// commands), exactly as terminal cells exist only in the TUI's Grid. The tree stays
-// intent-only; this layer RESOLVES intent into rectangles.
-//
-// The split mirrors the TUI's: tui_render.cpp = layout-to-cells + key mapping (the only place
-// cells and raw keys exist); here = layout-to-draw-commands (the only place pixel rects exist).
-// A complete renderer is px_layout (this, pure) + a thin executor for the commands + an input
-// mapper turning that medium's raw events into the same semantic InputEvents the TUI's
-// tui_map_key produces. The last two are a presentation's business; this repository ships the
-// brain and no skin, which is the shape that lets a skin be someone else's.
-//
-// Text metrics are INJECTED (PxMetrics.text_width) so the layout is deterministic under test
-// and honest under a real typeface, whose advances are per glyph. Widths are treated
-// as additive across codepoints — the thin renderer's stated simplification (kerning-free
-// wrap/truncate decisions; the glyph rasterizer still draws whatever it draws).
-//
-// Overflow gets REAL meaning here (the hint the TUI ignores, this projection honors):
-//   - a Text node with Wrap lays out as multiple lines, broken at spaces when possible and
-//     hard-broken INSIDE a word only at a codepoint boundary (never mid-UTF-8-sequence);
-//   - Truncate ellipsizes at a codepoint boundary;
-//   - Grow draws at natural size (clipped only by the viewport);
-//   - Scroll on a List/Log keeps the selection visible (else tail-follows), as in the TUI.
-// List/Log rows are single-line by design (a row wider than the node truncates with an
-// ellipsis; wrapped multi-line rows are a named refinement, not built).
+// The pixel projection's layout: it resolves the intent-only widget tree (zen/ui/tree.hpp) into
+// paint-ordered draw commands and pointer targets, owning no window, font library or display,
+// so it is testable everywhere. Pixel geometry exists only here and in whatever executes the
+// commands, as terminal cells exist only in the terminal renderer. A complete renderer adds a
+// thin executor and an input mapper to the same semantic InputEvents; this repository ships the
+// layout and no executor.
 
 #include <zen/ui/tree.hpp>
 
@@ -103,10 +83,11 @@ struct PxScene {
     std::vector<PxTarget> targets;
 };
 
-/// Injected text metrics: the line height and the pixel advance of a UTF-8 string. A real
-/// typeface answers per glyph; tests inject both a fixed per-codepoint width and a
-/// deliberately proportional one, because uniform widths make "fits the bound" and "counts
-/// the codepoints" the same sentence and a proportional typeface does not.
+/// Injected text metrics: the line height and the pixel advance of a UTF-8 string, so layout is
+/// deterministic under test and right under a real typeface. Widths are taken as additive across
+/// codepoints (no kerning in wrap and truncate decisions). Tests inject a fixed and a
+/// proportional width, since uniform widths make "fits the bound" and "counts the codepoints"
+/// the same sentence.
 struct PxMetrics {
     int line_height = 16;
     int pad = 4; ///< inner padding for selection bars / marker boxes
@@ -127,9 +108,12 @@ std::vector<std::string> px_wrap(std::string_view text, int max_width, const PxM
 /// Text that already fits is returned unchanged (no ellipsis).
 std::string px_truncate(std::string_view text, int max_width, const PxMetrics& m);
 
-/// Lay the tree out into `viewport`: intent + relationship -> paint-ordered draw commands and
-/// interactive targets. Pure: same tree + same metrics = same scene (pinned in tests). The
-/// weight grow-hint splits stack space exactly as the TUI resolves it (64-bit accumulation).
+/// Lay the tree out into `viewport`: paint-ordered draw commands and interactive targets. Pure:
+/// the same tree and metrics give the same scene. Overflow is honored: Wrap breaks Text at
+/// spaces, or inside a word at a codepoint boundary; Truncate ellipsizes at one; Grow draws at
+/// natural size, clipped by the viewport; Scroll keeps a List's selection visible, else follows
+/// the tail. List and Log rows are single lines, truncated. Weight splits stack space as the
+/// terminal renderer does (64-bit sums).
 PxScene px_layout(const Widget& root, PxRect viewport, const PxMetrics& m);
 
 /// The TOPMOST (last-added) target containing the point, or nullptr — pointer hit-testing for

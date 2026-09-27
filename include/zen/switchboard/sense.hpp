@@ -207,8 +207,9 @@ enum class JointApplication : std::uint8_t {
     Pending,
     /// Shown, and the claimant's hook completed.
     Applied,
-    /// Shown, and the hook did not complete: a native throw, or a non-OK status across the seam.
-    /// The claimant is held until reloaded or removed.
+    /// Shown, and the hook did not complete: it threw or returned `Failed`, or a loaded weave's
+    /// slot answered neither `ZEN_OK` nor `ZEN_CLAIM_DECLINED`. The claimant is held until
+    /// reloaded or removed.
     Failed,
     /// The claimant was removed before it could be shown.
     Lost,

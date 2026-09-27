@@ -4,43 +4,25 @@
 #ifndef ZEN_TERMINAL_SESSION_HPP
 #define ZEN_TERMINAL_SESSION_HPP
 
-// THE TERMINAL SESSION — an ordinary Loom weave that a person, a pane, or a
-// script can drive.
+// The terminal session: an ordinary Loom weave that a person, a pane or a script can drive.
+// One WeaveId, one admission grant the host chose, one vocabulary the host supplied, and its
+// own transcript. It composes typed messages from real schemas, authors them under its own
+// identity, receives what its doors admit, asks and recognizes Loom's authenticated answers,
+// and asks a policy office for more authority when it needs some. docs/reference/terminal.md
 //
-//     the Kernel enforces.  the Weaver decides.  the session acts.
-//
-// This is the third line, made into something you can hold. The Weaver withheld the
-// name from its demo because a thirty-line weave with no transcript, no composer
-// and no command language had not earned it; what follows is the attempt to earn
-// it, and the test of whether it did is that everything below is either an
-// ORDINARY PARTICIPANT'S POWER or is not here at all.
-//
-// WHAT IT IS. One WeaveId. One admission grant the host chose. One vocabulary the
-// host supplied. Its own transcript of its own experience. It composes typed
-// messages from real schemas, authors them under its own identity, receives what
-// its doors admit, asks and recognizes Loom's authenticated answers, and asks a
-// policy office for more authority when it needs some.
-//
-// WHAT IT IS NOT, said plainly because "terminal" sounds like "root":
+// What it is not, because "terminal" sounds like "root":
 //
 //     no Switchboard&, no Kernel&, no IsolationHost&, no host root send
 //     no whole-bus tap, and therefore no third party's traffic
 //     no `allow_any`, no `observe_any`, no load capability, no filesystem,
-//         no network — being a terminal confers NOTHING
+//         no network: being a terminal confers nothing
 //     no weave enumeration, no role directory, no registry read
 //     no journal or delivery guarantee: an authenticated refusal is a later receipt
 //     no way to speak as anybody else, because there is no verb for it
 //
-// A terminal is powerful because it can ask for authority and say true things
-// about what it knows — not because it stands outside Loom. Every one of the
-// absences above is a power some other component in this tree legitimately has,
-// held by something that legitimately IS the host.
-//
-// TWO IDENTITIES, ONE SCREEN. A presentation may show a governed session and an
-// operator seat side by side; `TerminalDesk` is that pairing, and it refuses to
-// pair a participant with itself. The same keyboard does not imply the same
-// sender, and nothing here will ever re-route one participant's command through
-// the other.
+// Each absence is a power the host legitimately holds. A presentation may show a governed
+// session and an operator seat side by side (`TerminalDesk`); one keyboard never makes them
+// one sender. docs/reference/terminal.md#what-it-is-and-what-it-is-not
 
 #include <zen/switchboard/weave_contract.hpp>
 #include <zen/terminal/composer.hpp>
@@ -92,30 +74,16 @@ struct Address {
     }
 };
 
-/// THE ONE OUTBOUND DOOR A TERMINAL PARTICIPANT IS GIVEN, bound to ONE identity.
+/// The one outbound door a terminal participant is given, bound to one identity. A weave's own
+/// `Bus` exists only during a delivery, so a participant driven by a keyboard rather than by an
+/// incoming message speaks through this instead.
 ///
-/// A weave's own `Bus` exists only for the duration of a delivery — it is handed
-/// to `handle()` and is gone when the handler returns — so a participant driven
-/// by a keyboard rather than by an incoming message has nothing to speak through.
-/// That is a real gap in the substrate's authoring surface, and this is the
-/// narrowest honest bridge across it.
-///
-/// IT NAMES AN IDENTITY. IT CONFERS NO AUTHORITY. Every message that leaves here
-/// is stamped with `self()` by the bus and authorized, at delivery, against THAT
-/// weave's own effective authority — baseline union delegated — by the same
-/// predicates every other delivery is checked with. So a channel handed to a
-/// participant with an empty grant can say nothing at all, and a channel is never
-/// a way around the Kernel. What it removes is the requirement to be inside a
-/// handler; what it does not remove is a single check.
-///
-/// AND THERE IS NO VERB FOR SPEAKING AS SOMEBODY ELSE. `self()` is fixed when the
-/// host binds the channel; no method takes a sender. A terminal core holding one
-/// of these cannot impersonate the operator seat beside it, cannot speak as the
-/// host, and cannot widen itself — not because it is refused, but because the
-/// sentence has nowhere to put the other identity.
-///
-/// The implementation is HOST WIRING (`zen/host/terminal_wiring.hpp`), which is
-/// where the `Switchboard&` lives. Nothing in this file knows that type exists.
+/// It names an identity and confers no authority: every message is stamped `self()` by the bus
+/// and authorized at delivery against that weave's own effective authority (baseline union
+/// delegated), by the checks every delivery gets, so an empty grant can say nothing. No method
+/// takes a sender, so a holder cannot speak as the operator seat, as the host or as anybody
+/// else. The implementation is host wiring (zen/host/terminal_wiring.hpp), which holds the
+/// `Switchboard&`; nothing in this file names that type.
 class ParticipantChannel {
 public:
     virtual ~ParticipantChannel() = default;
@@ -177,30 +145,16 @@ struct TerminalResult {
     explicit operator bool() const noexcept { return outcome == TerminalOutcome::Submitted; }
 };
 
-/// WHICH CONVERSATIONS THIS PARTICIPANT IS WAITING ON — `loom::AskBook`, the
-/// reusable asker-side record (`zen/weave/ask_book.hpp`), and `loom::PendingAsk`,
-/// one entry of it.
-///
-/// THIS CORE NO LONGER OWNS THAT BOOKKEEPING; it spends it. What used to be a
-/// `PendingAsk` struct and a hand-written correlation match here is the same
-/// invariant every other asker in this tree needs, so it moved to where an ordinary
-/// weave can reach it and this file became one of its consumers.
-///
-/// `correlation` is the load-bearing field and it is LOOM'S, not an invention of
-/// this core: an answer is delivered carrying the correlation of the ask it answers
-/// (`Switchboard::enqueue_answer`), for the immediate and the deferred path alike.
-/// So "which of my asks is this?" is answered by Loom's own record, exactly as "is
-/// this a real answer at all?" is. `id` is only the small number a person types.
+// Which conversations this participant is waiting on is its `loom::AskBook`
+// (zen/weave/ask_book.hpp). An answer is delivered carrying the correlation of the ask it
+// answers, on the immediate and the deferred path alike (`Switchboard::enqueue_answer`), so
+// Loom's own record says which ask an answer belongs to; an ask's `id` is only the number a
+// person types.
 
-/// The most conversations one participant will track at once.
-///
-/// A BOUND, NOT A LIMITATION OF LOOM, AND NOT A LOOM LAW. Loom correlates any
-/// number, and `loom::AskBook` has no default of its own; this is the TERMINAL
-/// refusing to grow an unbounded map because a user held down a key, so it is stated
-/// here, where that product decision lives, and handed to the book at construction.
-/// The (N+1)th ask is refused LOCALLY and nothing is authored, so the N already
-/// outstanding are untouched — a new ask must never be able to displace a
-/// conversation somebody is waiting on.
+/// The most conversations one participant will track at once: the terminal's own bound, not
+/// Loom's (Loom correlates any number, and `loom::AskBook` takes its capacity from here). An
+/// ask beyond it is refused locally and nothing is authored, so a new ask never displaces one
+/// somebody is waiting on.
 inline constexpr std::size_t kMaxOutstandingAsks = 8;
 
 /// AN ORDINARY LOOM WEAVE THAT A PRESENTATION CAN DRIVE.
@@ -301,10 +255,7 @@ public:
     TerminalResult cancel_ask(std::uint64_t ask_id);
 
     // ---- conversation state (never derived from the transcript) -------------
-    //
-    // A PROJECTION OF THIS PARTICIPANT'S ASK BOOK, and deliberately nothing more.
-    // These four names are what presentations already call, so they stay; what is
-    // behind them is one `loom::AskBook` and no second list.
+    // A view of this participant's one `loom::AskBook`, and nothing more.
 
     bool awaiting() const noexcept { return asks_.awaiting(); }
     std::size_t outstanding() const noexcept { return asks_.outstanding(); }

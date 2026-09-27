@@ -4,23 +4,14 @@
 #ifndef ZEN_HISTORY_RECORD_HPP
 #define ZEN_HISTORY_RECORD_HPP
 
-// ONE STRUCTURED FACT, SPOKEN BY TWO OWNERS (RTH-1a).
+// One structured fact, in the shape both the Recorder (recorder.hpp: volatile and bounded, what
+// the host knows now) and the Logger (logger.hpp: durable and selective, what it chose not to
+// forget) keep, so a reader written for one reads the other.
+// docs/reference/history.md#one-record
 //
-// RTH-1 built a single Recorder that both remembered and persisted. RTH-1a splits
-// that in two, and this header is what the halves have in common:
-//
-//   Recorder (recorder.hpp)  what does Zen know RIGHT NOW?   volatile, bounded
-//   Logger   (logger.hpp)    what did Zen choose NOT TO FORGET?  durable, selective
-//
-// Both describe a fact with the same `HistoryRecord`, so a durable record and a
-// live one are the same shape and a reader written for one reads the other. What
-// differs is entirely who keeps it and for how long — which is the split, stated
-// as a type rather than as a convention.
-//
-// EVERY DELIVERY FIELD BELOW IS READ OFF A `BusEvent`. Nothing here is inferred,
-// looked up later, or invented, and fields a log conventionally carries that this
-// bus cannot supply (a wall-clock stamp, a user, a host name, a severity) are
-// absent on purpose.
+// Every delivery field is read off a `BusEvent`: nothing is inferred, looked up later or
+// invented, and what this bus cannot supply (a wall-clock stamp, a user, a host name, a
+// severity) is absent.
 
 #include <zen/switchboard.hpp>
 
@@ -52,19 +43,15 @@ enum class RecordedOutcome : std::uint8_t {
     HandlerFailed ///< the handler was entered and did not complete (MSG-10)
 };
 
-/// WHICH OF THE RECORDER'S WINDOWS STILL CLAIM THIS RECORD — a SET, not a class.
+/// Which of the Recorder's windows still claim this record: a set, since one fact can be held
+/// by several and released by each separately.
 ///
-/// RTH-1 had one `RetentionClass` per record because a record lived in exactly one
-/// window. RTH-1a's recorder keeps two complementary kinds of working memory that
-/// ask different questions of the same fact:
-///
-///   LastCall   "what was the last one of THESE?"      per shape, small
-///   Recent     "what happened around now?"            one shared FIFO
+///   LastCall   "what was the last one of these?"         per shape, small
+///   Recent     "what happened around now?"               one shared FIFO
 ///   Protected  "the rare thing I will come looking for"  refusals, failures, deaths
 ///
-/// so one fact can be held by several at once and released by them separately. The
-/// mask on a retained record is therefore CURRENT: a record that has fallen out of
-/// recent context but is still the last of its shape says exactly that.
+/// The mask on a retained record is current: a record that has left recent context but is
+/// still the last of its shape says exactly that.
 enum class Held : std::uint8_t {
     Nothing = 0,
     LastCall = 1u << 0,
@@ -154,28 +141,15 @@ struct HistoryRecord {
 /// of it.
 void fill_from_event(HistoryRecord& rec, const BusEvent& e);
 
-/// WHAT MUST NOT ENTER THE RECORDABLE UNIVERSE AT ALL — a structural class,
-/// checked BEFORE any retention rule, and categorically not a filter.
+/// What must not enter the recordable universe at all: a structural class, checked before any
+/// retention rule, and not a filter. Retention policy decides which real facts deserve memory;
+/// this names what is no fact about the system, because it is history's own machinery observing
+/// itself, so recursive history is impossible rather than unlikely. The Recorder authors no bus
+/// traffic, so a default-constructed blacklist is empty; a host declares here whatever of its
+/// history machinery speaks on the bus, as the supplied host declares its scoped history reader.
 ///
-///   RETENTION POLICY   maker-controlled. Which real facts deserve memory.
-///   THIS               architecture-controlled. What is not a fact about the
-///                      system at all, because it is the recorder's own
-///                      machinery observing itself.
-///
-/// It exists to make recursive history impossible rather than unlikely. Today the
-/// Recorder authors NO bus traffic — it is a tap consumer, and the Logger writes
-/// with an ordinary file handle — so a default-constructed blacklist is empty and
-/// honest about it. The moment a mechanic here does speak (a storage broker
-/// exchange, a query answered by message, a policy applied over the wire), the
-/// host declares it here and it cannot appear in its own record.
-///
-/// It must NEVER be used to hide ordinary Loom facts for being noisy. A
-/// `TimerFired` is a real fact and belongs to policy; a recorder incrementing its
-/// own counter is not a fact at all.
-///
-/// THE LOGGER HAS NO BLACKLIST AND NEEDS NONE: its selection is a whitelist, so
-/// machinery nobody named is already excluded by construction. The Recorder's
-/// default is admit, which is why it is the half that carries this.
+/// It never hides an ordinary fact for being noisy: a `TimerFired` belongs to policy. The Logger
+/// needs no blacklist, since its selection is a whitelist that excludes what nobody named.
 class RecorderBlacklist {
 public:
     void declare_participant(WeaveId id);

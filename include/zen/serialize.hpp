@@ -90,19 +90,17 @@ Admission admit(const Unverified& unverified, std::shared_ptr<const Schema> door
 Admission admit(const Unverified& unverified, const Registry& registry,
                 Report report = Report::FirstError);
 
-/// The compatibility / debug codec: Zen's original self-describing JSON text
-/// format, demoted from native. It is inspectable and human-readable, useful for
-/// debugging and for tools, but it is lossy of byte-canonicality and larger than
-/// the native binary. It funnels through the exact same gate: compat::parse
-/// yields a normal Unverified that the same admit() overloads validate.
+/// The compatibility and debug codec: Zen's self-describing JSON text format. Inspectable and
+/// human-readable, useful for debugging, tools and peers not written in C++, but not
+/// byte-canonical and larger than the native binary. It funnels through the same gate:
+/// compat::parse yields an ordinary Unverified that the same admit() overloads validate.
 ///
 /// Under the strict-core policy the JSON decoder rejects any field the door does
 /// not declare (ErrorKind::UnknownField) — there is no partial acceptance and no
 /// silent drop in any format.
 namespace compat {
 
-/// Serialize a value to JSON text (the former native format). Total for any
-/// in-memory Value.
+/// Serialize a value to JSON text. Total for any in-memory Value.
 std::string serialize(const Value& value);
 
 /// Parse JSON text into an Unverified. Never throws; malformed input yields a

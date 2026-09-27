@@ -8,12 +8,8 @@
 // writers, a bounds-checked reader, the per-frame cap, and the two send kinds. Portable,
 // header-only, POSIX-free.
 //
-// They were born in the isolation protocol header and the bridge protocol borrowed them from
-// there, with a note that a neutral home was a clean future factoring. The two-host crossing is
-// the trigger: `loom::bridge` is exported and the isolation protocol is not, so the bridge's
-// header could no longer include the isolation's and remain self-contained in the installed
-// package. This file is that home; both protocol headers include it, and neither includes the
-// other.
+// Both protocol headers include this one and neither includes the other, so the installed
+// bridge header stays self-contained without the isolation protocol, which is not installed.
 
 #include <cstddef>
 #include <cstdint>

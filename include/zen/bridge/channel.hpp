@@ -4,19 +4,12 @@
 #ifndef ZEN_BRIDGE_CHANNEL_HPP
 #define ZEN_BRIDGE_CHANNEL_HPP
 
-// A portable, non-blocking, length-framed byte channel over a stream socket — the transport the
-// remote-operator bridge speaks the operator-protocol over. It is the cross-platform sibling of the
-// isolation Channel (same framing, same bounded/non-blocking/EOF-observable discipline), but it
-// works on BOTH a POSIX fd and a Winsock SOCKET, because the Windows console client connects to the
-// WSL-hosted bus over the real host boundary. The framing logic is shared; only the raw
-// recv/send/close/set-nonblocking differ per platform (in channel.cpp).
-//
-// Transport-agnostic by construction: the same Channel + protocol run over an AF_UNIX socketpair or
-// path (the fast WSL<->WSL inner loop) and over AF_INET 127.0.0.1 (the real Windows->WSL crossing —
-// WSL2 forwards localhost). A frame over the cap, or an undrained backlog over the cap, marks the
-// channel failed (a misbehaving peer is contained, never allowed to block/hang/OOM). EOF (peer
-// closed) is observable and signals disconnect — the event a synchronous block-on-read could not
-// represent, which is why the bridge's loop is an event-driven multiplexer.
+// A portable, non-blocking, length-framed byte channel over a stream socket: the transport the
+// bridge protocol (zen/bridge/protocol.hpp) runs over. It frames as the isolation Channel does and
+// works on both a POSIX fd and a Winsock SOCKET, so a Windows client can reach a bus hosted
+// elsewhere; only the raw socket calls differ per platform. It runs over an AF_UNIX socket and
+// loopback TCP alike. A frame or an undrained backlog over the cap fails the channel, so a
+// misbehaving peer cannot block, hang or exhaust memory, and a peer's close is observable (EOF).
 
 #include <zen/bridge/protocol.hpp>
 
@@ -97,14 +90,13 @@ private:
 // up front in a main() to be explicit. Returns false + sets *err on failure.
 bool bridge_net_init(std::string* err);
 
-/// Listen on an AF_UNIX path (the fast local WSL<->WSL transport). Unlinks a stale path first.
-/// Returns a listening, non-blocking socket or kInvalidSocket (+ sets *err). POSIX-only (Windows
-/// AF_UNIX interop is unreliable; the crossing uses TCP). The path is removed on close.
+/// Listen on an AF_UNIX path, unlinking a stale one first. Returns a listening, non-blocking
+/// socket or kInvalidSocket (+ sets *err). POSIX only (Windows AF_UNIX interop is unreliable, so
+/// a crossing from Windows uses TCP). The path is removed on close.
 socket_t bridge_listen_unix(const std::string& path, std::string* err);
 
-/// Listen on AF_INET 127.0.0.1:`port` (the real Windows<->WSL crossing — WSL2 forwards localhost).
-/// port 0 asks the OS to choose; read it back with bridge_socket_port(). Returns a listening,
-/// non-blocking socket or kInvalidSocket (+ sets *err).
+/// Listen on AF_INET 127.0.0.1:`port`; port 0 asks the OS to choose, read back with
+/// bridge_socket_port(). Returns a listening, non-blocking socket or kInvalidSocket (+ sets *err).
 socket_t bridge_listen_tcp(std::uint16_t port, std::string* err);
 
 /// The port a TCP listener is actually bound to (resolves a port-0 ephemeral choice). 0 on failure.
@@ -129,10 +121,10 @@ std::string bridge_peer_name(socket_t sock);
 /// Close a socket (platform close/closesocket). Safe on kInvalidSocket.
 void bridge_close(socket_t sock);
 
-/// TEST SEAM ONLY: write raw bytes to a socket, bypassing BridgeChannel's framing. This is the only
-/// way to forge a MALFORMED transport frame (queue() always writes an honest length prefix), so the
-/// malformed-framing hardening tests can prove the framer handles a lying length / bogus frame without
-/// over-read, hang, or desync. Not part of the operator-protocol; no production caller.
+/// Test seam only: write raw bytes to a socket, bypassing BridgeChannel's framing, the one way to
+/// forge a malformed frame (queue() always writes an honest length prefix), so the framing tests
+/// can prove a lying length or a bogus frame causes no over-read, hang or desync. No production
+/// caller.
 void bridge_send_raw(socket_t sock, std::string_view bytes);
 
 /// Block in select() until any socket in `socks` is readable, or `timeout_ms` elapses (negative =

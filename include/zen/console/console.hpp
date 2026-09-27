@@ -4,17 +4,12 @@
 #ifndef ZEN_CONSOLE_CONSOLE_HPP
 #define ZEN_CONSOLE_CONSOLE_HPP
 
-// The Console engine — the first doing-layer component. A fully message-native bus
-// participant: it discovers what's registered, composes and gate-sends messages, and
-// receives replies into an indexed buffer. Frontend-agnostic and testable with NO
-// terminal: this engine is the durable spine every later interface (the terminal now, a
-// GUI later) inherits unchanged. It returns DOMAIN DATA (lists, field descriptors,
-// received Values) — never formatted text, never a widget tree; formatting is the skin's
-// job, replaceable without touching the engine.
-//
-// The console is the operator's hands on the bus: the most-granted participant (broad
-// send + wildcard-accept + the tap + discovery), but each capability is a deliberate
-// grant, never a bypass. It knows no shape's meaning — it drives shapes it has never seen.
+// The operator's console: a bus participant that discovers what is registered, composes and
+// gate-sends messages, and keeps the replies and bus events it sees in bounded windows. It
+// returns data, never text or widgets, so a terminal, a remote client or a GUI can drive it.
+// It is the most-granted participant (broad send, any registered shape accepted, the tap,
+// discovery), each capability a grant and none a bypass, and it knows no shape's meaning.
+// docs/reference/terminal.md#the-console-is-a-different-thing-and-stays-one
 
 #include <zen/bounded_history.hpp>
 #include <zen/schema.hpp>
@@ -37,24 +32,11 @@
 namespace loom {
 
 // ---- Bounded console history ------------------------------------------------------------------
-//
-// The console is the operator's window, which makes it exactly the component most likely to be
-// left running for weeks — so its retained state is bounded BY DESIGN, never by lifetime
-// throughput. That is the same argument kJournalCapacity already won for the bus, applied to the
-// surface that grows without a bound: unbounded, every bus event and every delivered Value is kept
-// forever, and the console accepts from any registered participant, so ordinary traffic grew it.
-//
-// Both windows below are HISTORY — past observations kept for inspection. Nothing is OWED on
-// them (a delivered Value's obligation ends the moment it is recorded; nobody must drain either
-// one), which is precisely what makes discarding the oldest entry legitimate here and illegitimate
-// for a backlog. But never silently: Console::evicted() reports how much was dropped, and the
-// reply buffer's mN labels are STABLE IDENTITIES, so an evicted m3 refuses rather than quietly
-// re-binding to a newer reply.
-//
-// The window TYPE itself (`loom::BoundedHistory`) moved down to <zen/bounded_history.hpp> at
-// later, when a terminal participant's transcript became the fifth and sixth surface needing
-// exactly these semantics. Its own comment always said it should be written once; the constants
-// below stay here, because a capacity is a policy about ONE surface and this is the console's.
+// The tap and the reply buffer are history, past observations on which nothing is owed, so each
+// keeps a fixed window and discards its oldest entry, counted in `Console::evicted()`. A reply's
+// label (m1, m2, ...) is a stable identity: an evicted one refuses rather than naming a newer
+// reply. A held conversation is owed, so its bound refuses a new one instead of evicting.
+// The window type is `loom::BoundedHistory`; docs/reference/bounds.md#console-operator-history
 
 /// Bus events retained on the tap. Deliberately the same width as `Switchboard::kJournalCapacity`:
 /// one tap entry corresponds to roughly one journal entry, so an operator who can still SEE an
@@ -63,22 +45,11 @@ namespace loom {
 /// can no longer name.
 inline constexpr std::size_t kConsoleTapCapacity = 1024;
 
-/// Conversations this console HOLDS for its callers at once: the ones still open, AND the
-/// answered ones whose answer the caller has not yet taken.
-///
-/// It is not the reply window's number and must not become it. The reply buffer is HISTORY,
-/// where discarding the oldest entry loses an operator's view; a held conversation is
-/// something a caller is OWED, where discarding one would lose a question it asked or an
-/// answer it has not read (`loom::AskBook` refuses at capacity for exactly that reason).
-///
-/// WHY AN ANSWER KEEPS ITS SLOT UNTIL IT IS TAKEN. The bound has to be applied when a
-/// conversation is OPENED, because that is the only moment anything can still be refused
-/// honestly: an arrival cannot be turned away without losing an answer, and evicting a held
-/// answer would erase it before its caller collected it. So a slot is spent at the ask and
-/// returned at `take_settled` or `forget_ask` — and retained answers are bounded by this
-/// number rather than by lifetime traffic, which is what an open-asks-only count once failed
-/// to be. Thirty-two is an operator's number: a person driving a console by hand does not hold
-/// dozens of questions, and a host that somehow does is told so rather than silently losing one.
+/// Conversations this console holds for its callers at once: the ones still open and the
+/// answered ones whose answer has not been taken. Not a history window: a new tracked
+/// conversation is refused at capacity (the send still goes, untracked), and nothing held is
+/// evicted. A slot is spent at the ask and returned at `take_settled` or `forget_ask`.
+/// docs/reference/bounds.md#console-operator-history
 inline constexpr std::size_t kConsoleAskCapacity = 32;
 
 /// Received reply Values retained in the m1/m2/... buffer. Sixteen times smaller than the tap
@@ -101,13 +72,9 @@ struct WeaveInfo {
     std::vector<ShapeRef> accepts;
 };
 
-// The compose-time vocabulary — FieldDesc, ShapeDesc, FieldValue, Ref, Arg, describe_schema and
-// the assumption ladder itself — lives in <zen/terminal/composer.hpp>, so a second
-// participant (a terminal session with its own identity and its own vocabulary) could reuse the
-// ONE ladder rather than grow a second one. Every name is unchanged, in this same namespace; what
-// changed is only which file declares it, and that the ladder can now stop one step before
-// sending. `Composed` and `LadderHost` below are the console's original one-shot form, kept
-// exactly as they were.
+// The compose vocabulary (FieldDesc, ShapeDesc, FieldValue, Ref, Arg, describe_schema) and the
+// assumption ladder are in <zen/terminal/composer.hpp>, shared with the terminal session.
+// `Composed` and `LadderHost` below are the console's one-shot form: compose and send at once.
 
 /// The fate of a submitted message, surfaced from the gate (never a silent mis-send).
 struct SendOutcome {
@@ -116,49 +83,28 @@ struct SendOutcome {
     std::string reason; ///< the gate's verdict / routing refusal, on refusal
 };
 
-/// WHETHER A SEND OPENS A CONVERSATION THE CONSOLE HOLDS FOR ITS CALLER. Said at every
-/// in-process send, because the two are different ownership, not a detail:
-///
-///   Untracked   the message goes and nothing is held. Whatever comes back is HISTORY — the
-///               bounded reply window — and nothing is owed to anybody. A frontend that shows
-///               arrivals as they come wants this.
-///   Tracked     the message goes AND one slot of `kConsoleAskCapacity` is held until the
-///               caller takes the answer (`take_settled`) or forgets the conversation
-///               (`forget_ask`). Asking for a handle is taking on that duty; a caller that
-///               never collects runs out of slots and is told so (`ask == 0`), rather than
-///               growing without bound.
-///
-/// It used to be implicit: every send opened a conversation, and callers that never meant
-/// to read an attributed answer — a UI showing the reply window — accumulated every answer
-/// they were sent.
+/// Whether a send opens a conversation the console holds for its caller. `Untracked`: the
+/// message goes, nothing is held, and whatever comes back is the reply window's history.
+/// `Tracked`: the message goes and one slot of `kConsoleAskCapacity` is held until the caller
+/// takes the answer (`take_settled`) or forgets the conversation (`forget_ask`); a caller that
+/// never collects runs out of slots and is told so (`ask == 0`).
 enum class ConsoleTracking : std::uint8_t { Untracked, Tracked };
 
-/// WHAT SUBMITTING PRODUCED: the queued send, and the conversation it opened, if any.
-///
-/// `ask` is the local handle in the console's own ask book — the thing a caller holds to
-/// find out later whether an arrival was entitled to answer THIS question. It is 0 when the
-/// message could not be composed at all, when the send was `Untracked`, and when every slot
-/// was already held: in the last case the send still happened and only the tracking was
-/// refused, which a caller that cares must notice rather than read as "no answer yet".
+/// What submitting produced: the queued send and the conversation it opened. `ask` is the
+/// handle in the console's own ask book; it is 0 when the message could not be composed, when
+/// the send was `Untracked`, and when every slot was held. In the last case the send still
+/// went and only the tracking was refused, which a caller must not read as "no answer yet".
 struct Submitted {
     loom::Ticket ticket{};
     std::uint64_t ask = 0;
     bool sent() const noexcept { return ticket.valid(); }
 };
 
-/// A buffered reply (m1, m2, …): its label, shape, the received Value (read fields by
-/// name off `value`), and WHO SAID IT ABOUT WHAT. The Stage-2 `$m1.field` reference syntax
-/// reads from `value`.
-///
-/// THE LAST THREE FIELDS ARE THE ENTRY'S ATTRIBUTION, and the window used to drop them on
-/// the floor. A console is registered `AcceptMode::AnyRegistered`, so anything the registry
-/// can resolve lands in this buffer — including a `zen.Result` any admitted weave may send
-/// under the ordinary poke-answer baseline. Without `sender` and `correlation` there is no
-/// way to tell that `zen.Result` apart from the one the operator's own question earned, and a
-/// host that read "the newest entry" as "the answer" administered whatever the newest entry
-/// happened to name. The two are a PAIR and neither alone is enough (`loom::AskBook`):
-/// a correlation identifies a conversation and authenticates nothing; a bus-stamped sender
-/// says who spoke and not what about.
+/// A buffered reply (m1, m2, ...): its label, shape and received Value, which a `$m1.field`
+/// reference reads, and who sent it about what. The console accepts any registered shape, so
+/// any admitted weave's `zen.Result` can land here: only `sender` and `correlation` together
+/// tell an answer to this console's question from one it did not ask for (`loom::AskBook`).
+/// docs/reference/messaging.md#the-askers-own-book
 struct BufferEntry {
     std::string label;
     std::string name;
@@ -194,9 +140,9 @@ struct Composed {
 
 /// A copied bus event for the operator's window on the live bus (the tap).
 struct TapEvent {
-    /// "Delivered" / "Refused" / "Died" / "Revived" / "HandlerFailed" (RTH-1). The
-    /// remote client adds one more, "BridgeRefused", which is honestly NOT a bus
-    /// event -- see bridge/protocol.hpp.
+    /// "Delivered", "Refused", "Died", "Revived" or "HandlerFailed" (the handler was entered
+    /// and did not complete). The remote client adds "BridgeRefused", which is not a bus event
+    /// (zen/bridge/protocol.hpp).
     std::string kind;
     loom::WeaveId target;
     loom::WeaveId sender;
@@ -206,16 +152,9 @@ struct TapEvent {
 
 class ConsoleWeave; // the console's own raw Weave (buffers arrivals); defined in the .cpp
 
-/// ONE ARRIVAL, AS THE REPLY WINDOW KEEPS IT: the delivered Value and the routing facts
-/// that say whose it is.
-///
-/// The window used to keep the Value alone, and a Value cannot answer "who said this,
-/// about which question" — which is why a host reading the newest one could not tell an
-/// answer it had earned from an unsolicited message any loaded weave may author. The
-/// label is deliberately NOT stored: a label is a function of position in the stable
-/// sequence (see `Evicted::buffer`), and storing it would be a second, driftable answer
-/// to which entry this is. `BufferEntry` is this plus that computed label, which is the
-/// shape a caller reads.
+/// One arrival as the reply window keeps it: the delivered Value and the routing facts that
+/// say whose it is. Its label is not stored: a label is its place in the stable sequence
+/// (`Evicted::buffer`), and `BufferEntry` is this with that label computed.
 struct ConsoleArrival {
     loom::Value payload;
     loom::WeaveId sender{};
@@ -223,12 +162,10 @@ struct ConsoleArrival {
     bool answers_ask = false;
 };
 
-/// Per-region change flags for message-driven partial redraw (the retained-mode / Zengine point): a
-/// UI repaints only the regions whose data changed, and the change signal is bus messages. A
-/// top-level type (not nested) so the Console interface below can return it. Set inside the single
-/// bus observer (record_tap) as events arrive during pump(): `buffer` on a reply delivered to the
-/// console, `weaves` on a Weave dying/reviving, `tap` on any bus event. The compose/guidance regions
-/// are keystroke-driven (the input loop redraws them), so they are not tracked here.
+/// Which regions of a console's view changed, so a UI repaints only those. Set as bus events
+/// arrive: `buffer` on a reply delivered to the console, `weaves` on a weave dying or reviving,
+/// `tap` on any bus event. The compose and guidance regions change on keystrokes, so the input
+/// loop redraws them and they are not tracked here.
 struct Dirty {
     bool weaves = false;
     bool buffer = false;
@@ -236,30 +173,20 @@ struct Dirty {
     bool any() const noexcept { return weaves || buffer || tap; }
 };
 
-/// How much bounded console history has been discarded — per region, mirroring Dirty (the weave
-/// list has no row because it is a REPLACED snapshot of who is registered now, not a history).
-/// This is the operator's line between "this is the complete history" and "older evidence was
-/// evicted": a bounded diagnostic surface that pretended to be complete would trade a memory lie
-/// for an observability lie.
-///
-/// `buffer` is also the reply buffer's LABEL BASE. Labels are stable identities, not positions, so
-/// the retained entries are always m(buffer + 1) ... m(buffer + buffer_size()): a reference that
-/// resolved to m7 yesterday either still resolves to that same reply or refuses — it never
-/// silently re-binds to a different one. A caller walking the buffer walks that range, not
-/// 1..buffer_size().
+/// How much of each bounded window has been discarded, so an operator can tell a complete
+/// history from one whose oldest evidence was evicted. The weave list has no row: it is a
+/// snapshot, not a history. `buffer` is also the reply labels' base: the retained entries are
+/// m(buffer + 1) ... m(buffer + buffer_size()), and a label outside that range refuses rather
+/// than naming another reply.
 struct Evicted {
     std::uint64_t tap = 0;    ///< bus events dropped from the tap window (kConsoleTapCapacity)
     std::uint64_t buffer = 0; ///< replies dropped from the m-buffer (kConsoleBufferCapacity)
     bool any() const noexcept { return tap != 0 || buffer != 0; }
 };
 
-/// The frontend-facing console surface — what a renderer/controller (the TUI now, a GUI later, the
-/// remote client) drives, INDEPENDENT of where the bus lives. ConsoleEngine implements it in-process
-/// (direct bus calls); RemoteConsole implements it over the operator-protocol on a socket. This is
-/// the decision-#2 unification: "a remote console cannot hold a Switchboard& across a socket", so the
-/// frontend depends on THIS interface and only the transport differs. Discovery and the tap stop
-/// being privileged host-side methods baked into one class and become an interface a remote
-/// transport answers with messages.
+/// The frontend-facing console, independent of where the bus lives: `ConsoleEngine` implements
+/// it in process and `RemoteConsole` over the operator protocol on a socket, so a frontend
+/// written against it runs on either. Remotely, discovery and the tap are answered by messages.
 class Console {
 public:
     virtual ~Console() = default;
@@ -268,16 +195,10 @@ public:
     virtual std::vector<WeaveInfo> weaves() const = 0;
     virtual std::optional<ShapeDesc> describe(std::string_view name, std::uint32_t version) const = 0;
 
-    // Compose + gated send via the assumption ladder (named -> positional -> type-directed -> prompt).
-    //
-    // UNTRACKED, ON EVERY IMPLEMENTATION: a send through this interface holds nothing, and
-    // what comes back is the bounded reply window's to show (`Composed::ask` is 0). A frontend
-    // written against `Console` therefore cannot open a conversation it has no verb here to
-    // collect or forget. Attributed conversations are `ConsoleEngine`'s — the in-process
-    // participant that holds the bus-stamped facts and the book — through its
-    // `ConsoleTracking` overloads; `RemoteConsole` keeps no book at all. A frontend that needs
-    // attributed answers through THIS interface is the trigger to add the whole lifecycle here
-    // (ask, take, forget, list), and for the remote side to say honestly what it cannot track.
+    // Compose and gate-send by the assumption ladder (named, positional, type-directed, then
+    // prompt). Untracked on every implementation: nothing is held, `Composed::ask` is 0, and the
+    // reply is the window's to show. Attributed conversations are `ConsoleEngine`'s, through its
+    // `ConsoleTracking` overloads; `RemoteConsole` keeps no ask book.
     virtual Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                              const std::vector<Arg>& args) = 0;
 
@@ -298,22 +219,16 @@ public:
     /// a fresh console starts a fresh window at zero.
     virtual Evicted evicted() const = 0;
 
-    // Drive the transport so sends are delivered and replies/tap arrive (in-process: a bus
-    // dispatch turn; remote: flush + poll the socket and process the pushed frames).
-    //
-    // Deliberately still spelled `pump` — it is the CONSOLE's contract, not the
-    // Switchboard's, and the two implementations do different things. In-process it is
-    // `Switchboard::drain_until_idle()`, which suits an operator lens issuing one command
-    // and reading its outcome, and would suit a console sharing a bus with a perpetual
-    // service no better than any other drain (FRIC-1).
+    // Drive the transport so sends are delivered and replies and tap events arrive. The
+    // console's contract, not the Switchboard's: in process it is
+    // `Switchboard::drain_until_idle()`, unbounded (MSG-09), which suits an operator issuing one
+    // command and reading its outcome; remotely it flushes and polls the socket once.
     virtual void pump() = 0;
 };
 
-/// The assumption ladder's host surface — the two lookups `ComposeSource` already names, plus the
-/// one send. Segregated from the frontend Console so the ONE ladder implementation is shared by
-/// the in-process engine and the client-side remote console instead of duplicating the placement
-/// logic; the ladder itself is `loom::compose_message` and this is the console's
-/// one-shot form over it (the gate stays the unconditional backstop in both transports).
+/// The assumption ladder's host: `ComposeSource`'s two lookups plus the one send, apart from
+/// the frontend `Console` so the in-process engine and the remote console share one ladder
+/// (`loom::compose_message`). The gate is the backstop on both transports.
 class LadderHost : public ComposeSource {
 public:
     virtual loom::Ticket assemble_and_send(loom::WeaveId target,
@@ -327,9 +242,9 @@ public:
 Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,
                             std::uint32_t version, const std::vector<Arg>& args);
 
-/// Resolve `$label.field` against a Console's reply buffer — shared by the in-process engine and the
-/// remote console (both expose buffer_at()). Reads a scalar Cell off an immutable buffered Value;
-/// nullopt + *error on a missing entry, missing field, or non-scalar field (Stage 2 is scalar-only).
+/// Resolve `$label.field` against a Console's reply buffer, for the in-process engine and the
+/// remote console alike. Reads a scalar Cell off an immutable buffered Value; nullopt, and
+/// *error says why, on a missing entry, a missing field or a non-scalar field.
 std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& ref,
                                            std::string* error);
 
@@ -337,13 +252,10 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
 /// registers the console as an in-process Weave (broad grant + accept-any) and subscribes the tap.
 class ConsoleEngine : public Console, public LadderHost {
 public:
-    /// `vocabulary` is the shapes this operator window declares it expects to be TOLD —
-    /// normally none. It exists because `AcceptMode::AnyRegistered` means "any shape the
-    /// registry can resolve", and the registry learns a shape from some weave's accept-set:
-    /// a notification shape that only ever travels to the operator has nobody else to
-    /// declare it, and was therefore refused at the console's own door. Declaring it here is
-    /// the host saying what this window is for. It is not a grant and not a bypass — a
-    /// listed door is gated exactly as the wildcard one is.
+    /// `vocabulary`: the shapes this operator window expects to be told, normally none. The
+    /// console accepts any shape the registry can resolve, and the registry learns a shape from
+    /// some weave's accept-set, so a notification only the operator receives is declared here.
+    /// It is not a grant: a listed door is gated as the wildcard one is.
     explicit ConsoleEngine(loom::Switchboard& bus,
                            std::vector<std::shared_ptr<const loom::Schema>> vocabulary = {});
     ~ConsoleEngine() override;
@@ -357,39 +269,24 @@ public:
     std::optional<ShapeDesc> describe(std::string_view name, std::uint32_t version) const override;
 
     // ---- Compose + gated send ----
-    /// One-shot: set fields by name, assemble, and gate-send to `target`. The send is
-    /// enqueued — turn the bus, then read `outcome()` for its fate and, when it was sent
-    /// `Tracked`, `settled()` for its answer. On a compose-time error (no such shape/field, or
-    /// a type mismatch) the ticket is invalid, `ask` is 0, and *error says why.
-    ///
-    /// The tracking choice has no default on purpose: holding a conversation is a duty to
-    /// collect it, and a call site should say whether it took one on (see `ConsoleTracking`).
+    /// One-shot: set fields by name, assemble and gate-send to `target`. The send is queued:
+    /// turn the bus, then read `outcome()` for its fate and, when `Tracked`, `settled()` for its
+    /// answer. On a compose error (no such shape or field, a type mismatch) the ticket is
+    /// invalid, `ask` is 0 and *error says why. Tracking has no default: holding a conversation
+    /// is a duty to collect it, and the call site says whether it took one on.
     Submitted submit(loom::WeaveId target, std::string_view name, std::uint32_t version,
                      const std::map<std::string, FieldValue>& fields, ConsoleTracking tracking,
                      std::string* error = nullptr);
 
-    // ---- The ask book: WHICH ARRIVAL IS ENTITLED TO ANSWER WHICH QUESTION ----
-    //
-    // The console is a participant that asks, so it keeps the asker's record
-    // (`loom::AskBook`) rather than reading its own presentation history as a result. Every
-    // correlation this console stamps is drawn from that one book — a second counter beside
-    // it could stamp an ordinary send with a number an open conversation is already using,
-    // and an answer to that send would then settle the conversation.
-    //
-    // Settlement happens AT ARRIVAL, inside the console weave's own delivery, so a bounded
-    // reply window cannot evict an answer before a caller asks about it.
-    //
-    // WHO OWNS A HELD CONVERSATION: the caller that asked for it (`ConsoleTracking::Tracked`).
-    // It holds one slot from the send until it takes the answer or forgets the conversation;
-    // nothing here expires, sheds or evicts one on its behalf, and nothing but the pair the
-    // book checks can settle one.
+    // ---- The ask book: which arrival is entitled to answer which question ----
+    // Every correlation this console stamps comes from its one `loom::AskBook`, so no ordinary
+    // send carries a number an open conversation is using. An arrival settles a conversation
+    // inside the console weave's own delivery, so the reply window cannot evict an answer first.
+    // A held conversation is its caller's until taken or forgotten: nothing here expires one.
 
-    /// The arrival that settled `ask`, or nullopt while the conversation is still open.
-    ///
-    /// NULLOPT IS A REAL ANSWER — "still pending" — and this never invents a completion to
-    /// avoid returning it. A READ, not a collection: the answer stays held (and keeps its
-    /// slot) until `take_settled` or `forget_ask`, and a duplicate or late copy of the same
-    /// answer is inert either way, because the conversation closed when it settled.
+    /// The arrival that settled `ask`, or nullopt while it is still open: a real answer, never
+    /// an invented completion. A read: the answer stays held, and keeps its slot, until
+    /// `take_settled` or `forget_ask`. A duplicate or late copy of it is inert.
     std::optional<BufferEntry> settled(std::uint64_t ask) const;
 
     /// COLLECT an answer: hand it over and release its slot. nullopt, and nothing released,
@@ -425,11 +322,10 @@ public:
     /// The fate of a previously-submitted Ticket (after pump()).
     SendOutcome outcome(loom::Ticket t) const;
 
-    // ---- Stage 2: references + the assumption ladder (the dataflow brain) ----
-    /// Resolve `$label.field` off the indexed buffer to a typed scalar Cell — a reference
-    /// *read* of an immutable buffered Value (it cannot mutate the buffer). Returns nullopt
-    /// + sets *error on a missing entry, a missing field, or a non-scalar field (Stage 2 is
-    /// scalar-only). Independently testable. (LadderHost: the in-process engine reads its buffer.)
+    // ---- References and the assumption ladder ----
+    /// Resolve `$label.field` off the reply buffer to a scalar Cell, a read of an immutable
+    /// buffered Value. nullopt, and *error says why, on a missing entry, a missing field or a
+    /// non-scalar field.
     std::optional<loom::Cell> resolve_ref(const Ref& ref, std::string* error = nullptr) const override;
 
     /// Resolve a registered schema by identity (LadderHost): the in-process engine reads the bus's
@@ -437,14 +333,11 @@ public:
     std::shared_ptr<const loom::Schema> resolve_schema(std::string_view name,
                                                        std::uint32_t version) const override;
 
-    /// Compose by the assumption ladder: assign literal/reference args (each optionally
-    /// named) to the target's fields — named wins, then positional (declaration order), then
-    /// type-directed, else NeedsInput (prompt — never guess on genuine ambiguity, never
-    /// mis-send). On Ready it assembles and gate-sends (the gate is the unconditional
-    /// backstop). A wrong-typed named arg or a bad reference is a clean Error. Delegates to the
-    /// shared run_compose_ladder (this engine IS the LadderHost).
-    ///
-    /// The `Console` override is untracked, as it is on every implementation of that interface.
+    /// Compose by the assumption ladder: each literal or reference arg, optionally named, goes
+    /// to a field, named first, then positional (declaration order), then type-directed, else
+    /// NeedsInput; it never guesses on ambiguity. On Ready it assembles and gate-sends. A
+    /// wrong-typed named arg or a bad reference is an Error. This override is untracked, as
+    /// every `Console` is.
     Composed compose(loom::WeaveId target, std::string_view name, std::uint32_t version,
                      const std::vector<Arg>& args) override;
     /// ...and this is the in-process form that may hold the conversation it opens.
@@ -469,7 +362,7 @@ public:
     void pump() override;
 
 private:
-    friend struct ConsoleHistoryProbe; ///< reads tap_ / the reply window's own storage (see above)
+    friend struct ConsoleHistoryProbe; ///< tests read the windows' own storage through it
 
     loom::Ticket assemble_and_send(loom::WeaveId target,
                                       const std::shared_ptr<const loom::Schema>& schema,

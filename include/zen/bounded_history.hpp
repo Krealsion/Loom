@@ -4,27 +4,12 @@
 #ifndef ZEN_BOUNDED_HISTORY_HPP
 #define ZEN_BOUNDED_HISTORY_HPP
 
-// A BOUNDED WINDOW ON THE PAST — the retention primitive every long-running
-// observer surface in this tree needs, written once.
-//
-// It arrived with the console, whose own comment already named the
-// reason it should live somewhere shared: "four console history surfaces need
-// exactly these semantics, and writing the ring index arithmetic and the
-// eviction counter four times is how one of them ends up wrong." The terminal made
-// that a fifth and a sixth (a terminal participant's transcript and its received
-// messages), so the class moved down here rather than being copied — this header
-// is a RELOCATION, not a new design: the code, the invariants and the friend
-// probe are the ones the console suite has been proving all along.
-//
-// WHAT IT IS FOR, precisely. Everything stored in one of these is HISTORY: past
-// observations kept for inspection, on which NOTHING IS OWED. That is what makes
-// discarding the oldest entry legitimate here and illegitimate for a backlog — a
-// queue of work must not silently drop work, and this must not silently grow
-// without bound. Neither is a substitute for the other.
-//
-// AND NEVER SILENTLY: `evicted()` is monotonic and is the caller's answer to "is
-// this the complete history?". A bounded diagnostic surface that pretended to be
-// complete would trade a memory lie for an observability lie.
+// A bounded window on the past: the retention primitive every long-running observer surface
+// needs, written once (the console's tap and replies, a terminal participant's transcript and
+// received messages). Everything stored in one is history, past observations on which nothing is
+// owed, which is what makes discarding the oldest legitimate here and illegitimate for a
+// backlog: a queue of work must not drop work, and this must not grow without bound. Never
+// silently: `evicted()` is monotonic and answers "is this the complete history?".
 
 #include <cstddef>
 #include <cstdint>
