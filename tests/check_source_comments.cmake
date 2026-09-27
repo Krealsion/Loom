@@ -54,7 +54,6 @@ set(ZEN_COMMENT_PENDING
     "^src/host/secure_random[.]hpp$"
     "^src/host/session_files[.]hpp$"
     "^src/host/store_lock[.]cpp$"
-    "^src/host/store_lock[.]hpp$"
     "^src/isolation/channel[.]cpp$"
     "^src/kernel/admission[.]cpp$"
     "^src/runs/catalog[.]cpp$"
