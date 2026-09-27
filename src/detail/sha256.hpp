@@ -4,16 +4,11 @@
 #ifndef ZEN_DETAIL_SHA256_HPP
 #define ZEN_DETAIL_SHA256_HPP
 
-// Internal to loom. A self-contained SHA-256 (FIPS 180-4), dependency-free: no
-// external crypto library is linked anywhere in the project, and this adds none —
-// it is one file of standard, auditable code, pinned to NIST known-answer vectors
-// (see test_policy.cpp). It sits beside detail/hash.hpp's FNV-1a but answers a
-// different question: FNV names a build cheaply (schema content-ids), SHA-256 names
-// one *collision-resistantly*, which is what an above-floor grant key needs (audit
-// F-1 — FNV-1a's ~32-bit birthday resistance was too weak to key a security-relevant
-// identity). This is content-addressing (a second-preimage-resistant name), NOT
-// authentication: it is not a MAC and not constant-time; a *signed* author identity
-// is still the identity phase's job.
+// Internal to loom. A self-contained SHA-256 (FIPS 180-4), pinned to NIST known-answer vectors
+// (test_policy.cpp); no crypto library is linked anywhere. Beside detail/hash.hpp's FNV-1a it
+// answers another question: FNV names a schema cheaply, SHA-256 names a build
+// collision-resistantly, which a key for authority needs. Content addressing, not
+// authentication: not a MAC, not constant-time, and no signed author identity.
 
 #include <array>
 #include <cstddef>

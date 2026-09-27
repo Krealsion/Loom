@@ -27,7 +27,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
     "^src/detail/json[.]cpp$"
-    "^src/detail/sha256[.]hpp$"
     "^src/gate[.]cpp$"
     "^src/history/dump[.]cpp$"
     "^src/history/record[.]cpp$"
