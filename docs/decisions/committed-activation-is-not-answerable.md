@@ -1,18 +1,16 @@
 # Committed activation is not answerable
 
-**Context.** The committed activation's delivery context was first built in
-the ordinary path's image — which fabricated a requester. The stamped sender
-is the *operator that admitted*, not a weave that asked anything; a candidate
-could therefore `answer()` its own first breath and queue a real,
-provenance-carrying answer to a question nobody asked, or `defer_answer()` and
-park a slot of the Loom-wide bounded registry for a conversation that did not
-exist.
+**Context.** Built in the ordinary path's image, the committed activation's
+delivery context fabricates a requester. The stamped sender is the *operator
+that admitted*, not a weave that asked anything; a candidate could then
+`answer()` its own first breath and queue a real, provenance-carrying answer to
+a question nobody asked, or `defer_answer()` and park a slot of the Loom-wide
+bounded registry for a conversation that does not exist.
 
 **Decision.** The activation handler holds **no** reply authority. The model
 already had the category — `answer_as`/`defer_answer_as` refuse when there is
 no valid requester ("the request came from a root") — and Loom's own act
-belongs in it. The whole repair is `authority_ = ReplyAuthority{}` at the
-admission dispatch.
+belongs in it: `authority_ = ReplyAuthority{}` at the admission dispatch.
 
 **Alternatives considered.**
 - *Keep it answerable* ("harmless — nobody listens") — rejected: the answer
@@ -34,6 +32,6 @@ message remains answerable like any delivery.
 **Laws supported.** [LIFE-05](../laws/lifecycle-laws.md),
 [ANS-01](../laws/answer-authority-laws.md).
 
-**Evidence / history.** R2B-3d-1 in [history](../history/README.md); the
-"first breath is not a question" cases in `tests/test_kernel.cpp`, including
-the deferred-capacity proof run with the registry held one slot from full.
+**Evidence / history.** The "first breath is not a question" cases in
+`tests/test_kernel.cpp`, including the deferred-capacity proof run with the
+registry held one slot from full; how it came to be, in [history](../history/README.md).

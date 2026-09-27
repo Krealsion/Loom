@@ -27,20 +27,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 set(ZEN_DOC_STANDARD_EXCLUDE
     "^build(-[^/]*)?/" "^cmake-build" "^_install" "^out/" "^[.]git(/|$)" "^[.]idea/" "^[.]vscode/"
     "^[.]claude/" "^docs/history/" "^archive/" "third_party/" "^zen-vision[.]md$")
-# Documents not yet brought to the standard. The list only shrinks: a document leaves it when
-# it meets the standard.
-set(ZEN_DOC_STANDARD_PENDING
-    "^docs/decisions/README[.]md$"
-    "^docs/decisions/a-claim-is-not-a-message[.]md$"
-    "^docs/decisions/admission-and-activation-share-one-boundary[.]md$"
-    "^docs/decisions/committed-activation-is-not-answerable[.]md$"
-    "^docs/decisions/dispatch-refusal-returns-to-its-author[.]md$"
-    "^docs/decisions/lifecycle-authority-is-loom-owned[.]md$"
-    "^docs/decisions/migration-is-authored-not-inferred[.]md$"
-    "^docs/decisions/no-rollback-after-committed-production[.]md$"
-    "^docs/decisions/office-authorship-is-deliberate[.]md$"
-    "^docs/decisions/one-gate-at-every-boundary[.]md$"
-    "^docs/decisions/readiness-is-authenticated-conversation[.]md$")
 
 string(ASCII 1 ZEN_SOH)
 string(ASCII 2 ZEN_STX)
@@ -87,7 +73,6 @@ endfunction()
 # Excluded top-level entries are pruned before the walk, so no build tree is enumerated.
 file(GLOB top RELATIVE "${ZEN_REPO}" "${ZEN_REPO}/*")
 set(documents "")
-set(pending_count 0)
 foreach(entry IN LISTS top)
     set(probe "${entry}")
     if(IS_DIRECTORY "${ZEN_REPO}/${entry}")
@@ -106,10 +91,7 @@ foreach(entry IN LISTS top)
     endif()
     foreach(rel IN LISTS found)
         zen_doc_standard_matches("${rel}" "${ZEN_DOC_STANDARD_EXCLUDE}" skip)
-        zen_doc_standard_matches("${rel}" "${ZEN_DOC_STANDARD_PENDING}" pending)
-        if(pending AND NOT skip)
-            math(EXPR pending_count "${pending_count} + 1")
-        elseif(NOT skip)
+        if(NOT skip)
             list(APPEND documents "${rel}")
         endif()
     endforeach()
@@ -156,9 +138,8 @@ foreach(rel IN LISTS documents)
 endforeach()
 list(LENGTH findings finding_count)
 list(LENGTH laws law_count)
-message(STATUS "doc-standard: ${document_count} documents held, ${pending_count} not yet held "
-               "(ZEN_DOC_STANDARD_PENDING); ${law_count} laws declared under docs/laws/; "
-               "self-test passed")
+message(STATUS "doc-standard: ${document_count} documents held; ${law_count} laws declared "
+               "under docs/laws/; self-test passed")
 if(finding_count GREATER 0)
     string(REPLACE "${ZEN_SOH}" "\;" findings "${findings}")
     string(REPLACE "${ZEN_STX}" "[" findings "${findings}")

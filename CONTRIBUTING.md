@@ -81,8 +81,9 @@ refuses:
   `.md` path in a C/C++ or CMake comment, and refuses a path outside the repository in any
   current-facing text file, whether it is spelled out or reached by climbing above it with `../`.
 
-What a private id is, `tests/private_ids.cmake` says once for both. Files not yet brought to
-this standard are listed in each check, and the list only shrinks. No check can see history or
+What a private id is, `tests/private_ids.cmake` says once for both. Every current-facing
+document meets this standard; source files not yet brought to it are listed in
+`source_comments`, and the list only shrinks. No check can see history or
 a private process written in words, or read a comment for truth; that is a reviewer's.
 `tools/comment-pass/` measures, prints and proves a comment pass (`census.py`, `blocks.py`,
 `edit.py`, `prove.py`).

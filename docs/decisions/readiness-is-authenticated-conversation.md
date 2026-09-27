@@ -1,8 +1,8 @@
 # Prepared readiness is authenticated conversation, not host assertion
 
 **Context.** A replacement transaction must learn that its candidate is ready.
-The scaffolding version was a host call — `mark_candidate_ready` — that simply
-declared it.
+The obvious design is a host call — a `mark_candidate_ready` — that simply
+declares it.
 
 **Decision.** Readiness is the *consumption of the candidate's own
 authenticated answer* to the transaction's one preparation ask. The transition
@@ -30,6 +30,6 @@ command and can never terminalize someone else's promise.
 **Laws supported.** [PR-04](../laws/replacement-laws.md),
 [ANS-05](../laws/answer-authority-laws.md).
 
-**Evidence / history.** R2B-3b-3 in [history](../history/README.md); the
-forged-readiness cases in `tests/test_kernel.cpp`; six Night Lab coordinators
-used the mapping surface unchanged ([evidence](../evidence/night-lab.md)).
+**Evidence / history.** The forged-readiness cases in `tests/test_kernel.cpp`; six Night Lab coordinators
+used the mapping surface unchanged ([evidence](../evidence/night-lab.md)); how
+it came to be, in [history](../history/README.md).
