@@ -27,7 +27,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
     "^src/bridge/client[.]cpp$"
-    "^src/console/console_remote[.]cpp$"
     "^src/console/console_tui[.]cpp$"
     "^src/console/terminal_posix[.]cpp$"
     "^src/console/tui_render[.]hpp$"
