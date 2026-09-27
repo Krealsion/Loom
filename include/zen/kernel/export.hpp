@@ -4,16 +4,11 @@
 #ifndef ZEN_KERNEL_EXPORT_HPP
 #define ZEN_KERNEL_EXPORT_HPP
 
-// The weaving layer. A library maker writes a clean C++ loom::Weave
-// subclass and adds one line — ZEN_EXPORT_WEAVE(MyWeave) — and the macro
-// generates the whole C ABI: the descriptor, every thunk, and the single
-// exported symbol. No maker hand-writes a thunk, and Zen stays invisible: the
-// same Weave they would compile in is the same Weave they ship in a .so.
-//
-// The thunks bridge C <-> C++: they serialize Values to bytes for the host's
-// ByteSink, rebuild a Bus that forwards send/publish across the host callback
-// table, and never let a C++ exception cross the seam (everything is caught and
-// turned into a status code).
+// The weaving layer: a library maker writes an ordinary loom::Weave subclass and adds
+// ZEN_EXPORT_WEAVE(MyWeave), which generates the C ABI: the descriptor, every thunk and the one
+// exported symbol. The same Weave compiles in or ships in a library. The thunks serialize
+// Values for the host, rebuild a Bus that forwards across the host callbacks, and turn every
+// C++ exception into a status: none crosses the seam. docs/reference/dynamic-abi.md
 
 #include <zen/kernel/abi.h>
 #include <zen/kernel/schema_codec.hpp>
@@ -29,12 +24,8 @@
 #include <string_view>
 #include <vector>
 
-// ZEN_KERNEL_EXPORT — the entry point's export decoration — is NOT defined here.
-// It comes from <zen/kernel/abi.h> above, beside the declaration it must match,
-// because MSVC counts the decoration as part of the symbol's linkage: a plain
-// declaration followed by a decorated definition is C2375, not a merge. Reusing
-// that token rather than re-deriving an equivalent ladder is what makes the two
-// agree by construction. See abi.h for the full account.
+// ZEN_KERNEL_EXPORT, the entry point's export decoration, comes from <zen/kernel/abi.h>,
+// beside the declaration it must match (MSVC counts it as part of the linkage).
 
 namespace loom::detail {
 
@@ -48,11 +39,10 @@ inline std::string_view as_view(const std::uint8_t* data, std::size_t len) {
     return std::string_view(reinterpret_cast<const char*>(data), len);
 }
 
-// A Bus implementation that lives inside the library and forwards a Weave's
-// send/publish across the host callback table as serialized payload bytes. The
-// host assigns the real sender id and admits the bytes through the gate before
-// routing. ABI v7 returns the real attempt sequence for ordinary/office sends.
-// Answer tickets remain status sentinels; publication counts remain unchanged.
+// A Bus inside the library that forwards a Weave's sends across the host callback table as
+// serialized payload bytes; the host stamps the sender and admits the bytes before routing.
+// Ordinary and office sends return the real queued attempt; answer tickets are status markers,
+// and publication counts do not cross.
 class HostApiBus final : public loom::Bus {
 public:
     explicit HostApiBus(const ZenHostApi* host) : host_(host) {}
@@ -77,9 +67,8 @@ public:
         return 0;
     }
 
-    // Out-of-process role-addressed send: ship the payload bytes + role to the host,
-    // which stamps the authoritative sender from the connection and routes via
-    // send_as_to_role. The sender is never passed here and never rides the wire.
+    // Role-addressed send: the payload bytes and role go to the host, which stamps the sender
+    // from the context and routes with send_as_to_role. The sender never rides the wire.
     loom::Ticket send_to_role(std::string_view role, loom::Message msg) override {
         std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
@@ -92,31 +81,23 @@ public:
         return loom::Ticket{};
     }
 
-    /// THE IMMEDIATE ANSWER, across the seam (ANS-06).
-    ///
-    /// Without this override a loaded weave inherited `Bus::answer`'s truthful-
-    /// for-a-mailbox default — invalid ticket, nothing enqueued — which for a LIVE
-    /// DELIVERY is not truthful at all, merely silent. The same `mail.answer()`
-    /// that works natively appeared to do nothing here, and said nothing about it.
+    /// The immediate answer across the seam (ANS-06): the same `mail.answer()` a native weave
+    /// makes, answered by the host.
     loom::Ticket answer(loom::Message msg) override {
         if (host_ == nullptr || host_->answer == nullptr) {
-            return loom::Ticket{}; // an old host: honestly nothing, not a pretence
+            return loom::Ticket{}; // no door: nothing sent, and said so
         }
         const std::string bytes = loom::serialize(msg.payload);
         const ZenStatus st = host_->answer(
             host_->ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-        // This answer ticket remains a status sentinel, but success/failure IS
-        // meaningful, and is the only way a loaded weave learns whether its answer
-        // was authorized.
+        // A status marker, not a queued attempt; success or failure is how a loaded weave
+        // learns whether its answer was authorized.
         return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
     }
 
     // ---- deferred answers across the seam (ANS-02, ANS-06) ------------------
-    //
-    // The capability crosses as an OPAQUE TOKEN and nothing else. It carries no
-    // issuer here, and does not need one: a loaded weave can only present a token
-    // through the host context of the delivery that handed it one, so the token
-    // reaches its own board's registry or no registry at all.
+    // The capability crosses as an opaque token with no issuer: a loaded weave presents it only
+    // through the host context of the delivery that gave it, so it reaches its own board.
 
     loom::DeferredAnswer make_deferred_answer() override {
         if (host_ == nullptr || host_->defer_answer == nullptr) {
@@ -133,9 +114,8 @@ public:
         const ZenStatus st = host_->answer_deferred(
             host_->ctx, answer.opaque_token(),
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-        // This deferred-answer ticket remains a status sentinel,
-        // but success/failure IS meaningful and is the only way a loaded steward
-        // can learn whether its answer went out.
+        // A status marker, not a queued attempt; success or failure is how a loaded weave
+        // learns whether its answer went out.
         return st == ZEN_OK ? loom::Ticket{1} : loom::Ticket{};
     }
 
@@ -145,18 +125,14 @@ public:
         }
     }
 
-    // ---- deliberate office authorship across the seam (MSG-07; ABI v5) ------
-    //
-    // The library REQUESTS the public operation; the host verifies membership
-    // and stamps. A missing door (an older or narrower host) refuses HONESTLY —
-    // invalid ticket / unauthored publication — and NEVER falls back to an
-    // ordinary send: a silent downgrade from office to personal speech is
-    // exactly the same-word-two-meanings failure v4 closed for answer().
+    // ---- deliberate office authorship across the seam (MSG-07) ---------------
+    // The library requests; the host verifies membership and stamps. A missing door (the
+    // isolated pipe supplies none) refuses, and never falls back to an ordinary send.
 
     loom::Ticket office_send(std::string_view as_role, loom::WeaveId target,
                              loom::Message msg) override {
         if (host_ == nullptr || host_->office_send == nullptr) {
-            return loom::Ticket{}; // no door: honestly refused, not downgraded
+            return loom::Ticket{}; // no door: refused, never sent as personal speech
         }
         std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
@@ -196,17 +172,14 @@ public:
         if (st != ZEN_OK) {
             return loom::OfficePublication{};
         }
-        // The host-side count is real here (unlike ordinary publish, whose count
-        // deliberately does not cross): the door carries it out-of-band so the
-        // authorized-but-unheard office is not confusable with a refused one.
+        // Unlike an ordinary publish, the count crosses, so an office nobody hears is not
+        // confused with a refused one.
         return loom::OfficePublication{true, static_cast<std::size_t>(recipients)};
     }
 
-    // ---- Senses (v6) --------------------------------------------------------
-    //
-    // The same four public verbs a native weave reaches, forwarded. A missing
-    // door refuses honestly rather than silently doing nothing — the failure v4
-    // closed for answer() and v5 for office speech, closed here too.
+    // ---- Senses -------------------------------------------------------------
+    // The four verbs a native weave reaches, forwarded. A missing door refuses rather than
+    // doing nothing.
 
     loom::SenseClaimResult claim(loom::Value value) override {
         if (host_ == nullptr || host_->sense_claim == nullptr) {
@@ -266,16 +239,10 @@ public:
         return decode_reading(st, bytes, office, by, shape);
     }
 
-    // ---- Joint publication (ABI v8): the claimant's one verb across the seam ----
-    //
-    // A missing door refuses honestly (`NoLiveDelivery`) rather than pretending.
-    // THE OPERATOR'S VERBS DO NOT CROSS: `begin_joint`, `commit_joint`,
-    // `cancel_joint`, `joint_status` and `release_joint` inherit the refusing
-    // defaults of `loom::Bus`, so a loaded weave that tries to coordinate is told
-    // `NoLiveDelivery` at every one of them. Loaded coordination is unsupported by
-    // decision, not by omission: the authority is a native capability the host
-    // mints, and carrying it across the seam is a design of its own
-    // (docs/reference/joint-publication.md#what-crosses-the-abi).
+    // ---- Joint publication: the claimant's one verb across the seam ---------------
+    // A missing door refuses with `NoLiveDelivery`. The operator's verbs do not cross: a loaded
+    // weave inherits `loom::Bus`'s refusing defaults for them, since the authority is a native
+    // capability the host mints (docs/reference/joint-publication.md#what-crosses-the-abi).
     loom::JointResult offer_claim(std::uint64_t op, loom::Value value) override {
         if (host_ == nullptr || host_->sense_offer == nullptr) {
             return loom::JointResult{false, loom::JointRefusal::NoLiveDelivery};
@@ -290,8 +257,8 @@ public:
     }
 
 private:
-    /// ZEN_ERR_JOINT_BASE minus the enumerator, back to the enumerator; anything
-    /// else is a refusal this side cannot name and reads as `NoLiveDelivery`.
+    /// ZEN_ERR_JOINT_BASE minus the enumerator, back to the enumerator; anything else reads as
+    /// `NoLiveDelivery`.
     static loom::JointRefusal joint_refusal_of(ZenStatus st) {
         const int why = ZEN_ERR_JOINT_BASE - st;
         if (why > 0 && why <= static_cast<int>(loom::JointRefusal::Cancelled)) {
@@ -300,8 +267,8 @@ private:
         return loom::JointRefusal::NoLiveDelivery;
     }
 
-    /// The host's status, back to the four distinct answers. A status this side
-    /// does not recognize becomes `NoClaim` rather than a fabricated success.
+    /// The host's status, back to the four refusals; an unknown status becomes `NoClaim`, never
+    /// a success.
     static loom::SenseRefusal sense_refusal_of(ZenStatus st) {
         switch (st) {
         case ZEN_ERR_SENSE_NOT_AUTHORIZED:
@@ -321,10 +288,8 @@ private:
         static_cast<std::string*>(ctx)->append(reinterpret_cast<const char*>(data), len);
     }
 
-    /// Rebuild a reading library-side. The bytes were serialized from a value the
-    /// HOST had already admitted, and they are re-admitted here against this
-    /// library's own schema for the shape — so a library never holds a value that
-    /// did not pass a gate on its own side of the seam either.
+    /// Rebuild a reading library-side, re-admitting the host's bytes against this library's own
+    /// schema, so the library never holds a value its own gate did not pass.
     loom::SenseReading decode_reading(ZenStatus st, const std::string& bytes,
                                       const std::string& office, const ZenSenseBy& by,
                                       const std::shared_ptr<const loom::Schema>& shape) {
@@ -345,12 +310,9 @@ private:
         out.by.author_life = by.author_life;
         out.by.author_incarnation = by.author_incarnation;
         out.by.author_life_is_current = by.author_life_is_current != 0;
-        // Independent of the life fact above: a same-life replacement moves the
-        // incarnation without ending the life, and collapsing the two would make
-        // a predecessor's claim read as the current incarnation's.
+        // Separate from the life: a live replacement changes the incarnation, not the life.
         out.by.author_incarnation_is_current = by.author_incarnation_is_current != 0;
-        // EXACTLY what the host wrote, at any length — empty == personal, which
-        // no office name can be. Nothing here imposes or restores a bound.
+        // Exactly what the host wrote, at any length; empty is personal.
         out.by.office = office;
         out.by.office_holder_is_current = by.office_holder_is_current != 0;
         out.by.revision = by.revision;
@@ -384,23 +346,16 @@ ZenStatus do_describe(void* instance, ZenByteSink sink) {
         S* s = static_cast<S*>(instance);
         std::vector<std::shared_ptr<const loom::Schema>> accepted = s->accepted_schemas();
         loom::Value state = s->snapshot();
-        // The ask is optional: a Weave that declares one (via ZEN_ASK on the maker
-        // base) gets it surfaced in the manifest as advice; one that doesn't emits no
-        // requests section and lands on the floor. Either way it is never a grant.
+        // The ask, if the Weave declared one with ZEN_ASK: surfaced as advice, never a grant.
         std::optional<loom::CapabilityAsk> ask;
         if constexpr (requires { s->zen_requested_capabilities(); }) {
             ask = s->zen_requested_capabilities();
         }
-        // The declared claim-set (v6) rides the same manifest, so a loaded
-        // artifact's Sense capability is discoverable at load rather than after
-        // some runtime claim accidentally reveals a shape.
+        // The declared claim-set, so what the artifact may claim is known at load.
         const std::vector<std::shared_ptr<const loom::Schema>> claims = s->claimed_schemas();
-        // The declared emit-set (v9, zen.Manifest v5) rides it too, BY DEFINITION:
-        // the host claims these into its agreement wall beside the accept-set, so a
-        // loaded emitter's `Pong v1` and a divergent acceptor's `Pong v1` refuse at
-        // load instead of at the first delivery. Read through the same virtual a
-        // native weave answers, so a raw `loom::Weave` that declares nothing sends
-        // no section. Vocabulary only: the host derives no grant from it.
+        // The declared emit-set, which the host claims into its agreement wall beside the
+        // accept-set so a divergent definition refuses at load. Read through the virtual a native
+        // weave answers, so a raw `loom::Weave` sends no section. Vocabulary only.
         const std::vector<std::shared_ptr<const loom::Schema>> emits = s->emitted_schemas();
         sink_write(sink, loom::serialize(loom::encode_manifest(accepted, state.schema(),
                                                                      ask ? &*ask : nullptr,
@@ -431,19 +386,11 @@ ZenStatus do_policy(void* instance, ZenByteSink sink) {
     }
 }
 
-/// The joint-published value of one of this weave's own claims (ABI v8),
-/// re-admitted library-side against the weave's own declared claim-set before
-/// its C++ `claim_published` sees a Value — the same discipline `do_revive`
-/// keeps for state bytes.
-///
-/// THE STATUS IS THE FACT. The hook's three answers cross as three statuses:
-/// Applied as ZEN_OK, Declined as ZEN_CLAIM_DECLINED (the one positive status),
-/// Failed as ZEN_ERR. An exception that escapes the maker's handler is Failed,
-/// contained here and said as ZEN_ERR -- never allowed to cross, never turned into
-/// a success. Bytes this library's own gate would not admit are Failed too
-/// (ZEN_ERR_UNKNOWN_SCHEMA / ZEN_ERR_REFUSED): a value the weave could not be
-/// shown is a value it did not apply. The host's mapping of every status is on
-/// the slot in zen/kernel/abi.h.
+/// A joint-published value of one of this weave's claims, re-admitted against its declared
+/// claim-set before `claim_published` sees it, as `do_revive` does for state. Applied returns
+/// ZEN_OK, Declined ZEN_CLAIM_DECLINED, Failed ZEN_ERR; an exception from the maker's handler is
+/// caught here and is Failed, and bytes this library's gate refuses are Failed too
+/// (ZEN_ERR_UNKNOWN_SCHEMA, ZEN_ERR_REFUSED). The host's mapping is on the slot in abi.h.
 template <class S>
 ZenStatus do_claim_published(void* instance, const std::uint8_t* value, std::size_t len) {
     try {
@@ -482,8 +429,8 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
     try {
         S* s = static_cast<S*>(instance);
         loom::Unverified u = loom::parse(as_view(state, len));
-        // The host already admitted these bytes; the library re-admits against its
-        // own state schema only to rebuild the Value its C++ revive() expects.
+        // The host admitted these bytes; they are re-admitted against the library's own state
+        // schema to rebuild the Value revive() takes.
         loom::Value probe = s->snapshot();
         loom::Admission a = loom::admit(u, probe.schema_ptr());
         if (!a.ok()) {
@@ -496,12 +443,8 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
     }
 }
 
-/// Translate the host's provenance flags — and the authored office (v5) — back
-/// into the C++ fact.
-///
-/// The library rebuilds a Provenance for its own dispatch and nothing else: the
-/// value never leaves this call, and the outbound host callbacks have no field
-/// to put one in. A library that lied here would be lying to itself.
+/// Translate the host's provenance and authored office back into the C++ fact, for this
+/// library's own dispatch only: the outbound callbacks have no field to carry one.
 inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequence,
                                         const char* authored_role) {
     loom::Provenance p;
@@ -518,9 +461,7 @@ inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequen
     default:
         break;
     }
-    // The second axis, composed rather than switched: NULL/empty means personal
-    // speech, and either combines with any Kind — the same representation rule
-    // the native type keeps.
+    // The authored office composes with any Kind; NULL or empty is personal speech.
     if (authored_role != nullptr && authored_role[0] != '\0') {
         p = std::move(p).with_authored_role(std::string(authored_role));
     }
@@ -562,31 +503,14 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
 
 } // namespace loom::detail
 
-// Generate the C ABI for a Weave class. The thunks have C language linkage (to
-// match the descriptor's function-pointer types) and forward to the C++ helpers
-// above. Exactly one ZEN_EXPORT_WEAVE per library.
+// Generate the C ABI for a Weave class: thunks with C linkage forwarding to the helpers above.
+// Exactly one ZEN_EXPORT_WEAVE per library.
 //
-// THE DESCRIPTOR IS INITIALIZED BY NAME, AND THAT IS LOAD-BEARING (KERN-04).
-// `describe`, `snapshot` and `policy` are three different doors that share one
-// type — `ZenStatus (*)(void*, ZenByteSink)` — so a positional initializer can
-// put any of them in either of the others' slots and compile without a single
-// diagnostic, under -Wall -Wextra -Wpedantic -Werror. A designator cannot: it
-// names the door, so the field-to-function mapping is stated in the source and
-// checked by the compiler rather than inferred from counting commas.
-//
-// This is the reviewability half only. The correctness half is separate and
-// already held before this: each of those three doors emits a DIFFERENT schema,
-// and the host re-admits every one through the one gate against the door it was
-// asked for, so a miswire is refused rather than believed. Measured —
-// every miswire among the three is refused AT LOAD, before the artifact becomes
-// a participant — and `tests/test_kernel.cpp` names the property directly.
-// Neither half proves the other: a designator can still name the wrong function,
-// and the gate would still be what catches it.
-//
-// The form is deliberately the portable one: designators in DECLARATION ORDER,
-// which is standard C++20 and standard C99+. Out-of-order designators are legal
-// C and ill-formed C++, so declaration order is what lets one spelling serve
-// both sides of a seam whose header promises to be valid in each.
+// The descriptor is initialized by name (KERN-04): `describe`, `snapshot` and `policy` share one
+// function-pointer type, so a positional initializer could swap them with no diagnostic. The
+// host also re-admits each door's output against the schema that door must emit, so a miswire
+// is refused at load (suite `kernel`). Designators are in declaration order, the one form both
+// C++20 and C accept.
 #define ZEN_EXPORT_WEAVE(WeaveClass)                                                                \
     extern "C" {                                                                                    \
     static void* zen__abi_create(void) { return ::loom::detail::do_create<WeaveClass>(); }   \
