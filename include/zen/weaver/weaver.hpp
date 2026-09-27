@@ -4,66 +4,30 @@
 #ifndef ZEN_WEAVER_WEAVER_HPP
 #define ZEN_WEAVER_WEAVER_HPP
 
-// THE WEAVER — the first message-driven delegate of a human being's authority
-// decisions.
-// docs/reference/weaver.md
+// The Weaver: an ordinary weave that puts one governed session's requests for more message
+// authority in front of a person, and installs or revokes what that person decides through a
+// `GrantAuthority` the host minted for it. docs/reference/weaver.md
 //
 //     USER          decides
 //     WEAVER        delegates / revokes
 //     SESSION       acts
 //     SWITCHBOARD   enforces and attributes
 //
-// Or: the Kernel enforces, the Weaver decides, the session acts. GATE-05 built
-// the mechanism by which a host may appoint an administrator for one live
-// subject's speech; this is the first real policy actor to hold one, and its
-// whole job is to put that mechanism in front of a person and then get out of
-// the way.
+// It holds no `Switchboard&` and no privileged send path. Its Grant is what it may say and its
+// GrantAuthority what it may delegate; the host grants the two separately, and neither gives
+// the other. It keeps workflow state only, at most one request awaiting a person and the answer
+// right taken with it, and reads what a subject may do from `mail.describe_authority(...)`
+// each time, never from a record of its own. One operator seat, one governed subject, one
+// ceiling, at most one request in flight.
 //
-// IT IS AN ORDINARY WEAVE. It has an ordinary WeaveId, an ordinary Grant, an
-// ordinary Mail, ordinary handlers reached by ordinary messages, and it answers
-// through Loom's own answer authority. It holds no `Switchboard&`, so it is not
-// a host; it has no privileged send path, so it cannot speak as anybody else.
-// Its ONE extraordinary power is the `GrantAuthority` the host minted for it —
-// and that capability is not a way to send anything at all.
-//
-// THE TWO POWERS ARE SEPARATE, AND THE HOST GRANTS THEM SEPARATELY:
-//
-//     the ordinary Grant   what this Weaver may SAY
-//     the GrantAuthority   what this Weaver may DELEGATE
-//
-// Conflating them would make every send rule a Weaver happens to own into a
-// delegable right, and would mean a Weaver could not answer a policy question
-// without thereby gaining the power to grant what the answer is about. A Weaver
-// permitted to say `zen.AuthorityGranted` has gained no authority to grant
-// anything; a Weaver holding a wide ceiling has gained no new speech.
-//
-// WHAT IT REMEMBERS, AND WHAT IT REFUSES TO REMEMBER. It keeps POLICY WORKFLOW
-// state — at most one request awaiting a human, and the answer right it took
-// away with it. It keeps NO authority state: no map of what it thinks it
-// granted, no ledger beside `AuthorityView`, no cache of effective rules. Every
-// time it needs to know what a subject may do, it asks
-// `mail.describe_authority(...)`, which reads the very values `deliver_one`
-// reads through the very predicates `deliver_one` applies. The Kernel's store
-// wins because it is the only store.
-//
-// ONE OF EVERYTHING, DELIBERATELY: one operator seat, one governed subject, one
-// ceiling, at most one request in flight. Every one of those is a place a V2
-// could grow a map, a queue, an id space and an ordering policy — and every one
-// of those maps is a place a decision can land on the wrong request. The terminal and
-// multiple sessions can earn concurrency when there is something to concur.
-//
-// WHAT IT IS NOT, said plainly because the surrounding words are grand: this
-// governs Loom MESSAGE AUTHORITY and nothing else. It does not contain hostile
-// in-process native code (a loaded weave shares this address space), does not
-// authenticate a remote human, holds no accounts, persists nothing across a
-// restart, and cannot make an "allow once" grant because Loom has no such thing.
+// It governs Loom message authority and nothing else: it does not contain in-process native
+// code (a loaded weave shares this address space), authenticate a remote person, hold
+// accounts, persist anything across a restart, or grant "allow once", for which Loom has no
+// word. docs/reference/weaver.md#what-this-does-not-govern
 
-// DELIBERATELY ABSENT: <zen/host/grant_wiring.hpp>. A Weaver USES a capability;
-// it does not mint one. Pulling the host-wiring header in here would make
-// `host_grant_authority` visible to every weave that includes this file, which
-// is exactly the reachability that header exists to deny — and the name would
-// still be useless, since minting needs a `Switchboard&` no weave holds. The
-// host includes it, mints, and passes the result to this constructor.
+// Not <zen/host/grant_wiring.hpp>: a Weaver uses a capability and never mints one, and that
+// header keeps its minting function out of every weave's reach. The host mints the capability
+// and passes it to the constructor.
 #include <zen/switchboard/grant.hpp>
 #include <zen/weave.hpp>
 #include <zen/weaver/vocabulary.hpp>
@@ -91,25 +55,12 @@ inline constexpr std::size_t kMaxPurposeBytes = 200;
 /// document.
 inline constexpr std::size_t kMaxNameBytes = 128;
 
-/// RENDER `raw` SO IT CANNOT DRIVE THE TERMINAL IT IS PRINTED ON.
-///
-/// A security prompt is the last place to print attacker-chosen bytes verbatim:
-/// an escape sequence in a "purpose" string could reposition the cursor, erase
-/// the line above it, or repaint the trusted facts of the request the operator
-/// is deciding. So every byte outside printable ASCII becomes a visible `\xNN`,
-/// a literal backslash is doubled so the escaping is unambiguous, and the result
-/// is bounded — with the truncation SAID rather than performed silently.
-///
-/// IT LIVES HERE, AT THE WEAVER, RATHER THAN IN A SKIN, and that placement is
-/// the guarantee: the terminal console, a future Workshop pane and anything else
-/// that ever renders an `AuthorityPrompt` inherit the safety without knowing it
-/// exists. A sanitizer in one renderer protects one renderer.
-///
-/// ASCII-ONLY IS A REAL V1 LIMITATION, not an oversight: a non-ASCII purpose
-/// arrives escaped rather than translated, because deciding which non-ASCII
-/// bytes a given terminal will treat as printable is a question this phase has
-/// no way to answer honestly. An internationalized operator surface belongs to
-/// whoever builds the real terminal.
+/// Render `raw` so it cannot drive the terminal it is printed on: every byte outside printable
+/// ASCII becomes a visible `\xNN` and a literal backslash is doubled, so the escaping is
+/// unambiguous. Only the first `max_bytes` of `raw` are rendered, and a cut says
+/// `...[truncated]`. It lives at the Weaver rather than in a renderer, so every renderer of an
+/// `AuthorityPrompt` inherits it. Non-ASCII arrives escaped, never translated.
+/// docs/reference/weaver.md#untrusted-text-at-a-decision-surface
 inline std::string safe_operator_text(std::string_view raw, std::size_t max_bytes) {
     static constexpr char kHex[] = "0123456789abcdef";
     std::string out;
@@ -134,17 +85,10 @@ inline std::string safe_operator_text(std::string_view raw, std::size_t max_byte
     return out;
 }
 
-/// One send rule, as a person reads it: `Work v1 -> role some.service`.
-///
-/// Generated from the snapshot the Kernel handed back — never from a display
-/// string kept alongside what the Weaver believes it granted. If this line and
-/// the bus ever disagreed, this line would be the lie, so it is not allowed to
-/// have an independent existence.
-///
-/// A ROLE IS PRINTED AS A ROLE. "role some.service" is not "weave #19", however
-/// certain the Weaver may be about who holds the office right now: role authority
-/// follows whoever holds it at delivery, and saying otherwise would describe a
-/// narrower, more permanent grant than the one being made.
+/// One send rule, as a person reads it: `Work v1 -> role some.service`. Rendered from the
+/// snapshot the Kernel handed back, never from a string the Weaver kept, so it cannot disagree
+/// with the bus. A role is printed as a role, never as the weave holding it now: role authority
+/// follows whoever holds the office at delivery.
 inline std::string render_rule(const SendRule& rule) {
     std::string out =
         rule.any_shape ? std::string("any shape")
@@ -188,12 +132,8 @@ inline std::vector<std::string> render_authority(const LiveAuthority& authority)
 
 // ---- the Weaver's own state ------------------------------------------------
 
-/// WORKFLOW COUNTERS, AND DELIBERATELY NOTHING ELSE.
-///
-/// A Weaver's persistable state is the one place a shadow permission database
-/// would grow, so it is worth saying what is absent: there is no rule here, no
-/// subject here, and no record of what was granted. Both fields count things
-/// that HAPPENED; neither is consulted to decide anything.
+/// Workflow counters, and nothing else: no rule, no subject, no record of what was granted.
+/// Both count what happened; neither is consulted to decide anything.
 struct WeaverState {
     std::int64_t prompts = 0;   ///< authority requests put to the operator
     std::int64_t installed = 0; ///< approvals that actually installed a rule
@@ -201,34 +141,21 @@ struct WeaverState {
     ZEN_SHAPE(WeaverState, 1, ZEN_FIELD(prompts), ZEN_FIELD(installed));
 };
 
-/// THE FIRST USER-POLICY DELEGATE.
-///
-/// Bootstrapped by a host with two things and no others: the capability to
-/// administer ONE subject, and the WeaveId of the ONE weave whose decisions it
-/// will obey. It learns which session it governs FROM THE CAPABILITY
-/// (`GrantAuthority::subject()`) rather than from a second constructor
-/// parameter — so "the subject I check requests against" and "the subject I can
-/// actually administer" are one value and cannot drift apart.
+/// Bootstrapped by a host with the capability to administer one subject and the WeaveId of the
+/// one weave whose decisions it obeys. The governed subject is read from the capability
+/// (`GrantAuthority::subject()`), so the subject it checks requests against and the one it can
+/// administer are one value.
 class Weaver final
     : public WeaveBase<Weaver, WeaverState,
                        Accept<RequestAuthority, ApproveAuthority, RefuseAuthority, RevokeAuthority,
                               DescribeAuthority>,
                        Emit<AuthorityPrompt, AuthorityGranted, AuthorityDescription, Refused, Ack>> {
 public:
-    /// `authority` names the governed subject and the ceiling; `operator_seat` is
-    /// the exact weave whose word counts as the user's. Both come from the host,
-    /// out of band, at bootstrap — there is no message that can change either.
-    ///
-    /// THE DECIDER MAY NOT BE THE SUBJECT, and this refuses at the boot that
-    /// wires it rather than at the decision that abuses it. A Weaver whose
-    /// operator seat IS its governed session is a session that approves its own
-    /// requests: "no weave can widen its own authority" (GATE-05) would then be
-    /// false, defeated not by a bug but by one line of host wiring, silently.
-    /// It is a host misconfiguration, so it fails the way `register_weave`
-    /// fails a null weave or a doubly-held role — loudly, before anything runs.
-    ///
-    /// A wholly inert capability (no subject at all) is deliberately still
-    /// constructible: it governs nobody, so there is nobody for the seat to be.
+    /// `authority` names the governed subject and the ceiling; `operator_seat` is the weave
+    /// whose word counts as the user's. Both come from the host at bootstrap, and no message
+    /// changes either. Throws `std::invalid_argument` when the seat is the governed subject: a
+    /// session approving its own requests could widen itself up to the ceiling (GATE-05). A
+    /// capability with no subject is accepted and governs nobody.
     Weaver(GrantAuthority authority, WeaveId operator_seat)
         : authority_(std::move(authority)), operator_seat_(operator_seat) {
         if (authority_.subject().valid() && operator_seat == authority_.subject()) {
@@ -251,11 +178,9 @@ public:
     /// cannot disagree about whether a request exists.
     bool has_pending_request() const noexcept { return answer_.valid(); }
 
-    /// A Weaver does not reload. A revived one would come back with no pending
-    /// request and no answer right, having silently dropped a decision a person
-    /// was in the middle of making — so it fails visibly instead. That a dead
-    /// Weaver leaves previously-installed authority standing is separate, real,
-    /// and documented (an installed grant is not a lease).
+    /// A Weaver is never reloaded: a new incarnation would have dropped the request a person
+    /// was deciding and the answer right with it, so a failure ends it visibly. Authority it
+    /// installed outlives it, since a grant is not a lease (docs/reference/weaver.md).
     LifecyclePolicy policy_config() const { return LifecyclePolicy{0, true}; }
 
     // ---- the governed session speaks ---------------------------------------

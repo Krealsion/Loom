@@ -66,7 +66,6 @@ set(ZEN_COMMENT_PENDING
     "^include/zen/value[.]hpp$"
     "^include/zen/weave[.]hpp$"
     "^include/zen/weaver/vocabulary[.]hpp$"
-    "^include/zen/weaver/weaver[.]hpp$"
     "^include/zen/wire[.]hpp$"
     "^include/zen/zen[.]hpp$"
     "^src/"
