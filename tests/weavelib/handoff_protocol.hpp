@@ -4,27 +4,15 @@
 #ifndef ZEN_TESTS_HANDOFF_PROTOCOL_HPP
 #define ZEN_TESTS_HANDOFF_PROTOCOL_HPP
 
-// THE HANDOFF GARDEN'S VOCABULARY (HANDOFF-01..03).
-//
-// Two ledger implementations with GENUINELY INCOMPATIBLE state, one temporary
-// migrator that knows how to turn the first meaning into the second, and the
-// old/new protocol pair that makes queued traffic around a replacement a real
-// question rather than a hypothetical one.
-//
-// The point of the shapes below is that NOTHING here revives trivially:
-//
-//   LedgerV1   next_id: Int          flat, scalar, one mode as free text
-//              total:   Int
-//              mode:    Text
-//
-//   LedgerV2   ids:     NamespaceState{high_water}      nested message
-//              totals:  Metrics{count, sum}             one Int became two
-//              modes:   List<ModeFlag{name, on}>        one Text became a list
-//                                                       of messages
-//
-// Feeding a LedgerV1 value to LedgerV2's gate fails on every field. That is the
-// premise: different schema identities stay different, and only an explicit
-// authored transformation produces a valid new-schema value.
+// The handoff fixtures' vocabulary: two ledger implementations with GENUINELY INCOMPATIBLE
+// state, one temporary migrator that turns the first meaning into the second, and an old/new
+// protocol pair that makes queued traffic around a replacement a real question.
+// HANDOFF-01..03; docs/laws/handoff-laws.md
+
+// NOTHING here revives trivially: LedgerV1 {next_id, total, mode: Text} is flat and scalar;
+// LedgerV2 nests them as ids {high_water}, totals {count, sum} and modes: List<ModeFlag>. A
+// LedgerV1 value fails LedgerV2's gate on every field, so only an explicit authored
+// transformation produces a valid new-schema value.
 
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
@@ -113,10 +101,9 @@ struct Quiesce {
     ZEN_SHAPE(Quiesce, 1, ZEN_FIELD(token));
 };
 
-/// Ask the incumbent to describe itself. Answered with `LedgerV1` as the payload.
-/// Used twice, for two DIFFERENT things the suite must keep apart:
-///   before the boundary — an ordinary snapshot, which may go stale (H1);
-///   after  the boundary — the incumbent's final authored value (H2).
+/// Ask the incumbent to describe itself. Answered with `LedgerV1` as the payload. Used twice,
+/// for two DIFFERENT things the suite must keep apart: before the boundary, an ordinary
+/// snapshot, which may go stale; after the boundary, the incumbent's final authored value.
 struct Describe {
     std::int64_t token = 0;
     ZEN_SHAPE(Describe, 1, ZEN_FIELD(token));

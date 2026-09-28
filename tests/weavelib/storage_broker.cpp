@@ -2,17 +2,11 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // The StorageBroker: an ecosystem Weave (not host code), shipped as a .so and mounted
-// out-of-process at the TCB tier with FsAccess::WriteScoped(storage_root) and role
-// "storage". It holds the real (scoped) disk capability on behalf of untrusted mods
-// that have none, and namespaces each mod's data by the STAMPED sender — mail.sender(),
-// host-stamped from the connection, which a mod cannot forge — so mod A can never read
-// mod B's data, and neither can touch the host home (the bind is contained to
-// storage_root). The key is hex-encoded into the filename, so a hostile key (with '/'
-// or "..") cannot escape the sender's subdir. The value is opaque bytes.
-//
-// Storage is SESSION-SCOPED: the sender is the ephemeral runtime WeaveId, so a mod's
-// subdir changes across host restarts. Persistent-across-restart needs a first-class
-// Weave identity — the named successor phase.
+// out-of-process at the TCB tier with FsAccess::WriteScoped(storage_root), under role "storage".
+// It holds the scoped disk capability for mods that have none, namespacing each mod's data by
+// the STAMPED sender (host-stamped, unforgeable), keys hex-encoded into filenames so a hostile
+// key cannot escape its subdir. Storage is SESSION-SCOPED: the sender is the runtime WeaveId,
+// which changes across host restarts; persisting across them needs a stable Weave identity.
 
 #include "storage_protocol.hpp"
 
@@ -31,8 +25,8 @@ using namespace storage;
 
 namespace {
 
-// storage_root is bound at /scratch in the broker's view (the persistent-WriteScoped
-// extension). The broker reaches only here — never the host filesystem.
+// storage_root is bound at /scratch in the broker's view; the broker reaches only here, never
+// the host filesystem.
 constexpr const char* kRoot = "/scratch";
 
 std::string hex_key(const std::string& key) {

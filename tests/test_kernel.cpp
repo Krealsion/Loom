@@ -44,14 +44,11 @@ std::int64_t live_count(Switchboard& bus, WeaveId id) {
 }
 
 // ---- reading the deferring steward's mind, host-side (ANS-02) ---------------
-//
-// A loaded weave has exactly one window on itself — the snapshot it already had
-// to provide — so that is where the fixture puts what these tests need to see. No
-// back channel was invented for the test.
+// A loaded weave's one window on itself is its snapshot, so the fixture puts there what these
+// tests read; no back channel exists for the test.
 
-// Counter v4, the ZEN_WEAVE_DEFERS state contract, spelled out again here on
-// purpose: the test must not share a definition with the library it is
-// interrogating, or a drift in either would cancel out.
+// Counter v4, the ZEN_WEAVE_DEFERS state contract, spelled out again on purpose: a definition
+// shared with the library under test would cancel out a drift in either.
 inline std::shared_ptr<const Schema> defers_state_schema() {
     static const auto s = SchemaBuilder("Counter", 4)
                               .field("count", Kind::Int)
@@ -125,13 +122,10 @@ TEST_CASE("a loaded DLL Weave mounts and is indistinguishable; both directions a
     CHECK(recorder.weave->handled_values[0] == 7);
 }
 
-TEST_CASE("RTH-1: a loaded handler that throws is reported, not announced as delivered") {
-    // THE ONE ASYMMETRY THIS PHASE HAD TO CLOSE. A native handler's exception
-    // reaches the Switchboard, which now emits `HandlerFailed` and rethrows. A
-    // LOADED weave's exception never gets that far -- `do_handle` catches
-    // everything at the ABI boundary and returns a status -- so the host used to
-    // see a handler that returned, record `Delivered`, and tell every observer
-    // the delivery succeeded. Same fact, two seams, and only one of them said so.
+TEST_CASE("a loaded handler that throws is reported, not announced as delivered") {
+    // A native handler's exception reaches the Switchboard, which emits `HandlerFailed` and
+    // rethrows; a loaded weave's stops at the ABI boundary, where `do_handle` returns a status.
+    // The host must still record `HandlerFailed` for it, never `Delivered`.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     std::vector<std::pair<EventKind, std::uint64_t>> seen;
@@ -194,29 +188,12 @@ TEST_CASE("a descriptor with an unsupported abi_version is rejected cleanly") {
     CHECK_FALSE(kernel.is_loaded("ba"));
 }
 
-TEST_CASE("BL-4: the descriptor's three same-signature doors each answer for themselves") {
-    // POSITIONAL DRIFT, NAMED DIRECTLY. `describe`, `snapshot` and `policy` are
-    // the only three fields of ZenWeaveAbi that share a type — every one is
-    // `ZenStatus (*)(void*, ZenByteSink)` — so they are the only slots a
-    // positional initializer can permute while still compiling without a single
-    // diagnostic under -Wall -Wextra -Wpedantic -Werror. ZEN_EXPORT_WEAVE names
-    // them with designators now, but a designator can still name the WRONG
-    // function; the compiler checks that a door exists, never that the thing put
-    // behind it belongs there. This case is what checks the second half.
-    //
-    // Each door is reached through its own public consequence, and each assertion
-    // names the SHAPE it expects, because the shape is precisely what a swap
-    // changes. The gate is what does the catching in every instance — three doors
-    // that emit three different schemas cannot be permuted without one of them
-    // presenting bytes to a door that refuses them.
-    //
-    // WHERE IT FIRES, measured rather than assumed: every miswire among the three
-    // is refused AT LOAD, so the REQUIRE below is what goes red, carrying the
-    // gate's reason in `lr.error`. `reconstruct()` admits describe's bytes against
-    // the manifest schema and the load path admits snapshot's against the state
-    // schema, so a permuted door never becomes a live participant at all. The
-    // per-door assertions after it are the positive statement of which door is
-    // which — they would be what catches a future miswire that survived load.
+TEST_CASE("the descriptor's three same-signature doors each answer for themselves") {
+    // `describe`, `snapshot` and `policy` are the only ZenWeaveAbi slots that share a type, so
+    // they are the only ones a permuted initializer could swap and still compile, and a
+    // designator can still name the wrong function. Each door is reached through its own public
+    // consequence and named by the shape it must carry. Every miswire among the three is refused
+    // at load (the REQUIRE below carries the gate's reason); the checks after it name each door.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("doors", ZEN_SO_WEAVE);
@@ -368,9 +345,8 @@ TEST_CASE("reload refuses a drifted door contract before commit; the incumbent k
     const WeaveId id = lr.id;
     const std::size_t doors = bus.accepted_schemas(id).size();
 
-    // The candidate's STATE schema is byte-identical to the incumbent's — the
-    // only agreement reload checked before this phase, so this would have
-    // committed and then routed by a contract the new code no longer speaks.
+    // The candidate's STATE schema is byte-identical to the incumbent's: a reload that compared
+    // state alone would commit, then route by a contract the new code no longer speaks.
     ReloadResult rr = kernel.reload_from("t", ZEN_SO_ACTIVATES_DRIFT);
     CHECK(rr.ok);
     CHECK_FALSE(rr.reloaded);
@@ -405,7 +381,7 @@ TEST_CASE("reload refuses a drifted door contract before commit; the incumbent k
     CHECK(kernel.weave_id("t") == id);
 }
 
-TEST_CASE("the agreement wall follows LIVE claims, not the history of registrations (BL-0)") {
+TEST_CASE("the agreement wall follows LIVE claims, not the history of registrations") {
     // THE POSITIVE CONTROL, first, or the reclamation proofs below prove nothing:
     // while something live claims Greet v1, a library that disagrees about it is
     // still refused. Reclaiming vocabulary must not weaken the wall.
@@ -427,17 +403,10 @@ TEST_CASE("the agreement wall follows LIVE claims, not the history of registrati
     CHECK(kernel.is_loaded("u"));
 }
 
-TEST_CASE("a rejected candidate leaves no schema residue (BL-0 closes the R2A-1a pin)") {
-    // THE INVERSE OF WHAT A WEAKER ORACLE WOULD PIN. reconstruct() PRODUCES the schemas the
-    // compatibility check compares, so a candidate refused for door drift had
-    // already bound its (name, version) keys in this Kernel's dependency
-    // registry, and a later library disagreeing about one met a wall put up by
-    // a weave that never existed. "Refused before commit" had to be scoped to
-    // *incumbent replacement and its published routing contract* rather than to
-    // "the Loom is unchanged".
-    //
-    // It is unchanged now. reconstruct() claims into the Manifest it returns, so
-    // the refusal below destroys the only claim those schemas ever had.
+TEST_CASE("a rejected candidate leaves no schema residue") {
+    // reconstruct() produces the schemas the compatibility check compares and claims them into
+    // the Manifest it returns, so a candidate refused for door drift takes its claims with it: a
+    // later library disagreeing with one meets no wall left by a weave that never existed.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult lr = kernel.load("t", ZEN_SO_ACTIVATES);
@@ -454,11 +423,9 @@ TEST_CASE("a rejected candidate leaves no schema residue (BL-0 closes the R2A-1a
     CHECK(kernel.weave_id("t") == lr.id);
     CHECK_FALSE(kernel.accepts(lr.id, "Greet", 1));
 
-    // AND the rejected candidate's Greet v1 is gone with it — observable because
-    // a later library declaring Greet v1 with DIFFERENT content now loads, where
-    // without claim-scoped retention it meets a wall the refused candidate left
-    // standing (LIFE-08). The
-    // case above is what proves this is reclamation and not a dead wall.
+    // The refused candidate's Greet v1 is gone with it: a later library declaring Greet v1 with
+    // different content loads (LIFE-08). The case above proves this is reclamation, not a wall
+    // that was never there.
     LoadResult after = kernel.load("u", ZEN_SO_ACTIVATES_CONFLICT);
     CHECK_MESSAGE(after.ok, after.error);
     CHECK(kernel.is_loaded("u"));
@@ -467,15 +434,10 @@ TEST_CASE("a rejected candidate leaves no schema residue (BL-0 closes the R2A-1a
     CHECK(kernel.weave_id("t") == lr.id);
 }
 
-// ---- declared vocabulary is agreed at admission (P-LOOM-07, ABI v9) ---------------
-//
-// The case that opened this: a native Workshop declared the newer `PaneInventory v1`
-// only in `Emit<...>`, an older loaded desktop accepted the same name over a different
-// nested `InventoryPane v1`, both admitted, and the first publication was refused at the
-// gate with Pane Manager left waiting. Every shape a participant DECLARES — accepted,
-// claimed, emitted, persisted — and every component those nest is now claimed through
-// the one agreement wall at the door, natively and across the seam, in both orders.
-// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+// ---- declared vocabulary is agreed at admission (ABI v9) ---------------------------------
+// Every shape a participant declares -- accepted, claimed, emitted, persisted -- and every
+// component those nest is claimed through one agreement wall at the door, natively and across
+// the seam, in either order. docs/decisions/declared-vocabulary-is-agreed-at-admission.md
 namespace sa {
 // Greet v1, both ways the fixtures spell it: `msg` (zen_test_weave_emits,
 // zen_test_weave_activates_drift) and `text` (zen_test_weave_emits_conflict,
@@ -539,9 +501,8 @@ TEST_CASE("schema admission: a native emitter and a loaded acceptor that disagre
         REQUIRE(bus.resolve_schema("Greet", 1) != nullptr);
         CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
 
-        // zen_test_weave_activates_drift ACCEPTS Greet v1 {msg}: the same name and
-        // version, a different shape. Before this phase it loaded, and the first
-        // Greet the emitter sent it was refused at the gate.
+        // zen_test_weave_activates_drift ACCEPTS Greet v1 {msg}: the same name and version, a
+        // different shape. Admitted, it would have the emitter's first Greet refused at the gate.
         LoadResult blocked = kernel.load("old", ZEN_SO_ACTIVATES_DRIFT);
         CHECK(refused_over(blocked, "Greet"));
         CHECK_FALSE(kernel.is_loaded("old"));
@@ -613,9 +574,8 @@ TEST_CASE("schema admission: a loaded emitter's definition crosses the seam (man
 TEST_CASE("schema admission: a disagreement only the component closure can see refuses at "
           "load — loaded against loaded, and loaded against native, both orders") {
     using namespace sa;
-    // Box v1 nests Part v1 {a}; Box2 v1 nests Part v1 {a, b}. The OUTER names differ, so
-    // no top-level comparison ever met the two Parts; before this phase both admitted
-    // and two definitions of `Part v1` lived in one process.
+    // Box v1 nests Part v1 {a}; Box2 v1 nests Part v1 {a, b}. The outer names differ, so no
+    // top-level comparison meets the two Parts; only the nested claim can refuse the second.
     SUBCASE("loaded against loaded") {
         Switchboard bus;
         Kernel kernel(bus, sbfx::fixture_admission());
@@ -653,9 +613,9 @@ TEST_CASE("schema admission: one artifact whose own declaration nests two defini
           "a component is refused in both declaration orders; the agreeing control loads with "
           "the identity it declared") {
     using namespace sa;
-    // The independent review's Box/Box2 reproduction: the encoder once deduplicated
-    // `referenced` by name, the second Part was lost before reconstruction, and the
-    // artifact LOADED advertising a Box2 whose content-id was not the one it declared.
+    // The failure this guards: an encoder that deduplicated `referenced` by name would lose the
+    // second Part before reconstruction, and the artifact would load advertising a Box2 whose
+    // content-id is not the one it declared.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     for (const char* path : {ZEN_SO_NEST_MIXED, ZEN_SO_NEST_MIXED_REV}) {
@@ -798,8 +758,8 @@ TEST_CASE("schema admission: a prepared candidate whose emit-set disagrees is re
     CHECK(kernel.is_loaded("cand"));
 }
 
-TEST_CASE("schema admission: the copied weave that kept `Ping v1`'s name is refused at load "
-          "with the guide's sentence, natively hosted or not (P-LOOM-06)") {
+TEST_CASE("schema admission: the copied weave that kept `Ping v1`'s name is refused at load with "
+          "the guide's sentence, natively hosted or not") {
     using namespace sa;
     // docs/guides/writing-a-weave.md: copy a weave, add a field, leave the shape's
     // name and version as they were — refused at mount, and "a host that loaded the
@@ -832,11 +792,10 @@ TEST_CASE("schema admission: the copied weave that kept `Ping v1`'s name is refu
     }
 }
 
-TEST_CASE("many rejected candidates leave no accumulation (BL-0 boundedness)") {
-    // The C-10 shape at the reload door: a host that keeps being offered
-    // candidates it refuses must not grow a vocabulary out of the refusals.
-    // Repeated because one refusal leaving nothing behind is also what a
-    // one-shot fluke looks like; the wall is asked again at the end.
+TEST_CASE("many rejected candidates leave no accumulation") {
+    // A host that keeps being offered candidates it refuses must not grow a vocabulary out of
+    // the refusals. Repeated because one refusal leaving nothing behind is also what a one-shot
+    // fluke looks like; the wall is asked again at the end.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     REQUIRE(kernel.load("t", ZEN_SO_ACTIVATES).ok);
@@ -852,15 +811,10 @@ TEST_CASE("many rejected candidates leave no accumulation (BL-0 boundedness)") {
 }
 
 // ---- the deferring steward, proven where it has to be proven (ANS-02, ANS-06) -
-//
-// EVERY CASE BELOW DRIVES A REAL .so. That is not thoroughness for its own sake:
-// the whole claim is that an answer right survives the handler that earned it,
-// and a native fixture holding the old Bus& would be asking a different (and
-// already-answered) question. Across the C seam a loaded weave keeps NOTHING but
-// an opaque integer, gets a brand-new Bus on the next delivery, and still has to
-// be able to answer — or the capability is not really a capability.
+// Every case below drives a real .so: across the C seam a loaded weave keeps nothing but an
+// opaque integer and gets a new Bus on each delivery, and must still be able to answer.
 
-TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only once") {
+TEST_CASE("a loaded steward answers after its handler returned, and only once") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -923,7 +877,7 @@ TEST_CASE("R2B-2: a loaded steward answers after its handler returned, and only 
     CHECK(s3.spent == 1);
 }
 
-TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused — reload is a new "
+TEST_CASE("a loaded successor inherits the token and is still refused — reload is a new "
           "incarnation across the seam too") {
     // THE SHARPEST FORM OF THE INHERITANCE QUESTION. The fixture persists its
     // token, so the successor rebuilds a capability from the real number and
@@ -974,8 +928,7 @@ TEST_CASE("R2B-2: a loaded successor inherits the token and is still refused —
     CHECK(tried.spent == 0);
 }
 
-TEST_CASE("R2B-2: the requester dying strands a loaded steward's answer rather than misdelivering "
-          "it") {
+TEST_CASE("the requester dying strands a loaded steward's answer rather than misdelivering it") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -1010,7 +963,7 @@ TEST_CASE("R2B-2: the requester dying strands a loaded steward's answer rather t
     CHECK(after.spent == 0);
 }
 
-TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish somebody else's "
+TEST_CASE("a second loaded steward holding the same token cannot finish somebody else's "
           "conversation") {
     // The seam's token is a number, and a number is guessable. What stops a thief
     // is not secrecy: it is that the record names its respondent AT AN
@@ -1073,28 +1026,13 @@ TEST_CASE("R2B-2: a second loaded steward holding the same token cannot finish s
 }
 
 // ---- the candidate waits outside the world (PR-01) ----------------------------
-//
-// Today's SwapWeave says its own window out loud: it issues UnloadRole then
-// LoadLibrary, and between those two deliveries the role is held by nobody. The
-// incumbent is already gone when the successor turns out to be broken.
-//
-// A prepared replacement inverts that. The candidate is loaded, constructed and
-// made ready while the incumbent is still fully the incumbent — and one operation
-// makes the swap visible:
-//
-//     The incumbent remains fully authoritative until one atomic commit makes
-//     the prepared candidate live.
-//
-// The primitive underneath is a SEAL on the weave record. A sealed weave is real
-// (it loaded from a real artifact, it has contracts, it can be revived and can
-// answer) and is not a participant: publications skip it, ordinary sends cannot
-// find it, it cannot address a role at all, and it may speak to exactly one weave
-// — the coordinator preparing it.
-//
-//     The candidate may converse inside preparation before it may speak
-//     inside the world.
+// A prepared replacement loads, constructs and readies the candidate while the incumbent is
+// still fully the incumbent, and one atomic commit makes it live. Underneath is a SEAL on the
+// weave record: a sealed weave is real (loaded, contracted, revivable, able to answer) and not
+// a participant -- publications skip it, ordinary sends cannot find it, it cannot address a
+// role, and it may speak only to the coordinator preparing it.
 
-TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT in the world") {
+TEST_CASE("a sealed candidate is loaded from a real artifact and is NOT in the world") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -1152,7 +1090,7 @@ TEST_CASE("R2B-3: a sealed candidate is loaded from a real artifact and is NOT i
     CHECK(live_count(bus, candidate.id) == 1);
 }
 
-TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every attempt is named") {
+TEST_CASE("a sealed candidate cannot speak into the world, and every attempt is named") {
     // THE HOSTILE CANDIDATE. Its grant is the permissive one every loaded weave
     // gets — the prepared artifact is the artifact that becomes live, so its real
     // contract is not stripped — and it still cannot reach anything.
@@ -1193,8 +1131,8 @@ TEST_CASE("R2B-3: a sealed candidate cannot speak into the world, and every atte
     CHECK(coordinator.weave->handled_names[0] == "Pong");
 }
 
-TEST_CASE("R2B-3: commit is ONE visible change — no observer sees a gap, two holders, or a "
-          "role pointing at a sealed weave") {
+TEST_CASE("commit is ONE visible change — no observer sees a gap, two holders, or a role "
+          "pointing at a sealed weave") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -1259,8 +1197,8 @@ TEST_CASE("R2B-3: commit is ONE visible change — no observer sees a gap, two h
     CHECK(kernel.role_of("cand") == "worker");
 }
 
-TEST_CASE("R2B-3: a refused commit changes NOTHING — it is observationally identical to never "
-          "having tried") {
+TEST_CASE("a refused commit changes NOTHING — it is observationally identical to never having "
+          "tried") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -1286,11 +1224,10 @@ TEST_CASE("R2B-3: a refused commit changes NOTHING — it is observationally ide
     CHECK(live_count(bus, candidate.id) == 0);
 }
 
-TEST_CASE("R2B-3: an artifact that cannot load never becomes a candidate, and the incumbent "
-          "does not notice") {
-    // THE FAILURE SIDE IS THE POINT. Under today's SwapWeave the incumbent is
-    // already unloaded when a broken successor is discovered; here the discovery
-    // happens with the incumbent untouched, because nothing has been touched yet.
+TEST_CASE("an artifact that cannot load never becomes a candidate, and the incumbent does not "
+          "notice") {
+    // THE FAILURE SIDE IS THE POINT: a broken successor is discovered with the incumbent
+    // untouched, because nothing has been touched yet.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -1317,8 +1254,8 @@ TEST_CASE("R2B-3: an artifact that cannot load never becomes a candidate, and th
     CHECK(bus.list_weaves().size() == 2); // coordinator + incumbent; no wreckage
 }
 
-TEST_CASE("R2B-3: abandoning a prepared candidate leaves the world as it was, and its speech "
-          "cannot leak afterwards") {
+TEST_CASE("abandoning a prepared candidate leaves the world as it was, and its speech cannot leak "
+          "afterwards") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -1346,18 +1283,12 @@ TEST_CASE("R2B-3: abandoning a prepared candidate leaves the world as it was, an
 }
 
 // ---- the transaction's identity and the admission boundary (PR-02, PR-03) -----
-//
-// A seal bound to a coordinator's WeaveId alone is enough to prove isolation and
-// NOT enough to own a transaction. Every authority in this codebase carries three
-// facts for the same reason: a coordinator that dies and revives, or whose code is
-// replaced, is a different participant at the same address. A preparation is a
-// conversation, so it belongs to a life.
-//
-// And commit has to account for the incumbent, not merely the role — otherwise a
-// "replaced" service is still publicly direct-addressable, which is two live
-// services with one of them pretending to be retired.
+// A seal bound to a coordinator's WeaveId proves isolation but cannot own a transaction: a
+// coordinator that dies and revives, or whose code is replaced, is a different participant at
+// the same address, so a preparation belongs to a life. Commit accounts for the incumbent, not
+// only the role, or a replaced service would stay direct-addressable.
 
-TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor its conversation") {
+TEST_CASE("a coordinator successor inherits neither the candidate nor its conversation") {
     bool by_death = false;
     SUBCASE("the coordinator dies and is revived") { by_death = true; }
     SUBCASE("the coordinator's code is replaced while alive") { by_death = false; }
@@ -1413,8 +1344,8 @@ TEST_CASE("R2B-3b: a coordinator successor inherits neither the candidate nor it
     CHECK(live_count(bus, incumbent.id) == 1);
 }
 
-TEST_CASE("R2B-3b: at admission the candidate's FIRST live delivery is its activation, even "
-          "though production was queued for the role before commit") {
+TEST_CASE("at admission the candidate's FIRST live delivery is its activation, even though "
+          "production was queued for the role before commit") {
     // THE ORDERING THE QUEUE RESISTED. Role resolution is a delivery-time decision,
     // so a role-addressed message enqueued before the commit resolves to whoever
     // holds the role when it is finally dispatched — the candidate. Appending the
@@ -1457,8 +1388,8 @@ TEST_CASE("R2B-3b: at admission the candidate's FIRST live delivery is its activ
     CHECK(cand_raw->handled_names[2] == "Ping");
 }
 
-TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no production of any "
-          "kind, and the coordinator can still reach it") {
+TEST_CASE("after admission the incumbent is sealed for retirement — no production of any kind, "
+          "and the coordinator can still reach it") {
     // Moving the role alone would leave the incumbent publicly direct-addressable:
     // a second live service that merely lost its name.
     Switchboard bus;
@@ -1507,7 +1438,7 @@ TEST_CASE("R2B-3b: after admission the incumbent is sealed for retirement — no
     CHECK(inc_raw->handled_names.size() == 2);
 }
 
-TEST_CASE("R2B-3b: admission refuses without Loom's own authority, and a refusal changes nothing") {
+TEST_CASE("admission refuses without Loom's own authority, and a refusal changes nothing") {
     Switchboard bus;
     Switchboard decoy; // a real board, and a real authority — issued elsewhere
     Kernel kernel(bus, sbfx::fixture_admission());
@@ -1546,21 +1477,14 @@ TEST_CASE("R2B-3b: admission refuses without Loom's own authority, and a refusal
 }
 
 // ---- admission recognizes its owner (PR-03) ------------------------------------
-//
-// The candidate's private conversation already checked the exact coordinator life
-// and incarnation on every message. Admission did not — which left the strongest
-// act in the system, moving production topology, resting on a stale fact. A
-// trusted host caller holding a perfectly good lifecycle authority could admit a
-// candidate whose coordinator had died and revived, been reloaded into new code,
-// or been removed entirely.
-//
-//     A candidate may enter the world only while the exact coordinator life and
-//     incarnation that sealed it still owns the preparation.
+// A candidate may enter the world only while the exact coordinator life and incarnation that
+// sealed it still owns the preparation: a trusted host caller with good lifecycle authority
+// still cannot admit one whose coordinator died and revived, was reloaded, or is gone.
 
 namespace {
 
-/// The shape every errand-A case builds: a coordinator, an incumbent holding the
-/// role, and a sealed candidate belonging to that coordinator.
+/// The shape every admission-owner case builds: a coordinator, an incumbent holding the role,
+/// and a sealed candidate belonging to that coordinator.
 struct Prepared {
     Registered coordinator;
     WeaveId incumbent{};
@@ -1606,8 +1530,8 @@ struct Topology {
 
 } // namespace
 
-TEST_CASE("R2B-3b-1a: a coordinator successor cannot admit its predecessor's candidate, and the "
-          "refusal changes nothing") {
+TEST_CASE("a coordinator successor cannot admit its predecessor's candidate, and the refusal "
+          "changes nothing") {
     int route = 0;
     SUBCASE("the coordinator died and was revived") { route = 0; }
     SUBCASE("the coordinator's code was replaced while alive") { route = 1; }
@@ -1649,8 +1573,8 @@ TEST_CASE("R2B-3b-1a: a coordinator successor cannot admit its predecessor's can
     CHECK(p.candidate_raw->handled_names.empty());
 }
 
-TEST_CASE("R2B-3b-1a: the unchanged exact coordinator still admits — the positive control the "
-          "refusals above would otherwise be meaningless without") {
+TEST_CASE("the unchanged exact coordinator still admits — the positive control the refusals "
+          "above would otherwise be meaningless without") {
     Switchboard bus;
     Prepared p = prepare(bus);
 
@@ -1676,15 +1600,14 @@ TEST_CASE("R2B-3b-1a: the unchanged exact coordinator still admits — the posit
     CHECK(p.candidate_raw->handled_names[0] == std::string(loom::Activated::zen_name));
     CHECK(p.candidate_raw->handled_names[1] == "Ping");
 
-    // THE ADMISSION'S OWN RECEIPT SAYS DELIVERED, never refused. That is the
-    // fact the whole phase turns on: a successful admission's activation cannot
-    // have been rejected, because the two are one delivery.
+    // The admission's own receipt says Delivered, never refused: a successful admission's
+    // activation cannot have been rejected, because the two are one delivery.
     const DeliveryOutcome o = bus.outcome(r.ticket);
     CHECK(o.disposition == Disposition::Delivered);
     CHECK(o.refusal.reason == RefusalReason::None);
 }
 
-TEST_CASE("R2B-3b-1a: sealing refuses a dead coordinator and refuses to reseal") {
+TEST_CASE("sealing refuses a dead coordinator and refuses to reseal") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered second = register_probe(bus, {pong_schema()});
@@ -1704,9 +1627,8 @@ TEST_CASE("R2B-3b-1a: sealing refuses a dead coordinator and refuses to reseal")
     CHECK(owner.who == coordinator.id);
     CHECK(owner.life == 2); // the revived life, and the seal knows which one
 
-    // RESEALING IS NOT A TRANSFER. Silently changing owners would hand a prepared
-    // candidate to somebody else's transaction; transfer semantics are deliberately
-    // not part of this errand, so the second attempt simply fails.
+    // RESEALING IS NOT A TRANSFER. Silently changing owners would hand a prepared candidate to
+    // somebody else's transaction; no transfer is offered, so the second attempt fails.
     CHECK_FALSE(bus.seal_weave(candidate, second.id));
     CHECK(bus.candidate_owner(candidate) == owner);
 
@@ -1717,7 +1639,7 @@ TEST_CASE("R2B-3b-1a: sealing refuses a dead coordinator and refuses to reseal")
     CHECK_FALSE(bus.seal_weave(roled, coordinator.id));
 }
 
-TEST_CASE("R2B-3b-1a: every other admission refusal is named, and none of them touch topology") {
+TEST_CASE("every other admission refusal is named, and none of them touch topology") {
     Switchboard bus;
     Switchboard decoy;
     Prepared p = prepare(bus);
@@ -1748,21 +1670,10 @@ TEST_CASE("R2B-3b-1a: every other admission refusal is named, and none of them t
 }
 
 // ---- the answer means the same on both sides of the seam (ANS-06) -------------
-//
-// A native weave writes `mail.answer(reply)` and Loom enqueues an authenticated
-// answer. A dynamically loaded weave wrote the same line, reached `HostApiBus`,
-// and got the base class's do-nothing default: no answer, no refusal, no bus
-// event. The same public word meant two different things depending on which side
-// of the library seam it was spoken — and the difference was SILENT, which is the
-// worst way for it to be different.
-//
-//     A public delivery operation must mean the same thing on both sides of the
-//     dynamic-library seam, or fail loudly before user code mistakes silence for
-//     success.
-//
-// ABI v4 pays for it with one narrowly typed door. No authority crosses: the
-// library asks for the public operation, and the host decides whether this
-// delivery earned an answer, who receives it, and what it is labelled.
+// `mail.answer(reply)` from a loaded weave reaches the host through one narrowly typed ABI door
+// and must mean what it means natively: an authenticated answer, or a loud refusal. No
+// authority crosses: the host decides whether the delivery earned an answer, who receives it
+// and how it is labelled.
 
 namespace {
 
@@ -1839,7 +1750,7 @@ AnswerState answer_state(Switchboard& bus, WeaveId id) {
 
 } // namespace
 
-TEST_CASE("R2B-3b-1a: mail.answer() means the same thing natively and dynamically") {
+TEST_CASE("mail.answer() means the same thing natively and dynamically") {
     // THE PARITY PROOF. One ask each, the same public call, and the two results
     // compared field by field rather than each asserted against a wish.
     Switchboard bus;
@@ -1876,14 +1787,13 @@ TEST_CASE("R2B-3b-1a: mail.answer() means the same thing natively and dynamicall
     // ...and each answered its own asker with its own payload.
     CHECK(native_heard.seq == 11);
     CHECK(dynamic_heard.seq == 22);
-    // Both responders were told their answer went out — the dynamic one used to be
-    // told nothing at all.
+    // Both responders are told their answer went out.
     CHECK(nat_raw->answered);
     CHECK(answer_state(bus, dyn.id).answered == 1);
 }
 
-TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY ROLE, and a "
-          "forged ordinary reply is not") {
+TEST_CASE("the dynamic answer is authentic when the ask arrives BY ROLE, and a forged ordinary "
+          "reply is not") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
@@ -1908,8 +1818,8 @@ TEST_CASE("R2B-3b-1a: the dynamic answer is authentic when the ask arrives BY RO
     CHECK_FALSE(heard.all_attested); // the forgery is the one that is not attested
 }
 
-TEST_CASE("R2B-3b-1a: one delivery authorizes one dynamic answer, and the second is refused "
-          "rather than silently dropped") {
+TEST_CASE("one delivery authorizes one dynamic answer, and the second is refused rather than "
+          "silently dropped") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
@@ -1927,18 +1837,12 @@ TEST_CASE("R2B-3b-1a: one delivery authorizes one dynamic answer, and the second
     CHECK(st.second == 0);   // ...and the second was REFUSED, and it was told so
 }
 
-TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer capacity — proven "
-          "with the registry already FULL") {
-    // The defer-then-spend shortcut would have been the easy implementation, and
-    // this is why it was rejected: it would borrow a slot from a bounded registry
-    // for a conversation that never needed one, and at the bound it would begin
-    // failing as `Exhausted` for a reason the caller could do nothing about.
-    //
-    // AN EARLIER VERSION OF THIS CASE PROVED NOTHING: it answered far past the
-    // bound but pumped after every ask, so each borrowed slot was returned before
-    // the next was taken and the registry never actually filled. The mutation that
-    // routes the immediate answer through defer-then-spend stayed green. The
-    // instrument has to HOLD the registry full.
+TEST_CASE("a dynamic immediate answer consumes no deferred-answer capacity — proven with the "
+          "registry already FULL") {
+    // An immediate answer must not borrow a slot from the bounded deferral registry, or at the
+    // bound it would fail as `Exhausted` for a reason the caller cannot act on. The registry is
+    // held FULL: pumping after every ask returns each borrowed slot before the next is taken,
+    // and a defer-then-spend mutation stayed green against a case that did that.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered asker = register_probe(bus, {pong_schema()});
@@ -1986,8 +1890,8 @@ TEST_CASE("R2B-3b-1a: a dynamic immediate answer consumes no deferred-answer cap
     CHECK(tap.empty()); // no Exhausted, no refusal of any kind
 }
 
-TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle laws exactly as "
-          "a native one does") {
+TEST_CASE("a dynamic answer obeys the requester and sender lifecycle laws exactly as a native one "
+          "does") {
     bool requester_changes = false;
     SUBCASE("the requester dies and revives before the answer is delivered") {
         requester_changes = true;
@@ -2028,8 +1932,7 @@ TEST_CASE("R2B-3b-1a: a dynamic answer obeys the requester and sender lifecycle 
     CHECK(heard.count == 0); // neither law is weakened by crossing the seam
 }
 
-TEST_CASE("R2B-3b-1a: an artifact built against the previous ABI is refused, naming both "
-          "versions") {
+TEST_CASE("an artifact built against the previous ABI is refused, naming both versions") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
@@ -2042,21 +1945,17 @@ TEST_CASE("R2B-3b-1a: an artifact built against the previous ABI is refused, nam
     CHECK(bus.list_weaves().empty());
 }
 
-TEST_CASE("KERN-04 / v8: an image built against the previous ABI cannot replace a live "
-          "participant -- refused before any callback of anybody's, and the incumbent stands") {
-    // The v8 break appended a slot to BOTH tables (docs/reference/dynamic-abi.md). The
-    // load-time gate is one door; a reload is the other, and the more dangerous one: a
-    // v7 descriptor swapped behind a live participant would be read past its end at the
-    // next showing. So the candidate is judged BEFORE the incumbent is touched -- no
-    // snapshot, no showing, no rebind -- and the fixture that declares the previous
-    // version pins that ordering. A retained image genuinely built against the v7
-    // header supplies the mixed-artifact evidence; this fixture is the ordering control
+TEST_CASE("KERN-04: an image built against the previous ABI cannot replace a live participant -- "
+          "refused before any callback of anybody's, and the incumbent stands") {
+    // The load gate is one door for an old image; a reload is the more dangerous other: a
+    // previous-version descriptor swapped behind a live participant would be read past its end
+    // at the next showing. So the candidate is judged BEFORE the incumbent is touched -- no
+    // snapshot, no showing, no rebind -- and this fixture pins that ordering
     // (docs/reference/dynamic-abi.md#compatibility-discipline).
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered recorder = register_probe(bus, {pong_schema()});
-    // A rebuilt v8 image that never offers into anything loads as ever: the appended
-    // slots cost a nonparticipant nothing.
+    // An image built against the current ABI loads as ever.
     LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
     REQUIRE_MESSAGE(lr.ok, lr.error);
     const WeaveId id = lr.id;
@@ -2087,30 +1986,17 @@ TEST_CASE("KERN-04 / v8: an image built against the previous ABI cannot replace 
 }
 
 // ---- the transaction remembers (PR-02) ----------------------------------------
-//
-// The door already knew how to open. What it did not have was a memory of who was
-// allowed to turn the handle — so the strongest act in the system could be driven
-// by a coordinator that had died, an operator that had been replaced, or against
-// an incumbent that had drifted away underneath it.
-//
-//     A replacement transaction belongs to exact lives, advances through one
-//     finite state machine, and either commits once or disappears without
-//     disturbing the incumbent.
-//
-// The registry lives in the Switchboard for one decisive reason: `kill` announces
-// Died and `swap_state` announces Revived, but `unregister_weave` announces
-// NOTHING. A registry watching from outside would silently miss permanent
-// removal — the most complete invalidation there is.
+// A replacement transaction belongs to exact lives, advances through one finite state machine,
+// and either commits once or disappears without disturbing the incumbent. Its registry lives in
+// the Switchboard because `unregister_weave` announces nothing (unlike `kill` and
+// `swap_state`): a registry watching from outside would miss permanent removal.
 
 namespace {
 
-/// A production service that answers a version query, so "the incumbent never
-/// stopped being the service" is something a test can ASK rather than infer.
-///
-/// As a CANDIDATE it also holds up its end of the preparation conversation —
-/// deferring or answering immediately as the ask's plan directs. The dynamic
-/// `versioned.service` pair below is the same shape as a real artifact; this one
-/// keeps the native transaction cases readable without a `.so` per case.
+/// A production service that answers a version query, so "the incumbent never stopped being
+/// the service" is something a test can ASK. As a candidate it answers the preparation ask as
+/// the ask's plan directs, deferring or at once; it spares the native transaction cases a `.so`
+/// per case, and the dynamic `versioned.service` pair below has the same shape.
 class VersionedService final : public Weave {
 public:
     explicit VersionedService(std::string version, bool candidate = false)
@@ -2207,11 +2093,8 @@ public:
     loom::DeferredAnswer pending{};
 
     // ---- host wiring, for the LIFE-06 callback-lifetime cases ---------------
-    //
-    // Both hooks are null everywhere else, so no existing case changes shape.
-    // Whoever builds this fixture chooses to hand it a concrete `Switchboard&`
-    // by capture — the honest form of the pattern, and not something the `Bus&`
-    // this weave is delivered could ever provide.
+    // Both hooks are null everywhere else. A case that sets one hands the fixture a concrete
+    // `Switchboard&` by capture, which the `Bus&` a weave is delivered never provides.
 
     /// Run INSIDE the committed-activation callback.
     std::function<void()> on_activation;
@@ -2237,12 +2120,9 @@ private:
     bool candidate_ = false;
 };
 
-/// The mutable half of the cast, on the heap.
-///
-/// HELD BY shared_ptr SO THE HOOKS SURVIVE THE `Cast` BEING RETURNED. The hooks a
-/// cast installs run for the life of the bus and must reach durable storage; an
-/// earlier version captured the factory's local by reference and was correct only
-/// while NRVO elided the copy — true today, guaranteed by nothing.
+/// The mutable half of the cast, on the heap and held by shared_ptr so the hooks survive the
+/// `Cast` being returned: they run for the life of the bus, and a factory local captured by
+/// reference would be correct only while NRVO elided the copy.
 struct CastLog {
     std::vector<std::string> answers;      ///< what the role said when asked
     std::vector<TxnResult> readiness;      ///< every verdict the bus gave the coordinator
@@ -2284,19 +2164,11 @@ struct Cast {
     }
 };
 
-/// THE SMALLEST HONEST COORDINATOR — and deliberately a CREDULOUS one.
-///
-/// It owns lifecycle conversation and nothing else: it does not route domain
-/// traffic, does not inspect who spoke, does not check provenance, and does not
-/// compare correlations. Every delivery it receives while a transaction is live,
-/// it offers to the bus as that transaction's readiness — reading only the
-/// transaction id out of the payload, exactly as the phase says a payload may be
-/// read: to NAME the record, never to authorize the transition.
-///
-/// That credulity is the point. If the coordinator were careful, a green suite
-/// would prove the coordinator careful rather than the mechanism sound. Here every
-/// forgery in the phase is offered to the bus by a party that believes it, and the
-/// bus is the only thing saying no.
+/// THE SMALLEST HONEST COORDINATOR, and deliberately a CREDULOUS one: it owns the lifecycle
+/// conversation and nothing else, and offers every delivery it receives while a transaction is
+/// live to the bus as that transaction's readiness, reading only the transaction id from the
+/// payload, to NAME the record and never to authorize it. Every forgery below is offered by a
+/// party that believes it: a green says the bus refused, not that the coordinator was careful.
 void wire_coordinator(Switchboard& bus, Cast& c) {
     std::shared_ptr<CastLog> log = c.log;
     std::shared_ptr<TxnId> live = c.live_txn;
@@ -2338,13 +2210,10 @@ Cast cast_with_role(Switchboard& bus, const char* role) {
     return c;
 }
 
-/// Ask the candidate to prepare, and let the conversation run to its end.
-///
-/// This is what replaced `mark_candidate_ready` at every call site: not a shorter
-/// way to declare a transaction ready, but the real conversation — an ask through
-/// the sealed door, the candidate's own answer, and the bus deciding whether to
-/// believe it. `plan` is what the candidate is asked to do ("ready", "defer",
-/// "refuse", "defer-refuse"); a deferred plan needs the continuation below.
+/// Ask the candidate to prepare, and let the conversation run to its end: an ask through the
+/// sealed door, the candidate's own answer, and the bus deciding whether to believe it. `plan`
+/// is what the candidate is asked to do ("ready", "defer", "refuse", "defer-refuse"); a
+/// deferred plan needs the continuation below.
 void ask_to_prepare(Switchboard& bus, Cast& c, TxnId id, const char* plan = "ready") {
     *c.live_txn = id;
     versioned::PrepareReplacement ask;
@@ -2378,13 +2247,9 @@ void make_ready(Switchboard& bus, Cast& c, TxnId id) {
     REQUIRE(bus.transaction_state(id) == TxnState::Ready);
 }
 
-/// Everything a failure case must show is unchanged.
-///
-/// DELIBERATELY BUS-ONLY. An earlier version read `c.candidate_raw->activations`,
-/// which is a use-after-free the moment an abort discards the candidate — and it
-/// duly printed a garbage number rather than failing honestly. Everything here is
-/// asked of the bus, which is also the only party whose answer would matter to a
-/// real observer.
+/// Everything a failure case must show is unchanged, asked of the bus alone: an abort discards
+/// the candidate, so reading its own fields here would read freed memory, and the bus is the
+/// only party whose answer a real observer would see.
 void incumbent_untouched(Switchboard& bus, Cast& c, const char* role) {
     CHECK(bus.alive(c.incumbent));
     CHECK_FALSE(bus.sealed(c.incumbent));
@@ -2401,7 +2266,7 @@ constexpr const char* kRole = "service";
 
 } // namespace
 
-TEST_CASE("R2B-3b-2: one prepared replacement, remembered from Preparing to Committed") {
+TEST_CASE("one prepared replacement, remembered from Preparing to Committed") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     REQUIRE(c.ask(bus, kRole) == "v1");
@@ -2470,8 +2335,8 @@ TEST_CASE("R2B-3b-2: one prepared replacement, remembered from Preparing to Comm
     CHECK(bus.active_transactions() == 0);
 }
 
-TEST_CASE("R2B-3b-2: the registry is bounded, one transaction per incumbent, and every ending "
-          "returns the slot") {
+TEST_CASE("the registry is bounded, one transaction per incumbent, and every ending returns the "
+          "slot") {
     Switchboard bus;
     std::vector<Cast> casts;
     std::vector<TxnId> ids;
@@ -2509,7 +2374,7 @@ TEST_CASE("R2B-3b-2: the registry is bounded, one transaction per incumbent, and
     CHECK(bus.transaction_state(ids[1]) == TxnState::Preparing);
 }
 
-TEST_CASE("R2B-3b-2: the state machine has no back doors") {
+TEST_CASE("the state machine has no back doors") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     loom::Activated fact{1};
@@ -2550,7 +2415,7 @@ TEST_CASE("R2B-3b-2: the state machine has no back doors") {
     }
 }
 
-TEST_CASE("R2B-3b-2: the preparation budget is deterministic, and exhausting it aborts") {
+TEST_CASE("the preparation budget is deterministic, and exhausting it aborts") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -2577,7 +2442,7 @@ TEST_CASE("R2B-3b-2: the preparation budget is deterministic, and exhausting it 
     CHECK(out.reason == TxnReason::PreparationExhausted);
 }
 
-TEST_CASE("R2B-3b-2: a participant that changes aborts its own transaction and only its own") {
+TEST_CASE("a participant that changes aborts its own transaction and only its own") {
     // The failure ladder, one rung per subcase, each proving the same seven things
     // about the incumbent and one thing about the transaction.
     int who = 0;
@@ -2641,7 +2506,7 @@ TEST_CASE("R2B-3b-2: a participant that changes aborts its own transaction and o
     }
 }
 
-TEST_CASE("R2B-3b-2: the incumbent drifting aborts the transaction rather than retargeting it") {
+TEST_CASE("the incumbent drifting aborts the transaction rather than retargeting it") {
     int how = 0;
     SUBCASE("the incumbent dies") { how = 0; }
     SUBCASE("the incumbent's code is replaced") { how = 1; }
@@ -2671,8 +2536,8 @@ TEST_CASE("R2B-3b-2: the incumbent drifting aborts the transaction rather than r
     CHECK(bus.role_holder(kRole) != c.candidate);
 }
 
-TEST_CASE("R2B-3b-2: commit revalidates, and a precondition that drifts after Ready refuses "
-          "without moving anything") {
+TEST_CASE("commit revalidates, and a precondition that drifts after Ready refuses without moving "
+          "anything") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -2695,16 +2560,12 @@ TEST_CASE("R2B-3b-2: commit revalidates, and a precondition that drifts after Re
     CHECK(bus.pending() == 0); // no activation was queued
 }
 
-TEST_CASE("R2B-3b-2: a Ready transaction whose ADMISSION refuses aborts terminally rather than "
-          "claiming success") {
-    // THE BRANCH NO OTHER CASE REACHED. Everywhere else a doomed commit is caught
-    // by the transaction's own revalidation, so `admit_candidate` is never asked
-    // and never says no. The mutation that made a failed admission report
-    // `Committed` therefore stayed GREEN — not because the guard was redundant,
-    // but because nothing exercised it.
-    //
-    // A foreign lifecycle authority is the cleanest way in: every transaction
-    // precondition holds, and admission refuses on its own terms.
+TEST_CASE("a Ready transaction whose ADMISSION refuses aborts terminally rather than claiming "
+          "success") {
+    // The only case that reaches `admit_candidate` refusing: everywhere else the transaction's
+    // own revalidation catches a doomed commit first, and a mutation making a failed admission
+    // report `Committed` stayed green without this case. A foreign lifecycle authority is the
+    // clean way in: every transaction precondition holds, and admission refuses on its own terms.
     Switchboard bus;
     Switchboard decoy; // a real board, and a real authority — issued elsewhere
     Cast c = cast_with_role(bus, kRole);
@@ -2731,7 +2592,7 @@ TEST_CASE("R2B-3b-2: a Ready transaction whose ADMISSION refuses aborts terminal
     CHECK(out.reason == TxnReason::AdmissionRefused);
 }
 
-TEST_CASE("R2B-3b-3: readiness needs the exact coordinator and the exact candidate") {
+TEST_CASE("readiness needs the exact coordinator and the exact candidate") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     Cast other = cast_with_role(bus, "other");
@@ -2768,8 +2629,8 @@ TEST_CASE("R2B-3b-3: readiness needs the exact coordinator and the exact candida
     make_ready(bus, c, t.id);
 }
 
-TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its queued speech "
-          "does not escape") {
+TEST_CASE("an aborted candidate cannot be admitted afterwards, and its queued speech does not "
+          "escape") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -2797,27 +2658,10 @@ TEST_CASE("R2B-3b-2: an aborted candidate cannot be admitted afterwards, and its
 }
 
 // ---- the transaction ends once (PR-06) ----------------------------------------
-//
-// Terminalizing a transaction discards its candidate, and discarding a candidate
-// is a lifecycle change, which re-enters the invalidation hook. If the ending
-// transaction is still in the active registry at that moment, the hook rediscovers
-// it and ends it AGAIN:
-//
-//     outer finish -> record outcome #1 -> unregister candidate
-//                     -> invalidate -> finds the same transaction
-//                        -> nested finish -> record outcome #2 -> erase
-//                  -> outer erase finds nothing
-//
-// Two terminal truths for one promise, and two slots consumed in a bounded store
-// that then evicts somebody else's result early.
-//
-//     One candidate belongs to one active replacement, and one replacement
-//     produces one terminal truth.
-//
-// The repair is ORDERING, not a guard: remove the record from the active registry
-// BEFORE any cleanup can run, so the hook has nothing to rediscover. Structural
-// non-reentrancy beats a "currently finishing" flag, which would have to be
-// correct at every future call site instead of at one.
+// Terminalizing a transaction discards its candidate, a lifecycle change that re-enters the
+// invalidation hook; a transaction still in the active registry then would be ended twice, two
+// outcomes filling a bounded store. It leaves the registry BEFORE any cleanup runs, so the hook
+// finds nothing: ordering, not a "currently finishing" flag every call site would have to keep.
 
 namespace {
 
@@ -2835,7 +2679,7 @@ void exactly_one_outcome(Switchboard& bus, WeaveId op, TxnId id, TxnState state,
 
 } // namespace
 
-TEST_CASE("R2B-3b-2a: every abort route produces exactly one terminal outcome") {
+TEST_CASE("every abort route produces exactly one terminal outcome") {
     // Each of these ends by discarding the candidate, so each re-enters the
     // invalidation hook on its way out. The hook must find nothing.
     int route = 0;
@@ -2895,8 +2739,7 @@ TEST_CASE("R2B-3b-2a: every abort route produces exactly one terminal outcome") 
     exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, expected);
 }
 
-TEST_CASE("R2B-3b-2a: a duplicate terminalization cannot consume two slots of the bounded "
-          "terminal store") {
+TEST_CASE("a duplicate terminalization cannot consume two slots of the bounded terminal store") {
     // The bound is the instrument. Fill the store exactly, then run an abort whose
     // candidate cleanup re-enters the hook: a second insertion would evict one MORE
     // of the older results than it should, and the count of survivors says so.
@@ -2941,7 +2784,7 @@ TEST_CASE("R2B-3b-2a: a duplicate terminalization cannot consume two slots of th
     CHECK(survivors == store - 1);
 }
 
-TEST_CASE("R2B-3b-2a: one sealed candidate belongs to at most one active transaction") {
+TEST_CASE("one sealed candidate belongs to at most one active transaction") {
     Switchboard bus;
     // Two incumbents in two roles, one coordinator, and ONE candidate.
     Cast a = cast_with_role(bus, "role-a");
@@ -2980,8 +2823,7 @@ TEST_CASE("R2B-3b-2a: one sealed candidate belongs to at most one active transac
     CHECK(bus.transaction_state(first.id) == TxnState::Preparing);
 }
 
-TEST_CASE("R2B-3b-2a: a committed candidate is public, so it cannot be named as a sealed "
-          "candidate again") {
+TEST_CASE("a committed candidate is public, so it cannot be named as a sealed candidate again") {
     Switchboard bus;
     Cast a = cast_with_role(bus, "role-a");
     Cast b = cast_with_role(bus, "role-b");
@@ -3014,8 +2856,8 @@ TEST_CASE("R2B-3b-2a: a committed candidate is public, so it cannot be named as 
     incumbent_untouched(bus, b, "role-b");
 }
 
-TEST_CASE("R2B-3b-2a: aborting one transaction does not duplicate its result, disturb another, "
-          "or consume the other's terminal capacity") {
+TEST_CASE("aborting one transaction does not duplicate its result, disturb another, or consume the "
+          "other's terminal capacity") {
     Switchboard bus;
     Cast a = cast_with_role(bus, "role-a");
     Cast b = cast_with_role(bus, "role-b");
@@ -3041,21 +2883,11 @@ TEST_CASE("R2B-3b-2a: aborting one transaction does not duplicate its result, di
 }
 
 // ---- the candidate answers (PR-04) --------------------------------------------
-//
-// Until now a transaction became Ready because a trusted host said so. The state
-// machine was real and the readiness was scaffolding, named as such.
-//
-//     A transaction becomes ready only when the exact sealed candidate
-//     authentically answers the exact preparation request that belongs to that
-//     transaction.
-//
-// The coordinator in these cases is deliberately CREDULOUS (see wire_coordinator):
-// it offers every delivery it receives to the bus as readiness, reading only the
-// transaction id from the payload. So a green here is never "the coordinator was
-// careful" — it is always "the bus refused".
+// A transaction becomes ready only when the exact sealed candidate authentically answers the
+// exact preparation request of that transaction. The coordinator here is credulous (see
+// wire_coordinator), so a green is never "the coordinator was careful": it is "the bus refused".
 
-TEST_CASE("R2B-3b-3: an immediate answer and one deferred across deliveries are the same "
-          "readiness") {
+TEST_CASE("an immediate answer and one deferred across deliveries are the same readiness") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -3092,10 +2924,9 @@ TEST_CASE("R2B-3b-3: an immediate answer and one deferred across deliveries are 
     CHECK(c.ask(bus, kRole) == "v1");
 }
 
-TEST_CASE("R2B-3b-3: an immediate readiness answer consumes no deferred-answer capacity") {
-    // THE BOUND IS ONLY AN INSTRUMENT WHILE IT IS HELD SATURATED (the
-    // lesson, paid for once already): a test that defers and pumps between asks
-    // returns each slot before taking the next and never fills anything.
+TEST_CASE("an immediate readiness answer consumes no deferred-answer capacity") {
+    // The bound is an instrument only while it is held saturated: a test that defers and pumps
+    // between asks returns each slot before taking the next and never fills anything.
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
 
@@ -3134,7 +2965,7 @@ TEST_CASE("R2B-3b-3: an immediate readiness answer consumes no deferred-answer c
     }
 }
 
-TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer") {
+TEST_CASE("a forged readiness has the right shape and is not an answer") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     // A rogue that can reach the coordinator and knows the whole protocol.
@@ -3222,22 +3053,14 @@ TEST_CASE("R2B-3b-3: a forged readiness has the right shape and is not an answer
     CHECK(bus.transaction_state(t.id) == TxnState::Ready);
 }
 
-TEST_CASE("R2B-3b-3: an authentic answer to a DIFFERENT ask, with the right correlation, is not "
-          "the readiness answer") {
-    // THE CASE THE WHOLE `Envelope::preparation` FIELD EXISTS FOR, and the only
-    // one that can decide it. Everywhere else the answer's speaker, its recipient
-    // and its correlation are all already right — because they come from the real
-    // ask — so those terms cannot tell a true readiness from a false one.
-    //
-    // Here the coordinator asks its candidate the SAME QUESTION twice: once
-    // through `ask_candidate_to_prepare`, which opens the transaction's one
-    // conversation, and once as an ordinary send carrying the same correlation by
-    // hand. The candidate answers the second one, authentically, to the right
-    // party, with the right number. Only "which ask is this?" separates them.
-    //
-    // Loom mints preparation correlations from 1 on a fresh board, so the forging
-    // coordinator here knows exactly which number to write — as any real one
-    // could, since a correlation travels on the wire and is nobody's secret.
+TEST_CASE("an authentic answer to a DIFFERENT ask, with the right correlation, is not the "
+          "readiness answer") {
+    // The case the `Envelope::preparation` field exists for, and the only one that decides it:
+    // elsewhere the answer's speaker, recipient and correlation come from the real ask, so they
+    // cannot tell a true readiness from a false one. Here the coordinator asks the SAME QUESTION
+    // twice, through `ask_candidate_to_prepare` and as an ordinary send carrying the same
+    // correlation by hand (they start at 1 and travel on the wire), and the candidate answers the
+    // second one authentically. Only "which ask is this?" separates them.
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -3265,20 +3088,13 @@ TEST_CASE("R2B-3b-3: an authentic answer to a DIFFERENT ask, with the right corr
     CHECK(bus.transaction_state(t.id) == TxnState::Ready);
 }
 
-TEST_CASE("R2B-3b-3: answering the readiness instead of consuming it does not make the next "
-          "exchange the readiness") {
-    // FOUND BY READING, NOT BY A FAILING TEST — and it is the subtlest thing in
-    // the phase. `enqueue_answer` copies the correlation forward at every hop, so
-    // if the ask's identity were inherited the same way, a coordinator that
-    // ANSWERED the readiness rather than consuming it would find a later,
-    // unrelated exchange satisfying every term:
-    //
-    //   coordinator -> candidate   the ask                 (preparation = T)
-    //   candidate   -> coordinator the real readiness      (T)
-    //   coordinator -> candidate   an answer to THAT       (T, if inherited)
-    //   candidate   -> coordinator an answer to that       (T, and indistinguishable)
-    //
-    // An ask seeds an answerable conversation; its answer does not seed another.
+TEST_CASE("answering the readiness instead of consuming it does not make the next exchange the "
+          "readiness") {
+    // `enqueue_answer` copies the correlation forward at every hop. Were the ask's identity
+    // inherited the same way, a coordinator that ANSWERED the readiness instead of consuming it
+    // would find the next exchange satisfying every term: ask (T), readiness (T), an answer to
+    // that (T), and an answer to the answer (T, indistinguishable). An ask seeds an answerable
+    // conversation; its answer does not seed another.
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -3310,7 +3126,7 @@ TEST_CASE("R2B-3b-3: answering the readiness instead of consuming it does not ma
     incumbent_untouched(bus, c, kRole);
 }
 
-TEST_CASE("R2B-3b-3: a delivery live on one Loom confers nothing on another") {
+TEST_CASE("a delivery live on one Loom confers nothing on another") {
     // A transaction id is a number, and a number belongs to no world. The only
     // thing that could make one mean something is a live delivery — and a delivery
     // is live on exactly one board. So the decoy has nothing to offer, even at the
@@ -3346,7 +3162,7 @@ TEST_CASE("R2B-3b-3: a delivery live on one Loom confers nothing on another") {
     CHECK(bus.transaction_state(here.id) == TxnState::Ready);
 }
 
-TEST_CASE("R2B-3b-3: an authentic answer that names another transaction satisfies neither") {
+TEST_CASE("an authentic answer that names another transaction satisfies neither") {
     Switchboard bus;
     Cast a = cast_with_role(bus, "role-a");
     Cast b = cast_with_role(bus, "role-b");
@@ -3375,7 +3191,7 @@ TEST_CASE("R2B-3b-3: an authentic answer that names another transaction satisfie
     incumbent_untouched(bus, b, "role-b");
 }
 
-TEST_CASE("R2B-3b-3: one ask, one answer — a replay and a second answer both refuse") {
+TEST_CASE("one ask, one answer — a replay and a second answer both refuse") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -3383,12 +3199,10 @@ TEST_CASE("R2B-3b-3: one ask, one answer — a replay and a second answer both r
     REQUIRE(t.ok);
 
     SUBCASE("the coordinator offers the same delivery twice") {
-        // Two independent walls stop a replay, and they answer in a definite
-        // order. The state machine speaks first: an accepted readiness has already
-        // moved the transaction to Ready, so the second offer is refused as
-        // WrongState — truthfully, and before the conversation is consulted at
-        // all. (The conversation's own consumed-check is what catches a replay
-        // after a REFUSED validation, where the state has not moved; the
+        // Two walls stop a replay, in a definite order. The state machine speaks first: an
+        // accepted readiness has moved the transaction to Ready, so the second offer is refused
+        // as WrongState before the conversation is consulted. (The conversation's consumed-check
+        // catches a replay after a REFUSED validation, where the state has not moved; the
         // role-drift case pins that one.)
         offer_readiness_twice(bus, c);
         ask_to_prepare(bus, c, t.id, "ready");
@@ -3426,8 +3240,8 @@ TEST_CASE("R2B-3b-3: one ask, one answer — a replay and a second answer both r
     }
 }
 
-TEST_CASE("R2B-3b-3: the candidate's own refusal ends the transaction once, and the incumbent "
-          "never learns of it") {
+TEST_CASE("the candidate's own refusal ends the transaction once, and the incumbent never learns "
+          "of it") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const char* plan = "refuse";
@@ -3453,7 +3267,7 @@ TEST_CASE("R2B-3b-3: the candidate's own refusal ends the transaction once, and 
     incumbent_untouched(bus, c, kRole);
 }
 
-TEST_CASE("R2B-3b-3: a forged refusal cannot abort a legitimate transaction") {
+TEST_CASE("a forged refusal cannot abort a legitimate transaction") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     Registered rogue = register_probe(bus, {pong_schema()});
@@ -3475,8 +3289,8 @@ TEST_CASE("R2B-3b-3: a forged refusal cannot abort a legitimate transaction") {
     incumbent_untouched(bus, c, kRole);
 }
 
-TEST_CASE("R2B-3b-3: an authentic answer offered against a transaction that has ended is late, "
-          "and revives nothing") {
+TEST_CASE("an authentic answer offered against a transaction that has ended is late, and revives "
+          "nothing") {
     Switchboard bus;
     Cast a = cast_with_role(bus, "role-a");
     Cast b = cast_with_role(bus, "role-b");
@@ -3514,8 +3328,8 @@ TEST_CASE("R2B-3b-3: an authentic answer offered against a transaction that has 
     incumbent_untouched(bus, b, "role-b");
 }
 
-TEST_CASE("R2B-3b-3: the budget keeps running through a deferred preparation, and exhausting it "
-          "ends the transaction once") {
+TEST_CASE("the budget keeps running through a deferred preparation, and exhausting it ends the "
+          "transaction once") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -3550,7 +3364,7 @@ TEST_CASE("R2B-3b-3: the budget keeps running through a deferred preparation, an
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
 }
 
-TEST_CASE("R2B-3b-3: a lifecycle change during preparation aborts before any answer can land") {
+TEST_CASE("a lifecycle change during preparation aborts before any answer can land") {
     int how = 0;
     SUBCASE("the candidate dies") { how = 0; }
     SUBCASE("the candidate's code is replaced") { how = 1; }
@@ -3614,17 +3428,12 @@ TEST_CASE("R2B-3b-3: a lifecycle change during preparation aborts before any ans
     CHECK(bus.role_holder(kRole) != c.candidate);
 }
 
-TEST_CASE("R2B-3b-3: the role drifting under a live preparation refuses the readiness") {
-    // THE TERM NO LIFECYCLE CASE CAN REACH. Every death, revival and reload aborts
-    // the transaction outright, so readiness validation never sees a drifted role
-    // by those roads — which is exactly why the role-drift mutation stayed
-    // GREEN, and why it needs a road of its own.
-    //
-    // There is one: `admit_candidate` is the sole admission mutation and a trusted
-    // host may call it directly, outside any transaction. Doing so moves the role
-    // away from our incumbent and seals it — while leaving its life and its code
-    // untouched, so nothing announces anything and our transaction survives to
-    // meet the drift at validation time.
+TEST_CASE("the role drifting under a live preparation refuses the readiness") {
+    // Every death, revival and reload aborts the transaction outright, so readiness validation
+    // never meets a drifted role by those roads, and a role-drift mutation stayed green without
+    // this case. Its own road: a trusted host calls `admit_candidate` directly, outside any
+    // transaction, moving the role away from our incumbent without touching its life or code,
+    // so our transaction survives to meet the drift at validation.
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,
@@ -3661,11 +3470,9 @@ TEST_CASE("R2B-3b-3: the role drifting under a live preparation refuses the read
 }
 
 // ---- the dynamic `versioned.service` proof (PR-04) -----------------------------
-//
-// Everything above is native. This is the phase's real subject: two loaded
-// artifacts, a service that never stops answering "v1", and a successor that
-// receives a private preparation ask, keeps the answer across other deliveries,
-// and answers for itself before it is allowed anywhere near the world.
+// Two loaded artifacts: a service that never stops answering "v1", and a successor that
+// receives a private preparation ask, keeps the answer across other deliveries, and answers
+// for itself before it is allowed anywhere near the world.
 
 namespace {
 
@@ -3731,18 +3538,11 @@ struct DynCast {
     }
 };
 
-/// Load both artifacts and wire the same credulous coordinator the native cases
-/// use. `load_candidate` is the ordinary load followed by the seal — so v2 is
-/// built by exactly the code that builds every other weave, and the object that
-/// prepares is the object that goes live.
-///
-/// `coordinator_grant` is a parameter because the keystone case is a
-/// coordinator that CANNOT emit `zen.Activated` — the exact grant shape that used
-/// to commit successfully and leave its candidate untold.
-///
-/// `with_candidate=false` loads only the incumbent: the facade vertical
-/// must load its own candidate through the handle, or it would be proving the
-/// rig's plumbing instead of the handle's.
+/// Load both artifacts and wire the same credulous coordinator the native cases use.
+/// `load_candidate` is the ordinary load followed by the seal, so the object that prepares is
+/// the object that goes live. `coordinator_grant` lets a case use a coordinator that CANNOT
+/// emit `zen.Activated`; `with_candidate=false` loads only the incumbent, for the handle cases,
+/// which must load their own candidate through the handle.
 DynCast load_pair(Switchboard& bus, Kernel& kernel,
                   Grant coordinator_grant = Grant{}.allow_any(),
                   bool with_candidate = true) {
@@ -3858,8 +3658,8 @@ void announce_activation(Switchboard& bus, WeaveId target, std::int64_t sequence
 
 } // namespace
 
-TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answers for itself, "
-          "and only then becomes the service") {
+TEST_CASE("a sealed dynamic candidate prepares across deliveries, answers for itself, and only "
+          "then becomes the service") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -3949,7 +3749,7 @@ TEST_CASE("R2B-3b-3: a sealed dynamic candidate prepares across deliveries, answ
     CHECK(bus.active_transactions() == 0);
 }
 
-TEST_CASE("R2B-3b-3: the same readiness, answered inside the preparation handler") {
+TEST_CASE("the same readiness, answered inside the preparation handler") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -3974,8 +3774,7 @@ TEST_CASE("R2B-3b-3: the same readiness, answered inside the preparation handler
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
 }
 
-TEST_CASE("R2B-3b-3: queued production waiting on the role reaches the new service only after "
-          "its activation") {
+TEST_CASE("queued production waiting on the role reaches the new service only after its activation") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4016,7 +3815,7 @@ TEST_CASE("R2B-3b-3: queued production waiting on the role reaches the new servi
     CHECK(state_field(bus, d.candidate, "activations") == 1);
 }
 
-TEST_CASE("R2B-3b-3: a real candidate's refusal ends it, and v1 never notices") {
+TEST_CASE("a real candidate's refusal ends it, and v1 never notices") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4043,15 +3842,14 @@ TEST_CASE("R2B-3b-3: a real candidate's refusal ends it, and v1 never notices") 
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Aborted, TxnReason::CandidateRefused);
     v1_still_the_service(bus, d);
     // AND THE KERNEL'S BOOKS FOLLOW (KERN-02, KERN-03). The transaction discarded the
-    // candidate; nobody called the Kernel; the artifact is gone from it anyway.
-    // Before this phase the record survived, so `unload("v2")` answered true and
-    // meant "I closed a library whose weave had already been destroyed".
+    // candidate; nobody called the Kernel; the artifact is gone from it anyway, so
+    // `unload("v2")` cannot claim to close a library whose weave was already destroyed.
     CHECK_FALSE(kernel.is_loaded("v2"));
     CHECK(kernel.status("v2") == ArtifactStatus::NotLoaded);
     CHECK_FALSE(kernel.unload("v2")); // truthfully not loaded, rather than falsely tidy
 }
 
-TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidate outside") {
+TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside") {
     int how = 0;
     SUBCASE("the candidate dies while holding the answer") { how = 0; }
     SUBCASE("the candidate's code is replaced") { how = 1; }
@@ -4137,7 +3935,7 @@ TEST_CASE("R2B-3b-3: every pre-commit failure leaves v1 serving and the candidat
     CHECK(kernel.unload("v1"));
 }
 
-TEST_CASE("R2B-3b-3: a candidate artifact that cannot load never becomes a candidate") {
+TEST_CASE("a candidate artifact that cannot load never becomes a candidate") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4158,8 +3956,7 @@ TEST_CASE("R2B-3b-3: a candidate artifact that cannot load never becomes a candi
     v1_still_the_service(bus, d);
 }
 
-TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothing about the "
-          "new service") {
+TEST_CASE("after a successful commit, retirement failing changes nothing about the new service") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4198,7 +3995,7 @@ TEST_CASE("R2B-3b-3: after a successful commit, retirement failing changes nothi
     CHECK(bus.active_transactions() == 0);
 }
 
-TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation and at commit") {
+TEST_CASE("the artifact contracts are the real ones, at preparation and at commit") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4243,15 +4040,9 @@ TEST_CASE("R2B-3b-3: the artifact contracts are the real ones, at preparation an
 }
 
 // ---- the Kernel's books follow reality (KERN-02, KERN-03) -------------------
-//
-//   When the Switchboard destroys a Kernel-loaded weave, the Kernel releases its
-//   artifact record and library exactly once.
-//
-//   When the Switchboard changes production topology, the Kernel's queries and
-//   cleanup immediately agree with it.
-//
-// The Switchboard already changed reality correctly. What follows proves the
-// Kernel's records describe the world that actually exists.
+// When the Switchboard destroys a Kernel-loaded weave, the Kernel releases its artifact record
+// and library exactly once; when the Switchboard changes production topology, the Kernel's
+// queries and cleanup agree with it at once.
 
 namespace {
 
@@ -4305,8 +4096,7 @@ Kernel::RoleQuery service_query(const Kernel& kernel) {
 
 } // namespace
 
-TEST_CASE("R2B-3b-3a: a lifecycle-driven abort releases the candidate's artifact, and nobody "
-          "had to ask") {
+TEST_CASE("a lifecycle-driven abort releases the candidate's artifact, and nobody had to ask") {
     int route = 0;
     const char* plan = "defer";
     SUBCASE("the candidate refuses, authentically") { route = 0; plan = "refuse"; }
@@ -4367,7 +4157,7 @@ TEST_CASE("R2B-3b-3a: a lifecycle-driven abort releases the candidate's artifact
     CHECK_FALSE(bus.alive(doomed));
     CHECK(bus.role_holder(kService) == d.incumbent);
 
-    // THE KERNEL'S SIDE — WITHOUT A CLEANUP CALL. This is the phase.
+    // THE KERNEL'S SIDE, WITHOUT A CLEANUP CALL.
     artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
     CHECK(kernel.is_loaded("v1")); // and the incumbent's artifact is untouched
     CHECK(kernel.role_of("v1") == kService);
@@ -4396,7 +4186,7 @@ TEST_CASE("R2B-3b-3a: a lifecycle-driven abort releases the candidate's artifact
     }
 }
 
-TEST_CASE("R2B-3b-3a: shutdown after a lifecycle-driven abort repeats no destruction") {
+TEST_CASE("shutdown after a lifecycle-driven abort repeats no destruction") {
     Switchboard bus;
     LifetimeDelta ledger;
     WeaveId doomed{};
@@ -4428,8 +4218,8 @@ TEST_CASE("R2B-3b-3a: shutdown after a lifecycle-driven abort repeats no destruc
     CHECK(ledger.opened() == 3);
 }
 
-TEST_CASE("R2B-3b-3a: a released candidate name is reusable, and nothing of the old artifact "
-          "comes back with it") {
+TEST_CASE("a released candidate name is reusable, and nothing of the old artifact comes back with "
+          "it") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4491,8 +4281,8 @@ TEST_CASE("R2B-3b-3a: a released candidate name is reusable, and nothing of the 
     CHECK(late.why == TxnReason::LateReadiness);
 }
 
-TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's books as well as "
-          "the Switchboard's") {
+TEST_CASE("the committed candidate is the service, in the Kernel's books as well as the "
+          "Switchboard's") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LifetimeDelta ledger;
@@ -4578,7 +4368,7 @@ TEST_CASE("R2B-3b-3a: the committed candidate is the service, in the Kernel's bo
     CHECK(ledger.closed() == 2);
 }
 
-TEST_CASE("R2B-3b-3a: unloading the retired incumbent does not disturb the new service") {
+TEST_CASE("unloading the retired incumbent does not disturb the new service") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4605,8 +4395,8 @@ TEST_CASE("R2B-3b-3a: unloading the retired incumbent does not disturb the new s
     CHECK(d.ask(bus) == "v2");
 }
 
-TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all — is seen by the "
-          "Kernel immediately") {
+TEST_CASE("a role moved by DIRECT admission — no transaction at all — is seen by the Kernel "
+          "immediately") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4623,9 +4413,8 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
                                               Message(to_value(loom::Activated{7})), 7);
     REQUIRE(r.scheduled);
 
-    // Direct admission is SCHEDULED too (PR-07) — one primitive, one behaviour,
-    // so the direct road cannot keep the split-brain the transaction road lost.
-    // The Kernel says the truthful thing in both windows, immediately in both.
+    // Direct admission is SCHEDULED too (PR-07): one primitive, one behaviour, and the Kernel
+    // says the truthful thing in both windows, at once in both.
     CHECK(kernel.role_of("v1") == kService);
     CHECK(kernel.role_of("v2").empty());
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
@@ -4645,22 +4434,21 @@ TEST_CASE("R2B-3b-3a: a role moved by DIRECT admission — no transaction at all
     CHECK(state_field(bus, d.candidate, "activations") == 1);
     CHECK(d.ask(bus) == "v2");
 
-    // ...and the LEGACY road agrees too: `unload_role` is what a graceful
-    // `SwapWeave` reaches through, and it selects the live holder.
+    // ...and a graceful `SwapWeave`'s road agrees too: it reaches through `unload_role`, which
+    // selects the live holder.
     REQUIRE(kernel.unload_role(kService));
     CHECK_FALSE(kernel.is_loaded("v2"));
     CHECK(kernel.is_loaded("v1"));
 }
 
-TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up") {
+TEST_CASE("Kernel::commit_candidate leaves no bookkeeping to catch up") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
     REQUIRE(d.ask(bus) == "v1");
 
-    // The Kernel's own commit door. It used to patch two cached role fields after
-    // the bus answered; there is nothing to patch now, and the answers are the
-    // same ones the transaction road produces.
+    // The Kernel's own commit door keeps no cached role to patch: its answers are the ones the
+    // transaction road produces.
     REQUIRE(kernel.commit_candidate("v1", "v2", kService));
     CHECK(kernel.role_of("v2") == kService);
     CHECK(kernel.role_of("v1").empty());
@@ -4677,8 +4465,8 @@ TEST_CASE("R2B-3b-3a: Kernel::commit_candidate leaves no bookkeeping to catch up
     CHECK(kernel.role_of("v1").empty());
 }
 
-TEST_CASE("R2B-3b-3a: reloading a weave a transaction bound as its candidate releases the "
-          "artifact, and the reload says so") {
+TEST_CASE("reloading a weave a transaction bound as its candidate releases the artifact, and the "
+          "reload says so") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4714,7 +4502,7 @@ TEST_CASE("R2B-3b-3a: reloading a weave a transaction bound as its candidate rel
     CHECK(ledger.closed() == 2);
 }
 
-TEST_CASE("R2B-3b-3a: an adapter a host keeps holds its library open, and the Kernel says so") {
+TEST_CASE("an adapter a host keeps holds its library open, and the Kernel says so") {
     Switchboard bus;
     LifetimeDelta ledger;
     {
@@ -4747,8 +4535,7 @@ TEST_CASE("R2B-3b-3a: an adapter a host keeps holds its library open, and the Ke
     CHECK(ledger.created() == ledger.destroyed());
 }
 
-TEST_CASE("R2B-3b-3a: unloading an artifact whose adapter a host still holds does not close its "
-          "library early") {
+TEST_CASE("unloading an artifact whose adapter a host still holds does not close its library early") {
     Switchboard bus;
     LifetimeDelta ledger;
     std::unique_ptr<Weave> held;
@@ -4770,7 +4557,7 @@ TEST_CASE("R2B-3b-3a: unloading an artifact whose adapter a host still holds doe
     CHECK(ledger.closed() == 1); // the last holder closes it, once
 }
 
-TEST_CASE("R2B-3b-3a: every artifact status is reachable, and aliveness outranks the seal") {
+TEST_CASE("every artifact status is reachable, and aliveness outranks the seal") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4807,7 +4594,7 @@ TEST_CASE("R2B-3b-3a: every artifact status is reachable, and aliveness outranks
     CHECK(std::string(name_of(ArtifactStatus::Unregistered)) == "Unregistered");
 }
 
-TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter") {
+TEST_CASE("a namesake load is not reaped by its predecessor's adapter") {
     Switchboard bus;
     LifetimeDelta ledger;
     std::unique_ptr<Weave> held;
@@ -4819,10 +4606,9 @@ TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter
         REQUIRE(kernel.unload("t")); // ...and the Kernel gives up the name
         REQUIRE_FALSE(kernel.is_loaded("t"));
 
-        // THE SAME NAME, A DIFFERENT ARTIFACT — while the predecessor's adapter is
-        // still alive and still remembers the string "t". This is the input every
-        // other case in this file fails to produce, which is why the namesake
-        // identity check survived a solo cut: it was unwatched, not redundant.
+        // THE SAME NAME, A DIFFERENT ARTIFACT, while the predecessor's adapter is still alive
+        // and still remembers the string "t". No other case in this file produces this input,
+        // and a mutation cutting the namesake identity check alone stayed green without it.
         REQUIRE(kernel.load("t", ZEN_SO_WEAVE_B).ok);
         const WeaveId fresh = kernel.weave_id("t");
         CHECK(kernel.status("t") == ArtifactStatus::Live);
@@ -4843,7 +4629,7 @@ TEST_CASE("R2B-3b-3a: a namesake load is not reaped by its predecessor's adapter
     CHECK(ledger.created() == 2);
 }
 
-TEST_CASE("R2B-3b-3a: a candidate that loads but cannot be sealed leaves no artifact behind") {
+TEST_CASE("a candidate that loads but cannot be sealed leaves no artifact behind") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -4866,21 +4652,10 @@ TEST_CASE("R2B-3b-3a: a candidate that loads but cannot be sealed leaves no arti
 }
 
 // ---- admission includes first breath (PR-08) --------------------------------
-//
-// Putting the activation ahead of production is not enough to make it CERTAIN.
-// Move the role and queue the activation as an ordinary gated send stamped as the
-// coordinator, and the topology changes at the commit while the message is
-// authorized later — against a grant, a sender life and a seal that the commit has
-// already stopped being able to guarantee.
-//
-//     commit -> ok ; role moves ; then Activated -> CapabilityDenied
-//
-// A successor that is publicly the service and was never told it is alive. So the
-// two halves are not two things: one envelope IS the admission and IS
-// the activation, dispatched as one queue turn, and there is no representable
-// state in which one of them happened.
-//
-//     Entering the world and being told that you entered it are one event.
+// Queued as an ordinary gated send after the role moved, an activation would be authorized
+// against a grant, sender life and seal the commit can no longer guarantee: publicly the
+// service, never told it is alive. So one envelope IS the admission and IS the activation,
+// dispatched as one queue turn; entering the world and being told so are one event.
 
 namespace {
 
@@ -4936,12 +4711,10 @@ std::shared_ptr<RefusalLog> watch(Switchboard& bus, WeaveId candidate) {
     return log;
 }
 
-/// THE EXCLUSION LIST, written once. After a successful admission the activation
-/// must not be rejectable for any of these — they are exactly the questions the
-/// old gated path asked after the topology had already moved.
-///
-/// Scoped from the mark taken when the admission was scheduled, so a refusal the
-/// test itself provoked earlier cannot be mistaken for the activation's.
+/// THE EXCLUSION LIST, written once: after a successful admission the activation must not be
+/// rejectable for any of these, the questions a gated send would ask after the topology moved.
+/// Scoped from the mark taken when the admission was scheduled, so a refusal the test itself
+/// provoked earlier cannot be mistaken for the activation's.
 void no_activation_refusal(const RefusalLog& log, WeaveId candidate, std::size_t from,
                            std::size_t from_deliveries) {
     // A POSITIVE CONTROL FIRST: exactly one activation was actually DELIVERED. An
@@ -4971,8 +4744,8 @@ void no_activation_refusal(const RefusalLog& log, WeaveId candidate, std::size_t
     }
 }
 
-/// A coordinator grant that carries the preparation vocabulary and NOT
-/// `zen.Activated` — the original defect's exact shape, as a value.
+/// A coordinator grant that carries the preparation vocabulary and NOT `zen.Activated`, as a
+/// value.
 Grant preparation_only() {
     Grant g;
     g.allow_to_any(versioned::PrepareReplacement::zen_name,
@@ -4995,8 +4768,8 @@ TxnId dyn_ready(Switchboard& bus, DynCast& d) {
 
 } // namespace
 
-TEST_CASE("R2B-3d: admission and first breath are one event — v2 is never publicly the service "
-          "without having been told") {
+TEST_CASE("admission and first breath are one event — v2 is never publicly the service without "
+          "having been told") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -5075,13 +4848,11 @@ TEST_CASE("R2B-3d: admission and first breath are one event — v2 is never publ
     no_activation_refusal(*log, d.candidate, refusals_before, deliveries_before);
 }
 
-TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated grant admits, and "
-          "the activation is authentic anyway") {
-    // Before the repair this scenario was: commit -> ok, the role moves, and the
-    // activation is then refused at delivery as CapabilityDenied. The chosen law
-    // is that LIFECYCLE AUTHORITY owns a committed activation, so the ordinary
-    // grant is not consulted — and this proves both halves of that: the admission
-    // is whole, and the ordinary door is exactly as narrow as it was.
+TEST_CASE("a coordinator with no zen.Activated grant admits, and the activation is authentic "
+          "anyway") {
+    // LIFECYCLE AUTHORITY owns a committed activation, so the coordinator's ordinary grant is
+    // not consulted: a coordinator that cannot emit `zen.Activated` still admits whole, with an
+    // authentic activation, and the ordinary door stays exactly as narrow.
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, preparation_only());
@@ -5129,8 +4900,8 @@ TEST_CASE("R2B-3d: THE ORIGINAL DEFECT — a coordinator with no zen.Activated g
     CHECK(state_field(bus, d.candidate, "activations") == 1); // still one
 }
 
-TEST_CASE("R2B-3d: an ordinary weave holding the grant sends a perfect zen.Activated that is not "
-          "a lifecycle fact") {
+TEST_CASE("an ordinary weave holding the grant sends a perfect zen.Activated that is not a "
+          "lifecycle fact") {
     // The other half of the same law. Removing the grant from the committed path
     // must not make the shape mean anything on its own: a weave that IS permitted
     // to emit it produces a delivered, well-formed, correctly-stamped message
@@ -5167,8 +4938,8 @@ TEST_CASE("R2B-3d: an ordinary weave holding the grant sends a perfect zen.Activ
     CHECK(state_field(bus, d.candidate, "last_activation") == 4);  // and unadvanced
 }
 
-TEST_CASE("R2B-3d: a candidate that cannot receive its own activation is not admissible, and the "
-          "refusal happens before anything moves") {
+TEST_CASE("a candidate that cannot receive its own activation is not admissible, and the refusal "
+          "happens before anything moves") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
     const WeaveId incumbent = bus.register_weave(
@@ -5183,10 +4954,9 @@ TEST_CASE("R2B-3d: a candidate that cannot receive its own activation is not adm
     SUBCASE("it does not accept zen.Activated at all") {}
     SUBCASE("its gate refuses this exact activation") {
         accept.push_back(schema_of<loom::Activated>());
-        // The same (name, version), a different shape — so the door MATCHES and
-        // the gate is what refuses. An honest operator cannot produce this; the
-        // pin exists because "the door accepted it" and "the gate admitted it"
-        // are two questions and the old code asked neither until after commit.
+        // The same (name, version), a different shape, so the door MATCHES and the gate is
+        // what refuses. An honest operator cannot produce this; it is here because "the door
+        // accepted it" and "the gate admitted it" are two questions, both asked before commit.
         const auto impostor = SchemaBuilder(std::string(loom::Activated::zen_name),
                                             loom::Activated::zen_version)
                                   .field("sequence", Kind::Text)
@@ -5218,8 +4988,8 @@ TEST_CASE("R2B-3d: a candidate that cannot receive its own activation is not adm
     CHECK(cand_raw->handled_names.empty());
 }
 
-TEST_CASE("R2B-3d: a transaction whose candidate cannot be activated ends Aborted, and the "
-          "incumbent never learns of it") {
+TEST_CASE("a transaction whose candidate cannot be activated ends Aborted, and the incumbent never "
+          "learns of it") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult begun = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
@@ -5247,17 +5017,13 @@ TEST_CASE("R2B-3d: a transaction whose candidate cannot be activated ends Aborte
     CHECK(c.ask(bus, kRole) == "v1");
 }
 
-TEST_CASE("R2B-3d: a scheduled admission whose world drifts before dispatch refuses, and the "
-          "incumbent is still the service") {
-    // THE INTERVAL THE PHASE CREATED, and the proof that it is safe. Scheduling an
-    // admission promises nothing; between the schedule and the dispatch anything
-    // may happen, and every one of these roads ends in the same place — the
-    // envelope refuses as `AdmissionRevoked`, no topology moved, and no weave was
-    // told anything.
-    //
-    // These are DIRECT admissions on purpose: with no transaction there is no
-    // invalidation hook standing in front, so the envelope's own recorded
-    // participants are the only wall, which is exactly the wall under test.
+TEST_CASE("a scheduled admission whose world drifts before dispatch refuses, and the incumbent is "
+          "still the service") {
+    // Scheduling an admission promises nothing: between the schedule and the dispatch anything
+    // may happen, and every road here ends the same way -- the envelope refuses as
+    // `AdmissionRevoked`, no topology moved, and no weave was told anything. These are DIRECT
+    // admissions on purpose: with no transaction there is no invalidation hook in front, so the
+    // envelope's own recorded participants are the only wall, the one under test.
     enum class Drift { CoordinatorDies, CoordinatorReloads, CandidateDies, CandidateReloads,
                        IncumbentDies, IncumbentRemoved, CandidateRemoved };
     Drift drift = Drift::CoordinatorDies;
@@ -5337,8 +5103,7 @@ TEST_CASE("R2B-3d: a scheduled admission whose world drifts before dispatch refu
     CHECK(p.candidate_raw->handled_names.empty()); // and never told anything
 }
 
-TEST_CASE("R2B-3d: two admissions racing for one role — the first wins whole, the second refuses "
-          "whole") {
+TEST_CASE("two admissions racing for one role — the first wins whole, the second refuses whole") {
     // Both are scheduled while the world still permits both. The queue decides,
     // and there is no partial outcome on either side: the loser's envelope finds
     // an incumbent that is no longer a public service and changes nothing.
@@ -5368,8 +5133,8 @@ TEST_CASE("R2B-3d: two admissions racing for one role — the first wins whole, 
     CHECK(bus.sealed(rival));                // and is still outside the world
 }
 
-TEST_CASE("R2B-3d: aborting a pending admission stops it, once — the queued action cannot revive "
-          "a transaction that has ended") {
+TEST_CASE("aborting a pending admission stops it, once — the queued action cannot revive a "
+          "transaction that has ended") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult begun = bus.begin_prepared_replacement(c.op.id, c.coordinator.id,
@@ -5412,8 +5177,8 @@ TEST_CASE("R2B-3d: aborting a pending admission stops it, once — the queued ac
     CHECK(bus.transaction_state(begun.id) == TxnState::Aborted);
 }
 
-TEST_CASE("R2B-3d: a pending admission holds its promises — no second commit, no second candidate, "
-          "no readiness, no budget") {
+TEST_CASE("a pending admission holds its promises — no second commit, no second candidate, no "
+          "readiness, no budget") {
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     Cast other = cast_with_role(bus, "other");
@@ -5452,8 +5217,8 @@ TEST_CASE("R2B-3d: a pending admission holds its promises — no second commit, 
     CHECK(c.candidate_raw->activations == 1); // exactly one, ever
 }
 
-TEST_CASE("R2B-3d: the admission dispatch keeps activation-first ordering, unrelated FIFO, and "
-          "drops nothing") {
+TEST_CASE("the admission dispatch keeps activation-first ordering, unrelated FIFO, and drops "
+          "nothing") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered bystander = register_probe(bus, {ping_schema()});
@@ -5506,7 +5271,7 @@ TEST_CASE("R2B-3d: the admission dispatch keeps activation-first ordering, unrel
     CHECK(inc_raw->handled_values.size() == 1); // sealed for retirement, hears nothing
 }
 
-TEST_CASE("R2B-3d: a foreign lifecycle authority cannot even schedule an admission") {
+TEST_CASE("a foreign lifecycle authority cannot even schedule an admission") {
     Switchboard bus;
     Switchboard decoy;
     Prepared p = prepare(bus);
@@ -5523,8 +5288,8 @@ TEST_CASE("R2B-3d: a foreign lifecycle authority cannot even schedule an admissi
     CHECK(Topology::of(bus, p) == before);
 }
 
-TEST_CASE("R2B-3d: a lifecycle change during a pending admission ends the transaction, releases "
-          "the candidate's artifact, and leaves the Kernel agreeing with the Switchboard") {
+TEST_CASE("a lifecycle change during a pending admission ends the transaction, releases the "
+          "candidate's artifact, and leaves the Kernel agreeing with the Switchboard") {
     // The transaction road, where the invalidation hook stands in front of the
     // queued envelope. It ends the transaction with the reason that describes what
     // actually happened — not `AdmissionRefused`, which would blame the admission
@@ -5581,8 +5346,8 @@ TEST_CASE("R2B-3d: a lifecycle change during a pending admission ends the transa
                     .ok);
 }
 
-TEST_CASE("R2B-3d: a stale queued admission cannot land on a namesake artifact loaded in the "
-          "candidate's place") {
+TEST_CASE("a stale queued admission cannot land on a namesake artifact loaded in the candidate's "
+          "place") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -5610,20 +5375,10 @@ TEST_CASE("R2B-3d: a stale queued admission cannot land on a namesake artifact l
 }
 
 // ---- first breath is not a question (LIFE-05) -------------------------------
-//
-// The committed activation is Loom's own act rather than the coordinator's speech.
-// Build its delivery context in the ordinary path's image and it fabricates a
-// requester: the stamped sender is the OPERATOR that admitted the candidate, not a
-// weave that asked it anything, so a reply authority naming it would let a
-// candidate answer a request nobody made.
-//
-//     Lifecycle activation is an authenticated fact, not an ask.
-//
-// The model already had the right category: `answer_as` and `defer_answer_as`
-// refuse when there is no valid requester — the case they document as "the
-// request came from a root, so there is no requester to answer". Loom's own act
-// belongs there, and putting it there needed no new machinery, no new state and
-// no ABI change.
+// The committed activation is Loom's own act, not the coordinator's speech: its stamped sender
+// is the operator that admitted the candidate, not a weave that asked anything, so a reply
+// authority naming it would let a candidate answer a request nobody made. It is delivered as
+// from a root, where `answer_as` and `defer_answer_as` refuse: there is no requester.
 
 namespace {
 
@@ -5640,8 +5395,8 @@ struct ActivationAttempts {
 
 } // namespace
 
-TEST_CASE("R2B-3d-1: a candidate cannot answer its own activation, cannot defer an answer to it, "
-          "and is not thereby made mute") {
+TEST_CASE("a candidate cannot answer its own activation, cannot defer an answer to it, and is not "
+          "thereby made mute") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema(), ping_schema()});
     const WeaveId incumbent = bus.register_weave(
@@ -5714,11 +5469,10 @@ TEST_CASE("R2B-3d-1: a candidate cannot answer its own activation, cannot defer 
     CHECK(coordinator.weave->handled_values[1] == 99); // the answer to the real question
 }
 
-TEST_CASE("R2B-3d-1: an activation's refused deferral consumes none of the bounded capacity — "
-          "proven with the registry held one slot from full") {
-    // A BOUND IS ONLY AN INSTRUMENT IF THE TEST HOLDS IT SATURATED (the
-    // lesson, applied again). Answering past the bound proves nothing if each
-    // slot is returned before the next is taken.
+TEST_CASE("an activation's refused deferral consumes none of the bounded capacity — proven with "
+          "the registry held one slot from full") {
+    // A bound is an instrument only while the test holds it saturated: answering past it proves
+    // nothing if each slot is returned before the next is taken.
     Switchboard bus;
     Registered asker = register_probe(bus, {pong_schema()});
     Registered coordinator = register_probe(bus, {pong_schema(), ping_schema()});
@@ -5779,8 +5533,7 @@ TEST_CASE("R2B-3d-1: an activation's refused deferral consumes none of the bound
     CHECK_FALSE(held.back().valid());
 }
 
-TEST_CASE("R2B-3d-1: nothing delivered because of an activation can later be made to look like "
-          "an answer") {
+TEST_CASE("nothing delivered because of an activation can later be made to look like an answer") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema(), ping_schema()});
     const WeaveId incumbent = bus.register_weave(
@@ -5834,8 +5587,8 @@ TEST_CASE("R2B-3d-1: nothing delivered because of an activation can later be mad
     CHECK(coordinator.weave->handled_names.size() == 1); // still just the copy
 }
 
-TEST_CASE("R2B-3d-1: an ORDINARY zen.Activated-shaped message is still answerable — the "
-          "distinction is provenance, not payload type") {
+TEST_CASE("an ORDINARY zen.Activated-shaped message is still answerable — the distinction is "
+          "provenance, not payload type") {
     // The correction must not spread by SHAPE. A weave that legitimately holds
     // the grant may send `zen.Activated` as ordinary speech; that message is not
     // a lifecycle fact (it carries no attestation, and the consumer ignores it
@@ -5862,7 +5615,7 @@ TEST_CASE("R2B-3d-1: an ORDINARY zen.Activated-shaped message is still answerabl
     CHECK(sender.weave->handled_names[0] == "Pong");
 }
 
-TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library seam") {
+TEST_CASE("the dynamic candidate tries all three across the library seam") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel);
@@ -5887,12 +5640,10 @@ TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library se
     CHECK(live[0] == std::string(loom::Activated::zen_name));
     no_activation_refusal(*log, d.candidate, refusals_before, deliveries_before);
 
-    // ANSWER: refused, and that verdict is REAL across the seam (ANS-06) —
-    // the dynamic `answer`/`defer_answer` doors genuine success/failure, so a
-    // zero here is the host refusing rather than the ABI shrugging. (An ordinary
-    // `send` is the one that always returns an invalid ticket, which is why
-    // `act_send` records only that the handler got that far; its ARRIVAL is
-    // judged below, from what the coordinator was actually handed.)
+    // ANSWER: refused, and the verdict is real across the seam (ANS-06): the dynamic `answer`
+    // and `defer_answer` doors report genuine success or failure, so a zero is the host
+    // refusing. (An ordinary `send` always returns an invalid ticket, so `act_send` records only
+    // that the handler got that far; its arrival is judged below, from what the coordinator got.)
     CHECK(state_field(bus, d.candidate, "act_answer") == 0);
     CHECK(state_field(bus, d.candidate, "act_defer") == 0);
     CHECK(state_field(bus, d.candidate, "act_send") == 1);
@@ -5915,13 +5666,10 @@ TEST_CASE("R2B-3d-1: the dynamic candidate tries all three across the library se
 }
 
 // ---- one good handle (PR-02) ------------------------------------------------
-//
-// The substrate is complete; this is its authoring surface. `loom::
-// PreparedReplacement` composes the accepted primitives — it validates nothing
-// twice, caches nothing, decides nothing, and every one of its operations
-// visibly delegates. What these cases prove is exactly that: the sugar removed
-// the plumbing (id-carrying, authority wiring, cleanup branches) and removed
-// NOTHING else — not a state, not a refusal reason, not a decision.
+// `loom::PreparedReplacement` composes the replacement primitives: it validates nothing twice,
+// caches nothing, decides nothing, and every operation visibly delegates. These cases prove it
+// removed the plumbing (ids, authority wiring, cleanup branches) and nothing else: not a
+// state, not a refusal reason, not a decision.
 
 namespace {
 
@@ -5933,13 +5681,10 @@ static_assert(!std::is_default_constructible_v<PreparedReplacement>);
 static_assert(std::is_move_constructible_v<PreparedReplacement>);
 static_assert(std::is_move_assignable_v<PreparedReplacement>);
 
-/// The coordinator behaviour a facade author actually writes: when the
-/// candidate's domain answer arrives, OFFER the delivery being handled to the
-/// handle's gate and let the bus judge. The payload's `transaction` field is
-/// deliberately never read — the authoring-handle question, answered yes:
-/// domain payloads need no transaction id, because the bus (not the payload)
-/// proves which conversation an answer belongs to. `which` is a pointer so a
-/// test can retarget the same coordinator at a second replacement.
+/// The coordinator a facade author writes: when the candidate's domain answer arrives, OFFER
+/// the delivery being handled to the handle's gate and let the bus judge. The payload's
+/// `transaction` field is never read: the bus, not the payload, proves which conversation an
+/// answer belongs to. `which` is a pointer so a case can retarget it at a second replacement.
 void offer_through(DynCast& d, PreparedReplacement*& which, std::vector<TxnResult>& offers) {
     d.coordinator.weave->on_handle = [&which, &offers](const Message& in, Bus&, ProbeWeave&) {
         const std::string_view shape = in.payload.schema().name();
@@ -5972,8 +5717,8 @@ WeaveId native_candidate(Switchboard& bus, WeaveId coordinator, ProbeWeave** raw
 
 } // namespace
 
-TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement drives only the "
-          "handle, and the substrate underneath is unchanged") {
+TEST_CASE("a whole v1->v2 replacement drives only the handle, and the substrate underneath is "
+          "unchanged") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
@@ -6065,7 +5810,7 @@ TEST_CASE("R2B-4a: the facade vertical — a Night-Lab-shaped v1->v2 replacement
     CHECK(bus.sealed(d.incumbent)); // retirement-private, exactly as the raw law says
 }
 
-TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's side") {
+TEST_CASE("the deferred candidate is identical from the coordinator's side") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
@@ -6119,8 +5864,8 @@ TEST_CASE("R2B-4a: the deferred candidate is identical from the coordinator's si
     CHECK(outcome->state == TxnState::Committed);
 }
 
-TEST_CASE("R2B-4a: the candidate's refusal arrives whole — reason, cleanup, and a serving "
-          "incumbent, with no facade interpretation on top") {
+TEST_CASE("the candidate's refusal arrives whole — reason, cleanup, and a serving incumbent, "
+          "with no facade interpretation on top") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
@@ -6164,7 +5909,7 @@ TEST_CASE("R2B-4a: the candidate's refusal arrives whole — reason, cleanup, an
     CHECK(d.ask(bus) == "v1");
 }
 
-TEST_CASE("R2B-4a: the start-failure ladder — every rung leaves the world exactly as it was") {
+TEST_CASE("the start-failure ladder — every rung leaves the world exactly as it was") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -6274,8 +6019,8 @@ TEST_CASE("R2B-4a: the start-failure ladder — every rung leaves the world exac
     }
 }
 
-TEST_CASE("R2B-4a: a delivery offered to the wrong handle refuses, consumes nothing, and the "
-          "right handle still collects it") {
+TEST_CASE("a delivery offered to the wrong handle refuses, consumes nothing, and the right handle "
+          "still collects it") {
     // Two concurrent replacements under ONE coordinator — the case that decides
     // whether the facade's answer surface is genuinely transaction-bound.
     Switchboard bus;
@@ -6331,7 +6076,7 @@ TEST_CASE("R2B-4a: a delivery offered to the wrong handle refuses, consumes noth
     CHECK(b.offer_current_answer(PreparationAnswer::Ready).why == TxnReason::InvalidReadiness);
 }
 
-TEST_CASE("R2B-4a: two handles, one operator — each collects exactly its own outcome") {
+TEST_CASE("two handles, one operator — each collects exactly its own outcome") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -6368,7 +6113,7 @@ TEST_CASE("R2B-4a: two handles, one operator — each collects exactly its own o
     CHECK_FALSE(a.take_outcome().has_value()); // consumed once, each
 }
 
-TEST_CASE("R2B-4a: dropping a live handle changes nothing — a scope is not a lifecycle decision") {
+TEST_CASE("dropping a live handle changes nothing — a scope is not a lifecycle decision") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
@@ -6414,8 +6159,8 @@ TEST_CASE("R2B-4a: dropping a live handle changes nothing — a scope is not a l
     CHECK_FALSE(kernel.is_loaded("v2")); // the SUBSTRATE discarded it, as its law says
 }
 
-TEST_CASE("R2B-4a: the handle's state is the Switchboard's, under every mutation the facade "
-          "never saw coming") {
+TEST_CASE("the handle's state is the Switchboard's, under every mutation the facade never saw "
+          "coming") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
@@ -6466,8 +6211,8 @@ TEST_CASE("R2B-4a: the handle's state is the Switchboard's, under every mutation
     }
 }
 
-TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exactly — and gaps "
-          "obey the existing law") {
+TEST_CASE("the activation sequence is the caller's, passed through exactly — and gaps obey the "
+          "existing law") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
@@ -6495,15 +6240,15 @@ TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exact
     REQUIRE(first.commit(31337).ok);
     bus.drain_until_idle();
     CHECK(d.ask(bus) == "v2");
-    // The candidate observed EXACTLY the caller's number, through the same
-    // attested-sequence check the Zengine cursor applies.
+    // The candidate observed EXACTLY the caller's number, through the attested-sequence check
+    // a consumer applies.
     CHECK(state_field(bus, first.candidate(), "activations") == 1);
     CHECK(state_field(bus, first.candidate(), "last_activation") == 31337);
     REQUIRE(first.take_outcome().has_value());
 
-    // Second replacement over the NEW incumbent — the facade re-resolves the
-    // role at ITS start, finding v2 — with a gapped higher sequence. Gaps are
-    // legal (the existing law), and the facade neither invents nor reuses.
+    // Second replacement over the NEW incumbent -- the facade re-resolves the role at ITS
+    // start, finding v2 -- with a gapped higher sequence. Gaps are legal, and the facade
+    // neither invents nor reuses.
     PreparedReplacement second(bus, kernel);
     REQUIRE(second.start({
         .operator_id = d.op.id,
@@ -6524,7 +6269,7 @@ TEST_CASE("R2B-4a: the activation sequence is the caller's, passed through exact
     REQUIRE(second.take_outcome().has_value());
 }
 
-TEST_CASE("R2B-4a: the budget is the author's, one unit per tick, and nothing ticks it secretly") {
+TEST_CASE("the budget is the author's, one unit per tick, and nothing ticks it secretly") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
     Registered op = register_probe(bus, {pong_schema()});
@@ -6566,7 +6311,7 @@ TEST_CASE("R2B-4a: the budget is the author's, one unit per tick, and nothing ti
     }
 }
 
-TEST_CASE("R2B-4a: every refusal keeps the substrate's own words") {
+TEST_CASE("every refusal keeps the substrate's own words") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -6649,14 +6394,11 @@ TEST_CASE("the kernel unloads everything it still holds at destruction") {
     CHECK(bus.list_weaves().empty());
 }
 
-// ---- office authorship across the dynamic seam (MSG-07; ABI v5) -------------
-//
-// Full semantic parity: the same `mail.as_role(...)` a native weave writes, the
-// same `mail.authored_from_role(...)` a native recipient reads — spoken and
-// heard on the far side of the .so seam, with the HOST verifying membership at
-// every authorship moment. The fixture is deliberately obedient (it attempts
-// whatever it is told, including offices it does not hold) so these cases
-// measure the host's verdicts, not the fixture's manners.
+// ---- office authorship across the dynamic seam (MSG-07) ---------------------
+// The same `mail.as_role(...)` a native weave writes and `mail.authored_from_role(...)` a
+// native recipient reads, spoken and heard across the .so seam, with the host verifying
+// membership at every authorship moment. The fixture attempts whatever it is told, offices it
+// does not hold included, so these cases measure the host's verdicts, not its manners.
 
 namespace {
 
@@ -6752,8 +6494,8 @@ struct OfficeStage {
 
 } // namespace
 
-TEST_CASE("R2D-0/v5: a loaded weave deliberately authors office speech through every door, and "
-          "its personal speech stays personal") {
+TEST_CASE("a loaded weave deliberately authors office speech through every door, and its personal "
+          "speech stays personal") {
     OfficeStage s;
 
     s.command("direct", s.commander);
@@ -6798,8 +6540,8 @@ TEST_CASE("R2D-0/v5: a loaded weave deliberately authors office speech through e
     CHECK(heard[1].seen_role.empty());
 }
 
-TEST_CASE("R2D-0/v5: a loaded weave's request to speak for an office it does not hold is "
-          "refused across the seam — precisely, and nothing is queued") {
+TEST_CASE("a loaded weave's request to speak for an office it does not hold is refused across the "
+          "seam — precisely, and nothing is queued") {
     OfficeStage s;
     std::size_t denied = 0;
     s.bus.add_observer([&denied](const BusEvent& ev) {
@@ -6825,8 +6567,8 @@ TEST_CASE("R2D-0/v5: a loaded weave's request to speak for an office it does not
     CHECK(denied == 2);
 }
 
-TEST_CASE("R2D-0/v5: inbound office provenance crosses the seam — authored_from_role answers "
-          "identically on both sides") {
+TEST_CASE("inbound office provenance crosses the seam — authored_from_role answers identically "
+          "on both sides") {
     OfficeStage s;
 
     // Office speech from ANOTHER office: the dispatcher's own.
@@ -6849,8 +6591,8 @@ TEST_CASE("R2D-0/v5: inbound office provenance crosses the seam — authored_fro
     CHECK(heard[1].seen_role.empty());
 }
 
-TEST_CASE("R2D-0/v5: the previous-ABI artifact refuses at load by version — no instance becomes "
-          "live, no capability goes silently missing") {
+TEST_CASE("the previous-ABI artifact refuses at load by version — no instance becomes live, no "
+          "capability goes silently missing") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
@@ -6863,11 +6605,9 @@ TEST_CASE("R2D-0/v5: the previous-ABI artifact refuses at load by version — no
 }
 
 // ---- Senses across a real replacement (SENSE-03) ----------------------------
-//
-// The half of S3 that needs THIS ceremony: a committed admission overwrites the
-// role holder IN PLACE, so the role never passes through unheld. That is exactly
-// the case where a predecessor's office claim must survive — stamped stale, and
-// never relabelled as the successor's.
+// A committed admission overwrites the role holder IN PLACE, so the role never passes through
+// unheld: the case where a predecessor's office claim must survive, stamped stale, and never
+// be relabelled as the successor's.
 
 namespace {
 
@@ -6901,8 +6641,8 @@ private:
 
 } // namespace
 
-TEST_CASE("R2E-0/S3: a committed admission moves the role in place — the predecessor's office "
-          "claim survives, stamped stale, and is never attributed to the successor") {
+TEST_CASE("a committed admission moves the role in place — the predecessor's office claim "
+          "survives, stamped stale, and is never attributed to the successor") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
 
@@ -6960,8 +6700,8 @@ TEST_CASE("R2E-0/S3: a committed admission moves the role in place — the prede
     CHECK(now.by.revision == 2); // a replacement of the same office key, not a reset
 }
 
-TEST_CASE("R2E-0/S3: a SEALED candidate cannot claim as the office it does not yet hold — an "
-          "office Sense cannot appear before legal activation") {
+TEST_CASE("a SEALED candidate cannot claim as the office it does not yet hold — an office Sense "
+          "cannot appear before legal activation") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
     const WeaveId inc_id = bus.register_weave(std::make_unique<OfficeClaimer>("worker"),
@@ -6984,10 +6724,8 @@ TEST_CASE("R2E-0/S3: a SEALED candidate cannot claim as the office it does not y
     CHECK(bus.role_holder("worker") == inc_id);
 }
 
-// ---- Senses across the dynamic seam (SENSE-01; ABI v6) ----------------------
-//
-// The parity question, and it is the whole question: do the four public verbs
-// mean here what they mean natively? A Sense is meant for real loadable
+// ---- Senses across the dynamic seam (SENSE-01) ------------------------------
+// Do the four public verbs mean here what they mean natively? A Sense is meant for loadable
 // components, so a gap would make the feature host-only in practice.
 
 namespace {
@@ -7046,8 +6784,8 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
 
 } // namespace
 
-TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, and reads its own "
-          "claim back synchronously — the same four verbs, the same meanings") {
+TEST_CASE("a LOADED weave claims, is refused a forged office claim, and reads its own claim back "
+          "synchronously — the same four verbs, the same meanings") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult dyn = kernel.load("sensor", ZEN_SO_SENSES, "",
@@ -7095,18 +6833,10 @@ TEST_CASE("R2E-0/v6: a LOADED weave claims, is refused a forged office claim, an
 }
 
 // ---- the observed office identity IS the authored one (SENSE-03) ------------
-//
-// The v6 seam first carried the office name in a fixed `char office[128]` and
-// TRUNCATED at the bound. That is not a smaller answer, it is a WRONG one: a
-// 200-character role came back as a plausible 127-character prefix, and nothing
-// in the reading said so. A reader cannot audit "who claims this?" against an
-// identity that was manufactured on the way out, and two genuinely different
-// offices could arrive looking identical.
-//
-// The bound is gone rather than raised — a larger buffer only moves the lie
-// further out — and the name now crosses through the same caller-owned
-// ZenByteSink the VALUE already used. These cases are written so that restoring
-// any truncation fails them.
+// The office name crosses the seam whole, through the same caller-owned ZenByteSink the value
+// uses: a truncated name is not a smaller answer but a wrong one, a plausible prefix nothing
+// flags, and two different offices could arrive looking identical. These cases fail under any
+// truncation, whatever its bound.
 
 namespace {
 
@@ -7138,10 +6868,8 @@ private:
     std::string office_;
 };
 
-/// A role name far past the old 127-byte bound, built so that the ONLY thing
-/// distinguishing two of them lives past that bound. Under truncation both
-/// names collapse to the same prefix and the test cannot tell them apart —
-/// which is precisely the failure being pinned.
+/// A role name far past 127 bytes, built so that the ONLY thing distinguishing two of them
+/// lies past that length: under truncation both collapse to one prefix, the failure pinned.
 std::string long_role(char suffix) {
     std::string r = "this-is-a-real-role-name-";
     r.append(200, 'x'); // well past 127, and past any plausible "generous" bound
@@ -7159,13 +6887,13 @@ Value sense_probe(const std::string& role) {
 
 } // namespace
 
-TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office identity — a "
-          "name past the old buffer bound crosses whole, not as a plausible prefix") {
+TEST_CASE("a dynamic observation reports the EXACT authored office identity — a name past 127 "
+          "bytes crosses whole, not as a plausible prefix") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
     const std::string role_a = long_role('A');
-    REQUIRE(role_a.size() > 128); // the case is meaningless if it fits the old buffer
+    REQUIRE(role_a.size() > 128); // the case is meaningless if it fits in 128 bytes
 
     // A native holder of the long office claims through it.
     const WeaveId officer =
@@ -7173,7 +6901,7 @@ TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office id
     bus.send(officer, Message(ping(42)));
     bus.drain_until_idle();
 
-    // NATIVE: exact, and it always was — std::string imposes no bound.
+    // NATIVE: exact; std::string imposes no bound.
     SenseReading native = bus.observe_office(role_a, "SenseHealth", 1);
     REQUIRE(native);
     CHECK(native.by.office == role_a);
@@ -7194,16 +6922,13 @@ TEST_CASE("R2E-0a/v6: a dynamic observation reports the EXACT authored office id
     CHECK(w.read_office == native.by.office);   // native and dynamic agree exactly
 }
 
-// The generation facts have to cross the seam SEPARATELY, not just exist natively.
-// `author_life_is_current` and `author_incarnation_is_current` answer different
-// questions, and a live replacement is the case where they disagree — so a
-// dynamic reader that collapses them, or drops the second in transport or decode,
-// reports a predecessor's claim as the current incarnation's. This case runs the
-// disagreement through a real .so; the native-only twin lives in suite `sense`
-// (S3b) and cannot catch a seam that loses the fact.
+// The generation facts must cross the seam SEPARATELY: `author_life_is_current` and
+// `author_incarnation_is_current` disagree across a live replacement, so a dynamic reader
+// that collapses them, or drops the second, reports a predecessor's claim as the current
+// incarnation's. The native-only twin in suite `sense` cannot catch a seam that loses it.
 
-TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the life stood — the "
-          "two generation facts cross the seam separately") {
+TEST_CASE("a LOADED reader is told the incarnation moved while the life stood — the two "
+          "generation facts cross the seam separately") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -7262,15 +6987,15 @@ TEST_CASE("R2E-0a/v6: a LOADED reader is told the incarnation moved while the li
     CHECK(native.by.author_incarnation_is_current == current.read_inc_current);
 }
 
-TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay distinguishable "
-          "across the seam — truncation would report them as the same office") {
+TEST_CASE("two long offices differing ONLY past 127 bytes stay distinguishable across the seam — "
+          "truncation would report them as the same office") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
     const std::string role_a = long_role('A');
     const std::string role_b = long_role('B');
-    // The adversarial property: identical for far longer than the old buffer,
-    // so a truncating seam hands back one identity for two different offices.
+    // The adversarial property: identical far past 127 bytes, so a truncating seam hands back
+    // one identity for two different offices.
     REQUIRE(role_a.size() == role_b.size());
     REQUIRE(role_a.substr(0, 128) == role_b.substr(0, 128));
     REQUIRE(role_a != role_b);
@@ -7302,8 +7027,8 @@ TEST_CASE("R2E-0a/v6: two long offices differing ONLY past the old bound stay di
     CHECK(saw_b.read_hp == 2);
 }
 
-TEST_CASE("R2E-0/v6: a loaded weave without observe authority is refused a read, and its claim "
-          "of an undeclared shape is refused — the seam carries the distinct reasons") {
+TEST_CASE("a loaded weave without observe authority is refused a read, and its claim of an "
+          "undeclared shape is refused — the seam carries the distinct reasons") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     // Full SEND authority, no observe rule: a send rule answers a different
@@ -7324,14 +7049,10 @@ TEST_CASE("R2E-0/v6: a loaded weave without observe authority is refused a read,
 }
 
 // ---- the silent dynamic seam (MSG-08) -------------------------------------
-//
-// Night Lab III found that a loaded weave's emission whose shape nobody
-// registered vanishes: no recipient, no BusEvent, no journal entry, and the
-// shim is fire-and-forget by design. The identical NATIVE intent refuses
-// loudly. These cases pin the tier-parity claim from both sides, and pin the
-// three ways this fix could over-reach: a false refusal on a healthy dynamic
-// send, a doubled refusal on a path that already reported one, and a
-// manufactured target where none was ever named.
+// A loaded weave's emission whose shape nobody registered is refused as a Loom-owned fact, as
+// the same native intent is. These cases pin that parity from both sides, and the three ways
+// it could over-reach: a false refusal on a healthy dynamic send, a doubled refusal on a path
+// that already reported one, and a manufactured target where none was named.
 
 // Count Refused events carrying `reason`, and remember the last one whole.
 struct RefusalTap {
@@ -7349,8 +7070,8 @@ struct RefusalTap {
     }
 };
 
-TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-owned fact, "
-          "naming the sender, the claimed shape and the seam that refused it") {
+TEST_CASE("a loaded weave's unresolvable emission leaves ONE Loom-owned fact, naming the sender, "
+          "the claimed shape and the seam that refused it") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
@@ -7370,7 +7091,7 @@ TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-o
     bus.send(dyn.id, Message(ping(7)));
     bus.drain_until_idle();
 
-    // THE FACT THAT USED TO NOT EXIST.
+    // ONE Loom-owned refusal, at the seam.
     CHECK(seam.count == 1);
     CHECK(seam.last.sender == dyn.id);          // which artifact attempted it
     CHECK(seam.last.schema_name == "SeamOnly"); // which shape it claimed
@@ -7379,11 +7100,10 @@ TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-o
     // there is no weave to name — and inventing one would be a second lie on top
     // of the silence this fixes.
     CHECK_FALSE(seam.last.target.valid());
-    // ...AND THE ADDRESS IS NOT A MANUFACTURE (FRIC-0). The role is what the
-    // library literally said, carried out rather than invented, and it is the
-    // difference between "refused SeamOnly" and a sentence a reader can act on.
-    // It sits BESIDE the invalid target on purpose: where it was sent, never
-    // who answered.
+    // ...AND THE ADDRESS IS NOT A MANUFACTURE. The role is what the library literally said,
+    // carried out rather than invented: the difference between "refused SeamOnly" and a
+    // sentence a reader can act on. It sits BESIDE the invalid target on purpose: where it was
+    // sent, never who answered.
     CHECK(seam.last.addressed_role == "nobody.home");
 
     // ...and it is exactly one refusal in total: the seam rejection is the only
@@ -7392,8 +7112,8 @@ TEST_CASE("R2E-0/P-011: a loaded weave's unresolvable emission leaves ONE Loom-o
     CHECK(all_refusals == 1);
 }
 
-TEST_CASE("R2E-0/P-011: the comparable NATIVE reach is still observable, and now the two tiers "
-          "report at the same altitude") {
+TEST_CASE("the comparable NATIVE reach is still observable, and the two tiers report at the same "
+          "altitude") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     std::size_t native_refusals = 0;
@@ -7405,21 +7125,20 @@ TEST_CASE("R2E-0/P-011: the comparable NATIVE reach is still observable, and now
         }
     });
 
-    // A native weave reaching for the same unheld role with a shape it holds
-    // typed: no registry resolution is involved, so it refuses at DELIVERY, as
-    // NoSuchTarget — the loud failure Night Lab witnessed in the control arm.
+    // A native weave reaching for the same unheld role with a shape it holds typed: no
+    // registry resolution is involved, so it refuses at DELIVERY, as NoSuchTarget.
     Registered native = register_probe(bus, {ping_schema()});
     bus.send_as_to_role(native.id, "nobody.home", Message(ping(7)));
     bus.drain_until_idle();
 
     CHECK(native_refusals == 1);
-    // The native path is a DIFFERENT refusal for a different reason, and this fix
+    // The native path is a DIFFERENT refusal for a different reason, and the seam's refusal
     // does not reclassify it: the seam was never involved.
     CHECK(seam.count == 0);
 }
 
-TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam refusal — the "
-          "diagnostic fires on rejection only") {
+TEST_CASE("an ordinary successful dynamic emission produces NO seam refusal — the diagnostic "
+          "fires on rejection only") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
@@ -7438,26 +7157,21 @@ TEST_CASE("R2E-0/P-011: an ordinary successful dynamic emission produces NO seam
     CHECK(listener.weave->count == 1);
 }
 
-// ---- FRIC-0: a publication names nobody, so being unheard is not a refusal --
-//
-// SeamOnly v1, spelled out again here for `defers_state_schema()`'s reason: the
-// native control must not share a definition with the library it is being
-// compared against, or a drift in either would cancel out. Declared in no
-// accept-set on either side, which is the whole point of it.
+// ---- a publication names nobody, so being unheard is not a refusal -----------
+// SeamOnly v1, spelled out again for `defers_state_schema()`'s reason: the native control must
+// not share a definition with the library it is compared against. It is in no accept-set on
+// either side, which is the point of it.
 inline std::shared_ptr<const Schema> seamonly_schema() {
     static const auto s = SchemaBuilder("SeamOnly", 1).field("want", Kind::Int).build();
     return s;
 }
 
-//
-// The three cases below are one argument. The middle one is the repair; the two
-// on either side are what stop it from being a suppression, and they are the
-// canary: broaden the rule to "the seam does not refuse publications" and the
-// third goes red, broaden it to "the seam does not refuse" and the first goes
-// red too.
+// The three cases below are one argument: the middle one is the rule, and the two beside it
+// keep it from being a suppression. Broaden it to "the seam does not refuse publications" and
+// the third goes red; to "the seam does not refuse" and the first goes red too.
 
-TEST_CASE("FRIC-0: an unresolvable PUBLICATION from a loaded weave leaves no refusal, because "
-          "an unresolvable shape has no accepter and the publication reached nobody") {
+TEST_CASE("an unresolvable PUBLICATION from a loaded weave leaves no refusal, because an "
+          "unresolvable shape has no accepter and the publication reached nobody") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
@@ -7483,18 +7197,18 @@ TEST_CASE("FRIC-0: an unresolvable PUBLICATION from a loaded weave leaves no ref
     bus.send(dyn.id, Message(ping(7)));
     bus.drain_until_idle();
 
-    // NOT REFUSED, AND NOT BECAUSE THE DIAGNOSTIC WAS TURNED DOWN. `SeamOnly v1`
-    // is in no accept-set, and `fanout` selects recipients by the same
-    // (name, version) the registry is keyed on, so there was never a listener to
-    // lose. Both tiers are now silent about the same non-event.
+    // NOT REFUSED, AND NOT BECAUSE THE DIAGNOSTIC WAS TURNED DOWN. `SeamOnly v1` is in no
+    // accept-set, and `fanout` selects recipients by the same (name, version) the registry is
+    // keyed on, so there was never a listener to lose. Both tiers are silent about the same
+    // non-event.
     CHECK(seam.count == 0);
     // The listener heard nothing either — the malformed Pong did not sneak
     // through on the way past.
     CHECK(listener.weave->count == 0);
 }
 
-TEST_CASE("FRIC-0: a PUBLICATION whose shape resolves and whose bytes fail the gate is still "
-          "refused — the delivery that should have happened did not") {
+TEST_CASE("a PUBLICATION whose shape resolves and whose bytes fail the gate is still refused — "
+          "the delivery that should have happened did not") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap gate;
@@ -7523,16 +7237,15 @@ TEST_CASE("FRIC-0: a PUBLICATION whose shape resolves and whose bytes fail the g
     CHECK_FALSE(gate.last.target.valid());
 }
 
-TEST_CASE("FRIC-0: taking the address away is the ONLY difference — the same shape, from the "
-          "same seam, addressed to a role is still refused") {
+TEST_CASE("taking the address away is the ONLY difference — the same shape, from the same seam, "
+          "addressed to a role is still refused") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     RefusalTap seam;
     seam.arm(bus, RefusalReason::SeamUnresolved);
 
-    // Both artifacts carry SeamOnly v1 and neither can resolve it. One addresses
-    // a slot; the other addresses nobody. If a later change ever reads the repair
-    // as "the seam is quieter now", this is the case that says which half.
+    // Both artifacts carry SeamOnly v1 and neither can resolve it. One addresses a slot; the
+    // other addresses nobody: a change that made the seam quieter in general fails here.
     LoadResult crier = kernel.load("crier", ZEN_SO_SEAM_PUBLISH);
     REQUIRE_MESSAGE(crier.ok, crier.error);
     LoadResult caller = kernel.load("caller", ZEN_SO_SEAM_EMIT);
@@ -7548,18 +7261,12 @@ TEST_CASE("FRIC-0: taking the address away is the ONLY difference — the same s
 }
 
 // ---- LIFE-06 reaches the committed activation too ---------------------------
-//
-// The activation handler is the second — and only other — place Loom calls
-// `Weave::handle`. It matters more than the ordinary one, not less: by the time
-// it runs the topology has ALREADY moved and the transaction has ALREADY
-// committed, so a removal accepted here would destroy the live role holder
-// mid-callback and there is no rollback to reach for.
-//
-// Both paths are protected by ONE check on one fact — the ambient
-// `current_target_` that each of them assigns around its own `handle` call — so
-// there is no second rule to keep in step with the first.
+// The activation handler is the only other place Loom calls `Weave::handle`, and it matters
+// more: the topology has moved and the transaction committed, so a removal accepted here
+// would destroy the live role holder mid-callback with no rollback. Both paths are protected
+// by one check on one fact, the ambient `current_target_` each assigns around its `handle`.
 
-TEST_CASE("R2F-B: a candidate cannot unregister itself from its committed activation") {
+TEST_CASE("a candidate cannot unregister itself from its committed activation") {
     // Counters FIRST: `~Switchboard` destroys the weaves that write to them.
     int candidate_destroyed = 0;
     int incumbent_destroyed = 0;
@@ -7579,10 +7286,9 @@ TEST_CASE("R2F-B: a candidate cannot unregister itself from its committed activa
     WeaveId holder_inside{};
     bool sealed_inside = true;
     c.candidate_raw->on_activation = [&]() {
-        // HELD IN A NAMED LOCAL, deliberately. Post-repair it is always null, so
-        // this is ordinary code. It matters when the guard is REMOVED: binding
-        // the result keeps the object alive to the end of this hook, so the pins
-        // below still record what they saw and the case fails SEMANTICALLY
+        // HELD IN A NAMED LOCAL, deliberately. It is always null, so this is ordinary code;
+        // with the guard REMOVED, binding the result keeps the object alive to the end of this
+        // hook, so the pins below still record what they saw and the case fails SEMANTICALLY
         // rather than only tripping an allocator.
         std::unique_ptr<Weave> mine = bus.unregister_weave(candidate_id);
         returned_null = (mine == nullptr);
@@ -7629,21 +7335,13 @@ TEST_CASE("R2F-B: a candidate cannot unregister itself from its committed activa
     CHECK(incumbent_destroyed == 0);
 }
 
-TEST_CASE("R2F-B: the transaction's own discard cannot destroy the weave whose callback is "
-          "running") {
-    // THE INTERNAL ROUTE, and it is reachable rather than theoretical.
-    // `finish_txn` discards an ABORTED transaction's sealed candidate by calling
-    // `unregister_weave`. A host-wired candidate that kills itself from inside
-    // its own preparation callback invalidates the transaction it belongs to —
-    // and that abort's cleanup then names the very weave whose `handle` is on
-    // the stack. Pre-repair that discarded a `unique_ptr` on the spot, destroying
-    // a running object.
-    //
-    // The central active-target guard covers it with no special case, and the
-    // consequence is the one `finish_txn` already documents in the source: the
-    // discard fails and leaves SEALED WRECKAGE — nonpublic by construction,
-    // belonging to a transaction that no longer exists, and producing no second
-    // terminal result.
+TEST_CASE("the transaction's own discard cannot destroy the weave whose callback is running") {
+    // THE INTERNAL ROUTE, reachable rather than theoretical: `finish_txn` discards an aborted
+    // transaction's sealed candidate through `unregister_weave`, so a host-wired candidate that
+    // kills itself from inside its preparation callback has the abort's cleanup name the weave
+    // whose `handle` is on the stack. The active-target guard covers it with no special case:
+    // the discard fails and leaves SEALED WRECKAGE, nonpublic, belonging to no transaction, and
+    // producing no second terminal result.
     int candidate_destroyed = 0;
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
@@ -7690,15 +7388,10 @@ TEST_CASE("R2F-B: the transaction's own discard cannot destroy the weave whose c
 }
 
 // ---- The reloadable-weave build contract, at runtime (KERN-05) --------------------
-//
-// The `weave_contract` CTest entry reads the built artifacts' symbol bindings. These
-// two cases read what those bindings DO, which is the reason anyone should care: the
-// binding is a mechanism, an image that will not die is the consequence.
-//
-// Linux-only, and not because the law is: the observation is. RTLD_NOLOAD asks this
-// process's loader, directly, whether an image is still mapped -- no /proc, no timing,
-// no RSS. PE has no unique-symbol binding to begin with, so on Windows there is no
-// claim here to test.
+// The `weave_contract` entry reads the built artifacts' symbol bindings; these two cases read
+// what the bindings DO: an image that will not die. Linux-only because the observation is:
+// RTLD_NOLOAD asks this process's loader whether an image is still mapped. PE has no
+// unique-symbol binding, so on Windows there is no claim to test.
 #if !defined(_WIN32)
 
 TEST_CASE("a contracted weave library really leaves when it is closed") {
@@ -7729,13 +7422,10 @@ TEST_CASE("a contracted weave library really leaves when it is closed") {
 }
 
 TEST_CASE("without the contract the same source will not unload -- and dlclose says it did") {
-    // The negative control, and the point of the whole phase. This is not a defect in
-    // the fixture: it is F-22 reproduced on demand, so the case above cannot quietly
-    // become unfalsifiable. Same source, same compiler, same flags but one.
-    //
-    // Note what the loader reports on the way: dlclose returns SUCCESS. Nothing in the
-    // API tells a host that the image it just released is still there -- which is why
-    // the fix has to be at build time and why prose was never enough.
+    // The negative control: same source, same compiler, same flags but one, and the image stays
+    // mapped after dlclose, so the case above cannot quietly become unfalsifiable. dlclose
+    // returns SUCCESS on the way: nothing in the API tells a host the image is still there,
+    // which is why the contract is applied at build time.
     const char* path = ZEN_SO_CONTRACT_BYPASS;
 
     void* h = ::dlopen(path, RTLD_NOW | RTLD_LOCAL);
@@ -7752,9 +7442,9 @@ TEST_CASE("without the contract the same source will not unload -- and dlclose s
                   "the hazard the contracted case is contrasted against");
     if (still == nullptr) { return; }
 
-    // ...and the image that would not leave keeps its statics: a "fresh" load continues
-    // the previous one's count instead of starting over. That is the aliasing that cost
-    // Zengine an ASan use-after-free when the second library was a DIFFERENT one.
+    // ...and the image that would not leave keeps its statics: a "fresh" load continues the
+    // previous one's count instead of starting over, and when the second library is a
+    // different one, that aliasing is a use-after-free.
     auto again = reinterpret_cast<int (*)()>(::dlsym(still, "zen_contract_touch"));
     REQUIRE(again != nullptr);
     CHECK(again() == 2);

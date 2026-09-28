@@ -16,12 +16,11 @@
 namespace office {
 
 /// Tell the worker which act to perform. `mode` is one of:
-///   "direct"        office_send as worker.a, directly to `target`
-///   "to-role"       office send as worker.a, to the dispatcher role
-///   "publish"       office publication as worker.a
-///   "personal"      an ordinary personal publication of the same shape
-///   "forge-direct"  attempt to author as an office it does NOT hold
-///   "forge-publish" the same attempt, as a publication
+///   "direct", "to-role"  an office send as worker.a, to `target` or to the dispatcher role
+///   "publish"            an office publication as worker.a
+///   "personal"           an ordinary personal publication of the same shape
+///   "forge-direct"       an attempt to author as an office it does NOT hold
+///   "forge-publish"      the same attempt, as a publication
 struct OfficeCommand {
     std::string mode;
     std::int64_t target = 0;

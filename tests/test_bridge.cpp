@@ -46,12 +46,10 @@
 #include <unistd.h>
 #endif
 
-// The remote-operator bridge, proven at the mechanism altitude (the prompt's altitude 1): two
-// endpoints over a REAL socket — the same path the Windows->WSL crossing uses (127.0.0.1; WSL2
-// forwards localhost). The transport framing, then the operator-protocol (discovery + tap + send as
-// messages), the connection-stamped sender against a FORGED wire frame, and disconnect handled as an
-// event (close + a genuine SIGKILL of a real peer process). The crossing itself (altitude 2) is the
-// Windows console driving this same server.
+// The remote-operator bridge, proven over a REAL loopback socket: the transport framing, the
+// bridge protocol (discovery, tap and send as messages), the connection-stamped sender against a
+// FORGED wire frame, and disconnect handled as an event (close, and a genuine SIGKILL of a real
+// peer process).
 
 using namespace loom;
 
@@ -59,9 +57,9 @@ namespace loom {
 /// The LIFE-07 observation instrument (see the friend declaration in zen/bridge/channel.hpp): reads
 /// the channel's OWN retained buffers, so the bounded-storage law is stated as an assertion about
 /// transport state rather than inferred from process memory -- RSS is allocator- and OS-sensitive
-/// and cannot tell "capacity remains reusable" from "sent bytes remain part of the live buffer".
-/// Those are different claims and only the second is F-18. This adds no member and no code path:
-/// channel.cpp's object file is byte-identical with and without the friend declaration.
+/// and cannot tell "capacity remains reusable" from "sent bytes remain part of the live buffer",
+/// the claim under test. It adds no member and no code path: channel.cpp's object file is
+/// byte-identical with and without the friend declaration.
 struct BridgeChannelStorageProbe {
     static std::size_t live(const BridgeChannel& c) { return c.outbox_.size(); }
     static std::size_t sent(const BridgeChannel& c) { return c.out_pos_; }
@@ -116,12 +114,11 @@ private:
 };
 
 // ---- a weave whose door is the amplification carrier ------------------------------------------
-//
 // A zero-field Message costs ZERO wire bytes, so `Bulk`'s list is the shape whose decoded
-// population is unrelated to its serialized size. Registering this weave is what puts that door in
-// the bus's registry — which is exactly how a hostile participant reaches the host's decoder: it
-// declares a schema, the host registers it, and thereafter the host parses that participant's bytes
-// against it, IN THE HOST PROCESS, before any grant is consulted.
+// population is unrelated to its serialized size. Registering this weave puts that door in the
+// bus's registry, which is how a hostile participant reaches the host's decoder: it declares a
+// schema, the host registers it, and the host parses that participant's bytes against it, IN THE
+// HOST PROCESS, before any grant is consulted.
 
 std::shared_ptr<const loom::Schema> bulk_nothing_schema() {
     static const auto s = loom::SchemaBuilder("R2FA.Nothing", 1).build();
@@ -395,9 +392,8 @@ TEST_CASE("transport: a closed peer surfaces as eof (the disconnect-as-an-event 
 
 #ifndef _WIN32
 TEST_CASE("transport: framed messages round-trip over AF_UNIX (decision #4's local transport, POSIX)") {
-    // AF_UNIX gains its live consumer: the frozen design record (docs/history/pre-r2c/DESIGN.md,
-    // decision #4) says the fast local loop IS unix, so exercise it. (The crossing uses TCP;
-    // AF_UNIX is POSIX-only, hence the gate.)
+    // AF_UNIX, the fast local transport, exercised on POSIX, the only platform this build offers
+    // it on.
     const std::string path = "/tmp/zen-bridge-hygiene-af-unix.sock";
     std::string err;
     const socket_t listener = bridge_listen_unix(path, &err);
@@ -429,24 +425,11 @@ TEST_CASE("transport: framed messages round-trip over AF_UNIX (decision #4's loc
 }
 
 // ---- consumed transport bytes are history, not live channel storage (LIFE-07) -----------------
-//
-// THE FAILURE THIS FALSIFIES: flush() clear()ing the outbox ONLY on an exact drain, so a peer that keeps up but
-// never lets the socket run dry left a standing residue at every flush, the reset never fired, and
-// the buffer grew by the session's whole byte volume. kMaxBacklog measures the UNSENT residue, so
-// it never noticed. Measured pre-repair on exactly this shape: +261 B per round, strictly linear,
-// 524,160 bytes already sent and still retained after 2,000 rounds, with failed() never set.
-//
-// These proofs are POSIX-gated because they need a deliberately small in-flight socket window
-// (SO_SNDBUF/SO_RCVBUF over a socketpair) to state the law at kilobyte scale instead of at the
-// ~2.6 MB TCP-loopback window. The repaired code is the platform-agnostic framing half that both
-// raw-I/O backends share. The isolation Channel's identical repair is proven independently in
-// test_isolation.cpp -- neither suite is evidence for the other.
-//
-// Note what the outbox is NOT: unlike the inbox it is an undifferentiated byte stream, with no
-// header/payload structure to respect. A compaction boundary may fall anywhere -- inside a length
-// header, inside a payload, on a frame edge -- and the only correctness question is whether the
-// unsent bytes survive the move exactly. The tests classify where each boundary actually landed
-// and assert on the resulting wire stream.
+// The failure this falsifies: an outbox cleared only on an exact drain, so a peer that keeps up
+// but never lets the socket run dry leaves a standing residue, and the buffer grows by the
+// session's whole byte volume while kMaxBacklog, which measures the UNSENT residue, sees nothing.
+// POSIX-gated for a small socket window (SO_SNDBUF/SO_RCVBUF on a socketpair); test_isolation.cpp
+// proves the isolation Channel's twin independently. A compaction boundary may fall anywhere.
 
 namespace {
 
@@ -489,7 +472,7 @@ Landing classify(std::size_t offset) {
 
 } // namespace
 
-TEST_CASE("R2F-C (bridge): a channel that is never idle still reclaims what it has already sent") {
+TEST_CASE("a channel that is never idle still reclaims what it has already sent") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -513,7 +496,7 @@ TEST_CASE("R2F-C (bridge): a channel that is never idle still reclaims what it h
 
     // Phase 2 -- build a standing backlog LARGER than that window, so no later flush can empty the
     // buffer. A residue SMALLER than the window is drained away the moment the peer makes room and
-    // the exact-drain clear() fires: F-18 needs a PERSISTENT suffix, not merely a slow peer.
+    // the exact-drain clear() fires: the defect needs a PERSISTENT suffix, not merely a slow peer.
     for (int i = 0; i < 20000 && P::unsent(ch) < window + 8192; ++i) {
         queue_one();
         ch.flush();
@@ -568,7 +551,7 @@ TEST_CASE("R2F-C (bridge): a channel that is never idle still reclaims what it h
                       << " compactions moved " << bytes_moved << " B; boundary landed in-header "
                       << in_header << ", in-payload " << in_payload << ", on-edge " << on_edge);
 
-    CHECK(idle_rounds == 0);      // the buffer never once became empty -- the F-18 shape held
+    CHECK(idle_rounds == 0);      // the buffer never once became empty: the persistent-suffix shape held
     CHECK(law_violations == 0);   // ... and live storage stayed bounded by twice the backlog anyway
     CHECK(compactions > 0);       // reclamation actually ran (guards a vacuously bounded pass)
     CHECK(bytes_moved <= queued_bytes); // amortized: a move never costs more than the bytes it drops
@@ -593,7 +576,7 @@ TEST_CASE("R2F-C (bridge): a channel that is never idle still reclaims what it h
     CHECK(first_bad == static_cast<std::size_t>(-1)); // index of the first corrupted/reordered frame
 }
 
-TEST_CASE("R2F-C (bridge): frames queued behind a half-sent one keep their order and their bytes") {
+TEST_CASE("frames queued behind a half-sent one keep their order and their bytes") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -666,7 +649,7 @@ TEST_CASE("R2F-C (bridge): frames queued behind a half-sent one keep their order
     CHECK(got[static_cast<std::size_t>(first_untouched) + 2].payload == body(first_untouched + 2));
 }
 
-TEST_CASE("R2F-C (bridge): reclamation moves the backlog, it does not shrink it") {
+TEST_CASE("reclamation moves the backlog, it does not shrink it") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -710,7 +693,7 @@ TEST_CASE("R2F-C (bridge): reclamation moves the backlog, it does not shrink it"
     for (int i = 0; i < 80 && !ch.failed(); ++i) {
         ch.queue(BridgeOp::Send, mib);
     }
-    CHECK(ch.failed()); // a peer that will not drain is contained, exactly as before the repair
+    CHECK(ch.failed()); // a peer that will not drain is contained
 
     // A failed channel stays failed and stays inert.
     const std::size_t live_when_failed = P::live(ch);
@@ -722,7 +705,7 @@ TEST_CASE("R2F-C (bridge): reclamation moves the backlog, it does not shrink it"
     CHECK(P::live(ch) == live_when_failed); // queue() on a failed channel is still a no-op
 }
 
-TEST_CASE("R2F-C (bridge): a failed channel neither sends nor reclaims") {
+TEST_CASE("a failed channel neither sends nor reclaims") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -742,7 +725,7 @@ TEST_CASE("R2F-C (bridge): a failed channel neither sends nor reclaims") {
     peer.poll(got); // the socket is now empty: room for the whole remainder
     const std::size_t delivered_before = got.size();
 
-    ch.fail(); // the existing severance affordance (a protocol violation uses it)
+    ch.fail(); // the severance affordance (a protocol violation uses it)
     const std::size_t live_when_failed = P::live(ch);
     const std::size_t sent_when_failed = P::sent(ch);
     REQUIRE(live_when_failed > 0);
@@ -756,7 +739,7 @@ TEST_CASE("R2F-C (bridge): a failed channel neither sends nor reclaims") {
     CHECK(got.size() == delivered_before);  // ... so the peer received nothing more
 }
 
-TEST_CASE("R2F-C (bridge): an over-length frame is still refused, and EOF still arrives whole") {
+TEST_CASE("an over-length frame is refused, and EOF arrives whole") {
     using P = BridgeChannelStorageProbe;
     SUBCASE("the per-frame cap is a property of the payload, untouched by any buffer state") {
         const TinyPair fds = tiny_pair();
@@ -807,12 +790,12 @@ TEST_CASE("R2F-C (bridge): an over-length frame is still refused, and EOF still 
     }
 }
 
-TEST_CASE("R2F-C (bridge): the RECEIVE buffer was never part of F-18") {
-    // The finding named the outbox. Its sibling already reclaims decoded bytes unconditionally
-    // (`inbox_.erase(0, pos)`), so a permanently incomplete suffix does NOT pin consumed history in
-    // place. Measured, not assumed -- this is the evidence for "inspected, already correct". The
-    // partial suffix must be a GENUINE prefix of the next frame; junk would merely desync the
-    // framer, which is a different (and already covered) question.
+TEST_CASE("the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed "
+              "history") {
+    // The inbox reclaims decoded bytes unconditionally (`inbox_.erase(0, pos)`), so a permanently
+    // incomplete suffix does NOT pin consumed history in place: measured here, not assumed. The
+    // partial suffix is a GENUINE prefix of the next frame; junk would merely desync the framer,
+    // a different and already covered question.
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair(/*shrink=*/false); // raw pushes must never block the test
     BridgeChannel ch(static_cast<socket_t>(fds.consumer));
@@ -850,9 +833,9 @@ TEST_CASE("R2F-C (bridge): the RECEIVE buffer was never part of F-18") {
 }
 #endif // _WIN32
 
-// ---- the operator-protocol (discovery + tap + send as messages) --------------------------------
+// ---- the bridge protocol (discovery + tap + send as messages) ----------------------------------
 
-TEST_CASE("operator-protocol: discovery, a gate-sent message, and the reply buffer cross the wire") {
+TEST_CASE("bridge protocol: discovery, a gate-sent message, and the reply buffer cross the wire") {
     Host h;
     socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
     REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
@@ -915,12 +898,10 @@ TEST_CASE("operator-protocol: discovery, a gate-sent message, and the reply buff
     CHECK(h.greeter->last_sender() == rc.operator_id().value);
 }
 
-TEST_CASE("RTH-1a: a handler that fails reaches a REMOTE operator as HandlerFailed, not Delivered") {
-    // THE BRIDGE HALF OF RTH-1's REPAIR, exercised over a real socket. RTH-1 added
-    // `EventKind::HandlerFailed` and a wire kind for it (protocol v3); this is the
-    // witness that the kind survives the whole path — Switchboard tap, server
-    // encode, wire, client decode — rather than arriving as the `Delivered` a
-    // remote operator would have believed.
+TEST_CASE("a handler that fails reaches a REMOTE operator as HandlerFailed, not Delivered") {
+    // `EventKind::HandlerFailed` has its own wire kind, and this is the witness that the kind
+    // survives the whole path -- Switchboard tap, server encode, wire, client decode -- rather
+    // than arriving as the `Delivered` a remote operator would believe.
     class Thrower final : public loom::Weave {
     public:
         std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
@@ -998,8 +979,7 @@ TEST_CASE("RTH-1a: a handler that fails reaches a REMOTE operator as HandlerFail
         },
         3000));
     CHECK(saw_failed);
-    // ...and the SAME delivery did not also announce itself a success. That is the
-    // silence-wearing-a-success's-clothes RTH-1 found, stated on the wire.
+    // ...and the SAME delivery did not also announce itself a success, on the wire.
     CHECK(!saw_delivered_to_thrower);
     CHECK(escaped.load() > 0); // the exception still reached the host, unswallowed
     CHECK(kBridgeProtocolVersion >= 3);
@@ -1010,7 +990,8 @@ TEST_CASE("RTH-1a: a handler that fails reaches a REMOTE operator as HandlerFail
     }
 }
 
-TEST_CASE("operator-protocol: the sender is stamped from the connection — a FORGED wire sender loses") {
+TEST_CASE("bridge protocol: the sender is stamped from the connection — a FORGED wire sender "
+              "loses") {
     Host h;
     socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
     REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
@@ -1363,15 +1344,11 @@ TEST_CASE("hygiene: the client bounds pending replies a hostile host can pile up
     CHECK(overflow);
 }
 
-// ---- malformed-input hardening: three forged frames (coverage, not a fix) ----------------------
-//
-// An honest RemoteConsole composes against a real schema, so it can NEVER emit a malformed frame —
-// a test through the honest client cannot reach these paths at all. So each case FORGES the hostile
-// wire-frame by hand via a raw BridgeChannel (Cases 1-2) or bridge_send_raw (Case 3's lying length),
-// exactly as the sender-forge test does. Four assertions each: rejected / no-leak / connection-
-// survives / no-hang-crash-desync — the cluster that makes these BRIDGE tests, not just admit() tests.
-// (This is NOT a fuzzer: three representative frames pin the mechanism; wire-fuzzing is the seam tied
-// to actual off-host network exposure, which the bridge is explicitly not built for.)
+// ---- malformed-input hardening: three forged frames ------------------------------------------
+// An honest RemoteConsole composes against a real schema and cannot emit a malformed frame, so
+// each case FORGES one by hand (a raw BridgeChannel, or bridge_send_raw for a lying length) and
+// asserts four things: rejected, no leak, the connection survives, no hang, crash or desync. Not
+// a fuzzer: wire-fuzzing belongs with off-host exposure, which the bridge is not built for.
 
 TEST_CASE("hardening (value, known schema): a corrupt body is gate-refused, no leak, connection survives") {
     Host h;
@@ -1500,12 +1477,11 @@ TEST_CASE("hardening (value, unknown schema): a distinct branch is refused, no l
     CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
 }
 
-TEST_CASE("R2F-A (end-to-end): a compact frame cannot command an unbounded host decode") {
-    // The whole chain, over a REAL loopback socket, with the bytes chosen by the peer:
-    //   peer's schema is registered host-side  ->  peer sends a tiny frame  ->  the HOST
-    //   process parses and admits it, before any grant is consulted.
-    // That is the shape COLD-1 measured (37 wire bytes -> 1,048,576 admitted cells -> +102 MB
-    // of HOST RSS). It is refused here by the decoder, at the seam, for the whole host.
+TEST_CASE("a compact frame cannot command an unbounded host decode") {
+    // The whole chain, over a REAL loopback socket, with the bytes chosen by the peer: the peer's
+    // schema is registered host-side, the peer sends a tiny frame, and the HOST process parses it
+    // before any grant is consulted. Unrefused, 37 wire bytes became 1,048,576 admitted cells and
+    // +102 MB of host memory; the decoder refuses it at the seam, for the whole host.
     Host h{Host::kWithBulk};
     const socket_t cs = bridge_connect_tcp("127.0.0.1", h.port, &h.err);
     REQUIRE_MESSAGE(cs != kInvalidSocket, h.err);
@@ -1596,8 +1572,8 @@ TEST_CASE("R2F-A (end-to-end): a compact frame cannot command an unbounded host 
     CHECK(h.bulk->delivered() == 0);
     CHECK(h.bulk->received() == 0);
 
-    // (3) the host is still usable afterwards — an HONEST Bulk of the same shape delivers, which
-    //     also proves the repair did not simply outlaw zero-field-message lists.
+    // (3) the host is still usable afterwards -- an HONEST Bulk of the same shape delivers, which
+    //     also proves the bound does not simply outlaw zero-field-message lists.
     loom::Value honest(bulk_schema());
     loom::Cell::Array arr;
     for (int i = 0; i < 3; ++i) {
@@ -1723,7 +1699,8 @@ TEST_CASE("hardening (framing): garbage at the transport layer — the framer, n
 
 // ---- disconnect handled as an event (no hang) --------------------------------------------------
 
-TEST_CASE("operator-protocol: a vanished peer is reaped as an event (the server unregisters its proxy)") {
+TEST_CASE("bridge protocol: a vanished peer is reaped as an event (the server unregisters its "
+              "proxy)") {
     // Single-threaded here so connection_count is asserted deterministically after the peer vanishes.
     loom::Switchboard bus;
     bus.register_weave(std::make_unique<RecordingGreeter>(), loom::Grant{}.allow_any());
@@ -1768,7 +1745,8 @@ TEST_CASE("operator-protocol: a vanished peer is reaped as an event (the server 
 }
 
 #ifndef _WIN32
-TEST_CASE("operator-protocol: a SIGKILLed operator PROCESS is reaped as an event (two real processes)") {
+TEST_CASE("bridge protocol: a SIGKILLed operator PROCESS is reaped as an event (two real "
+              "processes)") {
     loom::Switchboard bus;
     bus.register_weave(std::make_unique<RecordingGreeter>(), loom::Grant{}.allow_any());
     std::string err;
@@ -1829,14 +1807,9 @@ TEST_CASE("operator-protocol: a SIGKILLed operator PROCESS is reaped as an event
 #endif // _WIN32
 
 // ---- composing with a perpetual in-process service (MSG-09) ------------------
-//
-// The Rule Garden's sharpest seam, at the altitude it was found: a repeating
-// Zengine Timer paces itself inside Drive and enqueues its next Drive before
-// returning, so the queue never empties and BridgeServer::step()'s drain-to-empty
-// pump never returns to poll sockets. Its playground workaround was to append a
-// fake application message (`GardenYieldPump`) whose handler called
-// Switchboard::stop() — observable machinery with no business purpose. This is
-// the same composition with the legitimate surface instead.
+// A service that re-arms itself inside its own handler, as a repeating timer does, keeps the
+// queue from ever emptying, so a drain-to-empty step() would never return to poll sockets. The
+// host's bounded dispatch lets it keep serving without a fake yield message or a second thread.
 
 /// A weave that re-arms itself on every delivery, exactly as a repeating Timer
 /// does. Nothing bounds it; that is the point.
@@ -1874,8 +1847,8 @@ private:
     }
 };
 
-TEST_CASE("R2E-0: a bridge host with a bounded turn stays responsive while a perpetual service "
-          "runs — no fake yield message, no second thread, FIFO intact") {
+TEST_CASE("a bridge host with a bounded turn stays responsive while a perpetual service runs — "
+          "no fake yield message, no second thread, FIFO intact") {
     loom::Switchboard bus;
     auto owned = std::make_unique<PerpetualDriver>();
     PerpetualDriver* driver = owned.get();
@@ -1899,9 +1872,8 @@ TEST_CASE("R2E-0: a bridge host with a bounded turn stays responsive while a per
     kick.set("msg", loom::Cell::text("go"));
     bus.send(did, loom::Message(std::move(kick)));
 
-    // A step() with the service already running RETURNS. That is the whole fix.
-    // The backlog at entry was 1, so exactly one turn happened and the driver's
-    // own continuation was left for the next step.
+    // A step() with the service already running RETURNS. The backlog at entry was 1, so exactly
+    // one turn happened and the driver's own continuation was left for the next step.
     server.step();
     CHECK(driver->turns == 1);
 
@@ -1935,8 +1907,8 @@ TEST_CASE("R2E-0: a bridge host with a bounded turn stays responsive while a per
     CHECK(driver->turns > 1);
 }
 
-TEST_CASE("R2E-0: set_bounded_dispatch needs no number — the backlog at entry bounds the turn, "
-          "and the perpetual service keeps running") {
+TEST_CASE("set_bounded_dispatch needs no number — the backlog at entry bounds the turn, and the "
+          "perpetual service keeps running") {
     loom::Switchboard bus;
     auto owned = std::make_unique<PerpetualDriver>();
     PerpetualDriver* driver = owned.get();
@@ -1971,7 +1943,7 @@ TEST_CASE("R2E-0: set_bounded_dispatch needs no number — the backlog at entry 
     CHECK(bus.pending() == 12u);
 }
 
-TEST_CASE("R2E-0: unbounded is the pre-existing contract — step() still drains to empty") {
+TEST_CASE("unbounded is the default contract — step() drains to empty") {
     loom::Switchboard bus;
     auto g = std::make_unique<RecordingGreeter>();
     const loom::WeaveId gid = bus.register_weave(std::move(g), loom::Grant{}.allow_any());
@@ -1991,19 +1963,11 @@ TEST_CASE("R2E-0: unbounded is the pre-existing contract — step() still drains
 }
 
 // ---- the CLIENT's retained state is bounded too -------------------------------------------------
-//
-// RemoteConsole holds four things a peer can feed. TREATING THEM AS ONE SHAPE IS THE MISTAKE — the
-// classification is what decides the fix, and each row wants a different one:
-//
-//   tap_               HISTORY        -> bounded window, oldest evicted and counted
-//   buffer_            HISTORY        -> bounded window, oldest evicted, labels stay identities
-//   pending_delivered_ ACTIVE BACKLOG -> already bounded by REFUSAL (kMaxPendingDelivered), not
-//                                        eviction: each entry is a reply still owed a schema, and
-//                                        dropping the oldest would discard an obligation. Proven
-//                                        above ("the client bounds pending replies..."); untouched.
-//   schema_absent_     CACHE          -> the easiest one to miss, and the only one a peer could
-//                                        still grow forever: every Delivered naming a novel unknown
-//                                        shape adds an entry that is never removed.
+// RemoteConsole holds four things a peer can feed, each bounded its own way: `tap_` and `buffer_`
+// are HISTORY (bounded windows, oldest evicted and counted; buffer labels stay identities);
+// `pending_delivered_` is an ACTIVE BACKLOG bounded by REFUSAL (kMaxPendingDelivered), since each
+// entry is a reply still owed a schema; `schema_absent_` is a CACHE bounded by eviction, the only
+// one a peer could otherwise grow forever with novel unknown shapes.
 
 namespace loom {
 /// See the friend declaration in zen/bridge/remote_console.hpp. The absent-schema memo has no
@@ -2057,7 +2021,7 @@ void welcome(RemoteConsole& rc, BridgeChannel& host) {
 
 } // namespace
 
-TEST_CASE("C-1 (bridge): the remote tap and reply buffer are bounded windows, with stable labels") {
+TEST_CASE("the remote tap and reply buffer are bounded windows, with stable labels") {
     const std::pair<socket_t, socket_t> pair = two_sockets();
     RemoteConsole rc(pair.first, /*handshake_timeout_ms=*/0);
     BridgeChannel host(pair.second);
@@ -2112,11 +2076,10 @@ TEST_CASE("C-1 (bridge): the remote tap and reply buffer are bounded windows, wi
     CHECK(RemoteConsoleStorageProbe::pending(rc) == 0);
 }
 
-TEST_CASE("C-1 (bridge): the absent-schema memo is bounded — a host cannot grow it forever") {
+TEST_CASE("the absent-schema memo is bounded — a host cannot grow it forever") {
     // Every Delivered naming an unknown shape makes the client ask Describe and remember the "no
-    // such schema" answer. A host that keeps naming NOVEL shapes therefore used to add one entry
-    // per distinct name, forever. It is a memo, so the bound is eviction: the cost is one repeated
-    // Describe, and it is the only bound here that also fixes a staleness (a shape registered later
+    // such schema" answer, one entry per distinct name. It is a memo, so the bound is eviction:
+    // the cost is one repeated Describe, and it also fixes a staleness (a shape registered later
     // is no longer remembered as absent for the life of the process).
     const std::pair<socket_t, socket_t> pair = two_sockets();
     RemoteConsole rc(pair.first, /*handshake_timeout_ms=*/0);
@@ -2222,21 +2185,17 @@ TEST_CASE("wire-originated refusal-shaped speech cannot acquire Loom attestation
     CHECK(trusted==1);CHECK(ordinary==1);CHECK(bus.pending()==0);
 }
 
-// =================================================================================================
-// THE TWO-HOST CROSSING (v4): admission, identity, stamped context, the link.
-// =================================================================================================
-//
-// Everything above this line proves the crossing at the mechanism altitude for ONE principal --
-// the operator. The cases below are the guest's: a connection that is admitted deliberately,
-// under a grant the host's policy chose, told what it is and what it is not, and given nothing
-// it was not granted. Two of them are the guards the prompt names as the ones that must fail
-// when removed: an unadmitted connection acting, and a claimed name becoming an identity.
+// ---- the two-host crossing: admission, identity, stamped context, the link ----------------------
+// The cases above prove the crossing for ONE principal, the operator. These are the guest's: a
+// connection admitted deliberately, under a grant the host's policy chose, told what it is and is
+// not, and given nothing it was not granted. An unadmitted connection acting, or a claimed name
+// becoming an identity, fails its case.
 
 
 namespace {
 
 /// A typed shape and a participant that ANSWERS it -- `mail.answer`, so Loom attests the reply
-/// -- the way a real Workshop door answers a guest. The greeter above replies with an ordinary
+/// -- the way an application's door answers a guest. The greeter above replies with an ordinary
 /// send, which is exactly the distinction the Delivered flags exist to carry.
 struct Echo {
     std::string msg;
@@ -2305,7 +2264,7 @@ struct GuestHost {
     }
 };
 
-/// The narrow grant a Workshop-like policy hands a guest: one shape, to one office.
+/// The narrow grant an application's policy hands a guest: one shape, to one office.
 loom::ConnectionAdmitted echo_only(std::string name) {
     loom::ConnectionAdmitted a;
     a.grant.allow_to_role(Echo::zen_name, Echo::zen_version, "echo");
@@ -2433,7 +2392,7 @@ TEST_CASE("admission: what the grant does not cover is refused at the bus, and t
         return loom::ConnectionVerdict::admit(echo_only("agent"));
     });
     // A participant that accepts the dispatch-refusal notice, so the shape is registered and the
-    // proxy (accept-any) can receive it -- exactly as Workshop's terminal registers it.
+    // proxy (accept-any) can receive it, as a terminal registers it.
     auto probe = sbfx::register_probe(h.bus, {schema_of<DispatchRefused>()});
     (void)probe;
     std::unique_ptr<loom::BridgeClient> c;
@@ -3427,13 +3386,11 @@ TEST_CASE("link: an asker replaced before its answer came is answered nothing it
     CHECK(fresh->heard_.size() == 1);
 }
 
-// THE DOOR DIES WITH THE BUS. Workshop mounts its guest door AS A WEAVE that owns a
-// BridgeServer, so the server's destructor -- which unregisters its proxies and removes its
-// tap observer -- runs from inside the Switchboard's own destructor. Before the registry was
-// emptied first, that was an erase from a map already being torn down (a SIGSEGV in
-// Workshop's guests suite, at teardown, with a guest still admitted). This case is that
-// exact shape: a weave-owned server with one admitted, still-connected guest, destroyed by
-// the bus alone.
+// THE DOOR DIES WITH THE BUS. An application may mount its guest door AS A WEAVE that owns a
+// BridgeServer, so the server's destructor (which unregisters its proxies and removes its tap
+// observer) runs inside the Switchboard's own destructor, and must not erase from a registry
+// being torn down. This is that shape: a weave-owned server with one admitted, still-connected
+// guest, destroyed by the bus alone.
 struct DoorWeave final : public loom::WeaveBase<DoorWeave, EchoState, loom::Accept<>, loom::Emit<>> {
     std::unique_ptr<loom::BridgeServer> server;
     explicit DoorWeave(std::unique_ptr<loom::BridgeServer> s) : server(std::move(s)) {}
@@ -3484,12 +3441,10 @@ TEST_CASE("teardown: a weave that owns a BridgeServer may die with the bus, gues
 }
 
 // ---- the payload encoding a session was admitted to speak --------------------------------------
-//
-// A peer that is not written in C++ should not have to reproduce the canonical binary's positional
-// body and schema content ids to take part. The host may admit such a session to Zen's compat JSON
-// envelope instead: its Sends are parsed as JSON and then admitted through the SAME gate, and what
-// is delivered to it is serialized the same way. One session, one encoding -- and nothing about
-// authority depends on which.
+// A peer not written in C++ need not reproduce the canonical binary's positional body and schema
+// content ids: the host may admit its session to Zen's compat JSON envelope, whose Sends are
+// parsed as JSON and admitted through the SAME gate, and whose deliveries are serialized the same
+// way. One session, one encoding, and nothing about authority depends on which.
 
 namespace {
 
@@ -3678,13 +3633,11 @@ TEST_CASE("link: an ask carrying a compat envelope is admitted here and crosses 
 
 
 // ---- a far relay's observations, carried by a link ----------------------------------------------
-//
-// The far host serves a relay (zen/observe/relay.hpp) with the bridge server's record of who
-// opened which fence; the near host's link keeps each subscription's custody for the near asker
-// that made it. What these cases hold is the link's half: only the relay that answered, on the
-// session it answered on, about a subscription the link holds, reaches that asker -- with the
-// crossing named and `cause` in the asker's own correlation -- and a session that ends, an asker
-// that leaves or a release ends the custody visibly.
+// The far host serves a relay (zen/observe/relay.hpp); the near link keeps each subscription's
+// custody for the near asker that made it. The link's half: only the relay that answered, on its
+// session, about a subscription the link holds, reaches that asker (the crossing named, `cause`
+// in the asker's own correlation), and a session ending, an asker leaving or a release ends the
+// custody visibly.
 
 namespace {
 
@@ -4052,12 +4005,10 @@ TEST_CASE("link: a release through the link is answered Ended and ends the link'
 }
 
 // ---- whose subscription it is, when every near asker is one session to the far relay ----------
-//
 // The far relay judges a Release or an Acknowledge by its subscriber, and across a link every near
-// asker is the link's one session there -- so only the link can keep one near asker's
-// subscription from another's controls. And a near subscriber that is gone must be released by
-// the link's own turn: a silent producer, or a window the gone reader can never reopen, sends no
-// word that would reveal it.
+// asker is the link's one session there, so only the link can keep one near asker's subscription
+// from another's controls. A near subscriber that is gone is released on the link's own turn: a
+// silent producer, or a window the gone reader can never reopen, sends no word to reveal it.
 
 namespace {
 

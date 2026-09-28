@@ -20,12 +20,11 @@ namespace zen_tests::observe_probe {
 inline constexpr const char* kTicker = "far.ticker";
 
 /// TELL THE PRODUCER WHAT TO DO, answered `zen.Ack` (or `zen.Refused` for a verb it does not know):
-///   tick N      publish N ticks, then the state, in this delivery
-///   burst N     the same, N large: one delivery that outruns a small window
-///   foreign     a participant that does NOT hold the office publishes a tick
-///   replace     the office changes hands: a new producer holds it from the next turn
-///   revoke      the far host withdraws every subscription of the asking session
-///   quit        the far host ends (the link's session with it)
+///   tick N / burst N  publish N ticks, then the state, in this delivery (burst: N large)
+///   foreign           a participant that does NOT hold the office publishes a tick
+///   replace           the office changes hands: a new producer holds it from the next turn
+///   revoke            the far host withdraws every subscription of the asking session
+///   quit              the far host ends (the link's session with it)
 struct ObserveProbeCommand {
     std::string verb;
     std::int64_t count = 0;

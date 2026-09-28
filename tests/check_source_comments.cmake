@@ -21,16 +21,55 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 
 # ---- scope -----------------------------------------------------------------------------
 # The first-party roots: a directory is read whole, a file alone. Vendored code is never held.
-# The session tooling's Python and its two launchers are installed documentation too.
+# The session tooling's Python and its two launchers are installed documentation too; Python and
+# shell scripts under the roots are read as scripts.
 set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
     python tools/basics tools/loom-session tools/loom-session.cmd)
 set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # Files not yet brought to the standard, as regular expressions over the repository-relative
-# path. The list only shrinks: a file leaves it when its comments meet the standard. The Python
-# under tests/ joined it when the check began to read Python, beside the suites it drives.
+# path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
-    "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx|py)$")
-set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py CMakeLists.txt *.cmake
+    "^tests/test_admission[.]cpp$"
+    "^tests/test_ask_book[.]cpp$"
+    "^tests/test_breathing[.]cpp$"
+    "^tests/test_capabilities[.]cpp$"
+    "^tests/test_compat[.]cpp$"
+    "^tests/test_component[.]cpp$"
+    "^tests/test_console[.]cpp$"
+    "^tests/test_describe[.]cpp$"
+    "^tests/test_dispatch_loaded[.]cpp$"
+    "^tests/test_dispatch_refusal[.]cpp$"
+    "^tests/test_fuzz[.]cpp$"
+    "^tests/test_gate[.]cpp$"
+    "^tests/test_grant[.]cpp$"
+    "^tests/test_handoff[.]cpp$"
+    "^tests/test_harness[.]cpp$"
+    "^tests/test_history_logger[.]cpp$"
+    "^tests/test_history_recorder[.]cpp$"
+    "^tests/test_host_input[.]cpp$"
+    "^tests/test_host_policy[.]cpp$"
+    "^tests/test_integration[.]cpp$"
+    "^tests/test_joint[.]cpp$"
+    "^tests/test_observe[.]cpp$"
+    "^tests/test_pixel[.]cpp$"
+    "^tests/test_poke[.]cpp$"
+    "^tests/test_policy[.]cpp$"
+    "^tests/test_registry[.]cpp$"
+    "^tests/test_role_authorship[.]cpp$"
+    "^tests/test_role_request[.]cpp$"
+    "^tests/test_runs[.]cpp$"
+    "^tests/test_schema[.]cpp$"
+    "^tests/test_schema_codec[.]cpp$"
+    "^tests/test_sense[.]cpp$"
+    "^tests/test_serialize[.]cpp$"
+    "^tests/test_session[.]cpp$"
+    "^tests/test_switchboard[.]cpp$"
+    "^tests/test_terminal[.]cpp$"
+    "^tests/test_value[.]cpp$"
+    "^tests/test_weave[.]cpp$"
+    "^tests/test_weave_shape[.]cpp$"
+    "^tests/test_weaver[.]cpp$")
+set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
 # (`// MSG-09; docs/laws/messaging-laws.md`) not counted -- outside an installed header, which
@@ -270,7 +309,7 @@ function(zen_comments_kind rel out)
         set(kind cmake)
     elseif(rel MATCHES "(^|/)(suite|entry)_population\\.txt$")
         set(kind manifest)
-    elseif(rel MATCHES "(\\.py|(^|/)loom-session)$")
+    elseif(rel MATCHES "(\\.py|\\.sh|(^|/)loom-session)$")
         set(kind script)
     elseif(rel MATCHES "\\.cmd$")
         set(kind cmd)
@@ -403,6 +442,7 @@ zen_comments_expect_path(include/zen/core/a.hpp TRUE cxx FALSE)
 zen_comments_expect_path(python/loom_session/tool.py TRUE script FALSE)
 zen_comments_expect_path(tools/loom-session TRUE script FALSE)
 zen_comments_expect_path(tools/loom-session.cmd TRUE cmd FALSE)
+zen_comments_expect_path(tests/run-under-scope.sh TRUE script FALSE)
 set(ZEN_COMMENT_PENDING "${ZEN_COMMENT_PENDING_KEPT}")
 zen_comments_install_excludes("" nothing)
 if(NOT nothing STREQUAL "NOTFOUND")
@@ -423,6 +463,7 @@ zen_comments_expect_name(a/entry_population.txt TRUE)
 zen_comments_expect_name(a/b/x_hpp FALSE)
 zen_comments_expect_name(a/b/x.py TRUE)
 zen_comments_expect_name(a/b/x.pyc FALSE)
+zen_comments_expect_name(a/b/x.sh TRUE)
 zen_comments_expect_name(a/b/notes.txt FALSE)
 
 if(population_count EQUAL 0)

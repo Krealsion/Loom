@@ -14,7 +14,7 @@ waiting 0.15s for the answer, and reports progress AGAIN when it stops waiting (
 so an interval that is quiet only while the answers happen to be quick. The product's
 pending-progress is useful and is left exactly as it is; this tool collects its answer itself,
 so that the quiet after an AskReport is quiet however long the answer took. ``slow`` makes it
-take long on purpose, so the witness runs in the condition it was hiding from.
+take long on purpose, so the witness runs in the condition a quick answer would hide.
 """
 
 import os
@@ -37,7 +37,7 @@ def _ask_quietly(ctx, slow):
 
     ``Pending.wait`` reports an ask as pending when IT has been waiting; by the time this calls
     it the answer is already in hand, so the only thing the manager hears about this ask is its
-    AskReport -- whatever the answer cost. That is the whole of the repair.
+    AskReport -- whatever the answer cost.
     """
     p = ctx.ask_async("loom.session", "loom.session.Describe", {})
     started = time.monotonic()

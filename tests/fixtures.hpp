@@ -33,7 +33,7 @@ inline std::shared_ptr<const Schema> Spawn() {
     return s;
 }
 
-// The "discovered at runtime" message of scene B.
+// A message a weave discovers at runtime.
 inline std::shared_ptr<const Schema> SetColor() {
     static const auto s = SchemaBuilder("SetColor", 1)
                               .field("r", Kind::Int)
@@ -44,7 +44,7 @@ inline std::shared_ptr<const Schema> SetColor() {
     return s;
 }
 
-// A Weave's persisted state — the lock the self chooses (scene C).
+// A Weave's persisted state, the shape it chooses for itself.
 inline std::shared_ptr<const Schema> PlayerState() {
     static const auto s = SchemaBuilder("PlayerState", 1)
                               .field("hp", Kind::Int)
@@ -53,7 +53,7 @@ inline std::shared_ptr<const Schema> PlayerState() {
     return s;
 }
 
-// A policy declared as a value, validated by the gate (scene C).
+// A policy declared as a value, validated by the gate.
 inline std::shared_ptr<const Schema> ReloadPolicy() {
     static const auto s = SchemaBuilder("ReloadPolicy", 1)
                               .field("max_reloads", Kind::Int)
@@ -62,7 +62,7 @@ inline std::shared_ptr<const Schema> ReloadPolicy() {
     return s;
 }
 
-// A wholly different policy shape, proving the grammar is open (scene C).
+// A wholly different policy shape, proving the grammar is open.
 inline std::shared_ptr<const Schema> EphemeralPolicy() {
     static const auto s =
         SchemaBuilder("EphemeralPolicy", 1).field("wipe_on_reload", Kind::Bool).build();
