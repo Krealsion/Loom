@@ -494,7 +494,7 @@ inline Registered register_emitter(Switchboard& bus, std::shared_ptr<const Schem
 TEST_CASE("schema admission: a native emitter and a loaded acceptor that disagree about one "
           "shape refuse at the door, in both orders") {
     using namespace sa;
-    SUBCASE("the native emitter first (the Workshop-then-old-desktop order)") {
+    SUBCASE("the native emitter first") {
         Switchboard bus;
         Kernel kernel(bus, sbfx::fixture_admission());
         Registered emitter = register_emitter(bus, greet_text());

@@ -517,9 +517,9 @@ TEST_CASE("the address grammar is three sigils, and a bareword is not a fourth")
         CHECK_FALSE(parse_address("##3", a));
     }
     SUBCASE("a refused parse leaves the caller's address exactly as it was") {
-        // The REPL and the Workshop overlay both declare one `Address` and test the bool, so a
-        // parser that half-wrote its out-param on the way to `false` would address the send
-        // somewhere nobody chose.
+        // Callers declare one `Address` and test the bool, as the REPL does, so a parser that
+        // half-wrote its out-param on the way to `false` would address the send somewhere nobody
+        // chose.
         REQUIRE(parse_address("@keepme", a));
         CHECK_FALSE(parse_address("nonsense", a));
         CHECK(a.mode == Addressing::Role);

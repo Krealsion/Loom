@@ -208,7 +208,7 @@ zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
 zen_add_test_weave(zen_test_weave_answers ZEN_WEAVE_ANSWERS)
 zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSWERS_TWICE)
 # An artifact that emits a shape only it knows, so the host seam cannot resolve it (a silent
-# seam Night Lab found).
+# seam).
 zen_add_test_weave(zen_test_weave_seam_emit ZEN_WEAVE_SEAM_EMIT)
 # The same unresolvable shape with no address on it: publishes SeamOnly v1 (unheard, so not a
 # refusal) and then a resolvable Pong whose bytes fail the gate (undelivered, so still one).
