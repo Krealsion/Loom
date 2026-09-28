@@ -31,9 +31,8 @@ struct ConsoleHistoryProbe {
     static std::size_t buffer_slots(const ConsoleEngine& e) {
         return e.reply_history().ring_.capacity();
     }
-    /// The answers the engine is actually HOLDING, read from their own storage — so "nothing is
-    /// retained" is a statement about the map, not an inference from a count of open asks
-    /// (which is the inference that let every settled answer accumulate unseen).
+    /// The answers the engine is actually HOLDING, read from their own storage, so "nothing is
+    /// retained" is a statement about the map, not an inference from a count of open asks.
     static std::size_t held_answers(const ConsoleEngine& e) { return e.settled_.size(); }
     /// Bytes of payload text those held answers keep alive. Not process memory: the size of
     /// what a caller could still read back.
@@ -49,9 +48,8 @@ struct ConsoleHistoryProbe {
 };
 } // namespace loom
 
-// The Console engine, proven with NO terminal — the headline. The engine is the durable
-// spine; these tests drive its API directly (discover, gate-send, receive replies), so
-// Stage 3's GUI inherits exactly this, only the skin new.
+// The Console engine, proven with NO terminal: these tests drive its API directly (discover,
+// gate-send, receive replies), the layer every frontend is built on.
 
 using namespace sbfx;          // Switchboard, ProbeWeave, register_probe, ping/pong, RefusalReason, ...
 using namespace loom;  // ConsoleEngine, WeaveInfo, SendOutcome, FieldValue, ...
@@ -71,7 +69,7 @@ loom::Value widget(std::int64_t w) {
     return v;
 }
 
-// ---- Stage 2 shapes, known only to the tests ----
+// ---- shapes known only to the tests ----
 
 // label (Text) is OPTIONAL and declared first, count (Int) is required and second — so a lone
 // Int fails positional at slot 0 (Text) and is rescued by type-directed into count.
@@ -97,7 +95,7 @@ std::shared_ptr<const loom::Schema> note_schema() {
     return s;
 }
 
-// ---- Stage 3 tree helpers ----
+// ---- widget tree helpers ----
 const Widget* find_region(const Widget& w, const std::string& id) {
     if (w.region_id == id) {
         return &w;
@@ -289,7 +287,7 @@ TEST_CASE("wildcard-accept gates against the REGISTRY schema, not the payload's 
     CHECK(engine.buffer_size() == 0); // the lie reached no one — gated against the registry shape
 }
 
-// ===================== Stage 2: references + the assumption ladder =====================
+// ===================== references and the assumption ladder =====================
 
 TEST_CASE("reference round-trip (the dataflow headline): $m1.field feeds a NEW message") {
     Switchboard bus;
@@ -472,7 +470,7 @@ TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, m
     CHECK_FALSE(c.ticket.valid());
 }
 
-// ===================== Stage 3: UI-as-data — the renderer-agnostic widget tree =====================
+// ===================== UI as data: the renderer-agnostic widget tree =====================
 
 TEST_CASE("the bet, headless: the engine emits a semantic widget tree, NO renderer involved") {
     Switchboard bus;
@@ -679,8 +677,8 @@ TEST_CASE("SelectAt names a row directly (the pointer's act), under the same sin
     ui.dispatch({Action::FocusNext, 0}); // Compose -> Weaves
     CHECK(ui.state().focus == Focus::Weaves);
 
-    // A pointer names row 2 where keys would walk to it — the shared input vocabulary's one
-    // Phase B addition, given real console semantics.
+    // A pointer names row 2 where keys would walk to it: the shared input vocabulary's
+    // `SelectAt`, given real console semantics.
     ui.dispatch({Action::SelectAt, 0, 2});
     CHECK(ui.state().weave_cursor == 2);
     const Widget tree = ui.tree(); // bind first — a pointer into the temporary would dangle
@@ -740,8 +738,7 @@ TEST_CASE("input: an unknown control byte maps to Action::None and changes nothi
     ConsoleUi ui(engine);
     const UiState before = ui.state();
 
-    // Ctrl-A (0x01): an unknown control byte. Before this pass it mapped to FocusNext (Ctrl-A cycled
-    // focus); now it is a TRUE no-op — mapped to Action::None, dispatched as nothing.
+    // Ctrl-A (0x01), an unknown control byte, maps to Action::None and dispatches as nothing.
     InputEvent ev;
     REQUIRE(tui_map_key(1, term, ev));
     CHECK(ev.action == Action::None);
@@ -756,16 +753,10 @@ TEST_CASE("input: an unknown control byte maps to Action::None and changes nothi
 }
 
 // ---- console history is bounded by capacity, never by lifetime throughput ---------------------
-//
-// Before this, ConsoleEngine::tap_ and ConsoleWeave::received_ were plain vectors that only ever
-// grew: 200,000 bus events retained 200,000 tap entries and 200,000 Values (+42 MB RSS, measured,
-// no ceiling). The console is the operator's window, so it is exactly the process left running for
-// weeks — the same argument the bus already accepted for kJournalCapacity.
-//
-// Both surfaces are HISTORY: nothing is owed on them, so the oldest may be discarded. What may NOT
-// happen is discarding it silently, or letting a label quietly re-bind to a different reply. Each
-// case below therefore asserts three things together: the retained population, the eviction count,
-// and the IDENTITY of what is retained.
+// The console is the operator's window, so it is the process left running for weeks. Both
+// surfaces are HISTORY: nothing is owed on them, so the oldest may be discarded, but never
+// silently, and a label never quietly re-binds to a different reply. Each case asserts three
+// things together: the retained population, the eviction count, and the IDENTITY of what is kept.
 
 namespace {
 
@@ -799,7 +790,7 @@ bool tap_window_is_exact(const ConsoleEngine& engine) {
 
 } // namespace
 
-TEST_CASE("C-1: the tap retains a bounded window — every transition across the capacity") {
+TEST_CASE("the tap retains a bounded window — every transition across the capacity") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered sender = register_probe(bus, {ping_schema()});
@@ -856,7 +847,7 @@ TEST_CASE("C-1: the tap retains a bounded window — every transition across the
     CHECK(ConsoleHistoryProbe::tap_slots(engine) == kConsoleTapCapacity);
 }
 
-TEST_CASE("C-1: the reply buffer retains a bounded window, and mN stays a stable identity") {
+TEST_CASE("the reply buffer retains a bounded window, and mN stays a stable identity") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     // A responder that answers Ping{seq} with Pong{seq}: the reply's payload carries the number
@@ -919,7 +910,7 @@ TEST_CASE("C-1: the reply buffer retains a bounded window, and mN stays a stable
     CHECK(ConsoleHistoryProbe::buffer_slots(engine) == kConsoleBufferCapacity);
 }
 
-TEST_CASE("C-1: a reference to an evicted reply refuses and SAYS SO; a retained one is unchanged") {
+TEST_CASE("a reference to an evicted reply refuses and SAYS SO; a retained one is unchanged") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
@@ -965,7 +956,7 @@ TEST_CASE("C-1: a reference to an evicted reply refuses and SAYS SO; a retained 
     CHECK(still->as_int() == 50);
 }
 
-TEST_CASE("C-1: long run — retained population is independent of lifetime throughput") {
+TEST_CASE("long run — retained population is independent of lifetime throughput") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered sender = register_probe(bus, {ping_schema()});
@@ -988,7 +979,7 @@ TEST_CASE("C-1: long run — retained population is independent of lifetime thro
     CHECK(engine.evicted().tap + engine.tap().size() == kLaps * kConsoleTapCapacity);
 }
 
-TEST_CASE("C-1: a fresh console starts a fresh retention window") {
+TEST_CASE("a fresh console starts a fresh retention window") {
     // There is no clear/reset operation on console history — the reset IS object lifetime, and this
     // pins that the eviction counters are a property of THIS window rather than a lifetime statistic
     // some future console would inherit.
@@ -1008,7 +999,7 @@ TEST_CASE("C-1: a fresh console starts a fresh retention window") {
     CHECK_FALSE(fresh.buffer_at(1).has_value()); // labels restart, because the history did
 }
 
-TEST_CASE("C-1: the operator can SEE that older evidence was discarded") {
+TEST_CASE("the operator can SEE that older evidence was discarded") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
@@ -1051,13 +1042,10 @@ TEST_CASE("C-1: the operator can SEE that older evidence was discarded") {
 }
 
 // ---- ATTRIBUTION: which arrival is entitled to answer which question ---------------------------
-//
 // The console accepts `AcceptMode::AnyRegistered`, so anything the registry can resolve lands in
-// its window — including a reply shape that every participant is ordinarily permitted to send.
-// "The newest entry after a pump" is therefore a value other participants can author, and a host
-// that read it as its own answer administered whatever the newest entry named. These cases pin the
-// wall: a conversation is settled by the correlation this console minted AND Loom's own stamp of
-// who spoke, and by nothing else.
+// its window, including a reply shape every participant is ordinarily permitted to send: "the
+// newest entry after a pump" is a value other participants can author. A conversation is settled
+// by the correlation this console minted AND Loom's own stamp of who spoke, and nothing else.
 
 namespace {
 
@@ -1197,8 +1185,8 @@ TEST_CASE("every buffered arrival carries who sent it and which conversation it 
 
     auto m1 = engine.buffer_at(1);
     REQUIRE(m1.has_value());
-    // The two facts the window used to discard. Without them an operator reading `buffer`
-    // cannot tell an answer they earned from a message somebody volunteered.
+    // The two facts the window keeps. Without them an operator reading `buffer` cannot tell an
+    // answer they earned from a message somebody volunteered.
     CHECK(m1->sender == responder.id);
     CHECK(m1->correlation != 0);
     // This reply came back as an ordinary send, so Loom attests nothing about it — which is
@@ -1255,14 +1243,10 @@ TEST_CASE("the ask book is bounded, and a send past the bound is sent and says i
 }
 
 // ---- OWNERSHIP: what the console HOLDS for a caller, and for how long -----------------------
-//
-// Every send used to open a conversation, and every answer that settled one was kept until
-// somebody forgot it. The bound (32) counted only OPEN conversations, and an answer leaves the
-// book when it settles — so a caller that pumped and read the reply window, which is what every
-// frontend does, kept every answer it was ever sent. These cases pin the ownership that
-// replaced it: a send holds nothing unless its caller asks to hold it; a held conversation
-// keeps its slot from the ask until the caller takes or forgets it; and nothing — not a flood
-// of arrivals, not a full reply window — releases one on the caller's behalf.
+// A send holds nothing unless its caller asks to hold it; a held conversation keeps its slot from
+// the ask until the caller takes or forgets it; and nothing, not a flood of arrivals nor a full
+// reply window, releases one on the caller's behalf. A caller that pumps and reads the reply
+// window, as every frontend does, must not keep every answer it was ever sent.
 
 namespace {
 
@@ -1286,8 +1270,8 @@ void answer_with_blobs(Registered& r) {
 } // namespace
 
 TEST_CASE("an untracked send holds nothing, however much completed traffic comes back") {
-    // THE REPORTED PATTERN, maintained: compose, pump, repeat — an ordinary answering weave, a
-    // thousand times, with nobody collecting anything.
+    // THE ORDINARY PATTERN: compose, pump, repeat, with an ordinary answering weave, a thousand
+    // times, and nobody collecting anything.
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), blob_schema()});
@@ -1402,9 +1386,9 @@ TEST_CASE("a caller that takes its answers can ask indefinitely, and each answer
 }
 
 TEST_CASE("a delayed answer keeps its slot and outlives the reply window until it is taken") {
-    // DELAYED COMPLETION, and the two ways a fix could have been wrong: letting history
-    // eviction erase an answer before its caller collected it, or letting an unrelated arrival
-    // release a slot. The responder parks every request and answers only when released.
+    // DELAYED COMPLETION, and the two ways retention could go wrong: history eviction erasing an
+    // answer before its caller collected it, or an unrelated arrival releasing a slot. The
+    // responder parks every request and answers only when released.
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered delayed = register_probe(bus, {ping_schema(), pong_schema(), tick_schema()});
