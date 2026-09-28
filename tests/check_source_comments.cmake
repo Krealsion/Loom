@@ -29,7 +29,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # Files not yet brought to the standard, as regular expressions over the repository-relative
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
-    "^tests/run-under-scope[.]sh$"
     "^tests/session/lifecycle/cleanup[.]py$"
     "^tests/session/lifecycle/crashes[.]py$"
     "^tests/session/lifecycle/descendants[.]py$"
