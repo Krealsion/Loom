@@ -49,7 +49,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_schema_codec[.]cpp$"
     "^tests/test_session[.]cpp$"
     "^tests/test_value[.]cpp$"
-    "^tests/test_weave[.]cpp$"
     "^tests/test_weave_shape[.]cpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
