@@ -11,3 +11,37 @@ tests/test_bridge.cpp	a channel that is never idle still reclaims what it has al
 tests/test_bridge.cpp	reclamation moves the backlog, it does not shrink it	a bridge channel's reclamation moves the backlog, it does not shrink it
 tests/test_bridge.cpp	a failed channel neither sends nor reclaims	a failed bridge channel neither sends nor reclaims
 tests/test_bridge.cpp	the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history	a bridge channel's RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history
+tests/test_switchboard.cpp	R2E-0: a perpetual service starves the outer loop — drain_until_idle() returns only when the PRODUCER stops, not when the host wants control back	a perpetual service starves the outer loop — drain_until_idle() returns only when the PRODUCER stops, not when the host wants control back
+tests/test_switchboard.cpp	R2E-0: drain_until_idle() is drain-to-empty — the contract every existing caller has	drain_until_idle() is drain-to-empty — the contract every existing caller has
+tests/test_switchboard.cpp	R2E-0: pump_pending dispatches exactly the backlog present at entry — a self-re-arming producer cannot extend the turn, and a busy bus is not throttled	pump_pending dispatches exactly the backlog present at entry — a self-re-arming producer cannot extend the turn, and a busy bus is not throttled
+tests/test_switchboard.cpp	R2E-0: pump_pending on a quiet bus is a no-op, and drains a finite backlog whole	pump_pending on a quiet bus is a no-op, and drains a finite backlog whole
+tests/test_switchboard.cpp	R2E-0: pump_pending keeps FIFO exact and honours stop()	pump_pending keeps FIFO exact and honours stop()
+tests/test_switchboard.cpp	R2E-0: the bounded turn is non-reentrant, exactly as drain_until_idle() is	the bounded turn is non-reentrant, exactly as drain_until_idle() is
+tests/test_switchboard.cpp	FRIC-1: bounded turn and drain are two POWERS, not two names — on one perpetually productive world they leave measurably different worlds behind	bounded turn and drain are two POWERS, not two names — on one perpetually productive world they leave measurably different worlds behind
+tests/test_switchboard.cpp	FRIC-1: an ordinary host loop keeps control every lap while a perpetual service stays healthy — the user story the old name denied	an ordinary host loop keeps control every lap while a perpetual service stays healthy
+tests/test_switchboard.cpp	STF-1: a native handler that throws through drain_until_idle() leaves no poisoned dispatch	a native handler that throws through drain_until_idle() leaves no poisoned dispatch
+tests/test_switchboard.cpp	STF-1: a native handler that throws through pump_pending() leaves no poisoned dispatch	a native handler that throws through pump_pending() leaves no poisoned dispatch
+tests/test_switchboard.cpp	STF-1: a callback that throws leaves no delivery-scoped authority behind	a callback that throws leaves no delivery-scoped authority behind
+tests/test_switchboard.cpp	STF-1: an already-minted deferred answer survives a handler that later throws	an already-minted deferred answer survives a handler that later throws
+tests/test_switchboard.cpp	STF-1: an observer that throws propagates, and later observation still happens	an observer that throws propagates, and later observation still happens
+tests/test_switchboard.cpp	RTH-1a: an observer that throws on HandlerFailed REPLACES the handler's exception	an observer that throws on HandlerFailed REPLACES the handler's exception
+tests/test_switchboard.cpp	STF-1: an observer added during notification joins at the NEXT event	an observer added during notification joins at the NEXT event
+tests/test_switchboard.cpp	STF-1: an observer may remove itself while being notified	an observer may remove itself while being notified
+tests/test_switchboard.cpp	STF-1: removing another observer during notification takes effect at once	removing another observer during notification takes effect at once
+tests/test_switchboard.cpp	STF-1: observer notification survives reallocation of the observer list	observer notification survives reallocation of the observer list
+tests/test_switchboard.cpp	STF-1: an observer may mutate the observer list and then throw	an observer may mutate the observer list and then throw
+tests/test_switchboard.cpp	STF-1: a nested event takes its own observer view	a nested event takes its own observer view
+tests/test_switchboard.cpp	R2F-B: a weave that unregisters itself from inside its handler stays alive	a weave that unregisters itself from inside its handler stays alive
+tests/test_switchboard.cpp	R2F-B: the host retries once the callback is over, and receives the weave	the host retries once the callback is over, and receives the weave
+tests/test_switchboard.cpp	R2F-B: a DIFFERENT weave may still be removed from inside a callback	a DIFFERENT weave may still be removed from inside a callback
+tests/test_switchboard.cpp	R2F-B: a refused active-target removal performs no part of unregistration	a refused active-target removal performs no part of unregistration
+tests/test_switchboard.cpp	R2F-B: an ordinary removal outside a callback still does all of it	an ordinary removal outside a callback still does all of it
+tests/test_switchboard.cpp	R2F-B: an exception after a refused self-removal leaves the weave removable	an exception after a refused self-removal leaves the weave removable
+tests/test_switchboard.cpp	BL-0: a weave's vocabulary arrives with it and leaves with it	a weave's vocabulary arrives with it and leaves with it
+tests/test_switchboard.cpp	BL-0: a shape two weaves accept survives the first of them leaving	a shape two weaves accept survives the first of them leaving
+tests/test_switchboard.cpp	BL-0: a refused active-target removal releases nothing	a refused active-target removal releases nothing
+tests/test_switchboard.cpp	BL-0: a code swap moves the claim without a gap	a code swap moves the claim without a gap
+tests/test_switchboard.cpp	BL-0: an authorized sender keeps the shape it may speak resolvable	an authorized sender keeps the shape it may speak resolvable
+tests/test_switchboard.cpp	BL-0: a wildcard grant claims no vocabulary	a wildcard grant claims no vocabulary
+tests/test_switchboard.cpp	BL-0: a registration refused mid-accept-set publishes nothing	a registration refused mid-accept-set publishes nothing
+tests/test_switchboard.cpp	BL-0: a long run of distinct weaves does not grow the bus's vocabulary	a long run of distinct weaves does not grow the bus's vocabulary
