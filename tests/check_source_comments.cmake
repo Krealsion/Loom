@@ -31,7 +31,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^tests/hook_return/hook_absent[.]cpp$"
     "^tests/hook_return/hook_bool[.]cpp$"
-    "^tests/hook_return/hook_common[.]hpp$"
     "^tests/hook_return/hook_enum[.]cpp$"
     "^tests/hook_return/hook_int[.]cpp$"
     "^tests/hook_return/hook_void[.]cpp$"

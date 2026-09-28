@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 //
-// Shared by the hook-return witness's five translation units: one claimed shape, one
-// state, and a function that CONSTRUCTS the weave and calls `claim_published` on it.
-// Construction is what instantiates the class template's virtual members (the vtable
-// has to exist), and the call is what odr-uses the routing -- a weave nobody builds
-// has a hook nobody instantiates, and a handler nobody instantiates is neither
-// accepted nor refused. Measured: with a reference parameter and no construction, the
-// unsupported `int` form compiled, because the body was never instantiated.
+// Shared by the hook-return witness's five translation units: one claimed shape, one state,
+// and a function that CONSTRUCTS the weave and calls `claim_published` on it. Construction
+// instantiates the class template's virtual members and the call odr-uses the routing: with a
+// reference parameter and no construction, the unsupported `int` form compiled, because its
+// body was never instantiated.
 #pragma once
 #include <zen/weave.hpp>
 
