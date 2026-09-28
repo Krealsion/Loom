@@ -1,25 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The terminal — an ordinary Loom weave that a person can drive, and the exact list of
-// docs/reference/terminal.md
-// things it must never quietly become.
-//
-// What this suite is watching for, stated as the failures it must catch:
-//
-//   a terminal that speaks as the host                        (own-sender provenance)
-//   a terminal that speaks as the seat beside it              (two identities, never one)
-//   a session that approves its own authority request         (no self-approval)
-//   a weave that decides because it can REACH the Weaver      (operator identity)
-//   a transcript fed by the whole-bus tap                     (participant-local observation)
-//   "submitted" quietly becoming "delivered"                  (the sender-fate seam, honestly)
-//   any inbound message satisfying a pending ask              (Loom's provenance, not shape)
-//   an answer landing on the wrong outstanding conversation   (Loom's correlation)
-//   an approval that replays the action it authorized         (authority is not a broker)
-//   a transcript that grows forever                           (bounded history)
-//   a bound that costs a conversation somebody is waiting on  (state is not history)
-//   an escape sequence reaching the terminal it is printed on (renderer-level safety)
-//   a core that mutates what it stores to make itself safe    (values are kept verbatim)
+// The terminal: an ordinary Loom weave a person can drive, and the exact list of things it must
+// never quietly become (docs/reference/terminal.md). The cases are those failures: speaking as
+// the host or as the seat beside it, approving its own request, deciding because it can reach the
+// Weaver, a transcript fed by the whole-bus tap or growing forever, "submitted" becoming
+// "delivered", an ask satisfied by shape or on the wrong conversation, an approval that replays,
+// a bound that costs a waited-on conversation, and an escape reaching the screen or the store.
 
 #include <doctest.h>
 
@@ -491,13 +478,10 @@ TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
     }
 }
 
-// ---- the address GRAMMAR, now shared -----------------------------------------
-
-// One parser, reachable by every presentation of this core (WT-1). It used to live in the
-// REPL's anonymous namespace, where the only way for a second presentation to address a
-// message was to re-author the syntax -- and two authors of one grammar is two grammars.
-// These cases pin the grammar itself, which is what makes the sharing safe to rely on:
-// nothing else in this repository asserts what `#12` means.
+// ---- the address GRAMMAR, shared ------------------------------------------------
+// One parser, reachable by every presentation of this core: two authors of one grammar would be
+// two grammars. These cases pin the grammar itself; nothing else in this repository asserts
+// what `#12` means.
 
 TEST_CASE("the address grammar is three sigils, and a bareword is not a fourth") {
     Address a;
@@ -544,11 +528,9 @@ TEST_CASE("the address grammar is three sigils, and a bareword is not a fourth")
 }
 
 TEST_CASE("a count, a version and a weave id cannot be negative, so the parser says so") {
-    // The repair WT-1's `#-1` case forced. `std::stoull` accepts a leading `-` and WRAPS, so
-    // this parser used to answer `true` with 18446744073709551615 in the out-param -- and every
-    // frontend in this tree believed it: an address to a weave that cannot exist, and `await -1`
-    // as eighteen quintillion turns of the host loop. Refusing is the safe direction, because
-    // each of those call sites already tests the bool.
+    // `std::stoull` accepts a leading `-` and WRAPS, so without this refusal `#-1` would address a
+    // weave that cannot exist and `await -1` would wait eighteen quintillion turns. Refusing is
+    // the safe direction: every call site already tests the bool.
     std::uint64_t n = 7;
     CHECK(parse_u64("0", n));
     CHECK(n == 0u);
@@ -595,7 +577,7 @@ TEST_CASE("SUBMITTED means authored, and says nothing about delivery — in eith
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
     c.bus.drain_until_idle();
 
-    // Submitted remains authorship; a separate authenticated event now explains refusal.
+    // Submitted remains authorship; a separate authenticated event explains a refusal.
     CHECK(c.tap_delivered("Query", c.service_id));
     CHECK(c.tap_refused("Work"));
     const std::vector<TranscriptEntry> submitted =
