@@ -15,7 +15,8 @@
 # What may differ, each printed: the instruments, the checks' own files (INSTRUMENTS); a directory
 # left to Git whole (LEFT_TO_GIT); the checks' registration lines in tests/CMakeLists.txt and their
 # rows in tests/entry_population.txt, when START lacks them; a failure message or exemption
-# reason named below by its START literal, reworded to show no private id or stage name; a CI
+# reason named below by its START literal, reworded to show no private id or stage name; a
+# test-data value renamed below, every use together; the one assertion named below; a CI
 # workflow's or shell script's whole-line `#` comments; a Python file's comments and docstrings,
 # its syntax tree otherwise identical; a TEST_CASE or SUBCASE name the case map (cases.tsv)
 # renames, whose old name is put back before the comparison. Every other changed file must be
@@ -87,6 +88,13 @@ REWORDED = {
         '"AF_UNIX listen is POSIX-only (the Windows<->WSL crossing uses TCP)"',
         '"AF_UNIX connect is POSIX-only (the Windows<->WSL crossing uses TCP)"'),
 }
+# Test data renamed because it carried a plan code or a private id: in each file, every use of the
+# START value is the new one now, in literals and code alike, and the START value is left in no
+# file's code. Each pair is put back before the comparison, so nothing else may differ.
+RENAMED_VALUES = {}
+# The one assertion the pass changes, named by its START and END code, each once in its file: a
+# letter whose author was removed is refused SenderLifeEnded (MSG-03), never CapabilityDenied.
+ASSERTIONS = {}
 WORKFLOWS = ".github/workflows/"
 # The manifests' reading in their checks, restated; the line it keys on must still be in each
 # check, or this restatement is stale and the proof says so.
@@ -156,6 +164,55 @@ def put_back(path, start_text, end_text):
         pairs.append((was, now))
     parts.append(end_text[pos:])
     return "".join(parts), pairs, None
+
+
+def code_mask(path, text):
+    """One flag per character of text: True outside a comment."""
+    return [not c for c in lex.comment_mask(text, lex.spans_of(path, text))]
+
+
+def outside_comments(path, text, needle):
+    """The offsets at which needle starts outside a comment."""
+    mask = code_mask(path, text)
+    out, i = [], text.find(needle)
+    while i != -1:
+        if all(mask[i:i + len(needle)]):
+            out.append(i)
+        i = text.find(needle, i + 1)
+    return out
+
+
+def put_back_values(path, start_text, end_text):
+    """(END's text with each renamed value put back as START had it, the pairs put back, refusals).
+    A pair is refused unless START holds the old value outside comments and not the new one, and
+    END holds the new one and not the old one."""
+    pairs, refusals = [], []
+    for old, new in RENAMED_VALUES.get(path, ()):
+        at = outside_comments(path, end_text, new)
+        if not outside_comments(path, start_text, old) or outside_comments(path, start_text, new):
+            refusals.append("the renamed value %r is not START's alone" % old)
+        elif outside_comments(path, end_text, old):
+            refusals.append("the renamed value %r is still used, so not every use changed" % old)
+        elif not at:
+            refusals.append("the renamed value %r has no new use %r" % (old, new))
+        else:
+            for i in reversed(at):
+                end_text = end_text[:i] + old + end_text[i + len(new):]
+            pairs.append((old, new, len(at)))
+    return end_text, pairs, refusals
+
+
+def put_back_assertion(path, start_text, end_text):
+    """(END's text with the named assertion put back, a refusal or None)."""
+    if path not in ASSERTIONS:
+        return end_text, None
+    was, now = ASSERTIONS[path]
+    if len(outside_comments(path, start_text, was)) != 1 or outside_comments(path, start_text, now):
+        return end_text, "the changed assertion is not once at START: %s" % was
+    at = outside_comments(path, end_text, now)
+    if len(at) != 1 or outside_comments(path, end_text, was):
+        return end_text, "the changed assertion is not once now: %s" % now
+    return end_text[:at[0]] + was + end_text[at[0] + len(now):], None
 
 
 def as_population_reads(text):
@@ -411,6 +468,7 @@ def main():
     laws_start, laws_added, laws_single = 0, [], []
     rows = cases.read_map()
     ends, renamed = {}, collections.Counter()
+    renamed_values, assertions = [], []
     for p in sorted(start & end):
         with open(os.path.join(repo, p), encoding="utf-8", newline="") as f:
             end_text = ends[p] = f.read().replace("\r\n", "\n")
@@ -428,6 +486,16 @@ def main():
             set_aside[p] = [d for d in difflib.unified_diff(a, b, lineterm="", n=0)
                             if d[:1] in "+-" and d[:3] not in ("+++", "---")]
             continue
+        if p in RENAMED_VALUES:
+            end_text, pairs, refusals = put_back_values(p, start_p, end_text)
+            renamed_values.extend((p, old, new, n) for old, new, n in pairs)
+            failures.extend("%s: %s" % (p, r) for r in refusals)
+        if p in ASSERTIONS:
+            end_text, refused = put_back_assertion(p, start_p, end_text)
+            if refused:
+                failures.append("%s: %s" % (p, refused))
+            else:
+                assertions.append((p,) + ASSERTIONS[p])
         if p in REWORDED:
             end_text, pairs, refused = put_back(p, start_p, end_text)
             reworded.extend((p, was, now) for was, now in pairs)
@@ -441,6 +509,11 @@ def main():
         if why:
             failures.append("%s: %s" % (p, why))
     failures.extend(map_verdicts(repo, rows, start_text, ends))
+    olds = {old for pairs in RENAMED_VALUES.values() for old, _ in pairs}
+    for p, text in sorted(ends.items()):
+        for old in sorted(olds):
+            if old in text and outside_comments(p, text, old):
+                failures.append("%s: still uses the renamed value %r" % (p, old))
     print("prove: %d C/C++, CMake and manifest files compared, START %s against the working tree; "
           "%d law pointers at START, each still above the same code, once" % (
               compared, args.start, laws_start))
@@ -466,6 +539,12 @@ def main():
         print("prove: set aside by name, %d added line(s) in %s: %s" % (len(lines), p, " | ".join(lines)))
     for p, was, now in reworded:
         print("prove: set aside by name, a literal reworded in %s:\n    was: %s\n    now: %s" % (p, was, now))
+    for p, old, new, n in renamed_values:
+        print("prove: set aside by name, a test-data value renamed in %s, %d use(s): %s -> %s" % (
+            p, n, old, new))
+    for p, was, now in assertions:
+        print("prove: set aside by name, the one changed assertion, in %s:\n    was: %s\n    now: %s" % (
+            p, was, now))
     for p in MANIFESTS:
         if p in start:
             print("prove: %s read as its check reads it, through CMake: %d rows at START" % (
@@ -605,6 +684,27 @@ def demo(repo, start_text, path):
     end_text, put = canonical(path, raw, back)
     if put:
         print("demo: %d renamed case name(s) put back in %s first" % (len(put), path))
+    extra = {}
+    if path in RENAMED_VALUES:
+        old, new = RENAMED_VALUES[path][0]
+        i = outside_comments(path, end_text, new)[0]
+        extra["a renamed value changed in one use only"] = put_back_values(
+            path, start_p, end_text[:i] + old + end_text[i + len(new):])[2]
+        end_text, pairs, refusals = put_back_values(path, start_p, end_text)
+        if refusals:
+            print("demo: %s: %s" % (path, refusals[0]))
+            return 1
+        print("demo: %d renamed value(s) put back in %s first" % (len(pairs), path))
+    if path in ASSERTIONS:
+        was, now = ASSERTIONS[path]
+        i = outside_comments(path, end_text, now)[0]
+        twice = end_text[:i] + now + " " + now + end_text[i + len(now):]
+        extra["the changed assertion written twice"] = [put_back_assertion(path, start_p, twice)[1]]
+        end_text, refused = put_back_assertion(path, start_p, end_text)
+        if refused:
+            print("demo: %s: %s" % (path, refused))
+            return 1
+        print("demo: the changed assertion put back in %s first" % path)
     if path in REWORDED:
         end_text, pairs, refused = put_back(path, start_p, end_text)
         if refused:
@@ -633,6 +733,12 @@ def demo(repo, start_text, path):
         print("demo: %s in %s: %s%s" % (what, path, "caught" if caught else "not a difference",
                                        (" -- " + why) if why else ""))
         ok += caught == want
+    for what, refusals in extra.items():
+        tried += 1
+        caught = any(refusals)
+        print("demo: %s in %s: %s%s" % (what, path, "caught" if caught else "not a difference",
+                                       (" -- " + next(r for r in refusals if r)) if caught else ""))
+        ok += caught
     print("demo: %d of %d as expected in %s" % (ok, tried, path))
     return 0 if ok == tried and tried >= 3 else 1
 
