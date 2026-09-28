@@ -97,7 +97,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/dispatch_probe[.]cpp$"
     "^tests/weavelib/dispatch_protocol[.]hpp$"
     "^tests/weavelib/forge_client[.]cpp$"
-    "^tests/weavelib/joint_protocol[.]hpp$"
     "^tests/weavelib/mod_storage[.]cpp$"
     "^tests/weavelib/net_broker[.]cpp$"
     "^tests/weavelib/net_client[.]cpp$"
