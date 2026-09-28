@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The `source_comments` entry: do first-party comments, strings and case names meet the standard
-# (CONTRIBUTING.md#comments-and-documents)? A long block, a removal note, a private id in a
-# comment, a string or CMake code, a label in a case name or a TEST_CASE name held twice is a red,
-# and so is an empty population. It cannot see history or process in words, a label in data, or
-# a comment's truth.
+# The `source_comments` entry (CONTRIBUTING.md#comments-and-documents): a long block, a removal
+# note, a private id in a comment, a string or CMake code, a label in a case name, a TEST_CASE name
+# held twice, or an empty population is a red. It cannot see history or process in words, a label
+# in data, or a comment's truth.
 #   cmake -P tests/check_source_comments.cmake    (from the repository root, or -DZEN_REPO=<repo>)
 
 cmake_minimum_required(VERSION 3.16)
