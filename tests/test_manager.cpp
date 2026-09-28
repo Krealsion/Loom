@@ -276,7 +276,7 @@ TEST_CASE("a load failure is a Refused with its why, relayed to the asker — no
     CHECK_FALSE(r.kernel.is_loaded("bad"));
 }
 
-// ---- reload-in-place: the refusal that used to die as an unread return value -
+// ---- reload-in-place: a refusal reaches the operator ------------------------
 
 TEST_CASE("reload-in-place keeps the WeaveId and transplants the state") {
     Rig r;
@@ -304,9 +304,8 @@ TEST_CASE("reload-in-place refuses a differently-shaped library, and the asker f
     drive(r.engine, r.manager, "zen.LoadWeave", {lit("t"), lit(ZEN_SO_WEAVE), lit("")});
     const WeaveId id = r.kernel.weave_id("t");
 
-    // Before this phase this refusal existed and was correct — and was discarded
-    // at the control door as an unread C++ return value. Now it reaches the
-    // operator, self-contained.
+    // A reload the incumbent's state contract refuses reaches the operator as a refusal,
+    // self-contained.
     Answer a = drive(r.engine, r.manager, "zen.ReloadWeave", {lit("t"), lit(ZEN_SO_V2)});
     CHECK(a.name == "zen.Refused");
     CHECK(text_field(a.value, "reason") == "state schema version mismatch; reload refused");
@@ -420,21 +419,11 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     // traffic that was already addressed to the role before it landed.
     CHECK(delivered_count(tap, "Ping", incumbent) == 2);
 
-    // OUTBOUND, and this is the honest half: the incumbent replied to both, but
-    // only the FIRST Pong was delivered before the unload. The second was still
-    // queued when the incumbent was unregistered — and a queued message belongs to
-    // the LIFE that authored it (MSG-03), so the bus refuses it as
-    // `SenderLifeEnded`. An unloaded weave's in-flight answers die with it.
-    //
-    // THE REASON IS THE POINT, not just the outcome. `CapabilityDenied` reaches the
-    // same refusal by the wrong road — a vanished sender has no grant to check, so
-    // the authorization term fails on its own — and an operator reading it would go
-    // looking for a grant that was never the problem. The author is what ended.
-    //
-    // This is a property of unregistering ANY weave mid-queue, not something the
-    // swap invented — the swap is simply the first op that makes it routine. It
-    // is the real texture of the swap window, and the concrete thing an
-    // invisible/atomic rebind would have to solve if the window is ever felt.
+    // OUTBOUND, the honest half: the incumbent replied to both, but only the FIRST Pong was
+    // delivered before the unload. The second was still queued when the incumbent was
+    // unregistered, and a queued message belongs to the LIFE that authored it (MSG-03), so it
+    // is refused as `SenderLifeEnded`, not the `CapabilityDenied` that would send an operator to
+    // a grant. Unregistering ANY weave mid-queue does this; a swap makes it routine.
     REQUIRE(answered_by.size() == 1);
     CHECK(answered_by[0] == incumbent);
     CHECK(refused_count(tap, "Pong", RefusalReason::SenderLifeEnded) == 1);
@@ -457,8 +446,8 @@ TEST_CASE("a failed swap leaves the role unheld: the asker hears why, and the sl
           {lit("spawn_v1"), lit(ZEN_SO_WEAVE), lit("spawner")});
     REQUIRE(r.kernel.is_loaded("spawn_v1"));
 
-    // The felt friction, admitted at floor tier: swap unloads the incumbent
-    // first, so a successor that fails to load leaves the slot empty.
+    // Swap unloads the incumbent first, so a successor that fails to load leaves the slot
+    // empty.
     Answer a = drive(r.engine, r.manager, "zen.SwapWeave",
                      {lit("spawner"), lit("spawn_v2"), lit("/nonexistent/nope.so"), litb(false)}, 2);
     CHECK(a.name == "zen.Refused");
@@ -646,7 +635,7 @@ TEST_CASE("the Manager holds no privilege: a second granted participant drives t
     CHECK_FALSE(r.kernel.is_loaded("sneaked"));
 }
 
-// ---- 1b: the letter (cooperative handoff) -----------------------------------
+// ---- the letter (cooperative handoff) ---------------------------------------
 
 TEST_CASE("the letter: a mid-life incumbent bequeaths, and a differently-shaped heir inherits") {
     Rig r;
@@ -671,11 +660,9 @@ TEST_CASE("the letter: a mid-life incumbent bequeaths, and a differently-shaped 
     const WeaveId heir = r.kernel.weave_id("spawn_v2");
     CHECK_FALSE(heir == incumbent);
 
-    // THE ORDERING PIN — the whole reason a graceful swap is two-stage. The
-    // Bequest must be DELIVERED to the steward strictly before the UnloadRole
-    // that kills its author; a fire-and-forget swap would post the letter into
-    // the void (an in-flight send from an unregistered sender, refused
-    // CapabilityDenied — the 1a pin). Read the order off the bus's own tape.
+    // THE ORDERING PIN, the reason a graceful swap is two-stage: the Bequest must be DELIVERED
+    // to the steward strictly before the UnloadRole that kills its author, or it would be an
+    // in-flight send from an unregistered sender, refused. Read the order off the bus's tape.
     const std::ptrdiff_t asked = index_of(tap, EventKind::Delivered, "zen.PrepareShutdown");
     const std::ptrdiff_t letter = index_of(tap, EventKind::Delivered, "zen.Bequest");
     const std::ptrdiff_t unload = index_of(tap, EventKind::Delivered, "UnloadRole");
@@ -684,8 +671,8 @@ TEST_CASE("the letter: a mid-life incumbent bequeaths, and a differently-shaped 
     REQUIRE(unload >= 0);
     CHECK(asked < letter);
     CHECK(letter < unload); // the letter is in hand BEFORE its author dies
-    // And it was never refused on the way — the thing 1a proved would happen if
-    // the steward had not waited.
+    // And no CapabilityDenied refusal of it (an unwaited letter would be refused
+    // SenderLifeEnded; the ordering pin above is the witness of the wait).
     CHECK(refused_count(tap, "zen.Bequest", RefusalReason::CapabilityDenied) == 0);
 
     // The heir wakes: its first message makes it claim, and what it inherits
@@ -701,10 +688,9 @@ TEST_CASE("the letter must not know the gap: a claim is honored after arbitrary 
     Rig r;
     drive(r.engine, r.manager, "zen.LoadWeave",
           {lit("spawn_v1"), lit(ZEN_SO_BEQUEATHS), lit("spawner")});
-    // Advance the predecessor to a value NOTHING ELSE could produce, so a claim
-    // that silently failed cannot be mistaken for one that succeeded. (Left at 0,
-    // this case would have passed whether or not the letter arrived — the
-    // vacuous-green shape the review exists to catch.)
+    // Advance the predecessor to a value NOTHING ELSE could produce, so a claim that silently
+    // failed cannot be mistaken for one that succeeded. (Left at 0, this case would pass
+    // whether or not the letter arrived.)
     for (int i = 0; i < 7; ++i) {
         r.bus.send(r.kernel.weave_id("spawn_v1"), Message(ping(1)));
     }
@@ -731,9 +717,9 @@ TEST_CASE("a non-participant is swapped hard, automatically, with no hang") {
     std::vector<TapRecord> tap;
     r.bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
 
-    // ZEN_SO_WEAVE never declares zen.PrepareShutdown. Asking for the ceremony
-    // is not an error — the steward checks participation BEFORE asking, so it
-    // simply falls through to the 1a hard swap.
+    // ZEN_SO_WEAVE never declares zen.PrepareShutdown. Asking for the ceremony is not an
+    // error: the steward checks participation BEFORE asking, so it falls through to the hard
+    // swap.
     drive(r.engine, r.manager, "zen.LoadWeave",
           {lit("spawn_v1"), lit(ZEN_SO_WEAVE), lit("spawner")});
     Answer a = drive(r.engine, r.manager, "zen.SwapWeave",
@@ -955,8 +941,7 @@ TEST_CASE("a failed graceful swap discards the letter: no successor means no cla
                      {lit("spawner"), lit("spawn_v2"), lit("/nonexistent/nope.so"), litb(true)}, 2);
     CHECK(a.name == "zen.Refused");
 
-    // The incumbent is gone AND its letter with it — the honest extension of
-    // 1a's failed-swap friction. Keeping mail no one can ever be authorized to
+    // The incumbent is gone AND its letter with it: mail no one can ever be authorized to
     // claim would be a leak wearing the costume of a feature.
     CHECK_FALSE(r.kernel.is_loaded("spawn_v1"));
     CHECK(letters_held(r.bus, r.manager) == 0);
@@ -996,7 +981,7 @@ TEST_CASE("a wedged graceful swap is escaped by a plain force-swap, with no time
 // zen.Activated says exactly one thing: a new code incarnation committed at this
 // address. Every case here pins that fact and its edges — never a larger claim.
 
-TEST_CASE("R2A-1 A: a participating load is told, once, that it is live") {
+TEST_CASE("a participating load is told, once, that it is live") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1023,7 +1008,7 @@ TEST_CASE("R2A-1 A: a participating load is told, once, that it is live") {
     CHECK(activation_log(r.bus, id).activations == 1);
 }
 
-TEST_CASE("R2A-1 B: a weave that never declared zen.Activated hears nothing at all") {
+TEST_CASE("a weave that never declared zen.Activated hears nothing at all") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1064,7 +1049,7 @@ TEST_CASE("R2A-1 B: a weave that never declared zen.Activated hears nothing at a
     CHECK(control_state(r.bus, r.control).last_activation == 1);
 }
 
-TEST_CASE("R2A-1 C: the direct control door activates too — the fact is not the Manager's") {
+TEST_CASE("the direct control door activates too — the fact is not the Manager's") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1107,7 +1092,7 @@ TEST_CASE("R2A-1 C: the direct control door activates too — the fact is not th
     CHECK(letters_held(r.bus, r.manager) == 0);
 }
 
-TEST_CASE("R2A-1 D: a reload keeps the identity, transplants the state, and earns a NEWER one") {
+TEST_CASE("a reload keeps the identity, transplants the state, and earns a NEWER one") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1150,7 +1135,7 @@ TEST_CASE("R2A-1 D: a reload keeps the identity, transplants the state, and earn
     CHECK(activation_log(r.bus, id).activations == 2);
 }
 
-TEST_CASE("R2A-1 E: a swap's successor is activated by the ordinary load primitive") {
+TEST_CASE("a swap's successor is activated by the ordinary load primitive") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1178,11 +1163,11 @@ TEST_CASE("R2A-1 E: a swap's successor is activated by the ordinary load primiti
     CHECK(s.activations == 1);
     CHECK(s.last > incumbent_seq); // newer than the prior one from the same door
 
-    // And no Manager code did this: `hard_swap` sends UnloadRole then
-    // LoadLibrary, and the second of those is the same primitive case A used.
+    // And no Manager code did this: `hard_swap` sends UnloadRole then LoadLibrary, and the
+    // second of those is the same primitive the participating-load case used.
 }
 
-TEST_CASE("R2A-1 E2: the graceful path activates its heir through that same primitive") {
+TEST_CASE("the graceful path activates its heir through that same primitive") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1208,7 +1193,7 @@ TEST_CASE("R2A-1 E2: the graceful path activates its heir through that same prim
     CHECK(activation_log(r.bus, heir).activations == 1);
 }
 
-TEST_CASE("R2A-1 F: a failed operation activates nobody, and spends no sequence") {
+TEST_CASE("a failed operation activates nobody, and spends no sequence") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1236,9 +1221,8 @@ TEST_CASE("R2A-1 F: a failed operation activates nobody, and spends no sequence"
     CHECK(am.name == "zen.Refused");
     CHECK(text_field(am.value, "reason") == "accepted schema contract mismatch; reload refused");
 
-    // Both refusals are PRE-COMMIT, so the incumbent is untouched and still
-    // serving. (A post-rebind revive failure is a different, still-open story —
-    // attestation — and nothing here claims otherwise.)
+    // Both refusals are PRE-COMMIT, so the incumbent is untouched and still serving. (A revive
+    // that fails after the rebind is a different question, and nothing here claims it.)
     CHECK(acts.size() == 1);
     CHECK(r.kernel.is_loaded("live"));
     CHECK(r.kernel.weave_id("live") == id);
@@ -1255,7 +1239,7 @@ TEST_CASE("R2A-1 F: a failed operation activates nobody, and spends no sequence"
     CHECK(activation_log(r.bus, r.kernel.weave_id("live2")).last == first + 1);
 }
 
-TEST_CASE("R2A-1 H: the activation sequence lives in the control state and survives revival") {
+TEST_CASE("the activation sequence lives in the control state and survives revival") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1297,13 +1281,10 @@ TEST_CASE("R2A-1 H: the activation sequence lives in the control state and survi
 
     REQUIRE(acts.size() == 3);
     CHECK(activation_log(r.bus, r.kernel.weave_id("c")).last == first + 1);
-    // THE HONEST LIMIT, stated rather than papered over: an "equivalent" control
-    // weave is necessarily a DIFFERENT weave with a different id, because no
-    // operation binds a replacement native participant behind an existing
-    // WeaveId (the known addressing seam). So the state continues and the
-    // stamped sender does not — which is exactly why identity is the PAIR, and
-    // why `sequence` is documented as monotonic within a lineage rather than
-    // globally unique.
+    // THE HONEST LIMIT: an "equivalent" control weave is necessarily a DIFFERENT weave with a
+    // different id, since no operation binds a replacement native participant behind an
+    // existing WeaveId. The state continues and the stamped sender does not, which is why
+    // identity is the PAIR and `sequence` is monotonic within a lineage, not globally unique.
     CHECK(acts[2].sender == control2);
     CHECK_FALSE(acts[2].sender == lineage);
 }
@@ -1314,16 +1295,15 @@ TEST_CASE("R2A-1 H: the activation sequence lives in the control state and survi
 // must REFUSE rather than wrap, and must refuse before it starts an operation
 // that would owe an activation it cannot name.
 
-TEST_CASE("R2A-1a A: an exhausted lineage refuses a load before the Kernel is called") {
+TEST_CASE("an exhausted lineage refuses a load before the Kernel is called") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
 
     set_control_state(r.bus, r.control, /*ops=*/0, kSeqMax);
 
-    // A load target whose success path is already known-good (case A of the
-    // loads exactly this), so the refusal is attributable to sequence
-    // exhaustion and to nothing else.
+    // A load target whose success path is already known-good (the participating-load case
+    // loads exactly this), so the refusal is attributable to sequence exhaustion alone.
     Answer a = drive(r.engine, r.manager, "zen.LoadWeave",
                      {lit("live"), lit(ZEN_SO_ACTIVATES), lit("spawner")});
     CHECK(a.name == "zen.Refused");
@@ -1377,7 +1357,7 @@ TEST_CASE("R2A-1a A: an exhausted lineage refuses a load before the Kernel is ca
     CHECK(activation_log(r.bus, r.kernel.weave_id("live")).last == 42);
 }
 
-TEST_CASE("R2A-1a B: an exhausted lineage refuses a reload without touching the incumbent") {
+TEST_CASE("an exhausted lineage refuses a reload without touching the incumbent") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1394,8 +1374,8 @@ TEST_CASE("R2A-1a B: an exhausted lineage refuses a reload without touching the 
     r.bus.drain_until_idle();
     REQUIRE(activation_log(r.bus, id).count == 3);
 
-    // Exhaust the lineage, then ask for a reload that would CERTAINLY have
-    // succeeded — the identical-contract rebuild case D reloads happily.
+    // Exhaust the lineage, then ask for a reload that would CERTAINLY have succeeded: the
+    // identical-contract rebuild the reload case reloads happily.
     set_control_state(r.bus, r.control, /*ops=*/7, kSeqMax);
     Answer a = drive(r.engine, r.manager, "zen.ReloadWeave",
                      {lit("live"), lit(ZEN_SO_ACTIVATES_B)});
@@ -1430,7 +1410,7 @@ TEST_CASE("R2A-1a B: an exhausted lineage refuses a reload without touching the 
     CHECK(activation_log(r.bus, id).last == 6); // the next unused sequence, not kSeqMax+1
 }
 
-TEST_CASE("R2A-1a C: the last representable sequence is emitted once, then operations refuse") {
+TEST_CASE("the last representable sequence is emitted once, then operations refuse") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1462,7 +1442,7 @@ TEST_CASE("R2A-1a C: the last representable sequence is emitted once, then opera
     CHECK(control_state(r.bus, r.control).last_activation == kSeqMax);
 }
 
-TEST_CASE("R2A-1a: a revived lineage with a negative sequence refuses rather than normalizing") {
+TEST_CASE("a revived lineage with a negative sequence refuses rather than normalizing") {
     Rig r;
     std::vector<ActivationEvent> acts;
     watch_activations(r.bus, acts);
@@ -1513,24 +1493,17 @@ TEST_CASE("the Manager is poke-inspectable like any weave: its bookkeeping is no
 
 
 // ---- the activation is trusted because Loom ATTESTS it (LIFE-04) -------------
-//
-// A narrow activation fact with a stamped sender still cannot answer the next
-// question: was that sender authorized to announce a lifecycle commit at all?
-// Without attestation, any weave granted the public shape can manufacture a first
-// breath for somebody else's incarnation and a consumer cannot tell. These cases
-// pin the answer — and because the fixture weave ignores an unattested activation
-// entirely, every activation-fact case above is silently pinning it too.
+// A stamped sender does not say whether that sender was authorized to announce a lifecycle
+// commit: without attestation, any weave granted the public shape could manufacture a first
+// breath for somebody else's incarnation. The fixture ignores an unattested activation, so
+// every activation-fact case above pins this too.
 
 namespace {
 
-/// A weave holding a real LifecycleAuthority — the test standing in for a HOST
-/// that wired a second lifecycle operator. It exists to drive the attestation
-/// from angles the honest door never would: an attestation whose sequence
-/// disagrees with the payload it accompanies, and one aimed at a bystander.
-///
-/// Note what a test can do here that no weave can: mint the authority. That is
-/// the point of it being a capability object rather than a grant — the host
-/// decides who conducts lifecycle, and a weave cannot promote itself.
+/// A weave holding a real LifecycleAuthority: the test standing in for a HOST that wired a
+/// second lifecycle operator, to drive the attestation from angles the honest door never would
+/// (a sequence disagreeing with its payload, an aim at a bystander). A test can mint the
+/// authority and no weave can: the host decides who conducts lifecycle.
 struct RogueState {
     std::int64_t n = 0;
     ZEN_SHAPE(RogueState, 1, ZEN_FIELD(n));
@@ -1577,8 +1550,8 @@ public:
 
 } // namespace
 
-TEST_CASE("R2B-1 A: a forged activation from an ordinary weave is ignored — the shape, a "
-          "plausible sequence and the right target are not enough") {
+TEST_CASE("a forged activation from an ordinary weave is ignored — the shape, a plausible "
+          "sequence and the right target are not enough") {
     Rig r;
     drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
     const WeaveId live = r.kernel.weave_id("live");
@@ -1605,7 +1578,7 @@ TEST_CASE("R2B-1 A: a forged activation from an ordinary weave is ignored — th
     CHECK(activation_log(r.bus, live).last == 1);
 }
 
-TEST_CASE("R2B-1 B: an attestation minted for one sequence cannot authenticate another") {
+TEST_CASE("an attestation minted for one sequence cannot authenticate another") {
     Rig r;
     drive(r.engine, r.manager, "zen.LoadWeave", {lit("live"), lit(ZEN_SO_ACTIVATES), lit("")});
     const WeaveId live = r.kernel.weave_id("live");
@@ -1628,8 +1601,8 @@ TEST_CASE("R2B-1 B: an attestation minted for one sequence cannot authenticate a
     CHECK(activation_log(r.bus, live).last == 9);
 }
 
-TEST_CASE("R2B-1 C: an attestation is bound to the incarnation it names — announcing to one "
-          "weave never activates another") {
+TEST_CASE("an attestation is bound to the incarnation it names — announcing to one weave never "
+          "activates another") {
     Rig r;
     drive(r.engine, r.manager, "zen.LoadWeave", {lit("a"), lit(ZEN_SO_ACTIVATES), lit("")});
     drive(r.engine, r.manager, "zen.LoadWeave", {lit("b"), lit(ZEN_SO_ACTIVATES), lit("")});
@@ -1653,7 +1626,7 @@ TEST_CASE("R2B-1 C: an attestation is bound to the incarnation it names — anno
     CHECK(activation_log(r.bus, b).activations == 1); // the bystander is untouched
 }
 
-TEST_CASE("R2B-1 D: an artifact built against the previous ABI is refused at load, and named") {
+TEST_CASE("an artifact built against the previous ABI is refused at load, and named") {
     // The break Loom pays for carrying provenance across the library seam. The
     // failure is a clean refusal that says which version — not a weave that
     // loads, runs, and is silently unable to accept a lifecycle fact for the

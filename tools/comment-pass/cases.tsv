@@ -215,3 +215,19 @@ tests/test_isolation.cpp	R2F-C (isolation): frames queued behind a half-sent one
 tests/test_isolation.cpp	R2F-C (isolation): reclamation moves the backlog, it does not shrink it	reclamation moves the backlog, it does not shrink it
 tests/test_isolation.cpp	R2F-C (isolation): a failed channel neither sends nor reclaims	a failed channel neither sends nor reclaims
 tests/test_isolation.cpp	R2F-C (isolation): the RECEIVE buffer was never part of F-18	the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history
+tests/test_manager.cpp	R2A-1 A: a participating load is told, once, that it is live	a participating load is told, once, that it is live
+tests/test_manager.cpp	R2A-1 B: a weave that never declared zen.Activated hears nothing at all	a weave that never declared zen.Activated hears nothing at all
+tests/test_manager.cpp	R2A-1 C: the direct control door activates too — the fact is not the Manager's	the direct control door activates too — the fact is not the Manager's
+tests/test_manager.cpp	R2A-1 D: a reload keeps the identity, transplants the state, and earns a NEWER one	a reload keeps the identity, transplants the state, and earns a NEWER one
+tests/test_manager.cpp	R2A-1 E: a swap's successor is activated by the ordinary load primitive	a swap's successor is activated by the ordinary load primitive
+tests/test_manager.cpp	R2A-1 E2: the graceful path activates its heir through that same primitive	the graceful path activates its heir through that same primitive
+tests/test_manager.cpp	R2A-1 F: a failed operation activates nobody, and spends no sequence	a failed operation activates nobody, and spends no sequence
+tests/test_manager.cpp	R2A-1 H: the activation sequence lives in the control state and survives revival	the activation sequence lives in the control state and survives revival
+tests/test_manager.cpp	R2A-1a A: an exhausted lineage refuses a load before the Kernel is called	an exhausted lineage refuses a load before the Kernel is called
+tests/test_manager.cpp	R2A-1a B: an exhausted lineage refuses a reload without touching the incumbent	an exhausted lineage refuses a reload without touching the incumbent
+tests/test_manager.cpp	R2A-1a C: the last representable sequence is emitted once, then operations refuse	the last representable sequence is emitted once, then operations refuse
+tests/test_manager.cpp	R2A-1a: a revived lineage with a negative sequence refuses rather than normalizing	a revived lineage with a negative sequence refuses rather than normalizing
+tests/test_manager.cpp	R2B-1 A: a forged activation from an ordinary weave is ignored — the shape, a plausible sequence and the right target are not enough	a forged activation from an ordinary weave is ignored — the shape, a plausible sequence and the right target are not enough
+tests/test_manager.cpp	R2B-1 B: an attestation minted for one sequence cannot authenticate another	an attestation minted for one sequence cannot authenticate another
+tests/test_manager.cpp	R2B-1 C: an attestation is bound to the incarnation it names — announcing to one weave never activates another	an attestation is bound to the incarnation it names — announcing to one weave never activates another
+tests/test_manager.cpp	R2B-1 D: an artifact built against the previous ABI is refused at load, and named	an artifact built against the previous ABI is refused at load, and named
