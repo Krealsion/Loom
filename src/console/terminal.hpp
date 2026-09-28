@@ -4,24 +4,12 @@
 #ifndef ZEN_CONSOLE_TERMINAL_HPP
 #define ZEN_CONSOLE_TERMINAL_HPP
 
-// The terminal-backend seam — the single place the shared TUI's platform (and, later, transport)
-// differences live. The TUI talks ONLY to this interface; make_terminal() is the one symbol
-// selected per platform: a POSIX termios backend today, a Win32 Console backend next. It belongs
-// to the zen-console-tui executable, NOT to zen-console — the engine library stays portable and
-// terminal-free.
-//
-// Seam appreciation: this boundary is the hook the next two frontends plug into. The WSL remote
-// console becomes "another TerminalBackend" (a socket transport, not a parallel codebase); the GUI
-// becomes another renderer of the same widget tree, inheriting the same discipline (platform behind
-// a seam, engine kept pure). The remote phase brought OUTPUT behind the seam too:
-//   - write()/flush() now carry the rendered frame: the POSIX/Windows backends write stdout; a
-//     socket backend that ships the frame on the wire is the clean extension this enables (decision
-//     #3's "remote is just a backend") — HOOKED, not built (no consumer yet: the remote console
-//     renders client-side off the operator-protocol, so it draws to its own real terminal).
-//   - The TUI's synchronous read_byte loop is, for the remote client, generalized into a
-//     single-threaded multiplexer over {input source, socket} with the same per-read deadline
-//     read_byte_timeout already models. The bus stays single-threaded FIFO; the multiplexer is the
-//     CLIENT's readiness-to-receive-from-many-sources, never bus concurrency.
+// The terminal-backend seam: the one place the shared TUI's platform differences live. The TUI
+// talks only to this interface, and make_terminal() is the one symbol selected per platform (a
+// POSIX termios backend, a Win32 Console backend). It belongs to the TUI executables, not to
+// zen-console, which stays portable and terminal-free. Output is behind the seam too
+// (write/flush), so a backend that ships the frame over a socket would plug in here; none does:
+// the remote console renders client-side to its own terminal.
 
 #include <memory>
 #include <string_view>
@@ -44,9 +32,9 @@ public:
     /// pass a positive ms; ms<=0 is a non-blocking poll (return at once, -1 if nothing is ready).
     virtual int read_byte_timeout(int ms) = 0;
 
-    /// Write the rendered frame bytes to the output. Unlike the reads, this is NOT gated on
-    /// is_interactive (a piped run still emits output) — it mirrors the old `std::cout << frame`.
-    /// The POSIX/Windows backends write stdout directly; a socket backend would write the wire.
+    /// Write the rendered frame bytes to the output. Unlike the reads, this is not gated on
+    /// is_interactive: a piped run still emits output. The POSIX and Windows backends write
+    /// stdout directly; a socket backend would write the wire.
     virtual void write(std::string_view bytes) = 0;
     /// Flush any buffered output. The direct-to-stdout backends are unbuffered, so this is a no-op;
     /// a buffered or socket backend overrides it. (Paired with write() to mirror `<< std::flush`.)

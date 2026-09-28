@@ -693,17 +693,11 @@ std::string ChildProcess::find_on_path(const std::string& name) {
 
 #endif
 
-/// THE WHOLE EXECUTION IS OVER WHEN BOTH ITS HALVES ARE: the leader has ended, AND nothing this
-/// object owns is still running. Asked in that order, and BOTH asked, because the two are not
-/// the same question and neither implies the other here.
-///
-/// The leader first, so its own code is read while it can still be read: on POSIX `alive()`
-/// reaps the leader the moment the group empties. And the group is not enough on its own: on
-/// Windows the job's accounting drops to zero processes BEFORE the leader's process handle is
-/// signalled, so a caller that trusted the job alone would see the execution end a moment
-/// before there was a code to read, and would have to report `unknown` for a run whose leader
-/// the operating system knows the answer for. Measured on MinGW-w64; it is why the shutdown's
-/// two records said `unknown` with a default zero beside them until this asked both.
+/// The whole execution is over when both halves are: the leader has ended, and nothing this
+/// object owns still runs. The leader first, so its code is read while it can be (on POSIX
+/// `alive()` reaps it once the group empties); and not the group alone, since a Windows job's
+/// accounting reaches zero before the leader's handle is signalled, which would report
+/// `unknown` for a code the operating system has.
 bool ChildProcess::execution_over() {
     const bool leader_over = ended();
     return leader_over && !alive();

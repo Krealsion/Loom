@@ -4,7 +4,7 @@
 # The `source_comments` entry: do first-party comments meet the source comment standard
 # (CONTRIBUTING.md#comments-and-documents)? A long block, a removal note or a private id is a red
 # that names where the text belongs; an empty population is a red. It cannot see history, a phase
-# or the maintainers' process described in words, and it does not read a comment for truth.
+# or the maintainers' process in words, a docstring's length, or a comment's truth.
 #   cmake -P tests/check_source_comments.cmake    (from the repository root, or -DZEN_REPO=<repo>)
 
 cmake_minimum_required(VERSION 3.16)
@@ -21,14 +21,16 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 
 # ---- scope -----------------------------------------------------------------------------
 # The first-party roots: a directory is read whole, a file alone. Vendored code is never held.
-set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests)
+# The session tooling's Python and its two launchers are installed documentation too.
+set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
+    python tools/basics tools/loom-session tools/loom-session.cmd)
 set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # Files not yet brought to the standard, as regular expressions over the repository-relative
-# path. The list only shrinks: a file leaves it when its comments meet the standard.
+# path. The list only shrinks: a file leaves it when its comments meet the standard. The Python
+# under tests/ joined it when the check began to read Python, beside the suites it drives.
 set(ZEN_COMMENT_PENDING
-    "^src/"
-    "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
-set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx CMakeLists.txt *.cmake
+    "^tests/.*[.](h|hpp|ipp|inl|c|cc|cpp|cxx|py)$")
+set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
 # (`// MSG-09; docs/laws/messaging-laws.md`) not counted -- outside an installed header, which
@@ -167,6 +169,17 @@ function(zen_comments_scan rel kind exempt content laws out)
                     set(in_quote TRUE)
                 endif()
             endif()
+        elseif(kind STREQUAL "script" OR kind STREQUAL "cmd")
+            # Python, shell and batch: the whole line is judged, so a docstring, a string and a
+            # trailing comment are read for an id too; only a comment on a line of its own (`#`,
+            # or a batch file's `rem` or `::`) counts toward a block. A first-line `#!` is none.
+            set(comment "${line}")
+            if(kind STREQUAL "script" AND line MATCHES "^[ \t]*#" AND
+               NOT (n EQUAL 1 AND line MATCHES "^#!"))
+                set(whole TRUE)
+            elseif(kind STREQUAL "cmd" AND line MATCHES "^[ \t]*([Rr][Ee][Mm]([ \t]|$)|::)")
+                set(whole TRUE)
+            endif()
         elseif(kind STREQUAL "manifest")
             # The population checks strip `#.*$` from every line: no quote protects a `#`.
             string(FIND "${line}" "#" hash)
@@ -257,6 +270,10 @@ function(zen_comments_kind rel out)
         set(kind cmake)
     elseif(rel MATCHES "(^|/)(suite|entry)_population\\.txt$")
         set(kind manifest)
+    elseif(rel MATCHES "(\\.py|(^|/)loom-session)$")
+        set(kind script)
+    elseif(rel MATCHES "\\.cmd$")
+        set(kind cmd)
     endif()
     set(${out} ${kind} PARENT_SCOPE)
 endfunction()
@@ -348,6 +365,13 @@ zen_comments_expect("a block after a closed argument" cmake "set(x \"a\")\n${has
 zen_comments_expect("a manifest block" manifest "${hashes}# seven\nswitchboard portable 22\n" 1)
 zen_comments_expect("a quote protects no manifest comment" manifest
     "x portable \"a # VD-27\"\n" 1)
+zen_comments_expect("a Python block" script "${hashes}# seven\nx = 1\n" 1)
+zen_comments_expect("an id in a docstring" script "\"\"\"Since R2E-0.\"\"\"\nx = 1\n" 1)
+zen_comments_expect("an id in a Python string" script "x = \"VD-27\"\n" 1)
+zen_comments_expect("a shebang is no comment" script "#!/bin/sh\n${hashes}x=1\n" 0)
+zen_comments_expect("a batch file's block" cmd
+    "rem one\nREM two\n:: three\nrem\nrem five\nrem six\nrem seven\nset X=1\n" 1)
+zen_comments_expect("a batch command that starts rem" cmd "remove.exe a\nremote b\n" 0)
 zen_comments_install_excludes("install(DIRECTORY include/zen/\n  FILES_MATCHING PATTERN \"*.hpp\"\n  PATTERN \"ui\"   EXCLUDE\n  PATTERN \"a.hpp\" EXCLUDE)\n" got)
 if(NOT got STREQUAL "ui;a.hpp")
     message(FATAL_ERROR "source-comments: self-test 'the install call's exclusions' found '${got}', want 'ui;a.hpp'")
@@ -376,6 +400,9 @@ zen_comments_expect_path(tests/package/run.cmake TRUE cmake FALSE)
 zen_comments_expect_path(include/zen/weave/weave.hpp TRUE cxx TRUE)
 zen_comments_expect_path(include/zen/ui/theme.hpp TRUE cxx FALSE)
 zen_comments_expect_path(include/zen/core/a.hpp TRUE cxx FALSE)
+zen_comments_expect_path(python/loom_session/tool.py TRUE script FALSE)
+zen_comments_expect_path(tools/loom-session TRUE script FALSE)
+zen_comments_expect_path(tools/loom-session.cmd TRUE cmd FALSE)
 set(ZEN_COMMENT_PENDING "${ZEN_COMMENT_PENDING_KEPT}")
 zen_comments_install_excludes("" nothing)
 if(NOT nothing STREQUAL "NOTFOUND")
@@ -394,6 +421,8 @@ zen_comments_expect_name(a/b/x.hpp TRUE)
 zen_comments_expect_name(a/b/x.cmake.in TRUE)
 zen_comments_expect_name(a/entry_population.txt TRUE)
 zen_comments_expect_name(a/b/x_hpp FALSE)
+zen_comments_expect_name(a/b/x.py TRUE)
+zen_comments_expect_name(a/b/x.pyc FALSE)
 zen_comments_expect_name(a/b/notes.txt FALSE)
 
 if(population_count EQUAL 0)

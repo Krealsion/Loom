@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The shared TUI renderer: it LAYS OUT the renderer-agnostic Widget tree (intent + relationship)
-// into a character grid — the only place positions, sizes, and cells exist — and maps raw key bytes
-// to semantic Actions. Both the in-process and remote consoles reuse this unchanged; a GUI later
-// replaces this file alone, laying the SAME tree out to pixels. Hand-rolled ANSI, no ncurses, no new
-// dependency. All terminal control lives behind the TerminalBackend seam.
+// The shared TUI renderer: it lays out the renderer-agnostic Widget tree (intent and
+// relationship) into a character grid, the only place positions, sizes and cells exist, and maps
+// raw key bytes to semantic Actions. The in-process and remote consoles both use it; the pixel
+// projection (zen/ui/pixel.hpp) lays the same tree out to pixels. Hand-rolled ANSI, no ncurses;
+// all terminal control lives behind the TerminalBackend seam.
 
 #include "tui_render.hpp"
 
@@ -270,7 +270,7 @@ bool tui_map_key(int c, loom::TerminalBackend& term, InputEvent& out) {
         out = {Action::Edit, static_cast<char>(c)};
         return true;
     }
-    out = {Action::None, 0}; // a true no-op for unknown control bytes (Ctrl-A no longer cycles focus)
+    out = {Action::None, 0}; // a true no-op for unknown control bytes
     return true;
 }
 

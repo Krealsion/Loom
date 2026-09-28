@@ -51,7 +51,7 @@ std::optional<loom::Cell> make_cell(const loom::Field& f, const FieldValue& v, s
         break;
     default:
         err = "field '" + f.name + "' is " + loom::name_of(f.type.kind) +
-              " — Stage 1 compose sets only scalar fields (the gate backstops a required one)";
+              " — compose sets only scalar fields (the gate backstops a required one)";
         return std::nullopt;
     }
     err = "field '" + f.name + "': value does not match the declared type " +
@@ -104,30 +104,18 @@ public:
         : vocabulary_(std::move(vocabulary)), on_arrival_(std::move(on_arrival)) {}
 
     std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
-        // Usually EMPTY: AcceptMode::AnyRegistered widens the door set at delivery, so the
-        // console receives whatever the system already knows about.
-        //
-        // But "already knows about" is exactly the limit, and it is not a console policy — a
-        // shape enters the registry by being in some weave's accept-set, claim-set or state,
-        // and `AnyRegistered` still refuses a shape the registry cannot resolve. So a
-        // NOTIFICATION shape — one that only ever travels TO the operator, which no other
-        // participant has any reason to accept — was undeliverable to the operator's own
-        // window. Declaring it here is how a host says "this window expects to be told this",
-        // and it costs the rest of the console nothing: the wildcard still answers for
-        // everything else, and a listed door is gated exactly as the wildcard one is.
+        // Usually empty: AcceptMode::AnyRegistered widens the door set at delivery, but only to
+        // shapes the registry can resolve, and a notification shape that only ever travels to
+        // the operator has nobody else to declare it. Declaring it here is how a host says "this
+        // window expects to be told this"; a listed door is gated exactly as the wildcard is.
         return vocabulary_;
     }
     void handle(const loom::Message& in, loom::Bus&) override {
-        // Buffer EVERY received Value, generically — into a BOUNDED window. This weave is
-        // registered AcceptMode::AnyRegistered, so what lands here is traffic-controlled: the
-        // retention has to be the console's decision, not the senders'. Nothing is owed on the
-        // buffer (handle() discharges the delivery here and now), so evicting the oldest retained
-        // reply drops no obligation — only the operator's oldest referenceable value, whose label
-        // then refuses honestly instead of re-binding.
-        //
-        // WITH ITS ROUTING FACTS. `sender` is Loom's stamp and `correlation` is what the sender
-        // named; keeping the payload alone is what left a host unable to tell an answer from an
-        // unrelated message of the same shape.
+        // Buffer every received Value into a bounded window: this weave accepts any registered
+        // shape, so retention is the console's decision, not the senders'. Nothing is owed on
+        // the buffer, so evicting the oldest drops no obligation and its label then refuses
+        // honestly. With its routing facts: Loom's `sender` stamp and the sender's
+        // `correlation`, which tell an answer from an unrelated message of the same shape.
         received_.push(ConsoleArrival{in.payload, in.sender, in.correlation,
                                       in.provenance.answers_ask()});
         // SETTLED HERE, INSIDE THE DELIVERY, not later off the window. The window is bounded
@@ -167,10 +155,9 @@ ConsoleEngine::ConsoleEngine(loom::Switchboard& bus,
     auto weave = std::make_unique<ConsoleWeave>(
         std::move(vocabulary), [this](const loom::Message& in) { record_arrival(in); });
     weave_ = weave.get();
-    // The most-granted participant — broad send (drive any Weave with any shape) — but a
-    // GRANT, not host root authority. Reply-receipt is AcceptMode::AnyRegistered; the tap +
-    // discovery are direct host-side bus queries (pragmatic for a single operator; a
-    // multi-user future scopes them to the operator's authority).
+    // The most-granted participant (broad send), but a grant, not host root authority. Replies
+    // arrive through AcceptMode::AnyRegistered; the tap and discovery are direct host-side bus
+    // queries, which suit a single operator.
     console_id_ = bus_.register_weave(std::move(weave), loom::Grant{}.allow_any(),
                                       loom::AcceptMode::AnyRegistered);
     tap_obs_ = bus_.add_observer([this](const loom::BusEvent& e) { record_tap(e); });
@@ -311,16 +298,11 @@ loom::Ticket ConsoleEngine::assemble_and_send(
             }
             return it->second;
         });
-    // OPEN THE CONVERSATION FIRST, so the number on the wire is the number the book is
-    // watching for — but only when the caller asked to hold one. An untracked send stamps a
-    // number from the same sequence and holds nothing: its replies are history.
-    //
-    // THE SLOT COUNT INCLUDES ANSWERS NOT YET TAKEN. The book itself counts only open
-    // conversations, and an answer leaves it at settlement; bounding that alone bounded the
-    // questions and let every answer nobody collected accumulate. With every slot held the
-    // send still GOES — refusing it would turn a bookkeeping limit into a messaging limit —
-    // and reports `ask == 0`, so a caller that needs attribution knows it has none rather
-    // than being handed a handle that can never settle.
+    // Open the conversation first, so the number on the wire is the one the book watches for,
+    // but only when the caller asked to hold one; an untracked send takes a number from the
+    // same sequence and holds nothing. The slot count includes answers not yet taken. With
+    // every slot held the send still goes (a bookkeeping limit is not a messaging limit) and
+    // reports `ask == 0`, so a caller that needs attribution knows it has none.
     loom::AskOpened opened;
     if (next_tracking_ == ConsoleTracking::Tracked && asks_held() < kConsoleAskCapacity) {
         opened = book_.open(target, schema->name(), schema->version());
@@ -397,12 +379,10 @@ Evicted ConsoleEngine::evicted() const {
 }
 
 std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t label_number) const {
-    // `label_number` is the N of `mN` — a STABLE IDENTITY over every reply this console has ever
-    // received, not a position in the retained window. Before the window saturates the two
-    // coincide, which is why this used to be spelled as an index; once eviction begins they part,
-    // and the identity is the one worth keeping (an operator's `$m7.count` must never quietly
-    // become a different reply). Outside the retained range this refuses, exactly as it always did
-    // for a label that never arrived.
+    // `label_number` is the N of `mN`: a stable identity over every reply this console has
+    // received, not a position in the retained window, so an operator's `$m7.count` never
+    // becomes a different reply once eviction begins. Outside the retained range this refuses,
+    // as it does for a label that never arrived.
     const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& buf = reply_history();
     const std::uint64_t base = buf.evicted(); // labels m(base+1) .. m(base+size) are retained
     if (label_number <= base || label_number > base + buf.size()) {
@@ -470,7 +450,7 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
     }
     const loom::Kind k = c->kind();
     if (k == loom::Kind::Message || k == loom::Kind::List) {
-        return fail("reference to non-scalar field '" + ref.field + "' is not supported in Stage 2");
+        return fail("reference to non-scalar field '" + ref.field + "' is not supported");
     }
     return *c; // copy the scalar Cell out of the immutable buffered Value
 }
@@ -500,10 +480,9 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
 
 Composed run_compose_ladder(LadderHost& host, loom::WeaveId target, std::string_view name,
                             std::uint32_t version, const std::vector<Arg>& args) {
-    // The ladder itself is `loom::compose_message`, which stops one step before anything
-    // is authored; this is the console's original one-shot form over it, so the placement rules,
-    // their order, and every refusal they produce are exactly the ones this suite has always
-    // pinned. The only thing that moved is where the sending happens.
+    // The ladder itself is `loom::compose_message`, which stops one step before anything is
+    // authored; this is the console's one-shot form over it, with the same placement rules,
+    // order and refusals.
     const Composition composed = compose_message(host, name, version, args);
     Composed result;
     switch (composed.status) {

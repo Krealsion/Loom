@@ -4,14 +4,10 @@
 #ifndef ZEN_DETAIL_HASH_HPP
 #define ZEN_DETAIL_HASH_HPP
 
-// Internal to loom. FNV-1a, 64-bit. Chosen for being tiny, dependency-free,
-// and deterministic across platforms and runs (no seeding) — the content
-// identity of a schema must be the same everywhere, forever. This is NOT a
-// cryptographic hash: it identifies schemas, it does not authenticate bytes.
-//
-// The algorithm and seed/prime below are frozen: the 64-bit content id they
-// produce appears in the wire format, so changing them would silently
-// reinterpret every persisted value's identity.
+// Internal to loom. FNV-1a, 64-bit: tiny, dependency-free and deterministic across platforms
+// and runs (no seeding), because a schema's content identity must be the same everywhere. Not
+// cryptographic: it identifies schemas, it does not authenticate bytes. The algorithm, seed and
+// prime are frozen: the 64-bit content id is in the wire format.
 
 #include <cstddef>
 #include <cstdint>

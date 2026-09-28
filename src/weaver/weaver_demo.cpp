@@ -1,39 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE FIRST SEAT — a running composition in which a human being decides, by
-// typing ordinary Loom messages, what one live session is allowed to say.
-//
-//     USER          decides          <- you, at this prompt
-//     WEAVER        delegates        <- loom::Weaver, holding one GrantAuthority
-//     SESSION       acts             <- an ordinary weave with a tiny baseline
-//     SWITCHBOARD   enforces         <- the Kernel, which has the last word
-//
-// THIS FILE IS THE HOST, and a host is exactly two things: the mounting, and a
-// skin. The mounting below is the whole security posture of the demo, written
-// out where it can be read in one sitting — who exists, what each may say, who
-// the user is, and what the Weaver may ever hand out. The skin underneath it is
-// a plain generic REPL over `loom::ConsoleEngine`, the durable console.
-//
-// THE SKIN KNOWS NOTHING ABOUT AUTHORITY. There is no `approve` command, no
-// `grant` command and no weaver branch of any kind — grep this file for
-// "Approve" and the only hits are in the mounting and in the help text. The
-// operator approves by composing `zen.ApproveAuthority` the same way it would
-// compose any other registered shape, and it travels down the same gated send
-// path as any other message. That absence is the point: if the console needed a
-// privileged branch to make this work, the architecture would have failed.
-//
-// Try it:
-//
-//     weaves                                  who is on the bus
-//     send <session> AskForAuthority 1        the session asks the Weaver
-//     buffer                                  a prompt arrived for you
-//     show m1                                 read it: requester, rule, purpose
-//     send <weaver> zen.ApproveAuthority 1    you decide
-//     send <session> DoWork 1                 the session retries, and lands
-//     send <weaver> zen.DescribeAuthority 1   what the Kernel now enforces
-//     send <weaver> zen.RevokeAuthority 1     the off switch
-//     send <session> DoWork 1                 denied again (see: tap)
+// The first seat: a running composition in which a person decides, by typing ordinary Loom
+// messages, what one live session may say. The user decides, the Weaver delegates (one
+// GrantAuthority), the session acts (a tiny baseline) and the Switchboard enforces. This file
+// is the host: the mounting, which is the whole security posture, and a REPL skin over
+// `loom::ConsoleEngine` that knows nothing about authority: the operator approves by composing
+// `zen.ApproveAuthority` like any other shape. It prints the walk to try when it starts.
 
 #include <zen/console/console.hpp>
 #include <zen/terminal/input_lex.hpp>

@@ -4,23 +4,11 @@
 #ifndef ZEN_HOST_SESSION_FILES_HPP
 #define ZEN_HOST_SESSION_FILES_HPP
 
-// WHERE A CLIENT FINDS A SESSION, AND WHAT IT PRESENTS.
-//
-// A session host (`loom-host --serve <dir>`) writes two files into its directory once it is
-// listening, and removes both when it ends cleanly:
-//
-//   session.json   where to attach and which lifetime this is -- the endpoint, the lifetime id,
-//                  the host's pid and version, the start time. Not a secret, and not authority:
-//                  knowing it lets a client TRY to attach, nothing more.
-//   session.key    the owner's client key, the one thing the door admits a client for. Created
-//                  owner-read/write only on POSIX (it never exists with wider permissions); on
-//                  Windows it inherits the directory's ACL, so a session directory belongs under
-//                  the owner's profile. Anyone who can read it can act as the session's owner.
-//
-// A host that dies without ending cleanly leaves both behind. They then describe a lifetime that
-// is over: a client that attaches finds nobody at the endpoint, or -- if another host now serves
-// the directory -- a different lifetime id, and says so. Neither file is ever read back by the
-// host; each start writes them afresh.
+// Where a client finds a session, and what it presents: a session host writes `session.json`
+// (endpoint, lifetime id, pid, version, start time; not a secret and not authority) and
+// `session.key` (the owner's client key; owner-only on POSIX, the directory's ACL on Windows;
+// whoever reads it acts as the owner) once listening, and removes both on a clean end. A host
+// that dies leaves them describing a lifetime that is over; the host never reads them back.
 
 #include "../detail/json.hpp"
 

@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The Windows terminal backend — the Win32 Console API behind the same TerminalBackend seam, so
-// the SAME ANSI-emitting renderer and the SAME escape-sequence key parsing run unchanged on
-// Windows. No new third-party dependency (Win32 only). Compiled only on Windows.
-//
-// BUILD/VERIFY DIVISION: this backend is written by-the-book against the Console API but is NOT
-// compiled or run on the Linux CI box — it is Josh-verified in CLion on Windows. The Linux path is
-// proven; this is best-effort-correct. See docs/history/pre-r2c/DESIGN.md (the build-verify
-// division) and the report's Windows checklist.
+// The Windows terminal backend: the Win32 Console API behind the same TerminalBackend seam, so
+// the same ANSI-emitting renderer and escape-sequence key parsing run unchanged on Windows, with
+// no third-party dependency. The Windows builds compile it; no test drives a console through
+// it, so its behaviour rests on the Console API's documented contract.
 
 #include "terminal.hpp"
 
@@ -96,13 +92,11 @@ public:
     }
 
     int read_byte_timeout(int ms) override {
-        // A console input handle signals when its queue is non-empty for ANY record type —
-        // including key-up / focus / buffer-resize records that translate to ZERO VT bytes. So we
-        // must NOT WaitForSingleObject then blindly ReadFile (ReadFile would filter the non-key
-        // record and block past the deadline). Instead: wait against a deadline, PEEK, and drain any
-        // non-key-down record before re-waiting — so the bound is honored and a key-down's VT bytes
-        // are read without blocking. Contract: ms<=0 is a non-blocking poll (matches the POSIX
-        // backend); -1 on timeout/EOF/error.
+        // A console input handle signals for any queued record, including key-ups, focus and
+        // resize records that yield no VT bytes, so a wait followed by a blind ReadFile could
+        // block past the deadline. Instead: wait against the deadline, peek, and drain any record
+        // that is not a key-down before waiting again. ms<=0 is a non-blocking poll; -1 on
+        // timeout or EOF.
         const DWORD budget = ms <= 0 ? 0u : static_cast<DWORD>(ms);
         const DWORD start = GetTickCount();
         for (;;) {
@@ -126,9 +120,9 @@ public:
     }
 
     void write(std::string_view bytes) override {
-        // Direct write to the console output handle — the raw equivalent of `std::cout << frame`,
-        // with VT processing enabled so the renderer's ANSI escapes are interpreted. Loop over
-        // partial writes; a real error just drops the rest (best-effort, as the old ostream path was).
+        // Direct write to the console output handle, with VT processing enabled so the
+        // renderer's ANSI escapes are interpreted. Loop over partial writes; a real error drops
+        // the rest (best-effort, like a failed ostream).
         std::size_t off = 0;
         while (off < bytes.size()) {
             const DWORD chunk =

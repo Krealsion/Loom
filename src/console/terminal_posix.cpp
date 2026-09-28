@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The POSIX terminal backend — the existing console_tui.cpp terminal control, MOVED behind the
-// TerminalBackend seam, behavior-identical. termios raw mode (the isatty gate + the atexit restore),
-// ioctl(TIOCGWINSZ) size, the blocking byte read, and the VTIME-grace timed read (the old inline
-// ESC-continuation, generalized to a millisecond argument). This is the safety property of the
-// seam extraction: the Linux path is preserved by construction, not rewritten. Compiled only on
-// non-Windows.
+// The POSIX terminal backend behind the TerminalBackend seam: termios raw mode (gated on isatty,
+// restored at exit), ioctl(TIOCGWINSZ) size, a blocking byte read, and a timed read built on
+// VTIME for escape continuations. Compiled only on non-Windows.
 
 #include "terminal.hpp"
 
@@ -69,7 +66,7 @@ public:
         if (!interactive_) {
             return read_byte(); // a pipe has no raw VTIME; EOF returns -1, so no indefinite block
         }
-        // The old ESC-continuation read: temporarily VMIN=0/VTIME=<grace>, read one byte, restore.
+        // The escape-continuation read: temporarily VMIN=0/VTIME=<grace>, read one byte, restore.
         // VTIME is in deciseconds; round the ms request up and clamp to [1, 255].
         struct termios cur {};
         tcgetattr(STDIN_FILENO, &cur);
@@ -89,9 +86,9 @@ public:
     }
 
     void write(std::string_view bytes) override {
-        // Direct, unbuffered write to stdout — the raw equivalent of `std::cout << frame`. Loop over
-        // partial writes; retry EINTR; a real I/O error just drops the rest (best-effort, as the old
-        // ostream path was). STDOUT in raw mode is blocking, so EAGAIN does not arise here.
+        // Direct, unbuffered write to stdout, the raw equivalent of `std::cout << frame`. Loop
+        // over partial writes and retry EINTR; a real I/O error drops the rest (best-effort, like
+        // a failed ostream). STDOUT in raw mode is blocking, so EAGAIN does not arise here.
         std::size_t off = 0;
         while (off < bytes.size()) {
             const ssize_t w = ::write(STDOUT_FILENO, bytes.data() + off, bytes.size() - off);

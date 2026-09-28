@@ -73,10 +73,10 @@ std::shared_ptr<const loom::Schema> history_schema() {
     return s;
 }
 
-// VERSION 2 ADDS TWO OPTIONAL SECTIONS AND CHANGES NOTHING A v1 FILE SAID: `links` (other
-// hosts this one connects to at boot) and `history` (what this host remembers and keeps). A
-// file with only `boot` still reads, because the host admits the person's object against the
-// schema it knows by name and supplies the version itself.
+// Two optional sections beside `boot`: `links` (other hosts this one connects to at boot) and
+// `history` (what this host remembers and keeps). A file with only `boot` still reads, because
+// the host admits the person's object against the schema it knows by name and supplies the
+// version itself.
 std::shared_ptr<const loom::Schema> boot_plan_schema() {
     static const auto s = loom::SchemaBuilder("zen.HostBootPlan", 2)
                               .list("boot", loom::type_message(boot_entry_schema()))

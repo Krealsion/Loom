@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// zen-console-remote: the REMOTE-operator console. It is exactly the in-process TUI (console_tui.cpp)
-// with two differences, and only two: the engine lives behind a SOCKET (a RemoteConsole Console impl,
-// not an in-process ConsoleEngine), and the synchronous read loop becomes an EVENT-DRIVEN
-// single-threaded multiplexer over {terminal input, the socket}. The same ConsoleUi, the same shared
-// renderer (tui_render), the same widget tree, the same key mapping — "remote is just another
-// backend", proven by reuse. The bus stays entirely host-side and single-threaded; the multiplexer is
-// the CLIENT's readiness-to-receive-from-many-sources, never bus concurrency.
-//
+// zen-console-remote: the in-process TUI (console_tui.cpp) with two differences: the engine is
+// behind a socket (a RemoteConsole, not a ConsoleEngine), and the read loop is an event-driven
+// single-threaded multiplexer over terminal input and the socket. The same ConsoleUi, renderer,
+// widget tree and key mapping; the bus stays host-side and single-threaded.
 // Usage: zen-console-remote [host=127.0.0.1] [port=7654]  (point it at a zen-bridge-host)
 
 #include "tui_render.hpp"

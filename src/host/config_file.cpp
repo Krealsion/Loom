@@ -11,10 +11,8 @@
 #include <sstream>
 
 #ifdef _WIN32
-// For MoveFileExA. The whole reason this file needs a platform branch at all is that
-// `std::rename` REFUSES to replace an existing file on Windows, and the workaround the
-// host shipped with — delete, then rename — is not a replacement: it has a window in
-// which neither the old record nor the new one is on disk.
+// For MoveFileExA: `std::rename` refuses to replace an existing file on Windows, and deleting
+// first would leave a window in which neither record is on disk.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -96,17 +94,10 @@ std::optional<loom::Value> read_gated_file(const std::string& path,
 
 namespace {
 
-/// REPLACE `from` WITH `to` IN ONE OPERATION — the only kind of replacement that can
-/// honestly be called atomic.
-///
-/// POSIX `rename(2)` replaces an existing destination as one step: a reader sees either
-/// the old file or the new one, never neither. Windows `std::rename` refuses when the
-/// destination exists, and the obvious workaround — `remove` then `rename` — is exactly
-/// the thing this function exists NOT to do: between the two calls the last good record
-/// is gone, and a process that dies there (or a rename that then fails) leaves a person
-/// with no decisions at all. `MoveFileExA` with `MOVEFILE_REPLACE_EXISTING` is Windows'
-/// own single-operation replace, so both platforms make the same promise by the same
-/// shape rather than one of them faking it.
+/// Replace `from` with `to` in one operation, the only replacement that can be called atomic:
+/// a reader sees the old file or the new one, never neither. POSIX `rename(2)` does it; on
+/// Windows `std::rename` refuses an existing destination, and `remove` then `rename` would lose
+/// the last good record between the two, so `MoveFileExA(MOVEFILE_REPLACE_EXISTING)` does it.
 bool replace_file(const std::string& from, const std::string& to, std::string* error) {
 #ifdef _WIN32
     if (MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING) != 0) {

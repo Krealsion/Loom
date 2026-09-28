@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// zen-weave-host: the child process that runs one Weave out-of-process. It reuses
-// the kernel C ABI directly — load the .so, get its descriptor, drive the same
-// create/describe/snapshot/policy/revive/handle thunks — and bridges to the parent
-// over a framed socket. The Weave's outbound Bus is a stub: its send/publish ship
-// Emit frames; gating happens parent-side. The .so is unchanged and does not know
-// it is out-of-process.
-//
-// I/O here is blocking — the child has nothing to do but service the parent — so
-// the async/non-blocking machinery lives only on the host side.
+// zen-weave-host: the child process that runs one Weave out of process. It drives the kernel C
+// ABI directly (load the .so, get its descriptor, call the same thunks) and bridges to the
+// parent over a framed socket; the Weave's outbound Bus ships Emit frames and gating happens in
+// the parent. The .so does not know it is out of process. I/O here blocks: the child has
+// nothing to do but serve the parent.
 
 #include <zen/isolation/protocol.hpp>
 #include <zen/kernel/abi.h>
@@ -201,33 +197,12 @@ int main(int argc, char** argv) {
         send_frame(Op::Hello, hello);
     }
 
-    // Deferred answers — and the immediate answer with them (v4) — are IN-PROCESS
-    // ONLY in V1, and the child is told so by being given no door: the answer
-    // authority lives in the parent's delivery, and this pipe carries no
-    // attestation, so an out-of-process weave's answer fails closed rather than
-    // reaching for something the pipe cannot vouch for.
-    // Office authorship (v5) joins the same law, in both directions: the Emit
-    // frames carry no authorship request and the doors below are null, so an
-    // out-of-process weave's `as_role(...)` refuses honestly at the library shim
-    // (invalid ticket / unauthored publication — NEVER a silent downgrade to
-    // personal speech). Extending the trusted control protocol with a verified
-    // office frame is the seam the first out-of-process office pulls; the parent
-    // knows the exact connected weave, so the verification story is ready for it.
-    // Senses (v6) join the same standing law, in both directions. The claim doors
-    // are null because the pipe carries no verified identity for the parent to
-    // check a claim-set or an office against, and the OBSERVE doors are null for
-    // the mirror reason: reading a Sense is authorized against the reader's own
-    // grant, and the child cannot present one the parent minted. So an
-    // out-of-process weave's `claim(...)` and `latest<T>(...)` refuse honestly at
-    // the library shim rather than silently doing nothing — the same
-    // fail-closed direction, and for the same reason, as the answer and office
-    // doors above.
-    // BY NAME, in declaration order (KERN-04). These names were already written here
-    // as comments, which is the same statement with none of the checking: a
-    // `/*answer=*/nullptr` that drifts one slot away from `answer` stays a
-    // perfectly valid comment, and the fail-closed reasoning above would then be
-    // documenting a door other than the one being nulled. A designator is the
-    // comment the compiler reads.
+    // The pipe carries no attestation and no verified identity, so every door that would need
+    // one is null and fails closed at the library shim: answers (the answer authority lives in
+    // the parent's delivery), office authorship (never a silent downgrade to personal speech),
+    // and Sense claims, reads and offers (a child cannot present the parent's grant or identity).
+    // A verified office frame on this pipe is the seam an out-of-process office would need.
+    // By name, in declaration order (KERN-04): a designator is the comment the compiler reads.
     ZenHostApi api{.ctx                  = nullptr,
                    .send                 = &zen_child_send,
                    .publish              = &zen_child_publish,
@@ -243,9 +218,8 @@ int main(int argc, char** argv) {
                    .sense_office_claim   = nullptr,
                    .sense_observe        = nullptr,
                    .sense_observe_office = nullptr,
-                   // v8: the isolated pipe supplies no offer door, exactly as it
-                   // supplies no claim or observe door -- a child cannot present
-                   // the exact identity a joint operation binds.
+                   // the isolated pipe supplies no offer door, as it supplies no claim or
+                   // observe door: a child cannot present the identity a joint operation binds
                    .sense_offer          = nullptr};
 
     for (;;) {
@@ -263,15 +237,10 @@ int main(int argc, char** argv) {
                 break;
             }
             std::string_view bytes = cursor.rest();
-            // PROVENANCE IS IN-PROCESS ONLY IN V1, and this is where that is
-            // paid rather than papered over. The Deliver frame carries no
-            // attestation — cross-process authentication is deliberately out of
-            // scope — so an out-of-process weave is told the truth: nothing here
-            // is attested. It therefore fails CLOSED, which is the safe
-            // direction: such a weave never adopts an authenticated answer, an
-            // attested activation, or an authored office (v5: the NULL role
-            // below), rather than being handed a fact the parent could not
-            // actually vouch for across the pipe.
+            // Provenance does not cross this pipe: a Deliver frame carries no attestation, so an
+            // out-of-process weave is told nothing here is attested, and never adopts an
+            // authenticated answer, an attested activation or an authored office (the NULL role
+            // below) that the parent could not vouch for across it.
             abi->handle(instance, sender, reply_to, correlation, ZEN_PROV_NONE,
                         /*attested_sequence=*/0, /*authored_role=*/nullptr,
                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
