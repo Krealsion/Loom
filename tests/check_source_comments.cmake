@@ -90,7 +90,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_pixel[.]cpp$"
     "^tests/test_poke[.]cpp$"
     "^tests/test_policy[.]cpp$"
-    "^tests/test_provenance[.]cpp$"
     "^tests/test_registry[.]cpp$"
     "^tests/test_role_authorship[.]cpp$"
     "^tests/test_role_request[.]cpp$"
