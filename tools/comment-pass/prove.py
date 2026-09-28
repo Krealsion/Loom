@@ -54,9 +54,9 @@ MANIFESTS = {
     "tests/entry_population.txt": ("tests/check_entry_population.cmake",
                                    ("source_comments portable", "doc_standard portable")),
 }
-# The failure messages, runtime messages and exemption reason that showed a reader a private id
-# or a plan's stage name, named by their START literals. Each may be reworded, its meaning
-# unchanged, and the rewording may show no id.
+# The failure messages, runtime messages and exemption reason that showed a reader a private id,
+# a plan's stage name or the maintainers' own setup, named by their START literals. Each may be
+# reworded, its meaning unchanged, and the rewording may show no id.
 REWORDED = {
     "tests/CMakeLists.txt": (
         '"the F-22 negative control: same source as zen_test_contract_applied, contract "',),
@@ -79,6 +79,9 @@ REWORDED = {
         '"zen terminal (TERM-0).\\n"',),
     "src/switchboard/switchboard.cpp": (
         '"\' is already held (roles are singletons in this phase)"',),
+    "src/bridge/channel.cpp": (
+        '"AF_UNIX listen is POSIX-only (the Windows<->WSL crossing uses TCP)"',
+        '"AF_UNIX connect is POSIX-only (the Windows<->WSL crossing uses TCP)"'),
 }
 WORKFLOWS = ".github/workflows/"
 # The manifests' reading in their checks, restated; the line it keys on must still be in each
