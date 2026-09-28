@@ -372,7 +372,7 @@ TEST_CASE("a non-scalar field is fully visible in the structure but not message-
     const auto read = au::poke_read(s, "items");
     REQUIRE(std::holds_alternative<au::Refused>(read));
     CHECK(std::get<au::Refused>(read).reason ==
-          "field 'items' has kind List<Int> — only scalar fields are message-readable this phase");
+          "field 'items' has kind List<Int> — only scalar fields are message-readable");
     const auto write = au::poke_write(s, "items", "[1,2]");
     REQUIRE(std::holds_alternative<au::Refused>(write));
 }

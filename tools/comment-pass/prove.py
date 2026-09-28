@@ -113,6 +113,11 @@ REWORDED = {
         '"GRANT-0: a Grant must not convert to a LiveAuthority"',
         '"GRANT-0: a LiveAuthority must not be constructible from a Grant"',
         '"GRANT-0: GrantAuthority must not be publicly constructible"'),
+    "include/zen/weave/poke.hpp": (
+        '" — only scalar fields are message-readable this phase"',
+        '" — only scalar fields are message-writable this phase"'),
+    "tests/test_poke.cpp": (
+        '"field \'items\' has kind List<Int> — only scalar fields are message-readable this phase"',),
 }
 # Test data renamed because it carried a plan code or a private id: in each file, every use of the
 # START value is the new one now, in literals and code alike, and the START value is left in no
