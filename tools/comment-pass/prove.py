@@ -94,7 +94,11 @@ REWORDED = {
 RENAMED_VALUES = {}
 # The one assertion the pass changes, named by its START and END code, each once in its file: a
 # letter whose author was removed is refused SenderLifeEnded (MSG-03), never CapabilityDenied.
-ASSERTIONS = {}
+ASSERTIONS = {
+    "tests/test_manager.cpp": (
+        'CHECK(refused_count(tap, "zen.Bequest", RefusalReason::CapabilityDenied) == 0);',
+        'CHECK(refused_count(tap, "zen.Bequest", RefusalReason::SenderLifeEnded) == 0);'),
+}
 WORKFLOWS = ".github/workflows/"
 # The manifests' reading in their checks, restated; the line it keys on must still be in each
 # check, or this restatement is stale and the proof says so.

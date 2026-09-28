@@ -671,9 +671,9 @@ TEST_CASE("the letter: a mid-life incumbent bequeaths, and a differently-shaped 
     REQUIRE(unload >= 0);
     CHECK(asked < letter);
     CHECK(letter < unload); // the letter is in hand BEFORE its author dies
-    // And no CapabilityDenied refusal of it (an unwaited letter would be refused
-    // SenderLifeEnded; the ordering pin above is the witness of the wait).
-    CHECK(refused_count(tap, "zen.Bequest", RefusalReason::CapabilityDenied) == 0);
+    // And no refusal of it for a life that ended: a letter left queued behind its author's
+    // unload would be refused SenderLifeEnded (MSG-03).
+    CHECK(refused_count(tap, "zen.Bequest", RefusalReason::SenderLifeEnded) == 0);
 
     // The heir wakes: its first message makes it claim, and what it inherits
     // shows up in its own behaviour. Fresh, it would count 1 after one ping;
