@@ -4,43 +4,18 @@
 #ifndef ZEN_TESTS_ENFORCEMENT_GATE_HPP
 #define ZEN_TESTS_ENFORCEMENT_GATE_HPP
 
-// Harness honesty (the project's own ethos applied to itself: never report a pass you didn't earn).
-//
-// Every OS-security proof used to sit behind `if (!enforceable(cap)) { WARN(); return; }`, and
-// doctest's WARN is a SOFT no-op — it neither fails nor skips, so the whole security suite went
-// GREEN having verified nothing on any host without unprivileged userns + delegated cgroup-v2
-// (hardened CI, many containers). That is fail-open while reporting success — the exact failure mode
-// the runtime polices everywhere else.
-//
-// This gate flips the default: a security-relevant skip FAILS, naming the missing capability — UNLESS
-// the explicit opt-out `ZEN_ALLOW_UNENFORCEABLE=1` (or `ZEN_REQUIRE_ENFORCEMENT=0`) converts it to a
-// marked-degraded skip. Plus a positive tally: the suites count how many OS-enforcement cases actually
-// executed, and a final coverage case asserts that count — so a green can never mean "every case
-// silently skipped." The runtime's own fail-safe behavior is unchanged; this is purely the harness no
-// longer reporting a pass it did not earn.
-//
-// POP-02: THE TALLY IS PER DOMAIN, AND THE EXPECTED COUNT IS EXACT.
-// docs/laws/population-laws.md
-//
-// It used to be one process-global `static int n` that both suites incremented and both floors read
-// as `>= N`. In a dedicated run each suite saw only its own contribution and the numbers looked
-// right; in the aggregate `all` lane — which is the one lane that mitigates a vanished suite —
-// isolation ran first and left 15 on the counter, so policy's floor of 11 was already satisfied
-// before policy executed a single proof. Neutering every one of policy's eleven OS-enforcement
-// guards left the `all` lane reporting 584/584, exit 0 (COLD-1 F-24). A floor named for one
-// population must be computed from that population's own witnesses, so the counter is keyed by
-// ZEN_ENFORCEMENT_DOMAIN, which each suite's translation unit declares for itself.
-//
-// And the count is `==`, not `>=`. A `>=` floor with slack hides a deletion: isolation ran 15 then,
-// against a floor of 12, so a genuine enforcement witness could be removed and the suite stayed
-// fully green with nothing moving anywhere. An exact expected population makes a missing
-// witness fail — and makes a NEW witness an intentional edit here, which is the correct price for a
-// small, security-relevant, deliberately stable population. (The per-suite CASE floors in
-// suite_population.txt are minimums instead, for the opposite reason: that population grows every
-// phase by design. Two populations, two policies, each argued.)
-//
-// Linux-only: included by test_isolation.cpp / test_policy.cpp (which already depend on the isolation
-// host). It is deliberately NOT in switchboard_fixtures.hpp, which portable suites include.
+// The harness's enforcement gate: a security proof that cannot run FAILS, naming the missing
+// capability, unless `ZEN_ALLOW_UNENFORCEABLE=1` (or `ZEN_REQUIRE_ENFORCEMENT=0`) turns it into
+// a marked-degraded skip; a doctest WARN would neither fail nor skip, and a suite could go green
+// having verified nothing. Each suite also tallies the OS-enforcement cases that actually ran,
+// and its last case asserts that tally EXACTLY.
+// POP-02; docs/laws/population-laws.md
+
+// The tally is keyed by ZEN_ENFORCEMENT_DOMAIN, so one suite's executions never satisfy
+// another's count, in a dedicated run or in the aggregate `all`; it is `==`, not `>=`, so
+// deleting a witness fails and adding one is a deliberate edit. (Case floors in
+// suite_population.txt are minimums instead: that population grows by design.) Linux-only, for
+// test_isolation.cpp and test_policy.cpp; deliberately not in switchboard_fixtures.hpp.
 
 #include <doctest.h>
 
@@ -53,8 +28,7 @@
 
 // The including translation unit must name the enforcement population it belongs to, before the
 // include. There is no default on purpose: a domain that fell back to something shared would
-// silently re-create F-24, and this way the mistake is a compile error at the first new suite
-// rather than a wrong number in a green run.
+// let one suite's executions satisfy another's count, so the mistake is a compile error instead.
 #ifndef ZEN_ENFORCEMENT_DOMAIN
 #error "define ZEN_ENFORCEMENT_DOMAIN (the suite's own name, as a string literal) before including enforcement_gate.hpp"
 #endif
@@ -96,14 +70,10 @@ inline Gate enforcement_decision(const loom::EnforcementReport& rep,
     return require_enforcement_strict() ? Gate::FailHard : Gate::SkipDegraded;
 }
 
-/// Per-DOMAIN tally of OS-enforcement cases that actually executed (imposed-and-confirmed), and a
-/// per-domain flag set when any of that domain's cases ran degraded (opt-out). The domain is the
-/// suite that owns the population; isolation's executions can never be read as policy's. The
-/// coverage TEST_CASE at the end of each suite reads both, for its own domain only.
-///
-/// The maps are process-global storage, but nothing process-global is ever the ANSWER: every read
-/// and every write is keyed, so the aggregate lane and a dedicated lane report the same number for
-/// the same domain.
+/// Per-DOMAIN tally of OS-enforcement cases that actually executed (imposed and confirmed), and
+/// a per-domain flag set when any of them ran degraded (opt-out). The coverage case at the end
+/// of each suite reads both for its own domain; the maps are process-global, but every read and
+/// write is keyed, so the aggregate lane and a dedicated lane report the same number.
 inline int& enforced_case_count(const std::string& domain) {
     static std::map<std::string, int> counts;
     return counts[domain];
@@ -139,15 +109,11 @@ inline bool& degraded_run(const std::string& domain) {
         ++::zenh::enforced_case_count(ZEN_ENFORCEMENT_DOMAIN);                                     \
     } while (false)
 
-// The coverage case at the end of a suite: assert that THIS domain's OS-enforcement population is
-// exactly the one it claims. Two outcomes, and they are not interchangeable.
-//
-//   strict mode   -> the exact expected count, by name. A missing witness fails; so does an
-//                    unannounced extra one.
-//   opt-out mode  -> NON-ENFORCEMENT MODE. The population did not run, so there is nothing to
-//                    assert about it, and the output says so in words that cannot be mistaken for
-//                    the proof. The official lane (tests/verify.cmake) refuses to run at all in
-//                    this mode, so an opt-out run can never be minted as enforcement evidence.
+// The coverage case at the end of a suite: THIS domain's OS-enforcement population is exactly
+// the one it claims. In strict mode, the exact expected count by name: a missing witness fails,
+// and so does an unannounced extra one. In opt-out mode, NON-ENFORCEMENT MODE: nothing ran, so
+// nothing is asserted and the output says so; the official lane (tests/verify.cmake) refuses to
+// run in this mode, so an opt-out run is never enforcement evidence.
 #define ZEN_ENFORCEMENT_POPULATION(EXPECTED)                                                       \
     do {                                                                                           \
         if (!::zenh::require_enforcement_strict() ||                                               \
