@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// Live delegation (GATE-05) — a live mounted subject's REAL Loom-enforced message
-// authority can be
-// widened and narrowed, without remounting it, by an ordinary weave holding a
-// host-minted capability scoped to one subject and one ceiling.
-//
-// What this suite is watching for, stated as the failures it must catch:
-//
-//   an administrator that exceeds its ceiling                     (ceiling)
-//   an administrator that reaches a subject it does not govern    (subject)
-//   a capability from another Loom that works here                (board)
-//   a revocation that leaves the rule effective                   (revoke)
-//   authorization decided at SEND time instead of DELIVERY time   (delivery)
-//   a revocation that also strips the host's admission baseline   (baseline)
-//   an administrator that brokers the action instead of the
-//     subject retrying it as itself                               (provenance)
+// Live delegation (GATE-05): a live mounted subject's real, Loom-enforced message authority can
+// be widened and narrowed, without remounting it, by an ordinary weave holding a host-minted
+// capability scoped to one subject and one ceiling. The cases are the failures it must catch: an
+// administrator past its ceiling or reaching a subject it does not govern, another Loom's
+// capability working here, a revocation that misses or strips the baseline, authorization at send
+// time rather than delivery, and an administrator brokering what the subject should retry.
 
 #include <doctest.h>
 
@@ -35,7 +26,7 @@ using namespace sbfx;
 
 namespace {
 
-// ---- the three shapes this phase's story needs ----------------------------
+// ---- the three shapes this suite's story needs ----------------------------
 //
 // Test-local, deliberately: this builds an enforcement primitive, and giving
 // it a permanent `DriverCommand`/`RequestAuthority` vocabulary would be building
@@ -88,13 +79,11 @@ LiveAuthority work_to(WeaveId service) {
     return ceiling;
 }
 
-// ---- compile-time proofs (prompt sections 7, 38, 39, 60) -------------------
+// ---- compile-time proofs ---------------------------------------------------
 //
-// The strongest available result for "live delegation cannot dynamically grant Network,
-// SpawnProcess, filesystem reach or resource limits" is not a refusal that a
-// test observes — it is that the delegation door's argument type HAS NO WORD for
-// them. These detectors go red the day somebody adds one, which is the only way
-// that claim can keep being true after this phase ends.
+// The strongest result for "live delegation cannot grant Network, SpawnProcess, filesystem reach
+// or resource limits" is not a refusal a test observes: the delegation door's argument type HAS
+// NO WORD for them. These detectors go red the day somebody adds one.
 
 template <class T, class = void>
 struct has_os_capabilities : std::false_type {};
@@ -125,29 +114,29 @@ static_assert(has_resources<loom::Grant>::value, "Grant still names resource lim
 // namespace, mount view and cgroup leaf were built once, before it ran; no write
 // in this process moves any of them, so no word here may pretend otherwise.
 static_assert(!has_os_capabilities<loom::LiveAuthority>::value,
-              "GRANT-0: live authority must have no vocabulary for OS capabilities");
+              "live authority must have no vocabulary for OS capabilities");
 static_assert(!has_filesystem<loom::LiveAuthority>::value,
-              "GRANT-0: live authority must have no vocabulary for filesystem reach");
+              "live authority must have no vocabulary for filesystem reach");
 static_assert(!has_resources<loom::LiveAuthority>::value,
-              "GRANT-0: live authority must have no vocabulary for resource limits");
+              "live authority must have no vocabulary for resource limits");
 // And a whole Grant cannot be smuggled in through a conversion.
 static_assert(!std::is_convertible_v<loom::Grant, loom::LiveAuthority>,
-              "GRANT-0: a Grant must not convert to a LiveAuthority");
+              "a Grant must not convert to a LiveAuthority");
 static_assert(!std::is_constructible_v<loom::LiveAuthority, loom::Grant>,
-              "GRANT-0: a LiveAuthority must not be constructible from a Grant");
+              "a LiveAuthority must not be constructible from a Grant");
 
 // An ordinary weave cannot mint one: the constructor is private and the one
 // factory needs a Switchboard&, which a weave never holds.
 static_assert(!std::is_constructible_v<loom::GrantAuthority, std::weak_ptr<const LoomIdentity>,
                                        WeaveId, loom::LiveAuthority>,
-              "GRANT-0: GrantAuthority must not be publicly constructible");
+              "GrantAuthority must not be publicly constructible");
 
 } // namespace
 
 TEST_SUITE("grant") {
 
 // =========================================================================
-// The phase, in one test (prompt sections 52, 53, 26).
+// The whole delegation, in one test.
 // =========================================================================
 
 TEST_CASE("a live session gains and loses real message authority, and stays its own sender") {
@@ -256,7 +245,7 @@ TEST_CASE("a live session gains and loses real message authority, and stays its 
 }
 
 // =========================================================================
-// Delivery-time enforcement (prompt sections 24, 25, 62).
+// Delivery-time enforcement.
 // =========================================================================
 
 TEST_CASE("a message queued while authorized is refused when delivery finds the authority gone") {
@@ -282,16 +271,10 @@ TEST_CASE("a message queued while authorized is refused when delivery finds the 
     bus.drain_until_idle();
     REQUIRE(service.weave->handled_names.size() == 1);
 
-    // THE WITNESS, and its shape is the point. `pump_pending()` dispatches
-    // exactly what was queued at ENTRY and leaves whatever a handler enqueues
-    // during it for the next turn. So one turn does this, in this order:
-    //
-    //   1. the session's handler runs and AUTHORS Work — authorized at that
-    //      instant, and merely ENQUEUED, landing behind the turn's snapshot;
-    //   2. the administrator's handler runs and revokes;
-    //   3. the turn ends with Work still sitting in the queue, undelivered.
-    //
-    // Then the next turn delivers it, into a world where the authority is gone.
+    // THE WITNESS, and its shape is the point. `pump_pending()` dispatches exactly what was
+    // queued at ENTRY, so in one turn the session's handler AUTHORS Work (authorized at that
+    // instant, and only enqueued), the administrator's handler revokes, and the turn ends with
+    // Work still queued. The next turn delivers it into a world where the authority is gone.
     session.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
         b.send(service.id, Message(work(42)));
     };
@@ -349,7 +332,7 @@ TEST_CASE("granting after a denial does not resurrect the message that was refus
 }
 
 // =========================================================================
-// Baseline vs delegated (prompt sections 27, 28, 84, 85).
+// Baseline vs delegated.
 // =========================================================================
 
 TEST_CASE("revoking delegated authority leaves the admission baseline untouched") {
@@ -441,7 +424,7 @@ TEST_CASE("a rule the baseline already carries survives revoking the delegated c
 }
 
 // =========================================================================
-// The ceiling (prompt sections 15, 16, 17, 54, 70).
+// The ceiling.
 // =========================================================================
 
 TEST_CASE("an administrator cannot install authority outside its ceiling") {
@@ -648,7 +631,7 @@ TEST_CASE("containment does not depend on the order rules were added") {
 }
 
 // =========================================================================
-// The capability itself (prompt sections 32, 33, 55, 56, 57, 58, 59, 34).
+// The capability itself.
 // =========================================================================
 
 TEST_CASE("a capability for one subject does nothing to another") {
@@ -910,7 +893,7 @@ TEST_CASE("delegated authority outlives the administrator that installed it") {
 }
 
 // =========================================================================
-// Observation authority (prompt sections 18, 61).
+// Observation authority.
 // =========================================================================
 
 TEST_CASE("observe authority is delegable and revocable, and is read at the moment of the read") {
@@ -977,7 +960,7 @@ TEST_CASE("observe authority is delegable and revocable, and is read at the mome
 }
 
 // =========================================================================
-// Atomicity, inspection, reload (prompt sections 63, 64, 35, 65).
+// Atomicity, inspection, reload.
 // =========================================================================
 
 TEST_CASE("replacement is one transition: the old rule is never live beside the new one") {
@@ -1100,7 +1083,7 @@ TEST_CASE("delegated authority survives a reload of the same subject") {
 }
 
 // =========================================================================
-// The refusal vocabulary itself (prompt section 45).
+// The refusal vocabulary itself.
 // =========================================================================
 
 TEST_CASE("every administration outcome is reachable and named") {
