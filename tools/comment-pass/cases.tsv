@@ -149,3 +149,4 @@ tests/test_history_recorder.cpp	RTH-1a: the per-shape last-call depth is a numbe
 tests/test_history_recorder.cpp	RTH-1a: one fact, several windows, and the mask says which	one fact, several windows, and the mask says which
 tests/test_history_recorder.cpp	RTH-1a: protection decides what is KEPT; the shape decides what takes context	protection decides what is KEPT; the shape decides what takes context
 tests/test_history_recorder.cpp	RTH-1a: a policy change reseats every shape already being watched	a policy change reseats every shape already being watched
+tests/test_poke.cpp	a non-scalar field is fully visible in the structure but not message-read/writable this phase	a non-scalar field is fully visible in the structure but not message-read/writable

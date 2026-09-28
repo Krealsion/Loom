@@ -3,10 +3,9 @@
 
 #include <doctest.h>
 
-// The poke phase: live inspect / manipulate by message, under the
-// ZEN_EXPOSE / ZEN_HIDE access model, enforced by the target's own
-// construction layer — and the Poke weave, an ordinary participant that
-// relays operator commands. Portable (in-process, no OS boundary).
+// Poke: live inspect / manipulate by message, under the ZEN_EXPOSE / ZEN_HIDE access model,
+// enforced by the target's own construction layer; and the Poke weave, an ordinary participant
+// that relays operator commands. Portable (in-process, no OS boundary).
 
 #include <zen/console/console.hpp>
 #include <zen/switchboard.hpp>
@@ -111,8 +110,8 @@ struct TagTwinTagged {
     }
 };
 
-// A weave whose state carries a non-scalar field (still fully visible in the
-// structure; not message-read/writable this phase).
+// A weave whose state carries a non-scalar field: fully visible in the structure, and neither
+// readable nor writable by message.
 struct ListyState {
     std::int64_t k = 0;
     std::vector<std::int64_t> items;
@@ -362,8 +361,7 @@ TEST_CASE("reset restores the default state, and only when every field is writab
     CHECK(m.rate == 5); // untouched
 }
 
-TEST_CASE("a non-scalar field is fully visible in the structure but not message-read/writable "
-          "this phase") {
+TEST_CASE("a non-scalar field is fully visible in the structure but not message-read/writable") {
     ListyState s;
     const au::PokeStructure st = au::poke_structure<ListyState>();
     REQUIRE(st.fields.size() == 2);
@@ -611,7 +609,7 @@ TEST_CASE("an unsolicited answer with no pending poke is dropped, not relayed") 
     CHECK(asker.got.empty());
 }
 
-// ---- driven from the existing console: the phase's standalone payoff -------
+// ---- driven from the console, end to end ------------------------------------
 
 TEST_CASE("driven from the console, end to end: inspect, manipulate, and honest refusals — no UI "
           "needed") {
