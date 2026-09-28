@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// RTH-1 (corrected by RTH-1a) — the host-side recorder as VOLATILE WORKING MEMORY.
-//
-// The cases below are grouped the way the phases argued: first that the bus
-// carries the facts a history needs, then that the recorder keeps them truthfully
-// in its three windows, then that it is honest about what it has forgotten. What
-// it PERSISTS is no longer a question about this component at all — see the
-// `logger` suite, which owns durability and never reads a Recorder.
+// The host-side recorder as VOLATILE WORKING MEMORY. The cases run in order: the bus carries the
+// facts a history needs; the recorder keeps them truthfully in its three windows; and it is
+// honest about what it has forgotten. What it PERSISTS is not this component's question: the
+// `logger` suite owns durability and never reads a Recorder.
 
 #include <doctest.h>
 
@@ -31,8 +28,8 @@ Registered reg(Switchboard& bus, std::vector<std::shared_ptr<const Schema>> acce
     return register_probe(bus, std::move(accept), 2, true, Grant{}.allow_any());
 }
 
-/// The one retained record of a shape, or nullptr. Tests read records, never
-/// rendered lines — which is the reader contract this phase owes.
+/// The one retained record of a shape, or nullptr. Tests read records, never rendered lines:
+/// that is the reader contract.
 const HistoryRecord* only_of(const std::vector<HistoryRecord>& all, const std::string& shape) {
     const HistoryRecord* found = nullptr;
     for (const HistoryRecord& r : all) {
@@ -73,10 +70,10 @@ Value output(std::int64_t op, std::string line) {
 TEST_SUITE("recorder") {
 
 // ---------------------------------------------------------------------------
-// The substrate facts (the tap now carries what a history needs)
+// The substrate facts (the tap carries what a history needs)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: an ordinary delivery becomes a structured record") {
+TEST_CASE("an ordinary delivery becomes a structured record") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -102,7 +99,7 @@ TEST_CASE("RTH-1: an ordinary delivery becomes a structured record") {
     CHECK(!body.bytes.empty());
 }
 
-TEST_CASE("RTH-1: the sender is retained, and it is the bus's stamp") {
+TEST_CASE("the sender is retained, and it is the bus's stamp") {
     Switchboard bus;
     Recorder rec(bus);
     Registered from = reg(bus, {ping_schema()});
@@ -120,7 +117,7 @@ TEST_CASE("RTH-1: the sender is retained, and it is the bus's stamp") {
     CHECK(p->target == to.id);
 }
 
-TEST_CASE("RTH-1: a refusal becomes a structured record, with its reason and its detail") {
+TEST_CASE("a refusal becomes a structured record, with its reason and its detail") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -151,7 +148,7 @@ TEST_CASE("RTH-1: a refusal becomes a structured record, with its reason and its
     }
 }
 
-TEST_CASE("RTH-1: an ask's correlation survives into history") {
+TEST_CASE("an ask's correlation survives into history") {
     Switchboard bus;
     Recorder rec(bus);
     Registered asker = reg(bus, {pong_schema()});
@@ -172,7 +169,7 @@ TEST_CASE("RTH-1: an ask's correlation survives into history") {
     CHECK(answer->correlation == 4242);
 }
 
-TEST_CASE("RTH-1: the role a message was ADDRESSED to survives, beside the resolved recipient") {
+TEST_CASE("the role a message was ADDRESSED to survives, beside the resolved recipient") {
     Switchboard bus;
     Recorder rec(bus);
     auto owned = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
@@ -193,7 +190,7 @@ TEST_CASE("RTH-1: the role a message was ADDRESSED to survives, beside the resol
 // Dispatch ancestry
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: dispatch ancestry is exact for a synchronous chain") {
+TEST_CASE("dispatch ancestry is exact for a synchronous chain") {
     Switchboard bus;
     Recorder rec(bus);
     Registered third = reg(bus, {greet_schema()});
@@ -222,12 +219,11 @@ TEST_CASE("RTH-1: dispatch ancestry is exact for a synchronous chain") {
     CHECK(c->dispatch_parent == b2->seq);
 }
 
-TEST_CASE("RTH-1: an async observation names the delivery that DRAINED it, not the request") {
-    // ASYNC-1's shape, reduced to its essentials: a runner is asked to start an
-    // operation, goes home, and publishes what it saw on a LATER beat. The
-    // dispatch parent of that observation is the beat — because that is the
-    // truth — and the thing that connects it to the request is the operation
-    // identity in the payload, which is a different kind of relation entirely.
+TEST_CASE("an async observation names the delivery that DRAINED it, not the request") {
+    // An asynchronous runner, reduced to its essentials: asked to start an operation, it goes
+    // home and publishes what it saw on a LATER beat. The dispatch parent of that observation is
+    // the beat, because that is the truth; what connects it to the request is the operation
+    // identity in the payload, a different kind of relation entirely.
     Switchboard bus;
     Recorder rec(bus);
     Registered watcher = reg(bus, {output_schema()});
@@ -266,7 +262,7 @@ TEST_CASE("RTH-1: an async observation names the delivery that DRAINED it, not t
 // Exceptional dispatch
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: a handler that throws is a recorded fact, not a silence") {
+TEST_CASE("a handler that throws is a recorded fact, not a silence") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -287,7 +283,7 @@ TEST_CASE("RTH-1: a handler that throws is a recorded fact, not a silence") {
     CHECK(p->payload == PayloadDisposition::Retained);
 }
 
-TEST_CASE("RTH-1: a failed handler is a rare fact and is protected from ordinary traffic") {
+TEST_CASE("a failed handler is a rare fact and is protected from ordinary traffic") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 4;
@@ -316,7 +312,7 @@ TEST_CASE("RTH-1: a failed handler is a rare fact and is protected from ordinary
 // Handler timing
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: history records how long a handler held the one mind") {
+TEST_CASE("history records how long a handler held the one mind") {
     Switchboard bus;
     Recorder rec(bus);
     Registered slow = reg(bus, {ping_schema()});
@@ -338,7 +334,7 @@ TEST_CASE("RTH-1: history records how long a handler held the one mind") {
     CHECK(p->handler_elapsed_ns < 5000000000u);
 }
 
-TEST_CASE("RTH-1: a refusal ran no handler and claims no duration") {
+TEST_CASE("a refusal ran no handler and claims no duration") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -354,7 +350,7 @@ TEST_CASE("RTH-1: a refusal ran no handler and claims no duration") {
 // Retention: classes, payloads, and the two budgets
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: metadata outlives its payload, and says which") {
+TEST_CASE("metadata outlives its payload, and says which") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.payload_byte_budget = 64; // room for roughly one Ping
@@ -376,7 +372,7 @@ TEST_CASE("RTH-1: metadata outlives its payload, and says which") {
     CHECK(rec.bounds().forgotten == 0); // no METADATA was forgotten
 }
 
-TEST_CASE("RTH-1: a payload over the ceiling leaves its metadata standing") {
+TEST_CASE("a payload over the ceiling leaves its metadata standing") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.max_payload_bytes = 4;
@@ -393,7 +389,7 @@ TEST_CASE("RTH-1: a payload over the ceiling leaves its metadata standing") {
     CHECK(rec.payload(p->record_seq).state == PayloadState::Declined);
 }
 
-TEST_CASE("RTH-1: a shape declared not-retained is counted, never silently dropped") {
+TEST_CASE("a shape declared not-retained is counted, never silently dropped") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.rules.push_back(RetentionRule{"Tick", 0, false, false});
@@ -420,7 +416,7 @@ TEST_CASE("RTH-1: a shape declared not-retained is counted, never silently dropp
     CHECK(saw);
 }
 
-TEST_CASE("RTH-1: a dedicated window keeps a shape out of the shared budget") {
+TEST_CASE("a dedicated window keeps a shape out of the shared budget") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 8;
@@ -440,7 +436,7 @@ TEST_CASE("RTH-1: a dedicated window keeps a shape out of the shared budget") {
     CHECK(rec.bounds().forgotten == 0);
 }
 
-TEST_CASE("RTH-1: a shape's payloads can be declined while its metadata is kept") {
+TEST_CASE("a shape's payloads can be declined while its metadata is kept") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.rules.push_back(RetentionRule{"Tick", 1, true, false});
@@ -460,7 +456,7 @@ TEST_CASE("RTH-1: a shape's payloads can be declined while its metadata is kept"
 // Bounds and forgetting — the four honest answers
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: forgotten, never-recorded and never-observed are three different answers") {
+TEST_CASE("forgotten, never-recorded and never-observed are three different answers") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 4;
@@ -516,7 +512,7 @@ TEST_CASE("RTH-1: forgotten, never-recorded and never-observed are three differe
 // The structural blacklist
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: recorder-internal machinery never enters the recordable universe") {
+TEST_CASE("recorder-internal machinery never enters the recordable universe") {
     Switchboard bus;
     Recorder rec(bus);
     Registered store = reg(bus, {greet_schema()});   // stands in for the recorder's own storage
@@ -547,7 +543,7 @@ TEST_CASE("RTH-1: recorder-internal machinery never enters the recordable univer
 // Policy changes
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: a policy change is remembered once, and nothing is published to remember it") {
+TEST_CASE("a policy change is remembered once, and nothing is published to remember it") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -578,7 +574,7 @@ TEST_CASE("RTH-1: a policy change is remembered once, and nothing is published t
     CHECK(rec.snapshot().size() == before + 1);
 }
 
-TEST_CASE("RTH-1: shrinking a window destroys nothing, and says how much is over the bound") {
+TEST_CASE("shrinking a window destroys nothing, and says how much is over the bound") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -610,7 +606,7 @@ TEST_CASE("RTH-1: shrinking a window destroys nothing, and says how much is over
 // Lifecycle facts
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: a participant's death is a protected record, not a delivery") {
+TEST_CASE("a participant's death is a protected record, not a delivery") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -630,7 +626,7 @@ TEST_CASE("RTH-1: a participant's death is a protected record, not a delivery") 
 // The reader, and the witness that is deliberately not the reader
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1: the dump renders what the reader returns, and is not the reader") {
+TEST_CASE("the dump renders what the reader returns, and is not the reader") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -655,10 +651,10 @@ TEST_CASE("RTH-1: the dump renders what the reader returns, and is not the reade
 }
 
 // ---------------------------------------------------------------------------
-// RTH-1a — the last-call store, the recent FIFO, and the correction between them
+// The last-call store, the recent FIFO, and what each of them is for
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1a: every observed shape keeps its most recent observation, by default") {
+TEST_CASE("every observed shape keeps its most recent observation, by default") {
     Switchboard bus;
     Recorder rec(bus);
     REQUIRE(rec.policy().default_last_n == 1);
@@ -682,10 +678,9 @@ TEST_CASE("RTH-1a: every observed shape keeps its most recent observation, by de
     CHECK(rec.observed("Tick"));
 }
 
-TEST_CASE("RTH-1a: a heartbeat can leave the recent FIFO and stay fully discoverable") {
-    // THE CORRECTION, IN ONE CASE. RTH-1 muted a heartbeat by making it
-    // NotRetained, which also made it unfindable. The policy that replaces it says
-    // only that four thousand beats are not four thousand pieces of CONTEXT.
+TEST_CASE("a heartbeat can leave the recent FIFO and stay fully discoverable") {
+    // Muting a heartbeat must not make it unfindable: the policy says only that four thousand
+    // beats are not four thousand pieces of CONTEXT.
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 8;
@@ -732,7 +727,7 @@ TEST_CASE("RTH-1a: a heartbeat can leave the recent FIFO and stay fully discover
     CHECK(rec.bounds().payload_bytes < 4096);
 }
 
-TEST_CASE("RTH-1a: a rare shape stays discoverable long after it leaves recent context") {
+TEST_CASE("a rare shape stays discoverable long after it leaves recent context") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 4;
@@ -759,7 +754,7 @@ TEST_CASE("RTH-1a: a rare shape stays discoverable long after it leaves recent c
     CHECK(held_in(after.record->held, Held::LastCall));
 }
 
-TEST_CASE("RTH-1a: removing a shape from the FIFO does not make it unrecordable") {
+TEST_CASE("removing a shape from the FIFO does not make it unrecordable") {
     // The stop condition, stated as an assertion rather than as prose. Two shapes,
     // one muted from context and one silenced outright, and the recorder tells
     // them apart.
@@ -781,7 +776,7 @@ TEST_CASE("RTH-1a: removing a shape from the FIFO does not make it unrecordable"
     CHECK(rec.counters().declined_by_policy == 1);
 }
 
-TEST_CASE("RTH-1a: the counters add up, and a policy note is on neither side of it") {
+TEST_CASE("the counters add up, and a policy note is on neither side of it") {
     // `observed == recorded + declined_by_policy + declined_internal`, checkable by
     // hand. A recorder-local note counted as `recorded` would make the history
     // appear to hold more than it was ever shown — which is the arithmetic a
@@ -815,7 +810,7 @@ TEST_CASE("RTH-1a: the counters add up, and a policy note is on neither side of 
     CHECK(rec.retained() == 2);
 }
 
-TEST_CASE("RTH-1a: the per-shape last-call depth is a number, and it is honoured") {
+TEST_CASE("the per-shape last-call depth is a number, and it is honoured") {
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 2;
@@ -836,7 +831,7 @@ TEST_CASE("RTH-1a: the per-shape last-call depth is a number, and it is honoured
     CHECK(rec.bounds().recent_held == 0); // it competes for no context at all
 }
 
-TEST_CASE("RTH-1a: one fact, several windows, and the mask says which") {
+TEST_CASE("one fact, several windows, and the mask says which") {
     Switchboard bus;
     Recorder rec(bus);
     Registered r = reg(bus, {ping_schema()});
@@ -857,10 +852,9 @@ TEST_CASE("RTH-1a: one fact, several windows, and the mask says which") {
     CHECK(b.last_call_held == 1);
 }
 
-TEST_CASE("RTH-1a: protection decides what is KEPT; the shape decides what takes context") {
-    // RTH-1 trap 3, restated for two windows instead of one. A muted shape's
-    // REFUSALS are still kept — and a storm of them still cannot drown the context
-    // a maker came for.
+TEST_CASE("protection decides what is KEPT; the shape decides what takes context") {
+    // A muted shape's REFUSALS are still kept, in either window, and a storm of them still
+    // cannot drown the context a maker came for.
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 4;
@@ -892,7 +886,7 @@ TEST_CASE("RTH-1a: protection decides what is KEPT; the shape decides what takes
     }
 }
 
-TEST_CASE("RTH-1a: a policy change reseats every shape already being watched") {
+TEST_CASE("a policy change reseats every shape already being watched") {
     // The hot path caches each shape's resolved rule on first sight, so a policy
     // change has to invalidate what it cached. This is the case that goes red if it
     // does not.

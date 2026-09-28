@@ -118,3 +118,34 @@ tests/test_sense.cpp	S6: an unauthorized read refuses EXPLICITLY, and is not con
 tests/test_sense.cpp	S6: an authorized reader is authorized per SHAPE — the rule it holds, not the one it does not	an authorized reader is authorized per SHAPE — the rule it holds, not the one it does not
 tests/test_sense.cpp	S6: claiming as an office you do not hold is refused, and NOTHING is stored — never downgraded to a personal claim	claiming as an office you do not hold is refused, and NOTHING is stored — never downgraded to a personal claim
 tests/test_sense.cpp	S6: claiming a shape the weave never declared is refused — the claim-set is a contract, not documentation	claiming a shape the weave never declared is refused — the claim-set is a contract, not documentation
+tests/test_history_recorder.cpp	RTH-1: an ordinary delivery becomes a structured record	an ordinary delivery becomes a structured record
+tests/test_history_recorder.cpp	RTH-1: the sender is retained, and it is the bus's stamp	the sender is retained, and it is the bus's stamp
+tests/test_history_recorder.cpp	RTH-1: a refusal becomes a structured record, with its reason and its detail	a refusal becomes a structured record, with its reason and its detail
+tests/test_history_recorder.cpp	RTH-1: an ask's correlation survives into history	an ask's correlation survives into history
+tests/test_history_recorder.cpp	RTH-1: the role a message was ADDRESSED to survives, beside the resolved recipient	the role a message was ADDRESSED to survives, beside the resolved recipient
+tests/test_history_recorder.cpp	RTH-1: dispatch ancestry is exact for a synchronous chain	dispatch ancestry is exact for a synchronous chain
+tests/test_history_recorder.cpp	RTH-1: an async observation names the delivery that DRAINED it, not the request	an async observation names the delivery that DRAINED it, not the request
+tests/test_history_recorder.cpp	RTH-1: a handler that throws is a recorded fact, not a silence	a handler that throws is a recorded fact, not a silence
+tests/test_history_recorder.cpp	RTH-1: a failed handler is a rare fact and is protected from ordinary traffic	a failed handler is a rare fact and is protected from ordinary traffic
+tests/test_history_recorder.cpp	RTH-1: history records how long a handler held the one mind	history records how long a handler held the one mind
+tests/test_history_recorder.cpp	RTH-1: a refusal ran no handler and claims no duration	a refusal ran no handler and claims no duration
+tests/test_history_recorder.cpp	RTH-1: metadata outlives its payload, and says which	metadata outlives its payload, and says which
+tests/test_history_recorder.cpp	RTH-1: a payload over the ceiling leaves its metadata standing	a payload over the ceiling leaves its metadata standing
+tests/test_history_recorder.cpp	RTH-1: a shape declared not-retained is counted, never silently dropped	a shape declared not-retained is counted, never silently dropped
+tests/test_history_recorder.cpp	RTH-1: a dedicated window keeps a shape out of the shared budget	a dedicated window keeps a shape out of the shared budget
+tests/test_history_recorder.cpp	RTH-1: a shape's payloads can be declined while its metadata is kept	a shape's payloads can be declined while its metadata is kept
+tests/test_history_recorder.cpp	RTH-1: forgotten, never-recorded and never-observed are three different answers	forgotten, never-recorded and never-observed are three different answers
+tests/test_history_recorder.cpp	RTH-1: recorder-internal machinery never enters the recordable universe	recorder-internal machinery never enters the recordable universe
+tests/test_history_recorder.cpp	RTH-1: a policy change is remembered once, and nothing is published to remember it	a policy change is remembered once, and nothing is published to remember it
+tests/test_history_recorder.cpp	RTH-1: shrinking a window destroys nothing, and says how much is over the bound	shrinking a window destroys nothing, and says how much is over the bound
+tests/test_history_recorder.cpp	RTH-1: a participant's death is a protected record, not a delivery	a participant's death is a protected record, not a delivery
+tests/test_history_recorder.cpp	RTH-1: the dump renders what the reader returns, and is not the reader	the dump renders what the reader returns, and is not the reader
+tests/test_history_recorder.cpp	RTH-1a: every observed shape keeps its most recent observation, by default	every observed shape keeps its most recent observation, by default
+tests/test_history_recorder.cpp	RTH-1a: a heartbeat can leave the recent FIFO and stay fully discoverable	a heartbeat can leave the recent FIFO and stay fully discoverable
+tests/test_history_recorder.cpp	RTH-1a: a rare shape stays discoverable long after it leaves recent context	a rare shape stays discoverable long after it leaves recent context
+tests/test_history_recorder.cpp	RTH-1a: removing a shape from the FIFO does not make it unrecordable	removing a shape from the FIFO does not make it unrecordable
+tests/test_history_recorder.cpp	RTH-1a: the counters add up, and a policy note is on neither side of it	the counters add up, and a policy note is on neither side of it
+tests/test_history_recorder.cpp	RTH-1a: the per-shape last-call depth is a number, and it is honoured	the per-shape last-call depth is a number, and it is honoured
+tests/test_history_recorder.cpp	RTH-1a: one fact, several windows, and the mask says which	one fact, several windows, and the mask says which
+tests/test_history_recorder.cpp	RTH-1a: protection decides what is KEPT; the shape decides what takes context	protection decides what is KEPT; the shape decides what takes context
+tests/test_history_recorder.cpp	RTH-1a: a policy change reseats every shape already being watched	a policy change reseats every shape already being watched
