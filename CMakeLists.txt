@@ -395,11 +395,11 @@ if(LOOM_BUILD_SESSION_TOOLS AND TARGET zen-kernel)
     add_dependencies(loom-runs loom-session-runtime)
 endif()
 
-# ---- The remote-operator bridge ----------------------------------------------------------
-# Portable: the operator protocol crosses the host boundary over POSIX sockets or Winsock
-# (ws2_32), AF_UNIX locally and AF_INET 127.0.0.1 across a machine boundary. `zen-bridge` is the
-# crossing (the framed channel, the host side with its admission seam, the console-free client
-# and the link envelope) and links only the bus and the core, so it is exported.
+# ---- The bridge: a bus reached over a socket ---------------------------------------------
+# Portable: the bridge protocol crosses the host boundary over POSIX sockets or Winsock (ws2_32),
+# on an AF_UNIX socket or loopback TCP; the bridge host listens on 127.0.0.1 only. `zen-bridge`
+# is the crossing (the framed channel, the host side with its admission seam, the console-free
+# client and the link envelope) and links only the bus and the core, so it is exported.
 # `zen-bridge-console` is the operator's console over it, and stays home with the console.
 add_library(zen-bridge
     src/bridge/channel.cpp

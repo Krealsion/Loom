@@ -10,18 +10,11 @@ namespace loom {
 
 namespace {
 
-/// THE ONE IMPLEMENTATION OF `ParticipantChannel`, and the only place in the
-/// terminal stack that names a `Switchboard`.
-///
-/// Each verb is the `*_as` form of the corresponding ordinary send: the sender is
-/// stamped from `self_`, which was fixed when the host built this object, and the
-/// delivery is GATED — authorized at delivery against that weave's own effective
-/// authority. This is the same door a weave's own `WeaveBus` goes through; what
-/// differs is only that this one outlives a single delivery, which is the whole
-/// reason it exists.
-///
-/// It holds `self_` by value and the bus by reference, and there is no setter for
-/// either. A terminal handed one of these has exactly one identity, forever.
+/// The one implementation of `ParticipantChannel`, and the only place in the terminal stack
+/// that names a `Switchboard`. Each verb is the `*_as` form of the ordinary send: the sender is
+/// stamped from `self_`, fixed when the host built this, and the delivery is gated against
+/// that weave's effective authority, the door its own `WeaveBus` uses, but outliving one
+/// delivery. `self_` is held by value with no setter: one identity, forever.
 class HostParticipantChannel final : public ParticipantChannel {
 public:
     HostParticipantChannel(Switchboard& bus, WeaveId self) : bus_(bus), self_(self) {}

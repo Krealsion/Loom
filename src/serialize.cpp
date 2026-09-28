@@ -86,19 +86,10 @@ std::string type_label(const TypeRef& t) {
 //  docs/reference/bounds.md#the-decode-materialization-bound
 // ===========================================================================
 
-// ONE budget per top-level decode, shared by every nested message, list, field
-// and recursive helper inside it — never reset per container, so two lists that
-// are each individually modest still cannot add up past the bound.
-//
-// It is spent BEFORE the cells it pays for exist: a list charges its whole
-// declared element count before the first element is built, and a message
-// charges its whole slot vector before the Value is constructed. Exhaustion is
-// therefore a refusal, never an allocation that is regretted afterwards, and it
-// is deliberately not a std::bad_alloc backstop.
-//
-// It is host-owned and automatic. Neither decoder takes a caller-supplied
-// budget, and nothing on the wire can widen it — an untrusted participant does
-// not get to choose how much host work it may command.
+// One budget per top-level decode, shared by everything nested in it and never reset per
+// container, and spent before the cells it pays for exist, so exhaustion is a refusal, never an
+// allocation regretted afterwards. Host-owned and automatic: no caller and nothing on the wire
+// can widen it.
 struct DecodeBudget {
     std::uint64_t remaining = detail::kMaxDecodedCells;
 
@@ -403,7 +394,7 @@ struct BinaryDecoder {
 };
 
 // ===========================================================================
-//  Compat JSON: helpers, encode, and the (now strict) decoder
+//  Compat JSON: helpers, encode, and the strict decoder
 // ===========================================================================
 
 bool json_parse_int64(std::string_view text, std::int64_t& out) {

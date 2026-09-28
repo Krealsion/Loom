@@ -161,18 +161,11 @@ void collect_referenced(const TypeRef& type, std::vector<std::shared_ptr<const S
     if (type.kind != Kind::Message || !type.message) {
         return;
     }
-    // ALREADY CARRIED MEANS ALREADY EXPANDED, so the identity scan comes BEFORE the
-    // descent. A schema is appended only after its components were (post-order), so
-    // finding it in `out` means its whole closure is there too and there is nothing
-    // left to walk under it. Descending first and scanning afterwards deduplicated the
-    // OUTPUT but not the WORK: a chain of schemas each holding two fields of the
-    // previous one was expanded as a binary tree — 2^depth visits for depth+1 distinct
-    // schemas, which stalled a host's registration on a 27-schema declaration. `out`
-    // is the visited set, across the components of one root and across repeated calls.
-    //
-    // Identity, not name: the same definition reached twice is carried once, and a
-    // DIFFERENT definition under a name already carried is kept beside it for the
-    // agreement check downstream to refuse — never dropped on the strength of its name.
+    // Already carried means already expanded, so the identity scan comes before the descent:
+    // a schema is appended only after its components (post-order), so finding it means its
+    // closure is there. `out` is the visited set, so a chain of schemas each nesting two of the
+    // previous is walked once per schema, not 2^depth times. Identity, not name: a different
+    // definition under a carried name is kept beside it for the agreement check to refuse.
     for (const auto& seen : out) {
         if (same_identity(*seen, *type.message)) {
             return;

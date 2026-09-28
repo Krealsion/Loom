@@ -17,8 +17,9 @@
 
 namespace loom {
 
-/// Lay `root` out into a `rows`x`cols` character grid (a banner on the top row) and write the frame
-/// through the terminal backend (output behind the seam). The SAME tree a GUI later lays out to pixels.
+/// Lay `root` out into a `rows`x`cols` character grid (a banner on the top row) and write the
+/// frame through the terminal backend (output behind the seam). The pixel projection lays out
+/// the same tree.
 void tui_draw(const Widget& root, int rows, int cols, TerminalBackend& term);
 
 /// Map one raw byte (already read; 0..255) to a semantic InputEvent. Returns false to signal quit

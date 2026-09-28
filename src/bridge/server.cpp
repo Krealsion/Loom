@@ -82,13 +82,10 @@ BridgeAdmission operator_admission() {
 }
 
 // ---- the proxy: a Weave, on the bus, backed by a socket connection ------------------------------
-//
-// To the Switchboard this is an ordinary Weave -- the session's identity on the bus, and the SENDER
-// the bridge stamps onto every send it makes on the connection's behalf. handle() is called when a
-// message is delivered to this proxy (a reply routed to reply_to == this id, an answer, a
-// dispatch-refusal notice); it ships the delivery to the peer as a Delivered frame WITH the facts
-// the bus stamped on it, because a peer that only got the bytes could not tell an attested answer
-// from any admitted participant's helpful `zen.Result`.
+// An ordinary Weave to the Switchboard: the session's identity on the bus, and the sender the
+// bridge stamps on every send it makes for the connection. handle() ships each delivery to the
+// peer as a Delivered frame with the facts the bus stamped on it, since a peer given only the
+// bytes could not tell an attested answer from any participant's helpful `zen.Result`.
 class OperatorProxy final : public loom::Weave {
 public:
     /// `slot` is the connection's non-owning pointer back to this proxy, cleared when the proxy
@@ -104,13 +101,10 @@ public:
     }
 
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
-        // THE LISTED SHAPES, beside whatever the admission's accept mode adds at delivery: the
-        // dispatch-refusal notice (MSG-12) is sent only to a sender whose DECLARED doors name
-        // it, so a session that could not hear its own refusals would be a session whose
-        // sends vanished; and the construction layer's answer to `zen.DescribeAccepted`, which
-        // no ordinary participant declares, so a session allowed to ask what a weave accepts
-        // has somewhere for the answer to land. Listing them also registers the shapes, so
-        // they resolve on a bus where no other participant declared them.
+        // The listed shapes, beside what the admission's accept mode adds at delivery: the
+        // dispatch-refusal notice (MSG-12), sent only to a sender whose declared doors name it,
+        // and the answer to `zen.DescribeAccepted`, which no ordinary participant declares.
+        // Listing them also registers the shapes on a bus where nobody else declared them.
         std::vector<std::shared_ptr<const Schema>> doors{schema_of<DispatchRefused>()};
         for (const auto& s : describe_answer_schemas()) {
             doors.push_back(s);
@@ -387,8 +381,8 @@ void BridgeServer::on_hello(Conn& c, const BridgeIncoming& f) {
         refuse(c, "malformed Hello");
         return;
     }
-    // The two identity fields are read as empty when absent (a v3-shaped Hello), and bounded
-    // when present: a peer has earned nothing yet, so what it can make this host hold is small.
+    // The two identity fields are read as empty when absent (an older protocol's Hello, refused
+    // in words below), and bounded when present: a peer has earned nothing yet.
     std::string_view claimed;
     std::string_view credential;
     (void)cur.bytes(claimed);

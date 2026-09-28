@@ -329,14 +329,10 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
         return result;
     }
 
-    // THE CORRELATION IS THIS PARTICIPANT'S OWN, monotonic and never zero. Loom echoes it back on
-    // whatever answer it authorizes, which is what lets several conversations be outstanding at
-    // once without this core inventing a request id beside the one Loom already keeps.
-    //
-    // ONE SEQUENCE, TWO DOORS INTO IT. An ask draws its number by OPENING a conversation in this
-    // participant's book; a fire-and-forget send draws one from the same counter. A second counter
-    // here could number an ordinary send with a value an open conversation is already using, and
-    // that send's answer would then settle the conversation.
+    // The correlation is this participant's own, monotonic and never zero; Loom echoes it on
+    // any answer it authorizes, so several conversations can be outstanding with no second
+    // request id. One sequence, two doors: an ask draws its number by opening a conversation in
+    // the book and a send takes one from the same counter, so a send never reuses an open one's.
     AskOpened opened;
     if (as_ask) {
         // WHICH DOOR IS THE ADDRESSING'S ANSWER, and it is the whole expected-respondent question:
@@ -498,14 +494,11 @@ void TerminalSession::handle(const loom::Message& in, loom::Bus& bus) {
     }
 
     if (answers) {
-        // WHICH ask, out of this participant's own book: Loom's correlation says which
-        // conversation, and the bus's sender stamp says the answer came from the weave that was
-        // asked. THE PROVENANCE GATE ABOVE IS A THIRD WALL AND IT IS THIS PARTICIPANT'S OWN, not
-        // the book's — an unsolicited `zen.Ack` from a weave that merely holds the grant for it
-        // carries no answer provenance at all, so it never reaches this branch. The book cannot
-        // require that of every asker, because Loom's own Weave Manager relays a load's answer to
-        // its asker as an ORDINARY send; a terminal participant is talking to weaves that answer
-        // it directly, so it can and does insist.
+        // Which ask, from this participant's own book: Loom's correlation says which
+        // conversation, and the bus's stamp that the asked weave answered. The provenance gate
+        // above is a third wall, this participant's own: an unsolicited `zen.Ack` carries no
+        // answer provenance. The book cannot require it of every asker (the Weave Manager relays
+        // a load's answer as an ordinary send); a terminal talks to weaves that answer directly.
         if (const std::optional<PendingAsk> settled = asks_.settle(in.correlation, in.sender)) {
             entry.answers = settled->id;
         }

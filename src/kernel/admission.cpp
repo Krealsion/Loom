@@ -30,18 +30,16 @@ const char* name_of(AdmissionKind k) noexcept {
 }
 
 AdmissionPolicy trust_every_artifact(std::string why) {
-    // The `why` is captured and handed back in the note of every verdict, so a host
-    // that installs this cannot end up unable to say why it did. That is the whole
-    // difference between this and the default the Kernel used to carry: this one has
-    // an author and a reason, and both travel with the decision.
+    // The `why` is captured and handed back in the note of every verdict, so a host that
+    // installs this can always say why: this trust has an author and a reason, and both travel
+    // with the decision.
     return [reason = std::move(why)](const AdmissionRequest& req) {
         if (req.stage == AdmissionStage::Open) {
             return AdmissionVerdict::admit(Grant{}, reason);
         }
-        // Permissive bus SENDS, and no Sense read authority: Grant's floor is empty
-        // and Senses did not change it. Observing another participant's claims stays
-        // a deliberate decision even for a host that trusts its own build output —
-        // "I compiled it" is not "it may read everything anyone publishes".
+        // Permissive bus sends, and no Sense read authority: Grant's floor has none, and reading
+        // another participant's claims stays a deliberate decision even for a host that trusts
+        // its own build output.
         return AdmissionVerdict::admit(Grant{}.allow_any(), reason);
     };
 }

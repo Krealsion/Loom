@@ -324,10 +324,8 @@ bool AuthorityStore::forget(const std::string& artifact, std::string* error) {
 }
 
 bool AuthorityStore::commit(std::map<std::string, AuthorityRule> candidate, std::string* error) {
-    // THE FILE IS WRITTEN BEFORE THE POLICY CHANGES, not after. A failed write leaves
-    // this host permitting exactly what it permitted before the command — and the
-    // command says so. The reverse order is how an unwritable store came to grant an
-    // approval for one session that the next boot had never heard of.
+    // The file is written before the policy changes: a failed write leaves this host
+    // permitting exactly what it permitted before the command, and the command says so.
     if (!write(candidate, error)) {
         return false;
     }
@@ -442,14 +440,10 @@ AdmissionPolicy AuthorityStore::policy() {
                                  brief(build) + " could not be recorded (" + why + ")");
                 return AdmissionVerdict::admit(Grant{}, notes_.back());
             }
-            // REFUSED, BECAUSE THE PIN IS THE APPROVAL'S BOUNDARY. Without `--rebuilds` the
-            // person approved THIS build and asked to be asked again when it changes, and
-            // the record of which build ran is the only thing that can notice a change. It
-            // used to admit here with a note, leaving the rule unpinned — so the next,
-            // DIFFERENT build took the same path and ran too. A note is not consent.
-            //
-            // Nothing is recorded as pending: no decision is waiting on the person, whose
-            // approval stands unchanged. What is waiting is the disk, and the reason says so.
+            // Refused, because the pin is the approval's boundary: without `--rebuilds` the
+            // person approved this build and asked to be asked again when it changes, and only
+            // the record of which build ran can notice a change. A note is not consent. Nothing
+            // is pending: the approval stands, and what waits is the disk, as the reason says.
             return AdmissionVerdict::refuse(
                 "'" + req.name + "' is approved, but this host could not record which build of it "
                 "runs (" + why + "). You chose to be asked again when it changes, and without that "
@@ -463,10 +457,8 @@ AdmissionPolicy AuthorityStore::policy() {
         }
 
         if (rule->trust_rebuilds) {
-            // THE OLD ID IS COPIED OUT FIRST. `rule` points into `rules_`, and `put`
-            // replaces that entry — so reading `rule->content_id` afterwards reports
-            // the NEW build as the old one, and the note said "84f68879 -> 84f68879".
-            // Found by reading the note it printed.
+            // The old id is copied out first: `rule` points into `rules_`, and `put` replaces
+            // that entry, so reading `rule->content_id` afterwards would report the new build.
             const std::string was = rule->content_id;
             AuthorityRule repinned = *rule;
             repinned.content_id = build;

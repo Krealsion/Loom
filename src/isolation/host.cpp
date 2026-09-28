@@ -36,23 +36,12 @@ namespace {
 constexpr int kChildFd = 3;            // the child reads its socket from this fd
 constexpr int kHandshakeTimeoutMs = 5000;
 
-// THE INTENTIONAL CHILD DESCRIPTOR SET. Derived from what the child actually
-// needs across execve, not guessed:
-//
-//   0,1,2      stdin/stdout/stderr — DELIBERATELY PRESERVED, and therefore an
-//              intentional ambient capability, not an accident: a contained child
-//              shares the host's console. It is what carries a crashing child's
-//              sanitizer report and its libc/loader diagnostics, and closing it would
-//              also arm the classic trap where the child's next open() silently
-//              becomes fd 0. containment() and docs/reference/capabilities.md both say so
-//              in words, because a reader must not infer "the child gets nothing".
-//   kChildFd   the weave-host protocol transport (the socketpair end dup2'd here and
-//              named to the child as argv[1]).
-//
-// Nothing else. The spawn-synchronisation pipes are closed by the child before the
-// mount plan runs and never cross exec; sv[0]/sv[1] are closed just above the sweep;
-// the .so and the executable are opened by the loader AFTER exec. The list must stay
-// strictly ascending — close_inherited_descriptors sweeps the gaps between entries.
+// The child's intentional descriptor set: 0, 1 and 2, deliberately shared with the host's
+// console (a crashing child's diagnostics travel there, closing them would let its next open()
+// become fd 0, and docs/reference/capabilities.md says so), and kChildFd, the protocol
+// transport named to the child as argv[1]. Nothing else crosses exec: the sync pipes close
+// before the mount plan runs and the loader opens the .so after exec. Strictly ascending:
+// close_inherited_descriptors sweeps the gaps between entries.
 constexpr int kChildKeepFds[] = {0, 1, 2, kChildFd};
 static_assert(kChildFd > 2, "kChildKeepFds must remain strictly ascending");
 
@@ -177,14 +166,11 @@ bool ensure_host_dir(const std::string& path) {
     return true;
 }
 
-// The allow-list view for `level`: private-first, a tmpfs root, the loader closure
-// and the exe/.so dirs bound read-only, a scratch tmpfs for the write levels, then
-// pivot_root into it. The view is built purely by ADDITION, so what a child can see is
-// exactly what this function binds -- nothing of the host home crosses, and neither
-// does any path outside the list below. Say that rather than "secrets are absent": the
-// loader closure includes the whole of /etc, and the exe/.so dirs are bound whole, so a
-// secret is absent from this view only if it is in neither. The enumeration lives in
-// docs/reference/capabilities.md and is written out there for the same reason.
+// The allow-list view for `level`: private first, a tmpfs root, the loader closure and the
+// exe/.so directories bound read-only, a scratch tmpfs for the write levels, then pivot_root.
+// Built by addition only, so the child sees exactly what this binds, and nothing of the host
+// home. That is not "secrets are absent": the loader closure includes all of /etc and the
+// directories are bound whole. The enumeration is in docs/reference/capabilities.md.
 MountPlan build_view_plan(loom::FsAccess level, const std::string& scoped_path,
                           const std::string& exe_path, const std::string& so_path,
                           const std::string& root) {
@@ -236,19 +222,16 @@ MountPlan build_view_plan(loom::FsAccess level, const std::string& scoped_path,
     return p;
 }
 
-// One honest sentence for a resolved capability — each capability describes its OWN
-// boundary precisely (honest over flattering). B4 extends this with its capabilities.
+// One honest sentence for a resolved capability: each describes its own boundary precisely.
 std::string describe_resolution(const CapabilityResolution& r) {
     using Outcome = CapabilityResolution::Outcome;
     if (r.capability == Capability::Network) {
         switch (r.outcome) {
             case Outcome::Enforced:
-                // THREE different facts, kept apart on purpose. The namespace decides what
-                // a FRESH socket can do; the descriptor sweep decides which ALREADY-OPEN
-                // descriptors exist at all; the authored environment decides what the child
-                // is TOLD. DESCRIBING ONLY THE FIRST IS THE TRAP: it has been true here
-                // while the second was false, and an inherited connected host socket then
-                // walks straight through the containment being claimed.
+                // Three facts, kept apart: the namespace decides what a fresh socket can do,
+                // the descriptor sweep which already-open descriptors exist, the authored
+                // environment what the child is told. Describing only the first would let an
+                // inherited connected socket walk through the containment claimed.
                 // docs/reference/capabilities.md#the-exec-boundary-three-independent-facts
                 return std::string(
                            "network: contained — private user+net namespace, no external "
@@ -295,10 +278,9 @@ std::string describe_resolution(const CapabilityResolution& r) {
     if (r.capability == Capability::Resources) {
         switch (r.outcome) {
             case Outcome::Enforced:
-                // Rendered by the pure, delegation-qualified helper (sandbox.cpp) so the
-                // fork-bomb-stop claim mirrors the memory clause: it is asserted only where
-                // the pids controller is delegated (F-20's pids mirror). cgroup_pids_available()
-                // is the same source of truth cgroup_create_leaf gates pids.max on.
+                // Rendered by the delegation-qualified helper (sandbox.cpp), so the fork-bomb
+                // claim is made only where the pids controller is delegated, as the memory
+                // clause is; cgroup_pids_available() is what cgroup_create_leaf gates pids.max on.
                 return resource_attestation(r.note, cgroup_pids_available(), r.confirmed);
             case Outcome::Granted:
                 // Resources never resolve to Granted (there is no wholesale opt-out; where the
@@ -316,12 +298,10 @@ std::string describe_resolution(const CapabilityResolution& r) {
 } // namespace
 
 // ---- the proxy: a Weave, on the bus, backed by a child process ---------------
-//
-// To the Switchboard this is an ordinary Weave. handle() serializes and ships the
-// message to the child and returns at once (fire-and-continue — a slow or hung
-// child never blocks the bus). snapshot()/policy() return the host-owned cached
-// values refreshed from the child's proactive Snapshot frames. revive() (re)spawns
-// the child if dead and ships the state.
+// An ordinary Weave to the Switchboard: handle() ships the message to the child and returns
+// at once, so a slow or hung child never blocks the bus; snapshot() and policy() return the
+// host's cached values, refreshed from the child's Snapshot frames; revive() respawns a dead
+// child and ships the state.
 class OutOfProcessWeave final : public loom::Weave {
 public:
     OutOfProcessWeave(IsolationHost* host, IsolationHost::Link* link) : host_(host), link_(link) {}
@@ -370,13 +350,11 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         error = "socketpair failed";
         return false;
     }
-    // BOTH ends get CLOEXEC, so neither is inherited by any *other* child this host
-    // (or its embedder) may spawn. The child end reaches its own exec by an explicit
-    // act instead: dup2 onto kChildFd clears CLOEXEC on the copy, and in the rare case
-    // where socketpair already handed back kChildFd itself the child clears the flag
-    // by hand. Loom's own descriptors being CLOEXEC is defence in depth, never the
-    // boundary — the boundary is the sweep below, because the embedding host owns
-    // descriptors Loom never created.
+    // Both ends get CLOEXEC, so no other child this host or its embedder spawns inherits
+    // them; the child end reaches its own exec explicitly (dup2 onto kChildFd clears the flag
+    // on the copy, or the child clears it by hand). That is defence in depth, not the
+    // boundary: the boundary is the sweep below, since the embedder owns descriptors Loom
+    // never created.
     (void)::fcntl(sv[0], F_SETFD, FD_CLOEXEC);
     (void)::fcntl(sv[1], F_SETFD, FD_CLOEXEC);
 
@@ -384,11 +362,10 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
     char* argv[] = {const_cast<char*>(exe_.c_str()), const_cast<char*>(fd_arg.c_str()),
                     const_cast<char*>(link.so_path.c_str()), nullptr};
 
-    // The exec boundary's SECOND authority surface. Built here, in the parent,
-    // where allocation is fine — exactly as the mount plan is — so the fork-child does
-    // nothing but hand the finished array to execve. `environ` is never consulted: a
-    // variable reaches the child because Zen authored it, not because this process
-    // happened to hold it.
+    // The exec boundary's second authority surface, built here in the parent, where
+    // allocation is fine, as the mount plan is, so the fork-child only hands the finished
+    // array to execve. `environ` is never consulted: a variable reaches the child because
+    // Loom authored it, not because this process happened to hold it.
     ChildEnvironment child_env = build_child_environment();
     if (!child_env.ok()) {
         ::close(sv[0]);
@@ -416,22 +393,12 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         return false;
     }
 
-    // ONE spawn path, and therefore ONE exec boundary. DO NOT SPLIT IT. Two paths — a
-    // fork/execve for the sandboxed case (posix_spawn cannot unshare) and a posix_spawn
-    // for the granted/dev-mode case — mean two descriptor policies, and posix_spawn's
-    // file actions cannot express "close everything except these" without enumerating,
-    // so the second path can only ever carry the weaker one. The guarantee is
-    // unconditional: a network-GRANTED weave has no more business inheriting the host's
-    // open database handle than a contained one does, so it gets a single place to live.
-    // docs/reference/capabilities.md#the-exec-boundary-three-independent-facts
-    //
-    // B3/B4: the child unshares into a network and/or mount namespace. This host refuses
-    // a child's self-map (EPERM), so the PARENT writes the child's uid/gid maps over a
-    // pipe handshake: the child unshares and signals, the parent maps it and releases it,
-    // then the child builds its restricted view and execs. Everything the child does is
-    // async-signal-safe (the mount plan was precomputed); the parent's map-writing uses
-    // ordinary libc. When nothing is sandboxed the same handshake runs and simply has no
-    // privileged work to do in the middle of it.
+    // One spawn path, and therefore one exec boundary: do not split it. A posix_spawn path
+    // could not express "close everything except these", so it would carry a weaker descriptor
+    // policy, and a granted weave has no more business inheriting host handles than a contained
+    // one (docs/reference/capabilities.md#the-exec-boundary-three-independent-facts). The host
+    // refuses a child's self-map, so the child unshares (network, mount) and signals, the parent
+    // writes its uid/gid maps and releases it, and the child builds its view and execs.
     int sync_c2p[2];
     int sync_p2c[2];
     if (::pipe(sync_c2p) != 0 || ::pipe(sync_p2c) != 0) {
@@ -476,13 +443,11 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         if (sv[0] != kChildFd) {
             ::close(sv[0]);
         }
-        // THE DESCRIPTOR BOUNDARY, the first of the exec boundary's two authority
-        // surfaces (the second, the authored environment, was built above and is handed
-        // to execve below). Everything the embedding host happened to hold open — its
-        // Bridge sockets, its files, its pipes, its terminal — stops existing for this
-        // child here, one syscall before it becomes zen-weave-host. The explicit closes
-        // above are subsumed by this and kept anyway: they state the intent, and the
-        // sweep enforces it over descriptors this code never knew about.
+        // The descriptor boundary, the first of the exec boundary's two authority surfaces
+        // (the authored environment is the second): everything the embedding host held open,
+        // its sockets, files, pipes and terminal, stops existing for this child here. The
+        // explicit closes above state the intent; the sweep enforces it over descriptors this
+        // code never knew about.
         if (close_inherited_descriptors(kChildKeepFds,
                                         sizeof(kChildKeepFds) / sizeof(kChildKeepFds[0])) != 0) {
             // Fail SAFE, loudly. stderr is in the allow-list and still open, and a raw
@@ -576,12 +541,10 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         *snapshot = std::string(s);
     }
 
-    // Part 3: positively confirm the sandbox actually took before any "contained"
-    // claim rests on it — the child is provably in a network namespace distinct from
-    // the host (inferred → verified). A failure here fails safe: the caller tears the
-    // child down and the mount refuses, so there is no path where a Weave runs while
-    // its status claims contained-but-the-namespace-was-not-entered. This also closes
-    // the probe-passed-but-real-entry-failed window for free.
+    // Confirm the sandbox took before any "contained" claim rests on it: the child is in a
+    // network namespace distinct from the host's (verified, not inferred). A failure fails
+    // safe: the caller tears the child down and the mount refuses, so no Weave runs while its
+    // status claims a namespace that was not entered.
     if (sandbox_net && !child_netns_is_isolated(link.pid)) {
         error = "network sandbox not confirmed: child shares the host network namespace";
         return false;
@@ -630,22 +593,19 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
         accept.push_back(std::move(door));
     }
     auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
-    // The declared emit-set (ABI v9), decoded exactly as the doors are: top-level,
-    // against this host's registry. This pipe's supported contract is flat shapes
-    // (no `referenced` section is read here), and an emit is held to that same
-    // contract rather than to a wider one nothing else on this pipe has.
+    // The declared emit-set, decoded as the doors are: top-level, against this host's
+    // registry. This pipe's contract is flat shapes (no `referenced` section is read here),
+    // and an emit is held to that contract rather than a wider one nothing else here has.
     std::vector<std::shared_ptr<const Schema>> emits;
     if (const loom::Cell* declared = mv.get("emits")) {
         for (const loom::Cell& c : declared->as_list()) {
             emits.push_back(loom::decode_schema(*c.as_message(), registry_));
         }
     }
-    // One transaction for the child's whole vocabulary (LIFE-08): cross-mount
-    // agreement on (name, version) as before, but a disagreement about the last
-    // door now leaves none of the earlier ones claimed — and the claim belongs to
-    // the mount, so a handshake refused below releases it on the way out. The
-    // emit-set joins the same transaction, so a child that says it will send a
-    // shape another mount hears differently is refused here, before it registers.
+    // One transaction for the child's whole vocabulary (LIFE-08): a disagreement about the
+    // last door leaves none of the earlier ones claimed, and the claim belongs to the mount,
+    // so a handshake refused below releases it. The emit-set joins the same transaction, so a
+    // child that says it will send a shape another mount hears differently is refused here.
     std::vector<std::shared_ptr<const Schema>> vocabulary = accept;
     vocabulary.insert(vocabulary.end(), emits.begin(), emits.end());
     vocabulary.push_back(state);
@@ -723,18 +683,17 @@ OutOfProcessResult IsolationHost::mount_mod(const std::string& name, const std::
         }
         grant.with_filesystem(level);
     }
-    // Roles above the floor: the floor already grants the storage role to all; the delta
-    // may add others. v1 wires the well-known "net" role explicitly (a general
-    // role->protocol registry is a deferred refinement). Network is dangerous, so —
-    // unlike storage — NO mod reaches the net broker without this recorded delta, and
-    // even then it gets only the role send-rule, never os_cap::Network: it stays
-    // OS-network-denied and reaches the network solely through the broker.
+    // Roles above the floor: the floor grants the storage role to all; the delta may add
+    // others, and only the well-known "net" role is wired. Network is dangerous, so no mod
+    // reaches the net broker without this recorded delta, and even then it gets only the role
+    // send-rule, never os_cap::Network: it stays OS-network-denied and reaches the network
+    // solely through the broker.
     for (const std::string& role : delta.roles) {
         if (role == kNetRole) {
             grant.allow_to_role(kNetRequest, kNetProtocolVersion, kNetRole);
         }
-        // kStorageRole is already granted by the floor; a role the host doesn't know how
-        // to wire is ignored (the deferred role->protocol registry).
+        // kStorageRole is already granted by the floor; a role this host does not know how
+        // to wire is ignored.
     }
     return mount(name, so_path, std::move(grant));
 }
@@ -793,10 +752,9 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
     link->name = name;
     link->so_path = so_path;
 
-    // B3: resolve each OS-capability from the grant and what this host can actually
-    // enforce, recording a per-capability outcome (one today — Network; B4 resolves
-    // more here, same shape). The default grant withholds Network, so the default is a
-    // sandboxed child — minimal authority, safe by default.
+    // Resolve each OS capability from the grant and what this host can enforce, recording an
+    // outcome per capability. The default grant withholds Network, so the default is a
+    // sandboxed child: minimal authority, safe by default.
     {
         using Outcome = CapabilityResolution::Outcome;
         CapabilityResolution net;
@@ -891,10 +849,9 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
             }
             link->cg_caps = caps;
             link->cg_leaf = "zen-weave-" + std::to_string(g_leaf_counter++);
-            // Built from what a leaf will ACTUALLY impose, not from the computed caps: where a
-            // controller is not delegated, create_leaf never writes that dimension's cap, so
-            // the note must say it is uncapped, not claim a cap it never set (audit F-20 — the
-            // honesty lattice's one absolute rule — applied to BOTH memory and pids).
+            // Built from what a leaf will actually impose, not from the computed caps: where
+            // a controller is not delegated, create_leaf writes no cap for it, so the note
+            // says that dimension is uncapped rather than claiming a cap it never set.
             rc.note = resource_note(caps, cgroup_memory_available(), cgroup_pids_available());
         } else if (dev_mode_) {
             rc.outcome = Outcome::Uncontained;
@@ -1026,13 +983,10 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         if (!a.ok()) {
             return; // gate-refused (malformed/hostile child output) -> drop
         }
-        // The sender is stamped from the connection (link.id), never from the wire —
-        // the EmitRole frame carries no sender field. The reply address of a role-send
-        // (a request to a broker) is ALWAYS the stamped sender: a child-supplied
-        // reply_to is ignored, so a mod cannot make a broker reply to another
-        // (guessable) WeaveId — a confused deputy that would reintroduce a sender-like
-        // field a mod could fiddle with. send_as_to_role then authorizes by role at
-        // delivery (Part A).
+        // The sender is stamped from the connection (link.id); the EmitRole frame carries no
+        // sender. A role-send's reply address is always the stamped sender and a child's
+        // reply_to is ignored, so a mod cannot make a broker reply to another WeaveId (a
+        // confused deputy). send_as_to_role then authorizes by role at delivery.
         (void)reply_to; // reserved in the frame; not trusted for routing a role-send reply
         loom::Message msg(std::move(a).value(), loom::WeaveId{}, link.id, correlation);
         (void)bus_.send_as_to_role(link.id, std::string(role), std::move(msg));
@@ -1215,8 +1169,7 @@ std::string IsolationHost::containment(const std::string& name) const {
             ? "isolated (process boundary); quarantined: dead after exhausting reloads."
             : "isolated (process boundary): crash-contained, cannot corrupt host memory.";
 
-    // Generated from what was ACTUALLY imposed, iterated per capability — never a
-    // hardcoded single-capability claim. B4's second capability needs no change here.
+    // Generated from what was actually imposed, per capability, never a hard-coded claim.
     std::string body;
     for (const CapabilityResolution& r : link.resolutions) {
         body += " " + describe_resolution(r) + ".";

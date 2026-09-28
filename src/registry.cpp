@@ -24,20 +24,11 @@ SchemaConflict::SchemaConflict(std::string name, std::uint32_t version, ContentI
 
 namespace detail {
 
-/// THE TWO HALVES, AND WHY THEY ARE SEPARATE.
-///
-/// `current` is the published immutable snapshot: what readers traverse
-/// lock-free, and the only thing `lookup` can see. `claims` is the private
-/// bookkeeping that decides how long an entry stays in it.
-///
-/// Keeping the counts OUT of the published map is what makes a shared schema
-/// cheap. Two weaves that both accept `Greet v1` produce two claims and ONE
-/// population — and the second claim copies nothing, because the snapshot did
-/// not change. If the count lived in the snapshot, every claim and every release
-/// would be a whole-map copy, which is the cost claim-scoped retention narrows.
-///
-/// Invariant: the key sets of `current` and `claims` are equal, and every count
-/// is >= 1. An entry reaching zero leaves both, together, in one publication.
+/// Two halves: `current` is the published immutable snapshot readers traverse lock-free, the
+/// only thing `lookup` sees; `claims` is the private bookkeeping of how long an entry stays.
+/// Counts stay out of the published map, so a second claim on a shared schema copies nothing.
+/// Invariant: the key sets of `current` and `claims` are equal, and every count is >= 1; an
+/// entry reaching zero leaves both together, in one publication.
 struct RegistryCore {
     using Key = SchemaKey;
     using Map = std::map<Key, std::shared_ptr<const Schema>>;
@@ -130,13 +121,10 @@ struct RegistryCore {
         }
     }
 
-    /// Drop these claims and, for every schema whose last one this was, remove
-    /// it from lookup — in ONE publication however many schemas that is.
-    ///
-    /// Everything that can throw (the tally, the snapshot copy) happens before
-    /// anything is mutated, and the commit below allocates nothing. So a caller
-    /// that swallows an exception here gets claims retained, never a Registry
-    /// whose two halves disagree.
+    /// Drop these claims and remove from lookup every schema whose last claim this was, in one
+    /// publication. Everything that can throw happens before anything is mutated and the commit
+    /// allocates nothing, so a caller that swallows an exception keeps its claims and never
+    /// sees the two halves disagree.
     void release(const std::vector<Key>& keys) {
         if (keys.empty()) {
             return;

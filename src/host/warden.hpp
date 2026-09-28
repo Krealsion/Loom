@@ -4,52 +4,12 @@
 #ifndef ZEN_HOST_WARDEN_HPP
 #define ZEN_HOST_WARDEN_HPP
 
-// THE HAND THAT INSTALLS WHAT A PERSON DECIDED.
-//
-// The supplied host keeps its standing decisions in a file (host/authority.hpp). This
-// weave is the only thing that makes the running bus agree with that file.
-//
-// IT EXISTS BECAUSE THE INSTALL IS A DELIVERY-TIME ACT, not because the host wanted a
-// middleman. `delegate_authority` is reachable only from a live participating Bus — a
-// host's `main()` holds a Switchboard, which mints capabilities, but has no standing to
-// spend one. So the host's administration is an ordinary participant, and an operator's
-// authority change is a message: it shows on the tap, in order, next to the traffic it
-// affects. An invisible host-side mutation would have been simpler to write and
-// impossible to watch.
-//
-// TWO ENTRY POINTS, ONE WRITE PATH (`install`). The operator's `zen.host.AuthoritySync`
-// is one; `adopt()` is the other, called from the kernel door's `LifecycleAdoption`
-// inside the delivery that committed a new incarnation, because that is the only moment
-// early enough for an approved permission to be in force for the weave's first breath.
-// That second one is NOT a message and does not appear on the tap on its own — the LOAD
-// it rides does. It is not a second writer either: the capability, the rules and the
-// decision of what to install are this object's in both cases, and `delegate_authority`
-// is authorized by possession of the capability rather than by who presented it
-// (GATE-05), so the door's Mail spends this warden's authority and nothing else.
-//
-// WHAT IT IS NOT. It is not a Weaver. `loom::Weaver` answers a SUBJECT'S request — one
-// subject, one seat, one pending ask at a time, approve-or-refuse — and the supplied
-// host's need is the other direction: an operator deciding unprompted, and a boot
-// restoring decisions nobody is asking about right now. Mounting both would put two
-// writers on one subject's delegated authority, which is the one thing GATE-05's single
-// write path exists to prevent. A weave that wants to ASK for authority still wants a
-// Weaver, and wiring one beside this is the natural next step — it is a different
-// conversation, not a competing one.
-//
-// WHAT IT CANNOT DO, by construction:
-//   - reach a subject the host never handed it a capability for. There is no message
-//     that adds one; `govern()` is C++ the host calls, out of band.
-//   - exceed what a person wrote. It reads the store and installs exactly that; the
-//     payload carries no rules, so a well-formed forged message can at most re-apply
-//     the file.
-//   - be driven BY A MESSAGE from anyone but the operator seat. Checked against the bus
-//     stamp, like the Weaver checks its own. (`adopt()` is not a message and carries no
-//     seat check: it is host wiring, reachable only from the object the host handed to
-//     `mount_control`, and its subject is the Kernel's own fact about what it just
-//     registered.)
-//   - perform anything on a subject's behalf. It changes what a subject MAY say and
-//     never says anything as one — which is the prompt's rule that an approval must not
-//     silently act as a more powerful identity, kept by having no way to break it.
+// The hand that installs what a person decided: the only thing that makes the running bus agree
+// with the authority store (host/authority.hpp). A participant, because `delegate_authority` is
+// spent from a live delivery, so an operator's change is a message on the tap. One write path
+// (`install`), two entries: the seat's `zen.host.AuthoritySync`, and `adopt()` inside the load
+// (`LifecycleAdoption`). Not a Weaver, which answers a subject's ask: it installs only what the
+// file says, for subjects the host handed it, at the seat's word, and speaks as no subject.
 
 #include "authority.hpp"
 
@@ -65,20 +25,11 @@
 
 namespace loom::host {
 
-/// Make the bus agree with the store, for one artifact.
-///
-/// The payload names WHICH artifact and nothing else: the rules are in the file, and a
-/// message that carried them too would be a second copy of the decision, able to
-/// disagree with the first. "Sync" rather than "grant" is the honest verb — it installs
-/// whatever the file now says, which for a forgotten artifact is nothing at all, and
-/// that is how revoke works.
-/// Hand-written registration blocks, not `ZEN_SHAPE`, for the reason the Manager's
-/// command shapes are hand-written: the macro derives the wire name from the C++ type
-/// name, and these need a PREFIX. `HostAuthoritySync` is a plausible enough name that an
-/// application could one day declare its own — and a `(name, version)` is frozen
-/// globally, so a collision is not a mix-up, it is a refused load for whoever arrives
-/// second. `zen.host.` says whose these are: the supplied host's own vocabulary, not the
-/// substrate's, which is why they are not plain `zen.`.
+/// Make the bus agree with the store, for one artifact. The payload names which artifact and
+/// nothing else: the rules are in the file, and a second copy could disagree. "Sync", not
+/// "grant": for a forgotten artifact it installs nothing, which is how revoke works.
+/// Registered by hand, not `ZEN_SHAPE`, for the prefix: `zen.host.` marks the supplied host's
+/// own vocabulary, so an application's `HostAuthoritySync` cannot collide with it.
 struct HostAuthoritySync {
     std::string artifact;
     using ZenSelf = HostAuthoritySync;
@@ -87,13 +38,9 @@ struct HostAuthoritySync {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(artifact)); }
 };
 
-/// Read back what the BUS will actually decide for one artifact — baseline and
-/// delegated, separately, because the two have different lifetimes and a person
-/// deciding what to revoke needs to know which half a permission is in.
-///
-/// A separate shape from the sync rather than a field on it, for the Weaver's reason:
-/// reading an authority and changing one are different acts, and a shape that did both
-/// depending on a value is a shape that can be mistyped into doing the other.
+/// Read back what the bus will decide for one artifact, baseline and delegated apart, since a
+/// person deciding what to revoke needs to know which half a permission is in. A separate
+/// shape from the sync: reading and changing an authority are different acts.
 struct HostDescribeAuthority {
     std::string artifact;
     using ZenSelf = HostDescribeAuthority;
@@ -139,20 +86,11 @@ public:
         governed_.insert_or_assign(artifact, std::move(authority));
     }
 
-    /// PUT A FRESHLY COMMITTED INCARNATION UNDER ADMINISTRATION AND MAKE THE BUS AGREE
-    /// WITH THE FILE — in one act, inside the delivery that committed it.
-    ///
-    /// The host wires this into the kernel door's `loom::LifecycleAdoption`, which is
-    /// the only moment early enough: everything after it is queue order, and the
-    /// weave's own `zen.Activated` is queued before the operation's answer reaches
-    /// anyone. So an approval a person already made is in force for the incarnation's
-    /// first breath rather than one turn too late.
-    ///
-    /// `mail` belongs to the door, not to this warden, and that is not a second writer:
-    /// `delegate_authority` is authorized by possession of the capability and records
-    /// the caller only for diagnostics (GATE-05), and the capability, the rules and the
-    /// decision of what to install are all still this object's. The write path below is
-    /// literally the same function the operator's own `AuthoritySync` runs.
+    /// Put a freshly committed incarnation under administration and make the bus agree with
+    /// the file, in one act, inside the delivery that committed it (`LifecycleAdoption`), the
+    /// only moment before the weave's own `zen.Activated`. `mail` is the door's, and that is
+    /// not a second writer: `delegate_authority` is authorized by the capability (GATE-05), and
+    /// the write path is the same function the seat's `AuthoritySync` runs.
     Installed adopt(Mail& mail, const std::string& artifact, GrantAuthority authority) {
         govern(artifact, std::move(authority));
         return install(mail, artifact);

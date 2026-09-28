@@ -4,57 +4,12 @@
 #ifndef ZEN_RUNS_RUN_MANAGER_HPP
 #define ZEN_RUNS_RUN_MANAGER_HPP
 
-// THE RUN MANAGER: named runs of editable tools, owned while the host that loaded it lives.
-//
-// An ordinary loadable weave (`loom-runs`, exported by runs_weave.cpp). A session host boots it
-// like any artifact, the operator approves it like any artifact, and it holds the office
-// `loom.runs` (zen/runs/vocabulary.hpp says what it answers). It is task policy, not host
-// authority: it cannot admit anybody to the bus. For each run it asks the session door to expect
-// one worker connection -- the credential's SHA-256 and the rules to grant, which the door
-// attenuates to this manager's OWN approved authority -- and only once the door has agreed does it
-// start the worker process. The worker is then its own session, the actor of its own asks.
-//
-// WHAT IT OWNS, AND WHERE IT KEEPS IT:
-//   in memory   every run of this lifetime: its view (`Run`), its process, its standing control
-//               question, the Start answer it still owes a client
-//   on disk     each run's directory, `runs/<lifetime prefix>-<name>/`: the package SNAPSHOT the
-//               worker executes, the request, the worker's output, `out/` for its artifacts, and
-//               `run.json` -- the run's record, rewritten at every change and read back through
-//               the gate by `Past`. A record is evidence of what happened, never live state.
-//
-// WHAT IT NEVER DOES: resume anything across a host restart, resend anything a worker asked, or
-// believe a report it cannot attribute. A report counts only from the session the door admitted
-// for that run (the bus stamps the sender); a run's name in a payload is data. A connection
-// notice counts only from the door that answered this manager's own registration.
-//
-// LIFETIMES. The host lifetime comes from the door's own published record (`session.json`,
-// written before anything booted); every handle names it, and a handle from another lifetime is
-// refused by name, never looked up as if it were this one's.
-//
-// THREE THINGS THIS MANAGER KEEPS APART, because a client that cannot tell them apart cannot act
-// (`zen/runs/vocabulary.hpp` says what each one's words mean):
-//
-//   the VERDICT       `state`. The tool's own conclusion, or the manager's for it. Settled once.
-//                     A worker that died before reporting one is a `crashed` run, and stopping
-//                     what it left behind afterwards does not turn that into a cancellation.
-//   the EXECUTION     `process`. Owned from spawn until release, and NOT ended by the verdict:
-//                     a worker that returned while a thread or a child of its own still runs is
-//                     a live execution -- it counts against `kMaxActive`, `Cancel` stops it, and
-//                     `Release` refuses until it is stopped. Stopping it never edits the verdict.
-//                     Whether there is a WORKER to ask is a separate question again, asked of
-//                     the connection and the leader (`worker_present`) and never of a session
-//                     number the run once had; a cancellation is a request only while one is
-//                     there to hear it, and otherwise it is a stop.
-//   the EVIDENCE      `record`. Whether `run.json` holds this view -- EVERY change to it, not
-//                     just the interesting ones. A save that fails leaves the LAST VALID record
-//                     where it is, says so in the live view, and changes no verdict; the next
-//                     change to the run tries again, and nothing loops.
-//
-// AND ONE RULE ABOUT EVIDENCE OF THE OPERATING SYSTEM: this manager writes down what it read.
-// `exited` and `killed` say the EXECUTION is over and carry the LEADER's own exit code, and
-// neither is written before the group has been seen to go and a code has been read. Not at a
-// shutdown either: it waits a bounded moment for the groups it just stopped and then says
-// `killing` rather than reporting an end it did not see, because a leader's exit is not one.
+// The run manager: named runs of editable tools, owned while the host that loaded it lives. An
+// ordinary loadable weave (`loom-runs`) holding office `loom.runs` (zen/runs/vocabulary.hpp),
+// and task policy, not host authority: the session door admits each worker, attenuated to this
+// manager's own approved authority, before the worker starts. It never resumes across a host
+// restart or believes a report it cannot attribute. Verdict, execution and evidence are kept
+// apart: docs/guides/sessions.md#three-things-a-run-says-and-why-none-stands-for-another
 
 #include "catalog.hpp"
 #include "process.hpp"
@@ -123,15 +78,11 @@ public:
     /// the manager still holds, and normally almost none of it is used.
     static constexpr int kShutdownObserveMs = 2000;
 
-    /// THE ONE PLACE THAT NAMES AN EXECUTION THIS MANAGER HAS SEEN END (`zen/runs/vocabulary.hpp`),
-    /// so that a reap and a shutdown cannot drift apart. Every caller has already established
-    /// that THE WHOLE OWNED EXECUTION is over -- the leader and anything it left in its group --
-    /// because that is the only thing these three words may be written after.
-    ///
-    /// `code_known` is about the LEADER and nothing else: `unknown` is the refusal to name a
-    /// code for an execution that really has ended, never a place to file an end nobody saw.
-    /// `by_us` is whether a stop of this manager's is what it ended under, counting one issued
-    /// earlier as well as one issued now.
+    /// The one place that names an execution this manager has seen end (zen/runs/vocabulary.hpp),
+    /// so a reap and a shutdown cannot drift apart. Every caller has established that the whole
+    /// owned execution, leader and group, is over. `code_known` is about the leader alone:
+    /// `unknown` refuses to name a code for an execution that did end, never files an end nobody
+    /// saw. `by_us`: whether it ended under a stop of this manager's, issued now or earlier.
     static const char* ended_execution_word(bool code_known, bool by_us) {
         if (!code_known) {
             return "unknown";
@@ -603,10 +554,9 @@ public:
             r->view.asks.push_back(a.ask);
         }
         (void)mail.answer(Ack{});
-        // THE VIEW JUST CHANGED, so the evidence has to answer for it. `record` promises that
-        // `run.json` holds THIS view; a mutation that skipped the write left that promise false
-        // for as long as the tool stayed quiet -- with no fault, and nothing to notice it. Like
-        // every other change to a run, this one is saved, or the record says it is behind.
+        // The view just changed, so the evidence has to answer for it: `record` promises that
+        // `run.json` holds this view, and a quiet tool gives nothing else a reason to write it.
+        // Like every other change to a run, this one is saved, or the record says it is behind.
         write_record(*r);
     }
 
@@ -703,20 +653,11 @@ public:
         }
     }
 
-    /// A CANCELLATION IS A REQUEST while somebody is still there to hear it: the worker is told
-    /// through its standing question and may clean up, and the run is `cancelled` once its
-    /// process has ended. `force` ends it now.
-    ///
-    /// WHO IS THERE TO HEAR IT is asked of the worker and the execution, never of a session
-    /// number this run once had or of whether a verdict happens to be in (`worker_present`).
-    /// A worker this manager has already watched go -- its connection ended, its leader exited
-    /// -- cannot clean anything up, so a cancellation aimed at its run stops the execution it
-    /// left behind outright. That is not a second verdict: what the worker did remains what it
-    /// did, and `reap` records the crash and the stop as the two separate things they are.
-    ///
-    /// AFTER THE VERDICT IT IS NOT A REQUEST either, for the same reason: the tool has already
-    /// concluded and its standing question is spent. A run whose EXECUTION is still alive is
-    /// stopped outright, and the verdict is left exactly as the tool gave it.
+    /// A cancellation is a request while somebody is still there to hear it: the worker is
+    /// told through its standing question and may clean up, and the run is `cancelled` once its
+    /// process has ended; `force` ends it now. Who is there is asked of the worker and the
+    /// execution (`worker_present`). A worker already gone, or one whose verdict is in, cannot
+    /// clean up: the execution it left is stopped outright, and the verdict stays as it was.
     void on(const Cancel& c, Mail& mail) {
         reap_all(mail);
         RunRecord* r = by_handle(c.lifetime, c.name, mail);
@@ -829,13 +770,11 @@ public:
         (void)mail.answer(out);
     }
 
-    /// A run's record as this manager wrote it (`run.json`), read back through the gate.
-    ///
-    /// A RECORD WRITTEN BY AN EARLIER MANAGER is still evidence, and is still read. It claims
-    /// the shape of its own day, so the gate refuses it by identity; it is then read FORWARD
-    /// (`read_forward`) and admitted through the same gate as any fresh record -- structure,
-    /// types and all. Nothing is guessed about what it does not say: a field it has no word for
-    /// takes that field's documented default, and `record` becomes `unknown`.
+    /// A run's record as this manager wrote it (`run.json`), read back through the gate. A
+    /// record an earlier manager wrote claims the shape of its day, so the gate refuses it by
+    /// identity; it is then read forward (`read_forward`) and admitted through the same gate.
+    /// A field it has no word for takes that field's documented default, and `record` becomes
+    /// `unknown`.
     static std::optional<Run> read_record(const std::filesystem::path& file) {
         std::ifstream in(file, std::ios::binary);
         if (!in) {
@@ -1150,15 +1089,10 @@ private:
     /// group this manager owns? Asked of the operating system, never inferred from the verdict.
     static bool alive(RunRecord& r) { return r.process.alive(); }
 
-    /// IS THERE A WORKER TO ASK? What a cooperative cancellation needs: a session the door
-    /// admitted, a connection that has not ended, and a leader this manager has not watched
-    /// exit. Each is a fact about NOW. A session id is not -- it is the historical number of a
-    /// worker that may be long gone, and routing a request by it is how a dead worker's run
-    /// became uncancellable.
-    ///
-    /// A worker that is admitted and has not asked its standing question yet IS present: it
-    /// will ask, and `on(Control&)` hands it the cancellation then. Absence is something this
-    /// manager has observed, never something it inferred from silence.
+    /// Is there a worker to ask? A session the door admitted, a connection that has not ended,
+    /// and a leader this manager has not watched exit: facts about now, never a session number
+    /// a gone worker once had. An admitted worker that has not asked its standing question yet
+    /// is present: `on(Control&)` hands it the cancellation then.
     static bool worker_present(RunRecord& r) {
         return r.session != 0 && !r.closed && !(r.process.started() && r.process.ended());
     }
@@ -1361,31 +1295,12 @@ private:
                    : std::string("with a code this manager could not read");
     }
 
-    /// WHAT A RECORD MAY SAY ABOUT AN EXECUTION AS THE HOST ENDS, and what it must not.
-    ///
-    /// `exited` and `killed` promise TWO things (zen/runs/vocabulary.hpp): that the execution is
-    /// over, and the LEADER's own exit code. Neither is written until this manager has observed
-    /// both. THE EXECUTION IS THE GROUP, NOT ITS LEADER -- a worker that exited leaving a child
-    /// of its own has ended nothing -- so the end this waits for is `wait_for_group_end`'s and
-    /// never `wait_for_end`'s: the leader's end can be true the instant the stop is issued, and
-    /// a record that outlives its host would then carry a claim nobody watched come true.
-    ///
-    /// It asks for a bounded moment (`observe_ms`, what is LEFT of the shutdown's one shared
-    /// budget) and then says what it actually knows: `killing` when the stop it issued has not
-    /// been seen to take the group, `unknown` when the execution is over and no code was ever
-    /// readable. Neither promises a code, so none is invented -- a record that outlives its host
-    /// is the only evidence left, and a default zero in it is a claim nobody made.
-    ///
-    /// AND A STOP THAT WAS NOT ISSUED CHANGES NOTHING. If nothing was stopped and the group is
-    /// still there, the run is exactly what it was -- `running`, or `descendants` -- because a
-    /// termination that did not happen is not evidence that anything ended.
-    ///
-    /// A LEADER'S CODE IS KEPT THE MOMENT IT IS READ, and a leader whose code is already known
-    /// keeps that. Stopping the group a leader left behind is not a new result for the leader;
-    /// this manager never substitutes a descendant's termination for it, never says no code was
-    /// read when one was -- and never throws away one it has just read because the execution it
-    /// belongs to is not over, which would leave the note above talking about a default nobody
-    /// observed. Returns whether the view moved.
+    /// What a record may say about an execution as the host ends. `exited` and `killed` promise
+    /// the execution is over and carry the leader's own exit code, so neither is written until
+    /// both are observed; the execution is the group (`wait_for_group_end`), not the leader.
+    /// After a bounded moment (what is left of `observe_ms`) it says what it knows: `killing`
+    /// if the stop has not taken the group, `unknown` if it is over with no readable code. A
+    /// stop not issued changes nothing; a leader's code is kept once read. True if the view moved.
     bool end_execution(RunRecord& r, bool stopped, int observe_ms) {
         const std::string was = r.view.process;
         const std::int64_t code_was = r.view.exit_code;
@@ -1525,15 +1440,11 @@ private:
         return !out.fail();
     }
 
-    /// THE RUN'S RECORD, rewritten whole through a temporary file beside it and then put in
-    /// place as one step. Returns whether it was saved.
-    ///
-    /// A SAVE THAT FAILS IS NOT A VERDICT. The tool's `state` is untouched, the LAST VALID
-    /// record is left exactly where it is, and the live view says the evidence on disk is stale
-    /// and why -- which a client reads from the manager, never from the file that would not
-    /// open. THE RETRY POLICY IS TWO SENTENCES: the next change to this run tries again, and a
-    /// run whose record is stale is tried once more whenever a client asks this manager about
-    /// its runs (`reap_all`). Nothing retries on its own, nothing loops, and nothing waits.
+    /// The run's record, rewritten whole through a temporary file beside it and put in place as
+    /// one step; returns whether it was saved. A failed save is not a verdict: `state` is
+    /// untouched, the last valid record stays, and the live view says the evidence is stale and
+    /// why. The next change to this run tries again, and so does a client's next question about
+    /// its runs (`reap_all`); nothing retries on its own.
     static bool write_record(RunRecord& r) {
         const std::filesystem::path file = std::filesystem::path(r.view.directory) / "run.json";
         const std::filesystem::path tmp = file.string() + ".tmp";

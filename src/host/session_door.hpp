@@ -4,41 +4,12 @@
 #ifndef ZEN_HOST_SESSION_DOOR_HPP
 #define ZEN_HOST_SESSION_DOOR_HPP
 
-// THE SESSION'S DOOR: who may attach to a persistent host, as whom, and under what grant.
-//
-// `loom-host --serve <dir>` keeps a host alive for clients that come and go. Everything a client
-// or a run worker does reaches this host through ONE loopback listener, and this participant owns
-// it: the bridge server (`zen/bridge/server.hpp`), the admission decision over every Hello, the
-// lifetime id, and the office `loom.session` (`zen/session/vocabulary.hpp`) that describes the
-// session and ends it. It is host wiring, like the warden and the links -- minimal hosting and
-// authority, never task policy. What runs exist, which tools they execute and what a run is doing
-// belong to a run manager, an ordinary artifact the operator approved; this door only admits the
-// one connection that manager asked for, under no more than the manager itself may say.
-//
-// THREE KINDS OF CONNECTION, DECIDED BY WHAT THEY PRESENT, NEVER BY WHAT THEY CLAIM:
-//
-//   the owner's key     a CLIENT: may describe and end the session, speak the run manager's client
-//                       vocabulary, and read the scoped history -- exactly those shapes, to exactly
-//                       those offices. No tap: a client is not given the whole bus to watch.
-//   a run credential    a RUN WORKER: one-time, expected by a registrar that told this door the
-//                       credential's SHA-256 and the rules to grant. Admitted once, as `run:<name>`.
-//   anything else       refused, in one sentence that does not say which guess came closest.
-//
-// ATTENUATION IS THE DOOR'S, AND IT IS SEMANTIC. A registrar may ask for a rule only when its own
-// approved authority -- the operator's standing decision for the artifact the warden administers
-// it as -- already CONTAINS that rule (`LiveAuthority::contains`), or when the rule addresses an
-// office the registrar itself holds (a worker reporting to its manager threatens no third party).
-// Anything else refuses the whole registration, naming the rule and the decision that would allow
-// it: a run is never quietly granted less than it was started for, and never more than its
-// manager holds. A run label is not attenuation; this is.
-//
-// A GRANT IS NOT A LEASE, AND THIS DOOR SAYS WHAT THAT MEANS HERE. A worker's session keeps its
-// admission grant until its socket ends. What the door does add: when the registrar of a run is no
-// longer on the bus, every session it registered is severed at the next service -- a manager that
-// dies does not leave workers speaking on its authority -- and a registrar's `ForgetRun` severs one.
-//
-// ENCODING. Every session this door admits speaks Zen's compat JSON envelope (`PayloadEncoding::
-// Compat`), so a client or a worker written in Python needs no copy of the canonical binary.
+// The session's door: who may attach to a persistent host (`loom-host --serve`), as whom, and
+// under what grant. Host wiring, never task policy: it owns the one loopback listener, the
+// admission of every Hello, the lifetime id and office `loom.session`. The owner's key admits
+// a client with exactly the client vocabularies and no tap; a registered one-time credential
+// admits a run worker with only rules its registrar's approved authority contains; anything
+// else is refused. A registrar leaving the bus severs its workers; every session is compat.
 
 #include "authority.hpp"
 #include "secure_random.hpp"

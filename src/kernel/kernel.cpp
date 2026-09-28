@@ -40,9 +40,9 @@ KernelLifetimeCounts& ledger() noexcept {
 
 void* lib_open(const std::string& path, std::string& error) {
 #if defined(_WIN32)
-    // The development/demo backend (see Kernel::containment_note). LoadLibraryA
-    // is ANSI: a non-ANSI path is a known, named limitation (a LoadLibraryW +
-    // UTF-8→UTF-16 conversion is the follow-on), not a silent one.
+    // The Windows backend (see Kernel::containment_note). LoadLibraryA is ANSI, so a non-ANSI
+    // path is a named limitation rather than a silent one; LoadLibraryW with a UTF-8 to UTF-16
+    // conversion would lift it.
     void* h = static_cast<void*>(::LoadLibraryA(path.c_str()));
     if (h == nullptr) {
         error = "LoadLibrary failed (error " + std::to_string(::GetLastError()) +
@@ -195,21 +195,11 @@ struct HostCtx {
     loom::WeaveId self;
 };
 
-/// Report a seam rejection to the host's diagnostics, and return the status the
-/// library was always given. ONE place, so no entry point can quietly forget:
-/// every `resolve_schema`/`admit` failure below routes through here.
-///
-/// `target` is the invalid id wherever the emission named no target (a
-/// publication, an answer whose conversation partner the seam never looked up) —
-/// see RefusalReason::SeamUnresolved on why a fabricated one would be worse than
-/// the silence this replaces.
-///
-/// `to_role` is the office the library NAMED, empty on every door that named
-/// none. It is not the fabrication MSG-08 forbids and is the opposite of one:
-/// the two role doors are handed the slot as a string and used to drop it, so
-/// the diagnostic said `refused StartTimer` with no word for where it was going.
-/// A role is not resolved to a weave here — that is the resolution that never
-/// happened — and this reports the address, never an arrival.
+/// Report a seam rejection to the host's diagnostics, and return the status the library is
+/// given: the one place, so every `resolve_schema`/`admit` failure below reports. `target` is
+/// invalid wherever the emission named no target (see RefusalReason::SeamUnresolved: a
+/// fabricated one would be worse). `to_role` is the office the library named, empty on every
+/// door that named none: the address it was going to, never a resolution (MSG-08).
 ZenStatus seam_reject(HostCtx* h, const loom::Unverified& u, loom::WeaveId target,
                       const loom::Refusal& refusal, std::string_view to_role = {}) {
     h->sb->note_seam_refusal(h->self, target, u.claimed_name(), u.claimed_version(), refusal,
@@ -218,36 +208,12 @@ ZenStatus seam_reject(HostCtx* h, const loom::Unverified& u, loom::WeaveId targe
                                                                  : ZEN_ERR_REFUSED;
 }
 
-/// A PUBLICATION THAT RESOLVES TO NOTHING IS UNHEARD, NOT REFUSED (MSG-08).
-///
-/// The two publication doors do not call `seam_reject` for an unresolvable
-/// shape, and the reason is an equivalence the Switchboard can be read off
-/// directly rather than a judgement about how alarming the line looks.
-///
-/// A weave's accept-set is claimed in the schema registry for exactly as long as
-/// its record exists (`register_weave`, LIFE-08), and `fanout` selects
-/// recipients by that same (name, version). So an unresolvable shape has NO live
-/// accepter by construction: `resolve_schema` returning null PROVES the
-/// publication would have reached zero recipients, which is what a native
-/// publication into a world with no listeners does every day — silently, with no
-/// seq, no journal slot and no event. Reporting one tier and not the other made
-/// the seam LOUDER than the native floor MSG-08 set out to match, and the loud
-/// half was the case where nothing had gone wrong.
-///
-/// Deliberately NOT extended to the gate refusal below it. There the shape DID
-/// resolve, so somebody accepts it and would have been handed these bytes; the
-/// payload is malformed and the delivery that should have happened did not. That
-/// is a real failure on a publication and it stays loud.
-///
-/// Nor to any addressed door. A send, a role send, an answer and an office send
-/// each named somewhere they expected to arrive, so zero arrivals is a failure
-/// there whatever the reason — that is the P-011 case, and it is untouched.
-///
-/// The library learns exactly what it learned before: the status is unchanged,
-/// and only the host's own diagnostic is withheld. `Bus::publish`'s recipient
-/// count deliberately does not cross this seam anyway (`export.hpp`), and the
-/// office door's `recipients_out` is already 0 on this path — which is the
-/// truthful answer to the question it asks.
+/// A publication that resolves to nothing is unheard, not refused (MSG-08). A weave's
+/// accept-set is claimed for exactly as long as its record exists (LIFE-08) and `fanout`
+/// selects by that (name, version), so `resolve_schema` returning null proves zero
+/// recipients, which a native publication to no listeners meets silently too. A gate refusal
+/// after resolution, and every addressed door, stay loud: somebody should have received it.
+/// The library's status is unchanged; only the host's diagnostic is withheld.
 constexpr ZenStatus kUnheardPublication = ZEN_ERR_UNKNOWN_SCHEMA;
 
 /// The two seam refusals, named once.
@@ -262,25 +228,11 @@ inline loom::Refusal seam_gate_refused(const loom::Admission& a) {
 
 // ---- one open dynamic library, owned by everybody who could still need it ----
 
-/// ONE OPEN LIBRARY, CLOSED EXACTLY ONCE, BY THE LAST HOLDER TO LET GO.
-///
-/// The forbidden outcomes this exists to make unrepresentable rather than merely
-/// avoided: closing twice, and closing while code from the library could still
-/// execute. Both used to be questions about the ORDER of statements in the
-/// Kernel — destroy the instance, *then* close — which is a rule every future
-/// call site has to remember. It is now a question about who is still holding a
-/// `shared_ptr`, which nobody has to remember:
-///
-///   the Kernel's Loaded record   holds one while it owns the artifact name
-///   the HostAdapter              holds one for exactly as long as an instance
-///                                built by that library exists
-///
-/// So the close cannot precede the instance's destruction (the adapter's share
-/// outlives its own destructor body), and cannot happen twice (a refcount reaches
-/// zero once).
-///
-/// Deliberately neither copyable nor movable: this object IS the handle's
-/// identity, and "the same library, at a different address" has no meaning.
+/// One open library, closed exactly once, by the last holder to let go: the Kernel's Loaded
+/// record while it owns the artifact name, and the HostAdapter while an instance built by the
+/// library exists. So the close cannot precede the instance's destruction and cannot happen
+/// twice, whatever order the callers use. Neither copyable nor movable: this object is the
+/// handle's identity.
 class LoadedLibrary {
 public:
     explicit LoadedLibrary(void* handle) noexcept : handle_(handle) {}
@@ -452,13 +404,10 @@ static void zen_host_release_deferred(void* ctx, uint64_t token) {
     h->gated->release_deferred(loom::DeferredAnswer::from_host_token(token));
 }
 
-// Deliberate office authorship (v5). Same shape as every outbound door: the
-// payload bytes are admitted through the gate host-side, then routed through the
-// gated WeaveBus — which stamps the loaded weave's id from the CONNECTION and
-// asks the Switchboard's authorship door to verify membership. The library
-// requested "speak as R"; the host decided whether that is true. An invalid
-// result maps to the precise status, so a loaded office learns "you do not hold
-// that role" rather than a generic failure.
+// Deliberate office authorship. As every outbound door: the payload is admitted host-side,
+// then routed through the gated WeaveBus, which stamps the loaded weave's id from the
+// connection and asks the Switchboard's authorship door to verify membership. An invalid
+// result maps to the precise status, so a loaded office learns "you do not hold that role".
 static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint64_t target,
                                       std::uint64_t reply_to, std::uint64_t correlation,
                                       const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
@@ -544,7 +493,7 @@ static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::ui
     return ZEN_OK;
 }
 
-// ---- Senses (v6) -----------------------------------------------------------
+// ---- Senses ----------------------------------------------------------------
 //
 // Same shape as every other outbound door: the value crosses as bytes, the HOST
 // admits it through the one gate, and the host — not the library — knows which
@@ -570,13 +519,10 @@ static ZenStatus sense_status_of(loom::SenseRefusal why) {
     return ZEN_OK;
 }
 
-/// Fill the C-layout authorship from the host's own reading, and write the
-/// AUTHORED OFFICE NAME into the library's own sink — exactly, at whatever
-/// length it is. The office deliberately does not travel in `ZenSenseBy`: a
-/// fixed buffer there truncated silently, which let a dynamic observation report
-/// an office identity that was never authored (see ZenSenseBy). A personal claim
-/// leaves the sink untouched, so "nothing written" means "no office", which no
-/// real role name can imitate.
+/// Fill the C-layout authorship from the host's own reading, and write the authored office
+/// name into the library's own sink, exactly, at whatever length it is (see ZenSenseBy: a
+/// fixed buffer would truncate). A personal claim leaves the sink untouched, so "nothing
+/// written" means "no office", which no real role name can imitate.
 static void fill_sense_by(const loom::SenseReading& r, ZenByteSink office_sink, ZenSenseBy* by) {
     if (by != nullptr) {
         *by = ZenSenseBy{};
@@ -643,10 +589,9 @@ static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
     return r.accepted ? ZEN_OK : sense_status_of(r.why);
 }
 
-// A loaded claimant's joint OFFER (ABI v8). The bytes are admitted host-side
-// exactly as a claim's are, then handed to the gated bus, which checks the
-// operation, the exact claimant and the bound revision
-// (docs/reference/joint-publication.md).
+// A loaded claimant's joint offer. The bytes are admitted host-side exactly as a claim's
+// are, then handed to the gated bus, which checks the operation, the exact claimant and the
+// bound revision (docs/reference/joint-publication.md).
 static ZenStatus zen_host_sense_offer(void* ctx, std::uint64_t op, const std::uint8_t* payload,
                                       std::size_t len) {
     auto* h = static_cast<HostCtx*>(ctx);
@@ -729,19 +674,11 @@ public:
           claims_(std::move(claims)), emits_(std::move(emits)),
           state_schema_(std::move(state_schema)), bus_(bus) {}
 
-    /// THE ONE PLACE A LIVE DYNAMIC ARTIFACT ENDS — whoever caused it.
-    ///
-    /// The Switchboard owns this object, so this runs when the Kernel unloads,
-    /// when a host hands the adapter back and drops it, and when a prepared
-    /// replacement aborts deep inside a delivery and discards its candidate. That
-    /// last one is why the notification lives here and not in a hook the
-    /// Switchboard calls: the bus does not know a Kernel exists, and the only
-    /// thing that is true in every case is that this destructor ran.
-    ///
-    /// ORDER, and it is guaranteed by the language rather than by care: the body
-    /// destroys the instance and tells the Kernel to release the artifact record;
-    /// `lib_` — a MEMBER — is released afterwards. So the library cannot close
-    /// before the instance built from it is gone, whichever share is the last.
+    /// The one place a live dynamic artifact ends, whoever caused it: the Kernel unloading, a
+    /// host dropping the adapter, or a prepared replacement discarding its candidate inside a
+    /// delivery. The bus does not know a Kernel exists, so the notification lives here. The
+    /// body destroys the instance and releases the artifact record; `lib_`, a member, is
+    /// released afterwards, so the library cannot close before its instance is gone.
     ~HostAdapter() override {
         destroy_instance(abi_, instance_);
         if (owner_ != nullptr) {
@@ -772,34 +709,22 @@ public:
         abi_ = new_abi;
         instance_ = new_instance;
         lib_ = std::move(new_lib);
-        // THE SUCCESSOR'S DECLARED SETS ARE ITS OWN. The accept-set was required
-        // equal before this ran; the claim-set and emit-set may differ, and the
-        // bus re-reads both from this adapter at `swap_state` (SENSE-04's "the
-        // claim-set belongs to the code"). Keeping the predecessor's lists here
-        // would have the bus describe code that is gone.
+        // The successor's declared sets are its own. The accept-set was required equal
+        // before this ran; the claim-set and emit-set may differ, and the bus reads both again
+        // at `swap_state` (SENSE-04: the claim-set belongs to the code).
         claims_ = std::move(new_claims);
         emits_ = std::move(new_emits);
-        // A successor reloaded over a predecessor that could not apply a published
-        // value is SHOWN that value again (`Switchboard::swap_state` returns it to
-        // Pending). Nothing is inherited here for that to work: every image this
-        // host admits is v8 and carries the `claim_published` slot, which is what
-        // the version gate at load establishes (KERN-04).
+        // A successor reloaded over a predecessor that could not apply a published value is
+        // shown it again (`Switchboard::swap_state`); every image the version gate admits
+        // carries the `claim_published` slot (KERN-04).
     }
 
-    /// The host's half of the showing (ABI v8): the published value crosses as
-    /// bytes the library re-admits against its own claim-set. No host table
-    /// crosses: this is not a delivery.
-    ///
-    /// THE STATUS IS NOT DISCARDED, and it is mapped exactly as the slot's
-    /// comment in zen/kernel/abi.h says: ZEN_OK is Applied; ZEN_CLAIM_DECLINED is
-    /// Declined -- the library, functioning, keeps state of its own and is not
-    /// held; every other status, negative or positive, is Failed, and the
-    /// Switchboard records it against exactly this instance and publication. A
-    /// descriptor that carries no slot (a hand-written v8 table with a NULL door)
-    /// answers Failed too: a value a weave cannot be shown is a value it did not
-    /// apply, never one it silently did. A host that discarded the status once
-    /// turned a library whose hook threw into a weave that stood silently behind a
-    /// claim it never applied; that is the defect this mapping exists to refuse.
+    /// The host's half of the showing: the published value crosses as bytes the library
+    /// admits again against its own claim-set; no host table crosses, since this is not a
+    /// delivery. The status is mapped as the slot's comment in zen/kernel/abi.h says: ZEN_OK
+    /// is Applied, ZEN_CLAIM_DECLINED is Declined, every other status is Failed, recorded
+    /// against this instance and publication. A descriptor with a NULL slot answers Failed
+    /// too: a value a weave cannot be shown is a value it did not apply.
     loom::Weave::PublishedClaim claim_published(const loom::Value& value) override {
         using Answer = loom::Weave::PublishedClaim;
         if (abi_->claim_published == nullptr) {
@@ -821,17 +746,15 @@ public:
         return accepted_;
     }
 
-    /// The declared claim-set the library published in its manifest (v6), so a
-    /// loaded artifact answers "what Senses can you provide?" exactly as a native
-    /// weave does — at load, before it has claimed anything.
+    /// The declared claim-set the library published in its manifest, so a loaded artifact
+    /// answers "what Senses can you provide?" as a native weave does, before it claims anything.
     std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
         return claims_;
     }
 
-    /// The declared emit-set the library published in its manifest (v9), so the
-    /// bus claims a loaded emitter's definitions beside its accept-set exactly as
-    /// it does a native weave's — the same door, the same wall, the same
-    /// discovery answer. What the artifact may SEND is still its grant's alone.
+    /// The declared emit-set the library published in its manifest, so the bus claims a
+    /// loaded emitter's definitions beside its accept-set as it does a native weave's. What the
+    /// artifact may send is still its grant's alone.
     std::vector<std::shared_ptr<const Schema>> emitted_schemas() const override {
         return emits_;
     }
@@ -841,12 +764,10 @@ public:
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_, self_};
-        // BY NAME, in declaration order (KERN-04). Since ABI v7, send_to_role
-        // and office_publish share a type: attempt_out and recipients_out are
-        // both uint64_t*. A designator can still name the wrong function. The
-        // loaded semantic witness distinguishes destination, office provenance
-        // and attempt versus count through this actual host table; the payload
-        // gate cannot distinguish two operations carrying the same shape.
+        // By name, in declaration order (KERN-04). send_to_role and office_publish share a
+        // type (attempt_out and recipients_out are both uint64_t*), so a designator can still
+        // name the wrong function; the loaded semantic witness tells destination, office
+        // provenance and attempt from count through this table. The payload gate cannot.
         // See docs/reference/dynamic-abi.md#constructing-the-tables.
         ZenHostApi api{.ctx                  = &ctx,
                        .send                 = &zen_host_send,
@@ -863,8 +784,8 @@ public:
                        .sense_office_claim   = &zen_host_sense_office_claim,
                        .sense_observe        = &zen_host_sense_observe,
                        .sense_observe_office = &zen_host_sense_observe_office,
-                       // v8: the claimant's joint offer, appended last in
-                       // declaration order. Its type is unique in this table.
+                       // the claimant's joint offer, last in declaration order; its type is
+                       // unique in this table
                        .sense_offer          = &zen_host_sense_offer};
         // Provenance crosses as host-computed facts beside the sender, and it
         // crosses ONE WAY ONLY: the office doors above carry REQUESTS the host
@@ -884,22 +805,15 @@ public:
         case loom::Provenance::Kind::None:
             break;
         }
-        // The authored office (v5): the delivery's STAMPED fact, NUL-terminated
-        // for the seam; NULL means personal speech.
+        // The authored office: the delivery's stamped fact, NUL-terminated for the seam;
+        // NULL means personal speech.
         const std::string authored(in.provenance.authored_role());
-        // The DLL handler's status is CONTAINED, and that is not the same as
-        // discarded (RTH-1). The message was validly delivered and the library's
-        // internal error stays the library's own concern: nothing is refused,
-        // nothing is retried, nothing is translated into a RefusalReason, and the
-        // status is not carried anywhere a weave could read it.
-        //
-        // But it is the ONE PLACE that knows a loaded weave's handler did not
-        // complete - `do_handle` catches every exception at the seam and returns
-        // ZEN_ERR, so the throw the native path re-raises never happens here - and
-        // dropping it meant the bus recorded and announced a plain `Delivered`.
-        // That is a silence wearing a success's clothes, and it is the one thing
-        // an observer most needs not to be told. So the fact crosses back, as a
-        // fact and nothing else, and the Switchboard says `HandlerFailed` instead.
+        // The library handler's status is contained, not discarded. The delivery was valid
+        // and the library's error stays its own: nothing is refused, retried or translated,
+        // and no weave can read the status. But `do_handle` catches every exception at the
+        // seam and returns ZEN_ERR, so this is the one place that knows the handler did not
+        // complete: the fact crosses back and the Switchboard says `HandlerFailed`, not
+        // `Delivered`.
         const ZenStatus st =
             abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation, prov,
                          in.provenance.attested_sequence(),
@@ -959,8 +873,8 @@ private:
     /// instance pointer it used.
     std::shared_ptr<LoadedLibrary> lib_;
     std::vector<std::shared_ptr<const Schema>> accepted_;
-    std::vector<std::shared_ptr<const Schema>> claims_; ///< the declared claim-set (v6)
-    std::vector<std::shared_ptr<const Schema>> emits_;  ///< the declared emit-set (v9)
+    std::vector<std::shared_ptr<const Schema>> claims_; ///< the declared claim-set
+    std::vector<std::shared_ptr<const Schema>> emits_;  ///< the declared emit-set
     std::shared_ptr<const Schema> state_schema_;
     loom::Switchboard* bus_;
     loom::WeaveId self_{};
@@ -1066,24 +980,12 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     const loom::Value& manifest = a.value();
 
     Manifest result;
-    // EVERYTHING THIS MANIFEST PUBLISHES IS CLAIMED BY `result`, AND ONLY BY IT
-    // (LIFE-08). `reconstruct` is a pure producer: it hands back both the schemas
-    // and the reason the registry still holds them, and it keeps nothing. A
-    // caller that accepts the candidate moves the claim into the record that
-    // owns the artifact; a caller that refuses it drops the Manifest, and the
-    // vocabulary the refused candidate introduced disappears with it.
-    //
-    // Referenced (nested component) schemas first — the manifest is
-    // self-contained, so a library whose doors, state, claims or emits nest a
-    // shape (a List<Pos>, a Pos field) brings that shape with it. Same registry,
-    // same agreement wall: a component conflicting with what another LIVE
-    // library claims refuses the load — and so does a manifest that carries two
-    // definitions of one component itself (`Box { Part {a} }` beside `Box2
-    // { Part {a, b} }`): the second `Part v1` meets the first at this door and
-    // the artifact is refused with the shape named, rather than loading with
-    // whichever definition came first substituted into the other's owner.
-    // A native weave's declaration meets the same rule on the bus, in
-    // `register_weave`; this registry is where LOADED manifests are decoded.
+    // Everything this manifest publishes is claimed by `result`, and only by it (LIFE-08):
+    // `reconstruct` keeps nothing, so a refused candidate's vocabulary goes with its Manifest.
+    // Referenced components first: a library whose doors, state, claims or emits nest a
+    // shape brings it, and meets the same wall, so a component that conflicts with a live
+    // library's, or a manifest carrying two definitions of one component, is refused with
+    // the shape named. A native weave meets the same rule on the bus, in `register_weave`.
     decode_referenced(manifest, registry_, result.schemas);
     std::vector<std::shared_ptr<const Schema>> vocabulary;
     for (const loom::Cell& c : manifest.get("accepted")->as_list()) {
@@ -1093,10 +995,9 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     }
     result.state = decode_schema(*manifest.get("state")->as_message(), registry_);
     vocabulary.push_back(result.state);
-    // The declared claim-set (v6). Optional: a weave that claims nothing emits no
-    // section, which is a declaration rather than an absence. Claimed through
-    // the same agreement wall, so a Sense shape two libraries disagree about
-    // refuses the load exactly as a message shape does.
+    // The declared claim-set. Optional: a weave that claims nothing emits no section, which
+    // is a declaration rather than an absence. Claimed through the same agreement wall, so a
+    // Sense shape two libraries disagree about refuses the load as a message shape does.
     if (const loom::Cell* claims = manifest.get("claims")) {
         for (const loom::Cell& c : claims->as_list()) {
             auto s = decode_schema(*c.as_message(), registry_);
@@ -1104,11 +1005,10 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
             result.claims.push_back(std::move(s));
         }
     }
-    // The declared emit-set (v9). Optional for the same reason, and claimed
-    // through the same wall for the same reason: a shape this artifact says it
-    // will SEND is a promise about somebody else's door, so its definition is
-    // compared at load, not at the first delivery. It is carried to the adapter
-    // for the bus's own registration and for discovery; no grant is read from it.
+    // The declared emit-set, optional and claimed through the same wall for the same reason:
+    // a shape this artifact says it will send is a promise about somebody else's door, so its
+    // definition is compared at load. It is carried to the adapter for registration and
+    // discovery; no grant is read from it.
     if (const loom::Cell* emits = manifest.get("emits")) {
         for (const loom::Cell& c : emits->as_list()) {
             auto s = decode_schema(*c.as_message(), registry_);
@@ -1125,9 +1025,9 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
         result.declared = decode_capability_ask(*requests->as_message());
         result.declared_present = true;
     }
-    // One transaction, one publication: a disagreement about the last door
-    // leaves none of the earlier ones claimed. (The `referenced` chain above is
-    // the exception it has to be — see the overload's note.)
+    // One transaction, one publication: a disagreement about the last door leaves none of the
+    // earlier ones claimed. The `referenced` chain above is claimed one entry at a time, since
+    // each resolves against the ones before it; `result` releases it all the same.
     registry_.claim(result.schemas, vocabulary);
     return result;
 }
@@ -1185,22 +1085,12 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
     if (libs_.count(name) != 0) {
         return {false, {}, "already loaded: " + name};
     }
-    // THE FIRST QUESTION, ASKED BEFORE THE FILE IS OPENED. Nothing below this point
-    // is reversible in the way this is: `open_library` runs the image's static
-    // initializers, so by the time the manifest exists, the artifact's code has
-    // already executed in this process. A policy that refuses here refuses the only
-    // containment an in-process kernel has (admission.hpp).
-    //
-    // A host that named the grant at its call site has already decided; it is not
-    // asked.
-    //
-    // WHICH BUILD THIS IS, AND ONLY IF THE POLICY WANTS TO KNOW. Hashing a multi-megabyte
-    // image is real work, so it is not done here: `build` reads the file the first time the
-    // policy asks, and a policy that decides without the bytes — trusting everything,
-    // refusing everything, deciding by name — costs nothing. It used to be computed here for
-    // every policy-mediated load, and that alone failed Zengine's replacement-timing tests
-    // under a policy that never read it. ONE identity for this whole operation, shared by
-    // both questions below; the next operation makes its own.
+    // The first question, asked before the file is opened: `open_library` runs the image's
+    // static initializers, so refusing here is the only containment an in-process kernel has
+    // (admission.hpp). A host that named the grant at its call site has already decided.
+    // Which build this is, only if the policy asks: `build` hashes the file on the first
+    // question, so a policy deciding without the bytes costs nothing. One identity for this
+    // whole operation, shared by both questions below; the next operation makes its own.
     Grant grant = (explicit_grant != nullptr) ? *explicit_grant : Grant{};
     const BuildIdentity build(path);
     if (explicit_grant == nullptr) {
@@ -1231,15 +1121,11 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
     bool adapter_built = false;
     try {
         Manifest mf = reconstruct(abi, instance);
-        // THE SECOND QUESTION: what may it say? The manifest has crossed the gate, so
-        // the artifact's declared ask exists and can be SHOWN to the policy — as
-        // advice, never as authority (admission.hpp). The verdict's grant becomes the
-        // baseline, which GATE-05 freezes for this weave's whole life.
-        //
-        // A refusal here throws into the catch below, which is the point: that is the
-        // same path a bad manifest or a held role takes, so the instance is destroyed
-        // and the library closed by machinery that already exists rather than by a
-        // second unwinding written for this case.
+        // The second question: what may it say? The manifest has crossed the gate, so the
+        // declared ask can be shown to the policy as advice, never authority (admission.hpp).
+        // The verdict's grant becomes the baseline, which GATE-05 freezes for this weave's
+        // life. A refusal throws into the catch below, the path a bad manifest or a held role
+        // takes, so the instance is destroyed and the library closed by the same machinery.
         if (explicit_grant == nullptr) {
             std::string why;
             if (!ask_admission(AdmissionStage::Speak, kind, name, path, role, build,
@@ -1252,18 +1138,12 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
                                                 std::move(mf.emits));
         adapter_built = true;
         HostAdapter* raw = adapter.get();
-        // A loaded .so shares this address space and can reach syscalls directly,
-        // so a restrictive *bus* grant on it is not containment: the grant bounds
-        // what it may SAY, never what it may TOUCH. Real containment is the
-        // out-of-process OS sandbox, which the grant's OS-capability fields drive.
-        // The grant below therefore decides SPEECH, and the decision belongs to
-        // whoever loaded this: a host that named it, or the host's admission policy.
-        // docs/reference/capabilities.md#the-grant-in-process
+        // A loaded library shares this address space and can reach syscalls directly, so its
+        // bus grant bounds what it may say, never what it may touch; containment is the
+        // out-of-process OS sandbox. docs/reference/capabilities.md#the-grant-in-process
         // docs/guides/dynamic-weaves.md#what-loading-it-in-process-means
-        // A non-empty role binds the slot here, at the only moment it can be
-        // bound. register_weave throws if the role is already held; that throw is
-        // caught below and becomes a clean LoadResult failure — the incumbent
-        // keeps its role and its life.
+        // A non-empty role binds the slot here; if it is held, register_weave throws, the
+        // catch below makes a clean LoadResult failure, and the incumbent keeps its role.
         loom::WeaveId id = bus_.register_weave(std::move(adapter), std::move(grant), role);
         raw->set_self(id);
         // The manifest's claim becomes the record's: from here the artifact being
@@ -1303,16 +1183,10 @@ LoadResult Kernel::load_candidate(const std::string& name, const std::string& pa
 
 LoadResult Kernel::candidate_impl(const std::string& name, const std::string& path,
                                   loom::WeaveId coordinator, const Grant* explicit_grant) {
-    // Deliberately the ordinary load, then the seal — rather than a second,
-    // simpler loading path that would drift from it. The prepared artifact MUST be
-    // the artifact that becomes live, so it is built by the same code that builds
-    // every other weave, and the only difference is that it is born outside the
-    // world.
-    //
-    // NOTHING CAN OBSERVE THE GAP between the two calls. `fanout` chooses its
-    // recipients at ENQUEUE time, so a publication already in the queue never
-    // named this weave; a publication enqueued later finds it sealed and skips it.
-    // And no delivery can run in between, because this is host code, not a handler.
+    // The ordinary load, then the seal, rather than a second loading path that would drift:
+    // the prepared artifact must be the one that becomes live. Nothing can observe the gap:
+    // `fanout` chooses its recipients at enqueue, so a queued publication never named this
+    // weave and a later one finds it sealed, and no delivery runs here, in host code.
     LoadResult lr =
         load_impl(name, path, /*role=*/std::string{}, AdmissionKind::Candidate, explicit_grant);
     if (!lr.ok) {
@@ -1347,16 +1221,11 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
     Loaded& rec = it->second;
 
-    // THE NEW BYTES ARE PUT TO THE POLICY BEFORE THEY ARE OPENED. This is the
-    // changed-artifact question: the host approved a build, and this is a different
-    // one. What a policy CANNOT do here is re-grant — a reload keeps the incumbent's
-    // WeaveId and therefore its baseline (GATE-05), so only the yes-or-no is
-    // consulted and `ask_admission` drops the verdict's grant on the floor for
-    // `Reload`. A policy that wants different authority refuses, and the host
-    // replaces the artifact instead of reloading it.
-    //
-    // The new bytes are identified only if the policy asks, once for this reload, and
-    // never from the identity the incumbent was loaded under (see `load_impl`).
+    // The new bytes are put to the policy before they are opened: the host approved a build,
+    // and this is another. A policy cannot grant again: a reload keeps the WeaveId and its
+    // baseline (GATE-05), so `ask_admission` drops the verdict's grant for `Reload`, and a
+    // policy that wants different authority refuses. The new bytes are identified only if
+    // the policy asks, once, never from the incumbent's identity (see `load_impl`).
     const BuildIdentity new_build(new_path);
     {
         Grant ignored;
@@ -1369,13 +1238,10 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
 
     std::string error;
-    // THE CANDIDATE IS JUDGED BEFORE THE INCUMBENT IS TOUCHED. Its ABI version
-    // (KERN-04), its descriptor and its manifest are all checked below before the
-    // incumbent's snapshot is taken, so a refused replacement -- an image built
-    // against another ABI included -- runs no code of the incumbent's, not even
-    // the showing its snapshot would perform, and leaves it exactly as it was.
-    // Owned from the moment it is open, as in `load`: every refusal below returns,
-    // and the handle closes when this share leaves scope.
+    // The candidate is judged before the incumbent is touched: its ABI version (KERN-04),
+    // descriptor and manifest are all checked before the incumbent's snapshot is taken, so a
+    // refused replacement runs no code of the incumbent's and leaves it as it was. Owned from
+    // the moment it is open, as in `load`: the handle closes when this share leaves scope.
     std::shared_ptr<LoadedLibrary> new_lib = open_library(new_path, error);
     if (!new_lib) {
         return {false, false, false, "open failed: " + error};
@@ -1399,10 +1265,9 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         return {false, false, false, std::string("new library refused: ") + e.what()};
     }
 
-    // THE CHANGED REQUEST. The bytes were approved above; this is the second half —
-    // the rebuilt artifact may now be asking for something the approved one did not.
-    // Asked at `Speak` so a policy sees the new declaration, and still refused
-    // before the incumbent is touched.
+    // The changed request. The bytes were approved above; the rebuilt artifact may now ask
+    // for something the approved one did not. Asked at `Speak` so a policy sees the new
+    // declaration, and still before the incumbent is touched.
     {
         Grant ignored;
         std::string why;
@@ -1414,16 +1279,11 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         }
     }
 
-    // THE CANDIDATE'S WHOLE VOCABULARY AGAINST THE BUS'S LIVE ONE, BEFORE THE
-    // INCUMBENT IS TOUCHED. `reconstruct` put the candidate's closure through this
-    // Kernel's decoding registry, which every LOADED artifact enters — but a
-    // definition only a NATIVE weave holds lives only in the Switchboard's
-    // registry, the one wall every participant registers into. The bus re-claims
-    // the successor's closure inside `swap_state`, after the rebind below; a
-    // disagreement discovered there would refuse a replacement that had already
-    // happened. So it is asked here, read-only, with the registry's own sentence:
-    // nothing runs between this check and the swap (dispatch is single-threaded),
-    // so an answer here is the answer the re-claim will get.
+    // The candidate's whole vocabulary against the bus's live one, before the incumbent is
+    // touched. `reconstruct` checked it against this Kernel's decoding registry, but a
+    // definition only a native weave holds lives only in the Switchboard's registry, which
+    // `swap_state` claims into after the rebind, when a refusal would be too late. Asked here,
+    // read-only; nothing runs before the swap, so this answer is the answer the claim gets.
     {
         std::vector<std::shared_ptr<const Schema>> closure;
         auto declare = [&closure](const std::shared_ptr<const Schema>& s) {
@@ -1461,20 +1321,11 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         return {true, false, true, "state schema version mismatch; reload refused"};
     }
 
-    // The second half of the contract: the doors. Compared against what the BUS
-    // published for the incumbent — the same list delivery matches against and
-    // the same list commit will silently keep using — so equality here is what
-    // makes the retained set true rather than merely retained. Refused before
-    // rebind: the incumbent's instance, library, state, WeaveId and role are all
-    // still untouched at this point.
-    //
-    // Refused before INCUMBENT REPLACEMENT and before any change to its
-    // published routing contract — and refused without residue (LIFE-08).
-    // reconstruct() produced these schemas and claimed them INTO `cand`; that
-    // claim is the only reason they resolve, so returning here destroys `cand`,
-    // releases it, and leaves a rejected candidate's unique (name, version) keys
-    // no more discoverable than before it was ever built. Shapes the incumbent
-    // also claims are untouched — the incumbent's own claim is still live.
+    // The second half of the contract: the doors, against what the bus published for the
+    // incumbent, the list delivery matches and a commit keeps, so equality makes the
+    // retained set true. Refused before rebind, with the incumbent untouched, and without
+    // residue (LIFE-08): `cand`'s claim is the only reason its schemas resolve, so returning
+    // destroys it and a rejected candidate's own keys are no longer discoverable.
     if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
         destroy_instance(new_abi, new_inst);
         return {true, false, false, "accepted schema contract mismatch; reload refused"};
@@ -1482,13 +1333,10 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
 
     std::string snapshot;
     try {
-        // THE RELOAD'S READ, taken only once the candidate has been admitted: the
-        // live weave is shown any publication it has not seen, as the ordinary
-        // snapshot shows it -- but a weave held behind a value it could not apply is
-        // not refused here: a reload is exactly how such a weave is repaired, and
-        // the successor revived from these bytes is shown the value again. The
-        // predecessor's failed hook is never retried; its outcome stays on the
-        // record (docs/reference/joint-publication.md#repair).
+        // The reload's read, taken once the candidate is admitted: the live weave is shown
+        // any publication it has not seen, as an ordinary snapshot shows it, but a weave held
+        // behind a value it could not apply is not refused, since a reload is its repair; the
+        // successor is shown the value again (docs/reference/joint-publication.md#repair).
         snapshot = bus_.snapshot_bytes(rec.id, loom::Switchboard::SnapshotAccess::Reload);
     } catch (const std::exception& e) {
         destroy_instance(new_abi, new_inst);
@@ -1505,23 +1353,17 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     rec.adapter->rebind(new_abi, new_inst, new_lib, std::move(cand.claims), std::move(cand.emits));
     rec.abi = new_abi;
     rec.lib = new_lib;
-    // THE CLAIM CROSSES WITH THE CODE, AND IT CROSSES WITHOUT A GAP (LIFE-08). The
-    // candidate's claim was taken by `reconstruct` before any of this; assigning
-    // it here releases the incumbent's afterwards, so every shape the two share
-    // is doubly claimed for the length of the assignment and never falls to
-    // zero. Done BEFORE `swap_state`, which may destroy `rec`.
+    // The claim crosses with the code, without a gap (LIFE-08): the candidate's claim was
+    // taken by `reconstruct`, and assigning it here releases the incumbent's afterwards, so a
+    // shape the two share never falls to zero. Done before `swap_state`, which may destroy
+    // `rec`.
     rec.schemas = std::move(cand.schemas);
 
-    // Revive the new instance from the host-owned snapshot, through the gate.
-    // This is an intentional code swap, not crash recovery, so it uses the
-    // unbudgeted swap_state path: a deliberate hot-reload must never be blocked by
-    // (or draw down) the Weave's crash-revival allowance.
-    //
-    // ...AND `rec` MAY NOT SURVIVE IT. New code is a new participant, so if some
-    // prepared replacement bound this weave as its CANDIDATE, the swap ends that
-    // transaction, ending it discards the candidate, and the discard runs this
-    // adapter's destructor — which releases the very record this reference names.
-    // Nothing below touches `rec`; the two facts still needed were copied above.
+    // Revive the new instance from the host-owned snapshot through the unbudgeted swap_state
+    // path: a deliberate reload must never be blocked by, or draw down, the crash-revival
+    // allowance. `rec` may not survive it: if a prepared replacement bound this weave as its
+    // candidate, the swap ends that transaction, which discards the candidate and runs this
+    // adapter's destructor, releasing the record. The two facts needed were copied above.
     loom::ReviveOutcome ro = bus_.swap_state(id, snapshot);
 
     if (libs_.count(name) == 0) {
@@ -1542,11 +1384,9 @@ bool Kernel::unload(const std::string& name) {
     if (it == libs_.end()) {
         return false; // including an artifact a transaction already discarded
     }
-    // THE NAME MUST BE OURS, NOT A REFERENCE INTO THE RECORD WE ARE DESTROYING.
-    // `unload_role` legitimately passes a record's own `name` field, and the
-    // adapter's destructor below erases that record — so a borrowed reference
-    // dangles from that moment and `forget()` at the end would read freed memory.
-    // ASan found exactly this; the Debug lane was green on it. Copy first.
+    // The name must be ours, not a reference into the record being destroyed: `unload_role`
+    // passes a record's own `name`, and the adapter's destructor below erases that record,
+    // so `forget()` would read freed memory. Copy first.
     const std::string artifact = name;
     const loom::WeaveId id = it->second.id;
 

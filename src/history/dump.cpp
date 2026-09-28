@@ -131,9 +131,8 @@ void dump_history(const Recorder& rec, std::ostream& out, const DumpOptions& opt
         << "\n";
     out << "  payloads: " << b.payloads_retained << " held (" << b.payload_bytes << " bytes), "
         << b.payloads_forgotten << " forgotten\n";
-    // THE THREE WINDOWS, SEPARATELY. A single "retained" number would hide the one
-    // thing RTH-1a exists to make visible: that a shape kept out of recent context
-    // is still kept.
+    // The three windows, separately: a single "retained" number would hide that a shape kept
+    // out of recent context is still kept.
     out << "  windows: recent " << b.recent_held << "/" << rec.policy().recent_capacity
         << ", protected " << b.protected_held << "/" << rec.policy().protected_capacity
         << ", last-call " << b.last_call_held << " over " << b.shapes_observed

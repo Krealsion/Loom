@@ -72,9 +72,11 @@ lifetime is at stake.
 Three entries on the official lane hold this, each naming the file and line of what it
 refuses:
 
-- `source_comments` (`tests/check_source_comments.cmake`) reads first-party C/C++, CMake and the
-  two population manifests: a comment block over six lines outside an installed header, a
-  removal note, or a private id.
+- `source_comments` (`tests/check_source_comments.cmake`) reads first-party C/C++, CMake, the
+  two population manifests, and the session tooling's Python and launchers: a comment block over
+  six lines outside an installed header, a removal note, or a private id. A Python, shell or
+  batch file is read whole for an id, docstrings and strings included; only a comment on a line
+  of its own counts toward a block there.
 - `doc_standard` (`tests/check_doc_standard.cmake`) reads every current-facing Markdown file for
   a private id.
 - `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every

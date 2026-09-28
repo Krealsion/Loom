@@ -79,11 +79,10 @@ const char* capability_name(Capability c) noexcept {
 
 std::string resource_note(const ResourceCaps& caps, bool memory_enforceable,
                           bool pids_enforceable) {
-    // Mirror cgroup_create_leaf exactly, in BOTH dimensions: memory.max and pids.max are
-    // each written only where their controller is delegated (g_cg_memory / g_cg_pids).
-    // Rendering "memory<=NMiB" or "pids<=N" where the controller is absent would claim a
-    // cap we never set — the one thing the honesty lattice forbids (audit F-20, and its
-    // pids mirror). Each dimension states UNCAPPED where its controller is not delegated.
+    // Mirror cgroup_create_leaf exactly, in both dimensions: memory.max and pids.max are each
+    // written only where their controller is delegated (g_cg_memory, g_cg_pids), so rendering
+    // a cap where the controller is absent would claim one never set. Each dimension states
+    // UNCAPPED where its controller is not delegated.
     std::string mem;
     if (caps.memory_max < 0) {
         mem = "memory unlimited-by-grant"; // opted out by grant; nothing to impose
@@ -105,13 +104,10 @@ std::string resource_note(const ResourceCaps& caps, bool memory_enforceable,
     return mem + ", " + pids;
 }
 
-// The honest one-line resources ATTESTATION for a resolved leaf: the note (above) plus the
-// "honest scope" sentence rendered into containment(). Pure and portable like resource_note,
-// so every delegation posture is unit-testable without a live cgroup. The fork-bomb stop is
-// pids.max, imposed only where the pids controller is delegated — so this clause is
-// delegation-qualified exactly as the memory and cpu clauses already are (F-20's pids
-// mirror): where pids is not delegated it states the fork-bomb stop is NOT enforceable,
-// retiring the former absolute "pids.max ALWAYS bounds a fork-bomb".
+// The honest one-line resources attestation for a resolved leaf: the note above plus the scope
+// sentence rendered into containment(). Pure and portable like resource_note, so every
+// delegation posture is unit-testable without a live cgroup. The fork-bomb stop is pids.max,
+// imposed only where the pids controller is delegated, so where it is not, this says so.
 std::string resource_attestation(const std::string& note, bool pids_enforceable, bool confirmed) {
     // The headline carries per-posture truth: where pids is not delegated, the absent
     // fork-bomb stop is surfaced as prominently as a NOT-CONTAINED network cap (it is at least
@@ -160,12 +156,9 @@ bool EnforcementReport::enforceable(Capability c) const noexcept {
 }
 
 // ---- The exec-boundary descriptor policy ------------------------------------------
-//
-// ONE definition, deliberately outside the platform split: the boundary is not a
-// Linux capability the way a namespace is, and a host that cannot impose a namespace
-// must still not hand its descriptors to a child. Everything here is
-// async-signal-safe (raw syscalls, no allocation, no locks) because it runs in the
-// fork-child, after the mount plan has already pivoted away from /proc.
+// One definition, outside the platform split: a host that cannot impose a namespace must
+// still not hand its descriptors to a child. Async-signal-safe (raw syscalls, no allocation,
+// no locks), because it runs in the fork-child after the mount plan has pivoted from /proc.
 
 namespace {
 
@@ -269,10 +262,9 @@ int close_inherited_descriptors(const int* keep, std::size_t keep_count) noexcep
 // ---- The exec-boundary environment policy -----------------------------------------
 
 void ChildEnvironment::set(std::string_view name, std::string_view value) {
-    // A refusal poisons the whole environment rather than skipping one entry: an
-    // environment missing a variable Zen meant to author is not the authored one, and
-    // silently continuing would put the caller's refusal decision behind a value it
-    // never sees. Same shape as the descriptor allow-list's well-formedness contract.
+    // A refusal poisons the whole environment rather than skipping one entry: an environment
+    // missing a variable Loom meant to author is not the authored one, and continuing would
+    // hide the refusal from the caller. The same shape as the descriptor allow-list's contract.
     if (name.empty() || name.find('=') != std::string_view::npos ||
         name.find('\0') != std::string_view::npos || value.find('\0') != std::string_view::npos) {
         ok_ = false;
@@ -301,49 +293,12 @@ char* const* ChildEnvironment::data() {
 ChildEnvironment build_child_environment() {
     ChildEnvironment env;
 
-    // IT IS EMPTY, AND THAT IS THE MEASURED ANSWER RATHER THAN an aesthetic one.
-    //
-    // The question this function exists to answer is "what does the supported child
-    // actually need", asked of the running system rather than of convention. Measured
-    // on the canonical toolchain, in all three lanes (Debug, Release, ASan+UBSan):
-    // zen-weave-host reaches main(), completes dynamic-loader startup, dlopens a real
-    // weave, checks the ABI, constructs the instance and unloads it, under `env -i`.
-    // Nothing before main() needs a variable either -- the binary carries no RPATH or
-    // RUNPATH, and every library it needs (libstdc++, libgcc_s, libm, libc, and under
-    // the sanitizer lane libasan and libubsan) resolves from the standard system paths,
-    // which the restricted view already binds read-only.
-    //
-    // So each variable a conventional list would add is here by its absence, deliberately:
-    //
-    //   LD_LIBRARY_PATH   not needed (no RPATH/RUNPATH, system paths suffice), and it is
-    //   LD_PRELOAD        capability-bearing: the loader acts on these BEFORE any Zen
-    //   LD_AUDIT, LD_*    code in the child runs, so inheriting one would let whatever
-    //                     the embedding host had set choose what executes inside the
-    //                     sandbox. Withheld even where a value would be harmless.
-    //   ASAN_OPTIONS      not needed: this tree configures its sanitizers entirely
-    //   UBSAN_OPTIONS     through compile and link flags (-fsanitize=address,undefined
-    //   LSAN_OPTIONS      -fno-sanitize-recover=all) and reads no *SAN_OPTIONS anywhere.
-    //                     The instrumentation is in the binary, not in the environment.
-    //   PATH              nothing in the child execs or searches for a program.
-    //   HOME, USER,       identity and session state. At FsAccess::None there is no home
-    //   LOGNAME, SHELL    to point at; the value would be an ambient fact, not a need.
-    //   TMPDIR            nothing in the child creates temporary files. A write-level
-    //                     grant gives the view its own /scratch, which is a mount fact
-    //                     rather than an environment one -- so pointing at a host path
-    //                     here would leak a host pathname for no gain.
-    //   LANG, LC_*, TZ    no locale- or time-zone-dependent formatting on any child
-    //                     path; the C/POSIX default the runtime starts in is already
-    //                     the deterministic one.
-    //   TERM              the child renders nothing.
-    //   DISPLAY,          the ones that make the point best: these are ADDRESSES OF
-    //   WAYLAND_DISPLAY,  RUNNING SERVICES. Under the old behavior a weave at
-    //   DBUS_SESSION_     FsAccess::None with no network was still told where the
-    //   BUS_ADDRESS,      session bus, the compositor and the audio server listen.
-    //   PULSE_SERVER,     Nothing reaches them through the sandbox's view -- but Zen
-    //   XDG_RUNTIME_DIR   never decided to say, and that is the whole objection.
-    //
-    // Adding one is a deliberate edit HERE, with its reason beside it, and it changes
-    // the exact set the isolation suite asserts -- which is what keeps this honest.
+    // Empty, and that is measured, not preferred: the supported child runs under `env -i`
+    // with no RPATH, and every library resolves from paths the view binds read-only. Each
+    // conventional variable is absent deliberately: LD_* would choose what executes inside the
+    // sandbox, and DISPLAY, DBUS_SESSION_BUS_ADDRESS and the like address running services.
+    // Adding one is a deliberate edit here, with its reason, and the isolation suite asserts
+    // the exact set. docs/reference/capabilities.md#the-exec-boundary-three-independent-facts
     return env;
 }
 

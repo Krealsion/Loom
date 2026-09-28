@@ -147,9 +147,8 @@ const LogRule* LoggerSelection::rule_for(std::string_view shape) const noexcept 
 
 LoggerSelection default_selection() {
     LoggerSelection s;
-    // WHAT CODE IS LOADED. The control door's four verbs that CHANGE it, and the
-    // weave manager's three. Each is measured-rare: RTH-1's live Workshop run saw
-    // exactly three LoadLibrary deliveries in a whole session, all at boot.
+    // What code is loaded: the control door's four verbs that change it, and the weave
+    // manager's three. Each is rare: a whole interactive session delivers a few, at boot.
     for (const char* shape : {"LoadLibrary", "ReloadLibrary", "UnloadLibrary", "UnloadRole",
                               "zen.LoadWeave", "zen.SwapWeave", "zen.ReloadWeave"}) {
         s.shapes.push_back(LogRule{shape, 0});
@@ -169,14 +168,11 @@ LoggerSelection default_selection() {
 // The durable stream
 // ---------------------------------------------------------------------------
 
-/// AN ORDINARY FILE HANDLE, and that is the whole of it. A record is appended on
-/// the dispatch that produced it, and closing flushes.
-///
-/// THE CONTAINER IS A STREAM OF TOP-LEVEL VALUES, `[u32 len][bytes]`, which is
-/// Arena's shape and is chosen for Arena's reason: `kMaxDecodedCells` bounds a
-/// SINGLE decode, so a whole stream as one nested document could not be read back
-/// at all. Each record is canonical native bytes and is re-admitted through the one
-/// gate on read, so a corrupt or forged file is refused rather than trusted.
+/// An ordinary file handle: a record is appended on the dispatch that produced it, and closing
+/// flushes. The container is a stream of top-level values, `[u32 len][bytes]`, because
+/// `kMaxDecodedCells` bounds a single decode, so one nested document could not be read back.
+/// Each record is canonical native bytes, admitted through the one gate again on read, so a
+/// corrupt or forged file is refused rather than trusted.
 struct Logger::Stream {
     std::ofstream out;
 };
@@ -541,9 +537,8 @@ bool Logger::read(const std::string& path, std::vector<LogRecord>* out, std::str
             }
             return false;
         }
-        // THROUGH THE ONE GATE, exactly as Arena re-admits every replay record: a
-        // log is bytes on a disk anybody can write, so it is admitted rather than
-        // believed.
+        // Through the one gate: a log is bytes on a disk anybody can write, so it is admitted
+        // rather than believed.
         Unverified u = ::loom::parse(bytes);
         Admission a = ::loom::admit(u, record_schema());
         if (!a.ok()) {

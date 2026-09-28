@@ -4,38 +4,12 @@
 #ifndef ZEN_RUNS_CATALOG_HPP
 #define ZEN_RUNS_CATALOG_HPP
 
-// THE TOOL CATALOG: which packages exist, what each tool says it is, and which ones may run.
-//
-// Two files, two owners:
-//
-//   loom-tools.json   THE OPERATOR'S, in the session directory. Which package directories this
-//                     manager knows, and for each one whether it may run: `"approve":
-//                     "any-revision"` (every edit may run -- the author's own tools), a revision
-//                     digest (exactly that content), or nothing (listed and described, never run).
-//                     Optionally which Python interpreter to use and where `loom_session` lives.
-//   loom-tool.json    THE PACKAGE AUTHOR'S, in the package directory. What each tool is for, its
-//                     inputs and outputs, what it needs, the bus rules it asks its worker to be
-//                     granted, the shapes it speaks, an example and what its refusals mean.
-//
-// READING NEVER RUNS ANYTHING. Listing and describing parse these two files and hash the package's
-// bytes; no tool code is loaded or executed until a run of an approved package starts. A path is
-// never approval: a package is approved by name in the operator's file, pinned by content unless
-// the operator said otherwise.
-//
-// A PACKAGE'S REVISION is the SHA-256 over its files -- every regular file under its directory,
-// by relative path, except Python's own caches -- so an edit anywhere in it is a new revision.
-// A run executes a SNAPSHOT copied into its own directory, and its revision is the snapshot's
-// digest: an edit made while a run is going changes the next run, never that one.
-//
-// A PACKAGE MAY BUILD ON ANOTHER. `"uses": ["workshop"]` in a manifest names packages of the same
-// catalog whose modules its tools import -- a game's monitor policy, say, on the package that
-// drives the application it watches. A run of it snapshots each one beside its own and puts them
-// after its own on the worker's import path; it starts only when every one is approved as its
-// snapshot stands, exactly as its own package must be. One level: a used package that uses others
-// is refused, and nothing is found by path.
-//
-// Both files are read strictly: a key neither file defines is a problem the catalog reports,
-// never a key it silently ignores.
+// The tool catalog: which packages exist, what each tool says it is, and which may run. Two
+// files, two owners: `loom-tools.json` is the operator's (which package directories, and
+// whether each may run: "any-revision", a revision digest, or nothing), `loom-tool.json` the
+// package author's (each tool's inputs, outputs, needs and requested rules). Reading never runs
+// anything; a revision is the SHA-256 over the package's files; a run executes a snapshot; a
+// package may build on one level of others. Both are read strictly. docs/guides/sessions.md
 
 #include <cstdint>
 #include <filesystem>

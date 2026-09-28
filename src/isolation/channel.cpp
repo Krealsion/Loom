@@ -64,15 +64,11 @@ void Channel::flush() {
             return;
         }
     }
-    // Reclaim the prefix already handed to the kernel: those bytes are history, not live channel
-    // storage. Clearing ONLY on a complete drain is not enough -- a peer that keeps up but never
-    // lets the socket run dry leaves a standing residue at every flush, so the reset never fires
-    // and the buffer grows by the session's whole byte volume (kMaxBacklog measures the *unsent*
-    // residue, so it never notices). Compacting whenever the sent prefix is at least as large as
-    // the unsent remainder keeps this amortized: the move costs no more than the bytes it drops,
-    // so total copying stays linear in the bytes ever queued rather than quadratic in the frame
-    // count. Live storage is therefore bounded by twice the backlog still owed to the peer, never
-    // by how long the channel has been alive. Both branches keep the allocation for reuse.
+    // Reclaim the prefix already handed to the kernel. Clearing only on a complete drain is not
+    // enough: a peer that keeps up but never lets the socket run dry leaves a residue at every
+    // flush, and the buffer would grow by the session's whole volume (kMaxBacklog counts only
+    // the unsent part). Compacting once the sent prefix is at least the unsent remainder keeps
+    // copying linear and live storage within twice the owed backlog. As src/bridge/channel.cpp.
     if (out_pos_ == outbox_.size()) {
         outbox_.clear();
         out_pos_ = 0;

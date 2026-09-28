@@ -647,4 +647,4 @@ server's `settle_origin(fence)` says which session and correlation opened a fenc
 ## Tests
 
 Suites `switchboard` (the `fence:` cases among them), `provenance`, `capabilities`, `poke`,
-`describe`; the bridge suite for the operator protocol and the crossing's settlement.
+`describe`; the bridge suite for the bridge protocol and the crossing's settlement.

@@ -4,36 +4,12 @@
 #ifndef ZEN_HOST_AUTHORITY_HPP
 #define ZEN_HOST_AUTHORITY_HPP
 
-// THE PERSON'S STANDING DECISIONS ABOUT WHAT MAY RUN AND WHAT MAY SPEAK.
-//
-// One file, per install, that a person writes at the console and can also read and
-// edit in an editor. It is the source of both halves of the supplied host's authority,
-// and the halves are deliberately different mechanisms because they have different
-// lifetimes (GATE-05):
-//
-//   may_run      -> ADMISSION. Consulted by the Kernel's admission policy before the
-//                   artifact's code is opened. Its yes mints a BASELINE, which is
-//                   frozen for that weave's whole life and cannot be revoked in place.
-//                   So the baseline is kept deliberately tiny: the floor plus the
-//                   right to answer a poke, which is what makes a loaded weave
-//                   inspectable without making it able to say anything.
-//
-//   send/observe -> DELEGATED LIVE AUTHORITY. Installed after the weave is running, by
-//                   a holder of a host-minted GrantAuthority, and REPLACEABLE while it
-//                   runs. That is why the approvals a person remembers land here and
-//                   not in the baseline: the prompt's requirement is that a restored
-//                   permission stay revocable, and only this half can be.
-//
-// So "revoke" means two different, both-honest things, and the console says which:
-// revoking speech takes effect on the next delivery; revoking the right to RUN takes
-// effect at the next load, and the honest way to end a running weave's baseline is to
-// unload it.
-//
-// THE RULE SPELLING IS THE WEAVER'S. A rule in this file is written exactly as
-// `loom::render_rule` prints one (`zen/weaver/weaver.hpp`) — `Greet v1 -> any target`,
-// `Tick v1 -> role clock`, `any shape -> any target`, `observe Tick v1`. One spelling
-// for what a person reads and what a person writes; a second grammar here would be a
-// second answer to "what did I approve".
+// The person's standing decisions about what may run and what may speak: one file per install,
+// written at the console or in an editor. `may_run` is admission, consulted before the code is
+// opened, and mints a baseline frozen for the weave's life (GATE-05), so kept tiny; send and
+// observe rules are delegated live authority, installed once it runs and revocable in place.
+// So revoking speech takes effect on the next delivery, revoking the right to run at the next
+// load. Rules are spelled as `loom::render_rule` prints them (zen/weaver/weaver.hpp).
 
 #include <zen/kernel/admission.hpp>
 #include <zen/switchboard/grant.hpp>
@@ -50,32 +26,18 @@ namespace loom::host {
 /// stay two questions.
 struct AuthorityRule {
     std::string artifact;
-    /// The build this decision was made about: `loom::file_content_id`. Empty means
-    /// "not pinned yet" — the state a rule is in between a person approving an
-    /// artifact and that artifact first loading, when its bytes get recorded.
-    ///
-    /// Recording it is part of admitting that first load, not a courtesy after it: unless
-    /// `trust_rebuilds` is on, a build whose identity cannot be written is REFUSED, because
-    /// an unpinned rule cannot tell the next, different build from this one.
+    /// The build this decision was made about: `loom::file_content_id`; empty until the
+    /// approved artifact first loads and its bytes are recorded. Recording it is part of
+    /// admitting that load: unless `trust_rebuilds` is on, a build whose identity cannot be
+    /// written is refused, since an unpinned rule cannot tell the next build from this one.
     std::string content_id;
     /// May its native code run in this process at all?
     bool may_run = false;
-    /// What happens when the bytes change under a pinned rule. False (the default)
-    /// re-asks: a different build is a different thing and the person decides again.
-    /// True is the DEVELOPMENT posture — the person is rebuilding this artifact
-    /// themselves and does not want to re-approve every compile.
-    ///
-    /// It never widens anything. The speech rules below are unchanged by a rebuild;
-    /// all this decides is whether new bytes may run under the authority the person
-    /// already granted. That distinction is the whole reason it can be a default-off
-    /// per-artifact switch rather than a global one.
-    ///
-    /// AND IT COVERS A CHANGED *REQUEST* TOO, without a second mechanism. An
-    /// artifact's declared `CapabilityAsk` is compiled into it, so an artifact that
-    /// starts asking for something new is an artifact whose bytes changed — the same
-    /// question, reached by the same door. What a person turns on here is "I am the one
-    /// rebuilding this"; leaving it off is how they see every change, including that
-    /// one.
+    /// What happens when the bytes change under a pinned rule. False (the default) asks
+    /// again; true is the development posture, for a person rebuilding this artifact. It never
+    /// widens anything: it decides only whether new bytes may run under authority already
+    /// granted. A changed `CapabilityAsk` is compiled in, so it is changed bytes too, and
+    /// leaving this off is how a person sees every change, that one included.
     bool trust_rebuilds = false;
     std::vector<std::string> send;    ///< rendered send rules (see the header note)
     std::vector<std::string> observe; ///< rendered observe rules
@@ -98,26 +60,16 @@ bool to_live_authority(const AuthorityRule& rule, LiveAuthority* out, std::strin
 /// strings that compare unequal.
 std::string canonical_rule(const std::string& raw, bool observe);
 
-/// COLLAPSE REPEATED PERMISSIONS, KEEPING THE PERSON'S ORDER (first occurrence wins).
-///
-/// A permission list is a SET and was stored as a sequence, so `authority allow X` typed
-/// twice stored X twice — and one `authority revoke X` then removed one copy, reported a
-/// revocation, and left the permission installed and remembered. Repeating an approval
-/// must not be a way to make it unrevocable. Applied when a decision is written AND when
-/// a hand-edited file is read, because the file is a surface a person edits directly.
-/// Returns how many entries it removed.
+/// Collapse repeated permissions, keeping the person's order (first occurrence wins). A
+/// permission list is a set: a duplicate would survive one `authority revoke`, which would
+/// report a revocation and leave the permission. Applied when a decision is written and when
+/// a hand-edited file is read. Returns how many entries it removed.
 std::size_t collapse_duplicates(AuthorityRule* rule);
 
-/// A decision the admission policy could not make and is waiting on. Recorded when a
-/// load is refused for want of a rule (or because the bytes changed), so the console
-/// can show a person exactly what to approve, with the facts in front of them.
-///
-/// WHAT IT CANNOT CARRY, AND WHY THAT IS THE RIGHT ANSWER. There is no declared ask
-/// here. A manifest exists only after the artifact has been opened and its code has
-/// run, and everything this store refuses, it refuses at `AdmissionStage::Open` —
-/// before that. So the price of not running unapproved code is that a person cannot be
-/// shown what that code says it wants, and the two cannot both be had. A field here
-/// holding an ask nobody could have read would be worse than its absence.
+/// A decision the admission policy could not make and is waiting on, recorded when a load is
+/// refused for want of a rule or for changed bytes, so the console can show what to approve.
+/// It carries no declared ask: this store refuses at `AdmissionStage::Open`, before the code
+/// runs and a manifest exists, and not running unapproved code costs that.
 struct PendingDecision {
     std::string artifact;
     std::string path;
@@ -140,18 +92,11 @@ public:
     const AuthorityRule* find(const std::string& artifact) const;
     std::vector<AuthorityRule> rules() const;
 
-    /// Replace one decision and write the file. The write is where "remember this"
-    /// actually happens, so it is not deferred to shutdown: a host that is killed
-    /// between an approval and its next boot must come back with the approval.
-    ///
-    /// DURABLE FIRST, AND THAT ORDER IS THE WHOLE POINT. The change is applied to a
-    /// CANDIDATE copy, the candidate is written, and only a successful write becomes the
-    /// live policy. It used to mutate the map and then try to write, which meant an
-    /// unwritable store printed `cannot write` and changed what this host permitted
-    /// anyway: `authority trust x` failed, `start x` then succeeded under the failed
-    /// approval, and a restart lost the decision nobody was told had not been made. A
-    /// failed command now changes nothing at all, which is the only version of
-    /// "remembered" that a person can act on.
+    /// Replace one decision and write the file now, not at shutdown: a host killed between an
+    /// approval and its next boot comes back with the approval. Durable first: the change is
+    /// applied to a candidate copy, the candidate is written, and only a successful write
+    /// becomes the live policy, so a failed command changes nothing at all, and nothing runs
+    /// under an approval the store does not hold.
     bool put(AuthorityRule rule, std::string* error);
 
     /// Drop one decision entirely and write the file — durable first, exactly as `put`.
@@ -159,39 +104,20 @@ public:
     /// authority too, and the console does both so a person's single "revoke" means both.
     bool forget(const std::string& artifact, std::string* error);
 
-    /// THE ADMISSION POLICY THIS STORE IMPLEMENTS — the thing the Kernel asks.
-    ///
-    /// It may WRITE the store, and that is the remembering: the first successful load
-    /// under an unpinned rule records which build it was, and a rebuild admitted under
-    /// `trust_rebuilds` re-pins. Nothing else in it mutates anything.
-    ///
-    /// A RECORD IT CANNOT WRITE NEVER WIDENS WHAT RUNS. A first pin that fails refuses the
-    /// load unless the rule already accepts any build (`trust_rebuilds`); a re-pin that
-    /// fails under `trust_rebuilds` admits — the person consented to new builds — and says
-    /// the pin still names the old one.
-    ///
-    /// IT ASKS WHICH BUILD, AT `Open`, AND PAYS FOR THE ANSWER. The identity it pins and
-    /// compares is `AdmissionRequest::build`, which the Kernel works out only when a policy
-    /// asks; this one asks before the file is opened, and only there. A build that cannot be
-    /// identified is refused.
-    ///
-    /// It never blocks on a person. A decision it cannot make is a refusal now, with
-    /// the facts recorded in `pending()` and the console command to resolve it named
-    /// in the refusal itself — so the asker hears a real answer about the request it
-    /// made, and the person has everything they need to answer it properly.
+    /// The admission policy this store implements, which the Kernel asks. It writes the store
+    /// only to remember: the first load under an unpinned rule pins its build, and a rebuild
+    /// under `trust_rebuilds` pins again. A pin it cannot write never widens what runs (a
+    /// first pin refuses unless `trust_rebuilds`). It asks `AdmissionRequest::build` at `Open`
+    /// and refuses a build it cannot identify. It never blocks on a person: an undecided load
+    /// is refused now, recorded in `pending()`, with the console command named in the refusal.
     AdmissionPolicy policy();
 
     const std::vector<PendingDecision>& pending() const noexcept { return pending_; }
     void clear_pending() noexcept { pending_.clear(); }
 
-    /// WHAT THE POLICY DID WITHOUT ASKING, in its own words, in the order it did it.
-    ///
-    /// An admission that needed no decision is still a decision the policy made, and
-    /// two of them are things a person should be able to see afterwards: which build
-    /// got pinned to a fresh approval, and — the one that matters — that an artifact
-    /// they are developing came up on code they have not seen before, under authority
-    /// they granted earlier. A `trust_rebuilds` that was silent would be a switch that
-    /// hides exactly what it is doing.
+    /// What the policy did without asking, in its own words and order: which build was pinned
+    /// to a fresh approval, and that an artifact came up on code the person has not seen,
+    /// under authority granted earlier. A silent `trust_rebuilds` would hide what it does.
     const std::vector<std::string>& notes() const noexcept { return notes_; }
 
 private:
@@ -209,14 +135,10 @@ private:
     std::vector<std::string> notes_;
 };
 
-/// THE BASELINE A POLICY-ADMITTED ARTIFACT GETS, and the argument for its size.
-///
-/// The floor plus the right to answer a poke, and nothing else. A baseline is frozen
-/// at admission and can never be narrowed (GATE-05), so everything a person might one
-/// day want to take back has to live in the delegated half instead. What is left is
-/// the one permission it would be perverse to make revocable: being inspectable. A
-/// weave a person cannot poke is a weave they cannot reason about, and they approved
-/// loading it.
+/// The baseline a policy-admitted artifact gets: the floor plus the right to answer a poke.
+/// A baseline is frozen at admission (GATE-05), so everything a person might take back lives
+/// in the delegated half; what remains is being inspectable, since a weave a person cannot
+/// poke is one they cannot reason about.
 Grant admitted_baseline();
 
 } // namespace loom::host

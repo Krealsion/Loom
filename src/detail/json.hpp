@@ -4,7 +4,7 @@
 #ifndef ZEN_DETAIL_JSON_HPP
 #define ZEN_DETAIL_JSON_HPP
 
-// Internal to loom. A small, hardened JSON reader/writer. Zen owns its wire
+// Internal to loom. A small, hardened JSON reader/writer. Loom owns its wire
 // format end to end (no third-party serializer), and this is the only code that
 // touches raw external bytes, so it is written to be total: every input,
 // hostile or truncated, yields either a parse tree or a clean error — never a

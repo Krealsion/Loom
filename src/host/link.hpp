@@ -4,71 +4,12 @@
 #ifndef ZEN_HOST_LINK_HPP
 #define ZEN_HOST_LINK_HPP
 
-// A LINK TO ANOTHER HOST, AS ONE ORDINARY PARTICIPANT OF THIS ONE.
-//
-// The supplied host can hold a connection to another running Loom -- a Workshop, another
-// loom-host -- and put an office in front of it: `loom.link.<name>`. A local weave that wants
-// something from the far side sends the link a `loom.link.Ask` naming the far office and
-// carrying its message as bytes (zen/bridge/link.hpp says what an asker is told, and when).
-//
-// ONE CROSSING PER ASK, AND IT IS THE LINK'S OWN. The asker's correlation is the asker's: two
-// askers each keep a book whose first conversation is 1, so it cannot be what crosses. The link
-// mints an `attempt` for every ask it submits -- monotonic over the link's life, never reused --
-// puts THAT on the wire, and keeps the crossing: which asker, which of the asker's
-// conversations, which session of the link (its `epoch`), and the asker's answer right. A far
-// reply names the attempt, and the attempt names exactly one crossing; a reply for a session
-// that has ended names none.
-//
-// THE ANSWER IS LOOM'S, NOT THE LINK'S SAY-SO. Taking an ask, the link converts the delivery's
-// answer opportunity into a deferred answer (ANS-02), which Loom binds to the asker, the
-// asker's incarnation and life, and its correlation. The far owner's attested answer -- and only
-// that -- is spent through it, so the asker's `mail.answers_ask()` is this bus's word; the
-// link's own `Outcome` is spent the same way. A far participant's ordinary speech to the
-// session is recorded and settles nothing; an asker that was replaced or died before its
-// answer came is refused by Loom at the spend, and its successor is answered nothing that was
-// earned by its predecessor.
-//
-// WHY THE LINK SPEAKS TO ITSELF. A deferred answer is spent from a delivery to the weave that
-// holds it, and a far frame is read on the HOST's turn, outside every delivery. So `service()`
-// turns each far frame into a `loom.link.Crossed` record said to the link itself -- which is also
-// how this host's Recorder and Logger come to hold the far session, the far stamp and office,
-// the attempt and the bytes -- and the link acts on it when it is delivered. Only a `Crossed`
-// the link said acts: anyone else's is ignored.
-//
-// WHAT THE LINK IS NOT. It is not authority: the far host admitted THIS SESSION under a grant of
-// the far host's choosing, and every send is checked there against that grant. It is not a
-// mirror of the far bus: it holds no tap (a guest is not given one), no far registry, no far
-// history. It is not a retry engine: a session that ends tells every crossing still open on it
-// `lost` and never resends, because a send whose outcome is unknown may well have acted. And it
-// is not a participant a loaded weave can replace -- it is host wiring, like the warden, holding
-// a socket the host opened.
-//
-// THE HOST SERVICES IT. A loaded weave has nothing to wake it; the host loop calls `service()`
-// every turn, exactly as it reads a line, so the socket is read between bus turns and what it
-// read is delivered in the next one.
-//
-// A FAR RELAY'S OBSERVATIONS REACH THE LOCAL PARTICIPANT THAT SUBSCRIBED, AND NOBODY ELSE. When a
-// far `loom.observe.Subscribed` crosses as the answer to a local asker's ask, the link keeps the
-// subscription's custody here: which far relay lifetime and far sender answered, on which epoch,
-// for which local asker -- that participant exactly, in the life and incarnation that asked. From
-// then on the far relay's own `Observed`, `Gap` and `Ended` for that subscription -- ordinary far
-// speech, which the link otherwise ignores -- are re-admitted through this bus's gate and said by
-// the link to that asker, with the link, epoch and far session filled in, and `cause` translated
-// from the far attempt to the asker's own correlation when that attempt was the asker's (and
-// emptied when it was not). Words about a subscription the link does not hold for that relay,
-// sender and epoch are ignored; a session that ends ends its subscriptions `lost`.
-//
-// THE FAR RELAY CANNOT TELL THIS HOST'S ASKERS APART -- every one of them is this link's one session
-// there -- SO THE LINK KEEPS THE DISTINCTION. A `Release` or an `Acknowledge`, in either encoding and
-// to whatever far address, crosses only for the local participant that holds that subscription on
-// the current session under that relay lifetime; anybody else's is told `refused` before anything
-// is submitted, and changes nothing here or there. A SUBSCRIBER THAT IS GONE -- removed, dead, or
-// succeeded by a new life or incarnation, even while its subscription was still being made -- is
-// noticed on the host's own turn (`service()`), never only at the next word, since a silent
-// producer or a full window may never send one. The link asks the far relay to release, tells
-// nobody, and goes on counting the subscription (`releasing()`) until the far relay's answer or
-// its own ending says it is over: asking is not the far side having let go. zen/observe/vocabulary.hpp
-// says what each word means.
+// A link to another host, as one ordinary participant of this one: office `loom.link.<name>`,
+// asked with `loom.link.Ask` (zen/bridge/link.hpp). One crossing per ask, under the link's own
+// `attempt` and session `epoch`; the answer is Loom's, spent through the asker's deferred
+// answer (ANS-02). A far frame is read on the host's turn, outside every delivery, so it becomes
+// a `Crossed` the link says to itself. Not authority, not a mirror, not a retry engine.
+// docs/reference/bridge.md#the-connecting-side and docs/reference/observation.md#across-a-link
 
 #include <zen/bridge/client.hpp>
 #include <zen/bridge/link.hpp>
@@ -255,14 +196,11 @@ public:
         const std::string_view payload(reinterpret_cast<const char*>(ask.payload.data()),
                                        ask.payload.size());
         loom::Unverified asked = loom::parse(payload);
-        // A COMPAT ENVELOPE IS ADMITTED HERE, AND WHAT CROSSES IS STILL NATIVE. An asker that does
-        // not speak the canonical binary (a Python tool, over a compat session) may hand the link
-        // Zen's JSON envelope instead. The link admits it through THIS bus's gate against the shape
-        // this host resolves -- the one gate, the one decode budget -- and puts the canonical bytes
-        // of the admitted value on the wire, so the far host sees exactly what a C++ asker's
-        // `ask_role` would have sent. A shape nothing here declares cannot be encoded, and is
-        // refused before anything is submitted: the far vocabulary must be known on this host,
-        // exactly as it must be for the far ANSWER to be re-admitted (below).
+        // A compat envelope is admitted here, and what crosses is still native: an asker that
+        // does not speak the canonical binary (a Python tool) may hand the link the JSON
+        // envelope, admitted through this bus's gate against the shape this host resolves, and
+        // the canonical bytes cross, as a C++ asker's would. A shape nothing here declares is
+        // refused before anything is submitted, as the far answer would be on its way back.
         std::string compat_native;
         std::string compat_refusal;
         std::optional<loom::Value> compat_value;

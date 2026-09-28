@@ -194,10 +194,9 @@ void Recorder::admit_local(HistoryRecord rec) {
     rec.record_seq = next_record_seq_++;
     const std::uint64_t record_seq = rec.record_seq;
     records_.emplace(record_seq, Slot{std::move(rec), 0});
-    // THE PROTECTED WINDOW ONLY, and that is what keeps `apply_policy` prospective.
-    // A note that also took a place in the recent FIFO would trim that FIFO to its
-    // NEW capacity as a side effect of being written — so the act of shrinking a
-    // window would destroy exactly what RTH-1 established it must not.
+    // The protected window only, which keeps `apply_policy` prospective: a note that also took
+    // a place in the recent FIFO would trim it to its new capacity as a side effect, so
+    // shrinking a window would destroy what a policy change must not.
     claim(protected_, record_seq, Held::Protected);
     auto it = records_.find(record_seq);
     if (it == records_.end() || it->second.claims == 0) {
@@ -274,12 +273,11 @@ void Recorder::store_payload(std::uint64_t record_seq, std::string bytes, std::s
 }
 
 void Recorder::trim_payloads() {
-    // A BYTE BUDGET, not an entry count — the two rank Zen's traffic differently.
-    // RTH-0 measured an idle application's noise at 31-47 bytes a message and one
-    // interactive SurfaceCanvas at up to 2.75 KiB, so a budget in entries bounds
-    // the wrong thing. The newest payload is always kept even when it alone exceeds
-    // the budget: refusing it would make the budget a second, silent per-payload
-    // ceiling, and there already is one.
+    // A byte budget, not an entry count: payload sizes differ by two orders of magnitude (an
+    // idle application's noise at 31-47 bytes, an interactive canvas at up to 2.75 KiB), so an
+    // entry count bounds the wrong thing. The newest payload is always kept even when it alone
+    // exceeds the budget: refusing it would be a second, silent per-payload ceiling beside the
+    // one there already is.
     while (payloads_.size() > 1 && payload_bytes_ > policy_.payload_byte_budget) {
         PayloadSlot& oldest = payloads_.front();
         payload_bytes_ -= oldest.bytes.size();
@@ -332,9 +330,9 @@ std::string describe_change(const RecorderPolicy& was, const RecorderPolicy& now
         add("payload ceiling " + std::to_string(was.max_payload_bytes) + " -> " +
             std::to_string(now.max_payload_bytes) + " bytes");
     }
-    // Rules, by shape, both directions. THREE KNOBS ARE REPORTED, not one: a rule
-    // that changed only its payload appetite still changed what Zen remembers, and
-    // reporting a class alone would print a change that was not one.
+    // Rules, by shape, both directions. Three knobs are reported, not one: a rule that changed
+    // only its payload appetite still changed what is remembered, and reporting a class alone
+    // would print a change that was not one.
     for (const RetentionRule& r : now.rules) {
         const RetentionRule* before = was.rule_for(r.shape);
         if (before == nullptr) {
@@ -533,9 +531,8 @@ Lookup Recorder::find(std::uint64_t bus_seq) const noexcept {
     }
     // THE THREE HONEST ABSENCES, and they are genuinely different facts.
     if (bus_seq > newest_observed_seq_) {
-        // Beyond anything the tap has shown us: still queued, never dispatched, or
-        // never issued. The recorder does not know which and does not guess —
-        // asking the queue is a different question with no answer today.
+        // Beyond anything the tap has shown: still queued, never dispatched, or never issued.
+        // The recorder does not know which and does not guess; the queue is not its to ask.
         return Lookup{Horizon::Unobserved, nullptr};
     }
     if (bus_seq <= forgotten_horizon_seq_) {
@@ -560,9 +557,8 @@ PayloadLookup Recorder::payload(std::uint64_t record_seq) const {
     PayloadLookup out;
     const HistoryRecord* rec = record(record_seq);
     if (rec == nullptr) {
-        // The metadata is gone too. Whether its payload was here once is no longer
-        // a question this recorder can answer about a record it does not have, so
-        // it answers about the payload only.
+        // The metadata is gone too, so this recorder cannot say whether the record had a
+        // payload; it answers about the payload only.
         out.state = record_seq <= payload_horizon_ ? PayloadState::Evicted : PayloadState::Absent;
         return out;
     }

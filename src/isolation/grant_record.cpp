@@ -29,10 +29,9 @@ namespace loom {
 
 namespace {
 
-// The persisted shape: a list of {content_hash, network, filesystem, roles} entries. A
-// gated Value like everything else — the record funnels through the same admit(). v2
-// adds `roles` (the broker roles a mod may reach beyond the floor's storage); bumping
-// the version rather than mutating v1 keeps the project's frozen-(name,version) invariant.
+// The persisted shape: a list of {content_hash, network, filesystem, roles} entries, a gated
+// Value admitted like everything else; `roles` are the broker roles a mod may reach beyond the
+// floor's storage.
 std::shared_ptr<const loom::Schema> grant_entry_schema() {
     static const auto s = loom::SchemaBuilder("zen.GrantEntry", 2)
                               .field("content_hash", loom::Kind::Text)
@@ -60,19 +59,17 @@ std::string read_file(const std::string& path) {
     return ss.str();
 }
 
-// Write `data` to `path` and fsync it: the bytes are on stable storage before this
-// returns, so a later rename of `path` cannot become durable ahead of its contents.
-// Throws (and removes the temp file) on any failure. POSIX only — std::ofstream gives
-// no fd to fsync, which is precisely why the durability claim went unbacked before.
+// Write `data` to `path` and fsync it, so a later rename of `path` cannot become durable ahead
+// of its contents. Throws (and removes the temp file) on any failure. POSIX only: std::ofstream
+// gives no fd to fsync.
 void write_file_synced(const std::string& path, const std::string& data) {
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         throw std::runtime_error("grant record: cannot write '" + path + "'");
     }
-    // open(O_CREAT, 0600) IGNORES the mode when the temp already EXISTS, and rename preserves
-    // the source mode — so a pre-planted looser-perm temp (audit N-2: a `0666` `.tmp` observed
-    // to yield a world-writable ledger) would leak into this TCB record. Enforce 0600 on the
-    // open fd unconditionally, so the perms never depend on a pre-existing file.
+    // open(O_CREAT, 0600) ignores the mode when the temp already exists, and rename keeps the
+    // source mode, so a pre-planted looser temp (a `0666` `.tmp`) would make this TCB record
+    // world-writable. 0600 is enforced on the open fd, whatever file was there.
     if (::fchmod(fd, 0600) != 0) {
         (void)::close(fd);
         (void)std::remove(path.c_str());
@@ -129,12 +126,10 @@ void fsync_parent_dir(const std::string& path) {
 } // namespace
 
 std::string so_content_hash(const std::string& so_path) {
-    // ONE IMPLEMENTATION, in the core (`zen/content_id.hpp`), because the in-process
-    // admission policy keys artifacts by exactly this identity too — and two answers
-    // to "is this the build I approved" is one answer too many. The reasoning behind
-    // the digest choice (audit F-1: collision resistance, not speed) lives with the
-    // implementation; this name stays because the isolation ledger's own record, its
-    // tests and its documentation all speak of a .so content hash.
+    // One implementation, in the core (`zen/content_id.hpp`), because the in-process admission
+    // policy keys artifacts by exactly this identity too. The digest's reasoning (collision
+    // resistance, not speed) is in that header; this name stays because the isolation ledger,
+    // its tests and its documentation speak of a .so content hash.
     try {
         return loom::file_content_id(so_path);
     } catch (const std::exception& e) {
@@ -204,14 +199,10 @@ void GrantRecord::persist() const {
     v.set("entries", loom::Cell::list(std::move(entries)));
     const std::string json = loom::compat::serialize(v);
 
-    // Write to a temp file, fsync its CONTENTS, atomically rename into place, then fsync
-    // the directory so the rename itself is durable. The record is TCB data the host's
-    // startup depends on: a partial, torn, or unsynced write (ENOSPC, power loss) must
-    // never corrupt the live ledger — a corrupt ledger throws on the next load() and
-    // bricks the host. rename(2) is atomic within a filesystem, but without the
-    // content-fsync a crash could make the rename durable while the data blocks are not,
-    // leaving the ledger's name pointing at empty/torn bytes. The two fsyncs close that
-    // window — this is the durability the temp-file-then-rename dance exists to deliver.
+    // Write a temp file, fsync its contents, rename it into place atomically, then fsync the
+    // directory so the rename is durable. The host's startup depends on this TCB record, and a
+    // torn write would make the next load() throw; without the content fsync a crash could make
+    // the rename durable before the data, leaving the name pointing at torn bytes.
     const std::string tmp = path_ + ".tmp";
     write_file_synced(tmp, json);
     if (std::rename(tmp.c_str(), path_.c_str()) != 0) {

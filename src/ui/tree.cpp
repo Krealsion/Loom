@@ -4,8 +4,8 @@
 // The tree vocabulary's mechanics: the widget named-constructors, the stable spellings, and the
 // headless outline renderer (the renderer-agnosticism proof). NOTHING here knows about cells,
 // pixels, coordinates, termios, or any windowing library — layout is a renderer's job alone,
-// and which renderers exist is not this file's business. Lifted verbatim out of the console
-// (Phase B): the vocabulary is the Loom's, the console one consumer of it.
+// and which renderers exist is not this file's business. The vocabulary is Loom's; the console
+// is one consumer of it.
 
 #include <zen/ui/tree.hpp>
 

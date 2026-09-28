@@ -187,15 +187,11 @@ HeldInput::Taken HeldInput::take(std::string* line, TooLongLine* refused) {
 #ifdef _WIN32
 
 // ---- Windows: a reader thread and the waiting area -----------------------------
-//
-// See the header for why. What is here is the mechanics, and the three facts they rest on,
-// each measured on a real console before it was relied on:
-//
-//   1. a cooked `ReadFile` skips key-ups, focus, mouse, menu and buffer-size records and
-//      modifier key-downs by itself, and returns the line behind them at once;
-//   2. `CancelSynchronousIo` ends a cooked read that is waiting on a half-typed line;
-//   3. the cancelled read's state goes away with the handle it was issued on only when that
-//      handle is a separate `CONIN$` object — which is why the reader opens its own.
+// A console cannot be asked whether its cooked read has a finished line, so the blocking read
+// runs on a thread that touches only its handle and `Shared`, never the bus or stdout. Measured
+// on a real console: a cooked `ReadFile` skips non-character records itself;
+// `CancelSynchronousIo` ends one waiting on a half-typed line; and the cancelled read goes away
+// with its handle only when that is a separate `CONIN$` object, so the reader opens its own.
 
 namespace {
 
@@ -222,9 +218,8 @@ unsigned __stdcall read_lines(void* arg) {
     for (;;) {
         {
             std::unique_lock<std::mutex> lock(s->m);
-            // THE BOUND ON READ-AHEAD. The thread reads only while a whole read fits in the
-            // waiting area, and otherwise waits for the host to take a line. It used to read
-            // whatever a pipe or a file held, as fast as it could, into a queue with no limit.
+            // The bound on read-ahead: the thread reads only while a whole read fits in the
+            // waiting area, and otherwise waits for the host to take a line.
             s->for_reader.wait(lock, [&s] { return s->stop || s->held.room() >= kReadChunkBytes; });
             if (s->stop) {
                 break;
@@ -386,13 +381,10 @@ LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
         return status_of(taken, out);
     }
 
-    // NOTHING IS FINISHED, so what is held is one unfinished line no longer than a command, and
-    // a whole read fits. The reader reads only now, and only until a line is ready — which is its
-    // whole bound on read-ahead: with finished lines waiting, it leaves the rest with the OS.
-    //
-    // UNTIL THE DEADLINE, not for one read. A read can complete nothing — part of a line, or part
-    // of a refused one being discarded — while more is already there to read, and "Idle" means
-    // nothing was ready in time, on every platform.
+    // Nothing is finished, so what is held is one unfinished line no longer than a command,
+    // and a whole read fits. The reader reads only now and only until a line is ready, which
+    // is its bound on read-ahead; and until the deadline, not for one read, since a read may
+    // finish nothing while more is there, and Idle means nothing was ready in time.
     using Clock = std::chrono::steady_clock;
     const Clock::time_point deadline =
         Clock::now() + std::chrono::milliseconds(timeout_ms > 0 ? timeout_ms : 0);
