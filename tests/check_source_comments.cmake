@@ -29,11 +29,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # Files not yet brought to the standard, as regular expressions over the repository-relative
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
-    "^tests/hook_return/hook_absent[.]cpp$"
-    "^tests/hook_return/hook_bool[.]cpp$"
-    "^tests/hook_return/hook_enum[.]cpp$"
-    "^tests/hook_return/hook_int[.]cpp$"
-    "^tests/hook_return/hook_void[.]cpp$"
     "^tests/run-under-scope[.]sh$"
     "^tests/session/lifecycle/asks[.]py$"
     "^tests/session/lifecycle/cleanup[.]py$"
@@ -82,15 +77,7 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_value[.]cpp$"
     "^tests/test_weave[.]cpp$"
     "^tests/test_weave_shape[.]cpp$"
-    "^tests/test_weaver[.]cpp$"
-    "^tests/weavelib/bad_abi[.]cpp$"
-    "^tests/weavelib/dispatch_probe[.]cpp$"
-    "^tests/weavelib/dispatch_protocol[.]hpp$"
-    "^tests/weavelib/mod_storage[.]cpp$"
-    "^tests/weavelib/net_protocol[.]hpp$"
-    "^tests/weavelib/observe_probe_vocab[.]cpp$"
-    "^tests/weavelib/storage_client[.]cpp$"
-    "^tests/weavelib/storage_protocol[.]hpp$")
+    "^tests/test_weaver[.]cpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
