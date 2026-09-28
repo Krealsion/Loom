@@ -842,6 +842,59 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
     }
 }
 
+TEST_CASE("a cgroup-v2 path is matched whole: a leaf never matches one its name prefixes") {
+    // cgroup_confirm reads a child's leaf through this rule; it is pure, so it is pinned here
+    // without a live cgroup. Only the "0::" line counts, and only the whole of its path.
+    const std::string in_ten = "0::/app.slice/run-1.scope/zen-weave-10\n";
+    CHECK(cgroup_v2_path_is(in_ten, "/app.slice/run-1.scope/zen-weave-10"));
+    CHECK_FALSE(cgroup_v2_path_is(in_ten, "/app.slice/run-1.scope/zen-weave-1"));
+    CHECK_FALSE(cgroup_v2_path_is("0::/s/zen-weave-1/inner\n", "/s/zen-weave-1")); // beneath it
+    CHECK_FALSE(cgroup_v2_path_is("0::/s\n", "/s/zen-weave-1"));                    // above it
+    CHECK(cgroup_v2_path_is("0::/zen-weave-1\n", "/zen-weave-1"));  // a base at the v2 root
+    CHECK(cgroup_v2_path_is("0::/s/zen-weave-1", "/s/zen-weave-1")); // no final newline
+    // a v1 line naming the path is not the v2 membership
+    CHECK_FALSE(cgroup_v2_path_is("1:name=systemd:/s/zen-weave-1\n0::/other\n", "/s/zen-weave-1"));
+    CHECK_FALSE(cgroup_v2_path_is("", "/s/zen-weave-1"));
+}
+
+TEST_CASE("a child is confirmed in its own cgroup leaf, never in one its leaf's name extends") {
+    // Two leaves with the same limits, one name extending the other's, and a child in the longer
+    // one: the limits of either would read back as written, so only membership tells them apart.
+    ZEN_REQUIRE_ENFORCEABLE(detect_enforcement(), {Capability::Resources},
+                            "a child is confirmed in its own cgroup leaf only");
+    const ResourceCaps caps = cgroup_default_caps();
+    const std::string shorter = "zen-leaf-exact-1";
+    const std::string longer = "zen-leaf-exact-10";
+    REQUIRE(cgroup_create_leaf(shorter, caps));
+    REQUIRE(cgroup_create_leaf(longer, caps));
+
+    int hold[2] = {-1, -1};
+    REQUIRE(::pipe(hold) == 0);
+    const pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::close(hold[1]);
+        char byte = 0;
+        while (::read(hold[0], &byte, 1) > 0) {
+        } // held until the parent closes its end
+        ::_exit(0);
+    }
+    ::close(hold[0]);
+
+    const bool moved = cgroup_move_pid(longer, pid);
+    CHECK(moved);
+    if (moved) {
+        CHECK(cgroup_confirm(longer, pid, caps));
+        CHECK_FALSE(cgroup_confirm(shorter, pid, caps));
+    }
+
+    ::close(hold[1]);
+    int status = 0;
+    (void)::waitpid(pid, &status, 0);
+    cgroup_remove_leaf(longer);
+    cgroup_remove_leaf(shorter);
+}
+
 TEST_CASE("no grant licenses a fork-bomb: pids stays bounded even with memory unlimited") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
@@ -1899,13 +1952,13 @@ TEST_CASE("an isolated image requesting dispatch-refusal attestation is refused 
 }
 
 // Keep this LAST in the file: a positive tally, so a green can never mean "every OS-enforcement
-// case silently skipped" (it relies on doctest's default registration order). EXACTLY 17, from
-// this suite's own witnesses only (POP-02): fourteen ZEN_REQUIRE_ENFORCEABLE guard sites, three
+// case silently skipped" (it relies on doctest's default registration order). EXACTLY 18, from
+// this suite's own witnesses only (POP-02): fifteen ZEN_REQUIRE_ENFORCEABLE guard sites, three
 // in cases doctest re-enters once per leaf subcase. Exact, not a floor, so deleting a witness is
-// a red; a new OS-enforcement proof raises it deliberately. The pure ChildEnvironment case takes
-// no gate: it spawns nothing and asserts nothing about the OS.
+// a red; a new OS-enforcement proof raises it deliberately. The pure ChildEnvironment and
+// cgroup-path cases take no gate: they spawn nothing and assert nothing about the OS.
 TEST_CASE("enforcement coverage: the OS-enforcement proofs actually executed, not silently skipped") {
-    ZEN_ENFORCEMENT_POPULATION(17);
+    ZEN_ENFORCEMENT_POPULATION(18);
 }
 
 } // TEST_SUITE
