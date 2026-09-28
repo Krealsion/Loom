@@ -1,30 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// Deliberate office authorship — role-authored provenance.
+// Deliberate office authorship: role-authored provenance.
 // MSG-07, MSG-04; docs/laws/messaging-laws.md
-//
-// THE LAW UNDER TEST:
-//
-//   A weave may deliberately author one statement in the capacity of a role it
-//   currently holds. Loom verifies that role membership at authorship time and
-//   carries the resulting office-authorship fact as immutable delivery
-//   provenance. Merely holding the role attaches nothing.
-//
-// The gap this closes is the one Night Lab priced five times over: identity
-// works when you are talking to somebody, and fails when you are talking to
-// whoever holds an office. A player told "your match is ready" by a weave that
-// HAPPENS to hold the matchmaker office cannot tell that statement from the
-// same weave's personal chatter — or from an attacker's perfectly-shaped
-// forgery. The office fact has two halves and both are load-bearing:
-// AUTHORIZATION (the author actually held R) and INTENT (this statement was
-// deliberately spoken as R).
-//
-// WHAT THESE CASES DELIBERATELY DO NOT DO: trust the polite path. Every attack
-// below is attempted by an ordinary registered weave holding an ordinary grant
-// for the shape it abuses — payload claims, copy/replay, wrong-office and
-// no-office authorship requests — because "the honest API cannot express the
-// attack" and "the substrate defends against it" are different properties.
+// A weave may deliberately author one statement as a role it holds; Loom verifies the membership
+// at authorship and carries the office fact as immutable delivery provenance, and merely holding
+// the role attaches nothing. Both halves bear load: AUTHORIZATION (the author held R) and INTENT
+// (this statement was spoken as R). Every attack is made by an ordinary weave with an ordinary
+// grant for the shape it abuses: "the honest API cannot express it" is not "Loom refuses it".
 
 #include "doctest.h"
 #include "switchboard_fixtures.hpp"
@@ -139,8 +122,7 @@ TEST_SUITE("role_authorship") {
 // destination — different authored standing.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: the same holder speaks personally and as the office, and the two arrive "
-          "distinguishable") {
+TEST_CASE("the same holder speaks personally and as the office, and the two arrive distinguishable") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered player = Listener::mount(bus, {greet_schema()}, log);
@@ -172,8 +154,8 @@ TEST_CASE("R2D-0: the same holder speaks personally and as the office, and the t
     CHECK_FALSE(office.from_empty_probe);
 }
 
-TEST_CASE("R2D-0: wrong office and no office are refused at authorship — visibly, and nothing "
-          "is queued or downgraded") {
+TEST_CASE("wrong office and no office are refused at authorship — visibly, and nothing is queued "
+          "or downgraded") {
     Switchboard bus;
     Tap tap;
     tap.attach(bus);
@@ -209,7 +191,7 @@ TEST_CASE("R2D-0: wrong office and no office are refused at authorship — visib
     CHECK(tap.count(RefusalReason::RoleAuthorshipDenied) == 4);
 }
 
-TEST_CASE("R2D-0: a payload role field buys zero provenance") {
+TEST_CASE("a payload role field buys zero provenance") {
     // The forgeable representation, used honestly by its owner: a schema whose
     // payload SAYS role=matchmaker. The delivery fact stays personal, which is
     // the entire difference between data and provenance.
@@ -237,8 +219,8 @@ TEST_CASE("R2D-0: a payload role field buys zero provenance") {
 // publications.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: authorship and destination are orthogonal — all four combinations, and the "
-          "two roles never conflate") {
+TEST_CASE("authorship and destination are orthogonal — all four combinations, and the two roles "
+          "never conflate") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     // The dispatcher holds a role AND records — a role-holding listener.
@@ -283,7 +265,7 @@ TEST_CASE("R2D-0: authorship and destination are orthogonal — all four combina
     }
 }
 
-TEST_CASE("R2D-0: publication carries the office fact to every listener; a rogue's same-shaped "
+TEST_CASE("publication carries the office fact to every listener; a rogue's same-shaped "
           "publication carries nothing") {
     Switchboard bus;
     auto log_a = std::make_shared<Listener>();
@@ -318,8 +300,8 @@ TEST_CASE("R2D-0: publication carries the office fact to every listener; a rogue
     }
 }
 
-TEST_CASE("R2D-0: an authorized publication with zero recipients is not a refusal, and a refusal "
-          "is not a zero-recipient publication") {
+TEST_CASE("an authorized publication with zero recipients is not a refusal, and a refusal is not a "
+          "zero-recipient publication") {
     Switchboard bus;
     Tap tap;
     tap.attach(bus);
@@ -348,8 +330,8 @@ TEST_CASE("R2D-0: an authorized publication with zero recipients is not a refusa
 // delivery law rather than bypassing any.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: a valid office author with an insufficient ordinary grant is still denied "
-          "delivery — the office is not a super-grant") {
+TEST_CASE("a valid office author with an insufficient ordinary grant is still denied delivery — "
+          "the office is not a super-grant") {
     Switchboard bus;
     Tap tap;
     tap.attach(bus);
@@ -378,8 +360,8 @@ TEST_CASE("R2D-0: a valid office author with an insufficient ordinary grant is s
     }
 }
 
-TEST_CASE("R2D-0: office speech from a life that ended obeys SenderLifeEnded — role provenance "
-          "cannot resurrect dead speech") {
+TEST_CASE("office speech from a life that ended obeys SenderLifeEnded — role provenance cannot "
+          "resurrect dead speech") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered player = Listener::mount(bus, {greet_schema()}, log);
@@ -395,8 +377,7 @@ TEST_CASE("R2D-0: office speech from a life that ended obeys SenderLifeEnded —
     CHECK(log->heard.empty());
 }
 
-TEST_CASE("R2D-0: a root cannot author office speech — the refusal is visible, not a base-class "
-          "silence") {
+TEST_CASE("a root cannot author office speech — the refusal is visible, not a base-class silence") {
     Switchboard bus;
     Tap tap;
     tap.attach(bus);
@@ -418,8 +399,8 @@ TEST_CASE("R2D-0: a root cannot author office speech — the refusal is visible,
 // Copy/replay: observed office provenance cannot be laundered.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: re-sending a received office-authored Message — provenance field and all — "
-          "arrives as ordinary personal speech") {
+TEST_CASE("re-sending a received office-authored Message — provenance field and all — arrives "
+          "as ordinary personal speech") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered second = Listener::mount(bus, {greet_schema()}, log);
@@ -450,8 +431,8 @@ TEST_CASE("R2D-0: re-sending a received office-authored Message — provenance f
 // The authorship moment, and the immutability of the authored fact.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: a legitimately authored fact survives a later role move — history is not "
-          "recomputed from current topology") {
+TEST_CASE("a legitimately authored fact survives a later role move — history is not recomputed "
+          "from current topology") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered player = Listener::mount(bus, {greet_schema()}, log);
@@ -478,8 +459,8 @@ TEST_CASE("R2D-0: a legitimately authored fact survives a later role move — hi
     CHECK(log->heard[0].sender == holder.id.value);
 }
 
-TEST_CASE("R2D-0: a message queued personally does not become office-authored because its sender "
-          "acquires the role before delivery") {
+TEST_CASE("a message queued personally does not become office-authored because its sender acquires "
+          "the role before delivery") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered coordinator = Listener::mount(bus, {greet_schema(), ping_schema()}, log);
@@ -510,8 +491,8 @@ TEST_CASE("R2D-0: a message queued personally does not become office-authored be
 // The replacement matrix: a REAL prepared replacement, end to end.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: the office survives its officeholder — prepared replacement moves authorship "
-          "without conflating identities") {
+TEST_CASE("the office survives its officeholder — prepared replacement moves authorship without "
+          "conflating identities") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered player = Listener::mount(bus, {greet_schema()}, log);
@@ -601,8 +582,8 @@ TEST_CASE("R2D-0: the office survives its officeholder — prepared replacement 
 // Answer/activation provenance: undamaged, and representable beside the office.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("R2D-0: the representation lets conversation provenance and the authored office "
-          "coexist — neither fact erases the other") {
+TEST_CASE("the representation lets conversation provenance and the authored office coexist — "
+          "neither fact erases the other") {
     // The type-level pin: Kind and authored_role are separate axes. No public
     // V1 door produces the combination; the representation must still hold it,
     // so a future answer_as_role needs no redesign.
@@ -624,8 +605,8 @@ TEST_CASE("R2D-0: the representation lets conversation provenance and the author
     CHECK_FALSE(Provenance{}.authored_from_role(""));
 }
 
-TEST_CASE("R2D-0: an office-authored ask earns an ordinary authenticated answer — the answer is "
-          "an answer, not office speech") {
+TEST_CASE("an office-authored ask earns an ordinary authenticated answer — the answer is an "
+          "answer, not office speech") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     // The asker holds an office and asks AS it; it records what comes back.
@@ -657,8 +638,8 @@ TEST_CASE("R2D-0: an office-authored ask earns an ordinary authenticated answer 
     CHECK(log->heard[0].sender == service.id.value);
 }
 
-TEST_CASE("R2D-0: a committed activation remains lifecycle provenance — never office speech, "
-          "even though the admitted candidate now holds the office") {
+TEST_CASE("a committed activation remains lifecycle provenance — never office speech, even "
+          "though the admitted candidate now holds the office") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered coordinator = register_probe(bus, {ping_schema()});
@@ -740,8 +721,8 @@ public:
     std::int64_t rejected() const { return state_.rejected; }
 };
 
-TEST_CASE("R2D-0: the definition-of-done program — a strict player joins only office-authored "
-          "matches, through Mail alone") {
+TEST_CASE("the whole program — a strict player joins only office-authored matches, through Mail "
+          "alone") {
     Switchboard bus;
     auto player = std::make_unique<StrictPlayer>();
     StrictPlayer* player_raw = player.get();
