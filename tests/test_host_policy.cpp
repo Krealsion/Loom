@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE SUPPLIED HOST'S DECIDING HALF — the two files a person writes by hand, and the
-// admission policy over one of them (`src/host/`).
-//
-// It is here because everything in this suite reads TEXT A PERSON TYPED: a rule grammar
-// and two schemas over hand-edited JSON. The rest of the host is a REPL, driven by hand
-// and proved by using it; a grammar is not, and a grammar nothing tests is one that
-// eventually accepts the wrong thing quietly.
-//
-// What each group pins:
-//   - the rule grammar reads back exactly what `render_rule` prints, including the two
-//     spellings it must REFUSE rather than guess at;
-//   - a decision survives a write and a re-read, which is the whole of "remembered";
-//   - the bare form a person writes and the enveloped form the host writes both read;
-//   - the policy admits, pins, re-pins and refuses in the five cases it distinguishes,
-//     and its baseline is the small one on purpose.
+// THE SUPPLIED HOST'S DECIDING HALF: the two files a person writes by hand, and the admission
+// policy over one of them (`src/host/`). Everything here reads TEXT A PERSON TYPED, and a grammar
+// nothing tests eventually accepts the wrong thing quietly. The rule grammar reads back what
+// `render_rule` prints and refuses two spellings rather than guess; a decision survives a write
+// and a re-read; the bare and enveloped forms both read; and the policy admits, pins, re-pins and
+// refuses in the five cases it distinguishes, from a deliberately small baseline.
 
 #include <doctest.h>
 
@@ -518,8 +509,7 @@ TEST_CASE("trust_rebuilds admits a changed build, re-pins it, and SAYS it did") 
     CHECK(s.find("counter")->content_id == "99998888777766665555444433332222");
     CHECK(s.pending().empty());
     // NOT SILENT. "Nothing changed" and "you are running code you have not seen, under
-    // authority you granted earlier" are different facts, and this is the note that had
-    // to be read to notice it was reporting the new build as the old one.
+    // authority you granted earlier" are different facts, and the note says which.
     REQUIRE(s.notes().size() == 1);
     CHECK(s.notes()[0].find("REBUILT") != std::string::npos);
     CHECK(s.notes()[0].find("aaaa1111") != std::string::npos);
@@ -685,15 +675,10 @@ TEST_CASE("the identity a decision is pinned to is the file's bytes, and says so
 
 
 // ---- durability: a failed write must change NOTHING -------------------------
-//
-// The store used to change its map and then try to write it, so an unwritable file
-// printed `cannot write` and changed what the host permitted anyway: `authority trust x`
-// failed, `start x` then succeeded under the failed approval, and a restart lost the
-// decision nobody had been told was not made. The candidate is written first now.
-//
-// THE INJECTION: the temp path is a DIRECTORY, which no open-for-write and no rename can
-// replace. It is a real filesystem refusal on both platforms rather than a seam a caller
-// could be given to stub out — this store's whole job is to be believed about the disk.
+// The candidate is written before the map changes, so an unwritable file cannot print `cannot
+// write` and still change what the host permits, or lose on restart a decision nobody was told
+// was not made. THE INJECTION: the temp path is a DIRECTORY, which no open-for-write and no
+// rename can replace: a real filesystem refusal on both platforms, not a seam to stub out.
 
 namespace {
 
@@ -722,8 +707,7 @@ TEST_CASE("a decision that could not be written did not happen, live or remember
     REQUIRE_FALSE(store.put(rule_for("probe"), &error));
     CHECK(error.find("cannot write") != std::string::npos);
 
-    // THE LIVE HALF. This is the assertion the old order could not make: the policy the
-    // running host is deciding by must not have changed.
+    // THE LIVE HALF: the policy the running host is deciding by must not have changed.
     CHECK(store.find("probe") == nullptr);
     CHECK(store.rules().empty());
     // ...and the durable half: nothing was created at all.
@@ -757,12 +741,11 @@ TEST_CASE("a forget that could not be written leaves the decision in force") {
 }
 
 TEST_CASE("a build whose pin cannot be written does not run, because the pin is the approval") {
-    // THE SEQUENCE THAT EXPOSED IT, not just its first step. An approval made without
-    // `--rebuilds` means "this build, and ask me again when it changes", and the record of
-    // WHICH build is the only thing that can notice a change. This store used to admit the
-    // first build when that record could not be written, leave the rule unpinned, and then
-    // admit a DIFFERENT build the same way — so a disk the person could not see turned their
-    // "ask me again" into "run anything", announced in a note. A warning is not consent.
+    // THE WHOLE SEQUENCE, not just its first step. An approval made without `--rebuilds` means
+    // "this build, and ask me again when it changes", and the record of WHICH build is the only
+    // thing that can notice a change. If it cannot be written, neither that build nor a different
+    // one may run: a disk the person cannot see must not turn "ask me again" into "run anything".
+    // A warning is not consent.
     Scratch f("failed-pin");
     AuthorityStore store;
     std::string error;
@@ -786,7 +769,7 @@ TEST_CASE("a build whose pin cannot be written does not run, because the pin is 
         CHECK(first.reason.find("could not record") != std::string::npos);
         CHECK(first.reason.find("cannot write") != std::string::npos);
         CHECK(first.reason.find("writable") != std::string::npos);
-        // A RETRY is the same answer, and so is the different build that used to walk in.
+        // A RETRY is the same answer, and so is a different build.
         CHECK_FALSE(store.policy()(build_a).admitted);
         CHECK_FALSE(store.policy()(build_b).admitted);
         // Nothing was invented: no pin in memory, no widened posture, and no "decision
@@ -841,11 +824,9 @@ TEST_CASE("`--rebuilds` is consent to any build, so a pin that cannot be written
 }
 
 TEST_CASE("replacement preserves the previous record when it cannot happen") {
-    // `write_gated_file` removed the destination and THEN renamed, so an interruption or a
-    // failed rename between the two lost the last good record. The header claimed atomic
-    // replacement; the code did not implement one. Both platforms replace in ONE operation
-    // now, and this is the observable consequence: a failed write leaves the old file
-    // exactly as it was, byte for byte.
+    // A replacement is ONE operation on both platforms, so a failed write leaves the old file
+    // exactly as it was, byte for byte: no interruption between a remove and a rename can lose
+    // the last good record.
     Scratch f("atomic-replace");
     AuthorityStore store;
     std::string error;
@@ -869,19 +850,11 @@ TEST_CASE("replacement preserves the previous record when it cannot happen") {
 
 
 TEST_CASE("replacement never removes the destination as a separate step") {
-    // THE PROPERTY, NOT A STORY ABOUT A CRASH. `write_gated_file` used to `remove()` the
-    // destination and then `rename()` onto it, which is two operations with a gap between
-    // them: a process that died in the gap, or a rename that then failed, left NO record at
-    // all. The header called that atomic replacement. Both platforms replace in one
-    // operation now -- POSIX rename(2), Windows MoveFileEx(MOVEFILE_REPLACE_EXISTING).
-    //
-    // A gap cannot be observed by racing it, so the test observes the DELETE instead. The
-    // destination here is something a single-operation replace cannot replace (a
-    // directory), so:
-    //   one operation  -> it fails, and whatever was at the destination is still there;
-    //   remove + rename -> the remove succeeds, the rename then succeeds onto the freed
-    //                      name, and the thing that was there is gone.
-    // The second is reported as SUCCESS by the old code, which is the sharper half of it.
+    // THE PROPERTY, NOT A STORY ABOUT A CRASH. A replacement is one operation (POSIX rename(2),
+    // Windows MoveFileEx(MOVEFILE_REPLACE_EXISTING)); a remove then a rename would leave no
+    // record at all if the process died between them. A gap cannot be observed by racing it, so
+    // the test observes the DELETE: at a destination one operation cannot replace (a directory),
+    // one operation fails and leaves it there, where remove + rename would succeed and lose it.
     Scratch f("replace-destination");
     std::filesystem::remove(f.path);
     std::filesystem::create_directory(f.path);

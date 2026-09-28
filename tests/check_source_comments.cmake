@@ -45,7 +45,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_history_logger[.]cpp$"
     "^tests/test_history_recorder[.]cpp$"
     "^tests/test_host_input[.]cpp$"
-    "^tests/test_host_policy[.]cpp$"
     "^tests/test_integration[.]cpp$"
     "^tests/test_observe[.]cpp$"
     "^tests/test_pixel[.]cpp$"
