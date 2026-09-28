@@ -64,8 +64,7 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_terminal[.]cpp$"
     "^tests/test_value[.]cpp$"
     "^tests/test_weave[.]cpp$"
-    "^tests/test_weave_shape[.]cpp$"
-    "^tests/test_weaver[.]cpp$")
+    "^tests/test_weave_shape[.]cpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer

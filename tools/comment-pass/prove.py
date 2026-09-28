@@ -101,6 +101,11 @@ REWORDED = {
         '"C-2a: the child\'s environment is authored, not inherited"'),
     "tests/check_entry_population.cmake": (
         '"# The CTest-entry inventory\'s receipt for one official-lane run (VOLATILE-B1).\\n"',),
+    "tests/test_weaver.cpp": (
+        '"WEAVER-1: a Weaver is built from a capability and an operator seat"',
+        '"WEAVER-1: a Weaver must never be constructible from a Switchboard"',
+        '"WEAVER-1: a Weaver must never be constructible from a Switchboard"',
+        '"WEAVER-1: the Weaver is an ordinary weave"'),
 }
 # Test data renamed because it carried a plan code or a private id: in each file, every use of the
 # START value is the new one now, in literals and code alike, and the START value is left in no
