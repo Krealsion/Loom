@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The `source_comments` entry: do first-party comments meet the source comment standard
-# (CONTRIBUTING.md#comments-and-documents)? A long block, a removal note or a private id is a red
-# that names where the text belongs; an empty population is a red. It cannot see history, a phase
-# or the maintainers' process in words, a docstring's length, or a comment's truth.
+# The `source_comments` entry (CONTRIBUTING.md#comments-and-documents): a long block, a removal
+# note, a private id in a comment, a string or CMake code, a label in a case name, a TEST_CASE name
+# held twice, or an empty population is a red. It cannot see history or process in words, a label
+# in data, or a comment's truth.
 #   cmake -P tests/check_source_comments.cmake    (from the repository root, or -DZEN_REPO=<repo>)
 
 cmake_minimum_required(VERSION 3.16)
@@ -26,49 +26,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
     python tools/basics tools/loom-session tools/loom-session.cmd)
 set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
-# Files not yet brought to the standard, as regular expressions over the repository-relative
-# path. The list only shrinks: a file leaves it when its comments meet the standard.
-set(ZEN_COMMENT_PENDING
-    "^tests/test_admission[.]cpp$"
-    "^tests/test_ask_book[.]cpp$"
-    "^tests/test_breathing[.]cpp$"
-    "^tests/test_capabilities[.]cpp$"
-    "^tests/test_compat[.]cpp$"
-    "^tests/test_component[.]cpp$"
-    "^tests/test_console[.]cpp$"
-    "^tests/test_describe[.]cpp$"
-    "^tests/test_dispatch_loaded[.]cpp$"
-    "^tests/test_dispatch_refusal[.]cpp$"
-    "^tests/test_fuzz[.]cpp$"
-    "^tests/test_gate[.]cpp$"
-    "^tests/test_grant[.]cpp$"
-    "^tests/test_handoff[.]cpp$"
-    "^tests/test_harness[.]cpp$"
-    "^tests/test_history_logger[.]cpp$"
-    "^tests/test_history_recorder[.]cpp$"
-    "^tests/test_host_input[.]cpp$"
-    "^tests/test_host_policy[.]cpp$"
-    "^tests/test_integration[.]cpp$"
-    "^tests/test_joint[.]cpp$"
-    "^tests/test_observe[.]cpp$"
-    "^tests/test_pixel[.]cpp$"
-    "^tests/test_poke[.]cpp$"
-    "^tests/test_policy[.]cpp$"
-    "^tests/test_registry[.]cpp$"
-    "^tests/test_role_authorship[.]cpp$"
-    "^tests/test_role_request[.]cpp$"
-    "^tests/test_runs[.]cpp$"
-    "^tests/test_schema[.]cpp$"
-    "^tests/test_schema_codec[.]cpp$"
-    "^tests/test_sense[.]cpp$"
-    "^tests/test_serialize[.]cpp$"
-    "^tests/test_session[.]cpp$"
-    "^tests/test_switchboard[.]cpp$"
-    "^tests/test_terminal[.]cpp$"
-    "^tests/test_value[.]cpp$"
-    "^tests/test_weave[.]cpp$"
-    "^tests/test_weave_shape[.]cpp$"
-    "^tests/test_weaver[.]cpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
@@ -119,7 +76,8 @@ endfunction()
 
 # One C/C++ line's comment text and whether the line is comment alone, given whether it opens
 # inside a `/* */` comment; string and character literals are code. Sets <out>_comment,
-# <out>_whole and <out>_open (the line ends inside a `/* */` comment).
+# <out>_whole, <out>_open (the line ends inside a `/* */` comment) and <out>_code (the rest, each
+# literal emptied).
 function(zen_comments_cxx_line line open out)
     string(REGEX REPLACE "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" "\"\"" rest "${line}")
     string(REGEX REPLACE "'([^'${ZEN_EOT}]|${ZEN_EOT}.)'" "''" rest "${rest}")
@@ -164,14 +122,150 @@ function(zen_comments_cxx_line line open out)
     set(${out}_comment "${comment}" PARENT_SCOPE)
     set(${out}_whole ${whole} PARENT_SCOPE)
     set(${out}_open ${open} PARENT_SCOPE)
+    set(${out}_code "${code}" PARENT_SCOPE)
+endfunction()
+
+# ---- test case names -------------------------------------------------------------------
+# A case's name says what it proves, in words, so it is read as a comment is: a private id in it
+# is a red, and so is a label that grammar cannot see -- one to four capitals and digits standing
+# alone (`J1`, `S3b`, `R2FA`). Every suite is compiled into one test binary, so no two TEST_CASEs
+# may share a name.
+set(ZEN_CASE_MACRO "(^|[^A-Za-z0-9_])(TEST_CASE|SUBCASE)[ \t]*\\(")
+set(ZEN_CASE_LABEL "(^|[^A-Za-z0-9_])([A-Z][A-Z]?[A-Z]?[A-Z]?[0-9]+[A-Za-z]?[A-Za-z]?)([^A-Za-z0-9_]|$)")
+string(ASCII 5 ZEN_ENQ)
+
+# The literals at the start of text, joined: sets <out>_name, <out>_lits (each literal, quotes
+# kept), <out>_rest (what follows them), and <out>_more when nothing but blanks follows them, so
+# the name may go on in the next line's literals.
+function(zen_cases_take text out)
+    set(name "")
+    set(lits "")
+    while(text MATCHES "^[ \t]*(\"(([^\"${ZEN_EOT}]|${ZEN_EOT}.)*)\")(.*)$")
+        list(APPEND lits "${CMAKE_MATCH_1}")
+        string(APPEND name "${CMAKE_MATCH_2}")
+        set(text "${CMAKE_MATCH_4}")
+    endwhile()
+    set(more FALSE)
+    if(text MATCHES "^[ \t]*$")
+        set(more TRUE)
+    endif()
+    set(${out}_name "${name}" PARENT_SCOPE)
+    set(${out}_lits "${lits}" PARENT_SCOPE)
+    set(${out}_rest "${text}" PARENT_SCOPE)
+    set(${out}_more ${more} PARENT_SCOPE)
+endfunction()
+
+# The findings about one case's name.
+function(zen_cases_judge where name laws out)
+    set(found "")
+    zen_private_ids("${name}" "${laws}" ids)
+    foreach(id IN LISTS ids)
+        list(APPEND found "${where}: the case name holds `${id}`, a development-phase name or private id -- say what the case proves in words (rename it through tools/comment-pass/cases.tsv)")
+    endforeach()
+    if(ids STREQUAL "" AND name MATCHES "${ZEN_CASE_LABEL}")
+        list(APPEND found "${where}: the case name holds the label `${CMAKE_MATCH_2}` -- say what the case proves in words (rename it through tools/comment-pass/cases.tsv)")
+    endif()
+    set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+
+# The findings about TEST_CASE names held twice, each `<file>:<line><ENQ><name>`.
+function(zen_cases_duplicates cases out)
+    set(found "")
+    set(seen "")
+    set(seen_at "")
+    foreach(item IN LISTS cases)
+        string(FIND "${item}" "${ZEN_ENQ}" cut)
+        string(SUBSTRING "${item}" 0 ${cut} where)
+        math(EXPR from "${cut} + 1")
+        string(SUBSTRING "${item}" ${from} -1 name)
+        list(FIND seen "${name}" at)
+        if(at GREATER -1)
+            list(GET seen_at ${at} first)
+            list(APPEND found "${where}: the case name is also the one at ${first} -- every suite is in one test binary, so say in the name what tells the two apart")
+        else()
+            list(APPEND seen "${name}")
+            list(APPEND seen_at "${where}")
+        endif()
+    endforeach()
+    set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+
+# Judge the case whose name the scan has read whole, and keep a TEST_CASE's for the duplicates.
+macro(zen_cases_close)
+    zen_cases_judge("${rel}:${case_line}" "${case_name}" "${laws}" judged_case)
+    list(APPEND findings ${judged_case})
+    math(EXPR case_count "${case_count} + 1")
+    if(case_macro STREQUAL "TEST_CASE" AND NOT case_name STREQUAL "")
+        list(APPEND cases "${rel}:${case_line}${ZEN_ENQ}${case_name}")
+    endif()
+endmacro()
+
+# Every case on the rest of a C/C++ line, left to right: strings and comments are stepped over,
+# and at each macro its name is taken; a name that runs off the line's end goes on in the next.
+macro(zen_cases_scan_rest)
+    while(NOT case_open)
+        if(NOT rest MATCHES "^([^\"/]*)(.*)$")
+            break()
+        endif()
+        set(cs_prefix "${CMAKE_MATCH_1}")
+        set(cs_tail "${CMAKE_MATCH_2}")
+        if(cs_prefix MATCHES "${ZEN_CASE_MACRO}[ \t]*$")
+            set(case_macro "${CMAKE_MATCH_2}")
+            set(case_line ${n})
+            zen_cases_take("${cs_tail}" ct)
+            set(case_name "${ct_name}")
+            list(APPEND case_lits ${ct_lits})
+            set(case_open ${ct_more})
+            set(rest "${ct_rest}")
+            if(NOT case_open)
+                zen_cases_close()
+            endif()
+        elseif(cs_tail STREQUAL "" OR cs_tail MATCHES "^//")
+            break()
+        elseif(cs_tail MATCHES "^/[*]")
+            string(FIND "${cs_tail}" "*/" cs_close)
+            if(cs_close EQUAL -1)
+                break()
+            endif()
+            math(EXPR cs_close "${cs_close} + 2")
+            string(SUBSTRING "${cs_tail}" ${cs_close} -1 rest)
+        elseif(cs_tail MATCHES "^/")
+            string(SUBSTRING "${cs_tail}" 1 -1 rest)
+        elseif(cs_tail MATCHES "^\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"(.*)$")
+            set(rest "${CMAKE_MATCH_2}")
+        else()
+            break()
+        endif()
+    endwhile()
+endmacro()
+
+# ---- strings and CMake code --------------------------------------------------------------
+# A private id is refused in every C/C++ string literal and in the code of every CMake file, as
+# in their comments: a message or a test-data value says its thing in words. Labels are not read
+# here; in data they look like ordinary values (`r1`, `Ping2`). Spared: the three checks whose
+# self-tests must spell ids to prove they refuse them; their comments are still read.
+set(ZEN_STRING_SPARED tests/private_ids.cmake tests/check_source_comments.cmake
+    tests/check_doc_standard.cmake)
+
+function(zen_strings_judge where text laws out)
+    set(found "")
+    zen_private_ids("${text}" "${laws}" ids)
+    foreach(id IN LISTS ids)
+        list(APPEND found "${where}: `${id}` in a string or in CMake code is a development-phase name or private id -- word a message without it, and rename test data in every use")
+    endforeach()
+    set(${out} "${found}" PARENT_SCOPE)
 endfunction()
 
 # Every finding in one file's swapped text. `kind` is cxx, cmake or manifest; `exempt` is TRUE for
 # an installed header. A comment line is comment alone: `//` or `/* */` text, or `#` outside a
 # quoted CMake argument, or a line inside an open `/* */`. Every comment is judged for a removal
-# note and a private id, a trailing one too.
+# note and a private id, a trailing one too, and every C/C++ case name as the rule above says.
+# Sets <out>_cases (the TEST_CASE names, for the duplicates) and <out>_names (the names read).
 function(zen_comments_scan rel kind exempt content laws out)
     set(findings "")
+    set(cases "")
+    set(case_count 0)
+    set(case_open FALSE)
     string(REPLACE "\n" ";" lines "${content}")
     set(n 0)
     set(block 0)
@@ -182,31 +276,39 @@ function(zen_comments_scan rel kind exempt content laws out)
         math(EXPR n "${n} + 1")
         set(comment "")
         set(whole FALSE)
+        set(code_text "")
         if(kind STREQUAL "cmake")
             # Quoted arguments may span lines; a `#` inside one is text, not a comment.
             set(rest "${line}")
             if(in_quote)
-                if(rest MATCHES "^([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"(.*)$")
-                    set(rest "${CMAKE_MATCH_2}")
+                if(rest MATCHES "^(([^\"${ZEN_EOT}]|${ZEN_EOT}.)*)\"(.*)$")
+                    set(code_text "${CMAKE_MATCH_1}")
+                    set(rest "${CMAKE_MATCH_3}")
                     set(in_quote FALSE)
                 else()
+                    set(code_text "${rest}")
                     set(rest "")
                 endif()
             endif()
             if(NOT in_quote)
                 # A closed argument leaves no quote behind: a `"` still found opens one.
+                string(REGEX MATCHALL "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" quoted "${rest}")
+                string(REPLACE ";" " " quoted "${quoted}")
                 string(REGEX REPLACE "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" "__" bare "${rest}")
                 string(FIND "${bare}" "#" hash)
                 string(FIND "${bare}" "\"" quote)
+                set(unquoted "${bare}")
                 if(NOT hash EQUAL -1 AND (quote EQUAL -1 OR hash LESS quote))
                     string(SUBSTRING "${bare}" ${hash} -1 comment)
                     string(SUBSTRING "${bare}" 0 ${hash} before)
+                    set(unquoted "${before}")
                     if(before MATCHES "^[ \t]*$" AND rest STREQUAL line)
                         set(whole TRUE)
                     endif()
                 elseif(NOT quote EQUAL -1)
                     set(in_quote TRUE)
                 endif()
+                string(APPEND code_text " ${unquoted} ${quoted}")
             endif()
         elseif(kind STREQUAL "script" OR kind STREQUAL "cmd")
             # Python, shell and batch: the whole line is judged, so a docstring, a string and a
@@ -238,6 +340,46 @@ function(zen_comments_scan rel kind exempt content laws out)
             if(was_open AND line MATCHES "^[ \t]*$")
                 set(whole TRUE)
             endif()
+            # Every case's name on the line: its literals after the macro, joined across the lines
+            # they span. The literals a name took are its rule's, not the string rule's.
+            set(case_lits "")
+            set(rest "${line}")
+            if(case_open)
+                set(case_open FALSE)
+                if(rest MATCHES "^[ \t]*\"")
+                    zen_cases_take("${rest}" ct)
+                    string(APPEND case_name "${ct_name}")
+                    list(APPEND case_lits ${ct_lits})
+                    set(case_open ${ct_more})
+                    set(rest "${ct_rest}")
+                endif()
+                if(NOT case_open)
+                    zen_cases_close()
+                endif()
+            endif()
+            if(NOT case_open AND cl_code MATCHES "${ZEN_CASE_MACRO}")
+                if(was_open)
+                    string(FIND "${rest}" "*/" cs_close)
+                    if(cs_close EQUAL -1)
+                        set(rest "")
+                    else()
+                        math(EXPR cs_close "${cs_close} + 2")
+                        string(SUBSTRING "${rest}" ${cs_close} -1 rest)
+                    endif()
+                endif()
+                zen_cases_scan_rest()
+            endif()
+            # Every string on the line, after character literals (a `'"'` opens none).
+            string(REGEX REPLACE "'([^'${ZEN_EOT}]|${ZEN_EOT}.)'" "''" chars "${line}")
+            string(REGEX MATCHALL "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" strings "${chars}")
+            if(NOT case_lits STREQUAL "" AND NOT strings STREQUAL "")
+                list(REMOVE_ITEM strings ${case_lits})
+            endif()
+            string(REPLACE ";" " " code_text "${strings}")
+        endif()
+        if(NOT code_text MATCHES "^[ \t]*$" AND NOT rel IN_LIST ZEN_STRING_SPARED)
+            zen_strings_judge("${rel}:${n}" "${code_text}" "${laws}" judged_strings)
+            list(APPEND findings ${judged_strings})
         endif()
         if(whole)
             if(block EQUAL 0)
@@ -262,7 +404,12 @@ function(zen_comments_scan rel kind exempt content laws out)
     if(block GREATER ZEN_COMMENT_BLOCK_LIMIT AND NOT exempt)
         list(APPEND findings "${rel}:${block_start}: a comment block of ${block} lines at the end of the file")
     endif()
+    if(case_open)
+        zen_cases_close()
+    endif()
     set(${out} "${findings}" PARENT_SCOPE)
+    set(${out}_cases "${cases}" PARENT_SCOPE)
+    set(${out}_names ${case_count} PARENT_SCOPE)
 endfunction()
 
 # The directories and files the root CMakeLists.txt's `install(DIRECTORY include/zen/ ...)` call
@@ -317,14 +464,12 @@ function(zen_comments_kind rel out)
     set(${out} ${kind} PARENT_SCOPE)
 endfunction()
 
-# Whether a path is held: not vendored, not pending.
+# Whether a path is held: every first-party file is, and vendored code never is.
 function(zen_comments_held rel out)
     set(held TRUE)
-    foreach(pattern IN LISTS ZEN_COMMENT_EXCLUDED ZEN_COMMENT_PENDING)
-        if(rel MATCHES "${pattern}")
-            set(held FALSE)
-        endif()
-    endforeach()
+    if(rel MATCHES "${ZEN_COMMENT_EXCLUDED}")
+        set(held FALSE)
+    endif()
     set(${out} ${held} PARENT_SCOPE)
 endfunction()
 
@@ -354,13 +499,10 @@ endforeach()
 list(REMOVE_DUPLICATES found_under_roots)
 list(SORT found_under_roots)
 set(population "")
-set(pending_count 0)
 foreach(rel IN LISTS found_under_roots)
     zen_comments_held("${rel}" held)
     if(held)
         list(APPEND population "${rel}")
-    elseif(NOT rel MATCHES "${ZEN_COMMENT_EXCLUDED}")
-        math(EXPR pending_count "${pending_count} + 1")
     endif()
 endforeach()
 list(LENGTH population population_count)
@@ -396,7 +538,42 @@ zen_comments_expect("a removal note" cxx "// ${ZEN_STAR} the old arm WAS HERE\ni
 zen_comments_expect("a private id" cxx "// see VD-27 for why\nint x;\n" 1)
 zen_comments_expect("declared laws and standards" cxx "// MSG-09, POP-01, UTF-8, button-1\nint x;\n" 0)
 zen_comments_expect("an id in a trailing comment" cxx "int x; // P-WORK-22\n" 1)
-zen_comments_expect("an id in a literal" cxx "const char* s = \"VD-27 // x\"; // fine\n" 0)
+zen_comments_expect("an id in a literal is the string rule's, not a comment" cxx
+    "const char* s = \"VD-27 // x\"; // fine\n" 1)
+zen_comments_expect("an id in a message" cxx "throw std::runtime_error(\"refused (R2E-0)\");\n" 1)
+zen_comments_expect("a label and a law in a string" cxx "f(\"c2b\", \"R2FB.Bulk\", \"Ping2\", \"MSG-09\");\n" 0)
+zen_comments_expect("a quote in a character literal opens no string" cxx "char q = '\"'; int R2E_0 = 1;\n" 0)
+zen_comments_expect("an id in CMake code" cmake "add_test(NAME x COMMAND t --test-suite=R2FD-1)\n" 1)
+zen_comments_expect("an id in a quoted CMake argument" cmake "message(STATUS \"since R2E-0\") # fine\n" 1)
+zen_comments_expect("an id inside a CMake argument spanning lines" cmake
+    "message(STATUS \"one\ntwo VD-27\nthree\")\n" 1)
+zen_comments_scan("tests/private_ids.cmake" cmake FALSE "set(x \"R2E-0a\")\n" "${laws}" spared)
+if(NOT spared STREQUAL "")
+    message(FATAL_ERROR "source-comments: self-test 'a check's own self-test spelling is spared' found '${spared}'")
+endif()
+zen_comments_expect("every case on a line" cxx "TEST_CASE(\"x\") { SUBCASE(\"S2b: y\") {} }\n" 1)
+zen_comments_expect("a case after a closed one on its continuation line" cxx
+    "TEST_CASE(\"a \"\n          \"b\") { SUBCASE(\"J3: c\") {} }\n" 1)
+zen_comments_expect("a case after a string and a comment on its line" cxx
+    "f(\"TEST_CASE(\"); /* SUBCASE( */ SUBCASE(\"H1: d\") {}\n" 1)
+zen_comments_expect("a coded name is refused once" cxx "TEST_CASE(\"R2E-0: e\") {}\n" 1)
+zen_comments_expect("a private id in a case name" cxx "TEST_CASE(\"R2E-0: a thing holds\") {\n}\n" 1)
+zen_comments_expect("a label in a subcase name" cxx "    SUBCASE(\"J1: a thing holds\") {\n    }\n" 1)
+zen_comments_expect("a label in a name's second literal" cxx
+    "TEST_CASE(\"a thing \"\n          \"holds (S3b)\") {\n}\n" 1)
+zen_comments_expect("a name on the line after its macro" cxx "TEST_CASE(\n    \"R2FA: a thing\") {\n}\n" 1)
+zen_comments_expect("words that look like labels, and a law" cxx
+    "TEST_CASE(\"v1 and u32 in Box2 by base64, per MSG-09; an x86 H.264\" * doctest::skip()) {\n}\n" 0)
+zen_comments_expect("a label in an ordinary literal" cxx "f(\"J1: not a case\");\nint TEST_CASEY(\"J2\");\n" 0)
+zen_comments_scan("self-test" cxx FALSE "TEST_CASE(\"one\") {}\nTEST_CASE(\"two\") {\n    SUBCASE(\"s\") {}\n}\n"
+                  "${laws}" counted)
+if(NOT counted_names EQUAL 3 OR NOT counted_cases MATCHES "^self-test:1${ZEN_ENQ}one;self-test:2${ZEN_ENQ}two$")
+    message(FATAL_ERROR "source-comments: self-test 'case names are counted and kept' read ${counted_names} names")
+endif()
+zen_cases_duplicates("a.cpp:1${ZEN_ENQ}one;b.cpp:2${ZEN_ENQ}two;c.cpp:3${ZEN_ENQ}one" twice)
+if(NOT twice STREQUAL "c.cpp:3: the case name is also the one at a.cpp:1 -- every suite is in one test binary, so say in the name what tells the two apart")
+    message(FATAL_ERROR "source-comments: self-test 'a TEST_CASE name held twice' found '${twice}'")
+endif()
 string(REPLACE "//" "#" hashes "${six}")
 zen_comments_expect("a CMake block" cmake "${hashes}# seven\nset(x 1)\n" 1)
 zen_comments_expect("hashes inside a quoted argument" cmake "set(x \"\n${hashes}# seven\n\")\n" 0)
@@ -428,10 +605,9 @@ function(zen_comments_expect_path rel want_held want_kind want_installed)
                             "${installed}; want ${want_held} as ${want_kind}, installed ${want_installed}")
     endif()
 endfunction()
-set(ZEN_COMMENT_PENDING_KEPT "${ZEN_COMMENT_PENDING}")
-set(ZEN_COMMENT_PENDING "^src/")
 zen_comments_expect_path(tests/third_party/doctest.h FALSE cxx FALSE)
-zen_comments_expect_path(src/kernel/kernel.cpp FALSE cxx FALSE)
+zen_comments_expect_path(src/kernel/kernel.cpp TRUE cxx FALSE)
+zen_comments_expect_path(tests/test_kernel.cpp TRUE cxx FALSE)
 zen_comments_expect_path(CMakeLists.txt TRUE cmake FALSE)
 zen_comments_expect_path(cmake/loomConfig.cmake.in TRUE cmake FALSE)
 zen_comments_expect_path(tests/suite_population.txt TRUE manifest FALSE)
@@ -443,7 +619,6 @@ zen_comments_expect_path(python/loom_session/tool.py TRUE script FALSE)
 zen_comments_expect_path(tools/loom-session TRUE script FALSE)
 zen_comments_expect_path(tools/loom-session.cmd TRUE cmd FALSE)
 zen_comments_expect_path(tests/run-under-scope.sh TRUE script FALSE)
-set(ZEN_COMMENT_PENDING "${ZEN_COMMENT_PENDING_KEPT}")
 zen_comments_install_excludes("" nothing)
 if(NOT nothing STREQUAL "NOTFOUND")
     message(FATAL_ERROR "source-comments: self-test 'no install call' found '${nothing}'")
@@ -484,6 +659,8 @@ zen_comments_expect("a pointer read from the tree" cxx "${six}${pointer}\nint x;
 
 # ---- the tree --------------------------------------------------------------------------
 set(findings "")
+set(all_cases "")
+set(names_read 0)
 set(lines_read 0)
 set(installed_count 0)
 foreach(rel IN LISTS population)
@@ -496,19 +673,26 @@ foreach(rel IN LISTS population)
     endif()
     zen_comments_scan("${rel}" ${kind} ${exempt} "${content}" "${laws}" found)
     list(APPEND findings ${found})
+    list(APPEND all_cases ${found_cases})
+    math(EXPR names_read "${names_read} + ${found_names}")
     string(REGEX MATCHALL "\n" breaks "${content}")
     list(LENGTH breaks count)
     math(EXPR lines_read "${lines_read} + ${count}")
 endforeach()
+zen_cases_duplicates("${all_cases}" twice)
+list(APPEND findings ${twice})
+list(LENGTH all_cases test_case_count)
 
 list(LENGTH findings finding_count)
 message(STATUS "source-comments: ${population_count} files held under ${ZEN_COMMENT_ROOTS}, "
-               "${lines_read} lines read; ${pending_count} files not yet held (ZEN_COMMENT_PENDING); "
+               "${lines_read} lines read; "
                "${installed_count} installed headers exempt from the ${ZEN_COMMENT_BLOCK_LIMIT}-line "
-               "block rule; self-test passed")
+               "block rule; ${names_read} case names read, ${test_case_count} of them TEST_CASEs; "
+               "self-test passed")
 if(finding_count GREATER 0)
     zen_comments_show("${findings}" shown)
     string(REPLACE ";" "\n  " shown "${shown}")
     message(FATAL_ERROR "source-comments: ${finding_count} findings:\n  ${shown}")
 endif()
-message(STATUS "source-comments: PASSED -- no long block, removal note or private id")
+message(STATUS "source-comments: PASSED -- no long block, removal note, private id in a comment, "
+               "string or CMake code, coded case name or case name held twice")

@@ -2,58 +2,10 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // JOINT PUBLICATION OF LATEST CLAIMS (SENSE-06, SENSE-07; docs/reference/joint-publication.md).
-//
-// The mechanism under test is the section header in zen/switchboard/sense.hpp. What each
-// case pins:
-//
-//   J1  one boundary          two claims change in one delivery; a reader before it sees
-//                             both old values, one after it both new, and there is no
-//                             delivery in which it could see one of each
-//   J2  the hook before work  a claimant standing behind its published claim is shown it
-//                             before its next handler runs, and before its snapshot
-//   J3  an edit invalidates   the claimant's own ordinary claim over a bound key aborts
-//                             the operation before commit; the other owner is untouched
-//   J4  a reload invalidates  new code behind a bound claimant aborts it; nothing exchanged
-//   J5  removal releases      a removed claimant aborts it and its offers are released
-//   J6  authority             the wrong operator, another board's authority, a claimant
-//                             outside the ceiling, a busy key, a forged id, an offer by a
-//                             stranger, an oversized offer, an undeclared shape, a commit
-//                             with an offer missing, and a cancelled operation
-//   J7  loaded claimant       a real image offers across the seam and hears the published
-//                             value back across it, before its next handle and before a
-//                             reload's snapshot; the operation bound to the old incarnation
-//                             is aborted by the reload
-//   J8  bounds                one live operation per key, the slot and key bounds, a
-//                             terminal record kept until its operator releases it, genuine
-//                             exhaustion by unreleased records, and release's refusals
-//   J9  nothing between       the commit's exchange runs no participant code: a claimant
-//                             that counts its deliveries counts none during the commit
-//   J10 the operator is told  when a bound participant is removed or replaced, the
-//                             operator that accepts zen.JointEnded hears it, once, naming
-//                             the operation and the record's reason -- also for an
-//                             operation the bus had already ended; a moved claim alone
-//                             tells it nothing (the owner answers); the record is the fact
-//   J11-J16: publication is not application --
-//                             a showing that fails holds the participant, attributably,
-//                             loaded and native alike; the substrate's mutation doors
-//                             reach the claim. Their own list heads that block.
-//   J17-J21: publication is not the end of an
-//                             outcome's lifetime, a queued notification is not consumption,
-//                             and a repaired owner is not proof its old operation applied --
-//                             records kept until released, exhaustion in words, the operator's
-//                             lifetime, and the third answer, Declined, native and loaded.
-//                             Their own list heads that block.
-//   J22 a refused replacement runs nothing of the incumbent's (its own list head).
-//   J23-J24: authority is exact and reaches only its holder's own records --
-//                             a foreign operator's VALID capability, named with another
-//                             operator's operation id, is refused NotOperator before the
-//                             record is touched, and the owner still commits (J23); a
-//                             capability names the operator's exact life and incarnation,
-//                             expires with either (swap, death and revival), cannot reach a
-//                             record the successor began, and the host authorizes the
-//                             successor by minting again (J24). J6's copied capability and
-//                             J19's operator lifetime are the neighbours, not the same
-//                             predicates: J6 never reaches the record, J19 retires it.
+// The mechanism under test is the section header in zen/switchboard/sense.hpp. The cases run in
+// the page's order: one boundary, the showing hook, what invalidates an operation, authority,
+// the loaded claimant and the bounds; then publication is not application, outcome retention,
+// the refused replacement, and authority that reaches only its holder's own records.
 
 #include <doctest.h>
 
@@ -136,9 +88,9 @@ public:
 };
 
 /// A participating owner whose EXPOSED state can be written through the substrate's own
-/// mutation doors (`zen.PokeWrite`, `zen.PokeResetState`), and whose `after_delivery`
-/// mirrors that state into its claim -- the reusable SDK contract J15/J16 pin. Its
-/// claim must follow its state whichever door moved it.
+/// mutation doors (`zen.PokeWrite`, `zen.PokeResetState`), and whose `after_delivery` mirrors
+/// that state into its claim: the reusable SDK contract the mutation-door cases pin. Its claim
+/// must follow its state whichever door moved it.
 struct MirrorState {
     std::string path = "A";
     std::int64_t epoch = 1;
@@ -382,7 +334,7 @@ struct Rig {
 
 TEST_SUITE("joint") {
 
-TEST_CASE("J1: one commit changes both claims, and a reader sees both-old or both-new") {
+TEST_CASE("one commit changes both claims, and a reader sees both-old or both-new") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     // PREPARED IS NOT PUBLISHED: the offers exist, the claims are what they were.
@@ -411,7 +363,7 @@ TEST_CASE("J1: one commit changes both claims, and a reader sees both-old or bot
     CHECK(s.by.author_incarnation_is_current);
 }
 
-TEST_CASE("J2: a claimant is shown its published claim before its next handler and before a snapshot") {
+TEST_CASE("a claimant is shown its published claim before its next handler and before a snapshot") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     rig.commit(id);
@@ -439,7 +391,8 @@ TEST_CASE("J2: a claimant is shown its published claim before its next handler a
     }
 }
 
-TEST_CASE("J3: the claimant's own claim over a bound key aborts the operation, and the other owner is untouched") {
+TEST_CASE("the claimant's own claim over a bound key aborts the operation, and the other owner is "
+              "untouched") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     // A legitimate edit of A while B is prepared: the document owner claims ordinarily.
@@ -464,7 +417,7 @@ TEST_CASE("J3: the claimant's own claim over a bound key aborts the operation, a
     CHECK(rig.doc_path() == "B");
 }
 
-TEST_CASE("J4: new code behind a bound claimant aborts the operation; nothing is exchanged") {
+TEST_CASE("new code behind a bound claimant aborts the operation; nothing is exchanged") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     const std::string bytes = rig.bus.snapshot_bytes(rig.doc);
@@ -488,7 +441,7 @@ TEST_CASE("J4: new code behind a bound claimant aborts the operation; nothing is
     CHECK(rig.d->last.why == JointRefusal::WrongState);
 }
 
-TEST_CASE("J5: a removed claimant aborts the operation and its offers are released") {
+TEST_CASE("a removed claimant aborts the operation and its offers are released") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     REQUIRE(rig.bus.joint_retained_bytes() > 0);
@@ -506,12 +459,12 @@ TEST_CASE("J5: a removed claimant aborts the operation and its offers are releas
     CHECK(rig.doc_path() == "A2");
 }
 
-TEST_CASE("J6: every unauthorized or mistaken act is refused by name and changes nothing") {
+TEST_CASE("every unauthorized or mistaken act is refused by name and changes nothing") {
     Rig rig;
     SUBCASE("a second weave presenting the operator's authority is not the operator") {
-        // THE COPY IS REFUSED AT THE AUTHORITY, before any operation is looked at. The
-        // other case -- a second operator's OWN valid authority named with this
-        // operator's operation id, which does reach the record -- is J23.
+        // THE COPY IS REFUSED AT THE AUTHORITY, before any operation is looked at. A second
+        // operator's OWN valid authority named with this operator's operation id does reach the
+        // record: that is the foreign-operator case at the end.
         auto [other_id, other] = put<Operator>(rig.bus, Grant{}, "joint.other");
         other->authority = rig.o->authority; // copied, as a capability can be
         other->keys = rig.o->keys;
@@ -606,7 +559,8 @@ TEST_CASE("J6: every unauthorized or mistaken act is refused by name and changes
     }
 }
 
-TEST_CASE("J7: a loaded claimant offers across the seam and is shown its published claim back across it") {
+TEST_CASE("a loaded claimant offers across the seam and is shown its published claim back across "
+              "it") {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
     // The loaded image replaces the native document owner in the ceiling.
@@ -705,7 +659,8 @@ TEST_CASE("J7: a loaded claimant offers across the seam and is shown its publish
     }
 }
 
-TEST_CASE("J8: one live operation per key, bounded slots and keys, a terminal record kept until its operator releases it, and genuine exhaustion in words") {
+TEST_CASE("one live operation per key, bounded slots and keys, a terminal record kept until its "
+              "operator releases it, and genuine exhaustion in words") {
     Rig rig;
     const std::uint64_t first = rig.prepare();
     tell(rig.bus, rig.op, Cmd{"begin"});
@@ -798,7 +753,7 @@ TEST_CASE("J8: one live operation per key, bounded slots and keys, a terminal re
     CHECK(rig.bus.joint_records() == 0);
 }
 
-TEST_CASE("J9: the commit's exchange runs no participant code") {
+TEST_CASE("the commit's exchange runs no participant code") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     const std::int64_t doc_before = rig.d->state().deliveries;
@@ -817,7 +772,7 @@ TEST_CASE("J9: the commit's exchange runs no participant code") {
     CHECK(rig.view_shown() == "B");
 }
 
-TEST_CASE("J10: the operator is told when the bus ends its operation, and a stranger is not") {
+TEST_CASE("the operator is told when the bus ends its operation, and a stranger is not") {
     SUBCASE("a bound participant removed: one notice, naming the operation and the reason") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
@@ -886,30 +841,11 @@ TEST_CASE("J10: the operator is told when the bus ends its operation, and a stra
     }
 }
 
-// ---- Publication is not application (SENSE-06) -------------------------------------------
-//
-// Two counterexamples shaped these cases: an application that failed inside the showing
-// hook vanished -- the loaded status discarded, the mark cleared before the hook ran -- and
-// a substrate mutation door bypassed the participant's end-of-delivery hook, so a written
-// state kept an old claim and a stale preparation committed over it. What each case pins:
-//
-//   J11 loaded failure     a real image whose hook fails through the ABI is HELD: the
-//                          ordinary snapshot refuses, a diagnostic read shows it as it
-//                          is, the hook is not retried, deliveries are refused
-//                          ApplicationFailed by exact attempt, the record names the
-//                          participant and the operation, the operator is told once,
-//                          unrelated work goes on, and a reload is the repair
-//   J12 native parity      the same contract for a native owner: the first observer
-//                          gets the exception after the record says Failed, the bus is
-//                          not poisoned, and a native swap repairs it
-//   J13 several at once    two publications under one weave: the first failure holds it,
-//                          the second stays Pending unattempted, the successor is shown
-//                          both
-//   J14 removal            a claimant removed unshown is Lost, named, told once
-//   J15 mutation doors     a PokeWrite or PokeResetState that changed exposed state
-//                          reaches the claim through after_delivery; reads, describes
-//                          and refused writes/resets change nothing and invalidate nothing
-//   J16 loaded parity      J15's write and its controls through the ABI
+// ---- publication is not application (SENSE-06) -------------------------------------------
+// A showing that fails holds the participant, attributably, loaded and native alike: not
+// retried, refused by exact attempt, named in the record, told once, and repaired by a reload.
+// Then several publications under one weave, a claimant removed unshown, and the substrate's
+// mutation doors reaching the claim, native and through the ABI.
 
 /// A weave standing behind TWO claims, so two publications can be pending under one
 /// weave at once; armed, its DocFact showing counts and fails before applying.
@@ -1021,7 +957,8 @@ ProbeState probe_state(Switchboard& bus, WeaveId who,
     return from_value<ProbeState>(a.value());
 }
 
-TEST_CASE("J11: a loaded participant whose showing fails through the ABI is held, attributable, told once, and repaired by a reload") {
+TEST_CASE("a loaded participant whose showing fails through the ABI is held, attributable, told "
+              "once, and repaired by a reload") {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
@@ -1143,7 +1080,8 @@ TEST_CASE("J11: a loaded participant whose showing fails through the ABI is held
     std::filesystem::remove(copy, ec);
 }
 
-TEST_CASE("J12: a native participant whose showing throws is recorded, then re-raised; held the same way; repaired by a swap") {
+TEST_CASE("a native participant whose showing throws is recorded, then re-raised; held the same "
+              "way; repaired by a swap") {
     SUBCASE("first observed by a snapshot") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
@@ -1238,7 +1176,8 @@ TEST_CASE("J12: a native participant whose showing throws is recorded, then re-r
     }
 }
 
-TEST_CASE("J13: several publications under one weave -- the first failure holds it, the rest stay pending unattempted, and the successor is shown all of them") {
+TEST_CASE("several publications under one weave -- the first failure holds it, the rest stay "
+              "pending unattempted, and the successor is shown all of them") {
     Rig rig;
     auto [both_id, both] = put<Both>(rig.bus, Grant{}, "joint.both");
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.both"});
@@ -1302,7 +1241,8 @@ TEST_CASE("J13: several publications under one weave -- the first failure holds 
     CHECK(rig.o->applied[1].applied);
 }
 
-TEST_CASE("J14: a claimant removed before it was shown is Lost -- named, told once, and the rest of the operation still settles") {
+TEST_CASE("a claimant removed before it was shown is Lost -- named, told once, and the rest of the "
+              "operation still settles") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     rig.commit(id);
@@ -1353,7 +1293,8 @@ TEST_CASE("J14: a claimant removed before it was shown is Lost -- named, told on
     CHECK(claimed_path_of(rig.bus, fresh_id) == "G");
 }
 
-TEST_CASE("J15: a substrate mutation door that changed exposed state reaches the claim, and the doors that changed nothing invalidate nothing (native)") {
+TEST_CASE("a substrate mutation door that changed exposed state reaches the claim, and the doors "
+              "that changed nothing invalidate nothing (native)") {
     Rig rig;
     auto [mirror_id, mirror] = put<Mirror>(rig.bus, Grant{}, "joint.mirror");
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.mirror", "joint.view"});
@@ -1467,7 +1408,8 @@ TEST_CASE("J15: a substrate mutation door that changed exposed state reaches the
     }
 }
 
-TEST_CASE("J16: the same doors through the ABI -- a loaded participant's performed write reaches its claim, and its reads and refused writes do not") {
+TEST_CASE("the same doors through the ABI -- a loaded participant's performed write reaches its "
+              "claim, and its reads and refused writes do not") {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
@@ -1528,16 +1470,12 @@ TEST_CASE("J16: the same doors through the ABI -- a loaded participant's perform
     REQUIRE(kernel.unload("joint-doc"));
 }
 
-// ---- Outcome retention ------------------------
-//
-// A committed operation's record is what its operator re-reads when the bus tells it the
-// application settled (`zen.JointApplied`); an aborted operation's record is what it
-// re-reads when told the operation ended (`zen.JointEnded`). An earlier form of this
-// mechanism let `begin_joint_as` reuse any slot that was not Preparing, so one unrelated begin --
-// under another operator, over other keys -- took the record out from under a legitimate,
-// still-unconsumed outcome: the application settled against a record that had become Missing
-// (schedule 1), or the notice arrived and re-read Missing (schedule 2). Publication is not
-// the end of an outcome's lifetime, and a queued notification is not consumption.
+// ---- outcome retention ------------------------
+// A committed operation's record is what its operator re-reads when told the application settled
+// (`zen.JointApplied`), and an aborted one's when told the operation ended (`zen.JointEnded`), so
+// no unrelated begin, under another operator over other keys, may take a record whose outcome is
+// unconsumed: publication is not the end of an outcome's lifetime, and a queued notification is
+// not consumption.
 
 /// A second, UNRELATED coordination on the same bus: its own document and view owners in
 /// offices of their own, and its own operator with an authority over exactly those.
@@ -1564,7 +1502,8 @@ struct Unrelated {
     }
 };
 
-TEST_CASE("J17: a committed publication's record outlives an unrelated coordination begun before its application was consumed") {
+TEST_CASE("a committed publication's record outlives an unrelated coordination begun before its "
+              "application was consumed") {
     SUBCASE("schedule 1: the unrelated operation begins before the owners are shown") {
         Rig rig;
         Unrelated other(rig.bus);
@@ -1635,7 +1574,8 @@ TEST_CASE("J17: a committed publication's record outlives an unrelated coordinat
     }
 }
 
-TEST_CASE("J18: an operation the bus ended keeps its record until its operator has consumed the notice, past an unrelated begin") {
+TEST_CASE("an operation the bus ended keeps its record until its operator has consumed the notice, "
+              "past an unrelated begin") {
     Rig rig;
     Unrelated other(rig.bus);
     const std::uint64_t id = rig.prepare();
@@ -1663,7 +1603,8 @@ TEST_CASE("J18: an operation the bus ended keeps its record until its operator h
     CHECK(rig.bus.joint_records() == 1);
 }
 
-TEST_CASE("J19: an operator replaced, removed or dead leaves nobody to consume its records -- they are released, and the claimants keep every fact of their own") {
+TEST_CASE("an operator replaced, removed or dead leaves nobody to consume its records -- they are "
+              "released, and the claimants keep every fact of their own") {
     SUBCASE("removed while its committed operation awaits application") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
@@ -1707,9 +1648,9 @@ TEST_CASE("J19: an operator replaced, removed or dead leaves nobody to consume i
         REQUIRE(rig.bus.swap_state(rig.op, bytes).revived);
         CHECK(rig.bus.joint_status(id).state == JointState::Missing);
         CHECK(rig.bus.joint_records() == 0);
-        // THE HOST AUTHORIZES THE SUCCESSOR, explicitly: the predecessor's capability
-        // names an incarnation that is gone (J24 pins every verb refusing it), and the
-        // host, not the bus, decides that the new code may coordinate. This case's
+        // THE HOST AUTHORIZES THE SUCCESSOR, explicitly: the predecessor's capability names an
+        // incarnation that is gone (the authority cases at the end pin every verb refusing it),
+        // and the host, not the bus, decides that the new code may coordinate. This case's
         // subject is the RECORD's lifetime, so the successor holds current authority.
         rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
         // THE STALE NOTICE reaches the successor and decides nothing: the record it
@@ -1772,7 +1713,8 @@ TEST_CASE("J19: an operator replaced, removed or dead leaves nobody to consume i
     }
 }
 
-TEST_CASE("J20: a native owner that DECLINES a published value is recorded Declined and not held -- told once, naming it -- and its own next claim replaces the value") {
+TEST_CASE("a native owner that DECLINES a published value is recorded Declined and not held -- "
+              "told once, naming it -- and its own next claim replaces the value") {
     SUBCASE("declined by answer: the owner keeps its state, works on, and re-claims") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
@@ -1878,7 +1820,8 @@ TEST_CASE("J20: a native owner that DECLINES a published value is recorded Decli
     }
 }
 
-TEST_CASE("J21: a loaded owner's declined showing crosses the seam as its own status -- recorded Declined, not held, its next claim replacing the value") {
+TEST_CASE("a loaded owner's declined showing crosses the seam as its own status -- recorded "
+              "Declined, not held, its next claim replacing the value") {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
     const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
@@ -1942,7 +1885,9 @@ TEST_CASE("J21: a loaded owner's declined showing crosses the seam as its own st
     REQUIRE(kernel.unload("joint-doc"));
 }
 
-TEST_CASE("J22: a refused replacement runs nothing of the incumbent's -- a v7 candidate is judged before the incumbent's snapshot, so a pending showing stays pending and the real reload still repairs") {
+TEST_CASE("a refused replacement runs nothing of the incumbent's -- a candidate claiming the "
+              "previous ABI is judged before the incumbent's snapshot, so a pending showing stays "
+              "pending and the real reload still repairs") {
     // The candidate is judged (ABI version, descriptor, manifest) BEFORE the reload's
     // snapshot of the incumbent is taken (docs/reference/joint-publication.md#repair).
     // The observable is the showing: a snapshot SHOWS the weave its pending publication,
@@ -1981,7 +1926,7 @@ TEST_CASE("J22: a refused replacement runs nothing of the incumbent's -- a v7 ca
     CHECK(kernel.weave_id("joint-doc") == loaded.id);
     // ...AND A REAL RELOAD STILL DOES ITS WORK: the incumbent is shown at the reload's
     // read, applies, and the successor revives carrying B.
-    const std::filesystem::path copy = std::filesystem::temp_directory_path() / "zen-joint-j22.so";
+    const std::filesystem::path copy = std::filesystem::temp_directory_path() / "zen-joint-after-refusal.so";
     std::filesystem::copy_file(ZEN_SO_JOINT, copy, std::filesystem::copy_options::overwrite_existing);
     const ReloadResult ok = kernel.reload_from("joint-doc", copy.string());
     REQUIRE_MESSAGE(ok.reloaded, ok.error);
@@ -1993,25 +1938,22 @@ TEST_CASE("J22: a refused replacement runs nothing of the incumbent's -- a v7 ca
     std::filesystem::remove(copy, ec);
 }
 
-// ---- J23-J24: authority is exact, and reaches only its holder's own records ----------
-//
-// Two defects a review reproduced against the landed candidate, both present since the
-// experiment: a foreign operator's refused commit ABORTED the record it named (the
-// refusal was checked by its return value, not by what it changed), and a capability
-// that named only the operator's address survived the operator's swap. The lessons live
-// in the reference page's authority section and on `JointAuthority`; these two cases are
-// the proof. J6's copied capability (refused at the authority, never reaching a record)
-// and J19's operator lifetime (the record retired) are neighbouring predicates, not these.
+// ---- authority is exact, and reaches only its holder's own records ----------------------
+// A foreign operator's refused verb is judged by what it changed, not only by what it returned,
+// and a capability must not outlive the operator's life or incarnation (the reference page's
+// authority section, and `JointAuthority`). The copied capability refused at the authority and
+// the operator's lifetime retiring its records are neighbouring cases above, not these.
 
-TEST_CASE("J23: a foreign operator's valid authority reaches none of another operator's operation -- refused NotOperator before the record is touched, and the owner still commits") {
+TEST_CASE("a foreign operator's valid authority reaches none of another operator's operation -- "
+              "refused NotOperator before the record is touched, and the owner still commits") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     const std::size_t retained = rig.bus.joint_retained_bytes();
     REQUIRE(retained > 0);
-    // X: a second operator with its OWN host-minted authority over an unrelated ceiling. It
-    // holds neither A's capability (J6's copy) nor authority over A's participants; what it
-    // presents is valid, issued here, and its own -- the request is wrong only in the
-    // operation it names.
+    // X: a second operator with its OWN host-minted authority over an unrelated ceiling. It holds
+    // neither A's capability (the copied case above) nor authority over A's participants; what it
+    // presents is valid, issued here, and its own: the request is wrong only in the operation it
+    // names.
     auto [stranger_id, stranger] = put<Doc>(rig.bus, Grant{}, "joint.stranger");
     tell(rig.bus, stranger_id, Cmd{"claim", 0, "S", 1});
     rig.bus.drain_until_idle();
@@ -2041,8 +1983,8 @@ TEST_CASE("J23: a foreign operator's valid authority reaches none of another ope
     CHECK(rig.doc_path() == "A");
     CHECK(rig.view_shown() == "hidden");
     CHECK(rig.o->ended.empty()); // nothing ended, so no notice of an ending was queued
-    // X IS A GENUINE OPERATOR over its own ceiling: its own begin works. That is what
-    // separates this case from J6's copy, which never reaches a record at all.
+    // X IS A GENUINE OPERATOR over its own ceiling: its own begin works. That is what separates
+    // this case from the copied capability, which never reaches a record at all.
     tell(rig.bus, x_id, Cmd{"begin"});
     rig.bus.drain_until_idle();
     CHECK_MESSAGE(x->begun.ok, std::string(name_of(x->begun.why)));
@@ -2062,7 +2004,9 @@ TEST_CASE("J23: a foreign operator's valid authority reaches none of another ope
     CHECK(rig.bus.joint_records() == 2);
 }
 
-TEST_CASE("J24: a JointAuthority names the operator's exact life and incarnation -- retiring its records and refusing its retained capability are two obligations, and the host authorizes a successor by minting again") {
+TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- retiring its "
+              "records and refusing its retained capability are two obligations, and the host "
+              "authorizes a successor by minting again") {
     SUBCASE("swapped: new code behind the operator's id") {
         Rig rig;
         const std::uint64_t id = rig.prepare();

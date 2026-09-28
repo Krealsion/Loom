@@ -7,8 +7,8 @@
 #include <zen/serialize.hpp>
 #include <zen/zen.hpp>
 
-// kMaxDecodedCells: the F-19 ceiling case meets the decode-materialization
-// bound, and the two are pinned as ADJACENT below, so this reads the real constant.
+// kMaxDecodedCells: the deep-type ceiling case meets the decode-materialization bound, and the
+// two are pinned as ADJACENT below, so this reads the real constant.
 #include "../src/detail/binary.hpp"
 
 #include <cstdint>
@@ -32,13 +32,11 @@ std::shared_ptr<const Schema> round_trip(const std::shared_ptr<const Schema>& s,
     return decode_schema(a.value(), deps);
 }
 
-// A schema descriptor whose single field's type is a FLAT stream of `n` List
-// tokens followed by one Int token — i.e. List<List<…Int>> nested n deep, exactly
-// what a hostile .so's describe() could emit. Built directly as tokens (not via
-// encode_schema of a real n-deep type), because the whole point is that the token
-// stream is flat: its length is bounded only by kMaxListCount (~1M), never by any
-// value-depth cap, so it stays tiny and passes the meta-schema gate. Returns the
-// serialized descriptor bytes — the same bytes the host admits then reconstructs.
+// A schema descriptor whose single field's type is a FLAT stream of `n` List tokens then one Int
+// token, i.e. List<List<…Int>> nested n deep, as a hostile .so's describe() could emit. Built
+// directly as tokens, because the point is that the stream is flat: its length is bounded only
+// by kMaxListCount (~1M), never by a value-depth cap, so it stays tiny and passes the meta-schema
+// gate. Returns the serialized descriptor, the bytes the host admits and then reconstructs.
 std::string deep_list_descriptor_bytes(int n) {
     std::vector<Cell> tokens;
     tokens.reserve(static_cast<std::size_t>(n) + 1);
@@ -133,10 +131,8 @@ TEST_CASE("a manifest carries the accept-set and state schema") {
 
 TEST_CASE("a manifest is self-contained: nested component schemas travel in `referenced` "
           "and resolve into an EMPTY registry") {
-    // The exact shape that found the hole (Zengine's snake): a state that nests
-    // a component both as a List<Message> and as a message field — plus a
-    // two-deep chain (Outer nests Mid nests Pos) to pin the post-order
-    // guarantee, not just one level.
+    // A state that nests a component both as a List<Message> and as a message field, plus a
+    // two-deep chain (Outer nests Mid nests Pos) to pin the post-order guarantee, not one level.
     auto pos = SchemaBuilder("Pos", 1).field("x", Kind::Int).field("y", Kind::Int).build();
     auto mid = SchemaBuilder("Mid", 1).message("at", pos).build();
     auto world = SchemaBuilder("SnakeWorldState", 1)
@@ -200,15 +196,12 @@ TEST_CASE("a manifest is self-contained: nested component schemas travel in `ref
 
 TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead of "
           "overflowing the host stack") {
-    // Audit F-19 (sign-off blocker). The type-token stream is FLAT, so its length is
-    // capped by kMaxListCount (~1M), NOT by the value-depth cap — a field typed
-    // List<List<…Int>> nested tens of thousands deep encodes to a small descriptor that
-    // PASSES the meta-schema gate, then, before the cap, drove decode_type to recurse
-    // once per List token and SIGSEGV'd the trusted host at mount time, uncatchable.
-    //
-    // This exercises the REAL decode path — hand-built descriptor -> gate -> decode_schema,
-    // the exact bytes host.cpp/kernel.cpp/remote_console.cpp feed. (The in-process
-    // make_schema path never calls decode_type; a green there proved nothing about this.)
+    // The type-token stream is FLAT, so its length is capped by kMaxListCount (~1M), NOT by the
+    // value-depth cap: a field typed List<List<…Int>> nested tens of thousands deep encodes to a
+    // small descriptor that PASSES the meta-schema gate, and without kMaxTypeDepth decode_type
+    // would recurse once per List token and overflow the trusted host's stack at mount. This
+    // drives the REAL decode path (hand-built descriptor -> gate -> decode_schema), the bytes
+    // host.cpp, kernel.cpp and remote_console.cpp feed; make_schema never calls decode_type.
 
     SUBCASE("exactly at the cap still decodes — the bound does not reject legitimate nesting") {
         std::string bytes = deep_list_descriptor_bytes(kMaxTypeDepth); // 64 nested lists
@@ -228,18 +221,16 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
         CHECK_THROWS_AS(decode_schema(a.value(), deps), std::runtime_error);
     }
 
-    // THE DECODE-MATERIALIZATION BUDGET IS A SECOND BOUND IN FRONT OF THIS ONE, and
-    // the two must be shown to meet with no gap between them.
-    // docs/reference/bounds.md#the-decode-materialization-bound A descriptor of n nested List tokens materialises
-    //     3 (SchemaDesc slots) + 1 (fields element) + 3 (Field slots)
-    //       + (n+1) (type-token elements) + 3(n+1) (each TypeToken's slots)  =  11 + 4n
-    // decoded cells, so the gate now admits a stream only while 11 + 4n fits the
-    // materialization budget. Above that the descriptor never becomes a Value at all.
+    // THE DECODE-MATERIALIZATION BUDGET IS A SECOND BOUND IN FRONT OF THIS ONE, and the two must
+    // meet with no gap (docs/reference/bounds.md#the-decode-materialization-bound). n nested List
+    // tokens materialise 3 (SchemaDesc slots) + 1 (fields element) + 3 (Field slots) + (n+1)
+    // (type-token elements) + 3(n+1) (each TypeToken's slots) = 11 + 4n decoded cells, so the gate
+    // admits a stream only while 11 + 4n fits the budget; above that it never becomes a Value.
     const int deepest_admissible = static_cast<int>((detail::kMaxDecodedCells - 11) / 4);
 
     SUBCASE("the deepest descriptor the budget still admits is still refused by kMaxTypeDepth") {
-        // The F-19 spine, unchanged, at the largest size the budget leaves reachable: the gate
-        // admits (the depth stays invisible to the meta-schema) and decode_type refuses.
+        // The deep descriptor at the largest size the budget leaves reachable: the gate admits
+        // (the depth stays invisible to the meta-schema) and decode_type refuses.
         std::string bytes = deep_list_descriptor_bytes(deepest_admissible);
         Unverified u = parse(bytes);
         Admission a = admit(u, schema_desc_schema());
@@ -257,12 +248,10 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
         CHECK(a.first_error().detail.find("materialization budget") != std::string::npos);
     }
 
-    SUBCASE("the auditor's ceiling case N=100000 no longer even reaches decode_schema") {
-        // The F-19 era's record: ~200 KB of descriptor, well under the frame cap, which the
-        // gate ADMITTED — leaving kMaxTypeDepth as the only thing between it and the host's
-        // stack. The budget refuses it a layer earlier (400,011 cells, far past it), so a
-        // descriptor big enough to have threatened the stack is no longer an admitted value.
-        // kMaxTypeDepth is not thereby redundant: it still owns every in-budget case above.
+    SUBCASE("a 100000-deep descriptor never reaches decode_schema") {
+        // ~200 KB of descriptor, well under the frame cap, would leave kMaxTypeDepth as the only
+        // thing between it and the host's stack; the budget refuses it a layer earlier (400,011
+        // cells). kMaxTypeDepth is not thereby redundant: it still owns every in-budget case above.
         std::string bytes = deep_list_descriptor_bytes(100000);
         Unverified u = parse(bytes);
         Admission a = admit(u, schema_desc_schema());
@@ -333,9 +322,9 @@ TEST_CASE("a manifest (v5) carries the declared emit-set and the components it n
 
 TEST_CASE("a manifest whose declaration carries two definitions of one component travels "
           "with both, is refused at the second, and leaves nothing claimed") {
-    // The independent review's Box/Box2 finding. The encoder once deduplicated
-    // `referenced` by name: the second Part was dropped, Box2 was reconstructed over
-    // the first Part, and the artifact loaded advertising a Box2 it never declared.
+    // Two definitions of Part under one name: an encoder that deduplicated `referenced` by name
+    // would drop the second Part, rebuild Box2 over the first, and load an artifact advertising a
+    // Box2 it never declared.
     auto part_a = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
     auto part_b = SchemaBuilder("Part", 1).field("a", Kind::Int).field("b", Kind::Bool).build();
     auto box = SchemaBuilder("Box", 1).message("part", part_a).build();

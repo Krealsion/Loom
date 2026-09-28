@@ -63,7 +63,7 @@ private:
 } // namespace
 
 int main() {
-    std::printf("stranger history witness (RTH-1a: the two halves, through the package)\n");
+    std::printf("stranger history witness (the two halves, through the package)\n");
 
     loom::Switchboard bus;
 

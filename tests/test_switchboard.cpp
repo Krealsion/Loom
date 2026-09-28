@@ -77,12 +77,9 @@ TEST_CASE("a directed send to an unknown target is refused") {
 }
 
 TEST_CASE("the delivery journal is a bounded ring: recent outcomes survive, ancient ones are evicted") {
-    // Audit F-6: journal_ used to retain one outcome per message EVER enqueued — a
-    // linear leak in lifetime throughput, and a bus is precisely the component that
-    // runs for weeks. It is now a fixed-capacity ring of kJournalCapacity slots.
-    // Flood far past the bound and show the journal keeps a recent window intact (no
-    // live correlation lost) while the footprint stays bounded (an out-of-window ticket
-    // has been evicted — the journal did NOT keep one slot per message sent).
+    // The journal is a fixed ring of kJournalCapacity slots, because a bus runs for weeks. Flood
+    // far past it: a recent window stays intact (no live correlation lost) while an out-of-window
+    // ticket is evicted, so the journal did not keep one slot per message sent.
     Switchboard bus;
     constexpr std::uint64_t cap = Switchboard::kJournalCapacity;
     const std::uint64_t flood = cap * 3; // three windows' worth of traffic
@@ -95,7 +92,7 @@ TEST_CASE("the delivery journal is a bounded ring: recent outcomes survive, anci
         if (seq == flood - cap) edge_out = t;        // one slot past the retained window
         if (seq == flood - cap + 1) edge_in = t;     // the oldest slot still inside the window
         recent = t;
-        bus.drain_until_idle(); // drain fully each time — the leak was in the journal, not the queue
+        bus.drain_until_idle(); // drain fully each time: the bound under test is the journal's
     }
 
     // In-window tickets still report their true fate — correlation is preserved.
@@ -224,16 +221,12 @@ TEST_CASE("two weaves declaring the same (name,version) with different shapes co
 
 // ---- event-loop composition (MSG-09) --------------------------------------
 //
-// The Rule Garden's sharpest seam: a perpetual service (Zengine's Timer paces
-// itself inside Drive and enqueues its next Drive before returning) means the
-// queue never becomes empty, so `drain_until_idle()` never returns to the
-// outer network loop. Both components work as designed; their liveness
-// assumptions do not compose. Reproduced here with the same SHAPE as a Timer —
-// a weave whose handler re-enqueues its own next turn — without needing Zengine.
+// A perpetual service (a repeating timer enqueues its next beat before returning) keeps the queue
+// from ever emptying, so `drain_until_idle()` never returns to the host's loop. Both parts work as
+// designed; their liveness assumptions do not compose.
 
-// A weave that re-arms itself on every delivery, exactly as a repeating Timer
-// does. `stop_after` bounds the reproduction so the test terminates; the seam
-// is what happens when nothing bounds it.
+// A weave that re-arms itself on every delivery, as a repeating timer does. `stop_after` bounds
+// the reproduction so the test terminates; the seam is what happens when nothing bounds it.
 struct Perpetual : ProbeWeave {
     explicit Perpetual(std::int64_t stop_after)
         : ProbeWeave({ping_schema()}), stop_after_(stop_after) {}
@@ -250,8 +243,8 @@ private:
     std::int64_t stop_after_;
 };
 
-TEST_CASE("R2E-0: a perpetual service starves the outer loop — drain_until_idle() returns only "
-          "when the PRODUCER stops, not when the host wants control back") {
+TEST_CASE("a perpetual service starves the outer loop — drain_until_idle() returns only when the "
+          "PRODUCER stops, not when the host wants control back") {
     Switchboard bus;
     auto owned = std::make_unique<Perpetual>(500);
     Perpetual* raw = owned.get();
@@ -266,18 +259,7 @@ TEST_CASE("R2E-0: a perpetual service starves the outer loop — drain_until_idl
     CHECK(raw->count == 500);
 }
 
-// The six cases that pinned `pump_bounded(n)` were REMOVED WITH THE SURFACE,
-// not because they failed but because the thing they proved correct turned out to
-// be the wrong question to ask a host. The number they exercised so carefully is
-// the number the Rule Garden could not pick: 64 made its live round-trip 17x
-// slower, and a budget large enough not to throttle was drain-to-empty again.
-// Every property they pinned that still has a public
-// surface — FIFO exactness across a turn boundary, honouring `stop()`, the
-// empty-queue no-op, non-reentrancy — is pinned below against `pump_pending()`,
-// which is the only bounded turn Loom now offers. The experiment itself is kept
-// as history in `docs/decisions/`, not as API nobody wanted.
-
-TEST_CASE("R2E-0: drain_until_idle() is drain-to-empty — the contract every existing caller has") {
+TEST_CASE("drain_until_idle() is drain-to-empty — the contract every existing caller has") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     for (std::int64_t i = 1; i <= 5; ++i) {
@@ -290,7 +272,7 @@ TEST_CASE("R2E-0: drain_until_idle() is drain-to-empty — the contract every ex
     CHECK(bus.pending() == 0);
 }
 
-TEST_CASE("R2E-0: pump_pending dispatches exactly the backlog present at entry — a self-re-arming "
+TEST_CASE("pump_pending dispatches exactly the backlog present at entry — a self-re-arming "
           "producer cannot extend the turn, and a busy bus is not throttled") {
     Switchboard bus;
     auto owned = std::make_unique<Perpetual>(1'000'000); // never stops
@@ -318,7 +300,7 @@ TEST_CASE("R2E-0: pump_pending dispatches exactly the backlog present at entry �
     CHECK(raw->count == 40);
 }
 
-TEST_CASE("R2E-0: pump_pending on a quiet bus is a no-op, and drains a finite backlog whole") {
+TEST_CASE("pump_pending on a quiet bus is a no-op, and drains a finite backlog whole") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
 
@@ -335,7 +317,7 @@ TEST_CASE("R2E-0: pump_pending on a quiet bus is a no-op, and drains a finite ba
     CHECK(r.weave->handled_values == expected);
 }
 
-TEST_CASE("R2E-0: pump_pending keeps FIFO exact and honours stop()") {
+TEST_CASE("pump_pending keeps FIFO exact and honours stop()") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     r.weave->on_handle = [&bus](const Message& in, Bus&, ProbeWeave&) {
@@ -354,7 +336,7 @@ TEST_CASE("R2E-0: pump_pending keeps FIFO exact and honours stop()") {
     CHECK(r.weave->handled_values == expected);
 }
 
-TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as drain_until_idle() is") {
+TEST_CASE("the bounded turn is non-reentrant, exactly as drain_until_idle() is") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     std::size_t nested = 1; // a sentinel the handler must overwrite
@@ -371,22 +353,14 @@ TEST_CASE("R2E-0: the bounded turn is non-reentrant, exactly as drain_until_idle
     CHECK(r.weave->count == 2);
 }
 
-// ---- FRIC-1: two powers, and a call site that says which one ---------------
+// ---- two powers, and a call site that says which one ------------------------
 //
-// R2E-0 gave Loom the bounded turn; FRIC-1 gave the pair NAMES that make the
-// choice legible, because the old spelling did not: `pump()` was drain-to-idle
-// while `pump_pending()` — the ordinary host-loop operation — wore the qualifier
-// that made it look like the special case. A stranger reached for the short
-// name and got a program that never returned.
-//
-// The names are only worth what the semantics behind them are, so these two
-// cases pin that the semantics are actually two. Both use `Perpetual`, whose
-// `stop_after` is a FUSE and not the subject: it exists so that wiring either
-// public entry to the other implementation goes RED rather than HANGING, which
-// is the only way a canary of this shape can be run at all.
+// `pump_pending()` is the bounded turn and `drain_until_idle()` the drain. These cases pin that
+// the semantics are two, not only the names. `Perpetual`'s `stop_after` is a fuse, not the
+// subject: wiring either entry to the other's implementation goes red rather than hanging.
 
-TEST_CASE("FRIC-1: bounded turn and drain are two POWERS, not two names — on one perpetually "
-          "productive world they leave measurably different worlds behind") {
+TEST_CASE("bounded turn and drain are two POWERS, not two names — on one perpetually productive "
+          "world they leave measurably different worlds behind") {
     constexpr std::int64_t kFuse = 400; // never reached by the bounded arm
 
     auto world = [kFuse](Switchboard& bus) {
@@ -425,8 +399,7 @@ TEST_CASE("FRIC-1: bounded turn and drain are two POWERS, not two names — on o
     }
 }
 
-TEST_CASE("FRIC-1: an ordinary host loop keeps control every lap while a perpetual service stays "
-          "healthy — the user story the old name denied") {
+TEST_CASE("an ordinary host loop keeps control every lap while a perpetual service stays healthy") {
     Switchboard bus;
     // A fuse far beyond anything this test approaches: within these 100 laps the
     // producer is indistinguishable from a real repeating Timer, which never
@@ -452,17 +425,11 @@ TEST_CASE("FRIC-1: an ordinary host loop keeps control every lap while a perpetu
     CHECK(raw->count == 100);
 }
 
-// ---------------------------------------------------------------------------
-// The native callback boundary (MSG-10).
-//
-// Loom calls two kinds of code it did not write: a native `Weave::handle`, and a
-// host observer. Both may throw. These cases pin what Loom owes the host when
-// one does — the exception itself is the host's business, the bookkeeping is
-// Loom's.
-// ---------------------------------------------------------------------------
+// ---- the native callback boundary (MSG-10) ----------------------------------
+// Loom calls code it did not write, a native `Weave::handle` and a host observer, and either may
+// throw. The exception is the host's business; the bookkeeping is Loom's.
 
-TEST_CASE("STF-1: a native handler that throws through drain_until_idle() leaves no poisoned "
-          "dispatch") {
+TEST_CASE("a native handler that throws through drain_until_idle() leaves no poisoned dispatch") {
     Switchboard bus;
     Registered a = reg(bus, {ping_schema()});
     Registered b = reg(bus, {pong_schema()});
@@ -506,7 +473,7 @@ TEST_CASE("STF-1: a native handler that throws through drain_until_idle() leaves
     CHECK(b.weave->handled_values.size() == 3);
 }
 
-TEST_CASE("STF-1: a native handler that throws through pump_pending() leaves no poisoned dispatch") {
+TEST_CASE("a native handler that throws through pump_pending() leaves no poisoned dispatch") {
     Switchboard bus;
     Registered a = reg(bus, {ping_schema()});
     Registered b = reg(bus, {pong_schema()});
@@ -564,7 +531,7 @@ struct ReadinessStage {
 };
 } // namespace
 
-TEST_CASE("STF-1: a callback that throws leaves no delivery-scoped authority behind") {
+TEST_CASE("a callback that throws leaves no delivery-scoped authority behind") {
     ReadinessStage s;
 
     // The readiness gate reads the delivery Loom is dispatching RIGHT NOW. Its
@@ -603,7 +570,7 @@ TEST_CASE("STF-1: a callback that throws leaves no delivery-scoped authority beh
     CHECK(s.bus.role_holder("service") == s.incumbent); // and nothing moved
 }
 
-TEST_CASE("STF-1: an already-minted deferred answer survives a handler that later throws") {
+TEST_CASE("an already-minted deferred answer survives a handler that later throws") {
     Switchboard bus;
     Registered asker = reg(bus, {pong_schema()});
     Registered responder = reg(bus, {ping_schema()});
@@ -629,7 +596,7 @@ TEST_CASE("STF-1: an already-minted deferred answer survives a handler that late
     CHECK(asker.weave->handled_values[0] == 9);
 }
 
-TEST_CASE("STF-1: an observer that throws propagates, and later observation still happens") {
+TEST_CASE("an observer that throws propagates, and later observation still happens") {
     Switchboard bus;
     Registered a = reg(bus, {ping_schema()});
     Registered b = reg(bus, {pong_schema()});
@@ -663,16 +630,11 @@ TEST_CASE("STF-1: an observer that throws propagates, and later observation stil
     CHECK(behind == 1);
 }
 
-TEST_CASE("RTH-1a: an observer that throws on HandlerFailed REPLACES the handler's exception") {
-    // A KNOWN, ASSERTED TRADE, pinned rather than repaired. RTH-1 noted it in
-    // prose; this makes it a fact a test states, so that a later phase which wants
-    // to change it changes a red test rather than discovering the behaviour.
-    //
-    // `deliver_one` holds the handler's exception, emits `HandlerFailed` so the
-    // abnormal exit is observable, and only then rethrows. An observer that throws
-    // from that emission unwinds first — ordinary C++ propagation, and the same
-    // trade MSG-10 already makes on every other event. It is NOT special to this
-    // event and there is no error channel on which the loss could be reported.
+TEST_CASE("an observer that throws on HandlerFailed REPLACES the handler's exception") {
+    // A known trade, pinned so that changing it changes a red test. `deliver_one` holds the
+    // handler's exception, emits `HandlerFailed` so the abnormal exit is observable, then
+    // rethrows; an observer that throws from that emission unwinds first. That is ordinary C++
+    // propagation, the trade MSG-10 makes on every event, with no channel to report the loss on.
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     r.weave->on_handle = [](const Message&, Bus&, ProbeWeave&) {
@@ -700,7 +662,7 @@ TEST_CASE("RTH-1a: an observer that throws on HandlerFailed REPLACES the handler
 // Observer notification under subscription mutation.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("STF-1: an observer added during notification joins at the NEXT event") {
+TEST_CASE("an observer added during notification joins at the NEXT event") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     int early = 0;
@@ -725,7 +687,7 @@ TEST_CASE("STF-1: an observer added during notification joins at the NEXT event"
     CHECK(late == 1); // ...and does receive the next one
 }
 
-TEST_CASE("STF-1: an observer may remove itself while being notified") {
+TEST_CASE("an observer may remove itself while being notified") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     ObserverId self{};
@@ -748,7 +710,7 @@ TEST_CASE("STF-1: an observer may remove itself while being notified") {
     CHECK(after == 2);
 }
 
-TEST_CASE("STF-1: removing another observer during notification takes effect at once") {
+TEST_CASE("removing another observer during notification takes effect at once") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     int victim_calls = 0;
@@ -781,7 +743,7 @@ TEST_CASE("STF-1: removing another observer during notification takes effect at 
     CHECK(survivor_calls == 2);
 }
 
-TEST_CASE("STF-1: observer notification survives reallocation of the observer list") {
+TEST_CASE("observer notification survives reallocation of the observer list") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     int first = 0;
@@ -818,7 +780,7 @@ TEST_CASE("STF-1: observer notification survives reallocation of the observer li
     CHECK(newcomers == 64); // ...and all of them are in the next one
 }
 
-TEST_CASE("STF-1: an observer may mutate the observer list and then throw") {
+TEST_CASE("an observer may mutate the observer list and then throw") {
     Switchboard bus;
     Registered r = reg(bus, {ping_schema()});
     ObserverId victim{};
@@ -850,7 +812,7 @@ TEST_CASE("STF-1: an observer may mutate the observer list and then throw") {
     CHECK(newcomer_calls == 1);
 }
 
-TEST_CASE("STF-1: a nested event takes its own observer view") {
+TEST_CASE("a nested event takes its own observer view") {
     Switchboard bus;
     Registered doomed = reg(bus, {ping_schema()});
     Registered other = reg(bus, {pong_schema()});
@@ -878,33 +840,16 @@ TEST_CASE("STF-1: a nested event takes its own observer view") {
 }
 
 // ---- a weave outlives its own callback (LIFE-06) ----------------------------
-//
-//     A Weave cannot be permanently removed, handed back, or destroyed while
-//     Loom is executing that same Weave's callback.
-//
-// EXACT TO THE ACTIVE TARGET, and nothing wider. It does not mean no weave may
-// be removed during a dispatch turn, that no lifecycle operation may run from a
-// callback, or that ownership became shared. Once the callback has exited — by
-// return OR by exception — ordinary unregistration works again.
-//
-// AUTHORITY, HONESTLY. The `Bus&` a handler is delivered has no
-// `unregister_weave`; every case below reaches the concrete board because the
-// test — standing in for HOST WIRING — captured it. That is a supported pattern
-// and it is not ambient weave authority.
-//
-// None of these cases performs the invalid access itself: they assert the
-// repaired contract (nullptr, no destruction, no cleanup) rather than reading
-// through a freed object and hoping an allocator notices.
+// Exact to the active target: once its callback exits, by return or by exception, ordinary
+// unregistration works again. A handler's `Bus&` has no `unregister_weave`; each case reaches the
+// concrete board because the test, standing in for host wiring, captured it. The cases assert the
+// contract (nullptr, no destruction, no cleanup) rather than read through a freed object.
 
 namespace {
 
-/// A ledger that OUTLIVES the weave, so "was it destroyed?" is answered from
-/// outside the object in question. Reading a flag stored *in* the weave would be
-/// the very use-after-free the law forbids.
-///
-/// DECLARE IT BEFORE THE `Switchboard` at every use site. `~Switchboard`
-/// destroys the weaves it still owns, and those destructors write here — so a
-/// ledger declared after the board would already be gone when they run.
+/// A ledger that outlives the weave, so whether it was destroyed is read from outside it.
+/// Declare it before the `Switchboard`: `~Switchboard` destroys the weaves it still owns, and
+/// their destructors write here.
 struct LifeLedger {
     int destroyed = 0;
 };
@@ -944,7 +889,7 @@ Ledgered reg_ledgered(Switchboard& bus, LifeLedger& ledger,
 
 } // namespace
 
-TEST_CASE("R2F-B: a weave that unregisters itself from inside its handler stays alive") {
+TEST_CASE("a weave that unregisters itself from inside its handler stays alive") {
     LifeLedger ledger; // before the board, always: ~Switchboard writes here
     Switchboard bus;
     Ledgered w = reg_ledgered(bus, ledger, {ping_schema()});
@@ -973,7 +918,7 @@ TEST_CASE("R2F-B: a weave that unregisters itself from inside its handler stays 
     CHECK(bus.outcome(t).disposition == Disposition::Delivered); // recorded normally
 }
 
-TEST_CASE("R2F-B: the host retries once the callback is over, and receives the weave") {
+TEST_CASE("the host retries once the callback is over, and receives the weave") {
     LifeLedger ledger;
     Switchboard bus;
     Ledgered w = reg_ledgered(bus, ledger, {ping_schema()});
@@ -998,7 +943,7 @@ TEST_CASE("R2F-B: the host retries once the callback is over, and receives the w
     CHECK(ledger.destroyed == 1); // exactly once, when the host's owner is reset
 }
 
-TEST_CASE("R2F-B: a DIFFERENT weave may still be removed from inside a callback") {
+TEST_CASE("a DIFFERENT weave may still be removed from inside a callback") {
     // THE WITNESS AGAINST GUARDING ALL OF `in_dispatch_`. A broad
     // `if (in_dispatch_) return nullptr;` refuses this removal and fails here.
     LifeLedger active_ledger;
@@ -1040,14 +985,11 @@ TEST_CASE("R2F-B: a DIFFERENT weave may still be removed from inside a callback"
 
 namespace {
 
-/// EVERYTHING `unregister_weave` TOUCHES, gathered onto ONE weave so that "the
-/// refusal changed nothing" and "a later success changes all of it" are the same
-/// six facts read twice. The pair is the proof: the mutation-free case alone
-/// would also pass on an `unregister_weave` that had simply stopped working.
-///
-/// `svc` is the interesting weave. It holds a role, has claimed a Sense both
-/// personally and as its office, is one party to an unfinished deferred
-/// conversation, and is the incumbent of an active prepared replacement.
+/// Everything `unregister_weave` touches, on one weave, so "the refusal changed nothing" and "a
+/// later success changes all of it" are the same six facts read twice: the refusal's case alone
+/// would pass on an `unregister_weave` that had stopped working. `svc` holds a role, a personal
+/// and an office claim, a party's place in an unfinished deferred conversation, and the
+/// incumbency of an active prepared replacement.
 struct RemovalSurface {
     LifeLedger ledger; // FIRST: destroyed last, i.e. after the board below
     Switchboard bus;
@@ -1120,7 +1062,7 @@ struct RemovalSurface {
 
 } // namespace
 
-TEST_CASE("R2F-B: a refused active-target removal performs no part of unregistration") {
+TEST_CASE("a refused active-target removal performs no part of unregistration") {
     RemovalSurface s;
 
     bool returned_null = false;
@@ -1139,7 +1081,7 @@ TEST_CASE("R2F-B: a refused active-target removal performs no part of unregistra
     s.expect_conversation_alive();      // including the conversation nothing abandoned
 }
 
-TEST_CASE("R2F-B: an ordinary removal outside a callback still does all of it") {
+TEST_CASE("an ordinary removal outside a callback still does all of it") {
     // The complement of the case above, and the reason it means anything: the
     // exact same six facts, all of them changed, because a successful removal
     // still means everything it always meant.
@@ -1172,7 +1114,7 @@ TEST_CASE("R2F-B: an ordinary removal outside a callback still does all of it") 
     CHECK(s.ledger.destroyed == 1);
 }
 
-TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave removable") {
+TEST_CASE("an exception after a refused self-removal leaves the weave removable") {
     LifeLedger ledger;
     Switchboard bus;
     Ledgered w = reg_ledgered(bus, ledger, {ping_schema()});
@@ -1210,12 +1152,9 @@ TEST_CASE("R2F-B: an exception after a refused self-removal leaves the weave rem
 }
 
 // ---- the bus's vocabulary is bounded by who is live (LIFE-08) ---------------
-//
-// `resolve_schema` IS the observable here, and deliberately so: it is the door
-// every raw emission crosses (a loaded weave's send, an out-of-process child's
-// output, a bridge frame, a console compose), so "does this shape still resolve
-// on this bus?" is the same question as "can this Loom still speak it?". No test
-// seam and no claim count is needed to ask it.
+// `resolve_schema` is the observable, deliberately: every raw emission crosses it (a loaded
+// weave's send, an out-of-process child's output, a bridge frame, a console compose), so "does
+// this shape still resolve on this bus?" is "can this Loom still speak it?".
 
 namespace {
 std::shared_ptr<const Schema> only_here(const char* name) {
@@ -1223,7 +1162,7 @@ std::shared_ptr<const Schema> only_here(const char* name) {
 }
 } // namespace
 
-TEST_CASE("BL-0: a weave's vocabulary arrives with it and leaves with it") {
+TEST_CASE("a weave's vocabulary arrives with it and leaves with it") {
     Switchboard bus;
     CHECK(bus.resolve_schema("Solo", 1) == nullptr);
 
@@ -1240,7 +1179,7 @@ TEST_CASE("BL-0: a weave's vocabulary arrives with it and leaves with it") {
     CHECK(owner->accepted_schemas().at(0)->name() == "Solo");
 }
 
-TEST_CASE("BL-0: a shape two weaves accept survives the first of them leaving") {
+TEST_CASE("a shape two weaves accept survives the first of them leaving") {
     Switchboard bus;
     Registered a = reg(bus, {ping_schema(), only_here("Common")});
     Registered b = reg(bus, {pong_schema(), only_here("Common")});
@@ -1256,7 +1195,7 @@ TEST_CASE("BL-0: a shape two weaves accept survives the first of them leaving") 
     CHECK(bus.resolve_schema("Common", 1) == nullptr);
 }
 
-TEST_CASE("BL-0: a refused active-target removal releases nothing") {
+TEST_CASE("a refused active-target removal releases nothing") {
     // NOTHING REMOVED MEANS NOTHING RELEASED. The LIFE-06 refusal is defined by the
     // fact that no part of unregistration happened; schema claims join that list.
     Switchboard bus;
@@ -1281,7 +1220,7 @@ TEST_CASE("BL-0: a refused active-target removal releases nothing") {
     CHECK(bus.resolve_schema("Vocab", 1) == nullptr);
 }
 
-TEST_CASE("BL-0: a code swap moves the claim without a gap") {
+TEST_CASE("a code swap moves the claim without a gap") {
     Switchboard bus;
     Registered w = reg(bus, {ping_schema()});
     REQUIRE(bus.resolve_schema("Ping", 1) != nullptr);
@@ -1300,7 +1239,7 @@ TEST_CASE("BL-0: a code swap moves the claim without a gap") {
     CHECK(bus.resolve_schema("Ping", 1) == nullptr);
 }
 
-TEST_CASE("BL-0: an authorized sender keeps the shape it may speak resolvable") {
+TEST_CASE("an authorized sender keeps the shape it may speak resolvable") {
     // THE PRODUCER'S CLAIM. A weave's accept-set is what it will HEAR; its
     // grant's named send rules are what it may SAY. A sender authorized for a
     // shape must keep being able to say it after the weave that defined it goes,
@@ -1323,7 +1262,7 @@ TEST_CASE("BL-0: an authorized sender keeps the shape it may speak resolvable") 
     CHECK(bus.resolve_schema("Request", 1) == nullptr);
 }
 
-TEST_CASE("BL-0: a wildcard grant claims no vocabulary") {
+TEST_CASE("a wildcard grant claims no vocabulary") {
     // The negative control for the case above: `allow_any` names no shape, so it
     // pins none. Otherwise "the producer claims what it may say" would quietly
     // mean "every permissive weave pins everything", which is the retention LIFE-08
@@ -1338,7 +1277,7 @@ TEST_CASE("BL-0: a wildcard grant claims no vocabulary") {
     CHECK(bus.weave(permissive.id) != nullptr); // still live, and still claiming nothing
 }
 
-TEST_CASE("BL-0: a registration refused mid-accept-set publishes nothing") {
+TEST_CASE("a registration refused mid-accept-set publishes nothing") {
     // The transactional half, at the door consumers actually use. Registering an
     // accept-set one shape at a time is the weaker implementation this falsifies:
     // a disagreement about the third shape would leave the first two published
@@ -1360,14 +1299,11 @@ TEST_CASE("BL-0: a registration refused mid-accept-set publishes nothing") {
     CHECK(bus.weave(incumbent.id) != nullptr);
 }
 
-// ---- declared vocabulary is agreed at admission (P-LOOM-07) ---------------------------
-//
-// Native half of the case a stale desktop opened: every shape a weave DECLARES —
-// accepted, claimed, emitted, persisted — and every component those shapes nest is
-// claimed in the one registration transaction, so two participants that disagree about
-// a (name, version) refuse at the door in either order, whichever list each declared it
-// in, and a weave whose own declaration contradicts itself never registers at all.
-// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+// ---- declared vocabulary is agreed at admission ------------------------------------------
+// Every shape a weave declares (accepted, claimed, emitted, persisted) and every component they
+// nest is claimed in one registration transaction: two participants that disagree about a (name,
+// version) refuse at the door in either order, and a self-contradicting declaration never
+// registers. docs/decisions/declared-vocabulary-is-agreed-at-admission.md
 namespace sa {
 inline std::shared_ptr<const Schema> greet_msg() {
     static const auto s = SchemaBuilder("Greet", 1).field("msg", Kind::Text).build();
@@ -1588,10 +1524,9 @@ TEST_CASE("schema admission: an emitted-only shape is offered to a wildcard acce
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
 
-    // The console's shape: AcceptMode::AnyRegistered, accepting any shape the bus
-    // can resolve. Before this phase an emitted-only shape resolved to nothing, so
-    // a directed send of it was refused NotAccepted; now the emitter's declaration
-    // is what makes it resolvable — a deliberate widening of discovery.
+    // The console's shape: AcceptMode::AnyRegistered accepts any shape the bus can resolve, and
+    // an emitter's declaration is what makes an emitted-only shape resolvable, a deliberate
+    // widening of discovery.
     auto console = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
     ProbeWeave* console_raw = console.get();
     const WeaveId console_id =
@@ -1613,8 +1548,7 @@ TEST_CASE("schema admission: an emitted-only shape is offered to a wildcard acce
     CHECK(tap[0].kind == EventKind::Delivered);
     CHECK(console_raw->handled_names == std::vector<std::string>{"Greet"});
 
-    // A PUBLICATION fans out to listed doors only, exactly as before: a wildcard
-    // acceptor is not a listener, and discovery widened nothing here.
+    // A publication fans out to listed doors only: a wildcard acceptor is not a listener.
     CHECK(bus.publish(Message(greet)) == 0);
 
     // THE DENIED-SEND CONTROL: a weave that DECLARES Greet under a grant with no
@@ -1638,13 +1572,11 @@ TEST_CASE("schema admission: an emitted-only shape is offered to a wildcard acce
 TEST_CASE("schema admission: registering a declaration whose closure is a deep shared graph "
           "completes in one pass, publishes every component once, and still refuses a divergent "
           "one and reclaims with its declarer") {
-    // THE REGISTRATION CONSEQUENCE of the traversal's bound: the closure walk now runs at
-    // every registration and every code swap, so a declaration whose components share a
-    // schema through several fields must register in bounded work — not as the binary
-    // tree of expansions that once stalled a host on a 27-schema emit-set. Node[i] holds
-    // `left` and `right`, both Node[i-1]; depth 200 makes a wrong walk unfinishable and a
-    // right one instant. Computed on a worker thread under a generous guard so a wrong
-    // walk is a named failure rather than a hung lane; asserted on this thread.
+    // The closure walk runs at every registration and every code swap, so a declaration whose
+    // components share a schema through several fields must register in bounded work, not as a
+    // binary tree of expansions. Node[i] holds `left` and `right`, both Node[i-1]: depth 200
+    // makes a wrong walk unfinishable and a right one instant. A worker thread under a generous
+    // guard makes a wrong walk a named failure rather than a hung lane.
     constexpr int depth = 200;
     auto leaf = SchemaBuilder("Shared.Leaf", 1).field("v", Kind::Int).build();
     std::shared_ptr<const Schema> node = leaf;
@@ -1715,9 +1647,8 @@ TEST_CASE("schema admission: registering a declaration whose closure is a deep s
     CHECK(bus->weave(later.id) != nullptr);
 }
 
-TEST_CASE("BL-0: a long run of distinct weaves does not grow the bus's vocabulary") {
-    // Load, unload, repeat — the shape in which unbounded retention was first
-    // observed, where all 300 shapes stayed resolvable to the end.
+TEST_CASE("a long run of distinct weaves does not grow the bus's vocabulary") {
+    // Load, unload, repeat: after 300 distinct weaves none of their shapes still resolves.
     Switchboard bus;
     Registered resident = reg(bus, {only_here("Resident")});
 

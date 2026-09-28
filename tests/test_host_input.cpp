@@ -2,12 +2,10 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // THE SUPPLIED HOST'S INPUT LIMITS, WHERE THEY ARE DECIDED (src/host/line_input.hpp).
-//
 // `HeldInput` is the one place both platform readers take their answers from: what a line is,
 // what is too long, how much may wait, and what the end of input means. These cases feed it bytes
-// directly — every boundary, every split, every ordering — so the rules are pinned on every
-// platform by the same assertions, with nothing about threads, terminals or timing in the way.
-// What only a real stdin can show (a pipe's writer held back, a console's cooked read, a
+// directly, every boundary, split and ordering, with no threads, terminals or timing in the way.
+// What only a real stdin can show (a held-back pipe writer, a console's cooked read, a
 // pseudo-terminal that cuts long lines) is `tests/host_terminal/witness.cpp`'s.
 
 #include <doctest.h>

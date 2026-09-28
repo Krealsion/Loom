@@ -312,27 +312,27 @@ concept MintsByStaticCall = requires { T::lifecycle_authority(); };
 /// A weave's own doors: a `Bus&` in `handle`, a `Mail&` in a maker's `on`.
 /// Neither may offer a way to mint, under this name or another.
 static_assert(!MintsByMemberCall<loom::Bus>,
-              "R2B-1a: a weave's Bus must never expose lifecycle minting");
+              "a weave's Bus must never expose lifecycle minting");
 static_assert(!MintsByMemberCall<loom::Mail>,
-              "R2B-1a: Mail must never expose lifecycle minting");
+              "Mail must never expose lifecycle minting");
 static_assert(!MintsByAnyName<loom::Mail>,
-              "R2B-1a: Mail must never expose lifecycle minting under another name");
+              "Mail must never expose lifecycle minting under another name");
 
 /// No static factory: one would need no instance and no host, and meet no wall.
 static_assert(!MintsByStaticCall<loom::Switchboard>,
-              "R2B-1a: the lifecycle mint must not be a reachable static factory");
+              "the lifecycle mint must not be a reachable static factory");
 
 /// And not reachable from an instance either. A weave handed a Switchboard is
 /// already host infrastructure by the host's own choice, but the mint stays
 /// private so that even then it comes through the one named host-wiring
 /// function rather than by helping itself.
 static_assert(!MintsByMemberCall<loom::Switchboard>,
-              "R2B-1a: the lifecycle mint must be private to the Switchboard");
+              "the lifecycle mint must be private to the Switchboard");
 
 /// Nor by naming the type: its only constructor is private, so neither a fresh
 /// one nor a value-initialised one is expressible.
 static_assert(!std::is_default_constructible_v<loom::LifecycleAuthority>,
-              "R2B-1a: LifecycleAuthority must not be default-constructible");
+              "LifecycleAuthority must not be default-constructible");
 
 /// THE POSITIVE CONTROL, without which every assertion above is satisfied just
 /// as happily by a typo. Copying an authority one was HANDED is ordinary and

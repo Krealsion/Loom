@@ -12,13 +12,10 @@
 #include <string_view>
 #include <vector>
 
-// The pixel projection's LOGIC, proven with no display, no window and no font library:
-// injected metrics make the layout deterministic, so tree -> draw-commands is pinned like any
-// pure function. Two metrics are injected on purpose — a fixed per-codepoint width, and a
-// deliberately proportional one, because under uniform widths "fits the bound" and "counts the
-// codepoints" are the same sentence and a real typeface makes them different sentences.
-// Executing the commands belongs to a presentation; everything that can be proven without one
-// IS proven here, on every platform the suite runs.
+// The pixel projection's LOGIC, proven with no display, window or font library: injected metrics
+// make tree -> draw-commands a pure function. A fixed per-codepoint width and a deliberately
+// proportional one are both injected (see the proportional section). Executing the commands
+// belongs to a presentation; everything provable without one is proven here, on every platform.
 
 using namespace loom;
 
@@ -341,10 +338,10 @@ TEST_CASE("weight splits pixel space exactly as it splits cells (the shared hint
 
 TEST_CASE("degenerate areas stay defined: a squeezed list with a huge legal cursor, a node narrower than the ellipsis") {
     const PxMetrics m = fixed_metrics();
-
     // A list whose row area fits ZERO rows (15px total - 10px title = 5px < one line), with
     // selected_index at the wire-legal ceiling. The capacity guard must refuse to compute the
-    // scroll window (selected_index - 0 + 1 was signed-overflow UB before the guard); under
+    // scroll window, where selected_index - 0 + 1 would be signed overflow; under the sanitized
+    // build UBSan enforces this pin, headlessly.
     // the sanitized build UBSan enforces this pin, headlessly.
     Widget squeezed = list("sq", "Sq", {"a", "b", "c"}, 0, /*activatable=*/true,
                            /*focused=*/false);
@@ -395,13 +392,11 @@ TEST_CASE("degenerate areas stay defined: a squeezed list with a huge legal curs
     CHECK_FALSE(d.cmds.empty()); // laid out (15 one-px lines), no UB — the clamp held
 }
 
-// ---- The same brain under a PROPORTIONAL metric --------------------------------------
-//
-// Everything above injects a uniform width, under which "this line is 80px" and "this line is
-// ten codepoints" are the same sentence. A real typeface makes them different sentences, and
-// the layout must be reading the first one. These cases feed the same injected seam a metric
-// where text_width("W") != text_width("i") != text_width(" ") != text_width("…"), and pin what
-// the layout ANSWERS — not that the injected function returned two different numbers.
+// ---- the same brain under a PROPORTIONAL metric --------------------------------------
+// Under a uniform width "this line is 80px" and "this line is ten codepoints" are the same
+// sentence; a real typeface makes them different, and the layout must read the first. These
+// cases feed the same seam a metric where text_width("W") != text_width("i") != text_width(" ")
+// != text_width("…"), and pin what the layout ANSWERS, not that the metric differs.
 
 TEST_CASE("proportional metrics: wrap sums real advances, so one bound holds different counts") {
     const PxMetrics prop = proportional_metrics();

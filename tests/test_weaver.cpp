@@ -1,24 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The Weaver — one human being, sitting in one seat, deciding what one live session
-// is allowed to say. The Kernel enforces, the Weaver decides, the session acts.
-//
-// What this suite is watching for, stated as the failures it must catch:
-//
-//   a decision accepted from someone who is not the user      (operator identity)
-//   a request accepted from someone who is not the subject    (requester identity)
-//   a session that could name itself in a payload             (no forgeable field)
-//   an answer that is not Loom's answer to the real ask       (answer authority)
-//   a second request quietly displacing the pending one       (one at a time)
-//   a decision landing on a request nobody was shown          (no banked yes)
-//   a human approval widening the Weaver's ceiling            (Kernel is final)
-//   a revocation that leaves the rule effective               (the off switch)
-//   a revocation that also strips the admission baseline      (union, not override)
-//   a dead session's authority being installed anyway         (fail safe)
-//   the Weaver becoming the author of the session's work      (provenance)
-//   requester prose reaching a terminal uninterpreted         (no escape injection)
-//   a description that is not what the bus will apply         (no shadow state)
+// The Weaver: one human in one seat deciding what one live session may say. The Kernel enforces,
+// the Weaver decides, the session acts. The cases are the failures it must catch: a decision or a
+// request from the wrong weave, a forgeable field, an answer that is not Loom's, a request
+// displaced or a yes banked, an approval past the ceiling, a revocation that misses or overreaches,
+// a dead session's grant, the Weaver authoring the work, uninterpreted requester prose, and a
+// description that is not what the bus applies.
 
 #include <doctest.h>
 
@@ -88,14 +76,9 @@ public:
     }
 };
 
-/// THE GOVERNED SUBJECT — deliberately the most boring weave here.
-///
-/// It is not called `TerminalSession`: it has no transcript, no composer and no
-/// command language, and claiming the terminal's noun for something that has none of
-/// them would mislead the next reader far more than a plain name costs. What it
-/// does have is exactly what the security story needs — an identity, a baseline
-/// grant, an ordinary ask, an ordinary answer, and an ordinary retry it decides
-/// on for itself.
+/// THE GOVERNED SUBJECT, deliberately the most boring weave here. It is not a `TerminalSession`:
+/// it has no transcript, composer or command language. It has what the security story needs: an
+/// identity, a baseline grant, an ordinary ask, an ordinary answer, and a retry it decides on.
 class Session final
     : public WeaveBase<Session, Nothing, Accept<Go, AuthorityGranted, Refused, AuthorityDescription>,
                        Emit<Work, RequestAuthority, DescribeAuthority>> {
@@ -205,15 +188,11 @@ std::pair<WeaveId, W*> place(Switchboard& bus, Grant grant, const std::string& r
     return {id, raw};
 }
 
-/// THE WHOLE CAST, BOOTSTRAPPED THE WAY A HOST WOULD.
-///
-/// The mount order is itself a finding. A governed session's baseline names its
-/// Weaver BY ROLE, so the session and the operator can both be admitted before
-/// the Weaver exists — which is necessary, because the Weaver cannot be
-/// constructed until the capability naming the session exists, and that needs
-/// the session's id. The role is pure routing: it confers no authority
-/// whatever (pinned by its own case below), and the administrative power is the
-/// capability the host mints separately.
+/// THE WHOLE CAST, BOOTSTRAPPED THE WAY A HOST WOULD. The session's baseline names its Weaver BY
+/// ROLE, so the session and the operator are admitted before the Weaver exists, which is
+/// necessary: the Weaver's capability names the session's id. The role is pure routing and
+/// confers no authority (pinned by its own case below); the power is the capability the host
+/// mints separately.
 struct Cast {
     Switchboard bus;
     WeaveId service_id{}, session_id{}, operator_id{}, intruder_id{}, weaver_id{};
@@ -327,14 +306,14 @@ std::vector<std::string> field_names(const Schema& s) {
 // available statement is that no such constructor exists to call.
 
 static_assert(std::is_constructible_v<Weaver, GrantAuthority, WeaveId>,
-              "WEAVER-1: a Weaver is built from a capability and an operator seat");
+              "a Weaver is built from a capability and an operator seat");
 static_assert(!std::is_constructible_v<Weaver, Switchboard&>,
-              "WEAVER-1: a Weaver must never be constructible from a Switchboard");
+              "a Weaver must never be constructible from a Switchboard");
 static_assert(!std::is_constructible_v<Weaver, Switchboard&, GrantAuthority, WeaveId>,
-              "WEAVER-1: a Weaver must never be constructible from a Switchboard");
+              "a Weaver must never be constructible from a Switchboard");
 // It is a weave like any other, dispatched through the same vtable as every
 // other participant — not a privileged object the bus knows about.
-static_assert(std::is_base_of_v<loom::Weave, Weaver>, "WEAVER-1: the Weaver is an ordinary weave");
+static_assert(std::is_base_of_v<loom::Weave, Weaver>, "the Weaver is an ordinary weave");
 
 } // namespace
 
@@ -397,10 +376,8 @@ TEST_CASE("a human puts one session in reach of one service, and takes it back")
     CHECK(c.service->heard.empty());
     CHECK(c.denied("Work"));
 
-    // NOTE what is NOT asserted: that the session LEARNED it was denied. A
-    // sender receives no asynchronous send fate today (a standing Loom seam),
-    // so the session below asks because its own logic says to, not because it
-    // observed the refusal.
+    // NOTE what is NOT asserted: that the session LEARNED it was denied. It accepts no
+    // dispatch-refusal notice, so it asks below because its own logic says to.
     CHECK(c.session->answers.empty());
 
     // 2. THE SESSION ASKS. An ordinary send of an ordinary registered shape,
@@ -866,17 +843,16 @@ TEST_CASE("the Weaver's death does not revoke what the operator already granted"
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.session->answers.size() == 1);
 
-    // The user's policy delegate leaves. An installed grant is not a lease, and
-    // The Weaver deliberately does not add RAII revocation.
+    // The user's policy delegate leaves. An installed grant is not a lease, and the Weaver
+    // deliberately does not add RAII revocation.
     (void)c.bus.unregister_weave(c.weaver_id);
 
     c.go(c.session_id, step::kWork);
     REQUIRE(c.service->heard.size() == 1);
     CHECK(c.service->heard_from[0] == c.session_id);
 
-    // ...and the consequence, stated: with the Weaver gone there is now no way
-    // to revoke it by message. That is real, and it is the pressure this phase
-    // records rather than papering over with a speculative lease.
+    // ...and the consequence, stated: with the Weaver gone there is no way to revoke the grant by
+    // message. That is real, and no speculative lease papers over it.
     c.clear_tap();
     c.go(c.operator_id, step::kRevoke);
     CHECK(c.op->acks == 1); // still just the approval's; the revoke reached nobody
@@ -901,14 +877,10 @@ TEST_CASE("what the operator reads is what the bus will apply") {
     c.go(c.session_id, step::kWork);
     CHECK(c.service->heard.size() == 1);
 
-    // A ROLE IS DESCRIBED AS A ROLE. The service holds the office right now, and
-    // the description still does not name it — role authority follows whoever
-    // holds the office at delivery, and saying "weave #N" would describe a
-    // narrower, more permanent grant than the one that was made.
-    // `weave #N` is the ONLY form a WeaveId can take in a rendered rule, so its
-    // absence is the whole claim. (Hunting for the bare digits instead would
-    // match the version in "v1" — a looser assertion that fails for the wrong
-    // reason and would pass for the wrong reason too.)
+    // A ROLE IS DESCRIBED AS A ROLE. The service holds the office now and the description still
+    // does not name it: role authority follows whoever holds the office at delivery, and "weave
+    // #N" would describe a narrower, more permanent grant. `weave #N` is the ONLY form a WeaveId
+    // takes in a rendered rule, so its absence is the whole claim; bare digits would match "v1".
     CHECK(c.op->described[0].delegated[0].find("weave #") == std::string::npos);
     CHECK(c.op->described[0].delegated[0].find("weave #" + std::to_string(c.service_id.value)) ==
           std::string::npos);

@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// RTH-1a — the Logger, the durable half of the split.
-//
-// The cases below prove the four things the split is for: that durability is
-// SELECTED rather than accumulated, that it does not depend on the Recorder's
-// retention lifetime, that a durable record which did not come from the bus can
-// never be mistaken for one that did, and that no traffic anybody did not select
-// can consume the horizon a later critical fact needs.
+// The Logger, the durable half of the history split. The cases prove the four things the split
+// is for: durability is SELECTED rather than accumulated; it does not depend on the Recorder's
+// retention lifetime; a durable record that did not come from the bus can never be mistaken for
+// one that did; and traffic nobody selected cannot consume the horizon a later critical fact needs.
 
 #include <doctest.h>
 
@@ -39,7 +36,7 @@ Registered reg(Switchboard& bus, std::vector<std::shared_ptr<const Schema>> acce
 std::string scratch_path(const char* stem) {
     static int counter = 0;
     ++counter;
-    return std::string("zen-rth1a-") + stem + "-" + std::to_string(counter) + ".log";
+    return std::string("zen-logger-") + stem + "-" + std::to_string(counter) + ".log";
 }
 
 struct ScratchFile {
@@ -78,7 +75,7 @@ TEST_SUITE("logger") {
 // Selection: a whitelist, and it REFUSES by default
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1a: a logger keeps what was named and nothing else") {
+TEST_CASE("a logger keeps what was named and nothing else") {
     ScratchFile file("selected");
     Switchboard bus;
     {
@@ -117,7 +114,7 @@ TEST_CASE("RTH-1a: a logger keeps what was named and nothing else") {
     CHECK(back[0].log_seq == 1);
 }
 
-TEST_CASE("RTH-1a: a recorder seeing a fact does not put it in the log") {
+TEST_CASE("a recorder seeing a fact does not put it in the log") {
     // The clean statement of the ownership split: two lenses on the same tap, and
     // what one KNOWS is not what the other KEEPS.
     ScratchFile file("independent");
@@ -140,7 +137,7 @@ TEST_CASE("RTH-1a: a recorder seeing a fact does not put it in the log") {
     CHECK(back[0].observation.shape == "Ping");
 }
 
-TEST_CASE("RTH-1a: a durable fact outlives the recorder window that held its live copy") {
+TEST_CASE("a durable fact outlives the recorder window that held its live copy") {
     ScratchFile file("outlives");
     Switchboard bus;
     RecorderPolicy policy = default_policy();
@@ -167,7 +164,7 @@ TEST_CASE("RTH-1a: a durable fact outlives the recorder window that held its liv
     CHECK(count_of(back, "Ping") == 30);
 }
 
-TEST_CASE("RTH-1a: a logger works in a process with no recorder at all") {
+TEST_CASE("a logger works in a process with no recorder at all") {
     ScratchFile file("alone");
     Switchboard bus;
     {
@@ -186,7 +183,7 @@ TEST_CASE("RTH-1a: a logger works in a process with no recorder at all") {
 // Structural selection: the facts no shape can name
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1a: a failed handler is durable by default, whatever shape it was") {
+TEST_CASE("a failed handler is durable by default, whatever shape it was") {
     ScratchFile file("failure");
     Switchboard bus;
     {
@@ -221,10 +218,9 @@ TEST_CASE("RTH-1a: a failed handler is durable by default, whatever shape it was
     CHECK(a.value().get("seq")->as_int() == 1);
 }
 
-TEST_CASE("RTH-1a: ordinary refusals are NOT durable by default, and that is measured") {
-    // RTH-1's live Workshop run found every KeyReleased reaching nobody, so a
-    // refusal is neither rare nor severe and a default that kept them all would
-    // make the durable stream ordinary traffic under another name.
+TEST_CASE("ordinary refusals are NOT durable by default, and that is measured") {
+    // In a live host refusals are ordinary (a key release that reaches nobody is one), so a default
+    // that kept them all would make the durable stream ordinary traffic under another name.
     ScratchFile file("refusals");
     Switchboard bus;
     {
@@ -244,7 +240,7 @@ TEST_CASE("RTH-1a: ordinary refusals are NOT durable by default, and that is mea
     CHECK(back.empty());
 }
 
-TEST_CASE("RTH-1a: a death is durable by default; it is rare and it changes who is here") {
+TEST_CASE("a death is durable by default; it is rare and it changes who is here") {
     ScratchFile file("death");
     Switchboard bus;
     {
@@ -260,7 +256,7 @@ TEST_CASE("RTH-1a: a death is durable by default; it is rare and it changes who 
     CHECK(back[0].observation.seq == 0);
 }
 
-TEST_CASE("RTH-1a: the shipped default keeps weave-lifecycle and authority vocabulary") {
+TEST_CASE("the shipped default keeps weave-lifecycle and authority vocabulary") {
     // The default whitelist is source-traced, not invented: two categories that
     // are rare BY CONSTRUCTION — what code is loaded, and who may speak.
     const LoggerSelection s = default_selection();
@@ -284,7 +280,7 @@ TEST_CASE("RTH-1a: the shipped default keeps weave-lifecycle and authority vocab
 // Caps: per shape, never global
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1a: a per-shape cap bounds ITS shape and says so, once") {
+TEST_CASE("a per-shape cap bounds ITS shape and says so, once") {
     ScratchFile file("cap");
     Switchboard bus;
     {
@@ -309,10 +305,10 @@ TEST_CASE("RTH-1a: a per-shape cap bounds ITS shape and says so, once") {
     CHECK(back.back().text.find("Tick") != std::string::npos);
 }
 
-TEST_CASE("RTH-1a: a capped shape cannot consume the horizon of an uncapped one") {
-    // THE RTH-1 FAILURE THIS PHASE EXISTS TO REMOVE. Under one global byte budget,
-    // forty thousand beats made a later weave replacement unwritable. Here the
-    // noisy shape stops at its own number and the rare one is untouched.
+TEST_CASE("a capped shape cannot consume the horizon of an uncapped one") {
+    // THE HORIZON: under one global byte budget, forty thousand beats would make a later weave
+    // replacement unwritable. Here the noisy shape stops at its own number and the rare one is
+    // untouched.
     ScratchFile file("horizon");
     Switchboard bus;
     {
@@ -343,7 +339,7 @@ TEST_CASE("RTH-1a: a capped shape cannot consume the horizon of an uncapped one"
 // Origins: a durable record may not pretend it was a message
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1a: a host diagnostic is durable and is never mistaken for a Loom message") {
+TEST_CASE("a host diagnostic is durable and is never mistaken for a Loom message") {
     ScratchFile file("diagnostic");
     Switchboard bus;
     {
@@ -379,7 +375,7 @@ TEST_CASE("RTH-1a: a host diagnostic is durable and is never mistaken for a Loom
     CHECK(back[1].log_seq == 2);
 }
 
-TEST_CASE("RTH-1a: changing what is kept is itself kept, and publishes nothing") {
+TEST_CASE("changing what is kept is itself kept, and publishes nothing") {
     ScratchFile file("policy");
     Switchboard bus;
     {
@@ -404,7 +400,7 @@ TEST_CASE("RTH-1a: changing what is kept is itself kept, and publishes nothing")
 // The stream itself
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RTH-1a: a corrupt durable stream is refused by the gate, not believed") {
+TEST_CASE("a corrupt durable stream is refused by the gate, not believed") {
     ScratchFile file("corrupt");
     {
         std::ofstream out(file.path, std::ios::binary);
@@ -418,7 +414,7 @@ TEST_CASE("RTH-1a: a corrupt durable stream is refused by the gate, not believed
     CHECK(!error.empty());
 }
 
-TEST_CASE("RTH-1a: a selected fact with nowhere to go is counted, never pretended") {
+TEST_CASE("a selected fact with nowhere to go is counted, never pretended") {
     Switchboard bus;
     Logger log(bus, only("Ping")); // never opened
     Registered r = reg(bus, {ping_schema()});
@@ -429,7 +425,7 @@ TEST_CASE("RTH-1a: a selected fact with nowhere to go is counted, never pretende
     CHECK(log.counters().appended == 0);
 }
 
-TEST_CASE("RTH-1a: logging changes what is remembered and nothing about delivery") {
+TEST_CASE("logging changes what is remembered and nothing about delivery") {
     Switchboard bus;
     Logger log(bus, only("Ping"));
     Registered r = reg(bus, {ping_schema()});
@@ -441,7 +437,7 @@ TEST_CASE("RTH-1a: logging changes what is remembered and nothing about delivery
     CHECK(r.weave->count == 1);
 }
 
-TEST_CASE("RTH-1a: the log dump names every record's ORIGIN before its content") {
+TEST_CASE("the log dump names every record's ORIGIN before its content") {
     ScratchFile file("dump");
     Switchboard bus;
     {

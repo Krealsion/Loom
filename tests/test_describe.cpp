@@ -3,17 +3,12 @@
 
 #include <doctest.h>
 
-// The self-description door (MSG-1): a participant asks a target which message
-// shapes it accepts, by ordinary message, under ordinary authority.
-//
-// What these cases are actually about, and why each is here:
-//   - the answer comes from the target's ENFORCED accept-set, never from a
-//     Registry sweep and never from a second store;
-//   - a stranger that never compiled against the described shapes can rebuild
-//     them -- which requires the DEPENDENCY CLOSURE, not just the roots;
-//   - roots and dependencies stay distinguishable on the wire;
-//   - knowing a shape is accepted is not permission to send it.
-// Portable (in-process, no OS boundary).
+// The self-description door: a participant asks a target which message shapes it accepts, by
+// ordinary message, under ordinary authority. The answer comes from the target's ENFORCED
+// accept-set, never a registry sweep or a second store; a stranger that never compiled the shapes
+// can rebuild them, which needs the DEPENDENCY CLOSURE, not only the roots; roots and
+// dependencies stay distinguishable on the wire; and knowing a shape is accepted is not
+// permission to send it. Portable (in-process, no OS boundary).
 
 #include <zen/switchboard.hpp>
 #include <zen/terminal/composer.hpp>
@@ -35,7 +30,7 @@ namespace au = loom;
 
 namespace {
 
-// ---- a scalar target, shaped like the real one MSG-0 will compose for -------
+// ---- a scalar target, shaped like a message a console composes ------------
 
 struct StartTimer {
     std::string id;
@@ -362,7 +357,7 @@ TEST_CASE("a consumer that never compiled against the shapes rebuilds them from 
     CHECK(start->content_id() == schema_of<StartTimer>()->content_id());
 }
 
-TEST_CASE("the scalar handoff MSG-0 needs: describe -> choose -> compose -> assemble") {
+TEST_CASE("the scalar handoff a composer needs: describe -> choose -> compose -> assemble") {
     Switchboard bus;
     const WeaveId target = mount<Timerish>(bus);
     WeaveId asker_id{};

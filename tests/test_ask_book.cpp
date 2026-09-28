@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE ASKER'S OWN BOOK (FRIC-2) — what it means for one of MY conversations to be
-// outstanding, and for one of them to be settled.
-//
-// TWO KINDS OF CASE, and the split is deliberate. The first half drives the book
-// directly, because the book is ordinary state and a claim about ordinary state is
-// cheapest to make where nothing else can interfere. The second half puts it inside a
-// real weave on a real Switchboard, because the load-bearing half of the settlement
-// rule is that THE BUS STAMPS THE SENDER — and a test that hands `from` in as a
-// parameter has proved nothing about that. There the impostor is a genuine second
-// participant, holding a grant this host wrote, speaking as itself.
+// THE ASKER'S OWN BOOK: what it means for one of MY conversations to be outstanding, and settled.
+// The first half drives the book directly: it is ordinary state, and a claim about ordinary state
+// is cheapest to make where nothing can interfere. The second half puts it in a real weave on a
+// real Switchboard, because the settlement rule's load-bearing half is that THE BUS STAMPS THE
+// SENDER, which a test handing `from` in as a parameter cannot prove; there the impostor is a
+// genuine second participant, holding a grant this host wrote.
 
 #include <doctest.h>
 

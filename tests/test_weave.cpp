@@ -240,16 +240,12 @@ TEST_CASE("the mount<> auto-grant denies an emit the Weave did not declare") {
 
 TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is deliverable under "
           "mount<>") {
-    // mount<>'s ride-along allow_poke_answers grant covers the standard replies
-    // (zen.Ack/zen.Refused/zen.Result + zen.PokeStructure) for every trusted
-    // weave, because the construction layer answers pokes with them. Since the
-    // same shapes are now the universal reply vocabulary, a maker's own
-    // UNDECLARED emit of one rides that grant — deliverable with an empty
-    // Emit<>. This is a KNOWN carve-out from "the silhouette is the grant",
-    // recorded here so it is never latent: makers who reply with a standard
-    // shape still declare it in Emit<...> (the standing rule in
-    // standard_shapes.hpp), and the reserved Mail emit-gate would close this
-    // for maker sends the day it lands — at which point this pin flips.
+    // mount<>'s ride-along allow_poke_answers grant covers the standard replies (zen.Ack,
+    // zen.Refused, zen.Result, zen.PokeStructure) for every trusted weave, because the
+    // construction layer answers pokes with them, so a maker's own UNDECLARED emit of one rides
+    // that grant with an empty Emit<>: a KNOWN carve-out from "the silhouette is the grant",
+    // pinned so it is never latent. Makers still declare standard replies in Emit<...>
+    // (standard_shapes.hpp); a Mail emit-gate for maker sends would close it, and flip this pin.
     Switchboard bus;
     WeaveId sink = au::mount<RefusedSink>(bus);
     WeaveId leaker = au::mount<StandardLeaker>(bus);
@@ -304,13 +300,10 @@ TEST_CASE("the accept-set is the typed handlers plus the universal substrate doo
 }
 
 // ---- the copied weave that kept a shape's name (docs/guides/writing-a-weave.md) ------
-//
-// The guide's own scenario, at the guide's altitude: copy Responder to make a second
-// participant, rename the class and its doors, give the copy's state a field of its own,
-// and leave the state's `ZEN_SHAPE(CounterState, 1, ...)` spelled as it was. Mounting it
-// beside the original throws SchemaConflict with the sentence the guide quotes. The same
-// rule reaches a shape the copy only EMITS: an emitted `Pong v1` that grew a field is a
-// promise about somebody else's door, and it is refused at mount, not at delivery.
+// The guide's scenario: copy Responder, rename the class and its doors, give the copy's state a
+// field of its own, and leave `ZEN_SHAPE(CounterState, 1, ...)` as it was. Mounting it beside
+// the original throws SchemaConflict with the sentence the guide quotes. An emitted `Pong v1`
+// that grew a field is a promise about somebody else's door, and it too is refused at mount.
 namespace copied {
 struct Ping2 {
     std::int64_t seq;
@@ -438,13 +431,11 @@ TEST_CASE("a derived policy reaches the bus") {
     CHECK(third.reloads_exhausted);
 }
 
-// ---- the Loomstd lifecycle vocabulary (weave/lifecycle.hpp) -----------------
-// This case lives in the PORTABLE suite on purpose. The letter protocol is
-// Loomstd-tier — universal, not kernel-tier — and a header that claims to be
-// portable while only ever being compiled behind `if(NOT WIN32)` is a claim
-// nothing checks. Compiling and running it on every platform is what makes the
-// tier placement true rather than asserted. (The parts that swap real .so files
-// stay Linux-gated in the `manager` suite, where they belong.)
+// ---- the lifecycle vocabulary (weave/lifecycle.hpp) -------------------------
+// This case lives in the PORTABLE suite on purpose: the letter protocol is universal, not
+// kernel-tier, and a header claiming to be portable while only ever compiled behind
+// `if(NOT WIN32)` is a claim nothing checks. The parts that swap real .so files stay
+// Linux-gated in the `manager` suite.
 
 TEST_CASE("a letter item round-trips, and reading one goes through the gate or not at all") {
     // bequeath_item writes; claim_item reads. claim_item's whole job is that
@@ -475,12 +466,11 @@ TEST_CASE("zen.Activated is an ordinary shape, and its whole claim is one number
     CHECK(s->name() == "zen.Activated");
     CHECK(s->version() == 1);
 
-    // THE SHAPE'S POWER IS ITS SMALLNESS, so the smallness is pinned: exactly one
-    // field. A later phase that wants a role, a cause, a health flag, or a
-    // predecessor id has to come here and change a test that says why it must not
-    // — which is the point. (`zen.Activated` deliberately carries no role: a
-    // loaded weave may hold none, and payload metadata must never compete with
-    // the bus and the live role map for who a thing is.)
+    // THE SHAPE'S POWER IS ITS SMALLNESS, so the smallness is pinned: exactly one field. A
+    // change that wants a role, a cause, a health flag or a predecessor id has to come here and
+    // change a test that says why it must not. (`zen.Activated` deliberately carries no role: a
+    // loaded weave may hold none, and payload metadata must never compete with the bus and the
+    // live role map for who a thing is.)
     REQUIRE(s->fields().size() == 1);
     CHECK(s->fields()[0].name == "sequence");
     CHECK(s->fields()[0].type.kind == Kind::Int);

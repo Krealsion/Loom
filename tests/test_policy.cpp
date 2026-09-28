@@ -32,12 +32,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-// The policy phase (P1). Part A's core hooks, proven on their own:
-//   - role-addressing: a send may name a *role* (a stable capability slot) instead
-//     of a WeaveId; the role resolves to its singleton holder at delivery, and a
-//     grant of "shape -> role" is a distinct authority from "shape -> WeaveId".
-// Part B's StorageBroker proofs (scoping, floor-without-disk, reload-keeps-state)
-// build on top of these and land in this same suite.
+// Role-addressing: a send may name a *role* (a stable capability slot) instead of a WeaveId; the
+// role resolves to its singleton holder at delivery, and a grant of "shape -> role" is a distinct
+// authority from "shape -> WeaveId". The StorageBroker proofs (scoping, floor without disk,
+// reload keeps state) build on these.
 
 using namespace sbfx;
 using namespace loom;
@@ -252,7 +250,7 @@ TEST_CASE("a role binding survives the holder reloading; the role rule keeps rou
     CHECK(storage.weave->handled_names.size() == 2); // still routed after the reload
 }
 
-TEST_CASE("a role is a singleton in this phase: binding a role already held is refused") {
+TEST_CASE("a role is a singleton: binding a role already held is refused") {
     Switchboard bus;
     Registered first = register_probe_role(bus, {ping_schema()}, "storage");
     (void)first;
@@ -282,15 +280,14 @@ TEST_CASE("the grant-record persists deltas across reload, keyed by content-hash
     std::remove(path.c_str());
 }
 
-TEST_CASE("grant-record perms: a pre-planted looser-perm temp does not leak into the ledger (N-2)") {
-    // Audit N-2: write_file_synced opens the temp with 0600, but open(O_CREAT,0600) IGNORES the
-    // mode when the temp already EXISTS, and rename preserves the source mode — so a pre-planted
-    // world-writable `<path>.tmp` would make this TCB ledger world-writable after the next
-    // persist() (the re-test observed 0666). The fix fchmods the open fd to 0600 regardless of a
-    // pre-existing file. Pin it: plant a 0666 temp, persist, confirm the live ledger is
-    // owner-only (never group/other writable) and the temp did not leak.
+TEST_CASE("grant-record perms: a pre-planted looser-perm temp does not leak into the ledger") {
+    // write_file_synced opens the temp with 0600, but open(O_CREAT, 0600) IGNORES the mode when the
+    // temp already EXISTS, and rename preserves the source mode, so a pre-planted world-writable
+    // `<path>.tmp` would make this ledger world-writable after the next persist(): the open fd is
+    // fchmod'ed to 0600 regardless. Plant a 0666 temp, persist, and confirm the live ledger is
+    // owner-only and the temp did not leak.
     namespace fs = std::filesystem;
-    const std::string path = "/tmp/zen_grant_record_perms_n2.json";
+    const std::string path = "/tmp/zen_grant_record_perms.json";
     const std::string tmp = path + ".tmp";
     std::remove(path.c_str());
     std::remove(tmp.c_str());
@@ -312,7 +309,7 @@ TEST_CASE("grant-record perms: a pre-planted looser-perm temp does not leak into
     CHECK((p & fs::perms::owner_read) != fs::perms::none);
     CHECK((p & fs::perms::owner_write) != fs::perms::none);
     CHECK((p & fs::perms::group_write) == fs::perms::none);  // NOT group-writable
-    CHECK((p & fs::perms::others_write) == fs::perms::none); // NOT world-writable (the N-2 hole)
+    CHECK((p & fs::perms::others_write) == fs::perms::none); // NOT world-writable
     CHECK((p & fs::perms::others_read) == fs::perms::none);  // 0600, not the umask-masked 0644
     CHECK_FALSE(fs::exists(tmp));                            // temp renamed away, no leak
 
@@ -320,14 +317,13 @@ TEST_CASE("grant-record perms: a pre-planted looser-perm temp does not leak into
 }
 
 TEST_CASE("so_content_hash is a truncated SHA-256 (NIST vectors); a content change changes the key") {
-    // Audit F-1: the grant key is now a cryptographic digest (SHA-256 truncated to 128
-    // bits), not FNV-1a — because this key ALONE decides a mod's authority above the
-    // floor, and FNV's ~2^32 birthday resistance was cheap to forge a second build onto
-    // an existing grant. Pin it to FIPS 180-4 known-answer vectors so the in-tree
-    // SHA-256 is proven correct, not merely trusted, then confirm the security property:
-    // any content change changes the key (a rebuilt mod re-floors — the honest default).
+    // The grant key is a cryptographic digest (SHA-256 truncated to 128 bits), because this key
+    // ALONE decides a mod's authority above the floor, and a fast non-cryptographic hash would make
+    // a second build onto an existing grant cheap to forge. Pin the in-tree SHA-256 to FIPS 180-4
+    // known-answer vectors, then confirm any content change changes the key (a rebuilt mod
+    // re-floors: the honest default).
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "zen_f1_kat";
+    const fs::path dir = fs::temp_directory_path() / "zen_sha256_kat";
     fs::create_directories(dir);
     const auto hash_of = [&](const std::string& name, const std::string& content) {
         const fs::path p = dir / name;
@@ -402,7 +398,7 @@ TEST_CASE("out-of-process role-send reaches the role holder, sender stamped (kEm
                             ZEN_FLOOR_CAPS,
                             "the out-of-process role-send (kEmitToRole) seam reaches the role holder");
     // An in-process Weave holds the "storage" role and accepts StoragePut — a stand-in
-    // for the broker; this stage proves only that the wire seam carries a role-send to
+    // for the broker; this case proves only that the wire seam carries a role-send to
     // its holder with the sender stamped host-side.
     Registered holder =
         register_probe_role(bus, {loom::schema_of<storage::StoragePut>()}, "storage");
@@ -618,7 +614,7 @@ TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget
     std::filesystem::remove_all(root);
 }
 
-// ---- P2: the NetworkBroker (the powerbox generalized to a second capability) ----
+// ---- the NetworkBroker (the powerbox generalized to a second capability) ----
 
 TEST_CASE("floor denies net: a mod (even one that asks) cannot reach role net without a delta") {
     Switchboard bus;
@@ -735,14 +731,12 @@ TEST_CASE("allow-list scoping: the broker refuses a disallowed destination and n
     std::remove(rec.c_str());
 }
 
-// Keep this LAST: a positive tally so a green policy run can never mean "every floor proof silently
-// skipped." (Default doctest registration order; a --order-by=rand run would assert in a reporter.)
-//
-// EXACTLY 11, from this suite's own witnesses only (POP-02) — the eleven full-floor
-// ZEN_REQUIRE_ENFORCEABLE guard sites, including the forged-reply_to proof, none of them in a
-// subcase. THIS NUMBER IS THE POINT: a process-global tally means that in the
-// aggregate `all` lane this case read 26 (isolation's 15 plus policy's 11) and would have passed
-// its `>= 11` floor with all eleven of policy's own proofs neutered.
+// Keep this LAST: a positive tally, so a green policy run can never mean "every floor proof
+// silently skipped" (default registration order; --order-by=rand would assert in a reporter).
+// EXACTLY the number below, from this suite's own witnesses (POP-02): its full-floor
+// ZEN_REQUIRE_ENFORCEABLE sites, the forged-reply_to proof included, none in a subcase. A
+// process-global tally would count isolation's proofs too in the `all` lane, and a floor would
+// then pass with every one of policy's own neutered.
 TEST_CASE("enforcement coverage: the floor proofs actually executed, not silently skipped") {
     ZEN_ENFORCEMENT_POPULATION(11);
 }

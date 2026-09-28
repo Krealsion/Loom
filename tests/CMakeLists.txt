@@ -208,7 +208,7 @@ zen_add_test_weave(zen_test_weave_defers ZEN_WEAVE_DEFERS)
 zen_add_test_weave(zen_test_weave_answers ZEN_WEAVE_ANSWERS)
 zen_add_test_weave(zen_test_weave_answers_twice ZEN_WEAVE_ANSWERS ZEN_WEAVE_ANSWERS_TWICE)
 # An artifact that emits a shape only it knows, so the host seam cannot resolve it (a silent
-# seam Night Lab found).
+# seam).
 zen_add_test_weave(zen_test_weave_seam_emit ZEN_WEAVE_SEAM_EMIT)
 # The same unresolvable shape with no address on it: publishes SeamOnly v1 (unheard, so not a
 # refusal) and then a resolvable Pong whose bytes fail the gate (undelivered, so still one).
@@ -531,11 +531,11 @@ endforeach()
 # PASS_REGULAR_EXPRESSION is set: a filter naming a suite no compiled case belongs to (what a
 # rename, an #if or a deletion produces) must exit nonzero and say why.
 add_test(NAME empty_population_refused
-    COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
+    COMMAND zen-tests --test-suite=zen_suite_that_does_not_exist --no-skipped-summary)
 set_tests_properties(empty_population_refused PROPERTIES WILL_FAIL TRUE)
 
 add_test(NAME empty_population_says_so
-    COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
+    COMMAND zen-tests --test-suite=zen_suite_that_does_not_exist --no-skipped-summary)
 set_tests_properties(empty_population_says_so PROPERTIES
     PASS_REGULAR_EXPRESSION "EMPTY TEST POPULATION")
 

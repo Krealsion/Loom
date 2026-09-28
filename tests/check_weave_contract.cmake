@@ -131,7 +131,7 @@ if(elf_platform)
     if(NOT sentinel_seen)
         list(APPEND failures
              "the BYPASS control has no unique reload_sentinel symbol (${bypass_n} unique "
-             "symbols in total). The negative control has stopped reproducing F-22, so "
+             "symbols in total). The negative control no longer reproduces the binding, so "
              "the contracted artifacts above prove nothing: same source, same compiler, "
              "and the difference is supposed to be the contract alone.")
     endif()

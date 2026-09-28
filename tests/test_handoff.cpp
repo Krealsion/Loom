@@ -1,24 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE HANDOFF GARDEN — how one incarnation deliberately becomes another.
+// AUTHORED HANDOFF: how one incarnation deliberately becomes another.
 // HANDOFF-01..03; docs/laws/handoff-laws.md · docs/reference/handoff.md
-//
-// THE CLAIM UNDER TEST, and it is a claim about what Loom does NOT need:
-//
-//     Authored Handoff requires no new Loom primitive. Prepared replacement
-//     already verifies the successor; FIFO already provides an exact boundary;
-//     NotAccepted already provides a visible refusal for incompatible traffic;
-//     and an ordinary weave already provides an inspectable, testable,
-//     versioned, refusable, attributable migrator.
-//
-// Every case below is written to break that claim if it is false. Nothing in
-// this file calls an API added for continuity, because nothing was added
-// none: the substrate calls are all PR-era, and what is new is the PATTERN.
-//
-// The standing law is unchanged and is re-proven here rather than assumed:
-// prepared replacement preserves NOTHING (PR-09). The migration is what carries
-// meaning across, and it is authored.
+// The claim under test is what Loom does NOT need: prepared replacement verifies the successor,
+// FIFO gives an exact boundary, NotAccepted a visible refusal, and an ordinary weave an
+// inspectable, versioned, refusable, attributable migrator. Every case is written to break that
+// claim if it is false. Prepared replacement preserves NOTHING (PR-09), so the migration is what
+// carries meaning across, and it is authored.
 
 #include <doctest.h>
 
@@ -50,18 +39,12 @@ struct Bookkeeping {
     ZEN_SHAPE(Bookkeeping, 1, ZEN_FIELD(seen));
 };
 
-/// THE COORDINATOR, and the whole host/coordinator bridge in one place.
-///
-/// It is an ordinary weave that happens to hold a reference to a host-owned
-/// PreparedReplacement handle, because `accept_preparation_answer` must run
-/// inside the coordinator's own delivery of the candidate's answer. That is the
-/// known authoring friction (known-seams § PreparedReplacement
-/// host/coordinator), and this phase records another sighting of it rather than
-/// pre-emptively fixing it.
-///
-/// It drives the whole sequence: ask the incumbent to describe itself, hand that
-/// to the migrator, hand the migrator's answer to the candidate, and map the
-/// candidate's authenticated answer to Ready or Refused.
+/// THE COORDINATOR, and the whole host/coordinator bridge in one place: an ordinary weave holding
+/// a host-owned PreparedReplacement handle, because `accept_preparation_answer` must run inside
+/// its own delivery of the candidate's answer, a known seam:
+/// docs/reference/known-seams.md#preparedreplacement-hostcoordinator-friction. It asks the
+/// incumbent to describe itself, hands that to the migrator, hands the migrator's answer to the
+/// candidate, and maps the candidate's authenticated answer to Ready or Refused.
 class Coordinator : public WeaveBase<Coordinator, Bookkeeping,
                                      Accept<LedgerV1Report, MigrationResult, Adopted>,
                                      Emit<MigrateV1ToV2, AdoptMigrated>> {
@@ -198,8 +181,8 @@ TEST_SUITE("handoff") {
 
 // ---- law 1: different schemas remain different ------------------------------
 
-TEST_CASE("R2E-0/H: a v1 value does not pass v2's gate — no automatic transcode, however "
-          "related the versions look") {
+TEST_CASE("a v1 value does not pass v2's gate — no automatic transcode, however related the "
+          "versions look") {
     // The premise the whole part rests on. If this ever passes, the migration is
     // decoration.
     const Value v1 = to_value(LedgerV1{48, 500, "plain"});
@@ -215,10 +198,10 @@ TEST_CASE("R2E-0/H: a v1 value does not pass v2's gate — no automatic transcod
     CHECK_FALSE(as_v1.ok());
 }
 
-// ---- H1: the snapshot-tolerant migration, labelled honestly ------------------
+// ---- the snapshot-tolerant migration, labelled honestly ----------------------
 
-TEST_CASE("R2E-0/H1: a snapshot taken while the incumbent is LIVE is a snapshot — it can go "
-          "stale before it is used, and the witness says so rather than calling it exact") {
+TEST_CASE("a snapshot taken while the incumbent is LIVE is a snapshot — it can go stale before "
+          "it is used, and the witness says so rather than calling it exact") {
     Garden g;
     g.start_v1(/*issue_count=*/3, /*add_total=*/100);
     g.load_migrator();
@@ -243,11 +226,11 @@ TEST_CASE("R2E-0/H1: a snapshot taken while the incumbent is LIVE is a snapshot 
     CHECK(g.status().issued_high_water == 4); // the world moved on
 }
 
-// ---- H2: the exact authored boundary ----------------------------------------
+// ---- the exact authored boundary --------------------------------------------
 
-TEST_CASE("R2E-0/H2: the FIFO boundary makes the incumbent's final value EXACT — A/B/C are "
-          "handled ordinarily, the boundary lands at its exact position, and D/E meet the "
-          "domain's declared post-boundary policy") {
+TEST_CASE("the FIFO boundary makes the incumbent's final value EXACT — A/B/C are handled "
+          "ordinarily, the boundary lands at its exact position, and D/E meet the domain's "
+          "declared post-boundary policy") {
     Garden g;
     g.start_v1(/*issue_count=*/2, /*add_total=*/0);
     g.coordinator->forward_to_migrator = false;
@@ -285,8 +268,8 @@ TEST_CASE("R2E-0/H2: the FIFO boundary makes the incumbent's final value EXACT �
 
 // ---- the full authored handoff ----------------------------------------------
 
-TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final value, migrate it "
-          "through a temporary weave, prepare, commit, and carry the identity namespace") {
+TEST_CASE("the whole authored handoff — quiesce, author the final value, migrate it through a "
+          "temporary weave, prepare, commit, and carry the identity namespace") {
     Garden g;
     g.start_v1(/*issue_count=*/47, /*add_total=*/500);
     g.load_migrator();
@@ -304,8 +287,8 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
     REQUIRE(g.coordinator->last_report.quiesced);
     CHECK(g.coordinator->last_report.state.next_id == 48); // 47 issued, 48 is next
 
-    // 3. THE CANDIDATE, loaded sealed by the prepared-replacement handle. The
-    //    ceremony is entirely PR-era; nothing new was added for continuity.
+    // 3. THE CANDIDATE, loaded sealed by the prepared-replacement handle: the ordinary
+    //    ceremony, with nothing added for continuity.
     PreparedReplacement txn(g.bus, g.kernel);
     g.coordinator->txn = &txn;
     const auto started = txn.start(PreparedReplacement::Start{
@@ -381,8 +364,8 @@ TEST_CASE("R2E-0/H: the whole authored handoff — quiesce, author the final val
 
 // ---- the namespace control case ---------------------------------------------
 
-TEST_CASE("R2E-0/H: the control case — a domain that deliberately does NOT carry the namespace "
-          "gets repeated identities, and the difference is the migration's, not Loom's") {
+TEST_CASE("the control case — a domain that deliberately does NOT carry the namespace gets "
+          "repeated identities, and the difference is the migration's, not Loom's") {
     Garden g;
     g.start_v1(/*issue_count=*/47, /*add_total=*/500);
     g.load_migrator();
@@ -421,8 +404,8 @@ TEST_CASE("R2E-0/H: the control case — a domain that deliberately does NOT car
 
 // ---- a refused migration -----------------------------------------------------
 
-TEST_CASE("R2E-0/H: a migrator that does not understand its input REFUSES, nothing reaches the "
-          "candidate, and the incumbent is still the service") {
+TEST_CASE("a migrator that does not understand its input REFUSES, nothing reaches the candidate, "
+          "and the incumbent is still the service") {
     Garden g;
     // An empty mode is meaningless in v2's vocabulary; the migrator says so.
     g.start_v1(/*issue_count=*/1, /*add_total=*/0);
@@ -444,8 +427,8 @@ TEST_CASE("R2E-0/H: a migrator that does not understand its input REFUSES, nothi
 
 // ---- queued old-protocol traffic --------------------------------------------
 
-TEST_CASE("R2E-0/H: queued OLD-PROTOCOL traffic is never magically migrated — four positions "
-          "around the replacement, four honest outcomes") {
+TEST_CASE("queued OLD-PROTOCOL traffic is never magically migrated — four positions around the "
+          "replacement, four honest outcomes") {
     Garden g;
     g.start_v1(/*issue_count=*/2, /*add_total=*/0);
     g.load_migrator();
@@ -509,9 +492,9 @@ TEST_CASE("R2E-0/H: queued OLD-PROTOCOL traffic is never magically migrated — 
 
 // ---- Senses meet Handoff -----------------------------------------------------
 
-TEST_CASE("R2E-0/H+S: across the handoff the office's claim is never relabelled — the "
-          "incumbent's final claim stays the incumbent's, the successor claims nothing until it "
-          "does, and then the role-bound view follows it") {
+TEST_CASE("across the handoff the office's claim is never relabelled — the incumbent's final "
+          "claim stays the incumbent's, the successor claims nothing until it does, and then the "
+          "role-bound view follows it") {
     Garden g;
     g.start_v1(/*issue_count=*/5, /*add_total=*/50);
     g.load_migrator();
@@ -564,8 +547,8 @@ TEST_CASE("R2E-0/H+S: across the handoff the office's claim is never relabelled 
     CHECK_FALSE(g.bus.observe(g.incumbent, "LedgerStatus", 1));
 }
 
-TEST_CASE("R2E-0/H+S: an ordinary Sense is NOT an exact handoff snapshot — a domain using one "
-          "as migration input inherits its staleness") {
+TEST_CASE("an ordinary Sense is NOT an exact handoff snapshot — a domain using one as migration "
+          "input inherits its staleness") {
     Garden g;
     g.start_v1(/*issue_count=*/3, /*add_total=*/0);
 
@@ -596,8 +579,8 @@ TEST_CASE("R2E-0/H+S: an ordinary Sense is NOT an exact handoff snapshot — a d
 
 // ---- what replacement still does NOT do -------------------------------------
 
-TEST_CASE("R2E-0/H: PR-09 is unchanged — a replacement with NO authored migration carries "
-          "nothing, and the successor starts empty") {
+TEST_CASE("a replacement with NO authored migration carries nothing, and the successor starts "
+          "empty (PR-09)") {
     Garden g;
     g.start_v1(/*issue_count=*/47, /*add_total=*/500);
 
