@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
-//
-// The vocabulary the joint-publication witnesses (suite `joint`) share between
-// the native suite and the loaded fixture. Two claim
-// shapes with no application meaning — a "document fact" and a "view fact" —
-// because the substrate mechanism under test must have no document or layout
-// vocabulary of its own; the pair is what any two owners changing together look
-// like from the bus.
+
+// The vocabulary the joint-publication witnesses (suite `joint`) share between the native
+// suite and the loaded fixture: two claim shapes with no application meaning, a "document
+// fact" and a "view fact", because the mechanism under test has no document or layout
+// vocabulary of its own; the pair is what any two owners changing together look like.
 #pragma once
 #include <zen/weave.hpp>
 
@@ -48,14 +46,10 @@ struct Cmd {
     ZEN_SHAPE(Cmd, 1, ZEN_FIELD(verb), ZEN_FIELD(op), ZEN_FIELD(path), ZEN_FIELD(epoch));
 };
 
-/// The loaded probe's state — everything the suite reads back through a
-/// snapshot, so the hook's effect is visible without reaching into the image.
-///
-/// EXPOSED WHOLE: the substrate's own mutation
-/// doors -- `zen.PokeWrite`, `zen.PokeResetState` -- can change `path` from outside the
-/// probe's handlers, which is the reusable SDK path the corrections' witnesses drive. A
-/// participant that exposes a writable path must still keep its claim true after such a
-/// write; a fixture that hid every field could not ask that question.
+/// The loaded probe's state, everything the suite reads back through a snapshot. EXPOSED
+/// WHOLE: the substrate's own mutation doors (`zen.PokeWrite`, `zen.PokeResetState`) can change
+/// `path` from outside the probe's handlers, and a participant exposing a writable path must
+/// still keep its claim true after such a write; a fixture that hid every field could not ask.
 struct ProbeState {
     std::string path = "A";
     std::int64_t epoch = 1;

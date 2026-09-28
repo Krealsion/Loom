@@ -1,32 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE MIGRATOR (HANDOFF-01): an ordinary, temporary weave that says
-//
-//     "I know how to transform v1 meaning into v2 meaning."
-//
-// WHY A WEAVE, and not the alternatives it was compared against:
-//
-//   host callback registry   a C++ lambda: not inspectable, not versioned, no
-//                            natural refusal, and no bus identity — "who
-//                            transformed this?" would be unanswerable
-//   candidate-owned          the candidate would have to accept old-schema
-//                            input, which is precisely the two schemas ceasing
-//                            to be different (law 1)
-//   gate migration hook      invisible coercion inside the gate: forbidden
-//   plain library function   testable, but with no bus identity and no refusal
-//                            rail — attribution again unanswerable
-//
-// A weave wins because every property the phase requires of a migration —
-// inspectable, testable, versioned, refusable, attributable — is a fact Loom
-// ALREADY CARRIES about a weave, rather than a convention the domain has to
-// maintain. And it can be unloaded afterwards, which is what makes "temporary"
-// a proven thing rather than an intention.
-//
-// It holds no role, needs no lifecycle standing, and touches neither the
-// incumbent nor the candidate. It answers one question, through the ordinary
-// answer rail, so the coordinator's readiness verdict rests on an authenticated
-// statement from a named author.
+// THE MIGRATOR (HANDOFF-01): an ordinary, temporary weave that says "I know how to transform v1
+// meaning into v2 meaning". A weave, because inspectable, testable, versioned, refusable and
+// attributable are facts Loom already carries about one, and unloading it afterwards makes
+// "temporary" a proven thing (docs/reference/handoff.md compares the alternatives). It holds no
+// role, touches neither the incumbent nor the candidate, and answers one question through the
+// ordinary answer rail, so readiness rests on an authenticated statement from a named author.
 
 #include "handoff_protocol.hpp"
 
@@ -54,13 +34,10 @@ struct MigratorState {
 class Migrator : public WeaveBase<Migrator, MigratorState, Accept<MigrateV1ToV2>> {
 public:
     void on(const MigrateV1ToV2& ask, Mail& mail) {
-        // A REAL TRANSFORMATION, with real opinions — which is what makes a bad
-        // one provable. Every field changes shape:
-        //
-        //   next_id  -> ids.high_water     (a "next" becomes a "highest issued",
-        //                                   so it is next_id - 1, not next_id)
-        //   total    -> totals.sum         (and a count nobody had before)
-        //   mode     -> modes:List<Flag>   (free text becomes a named flag)
+        // A REAL TRANSFORMATION, with real opinions, which is what makes a bad one provable.
+        // Every field changes shape: next_id becomes ids.high_water (a "next" becomes a
+        // "highest issued", so next_id - 1), total becomes totals.sum (with a count nobody had
+        // before), and the free-text mode becomes a named flag in modes.
         MigrationResult out;
 
         // REFUSABLE. A migrator that does not understand its input says so

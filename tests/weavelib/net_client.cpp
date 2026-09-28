@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// A net-client "mod": woven with WeaveBase, mounted on the floor. A mod that needs
-// network (a multiplayer mod, say) reaches it ONLY through the NetworkBroker — never as
-// a raw grant. With a recorded `net` delta it holds the net role send-rule (it may *talk
-// to* the broker) but NOT os_cap::Network: it stays OS-network-denied (no-interface
-// netns) and reaches the network solely via the broker. On a DoNet trigger it first
-// attempts a DIRECT connect (the negative control — must fail at the syscall level) and
-// carries that errno THROUGH the broker's echo, so one round-trip proves both
-// "powerless directly" and "useful via the broker".
+// A net-client "mod", woven with WeaveBase and mounted on the floor, that reaches the network
+// ONLY through the NetworkBroker: a recorded `net` delta gives it the net role's send rule,
+// never os_cap::Network, so it stays OS-network-denied. On DoNet it first attempts a DIRECT
+// connect (the negative control, failing at the syscall) and carries that errno THROUGH the
+// broker's echo, so one round trip proves "powerless directly" and "useful via the broker".
 
 #include "net_protocol.hpp"
 

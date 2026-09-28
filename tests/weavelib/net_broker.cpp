@@ -2,14 +2,11 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // The NetworkBroker: an ecosystem Weave (not host code), shipped as a .so and mounted
-// out-of-process at the TCB tier with os_cap::Network (so it runs in the host netns, with
-// the real network), FsAccess::None (it needs no disk), bounded resources, registered
-// under role "net". It is a HIGHER-TRUST broker than the StorageBroker: network is binary
-// — there is no OS-scoped network — so the OS gives it the *whole* host network, and the
-// only thing between a mod and an arbitrary host is the broker's own allow-list. That
-// validation is therefore kept tiny and obviously-correct (loopback only, v1). It
-// performs raw TCP on a mod's behalf (no HTTP/TLS/DNS, no dependency) and replies to the
-// stamped sender. It scopes by its allow-list, never a payload-supplied address.
+// out-of-process at the TCB tier with os_cap::Network (the host netns), FsAccess::None and
+// bounded resources, under role "net". Network is binary (no OS-scoped network), so the broker's
+// own allow-list is the only thing between a mod and an arbitrary host, and it is kept tiny:
+// loopback only. It performs raw TCP on a mod's behalf (no HTTP, TLS or DNS) and replies to the
+// stamped sender, scoping by its allow-list, never by a payload-supplied address.
 
 #include "net_protocol.hpp"
 
@@ -29,10 +26,8 @@ using namespace net;
 
 namespace {
 
-// The broker's allow-list — its software scoping, the policy-enforcement point the OS
-// cannot back up for a binary network grant. v1: loopback only, simple and auditable.
-// (An OS-level tightening — nftables inside the broker's netns — is a named future
-// hardening, not built.)
+// The broker's allow-list, the policy-enforcement point the OS cannot back up for a binary
+// network grant: loopback only, simple and auditable. Seam: nftables inside the broker's netns.
 bool allowed(const std::string& host) { return host == "127.0.0.1"; }
 
 // Raw TCP connect/send/recv (native POSIX — the same calls the net-probe uses). On

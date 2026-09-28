@@ -1,28 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The authenticated lifecycle conversation — Loom's side.
+// The authenticated lifecycle conversation, Loom's side: a role tells Loom WHERE to deliver an
+// ask; an authenticated conversation tells the asker WHO received it, and who may answer.
 // ANS-01..07; docs/laws/answer-authority-laws.md
-//
-// THE LAW UNDER TEST:
-//
-//   A role tells Loom WHERE to deliver an ask.
-//   An authenticated conversation tells the asker WHO actually received it,
-//   and who may answer.
-//
-// The gap this closes is specific and was load-bearing. A weave that must
-// survive its provider being replaced addresses that provider BY ROLE — which
-// is exactly the case where it cannot know the provider's WeaveId, and so cannot
-// pre-bind the answer's sender. WITHOUT PROVENANCE all such a weave has is a
-// shape and a correlation, both of which any weave holding the same grant can
-// produce. Loom records which incarnation the routing decision actually chose,
-// and lets only that incarnation, once, speak with Loom's word behind it.
-//
-// WHAT THESE CASES DELIBERATELY DO NOT DO: reach around the bus. Every forgery
-// below is attempted by an ORDINARY REGISTERED WEAVE holding the ordinary grant
-// for the shape it forges — because "the honest API cannot express the attack"
-// and "the substrate defends against the attack" are different properties, and a
-// test written only through the polite path would pass while proving neither.
+// Every forgery below is attempted by an ORDINARY REGISTERED WEAVE holding the ordinary grant
+// for the shape it forges: "the honest API cannot express the attack" and "the substrate
+// defends against it" are different properties, and a test of the polite path proves neither.
 
 #include "doctest.h"
 
@@ -85,8 +69,8 @@ struct Received {
     }
 };
 
-/// The asker. It records what it was told AND what Loom said about it — the two
-/// facts this phase exists to keep apart.
+/// The asker. It records what it was told AND what Loom said about it: the two facts this
+/// suite keeps apart.
 class Asker : public WeaveBase<Asker, ProvState, Accept<ProvAnswer>, Emit<ProvAsk>> {
 public:
     explicit Asker(Received& heard) : heard_(&heard) {}
@@ -186,18 +170,10 @@ private:
     std::uint64_t kept_correlation_ = 0;
 };
 
-/// The copy-what-you-observed attack, done PROPERLY.
-///
-/// The polite Magpie above re-sends the decoded SHAPE, which builds a fresh
-/// Message and therefore never touches provenance at all — a test that proves
-/// nothing about the clearing rule, which is exactly what a mutation caught.
-/// This one implements `loom::Weave` directly so it holds the raw `Message` and
-/// the raw `Bus&`, stores the delivered envelope whole, and re-sends THAT.
-///
-/// That is the sharpest form of the attack the threat model allows: no forgery,
-/// no guessing, no reaching around the bus — just keeping a message that really
-/// did carry Loom's word and saying it again. It works only if some enqueue path
-/// forgets to clear.
+/// The copy-what-you-observed attack, done PROPERLY: it implements `loom::Weave` directly,
+/// keeps the delivered raw `Message` whole and re-sends THAT. (The Magpie above re-sends the
+/// decoded shape, a fresh Message that never touches provenance; a mutation to the clearing
+/// rule stayed green against it.) It works only if some enqueue path forgets to clear.
 class RawMagpie final : public Weave {
 public:
     RawMagpie(WeaveId victim, Received& seen) : victim_(victim), seen_(&seen) {}
@@ -314,23 +290,11 @@ constexpr const char* kProvRole = "prov.steward";
 constexpr std::uint64_t kPublicCorrelation = 0xC1A1; // as public as a constant gets
 
 // ---- the compile-surface half of the authority proof (LIFE-04) ---------------
-//
-// The runtime cases below can only ever show that the strongest attack a weave
-// can COMPILE achieves nothing. They cannot show that a stronger one is
-// unwriteable — and that is the actual claim, so it is asserted here, at compile
-// time, over the exact headers a weave author is supported in using.
-//
-// This TU includes <zen/switchboard.hpp> and <zen/weave.hpp>: the whole
-// weave-authoring surface for a native weave, and a superset of what a loaded
-// weave library gets (which sees no Switchboard at all). If any of these
-// expressions became well-formed, the corresponding static_assert fires and this
-// file stops compiling. A source-text grep would not catch a new spelling; this
-// does, because it asks the compiler the question directly.
-//
-// THE THIRD ASSERTION IS THE ONE THAT HAS BEEN FALSE IN SHIPPED CODE. As a
-// public static, `Switchboard::lifecycle_authority()` needs no instance and no
-// host, so a weave with an exact `zen.Activated` grant can manufacture a
-// lifecycle fact for someone else's incarnation. These are the pins on that.
+// The runtime cases below show that the strongest attack a weave can COMPILE achieves nothing;
+// these static_asserts show a stronger one is unwriteable, over <zen/switchboard.hpp> and
+// <zen/weave.hpp>, the whole native weave-authoring surface. Asking the compiler catches a new
+// spelling a text grep would not. A public static `Switchboard::lifecycle_authority()` would
+// let a weave with a `zen.Activated` grant manufacture someone else's lifecycle fact.
 
 /// The questions have to be asked THROUGH A TEMPLATE. A `requires` expression
 /// only swallows an invalid expression inside an immediate context, so asking it
@@ -354,7 +318,7 @@ static_assert(!MintsByMemberCall<loom::Mail>,
 static_assert(!MintsByAnyName<loom::Mail>,
               "R2B-1a: Mail must never expose lifecycle minting under another name");
 
-/// The static factory that once shipped: no instance, no host, no wall.
+/// No static factory: one would need no instance and no host, and meet no wall.
 static_assert(!MintsByStaticCall<loom::Switchboard>,
               "R2B-1a: the lifecycle mint must not be a reachable static factory");
 
@@ -417,7 +381,7 @@ TEST_CASE("the same bytes sent ordinarily carry no word — provenance is not th
     REQUIRE(heard.answers.size() == 1);
     CHECK(heard.answers[0].sender == holder.value);
     CHECK(heard.answers[0].correlation == kPublicCorrelation);
-    CHECK_FALSE(heard.answers[0].attested); // the whole phase, in one assertion
+    CHECK_FALSE(heard.answers[0].attested); // the whole suite, in one assertion
 }
 
 TEST_CASE("an ordinary weave that knows the shape, the correlation and the victim still cannot "
@@ -683,19 +647,11 @@ TEST_CASE("ordinary messaging is untouched: send, publish and role-send carry no
 
 namespace {
 
-/// The strongest attack the supported authoring surface permits.
-///
-/// This weave is given every advantage the threat model allows and one more
-/// besides: it is handed the victim's real WeaveId at construction, it knows a
-/// plausible positive sequence, it accepts an ordinary trigger, and its grant
-/// permits EXACTLY `zen.Activated` — the very shape it wants to forge. It
-/// includes the whole weave-authoring surface (this TU includes
-/// <zen/switchboard.hpp> and <zen/weave.hpp>).
-///
-/// What it cannot write is the line that would matter. Every route that existed
-/// is asserted unwriteable at compile time above; what remains,
-/// and what this class actually does, is the strongest thing that still
-/// COMPILES: an ordinary, legal, correctly-stamped `zen.Activated`.
+/// The strongest attack the supported authoring surface permits: handed the victim's real
+/// WeaveId, a plausible positive sequence, an ordinary trigger, a grant for EXACTLY
+/// `zen.Activated`, and the whole weave-authoring surface. Every stronger route is asserted
+/// unwriteable above, so what it does is the strongest thing that still COMPILES: an
+/// ordinary, legal, correctly-stamped `zen.Activated`.
 class ActivationImpostor : public WeaveBase<ActivationImpostor, ProvState, Accept<ProvNudge>,
                                             Emit<loom::Activated>> {
 public:
@@ -715,10 +671,9 @@ private:
     std::int64_t sequence_;
 };
 
-/// The victim: an ordinary activation consumer applying the rule every Zengine
-/// package applies — believe it only if Loom attests it, for this exact
-/// sequence. It records BOTH what arrived and what Loom said about it, so a
-/// refusal is distinguishable from a message that never came.
+/// The victim: an ordinary activation consumer applying the consumer's rule, believing it only
+/// if Loom attests it for this exact sequence. It records BOTH what arrived and what Loom said,
+/// so a refusal is distinguishable from a message that never came.
 struct ActivationLog {
     std::int64_t delivered = 0; ///< Activated messages handled at all
     std::int64_t accepted = 0;  ///< ...that Loom vouched for
@@ -770,8 +725,8 @@ private:
 
 } // namespace
 
-TEST_CASE("R2B-1a: an ordinary weave with an exact zen.Activated grant, the victim's id and a "
-          "plausible sequence still cannot manufacture a lifecycle fact") {
+TEST_CASE("an ordinary weave with an exact zen.Activated grant, the victim's id and a plausible "
+          "sequence still cannot manufacture a lifecycle fact") {
     Switchboard bus;
     ActivationLog log;
     const WeaveId victim = mount<ActivationConsumer>(bus, log);
@@ -802,8 +757,8 @@ TEST_CASE("R2B-1a: an ordinary weave with an exact zen.Activated grant, the vict
     CHECK(log.lineage == 1);
 }
 
-TEST_CASE("R2B-1a: a genuine authority still binds to one target and one sequence, and a "
-          "replayed activation stays inert") {
+TEST_CASE("a genuine authority still binds to one target and one sequence, and a replayed "
+          "activation stays inert") {
     Switchboard bus;
     ActivationLog first;
     ActivationLog second;
@@ -841,8 +796,8 @@ TEST_CASE("R2B-1a: a genuine authority still binds to one target and one sequenc
     CHECK(second.accepted == 0); // the bystander was never touched at all
 }
 
-TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnation that actually "
-          "received it — not to whoever holds the role afterwards") {
+TEST_CASE("a request sent BY ROLE binds its one answer to the incarnation that actually received "
+          "it — not to whoever holds the role afterwards") {
     Switchboard bus;
     Received heard;
     const WeaveId asker = mount<Asker>(bus, heard);
@@ -877,13 +832,9 @@ TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnatio
     CHECK(heard.answers[0].correlation == kPublicCorrelation);
     CHECK(heard.answers[0].sender == second.value);
 
-    // NOW THE ROLE CHANGES HANDS AGAIN, to a weave that wants that conversation.
-    //
-    // (Freeing a role means unregistering its holder, and an unregistered
-    // weave's still-queued replies die with it — the substrate's in-flight rule,
-    // pinned in the manager suite. So this move happens after the answer has
-    // landed; what is under test here is the SUCCESSOR's standing, not that
-    // rule.)
+    // NOW THE ROLE CHANGES HANDS AGAIN, to a weave that wants that conversation. (Freeing a
+    // role unregisters its holder, whose still-queued replies die with it, as the manager suite
+    // pins; so the move follows the answer, and what is under test is the SUCCESSOR's standing.)
     bus.unregister_weave(second);
     const WeaveId third = mount_into_role<Forger>(bus, kProvRole, asker, kPublicCorrelation);
 
@@ -907,11 +858,8 @@ TEST_CASE("R2B-1a: a request sent BY ROLE binds its one answer to the incarnatio
 // ============================================================================
 // Every Loom is its own authority domain
 // ============================================================================
-//
-// Requiring a `Switchboard&` to MINT an authority says nothing about WHICH
-// Switchboard: were the authority an empty marker, every board would honour every
-// board's. The attack below is therefore not a compile-surface question at all —
-// it is entirely legal to write, it compiles, and it must fail at RUNTIME.
+// Minting an authority takes a `Switchboard&`, which says nothing about WHICH board: the
+// attack below compiles, and must fail at RUNTIME.
 
 namespace {
 
@@ -922,18 +870,11 @@ struct DecoyAttack {
     ZEN_SHAPE(DecoyAttack, 1, ZEN_FIELD(target), ZEN_FIELD(sequence));
 };
 
-/// THE DECOY-BOARD ATTACK, by an ordinary native weave.
-///
-/// It does everything the threat model permits and nothing it forbids: it
-/// includes the host-wiring header (any code may), constructs its OWN
-/// Switchboard (any code may — a Switchboard is an ordinary object), and mints a
-/// completely genuine LifecycleAuthority from it through the same public
-/// function the real host uses. Then it spends that authority through the REAL
-/// delivery's `Mail`.
-///
-/// Its grant permits exactly `zen.Activated`, so nothing here is refused for
-/// want of capability. The authority is not a forgery — it is real, and real
-/// somewhere else.
+/// THE DECOY-BOARD ATTACK, by an ordinary native weave: it includes the host-wiring header,
+/// constructs its OWN Switchboard (any code may), mints a genuine LifecycleAuthority from it
+/// through the function the real host uses, and spends it through the REAL delivery's `Mail`.
+/// Its grant permits exactly `zen.Activated`. The authority is not a forgery: it is real, and
+/// real somewhere else.
 class DecoyBoardAttacker : public WeaveBase<DecoyBoardAttacker, ProvState, Accept<DecoyAttack>,
                                             Emit<loom::Activated>> {
 public:
@@ -998,8 +939,8 @@ struct ActivationTap {
 
 } // namespace
 
-TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy board — and the "
-          "running Loom refuses it, because it belongs to another world") {
+TEST_CASE("an ordinary weave mints a REAL authority from its own decoy board — and the running "
+          "Loom refuses it, because it belongs to another world") {
     Switchboard bus;
     ActivationTap tap;
     tap.arm(bus);
@@ -1042,8 +983,8 @@ TEST_CASE("R2B-1b: an ordinary weave mints a REAL authority from its own decoy b
     CHECK(log.lineage == 1);
 }
 
-TEST_CASE("R2B-1b: an authority whose issuing Loom has been destroyed cannot be spent — the "
-          "lifetime rule, not a special case") {
+TEST_CASE("an authority whose issuing Loom has been destroyed cannot be spent — the lifetime "
+          "rule, not a special case") {
     Switchboard bus;
     ActivationTap tap;
     tap.arm(bus);
@@ -1066,17 +1007,12 @@ TEST_CASE("R2B-1b: an authority whose issuing Loom has been destroyed cannot be 
     CHECK(log.accepted == 1);
 }
 
-TEST_CASE("R2B-1b: authority does not follow a board's ADDRESS — reusing a dead Loom's storage "
-          "cannot revive it") {
-    // THE CASE THAT JUSTIFIES THE REPRESENTATION, deterministically rather than
-    // by argument. "Identify a board by its address" is the obvious design and
-    // the wrong one: destroy a board, construct another in the same storage, and
-    // an authority from the dead world would validate against the living one.
-    //
-    // Placement-new makes the address collision GUARANTEED instead of hoped for,
-    // which is what turns this from a comment into a pin. (The two boards'
-    // identity OBJECTS are separate heap allocations; only the boards share an
-    // address — exactly the confusion a raw board pointer would fall for.)
+TEST_CASE("authority does not follow a board's ADDRESS — reusing a dead Loom's storage cannot "
+          "revive it") {
+    // "Identify a board by its address" is the obvious design and the wrong one: destroy a
+    // board, construct another in the same storage, and an authority from the dead world would
+    // validate against the living one. Placement-new makes the address collision GUARANTEED.
+    // (Only the boards share an address; their identity objects are separate heap allocations.)
     alignas(Switchboard) static unsigned char storage[sizeof(Switchboard)];
 
     Switchboard* first = new (static_cast<void*>(storage)) Switchboard();
@@ -1110,8 +1046,8 @@ TEST_CASE("R2B-1b: authority does not follow a board's ADDRESS — reusing a dea
     second->~Switchboard();
 }
 
-TEST_CASE("R2B-1b: two worlds, the same logical ids and the same sequences — and authority does "
-          "not cross between them") {
+TEST_CASE("two worlds, the same logical ids and the same sequences — and authority does not "
+          "cross between them") {
     // Two independent Looms. No world/fork machinery: two Switchboards IS two
     // worlds, which is exactly the point being made.
     Switchboard world_a;
@@ -1164,8 +1100,7 @@ TEST_CASE("R2B-1b: two worlds, the same logical ids and the same sequences — a
     CHECK(log_b.accepted == 2);
 }
 
-TEST_CASE("R2B-1b: a Switchboard is an authority domain, and is deliberately neither copyable "
-          "nor movable") {
+TEST_CASE("a Switchboard is an authority domain, and is deliberately neither copyable nor movable") {
     // "The same Loom, at a different address" is not a state this design has a
     // meaning for: weaves hold references into a board and its identity anchors
     // every authority it ever issued. The meaningless case is unrepresentable
@@ -1336,8 +1271,8 @@ private:
 
 } // namespace
 
-TEST_CASE("R2B-2: the answer waits — a responder defers, the handler returns, and a LATER "
-          "handler answers the original request") {
+TEST_CASE("the answer waits — a responder defers, the handler returns, and a LATER handler "
+          "answers the original request") {
     Switchboard bus;
     Received heard;
     const WeaveId asker = mount<Asker>(bus, heard);
@@ -1378,8 +1313,8 @@ TEST_CASE("R2B-2: the answer waits — a responder defers, the handler returns, 
     CHECK(static_cast<Deferrer*>(bus.weave(steward))->first_spend_);
 }
 
-TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second deferral, no "
-          "immediate answer afterwards, and no second spend") {
+TEST_CASE("deferring CONSUMES the immediate opportunity — no second deferral, no immediate "
+          "answer afterwards, and no second spend") {
     // One request grants one answer, whichever door it leaves by.
     {
         Switchboard bus;
@@ -1427,8 +1362,8 @@ TEST_CASE("R2B-2: deferring CONSUMES the immediate opportunity — no second def
     }
 }
 
-TEST_CASE("R2B-2: releasing abandons the conversation — silently to the requester, immediately "
-          "to the bus") {
+TEST_CASE("releasing abandons the conversation — silently to the requester, immediately to the "
+          "bus") {
     Switchboard bus;
     Received heard;
     const WeaveId asker = mount<Asker>(bus, heard);
@@ -1446,8 +1381,7 @@ TEST_CASE("R2B-2: releasing abandons the conversation — silently to the reques
     CHECK(heard.answers.empty());  // and the requester is told nothing at all
 }
 
-TEST_CASE("R2B-2: another weave knowing every public value cannot finish somebody else's "
-          "conversation") {
+TEST_CASE("another weave knowing every public value cannot finish somebody else's conversation") {
     Switchboard bus;
     Received heard;
     const WeaveId asker = mount<Asker>(bus, heard);
@@ -1479,17 +1413,13 @@ TEST_CASE("R2B-2: another weave knowing every public value cannot finish somebod
     CHECK(heard.answers[1].correlation == kPublicCorrelation);
 }
 
-TEST_CASE("R2B-2: the real token, forged into a capability by a weave that never received the "
-          "request, buys nothing") {
-    // THE RESIDUAL, PINNED RATHER THAN ARGUED. `from_host_token` must be public —
-    // it is how the library side of the C seam rebuilds a capability from the
-    // integer the host handed it — so a native weave can mint a token-shaped value
-    // at will. What makes that safe is not secrecy: it is that the record names
-    // its respondent, so presenting a number nobody gave you reaches nothing.
-    //
-    // NOTE the incarnations: both weaves are mounted fresh, so both are at
-    // incarnation 1. The forger is therefore refused by RESPONDENT IDENTITY and by
-    // nothing else — the incarnation term cannot mask it here.
+TEST_CASE("the real token, forged into a capability by a weave that never received the request, "
+          "buys nothing") {
+    // THE RESIDUAL, PINNED RATHER THAN ARGUED. `from_host_token` must be public (the library
+    // side of the C seam rebuilds a capability from the host's integer), so a native weave can
+    // mint a token-shaped value at will. The record names its respondent, so a number nobody
+    // gave you reaches nothing. Both weaves are fresh, at incarnation 1, so the forger is refused
+    // by RESPONDENT IDENTITY alone.
     Switchboard bus;
     Received heard;
     const WeaveId asker = mount<Asker>(bus, heard);
@@ -1523,7 +1453,7 @@ TEST_CASE("R2B-2: the real token, forged into a capability by a weave that never
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2: the role moving on does not carry the unfinished conversation with it") {
+TEST_CASE("the role moving on does not carry the unfinished conversation with it") {
     Switchboard bus;
     Received heard;
     const WeaveId asker = mount<Asker>(bus, heard);
@@ -1552,8 +1482,8 @@ TEST_CASE("R2B-2: the role moving on does not carry the unfinished conversation 
     CHECK(heard.answers.empty());
 }
 
-TEST_CASE("R2B-2: reload behind a stable WeaveId is a NEW incarnation — the successor cannot "
-          "spend its predecessor's answer right") {
+TEST_CASE("reload behind a stable WeaveId is a NEW incarnation — the successor cannot spend its "
+          "predecessor's answer right") {
     // THE LOAD-BEARING IDENTITY QUESTION, pinned. A WeaveId is never reused, so it
     // already distinguishes a SWAP successor. It does NOT distinguish a RELOAD
     // successor, because reload deliberately keeps the id — so without an
@@ -1585,7 +1515,7 @@ TEST_CASE("R2B-2: reload behind a stable WeaveId is a NEW incarnation — the su
     CHECK(heard.answers.empty());
 }
 
-TEST_CASE("R2B-2: the requester dying prevents delivery, and no successor inherits the answer") {
+TEST_CASE("the requester dying prevents delivery, and no successor inherits the answer") {
     Switchboard bus;
     Received heard;
     Received successor_heard;
@@ -1615,7 +1545,7 @@ TEST_CASE("R2B-2: the requester dying prevents delivery, and no successor inheri
     CHECK(newcomer.value != asker.value);
 }
 
-TEST_CASE("R2B-2: an ordinary delivery has no answer authority to defer") {
+TEST_CASE("an ordinary delivery has no answer authority to defer") {
     Switchboard bus;
     Received heard;
     (void)mount<Asker>(bus, heard);
@@ -1635,8 +1565,8 @@ TEST_CASE("R2B-2: an ordinary delivery has no answer authority to defer") {
     CHECK(heard.answers.empty());
 }
 
-TEST_CASE("R2B-2: a deferred answer is board-relative — World A's capability has no standing "
-          "in World B, even with identical ids and correlations") {
+TEST_CASE("a deferred answer is board-relative — World A's capability has no standing in World "
+          "B, even with identical ids and correlations") {
     Switchboard world_a;
     Switchboard world_b;
     Received heard_a;
@@ -1678,15 +1608,12 @@ TEST_CASE("R2B-2: a deferred answer is board-relative — World A's capability h
     CHECK(heard_b.answers[0].attested);
 }
 
-TEST_CASE("R2B-2: and the capability ITSELF does not cross — World A's answer right, presented by "
-          "World B's steward against a matching record, is refused") {
-    // THE PREVIOUS CASE IS NOT ENOUGH, and saying why is the point. There, each
-    // world spent its own capability, so the issuer never had to be the thing that
-    // refused anything — the tokens stayed home by construction. This case makes
-    // the capability actually cross: the object minted by World A is moved, by
-    // hand, into World B's steward, where a record with the SAME token number
-    // names that very steward at that very incarnation. Every check but one
-    // agrees. The issuing Loom is the one that says no.
+TEST_CASE("and the capability ITSELF does not cross — World A's answer right, presented by World "
+          "B's steward against a matching record, is refused") {
+    // In the previous case each world spent its own capability, so the issuer never had to
+    // refuse anything. Here World A's capability is moved by hand into World B's steward, where
+    // a record with the SAME token number names that very steward at that very incarnation.
+    // Every check but one agrees; the issuing Loom is the one that says no.
     Switchboard world_a;
     Switchboard world_b;
     Received heard_a;
@@ -1770,8 +1697,8 @@ struct FullRegistry {
 
 } // namespace
 
-TEST_CASE("R2B-2: the registry is bounded, the overflow says CAPACITY, and the caller keeps the "
-          "immediate opportunity it never spent") {
+TEST_CASE("the registry is bounded, the overflow says CAPACITY, and the caller keeps the immediate "
+          "opportunity it never spent") {
     // A deferred answer is host-side state a weave asks for, so an unbounded one
     // would be a memory hole any weave could dig by deferring and never answering.
     // The bound is published — and DRIVEN here, because a bound nobody reaches is
@@ -1802,7 +1729,7 @@ TEST_CASE("R2B-2: the registry is bounded, the overflow says CAPACITY, and the c
     CHECK(world.heard.answers[0].attested); // and it is still a REAL answer
 }
 
-TEST_CASE("R2B-2: a leaked capability costs one slot only until NEW CODE lands behind its owner") {
+TEST_CASE("a leaked capability costs one slot only until NEW CODE lands behind its owner") {
     // Reclamation on reload, facing a FULL registry — which is the only way to see
     // it. Reclamation and the incarnation comparison in spend_deferred_as are two
     // independent guards against the same mistake; this one watches reclamation,
@@ -1822,7 +1749,7 @@ TEST_CASE("R2B-2: a leaked capability costs one slot only until NEW CODE lands b
     CHECK(world.tap.exhausted == 0);
 }
 
-TEST_CASE("R2B-2: a leaked capability costs one slot only until its owner DIES") {
+TEST_CASE("a leaked capability costs one slot only until its owner DIES") {
     // The same claim, the other event, and a separate full registry — because
     // reclaiming on reload would otherwise have emptied this one before death got
     // a chance to be the thing that reclaimed anything.
@@ -1840,16 +1767,10 @@ TEST_CASE("R2B-2: a leaked capability costs one slot only until its owner DIES")
 }
 
 // ---- death ends the answer (ANS-04) ------------------------------------------
-//
-// "An answer may outlive the handler, but never the conversation or the
-// incarnation that earned it." The code-replacement and permanent-removal halves
-// are the easy ones; RECOVERABLE DEATH is the half that escapes a weaker oracle,
-// because `kill()` leaves both the WeaveId and the incarnation untouched. Nothing
-// about the record looks stale, so a crashed weave revived from its own snapshot
-// — the isolation supervisor's ordinary recovery path — would come back holding
-// its predecessor's answer rights. These cases pin the law at that transition:
-//
-//     A handler may end without ending the conversation. A life may not.
+// A handler may end without ending the conversation; a life may not. `kill()` leaves the
+// WeaveId and the incarnation untouched, so nothing about the record looks stale, and a crashed
+// weave revived from its own snapshot (the isolation supervisor's ordinary recovery) would
+// otherwise come back holding its predecessor's answer rights.
 
 namespace {
 
@@ -1890,8 +1811,8 @@ constexpr const char* kOtherRole = "prov.other";
 
 } // namespace
 
-TEST_CASE("R2B-2a: the respondent DYING ends the conversation, and revival from its own snapshot "
-          "does not bring the answer back") {
+TEST_CASE("the respondent DYING ends the conversation, and revival from its own snapshot does not "
+          "bring the answer back") {
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -1943,7 +1864,7 @@ TEST_CASE("R2B-2a: the respondent DYING ends the conversation, and revival from 
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2a: LAST-KNOWN-GOOD revival cannot restore an answer right either") {
+TEST_CASE("LAST-KNOWN-GOOD revival cannot restore an answer right either") {
     // The other real revival branch, and it must not be a back door. A malformed
     // candidate plus a policy that permits the fallback is the whole difference; the
     // conversation is just as over.
@@ -1979,8 +1900,7 @@ TEST_CASE("R2B-2a: LAST-KNOWN-GOOD revival cannot restore an answer right either
     CHECK(tap.delivered_answers == 0);
 }
 
-TEST_CASE("R2B-2a: the REQUESTER dying and reviving does not inherit the answer its previous life "
-          "was owed") {
+TEST_CASE("the REQUESTER dying and reviving does not inherit the answer its previous life was owed") {
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2026,7 +1946,7 @@ TEST_CASE("R2B-2a: the REQUESTER dying and reviving does not inherit the answer 
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2a: death reclaims registry capacity AT THE DEATH, in both ownership directions") {
+TEST_CASE("death reclaims registry capacity AT THE DEATH, in both ownership directions") {
     // The bound is 64 and a leaked capability costs a slot. ANS-02 proves code
     // replacement and permanent removal give the slots back; this proves DEATH does
     // — immediately, and before any revival, because a quarantined weave is never
@@ -2085,8 +2005,8 @@ TEST_CASE("R2B-2a: death reclaims registry capacity AT THE DEATH, in both owners
     }
 }
 
-TEST_CASE("R2B-2a: death cleanup is SELECTIVE — killing one participant ends only the "
-          "conversations it was a party to") {
+TEST_CASE("death cleanup is SELECTIVE — killing one participant ends only the conversations it "
+          "was a party to") {
     // A -> B, E -> B, C -> D. Killing B must end the first two and leave the third
     // untouched. Clearing the whole registry would make every other case in this
     // suite pass just as green, which is exactly why this case exists.
@@ -2130,7 +2050,7 @@ TEST_CASE("R2B-2a: death cleanup is SELECTIVE — killing one participant ends o
     CHECK(heard_c.answers[0].attested);
 }
 
-TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICALLY, on purpose") {
+TEST_CASE("a reclaimed token and a never-issued one are refused IDENTICALLY, on purpose") {
     // Deliberate, and worth writing down: after a death the record is gone, so a
     // persisted token names nothing — the same nothing a fabricated number names.
     // Both come back as ForeignAuthority with no requester on the refusal, so the
@@ -2170,18 +2090,10 @@ TEST_CASE("R2B-2a: a reclaimed token and a never-issued one are refused IDENTICA
 }
 
 // ---- the message belongs to a life (MSG-03) -----------------------------------
-//
-// Ending every conversation a dying participant was already IN (ANS-04) cannot
-// reach a message it had merely QUEUED, which names no conversation yet. Delivered
-// later, that message becomes speech from whatever now answers to the same id:
-//
-//     life A queues an ask -> A dies -> A is revived under the same WeaveId
-//     -> the ask is delivered -> the responder answers -> the NEW life is answered
-//
-// So every weave-originated envelope is stamped, at enqueue, with the sender's
-// current LIFE, and delivery refuses when that life is over.
-//
-//     A weave-originated message belongs to the life that authored it.
+// Ending the conversations a dying participant was IN (ANS-04) cannot reach a message it had
+// merely QUEUED: delivered after a revival under the same WeaveId, it would be speech from the
+// new life, and the new life would be answered. So every weave-originated envelope is stamped,
+// at enqueue, with its sender's current LIFE, and delivery refuses when that life is over.
 
 namespace {
 
@@ -2227,13 +2139,9 @@ private:
     std::string tag_ = "queued";
 };
 
-/// Make `speaker` author exactly one message and leave it in the queue.
-///
-/// The nudge is root-sent, so the pump delivers it, the handler enqueues the real
-/// utterance, and the observer stops the pump the instant the nudge's own delivery
-/// is announced — which happens after the handler has returned. What the handler
-/// enqueued is therefore still queued, and `pending()` is the proof rather than
-/// the assumption.
+/// Make `speaker` author exactly one message and leave it in the queue: the root-sent nudge is
+/// delivered, the handler enqueues the utterance, and the observer stops the pump when the
+/// nudge's delivery is announced, after the handler returned; `pending()` proves it is queued.
 void queue_one_utterance(Switchboard& bus, WeaveId speaker) {
     const ObserverId stopper = bus.add_observer([&bus](const BusEvent& ev) {
         if (ev.kind == EventKind::Delivered && ev.schema_name == ProvNudge::zen_name) {
@@ -2258,7 +2166,7 @@ void kill_and_revive(Switchboard& bus, WeaveId id, LifeTap& life) {
 
 } // namespace
 
-TEST_CASE("R2B-2b: an ask queued by a life that then died is not speech from its revival") {
+TEST_CASE("an ask queued by a life that then died is not speech from its revival") {
     // THE CORE PROOF. Everything after it is another shape of send, or another
     // thing the stale message must fail to reach.
     Switchboard bus;
@@ -2308,15 +2216,12 @@ TEST_CASE("R2B-2b: an ask queued by a life that then died is not speech from its
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2b: a queued message from a sender that is DEAD AND NOT YET REVIVED is refused "
-          "too — and the two life numbers are EQUAL, which is why aliveness is its own term") {
-    // THE TERM NO OTHER CASE REACHES. Everywhere else the author is killed AND
-    // revived before the pump, so the generation has moved and the generation check
-    // is what refuses. Here the author is simply dead: the stamped life and the
-    // current life are IDENTICAL, and only aliveness can tell the difference.
-    //
-    // This case exists because a mutation deleting the aliveness term came back
-    // GREEN. It was not redundant — it was unwatched.
+TEST_CASE("a queued message from a sender that is DEAD AND NOT YET REVIVED is refused too — and "
+          "the two life numbers are EQUAL, which is why aliveness is its own term") {
+    // THE TERM NO OTHER CASE REACHES: elsewhere the author is killed AND revived before the
+    // pump, so the generation check refuses. Here the author is simply dead: the stamped and
+    // current lives are IDENTICAL, and only aliveness tells them apart. A mutation deleting the
+    // aliveness term stayed green without this case.
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2343,8 +2248,8 @@ TEST_CASE("R2B-2b: a queued message from a sender that is DEAD AND NOT YET REVIV
     CHECK(heard.answers.empty());
 }
 
-TEST_CASE("R2B-2b: a stale ROLE-addressed message reaches neither the old holder nor whoever "
-          "holds the role by the time it is delivered") {
+TEST_CASE("a stale ROLE-addressed message reaches neither the old holder nor whoever holds the "
+          "role by the time it is delivered") {
     // Role resolution is delivery-time behaviour, and that is the point of danger:
     // a stale message would otherwise be handed to whoever happens to hold the slot
     // later. The life check runs BEFORE resolution, so it never gets that far.
@@ -2376,8 +2281,8 @@ TEST_CASE("R2B-2b: a stale ROLE-addressed message reaches neither the old holder
     CHECK(heard.answers.empty());
 }
 
-TEST_CASE("R2B-2b: a stale PUBLICATION reaches no subscriber, and every recipient's copy is "
-          "checked on its own") {
+TEST_CASE("a stale PUBLICATION reaches no subscriber, and every recipient's copy is checked on its "
+          "own") {
     // A publish becomes one envelope per subscriber, so a single check at fan-out
     // time would be exactly the wrong shape: it would let a stale publication reach
     // everyone on the strength of one answer. Each delivery answers for itself, and
@@ -2403,7 +2308,7 @@ TEST_CASE("R2B-2b: a stale PUBLICATION reaches no subscriber, and every recipien
     CHECK(static_cast<Deferrer*>(bus.weave(sub_b))->deliveries() == 0);
 }
 
-TEST_CASE("R2B-2b: a stale ask creates no IMMEDIATE answer authority") {
+TEST_CASE("a stale ask creates no IMMEDIATE answer authority") {
     // The responder here answers every ask it receives. If a stale ask reached its
     // handler, an authenticated answer would exist — addressed, by Loom, to the
     // revived life that never asked anything.
@@ -2434,8 +2339,7 @@ TEST_CASE("R2B-2b: a stale ask creates no IMMEDIATE answer authority") {
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2b: a stale ask creates no DEFERRED answer authority and occupies no registry "
-          "capacity") {
+TEST_CASE("a stale ask creates no DEFERRED answer authority and occupies no registry capacity") {
     // Capacity is the exact instrument. The registry is filled to one slot short of
     // its bound; if the stale ask were delivered and deferred, it would take the
     // last slot and the living conversation below would be refused as Exhausted.
@@ -2470,7 +2374,7 @@ TEST_CASE("R2B-2b: a stale ask creates no DEFERRED answer authority and occupies
     CHECK(world.tap.exhausted == 0);
 }
 
-TEST_CASE("R2B-2b: killing one speaker leaves another living speaker's queued message alone") {
+TEST_CASE("killing one speaker leaves another living speaker's queued message alone") {
     // Cleanup and validation must both be about ONE life. Invalidating the queue
     // wholesale would make every case above just as green.
     Switchboard bus;
@@ -2513,13 +2417,11 @@ TEST_CASE("R2B-2b: killing one speaker leaves another living speaker's queued me
     CHECK(d->retained_count() == 1);
 }
 
-TEST_CASE("R2B-2b: a queued message from a PERMANENTLY REMOVED sender is refused as a life that "
-          "ended, not as a missing grant") {
-    // The same fact the swap window has always had (an unloaded weave's in-flight
-    // replies die with it) — reported by its real cause. Without the life stamp this
-    // arrived at the right answer down the wrong road: a vanished sender has no
-    // grant to check, so the AUTHORIZATION term failed and the tap said
-    // CapabilityDenied, sending an operator to edit a grant that was never wrong.
+TEST_CASE("a queued message from a PERMANENTLY REMOVED sender is refused as a life that ended, not "
+          "as a missing grant") {
+    // An unloaded weave's in-flight replies die with it, reported by the real cause: a
+    // vanished sender has no grant to check either, and CapabilityDenied would send an operator
+    // to edit a grant that was never wrong.
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2539,12 +2441,11 @@ TEST_CASE("R2B-2b: a queued message from a PERMANENTLY REMOVED sender is refused
     CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 0);
 }
 
-TEST_CASE("R2B-2b: a LIVE code reload is not a death — speech already in the queue is still that "
-          "same living weave's") {
-    // THE OTHER HALF OF THE LAW, and the reason this phase added a second field
-    // instead of reusing the incarnation. A weave whose code is replaced never
-    // stopped living; a sentence it was already mid-way through delivering is
-    // still its own. Collapsing the two concepts would silently discard it.
+TEST_CASE("a LIVE code reload is not a death — speech already in the queue is still that same "
+          "living weave's") {
+    // THE OTHER HALF OF THE LAW, and why life is a field of its own beside the incarnation: a
+    // weave whose code is replaced never stopped living, and a sentence it was mid-way through
+    // delivering is still its own. Collapsing the two would silently discard it.
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2569,16 +2470,12 @@ TEST_CASE("R2B-2b: a LIVE code reload is not a death — speech already in the q
     CHECK(tap.last_current_life == 1);
 }
 
-TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold — a replayed "
-          "envelope speaks with its REPLAYER's life") {
-    // Cross-Loom and replay are structural here rather than checked: the stamp
-    // lives on the bus's private Envelope, which has no wire form, no schema and no
-    // constructor a weave can reach. So there is nothing to copy out of a delivered
-    // message and nothing to carry into another Loom.
-    //
-    // What that MEANS is worth pinning, because a reader might expect the opposite:
-    // a weave that hoards someone else's message and re-sends it is not relaying
-    // that author's speech, it is speaking itself — and it is checked as itself.
+TEST_CASE("the life stamp is not carried by anything a weave can hold — a replayed envelope "
+          "speaks with its REPLAYER's life") {
+    // Cross-Loom and replay are structural here: the stamp lives on the bus's private
+    // Envelope, which has no wire form, schema or reachable constructor, so there is nothing to
+    // copy out. A weave that hoards someone else's message and re-sends it is not relaying that
+    // author's speech: it is speaking itself, and is checked as itself.
     Switchboard bus;
     Received victim_heard;
     Received magpie_heard;
@@ -2615,25 +2512,11 @@ TEST_CASE("R2B-2b: the life stamp is not carried by anything a weave can hold �
 }
 
 // ---- the answer belongs to the life that asked (ANS-03) ------------------------
-//
-// MSG-03 binds a message to the life that AUTHORED it, protecting the answering
-// side. This is the other half — the participant an answer was earned FOR:
-//
-//     requester A asks -> responder queues an authentic answer -> A dies
-//     -> A is revived under the same WeaveId -> the answer lands on the revival
-//
-// and its quieter twin, where A never dies at all:
-//
-//     requester A asks -> the answer is queued -> A's CODE is replaced in place
-//     -> successor code B inherits A's completed conversation
-//
-// Ordinary messages deliberately keep their old behaviour: a direct or
-// role-addressed send is aimed at a logical destination and should reach whoever
-// legitimately occupies it. An authenticated answer is different in kind, because
-// its meaning already names one conversation between two exact participants.
-//
-//     An authenticated answer belongs to the requester life and code
-//     incarnation that asked.
+// MSG-03 protects the answering side; this is the participant an answer was earned FOR. An
+// authentic answer queued for requester A must not land on A's revival under the same WeaveId,
+// nor on successor code that replaced A in place. Ordinary sends keep their logical target;
+// an authenticated answer names one conversation between two exact participants, and belongs
+// to the requester life and incarnation that asked.
 
 namespace {
 
@@ -2672,8 +2555,8 @@ void queue_one_deferred_answer(Switchboard& bus, WeaveId asker, WeaveId steward,
 
 } // namespace
 
-TEST_CASE("R2B-2c: an authenticated answer queued for a requester that then died is not the "
-          "revival's answer — immediate and deferred alike") {
+TEST_CASE("an authenticated answer queued for a requester that then died is not the revival's "
+          "answer — immediate and deferred alike") {
     // THE CORE PROOF, run down both answer doors, because patching only the
     // deferred registry would leave the immediate path exactly as broken.
     bool deferred = false;
@@ -2729,8 +2612,8 @@ TEST_CASE("R2B-2c: an authenticated answer queued for a requester that then died
     CHECK(heard.answers[0].correlation == kPublicCorrelation);
 }
 
-TEST_CASE("R2B-2c: a LIVE code reload of the requester does not inherit the conversation its "
-          "predecessor completed") {
+TEST_CASE("a LIVE code reload of the requester does not inherit the conversation its predecessor "
+          "completed") {
     // THE REASON INCARNATION IS REQUIRED AS WELL AS LIFE. Nothing died here: the
     // weave never stopped living, so its life generation is untouched and a
     // life-only check would hand A's finished conversation to successor code B —
@@ -2766,16 +2649,12 @@ TEST_CASE("R2B-2c: a LIVE code reload of the requester does not inherit the conv
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2c: ORDINARY messages keep their logical targeting — a queued direct send still "
-          "reaches the address it named, even after that address gets new code") {
-    // THE BOUNDARY, PINNED FROM THE OTHER SIDE. It would be easy to "improve"
-    // delivery by pinning every message to the exact recipient it was aimed at
-    // when queued. That is deliberately NOT the law: an ordinary send names a
-    // logical destination and should reach whoever legitimately occupies it —
-    // which is what makes hot-reload usable at all.
-    //
-    // Only envelopes that leave by an answer door carry a target expectation, and
-    // this case is what would go red if that ever stopped being true.
+TEST_CASE("ORDINARY messages keep their logical targeting — a queued direct send still reaches "
+          "the address it named, even after that address gets new code") {
+    // THE BOUNDARY, FROM THE OTHER SIDE. Pinning every message to the exact recipient it was
+    // aimed at when queued is deliberately NOT the law: an ordinary send names a logical
+    // destination and should reach whoever legitimately occupies it, which is what makes
+    // hot-reload usable. Only envelopes leaving by an answer door carry a target expectation.
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2799,15 +2678,12 @@ TEST_CASE("R2B-2c: ORDINARY messages keep their logical targeting — a queued d
     CHECK(static_cast<Deferrer*>(bus.weave(steward))->deliveries() == 1); // it arrived
 }
 
-TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and the spend is "
-          "refused at the spend, before any answer is queued") {
-    // THE OTHER WINDOW. A deferred conversation can be invalidated in two places:
-    // before the answer is written (here) and after it is queued (the live-reload
-    // case above). This one is the separate spend-time incarnation check
-    // (ANS-02), and it is pinned here because it is what makes the requester-capture
-    // rule LOOK redundant: with it in place, a spend that recomputed the
-    // requester's identity instead of using the record's could never observe a
-    // difference. Cutting both together is the only way to see the pair.
+TEST_CASE("a requester that is live-reloaded BETWEEN the deferral and the spend is refused at the "
+          "spend, before any answer is queued") {
+    // THE OTHER WINDOW: a deferred conversation can be invalidated before the answer is
+    // written (here) or after it is queued (the live-reload case above). This is the spend-time
+    // incarnation check (ANS-02); with it in place, a spend that recomputed the requester's
+    // identity instead of using the record's could never differ, so only cutting both shows it.
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2847,10 +2723,10 @@ TEST_CASE("R2B-2c: a requester that is live-reloaded BETWEEN the deferral and th
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2c: an UNCHANGED requester still gets its answer, whatever else the world does") {
-    // The positive control for the whole phase. If the target expectation were
-    // even slightly too strict, this is the case that would go quiet — and every
-    // "no answer arrived" assertion elsewhere would become meaningless.
+TEST_CASE("an UNCHANGED requester still gets its answer, whatever else the world does") {
+    // The positive control for the answer cases. If the target expectation were even slightly
+    // too strict, this case would go quiet, and every "no answer arrived" assertion elsewhere
+    // would become meaningless.
     Switchboard bus;
     Received heard;
     Received bystander_heard;
@@ -2884,8 +2760,8 @@ TEST_CASE("R2B-2c: an UNCHANGED requester still gets its answer, whatever else t
     CHECK(bystander_heard.answers.empty());
 }
 
-TEST_CASE("R2B-2c: an answer pumped while the requester is STILL DEAD is refused as a dead "
-          "target, which is a different fact from a changed one") {
+TEST_CASE("an answer pumped while the requester is STILL DEAD is refused as a dead target, which "
+          "is a different fact from a changed one") {
     // Two honest outcomes that must not be conflated: an address whose occupant is
     // dead (nobody can be delivered to, whoever they are) versus an address whose
     // occupant is alive and is somebody else. This case is deliberately NOT a
@@ -2904,11 +2780,11 @@ TEST_CASE("R2B-2c: an answer pumped while the requester is STILL DEAD is refused
     bus.drain_until_idle();
     CHECK(heard.answers.empty());
     CHECK(tap.answer_target_changed == 0); // NOT "changed" — it has not changed yet
-    CHECK(tap.other_refusals == 1);        // TargetUnavailable, the pre-existing truth
+    CHECK(tap.other_refusals == 1);        // TargetUnavailable
     CHECK(tap.delivered_answers == 0);
 }
 
-TEST_CASE("R2B-2c: LAST-KNOWN-GOOD revival is no back door either") {
+TEST_CASE("LAST-KNOWN-GOOD revival is no back door either") {
     Switchboard bus;
     Received heard;
     RefusalTap tap;
@@ -2938,7 +2814,7 @@ TEST_CASE("R2B-2c: LAST-KNOWN-GOOD revival is no back door either") {
     CHECK(heard.answers[0].attested);
 }
 
-TEST_CASE("R2B-2c: when BOTH participants change, the answer still does not arrive") {
+TEST_CASE("when BOTH participants change, the answer still does not arrive") {
     // Two independent guards can both apply, and correctness must not depend on
     // which one is consulted first. This records which one fires today — the
     // sender's, because it is checked before the target is even resolved — while
@@ -2969,7 +2845,7 @@ TEST_CASE("R2B-2c: when BOTH participants change, the answer still does not arri
     CHECK(tap.sender_life_ended == 1); // today: the author's life, checked first
 }
 
-TEST_CASE("R2B-2c: changing one requester does not invalidate an answer queued for another") {
+TEST_CASE("changing one requester does not invalidate an answer queued for another") {
     // The cleanup-everything shortcut would make every case above just as green.
     Switchboard bus;
     Received heard_a;
@@ -3009,11 +2885,10 @@ TEST_CASE("R2B-2c: changing one requester does not invalidate an answer queued f
     CHECK(heard_a.answers[0].attested);
 }
 
-TEST_CASE("R2B-2c: WeaveIds are never reused, so a later participant cannot inherit an earlier "
-          "one's conversation by numbering") {
-    // The prompt's "numerically reused id" case is unreachable rather than
-    // untested, and the honest thing is to pin the allocation law that makes it so
-    // rather than manufacture a scenario the bus cannot produce.
+TEST_CASE("WeaveIds are never reused, so a later participant cannot inherit an earlier one's "
+          "conversation by numbering") {
+    // A numerically reused id is unreachable rather than untested, so this pins the allocation
+    // law that makes it so rather than manufacture a scenario the bus cannot produce.
     Switchboard bus;
     Received heard;
     const WeaveId first = mount<Asker>(bus, heard);
@@ -3038,12 +2913,11 @@ TEST_CASE("R2B-2c: WeaveIds are never reused, so a later participant cannot inhe
     CHECK(tap.delivered_answers == 0);
 }
 
-TEST_CASE("R2B-2c: a SWAP successor holds a different WeaveId, so an answer owed to its "
-          "predecessor cannot reach it") {
-    // Distinct from a reload: a swap creates a NEW record with a NEW id, so the
-    // predecessor's conversation cannot even be addressed at the successor. Pinned
-    // rather than argued, because "a different id" is exactly the assumption the
-    // rest of this phase rests on.
+TEST_CASE("a SWAP successor holds a different WeaveId, so an answer owed to its predecessor cannot "
+          "reach it") {
+    // Distinct from a reload: a swap creates a NEW record with a NEW id, so the predecessor's
+    // conversation cannot even be addressed at the successor. Pinned rather than argued,
+    // because "a different id" is the assumption the rest of this suite rests on.
     Switchboard bus;
     Received heard;
     Received successor_heard;
@@ -3067,13 +2941,12 @@ TEST_CASE("R2B-2c: a SWAP successor holds a different WeaveId, so an answer owed
     CHECK(tap.delivered_answers == 0);
 }
 
-TEST_CASE("R2B-2c: a replayed raw envelope carries no target expectation, because it carries no "
-          "private provenance at all") {
-    // The existing replay proof covers answer provenance; this adds the new
-    // private fact to the same statement. A weave that hoards a delivered answer
-    // and re-sends it is speaking as itself under ordinary rules — so the copy
-    // reaches its victim even though the ORIGINAL conversation named somebody else
-    // entirely, and it arrives with no authenticity to inherit.
+TEST_CASE("a replayed raw envelope carries no target expectation, because it carries no private "
+          "provenance at all") {
+    // The replay proof above covers answer provenance; this adds the target expectation. A
+    // weave that hoards a delivered answer and re-sends it is speaking as itself under ordinary
+    // rules, so the copy reaches its victim though the ORIGINAL conversation named somebody
+    // else, and it arrives with no authenticity to inherit.
     Switchboard bus;
     Received victim_heard;
     Received magpie_heard;

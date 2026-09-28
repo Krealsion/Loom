@@ -1,16 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE STRANGER'S CROSSING -- a host outside Loom's build tree that serves a listener under an
-// admission policy of its own, and a client outside it that connects, is refused, then admitted
-// and answered, reaching both halves only through `find_package(loom)`.
-//
-// The two-host crossing exported `loom::bridge` on the strength of a second HOST -- a Loom host
-// that links to a running Workshop -- and this closes the same debt the history witness closed
-// for the history pair: the build tree can satisfy a target the export set never published, and
-// the difference only shows up in somebody else's project. It links `loom::bridge` and nothing
-// that is not exported: no console, no UI, no remote console. If the admission seam, the client
-// or the link envelope stop being reachable that way, this fails to configure or to compile.
+// THE STRANGER'S CROSSING: a host outside Loom's build tree that serves a listener under an
+// admission policy of its own, and a client that connects, is refused, then admitted and
+// answered, reaching both halves only through `find_package(loom)`. It links `loom::bridge` and
+// nothing unexported (no console, no UI, no remote console): if the admission seam, the client
+// or the link envelope stop being reachable that way, this fails to configure or compile.
 
 #include <zen/bridge/client.hpp>
 #include <zen/bridge/link.hpp>

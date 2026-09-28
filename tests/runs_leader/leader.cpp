@@ -1,28 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// A WORKER THAT LEAVES A CHILD BEHIND, and nothing else.
-//
-// The run manager owns a worker's EXECUTION GROUP, not the process that leads it
-// (src/runs/process.hpp), and only the worker itself can put a second process into that group --
-// so a test that wants to ask what this manager says about an execution whose LEADER has ended
-// while the group is still running has to be handed a worker that arranges exactly that. This is
-// that worker: the C++ twin of tests/session/lifecycle/descendants.py, for the suite that runs
-// without Python and on both ownership paths (a Windows job object, a POSIX process group).
-//
-// It stands in for the catalog's INTERPRETER, so the manager starts it with the arguments it
-// would give Python (`-X utf8 -u -m loom_session.worker`) and it ignores them:
-//
-//   <this> sleep <seconds>    the child, and the only argument list it reads.
-//   <this> <anything else>    the leader. It starts a copy of ITSELF sleeping -- started
-//                             ordinarily, with no job and no process group of its own, so the
-//                             child lands in the group its parent leads -- writes that child's
-//                             process id to `child.pid` in the working directory (the manager
-//                             makes that the run's own directory), and exits with a code of its
-//                             own that nothing may overwrite.
-//
-// It starts ITSELF rather than a named program so that nothing has to be quoted, looked up on
-// PATH, or assumed to exist on the other platform.
+// A WORKER THAT LEAVES A CHILD BEHIND, and nothing else. The run manager owns a worker's
+// EXECUTION GROUP, not its leader (src/runs/process.hpp), and only the worker can put a second
+// process into that group, so asking what the manager says of a group whose leader has ended
+// needs this worker: the C++ twin of tests/session/lifecycle/descendants.py, for the suite that
+// runs without Python, on both ownership paths (a Windows job object, a POSIX process group).
+
+// It stands in for the catalog's INTERPRETER and ignores the arguments it would give Python.
+// `<this> sleep <seconds>` is the child. Anything else is the leader: it starts a copy of
+// ITSELF sleeping, ordinarily, so the child lands in the group its parent leads; writes that
+// child's pid to `child.pid` in its working directory (the run's own); and exits with a code of
+// its own that nothing may overwrite. Starting itself means nothing is quoted or looked up.
 
 #include <chrono>
 #include <cstdio>

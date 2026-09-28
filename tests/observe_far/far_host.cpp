@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE OBSERVATION JOURNEY'S FAR HOST: a second real process, with its own bus, a bridge server
-// that admits two named guests, an observation relay whose policy admits exactly one of them to
-// exactly two shapes, and a producer it can be told to drive (probe_protocol.hpp). The session
-// host links to it; tests/session/observe_journey.py drives both through real runs.
-//
+// THE OBSERVATION JOURNEY'S FAR HOST: a second real process with its own bus, a bridge server
+// admitting two named guests, an observation relay whose policy admits one of them to exactly
+// two shapes, and a producer it can be told to drive (probe_protocol.hpp). Test-only.
 //   zen-observe-far-host --port-file <file> [--port <n>]
-//
-// It writes the port it listens on to the file once it listens, and runs until told `quit` --
-// which ends it abruptly, as a host that dies does: nothing is said to anybody first. Test-only.
+// It writes its port to the file once it listens, and runs until told `quit`, which ends it
+// abruptly, as a host that dies does: nothing is said to anybody first.
 
 #include "probe_protocol.hpp"
 

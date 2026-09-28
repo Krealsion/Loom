@@ -1,29 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The one translation unit that compiles the doctest framework and provides
-// main(). Every other test file includes <doctest.h> without this macro.
-//
-// POP-01: a run that executed ZERO test cases is a FAILURE, not a pass.
-// docs/laws/population-laws.md
-//
-// doctest exits 0 when a filter selects nothing -- `--test-suite=switchboard`
-// against a binary where that suite was renamed, #if'd out, or deleted prints
-// "test cases: 0 ... Status: SUCCESS!" and returns 0, so CTest's exit-status
-// check reports the named suite Passed in 0.00 s having verified nothing. That
-// is the F-2 hole, and doctest 2.4.11 has no built-in option to close it (there
-// is no --no-tests=error equivalent anywhere in Context::parseArgs). So the
-// project's own main() closes it: the run's population is read out of doctest's
-// own TestRunStats and an empty one is refused by name.
-//
-// The guard is deliberately scoped to a REAL RUN. doctest calls test_run_end
-// only when `query_mode` is false -- `--count`, `--list-test-cases` and
-// `--list-test-suites` report through report_query instead, and `--help`,
-// `--version`, `--no-run` and `--list-reporters` return before either. Those
-// are exactly the modes tests/check_population.cmake uses to take an inventory
-// without running anything, so "no run happened" must stay a legitimate,
-// silent, zero-exit outcome. Only a run that actually started and selected
-// nothing is a lie about its own population.
+// The one translation unit that compiles the doctest framework and provides main(); every
+// other test file includes <doctest.h> without this macro.
+
+// A run that executed ZERO test cases is a FAILURE: doctest exits 0 when a filter selects
+// nothing, and has no --no-tests=error option, so main() reads the run's population from
+// doctest's TestRunStats and refuses an empty one by name.
+// POP-01; docs/laws/population-laws.md
+// Only a REAL RUN is judged: `--count`, the `--list-*` modes, `--help`, `--version` and
+// `--no-run` start no run, and tests/check_population.cmake takes its inventory through them.
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest.h>

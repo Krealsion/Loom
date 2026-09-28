@@ -1,16 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE REAL KERNEL PATH, DRIVEN BY A STRANGER.
-//
-// Not a custom test loader: loom::Kernel is the actual mechanism, so what is proven
-// here is the mechanism a host really uses -- LoadLibrary/dlopen, the "zen_weave_abi"
-// lookup by exact name, the descriptor handshake, a live delivery in BOTH directions
-// across the C ABI, and unload.
-//
-// The reply is what makes this more than a load test. A weave that loads but whose
-// outbound host callbacks are broken would still pass "it loaded"; only a Pong
-// arriving back at a native collector proves the seam carries traffic both ways.
+// THE REAL KERNEL PATH, DRIVEN BY A STRANGER: loom::Kernel itself, not a custom loader, so the
+// mechanism proven is the one a host uses -- LoadLibrary/dlopen, the "zen_weave_abi" lookup by
+// exact name, the descriptor handshake, a live delivery in BOTH directions across the C ABI,
+// and unload. The reply matters: a weave whose outbound host callbacks are broken still loads,
+// and only a Pong arriving back at a native collector proves the seam carries traffic both ways.
 
 #include "witness_protocol.hpp"
 
@@ -197,7 +192,7 @@ int main() {
         return 1;
     }
 
-    // ---- its declared vocabulary crossed the installed seam whole (ABI v9) -------
+    // ---- its declared vocabulary crossed the installed seam whole ----------------
     // The manifest's `emits` section reached the host: the bus can say this loaded
     // weave declares Pong, and the component its accepted `Nested` nests (Inner,
     // which nothing accepts at top level) resolves by definition — the closure was
@@ -288,7 +283,7 @@ int main() {
                       nested->content_id() == loom::schema_of<witness::Nested>()->content_id(),
                   "the reconstruction is EXACT: the same content identity, not merely similar");
 
-            // The MSG-0 handoff, end to end: describe -> compose -> assemble.
+            // The discovery handoff, end to end: describe -> compose -> assemble.
             LearnedVocabulary vocab(learned);
             const loom::ShapeDesc desc = loom::describe_schema(*learned.lookup("Ping", 1));
             check(desc.fields.size() == 1 && desc.fields[0].name == "seq" &&

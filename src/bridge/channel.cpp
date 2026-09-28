@@ -379,14 +379,14 @@ socket_t bridge_connect_unix(const std::string& path, std::string* err) {
     return s;
 }
 
-#else // _WIN32: AF_UNIX is POSIX-only here (the crossing uses TCP); provide failing stubs.
+#else // _WIN32: this build has AF_UNIX on POSIX only; on Windows the bridge runs over TCP.
 
 socket_t bridge_listen_unix(const std::string&, std::string* err) {
-    set_err(err, "AF_UNIX listen is POSIX-only (the Windows<->WSL crossing uses TCP)");
+    set_err(err, "AF_UNIX listen is POSIX-only in this build (on Windows, listen on loopback TCP)");
     return kInvalidSocket;
 }
 socket_t bridge_connect_unix(const std::string&, std::string* err) {
-    set_err(err, "AF_UNIX connect is POSIX-only (the Windows<->WSL crossing uses TCP)");
+    set_err(err, "AF_UNIX connect is POSIX-only in this build (on Windows, connect over TCP)");
     return kInvalidSocket;
 }
 

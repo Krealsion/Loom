@@ -32,22 +32,11 @@ using loom::WeaveId;
 using loom::Switchboard;
 
 // ---- the harness's admission posture, said once ---------------------------
-//
-// A TEST HARNESS IS A HOST. It holds the Switchboard, so it is inside the authority
-// boundary by construction rather than by exemption (zen/host/grant_wiring.hpp says
-// so about minting a GrantAuthority; the same sentence is true here). These suites
-// test KERNEL MECHANICS — opening, the ABI, roles, reload, replacement — not the
-// question of who should be trusted, and every artifact they load is this tree's own
-// build output, produced by the same CMake run as the test binary.
-//
-// So the posture is stated once, here, instead of ninety times at the call sites: this
-// host trusts what it loads. That is exactly the authority the Kernel used to mint
-// invisibly for every library it could open (P-WORK-18) — the difference, and the whole
-// point, is that a HOST now asks for it by name and a reader can grep for who did.
-//
-// A suite that wants to exercise a REAL policy — a refusal, a narrowed grant, a
-// rebuild — installs its own instead. tests/test_admission.cpp does exactly that, and
-// nothing here is in its way.
+// A TEST HARNESS IS A HOST: it holds the Switchboard, so it is inside the authority boundary by
+// construction (zen/host/grant_wiring.hpp says the same of minting a GrantAuthority). These
+// suites test kernel mechanics, not who should be trusted, and every artifact they load is this
+// tree's own build output, so this host trusts what it loads, by name, where a reader can find
+// it. A suite exercising a REAL policy installs its own, as tests/test_admission.cpp does.
 inline loom::AdmissionPolicy fixture_admission() {
     return loom::trust_every_artifact("Loom's own test harness: every artifact it loads "
                                       "is this build tree's output");
@@ -121,10 +110,10 @@ public:
     /// A retained answer right, for hooks that defer. Move-only, so it lives here
     /// rather than being returned out of the hook.
     loom::DeferredAnswer pending{};
-    /// The declared claim-set and emit-set a test wants this raw weave to carry
-    /// (SENSE-04, and the schema-admission phase's emit registration). Set before
-    /// registration; both are read through the `loom::Weave` virtuals exactly as
-    /// the bus reads a WeaveBase's, so a probe can play a declared emitter.
+    /// The declared claim-set and emit-set a test wants this raw weave to carry (SENSE-04, and
+    /// the emit declaration the agreement wall reads). Set before registration; both are read
+    /// through the `loom::Weave` virtuals exactly as the bus reads a WeaveBase's, so a probe can
+    /// play a declared emitter.
     std::vector<std::shared_ptr<const Schema>> declared_claims;
     std::vector<std::shared_ptr<const Schema>> declared_emits;
 
@@ -198,9 +187,9 @@ struct Registered {
     ProbeWeave* weave;
 };
 
-// The probe is a trusted in-process test fixture; by default it is granted
-// permissive send authority so existing routing/lifecycle tests are unaffected by
-// capability gating. A capability test passes an explicit, restrictive grant.
+// The probe is a trusted in-process test fixture; by default it is granted permissive send
+// authority, so routing and lifecycle tests are not about capability gating. A capability test
+// passes an explicit, restrictive grant.
 inline Registered register_probe(Switchboard& bus,
                                  std::vector<std::shared_ptr<const Schema>> accept,
                                  std::int64_t max_reloads = 2,

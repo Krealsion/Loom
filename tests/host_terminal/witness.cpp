@@ -1,57 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE SUPPLIED HOST'S INPUT, THROUGH A REAL TERMINAL.
-//
-// WHY THIS IS NOT IN tests/host_process/run.cmake. That lane feeds the host a FILE, and on
-// Windows a file is the one kind of stdin whose reader was never wrong. The console reader
-// took a queued character to mean "a read will not block", and a console with line input —
-// every ordinary console — does not finish a read until Enter: a person who paused halfway
-// through a command stopped every weave in the host, and 32 key-ups in front of a finished
-// line hid it for good. A redirected stdin cannot show either. So this program builds the
-// terminal a person actually types into — its own hidden native console on Windows, a
-// pseudo-terminal on POSIX — and types into it.
-//
-// THREE MODES, THREE CTest ENTRIES:
-//
-//   reader   `loom::host::LineInput` itself (portable): a half-typed line is Idle at once and
-//            at its deadline; it completes when finished; lines behind non-character records
-//            are reached; several lines typed at once are each read; stopping a reader with a
-//            half-typed line pending is prompt and leaves the terminal usable for the next
-//            reader; end of input is Closed; the input limits hold through the terminal's own
-//            line discipline (a command of exactly the limit, a longer one refused, a pasted
-//            burst while nothing is taken, a reader stopped while it waits for room); the
-//            terminal's mode is exactly what it was.
-//
-//   streams  `LineInput` on a PIPE and a FILE (portable), with the same assertions on every
-//            platform: a producer far ahead of a host that takes nothing is held back, not read
-//            out, and every line then arrives exactly and in order; commands at, over and far
-//            over the limit; a line that never ends; a read that waits for the rest of a line
-//            until its deadline; the end of input; stopping a reader while its producer waits
-//            for room, and while a read is pending; what a replaced reader loses. What the
-//            reader holds is read from `LineInput::held()`, never guessed from process memory.
-//            (Not a terminal — and a pipe is not evidence about one either.)
-//
-//   host     a real `loom-host` with the probe weave booted (kernel gate): a delayed answer is
-//            delivered AND REPORTED while a command is half typed; cooperative work
-//            progresses through a pause mid-command; a typed line longer than any command is
-//            refused and the next command runs; inspection, authority administration,
-//            `stop` and `quit` are all reachable with pauses and non-character records inside
-//            the lines, and the host exits 0.
-//
-// THE DISCRIMINATING ARRANGEMENT, so this is not a timing test. The command that starts the
-// delayed answer and the first half of the NEXT command are typed in one burst. The first
-// line is finished; the second is not. A reader that blocks on a half-typed line blocks
-// immediately after the first command, before the countdown can possibly complete, so its
-// answer never arrives; a reader that does not, reports it. No sleep decides the outcome.
-//
-// On Windows the terminal work runs in a CHILD of this program, started detached and hidden,
-// which allocates its own console. A console window is therefore never shown, and the ctest
-// process's own console and pipes are never replaced. The child writes its report to a file
-// that the parent prints.
-//
-// Exit codes: 0 every check passed, 1 a check failed, 2 bad command line, 3 the terminal could
-// not be built — which is a failure, not a skip: a witness without a terminal proves nothing.
+// The supplied host's input, through a real terminal: its own hidden native console on
+// Windows, a pseudo-terminal on POSIX, typed into. tests/host_process/run.cmake feeds the host a
+// FILE, and a redirected stdin cannot show a reader that blocks on a half-typed line (a person
+// pausing mid-command would stop every weave) or one that misreads non-character input.
+
+// Three modes, three CTest entries: `reader` (LineInput on a real terminal, portable),
+// `streams` (LineInput on a pipe and a file, the same assertions on every platform, and no
+// evidence about a terminal), and `host` (a real loom-host with the probe weave booted, kernel
+// gate). What each asserts is the list of checks it reports.
+
+// Not a timing test: the command that starts a delayed answer and the first half of the NEXT
+// command are typed in one burst, so a reader that blocks on the half-typed line blocks before
+// the countdown can complete, and its answer never arrives. On Windows the terminal work runs
+// in a detached, hidden child with a console of its own, which writes its report to a file the
+// parent prints. Exit codes: 0 passed, 1 a check failed, 2 bad command line, 3 no terminal (a
+// failure: a witness without a terminal proves nothing).
 
 #include "line_input.hpp"
 
@@ -508,7 +473,7 @@ int run_reader(Report& r) {
                 s == LineInput::Status::Idle && idle_ms < 200,
                 std::string(status_name(s)) + " in " + std::to_string(idle_ms) + " ms");
 
-        // THE FINDING. A half-typed line, and a zero deadline.
+        // THE HALF-TYPED LINE, and a zero deadline.
         term.type("x");
         sleep_ms(100);
         const auto t1 = Clock::now();
@@ -1168,10 +1133,9 @@ void stream_endless_line(Report& r) {
 }
 
 void stream_deadline(Report& r) {
-    // A LINE THAT ARRIVES IN PIECES, THE LAST AFTER THE READ BEGAN. A read with a deadline waits
-    // for a finished line until that deadline, on every platform — it does not answer Idle as soon
-    // as one read finished nothing while more is on its way. (The POSIX reader once did, and the
-    // Windows thread never did: the same call meant two different things.)
+    // A LINE THAT ARRIVES IN PIECES, THE LAST AFTER THE READ BEGAN. A read with a deadline
+    // waits for a finished line until that deadline, on every platform: it does not answer Idle
+    // as soon as one read finished nothing while more is on its way.
     Pipe pipe;
     if (!pipe.open()) {
         r.check("a pipe could be made", false);
@@ -1612,8 +1576,8 @@ int run_host(Report& r, const std::string& host_exe, const std::string& probe_li
         return give_up("boot");
     }
 
-    // THE FINDING, AS ONE BURST: a command whose answer comes late, then HALF of the next
-    // command. The first line is finished and the second is not, and non-character input
+    // THE HALF-TYPED LINE, AS ONE BURST: a command whose answer comes late, then HALF of the
+    // next command. The first line is finished and the second is not, and non-character input
     // arrives while it waits.
     term.type("send 5 Countdown 1 turns=64\nauthority sh");
     if (!expect("no answer yet", "the delayed conversation is reported pending, not invented")) {
@@ -1627,7 +1591,7 @@ int run_host(Report& r, const std::string& host_exe, const std::string& probe_li
         return give_up("the completed half-typed command");
     }
 
-    // A FINISHED COMMAND BEHIND NON-CHARACTER INPUT — more of it than the old reader peeked.
+    // A FINISHED COMMAND BEHIND NON-CHARACTER INPUT, 48 records of it.
     term.noise_then_type(48, "authority show probe\n");
     if (!expect("LIVE, weave 5", std::string("a finished command is executed ") + kBehindNoise)) {
         return give_up("a command behind non-character records");

@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
-//
-// A real loaded claimant for the joint-publication witnesses (suite `joint`). It
-// claims a DocFact, offers the next one for an operation it is told about, and
-// folds a joint-published DocFact into its state through `on_claim_published` --
-// the route a loaded document owner would take. Nothing here is an application;
-// the suite reads its state back through a snapshot.
-//
-// Three more things a real participant can do, each driven from the suite so the
-// seam is exercised for each: FAIL to apply a published claim (`arm-fail`: the
-// next hook increments its attempt counter and throws before applying anything --
-// the failure the host must not swallow), DECLINE one (`arm-decline`: the `bool`
-// form's `false`, crossing as ZEN_CLAIM_DECLINED), and MIRROR its native state
-// into its claim at the end of every delivery (`after_delivery`), which is how a
-// participant whose exposed state was written through a substrate door keeps its
-// claim true.
+
+// A real loaded claimant for the joint-publication witnesses (suite `joint`): it claims a
+// DocFact, offers the next one for an operation it is told about, and folds a joint-published
+// DocFact into its state through `on_claim_published`, as a loaded document owner would. Driven
+// from the suite, it can also FAIL to apply a published claim (`arm-fail`: counted, then thrown
+// before applying anything), DECLINE one (`arm-decline`: crosses as ZEN_CLAIM_DECLINED), and
+// MIRROR its native state into its claim at the end of every delivery (`after_delivery`).
 #include "joint_protocol.hpp"
 
 #include <zen/kernel/export.hpp>

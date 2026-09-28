@@ -73,10 +73,10 @@ Three entries on the official lane hold this, each naming the file and line of w
 refuses:
 
 - `source_comments` (`tests/check_source_comments.cmake`) reads first-party C/C++, CMake, the
-  two population manifests, and the session tooling's Python and launchers: a comment block over
-  six lines outside an installed header, a removal note, or a private id. A Python, shell or
-  batch file is read whole for an id, docstrings and strings included; only a comment on a line
-  of its own counts toward a block there.
+  two population manifests, Python and shell, and the session tooling's launchers: a comment
+  block over six lines outside an installed header, a removal note, or a private id. A Python,
+  shell or batch file is read whole for an id, docstrings and strings included; only a comment on
+  a line of its own counts toward a block there.
 - `doc_standard` (`tests/check_doc_standard.cmake`) reads every current-facing Markdown file for
   a private id.
 - `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every
@@ -88,4 +88,5 @@ document meets this standard; source files not yet brought to it are listed in
 `source_comments`, and the list only shrinks. No check can see history or
 a private process written in words, or read a comment for truth; that is a reviewer's.
 `tools/comment-pass/` measures, prints and proves a comment pass (`census.py`, `blocks.py`,
-`edit.py`, `prove.py`).
+`edit.py`, `prove.py`); a renamed test case is renamed through its case map (`cases.tsv`, applied
+by `cases.py`), which the proof reads.
