@@ -199,3 +199,19 @@ tests/test_bridge.cpp	operator-protocol: discovery, a gate-sent message, and the
 tests/test_bridge.cpp	operator-protocol: the sender is stamped from the connection — a FORGED wire sender loses	bridge protocol: the sender is stamped from the connection — a FORGED wire sender loses
 tests/test_bridge.cpp	operator-protocol: a vanished peer is reaped as an event (the server unregisters its proxy)	bridge protocol: a vanished peer is reaped as an event (the server unregisters its proxy)
 tests/test_bridge.cpp	operator-protocol: a SIGKILLed operator PROCESS is reaped as an event (two real processes)	bridge protocol: a SIGKILLed operator PROCESS is reaped as an event (two real processes)
+tests/test_isolation.cpp	pids-only (memory NOT delegated): memory UNCAPPED, pids asserted [F-20 pin, kept]	pids-only (memory NOT delegated): memory UNCAPPED, pids asserted
+tests/test_isolation.cpp	memory-only (pids NOT delegated): pids UNCAPPED, memory asserted [N-1 mirror]	memory-only (pids NOT delegated): pids UNCAPPED, memory asserted
+tests/test_isolation.cpp	attestation asserts the fork-bomb stop only where pids is delegated [N-1 mirror]	attestation asserts the fork-bomb stop only where pids is delegated
+tests/test_isolation.cpp	C-2: the descriptor sweep keeps exactly its allow-list, and refuses a malformed one	the descriptor sweep keeps exactly its allow-list, and refuses a malformed one
+tests/test_isolation.cpp	C-2: the child inherits NO ambient host descriptor, and the netns is still real	the child inherits NO ambient host descriptor, and the netns is still real
+tests/test_isolation.cpp	C-2a: the child's environment is the one Zen authored, not the host's ambient one	the child's environment is the one Zen authored, not the host's ambient one
+tests/test_isolation.cpp	C-2a: an authored environment refuses malformed entries rather than half-applying	an authored environment refuses malformed entries rather than half-applying
+tests/test_isolation.cpp	BL-0: a child's vocabulary is claimed by the MOUNT, and released by unmount	a child's vocabulary is claimed by the MOUNT, and released by unmount
+tests/test_isolation.cpp	BL-0: repeated mount/unmount does not accumulate vocabulary	repeated mount/unmount does not accumulate vocabulary
+tests/test_isolation.cpp	R2B-2: an out-of-process weave gets no deferred-answer capability, and says so by having none rather than by holding one the pipe cannot honour	an out-of-process weave gets no deferred-answer capability, and says so by having none rather than by holding one the pipe cannot honour
+tests/test_isolation.cpp	R2D-0: an out-of-process weave really holding the role still cannot author office speech across the pipe — refused honestly, never downgraded, in both directions	an out-of-process weave really holding the role still cannot author office speech across the pipe — refused honestly, never downgraded, in both directions
+tests/test_isolation.cpp	R2F-C (isolation): a channel that is never idle still reclaims what it has already sent	a channel that is never idle still reclaims what it has already sent
+tests/test_isolation.cpp	R2F-C (isolation): frames queued behind a half-sent one keep their order and bytes	frames queued behind a half-sent one keep their order and bytes
+tests/test_isolation.cpp	R2F-C (isolation): reclamation moves the backlog, it does not shrink it	reclamation moves the backlog, it does not shrink it
+tests/test_isolation.cpp	R2F-C (isolation): a failed channel neither sends nor reclaims	a failed channel neither sends nor reclaims
+tests/test_isolation.cpp	R2F-C (isolation): the RECEIVE buffer was never part of F-18	the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history

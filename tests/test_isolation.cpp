@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The B2 milestone: a Weave hosted out-of-process is indistinguishable to the bus
-// from one hosted in-process, a crashing child is contained (host survives, bounded
-// reload, then quarantine), and the process boundary is gated exactly like every
-// other boundary — malformed child output is gate-refused, an emitted message is
-// authorized against the child's grant, and the sender is stamped from the
-// connection (a child cannot forge it). The host never blocks on a child.
+// A weave hosted out-of-process is indistinguishable to the bus from one hosted in-process, a
+// crashing child is contained (host survives, bounded reload, then quarantine), and the process
+// boundary is gated like every other: malformed child output is gate-refused, an emitted message
+// is authorized against the child's grant, and the sender is stamped from the connection (a
+// child cannot forge it). The host never blocks on a child.
 
 #include <doctest.h>
 
@@ -44,8 +43,8 @@ namespace loom {
 /// reads the channel's OWN retained buffers, so the bounded-storage law is stated as an assertion
 /// about transport state rather than inferred from process memory -- RSS is allocator- and
 /// OS-sensitive and cannot tell "capacity remains reusable" from "sent bytes remain part of the
-/// live buffer". Those are different claims and only the second is F-18. This adds no member and
-/// no code path: channel.cpp's object file is byte-identical with and without the declaration.
+/// live buffer", the claim under test. It adds no member and no code path: channel.cpp's object
+/// file is byte-identical with and without the declaration.
 struct ChannelStorageProbe {
     static std::size_t live(const Channel& c) { return c.outbox_.size(); }
     static std::size_t sent(const Channel& c) { return c.out_pos_; }
@@ -82,25 +81,12 @@ std::shared_ptr<const Schema> netresult_schema() {
 /// `kBombAllocRefused` above is: the fixture is a separate artifact in its own `.so`.
 constexpr char kNetProbeToken = 'Z';
 
-/// THE ENDPOINT THE NETWORK CASE OWNS (BL-VER-08).
-///
-/// The positive control used to prove "this child can reach the network" from the
-/// errno of a connect() to port 1 — ECONNREFUSED meaning *reachable, nothing
-/// listening*. That made the proof depend on how the HOST answers a closed port, and
-/// on a WSL2 mirrored-networking host it does not answer at all: the SYN is
-/// black-holed and connect() blocks for the kernel's whole retry budget (~124 s
-/// measured, BL-VER-07). The test was asking somebody else's closed door to prove
-/// that its own door opens.
-///
-/// So the test brings its own door. A listener on 127.0.0.1:0 — the kernel picks the
-/// port, so nothing is reserved, occupied, firewalled or guessed — is established
-/// BEFORE any child is mounted, and its port is handed to the probe. The positive
-/// witness becomes success rather than a particular kind of failure.
-///
-/// The child cannot reach this by inheritance: the exec boundary closes every
-/// descriptor but the control fd and the standard three, so a child that
-/// arrives here arrived over the network. It is marked close-on-exec anyway, to say
-/// so.
+/// THE ENDPOINT THE NETWORK CASE OWNS: a listener on 127.0.0.1:0 (the kernel picks the port, so
+/// nothing is reserved, occupied, firewalled or guessed), established BEFORE any child is
+/// mounted, its port handed to the probe. The positive witness is success, not a kind of failure:
+/// a closed port's errno depends on how the host answers it, and some hosts black-hole the SYN.
+/// The child cannot reach it by inheritance (the exec boundary closes every descriptor but the
+/// control fd and the standard three); it is close-on-exec anyway, to say so.
 class TestOwnedEndpoint {
 public:
     TestOwnedEndpoint() {
@@ -158,7 +144,7 @@ private:
     int accepted_ = -1;
     std::int64_t port_ = 0;
 };
-// Matches the fs-probe weave's emitted shape (B4): the errno of each filesystem reach.
+// Matches the fs-probe weave's emitted shape: the errno of each filesystem reach.
 std::shared_ptr<const Schema> fsresult_schema() {
     static const auto s = SchemaBuilder("FsResult", 1)
                               .field("secret_read", Kind::Int)
@@ -168,7 +154,7 @@ std::shared_ptr<const Schema> fsresult_schema() {
                               .build();
     return s;
 }
-// Matches the fork-bomb weave's emitted shape (B5): how many forks succeeded.
+// Matches the fork-bomb weave's emitted shape: how many forks succeeded.
 std::shared_ptr<const Schema> forkresult_schema() {
     static const auto s = SchemaBuilder("ForkResult", 1).field("forked", Kind::Int).build();
     return s;
@@ -465,10 +451,9 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
                             "network is OS-enforced: a no-net child cannot reach the network");
 
-    // The endpoint belongs to this test, and exists before either child does. Both
-    // halves are aimed at THIS port, so the only meaningful difference between them is
-    // the grant (BL-VER-08). A live endpoint also makes the negative half say more than
-    // it used to: the contained child is now refused a destination that provably works.
+    // The endpoint belongs to this test and exists before either child does. Both halves aim at
+    // THIS port, so the only difference between them is the grant, and the contained child is
+    // refused a destination that provably works.
     TestOwnedEndpoint endpoint;
 
     // Sandboxed: the default grant withholds Network, but we DO allow it to send
@@ -494,13 +479,10 @@ TEST_CASE("network is OS-enforced: a child without the Network grant cannot reac
     // probe must not be able to impersonate containment.
     CHECK(contained_code == ENETUNREACH);
 
-    // Granted Network: no netns is imposed, so the child is in this process's own
-    // network namespace and the endpoint above is genuinely its 127.0.0.1 too. The
-    // same probe, the same port, one grant apart.
-    // The sentinel must not be 0, because 0 is now the PASS value — a sentinel that
-    // equals the expected answer would let "no result arrived" read as success. The
-    // probe reports 0, a positive errno, or -1 (its errno-less fallback), so -2 is
-    // outside its whole range.
+    // Granted Network: no netns is imposed, so the child shares this process's network namespace
+    // and the endpoint is its 127.0.0.1 too: the same probe, the same port, one grant apart. The
+    // sentinel is not 0, the PASS value, or "no result arrived" would read as success; the probe
+    // reports 0, a positive errno, or -1, so -2 is outside its range.
     std::int64_t granted_code = -2;
     Registered rec2 = register_probe(bus, {netresult_schema()});
     rec2.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
@@ -659,15 +641,10 @@ TEST_CASE("a memory bomb is OOM-killed within its cgroup; the host survives, the
     bus.send(r.id, Message(ping(1), WeaveId{}, rec.id));
     const bool quarantined = host.run_until([&] { return host.quarantined("bomb"); }, 8000);
 
-    // SILENCE IS THE WITNESS. The bomb replies on every path where it did NOT
-    // die, so a reply arriving means containment failed — and the sentinel says
-    // WHICH failure, rather than leaving "it answered" to be interpreted.
-    //
-    // READ IT BEFORE THE REQUIRE BELOW, DELIBERATELY. `REQUIRE(quarantined)`
-    // aborts the case, so a diagnostic placed after it is computed only on the
-    // runs that did not need it — and never on the one failure it exists to
-    // explain. The interesting failure is exactly "the bomb lived, so nothing
-    // was quarantined", and that is the run that must say why.
+    // SILENCE IS THE WITNESS: the bomb replies on every path where it did NOT die, so a reply
+    // means containment failed, and the sentinel says WHICH failure. Read BEFORE the REQUIRE
+    // below, deliberately: `REQUIRE(quarantined)` aborts the case, so a diagnostic after it would
+    // never be computed on the one failure it exists to explain: the bomb lived.
     const std::int64_t sentinel =
         rec.weave->handled_values.empty() ? 0 : rec.weave->handled_values.front();
     INFO("bomb reply sentinel = "
@@ -747,14 +724,11 @@ TEST_CASE("a fork-bomb is bounded by pids.max; the host survives") {
 }
 
 TEST_CASE("resource note + attestation honesty: the full delegation matrix (memory x pids)") {
-    // Audit F-20 AND its pids mirror (N-1) — the honesty lattice's one absolute rule: never
-    // report enforcement we did not impose. cgroup_create_leaf writes memory.max ONLY where the
-    // memory controller is delegated, and pids.max ONLY where the pids controller is delegated
-    // (sandbox.cpp:482/488), so neither the note NOR the attestation may claim a cap the leaf
-    // will not set. The original F-20 pin watched only the pids-only posture and never the
-    // symmetric memory-only one, so the mirror over-claimed unwatched. resource_note and
-    // resource_attestation are pure, so this pins ALL FOUR postures — including memory-only,
-    // which no live cgroup on this memory+pids host can produce — with no live cgroup.
+    // Never report enforcement not imposed: cgroup_create_leaf writes memory.max only where the
+    // memory controller is delegated and pids.max only where pids is, so neither the note nor
+    // the attestation may claim a cap the leaf will not set. resource_note and
+    // resource_attestation are pure, so all four delegation postures are pinned without a live
+    // cgroup, memory-only included, which no live cgroup on a memory+pids host can produce.
     ResourceCaps caps;
     caps.memory_max = 256 * 1024 * 1024; // a computed 256 MiB cap
     caps.pids_max = 64;
@@ -766,13 +740,13 @@ TEST_CASE("resource note + attestation honesty: the full delegation matrix (memo
         CHECK(note.find("pids<=64") != std::string::npos);
         CHECK(note.find("UNCAPPED") == std::string::npos);
     }
-    SUBCASE("pids-only (memory NOT delegated): memory UNCAPPED, pids asserted [F-20 pin, kept]") {
+    SUBCASE("pids-only (memory NOT delegated): memory UNCAPPED, pids asserted") {
         const std::string note = resource_note(caps, /*mem=*/false, /*pids=*/true);
         CHECK(note.find("memory<=") == std::string::npos);       // never a cap it cannot impose
         CHECK(note.find("memory UNCAPPED") != std::string::npos); // positively stated
         CHECK(note.find("pids<=64") != std::string::npos);        // pids is real here
     }
-    SUBCASE("memory-only (pids NOT delegated): pids UNCAPPED, memory asserted [N-1 mirror]") {
+    SUBCASE("memory-only (pids NOT delegated): pids UNCAPPED, memory asserted") {
         const std::string note = resource_note(caps, /*mem=*/true, /*pids=*/false);
         CHECK(note.find("memory<=256MiB") != std::string::npos);  // memory is real here
         CHECK(note.find("pids<=") == std::string::npos);          // never a pids cap it cannot impose
@@ -794,7 +768,7 @@ TEST_CASE("resource note + attestation honesty: the full delegation matrix (memo
     }
 
     // ---- resource_attestation: the fork-bomb-stop claim is delegation-qualified on pids ----
-    SUBCASE("attestation asserts the fork-bomb stop only where pids is delegated [N-1 mirror]") {
+    SUBCASE("attestation asserts the fork-bomb stop only where pids is delegated") {
         const std::string att_pids =
             resource_attestation(resource_note(caps, true, true), /*pids=*/true, /*confirmed=*/true);
         CHECK(att_pids.find("bounds a fork-bomb") != std::string::npos);            // real here
@@ -805,8 +779,8 @@ TEST_CASE("resource note + attestation honesty: the full delegation matrix (memo
                                                             /*pids=*/false, /*confirmed=*/true);
         CHECK(att_nopids.find("FORK-BOMB STOP NOT ENFORCEABLE") != std::string::npos); // honest
         CHECK(att_nopids.find("ALWAYS bounds a fork-bomb") == std::string::npos);      // retired absolute
-        // prominence (judgment d): the gap is in the HEADLINE, not buried — parity with
-        // "network: NOT CONTAINED", so a status scan can't miss an absent fork-bomb stop.
+        // prominence: the gap is in the HEADLINE, not buried -- parity with "network: NOT
+        // CONTAINED", so a status scan cannot miss an absent fork-bomb stop.
         CHECK(att_nopids.compare(0, 20, "resources: contained") != 0); // not the plain headline
         CHECK(att_nopids.find("memory contained but FORK-BOMB STOP NOT ENFORCEABLE") !=
               std::string::npos);
@@ -953,14 +927,11 @@ TEST_CASE("a contained mount is positively confirmed in a distinct network names
     CHECK(status.find("confirmed") != std::string::npos); // VERIFIED (distinct netns), not inferred
 }
 
-TEST_CASE("C-2: the descriptor sweep keeps exactly its allow-list, and refuses a malformed one") {
-    // The mechanism itself, asked directly — the end-to-end case above proves the
-    // BOUNDARY, this proves the TOOL. Two properties, and the second is the one that
-    // has no other witness: the sweep walks the gaps BETWEEN allow-list entries, so an
-    // unsorted list would leave a whole range unswept while returning success. That is
-    // a silent hole in a function whose entire value is having none, so a malformed
-    // list is refused up front — before a single descriptor is touched, which is why
-    // these three calls are safe to make in the test process itself.
+TEST_CASE("the descriptor sweep keeps exactly its allow-list, and refuses a malformed one") {
+    // The mechanism itself: the end-to-end case above proves the BOUNDARY, this the TOOL. The
+    // sweep walks the gaps BETWEEN allow-list entries, so an unsorted list would leave a range
+    // unswept while returning success; a malformed list is refused before a single descriptor
+    // is touched, which is why these three calls are safe in the test process itself.
     const int unsorted[] = {3, 1};
     CHECK(close_inherited_descriptors(unsorted, 2) == -1);
     const int duplicated[] = {1, 1};
@@ -968,14 +939,11 @@ TEST_CASE("C-2: the descriptor sweep keeps exactly its allow-list, and refuses a
     const int negative[] = {-1, 3};
     CHECK(close_inherited_descriptors(negative, 2) == -1);
 
-    // And the sweep itself, in a throwaway fork-child so the test process keeps its own
-    // descriptors. The child's ONLY surviving descriptor is its report pipe, which is
-    // also the allow-list — so the answer arrives over the very mechanism under test.
-    //
-    // BOTH implementations are run, not merely whichever one this kernel selects. A
-    // fallback that executes only on hosts nobody tests on is a claim with no witness;
-    // the enumeration path exists precisely for kernels older than close_range(2), which
-    // is exactly the population least likely to run this suite.
+    // And the sweep itself, in a throwaway fork-child so the test process keeps its
+    // descriptors; the child's only surviving descriptor is its report pipe, also the
+    // allow-list. BOTH implementations run, not only the one this kernel selects: the
+    // enumeration fallback exists for kernels older than close_range(2), the hosts least likely
+    // to run this suite.
     struct Sweep {
         char rc = 0;     ///< the sweep returned 0
         char before = 0; ///< the victim was open BEFORE (so `after` is a change, not a fact)
@@ -1037,32 +1005,22 @@ TEST_CASE("C-2: the descriptor sweep keeps exactly its allow-list, and refuses a
     }
 }
 
-TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is still real") {
-    // COLD-2's attack, reconstructed here rather than quoted. The host builds a real
-    // connected loopback TCP pair through its own network stack, a real pipe and a real
-    // file, parks one end of each at a known descriptor number WITHOUT FD_CLOEXEC, and
-    // then mounts a weave with Network withheld. Without the descriptor sweep the child
-// receives all three,
-    // could write to them, and the bytes arrived back on the host side — while
-    // containment() reported `network: contained (confirmed: child netns distinct from
-    // host)` over that same byte.
-    //
-    // THE TWO FACTS ARE ASSERTED SEPARATELY, and that separation is the point. A test
-    // that observes only ENETUNREACH proves the namespace and says nothing about
-    // inheritance; COLD-2's host produced ENETUNREACH and a working escape at the same
-    // time. So each result carries the namespace verdict AND the descriptor inventory,
-    // and this case fails if either half regresses.
+TEST_CASE("the child inherits NO ambient host descriptor, and the netns is still real") {
+    // The attack, reconstructed: the host builds a real connected loopback TCP pair, a real
+    // pipe and a real file, parks one end of each at a known descriptor WITHOUT FD_CLOEXEC, and
+    // mounts a weave with Network withheld. Unswept, the child inherits all three and its bytes
+    // reach the host while containment() reports the network contained. So the namespace verdict
+    // and the descriptor inventory are asserted SEPARATELY: ENETUNREACH alone says nothing about
+    // inheritance, and a host can produce it beside a working escape.
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
                             "C-2: ambient descriptors removed at exec while the netns holds");
 
     // ---- the host's own ambient capabilities, built for real ----------------------
-    //
-    // Each is parked with F_DUPFD (never F_DUPFD_CLOEXEC), so the copy the child could
-    // inherit has FD_CLOEXEC CLEAR — deliberately the hostile case, exactly as COLD-2
-    // left it. The originals and the host-side ends are marked CLOEXEC so the ONE
-    // subject of each assertion is the parked number and nothing else.
+    // Each is parked with F_DUPFD (never F_DUPFD_CLOEXEC), so the copy the child could inherit
+    // has FD_CLOEXEC CLEAR, deliberately the hostile case. The originals and the host-side ends
+    // are CLOEXEC, so the ONE subject of each assertion is the parked number.
     const auto park = [](int fd) {
         const int parked = ::fcntl(fd, F_DUPFD, 20); // lowest free >= 20, CLOEXEC clear
         REQUIRE(parked >= 20);
@@ -1155,8 +1113,8 @@ TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is 
         CHECK((r.open_low & (static_cast<std::int64_t>(1) << fd)) == 0);
         CHECK(r.open_high == 0);
 
-        // (c) AND IT CANNOT MOVE BYTES. Presence and usability are different questions;
-        //     COLD-2's payload write returned 20, this one must fail.
+        // (c) AND IT CANNOT MOVE BYTES. Presence and usability are different questions; a
+        //     write through an inherited descriptor succeeds, and this one must fail.
         CHECK(r.parked_write == EBADF);
 
         // (d) THE INSTRUMENT WORKS. If the probe simply could not see open descriptors,
@@ -1171,13 +1129,10 @@ TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is 
         CHECK((r.open_low & ~kIntendedFds) == 0);
     }
 
-    // (f) THE HOST'S OWN SIDE HEARD NOTHING. The end-to-end half of COLD-2: its host
-    //     read "COLD2-ESCAPE-PAYLOAD" off this very socket. Both ends are checked, so a
-    //     leak that somehow wrote without the child noticing still fails.
-    // errno is captured on the SAME line as the syscall, never read from a later
-    // assertion: doctest's own reporting writes to stdout between assertions, and under
-    // `-s` that write resets errno — which showed up here as two failures that appeared
-    // only when successes were printed. An errno read one assertion late is a flake.
+    // (f) THE HOST'S OWN SIDE HEARD NOTHING, so a leak that wrote without the child noticing
+    //     still fails. errno is captured on the SAME line as the syscall: doctest's reporting
+    //     writes to stdout between assertions, and under `-s` that write resets errno; an
+    //     errno read one assertion late is a flake.
     char sink[64];
     errno = 0;
     const ssize_t from_socket = ::recv(host_end, sink, sizeof(sink), MSG_DONTWAIT);
@@ -1204,18 +1159,12 @@ TEST_CASE("C-2: the child inherits NO ambient host descriptor, and the netns is 
     (void)::unlink(file_path.c_str());
 }
 
-TEST_CASE("C-2a: the child's environment is the one Zen authored, not the host's ambient one") {
-    // The descriptor sweep closes one half of the exec boundary; this is the other half. The
-    // child used to receive `environ` wholesale, so a weave at FsAccess::None with no
-    // network was still handed the host's HOME, PATH, session-bus and compositor
-    // addresses, whatever tokens the embedding process held -- and any LD_*, which the
-    // loader acts on BEFORE any Zen code in the child runs.
-    //
-    // The load-bearing assertion is `count`, not any named lookup. A test that only
-    // asked "is ZEN_C2A_AMBIENT_SECRET absent?" would pass forever while every other
-    // host variable kept crossing, and would say nothing about a variable introduced
-    // next year. Asserting the COMPLETE set against the authored one is what makes an
-    // unknown future variable fail here with nobody remembering to add it.
+TEST_CASE("the child's environment is the one Zen authored, not the host's ambient one") {
+    // The other half of the exec boundary: the child's environment is authored, never the
+    // host's `environ`, which would hand a contained weave HOME, PATH, session-bus and
+    // compositor addresses, the embedder's tokens, and any LD_* (acted on before any Zen code
+    // runs). The load-bearing assertion is `count`, the COMPLETE set against the authored one,
+    // so a variable introduced later fails here with nobody remembering to add it.
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
@@ -1274,9 +1223,9 @@ TEST_CASE("C-2a: the child's environment is the one Zen authored, not the host's
 
     MESSAGE("child environment (" << count << " entries): " << (names.empty() ? "<empty>" : names));
 
-    // THE COMPLETE SET. build_child_environment() authors nothing today, so the child's
-    // environment is empty; if a future phase authors a variable, this number changes
-    // deliberately here and in that builder, together.
+    // THE COMPLETE SET. build_child_environment() authors nothing, so the child's environment
+    // is empty; a variable it ever authors changes this number deliberately, here and in that
+    // builder together.
     CHECK(count == 0);
     CHECK(names.empty());
 
@@ -1290,7 +1239,7 @@ TEST_CASE("C-2a: the child's environment is the one Zen authored, not the host's
     }
 }
 
-TEST_CASE("C-2a: an authored environment refuses malformed entries rather than half-applying") {
+TEST_CASE("an authored environment refuses malformed entries rather than half-applying") {
     // The refusal path the spawn depends on (there is no fallback to `environ`, so a
     // malformed authored environment must be a REFUSAL, not a smaller environment).
     // Cheap and pure, so every posture is testable without a spawn.
@@ -1393,16 +1342,12 @@ TEST_CASE("unmount tears the child down cleanly and the proxy leaves the bus") {
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
 }
 
-TEST_CASE("BL-0: a child's vocabulary is claimed by the MOUNT, and released by unmount") {
-    // THE LIFETIME §13 ASKS FOR, PINNED. The narrowest object whose life
-    // truthfully means "these bytes may still need these schemas" is the mount,
-    // not the child process: a child that dies is respawned under the same Link
-    // and re-uses the accept-set cached at handshake without reconstructing it,
-    // and the channel's unread bytes belong to the Link too. So the mount claims,
-    // and unmount is the whole release path.
-    //
-    // Read through the BUS, because that is the registry the child's emissions
-    // are actually gated against.
+TEST_CASE("a child's vocabulary is claimed by the MOUNT, and released by unmount") {
+    // The mount is the narrowest object whose life truthfully means "these bytes may still need
+    // these schemas": a child that dies is respawned under the same Link and reuses the
+    // accept-set cached at handshake, and the channel's unread bytes belong to the Link too. So
+    // the mount claims, and unmount is the whole release path; read through the BUS, the
+    // registry the child's emissions are gated against.
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
     CHECK(bus.resolve_schema("Ping", 1) == nullptr);
@@ -1424,7 +1369,7 @@ TEST_CASE("BL-0: a child's vocabulary is claimed by the MOUNT, and released by u
     CHECK(bus.resolve_schema("Ping", 1) == nullptr);
 }
 
-TEST_CASE("BL-0: repeated mount/unmount does not accumulate vocabulary") {
+TEST_CASE("repeated mount/unmount does not accumulate vocabulary") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
     for (int i = 0; i < 8; ++i) {
@@ -1438,13 +1383,12 @@ TEST_CASE("BL-0: repeated mount/unmount does not accumulate vocabulary") {
 
 // ---- deferred answers are in-process only, and FAIL CLOSED out of it (ANS-02) --
 
-TEST_CASE("R2B-2: an out-of-process weave gets no deferred-answer capability, and says so by "
-          "having none rather than by holding one the pipe cannot honour") {
-    // THE COST OF V1's SCOPE, PAID WHERE IT IS INCURRED. Cross-process capability
-    // is deliberately out of scope, so the child host hands the library NO
-    // deferral door. This pins the direction of that gap: the child gets nothing
-    // (and its conversation simply goes unanswered), rather than being handed a
-    // token the parent could not validate across the pipe.
+TEST_CASE("an out-of-process weave gets no deferred-answer capability, and says so by having none "
+          "rather than by holding one the pipe cannot honour") {
+    // Cross-process capability is deliberately out of scope, so the child host hands the
+    // library NO deferral door. This pins the direction of that gap: the child gets nothing (its
+    // conversation goes unanswered) rather than a token the parent could not validate across
+    // the pipe.
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
 
@@ -1505,14 +1449,12 @@ TEST_CASE("R2B-2: an out-of-process weave gets no deferred-answer capability, an
 
 // ---- office authorship is in-process only, and FAILS CLOSED out of it (MSG-07) --
 
-TEST_CASE("R2D-0: an out-of-process weave really holding the role still cannot author office "
-          "speech across the pipe — refused honestly, never downgraded, in both directions") {
-    // THE SAME LAW THE ANSWER DOORS PAY, EXTENDED TO THE OFFICE (v5): the pipe
-    // carries no attestation, so the child gets no authorship door outbound and
-    // no authored-role fact inbound. What makes this case sharp is that the
-    // membership itself is REAL — the mounted weave holds "worker.a" host-side —
-    // so the only wall standing is the pipe's, and it must refuse rather than
-    // downgrade or pretend.
+TEST_CASE("an out-of-process weave really holding the role still cannot author office speech "
+          "across the pipe — refused honestly, never downgraded, in both directions") {
+    // The answer doors' law, extended to the office: the pipe carries no attestation, so the
+    // child gets no authorship door outbound and no authored-role fact inbound. The membership
+    // itself is REAL (the mounted weave holds "worker.a" host-side), so the only wall standing
+    // is the pipe's, and it must refuse rather than downgrade or pretend.
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
 
@@ -1577,7 +1519,7 @@ TEST_CASE("R2D-0: an out-of-process weave really holding the role still cannot a
     CHECK((*reports)[1].seen_role.empty());
 }
 
-// ---- Harness honesty (Part 1): the fail-by-default asymmetry, proven in-suite ----
+// ---- harness honesty: the fail-by-default asymmetry, proven in-suite ------------
 
 TEST_CASE("harness honesty: an unprovable security proof FAILS by default, skips only on opt-out") {
     // No host / no real enforcement needed — exercise the gate's DECISION directly, so this proof
@@ -1606,16 +1548,10 @@ TEST_CASE("harness honesty: an unprovable security proof FAILS by default, skips
 }
 
 // ---- consumed transport bytes are history, not live channel storage (LIFE-07) -----------------
-//
-// The finding that named this named BOTH framers. The isolation Channel is the parent side of every out-of-process
-// Weave link, so a long-lived host with a child that keeps up but never lets the socket run dry
-// retained the whole session's byte volume: flush() clear()ed the outbox only on an EXACT drain,
-// and kMaxBacklog measures the UNSENT residue, so nothing ever noticed. Measured pre-repair on this
-// shape: +261 B per round, strictly linear, 524,160 bytes already sent and still retained after
-// 2,000 rounds, failed() never set.
-//
-// These are deliberately INDEPENDENT of the BridgeChannel proofs in test_bridge.cpp: the two
-// framers are separate source files with separate repairs, and one is not evidence for the other.
+// The isolation Channel is the parent side of every out-of-process link, so a long-lived host
+// whose child keeps up but never lets the socket run dry must not retain the session's byte
+// volume, as an outbox cleared only on an exact drain would, unseen by kMaxBacklog. These are
+// INDEPENDENT of the BridgeChannel proofs in test_bridge.cpp: separate framers, separate code.
 
 namespace {
 
@@ -1658,7 +1594,7 @@ ChLanding ch_classify(std::size_t offset) {
 
 } // namespace
 
-TEST_CASE("R2F-C (isolation): a channel that is never idle still reclaims what it has already sent") {
+TEST_CASE("a channel that is never idle still reclaims what it has already sent") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1735,7 +1671,7 @@ TEST_CASE("R2F-C (isolation): a channel that is never idle still reclaims what i
                       << " compactions moved " << bytes_moved << " B; boundary landed in-header "
                       << in_header << ", in-payload " << in_payload << ", on-edge " << on_edge);
 
-    CHECK(idle_rounds == 0);      // the buffer never once became empty -- the F-18 shape held
+    CHECK(idle_rounds == 0);      // the buffer never once became empty: the persistent-suffix shape held
     CHECK(law_violations == 0);   // ... and live storage stayed bounded by twice the backlog anyway
     CHECK(compactions > 0);       // reclamation actually ran (guards a vacuously bounded pass)
     CHECK(bytes_moved <= queued_bytes); // amortized: a move never costs more than the bytes it drops
@@ -1760,7 +1696,7 @@ TEST_CASE("R2F-C (isolation): a channel that is never idle still reclaims what i
     CHECK(first_bad == static_cast<std::size_t>(-1)); // index of the first corrupted/reordered frame
 }
 
-TEST_CASE("R2F-C (isolation): frames queued behind a half-sent one keep their order and bytes") {
+TEST_CASE("frames queued behind a half-sent one keep their order and bytes") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1816,7 +1752,7 @@ TEST_CASE("R2F-C (isolation): frames queued behind a half-sent one keep their or
     CHECK(got[static_cast<std::size_t>(first_untouched) + 2].payload == ch_body(first_untouched + 2));
 }
 
-TEST_CASE("R2F-C (isolation): reclamation moves the backlog, it does not shrink it") {
+TEST_CASE("reclamation moves the backlog, it does not shrink it") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1859,7 +1795,7 @@ TEST_CASE("R2F-C (isolation): reclamation moves the backlog, it does not shrink 
     for (int i = 0; i < 80 && !ch.failed(); ++i) {
         ch.queue(Op::Emit, mib);
     }
-    CHECK(ch.failed()); // an undrained backlog is contained, exactly as before the repair
+    CHECK(ch.failed()); // an undrained backlog is contained
 
     const std::size_t live_when_failed = P::live(ch);
     ch.flush();
@@ -1870,7 +1806,7 @@ TEST_CASE("R2F-C (isolation): reclamation moves the backlog, it does not shrink 
     CHECK(P::live(ch) == live_when_failed); // and queue() is still a no-op
 }
 
-TEST_CASE("R2F-C (isolation): a failed channel neither sends nor reclaims") {
+TEST_CASE("a failed channel neither sends nor reclaims") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1908,10 +1844,11 @@ TEST_CASE("R2F-C (isolation): a failed channel neither sends nor reclaims") {
     CHECK(got.size() == delivered_before);  // ... so the peer received nothing more
 }
 
-TEST_CASE("R2F-C (isolation): the RECEIVE buffer was never part of F-18") {
-    // The finding named the outbox. Its sibling already reclaims decoded bytes unconditionally
-    // (`inbox_.erase(0, pos)`), so a permanently incomplete suffix does NOT pin consumed history in
-    // place. Measured, not assumed -- the evidence for "inspected, already correct".
+TEST_CASE("the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed "
+              "history") {
+    // The inbox reclaims decoded bytes unconditionally (`inbox_.erase(0, pos)`), so a
+    // permanently incomplete suffix does NOT pin consumed history in place: measured here, not
+    // assumed.
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair(/*shrink=*/false); // raw pushes must never block the test
     Channel ch(fds.consumer);
@@ -1961,25 +1898,12 @@ TEST_CASE("an isolated image requesting dispatch-refusal attestation is refused 
     CHECK(bus.list_weaves().empty());
 }
 
-// Keep this LAST in the file: a positive tally so a green can never mean "every OS-enforcement case
-// silently skipped." (Relies on doctest's default registration order; a --order-by=rand run would
-// instead assert the count in a reporter hook.)
-//
-// EXACTLY 17, from this suite's own witnesses only (POP-02). Fourteen ZEN_REQUIRE_ENFORCEABLE guard
-// sites, three of which sit in cases doctest re-enters once per leaf subcase — hence 17 executions,
-// not 14. The number is exact rather than a floor because `>= 12` had three executions of slack:
-// a genuine enforcement witness could be deleted and this suite stayed fully green with nothing
-// moving anywhere. When a new OS-enforcement proof is added, raise this deliberately.
-//
-// 15 -> 16 at C2: the exec-boundary descriptor case is a THIRTEENTH guard site. It is a genuine
-// OS-enforcement witness — it asserts ENETUNREACH from inside the namespace alongside the
-// descriptor inventory — so it belongs in this population, and raising the number on purpose is
-// exactly the price this contract charges for adding one.
-//
-// 16 -> 17 at C2a: the exec-boundary ENVIRONMENT case is the fourteenth. It mounts under the
-// enforced floor and reads the environment from inside it, so it needs the same gate. Its pure
-// companion (the ChildEnvironment well-formedness case) deliberately does NOT take the gate — it
-// spawns nothing and asserts nothing about the OS — which is why the population moved by one.
+// Keep this LAST in the file: a positive tally, so a green can never mean "every OS-enforcement
+// case silently skipped" (it relies on doctest's default registration order). EXACTLY 17, from
+// this suite's own witnesses only (POP-02): fourteen ZEN_REQUIRE_ENFORCEABLE guard sites, three
+// in cases doctest re-enters once per leaf subcase. Exact, not a floor, so deleting a witness is
+// a red; a new OS-enforcement proof raises it deliberately. The pure ChildEnvironment case takes
+// no gate: it spawns nothing and asserts nothing about the OS.
 TEST_CASE("enforcement coverage: the OS-enforcement proofs actually executed, not silently skipped") {
     ZEN_ENFORCEMENT_POPULATION(17);
 }

@@ -82,7 +82,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_host_input[.]cpp$"
     "^tests/test_host_policy[.]cpp$"
     "^tests/test_integration[.]cpp$"
-    "^tests/test_isolation[.]cpp$"
     "^tests/test_joint[.]cpp$"
     "^tests/test_manager[.]cpp$"
     "^tests/test_observe[.]cpp$"
