@@ -93,7 +93,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_weave_shape[.]cpp$"
     "^tests/test_weaver[.]cpp$"
     "^tests/weavelib/bad_abi[.]cpp$"
-    "^tests/weavelib/contract_sentinel[.]cpp$"
     "^tests/weavelib/dispatch_probe[.]cpp$"
     "^tests/weavelib/dispatch_protocol[.]hpp$"
     "^tests/weavelib/forge_client[.]cpp$"
