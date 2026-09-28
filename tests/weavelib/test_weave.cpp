@@ -644,7 +644,7 @@ public:
             ::close(fd);
             return 0;
         };
-        const std::int64_t secret = try_read("/tmp/zen_b4_secret.txt");
+        const std::int64_t secret = try_read("/tmp/zen_host_secret.txt");
         const std::int64_t scratch = try_write("/scratch/probe.txt");
         const std::int64_t outside = try_write("/zen_outside.txt");
         std::int64_t noexec = 0;
@@ -699,7 +699,7 @@ public:
             // (2) Can the parked descriptor still be USED? Presence and usability are
             //     asked separately because a closed number and a live socket both answer
             //     "an int" — only a write says which.
-            const char payload[] = "COLD2-ESCAPE-PAYLOAD";
+            const char payload[] = "PARKED-DESCRIPTOR-PAYLOAD";
             errno = 0;
             const ssize_t wrote = ::write(static_cast<int>(seq), payload, sizeof(payload) - 1);
             const std::int64_t parked_write = wrote > 0 ? 0 : (errno != 0 ? errno : -1);
@@ -757,7 +757,7 @@ public:
             result.set("count", Cell::integer(count));
             result.set("ld_count", Cell::integer(ld_count));
             result.set("secret_present",
-                       Cell::integer(std::getenv("ZEN_C2A_AMBIENT_SECRET") != nullptr ? 1 : 0));
+                       Cell::integer(std::getenv("ZEN_AMBIENT_SECRET") != nullptr ? 1 : 0));
             result.set("names", Cell::text(names));
             bus.send(in.reply_to, Message(std::move(result)));
         }

@@ -96,11 +96,27 @@ REWORDED = {
         '"R2B-1a: LifecycleAuthority must not be default-constructible"'),
     "tests/package/stranger_history.cpp": (
         '"stranger history witness (RTH-1a: the two halves, through the package)\\n"',),
+    "tests/test_isolation.cpp": (
+        '"C-2: ambient descriptors removed at exec while the netns holds"',
+        '"C-2a: the child\'s environment is authored, not inherited"'),
 }
 # Test data renamed because it carried a plan code or a private id: in each file, every use of the
 # START value is the new one now, in literals and code alike, and the START value is left in no
 # file's code. Each pair is put back before the comparison, so nothing else may differ.
-RENAMED_VALUES = {}
+RENAMED_VALUES = {
+    "tests/weavelib/test_weave.cpp": (
+        ("COLD2-ESCAPE-PAYLOAD", "PARKED-DESCRIPTOR-PAYLOAD"),
+        ("/tmp/zen_b4_secret.txt", "/tmp/zen_host_secret.txt"),
+        ("ZEN_C2A_AMBIENT_SECRET", "ZEN_AMBIENT_SECRET")),
+    "tests/test_isolation.cpp": (
+        ("/tmp/zen_b4_secret.txt", "/tmp/zen_host_secret.txt"),
+        ("/tmp/zen_c2_ambient_file.txt", "/tmp/zen_ambient_file.txt"),
+        ("ZEN_C2A_AMBIENT_SECRET", "ZEN_AMBIENT_SECRET"),
+        ("/zen-c2a-nonexistent-lib-dir", "/zen-nonexistent-lib-dir"),
+        ("/zen-c2a-nonexistent-preload.so", "/zen-nonexistent-preload.so"),
+        ('"c2a"', '"envprobe"'),
+        ('"c2"', '"fdprobe"')),
+}
 # The one assertion the pass changes, named by its START and END code, each once in its file: a
 # letter whose author was removed is refused SenderLifeEnded (MSG-03), never CapabilityDenied.
 ASSERTIONS = {

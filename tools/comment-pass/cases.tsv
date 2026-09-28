@@ -3,3 +3,7 @@
 # of a rename: cases.py applies it, prove.py puts each old name back before it compares, and a
 # rename it does not hold is a difference. A row struck with a leading `#` is not applied. It
 # holds the rows of one pull request; earlier rows are in Git and in their report.
+tests/test_isolation.cpp	a channel that is never idle still reclaims what it has already sent	an out-of-process channel that is never idle still reclaims what it has already sent
+tests/test_isolation.cpp	reclamation moves the backlog, it does not shrink it	an out-of-process channel's reclamation moves the backlog, it does not shrink it
+tests/test_isolation.cpp	a failed channel neither sends nor reclaims	a failed out-of-process channel neither sends nor reclaims
+tests/test_isolation.cpp	the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history	an out-of-process channel's RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history
