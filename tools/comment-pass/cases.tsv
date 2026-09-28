@@ -158,3 +158,4 @@ tests/test_serialize.cpp	R2F-A: a nested message charges its whole slot vector, 
 tests/test_serialize.cpp	R2F-A: the budget counts STRUCTURE, not bytes — a big payload is one cell	the budget counts STRUCTURE, not bytes — a big payload is one cell
 tests/test_serialize.cpp	R2F-A: the budget does not swallow the older, more precise refusals	the budget does not swallow the more precise refusals
 tests/test_serialize.cpp	R2F-A: the compat (JSON) decoder shares the same budget domain	the compat (JSON) decoder shares the same budget domain
+tests/test_describe.cpp	the scalar handoff MSG-0 needs: describe -> choose -> compose -> assemble	the scalar handoff a composer needs: describe -> choose -> compose -> assemble
