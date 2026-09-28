@@ -159,3 +159,4 @@ tests/test_serialize.cpp	R2F-A: the budget counts STRUCTURE, not bytes — a big
 tests/test_serialize.cpp	R2F-A: the budget does not swallow the older, more precise refusals	the budget does not swallow the more precise refusals
 tests/test_serialize.cpp	R2F-A: the compat (JSON) decoder shares the same budget domain	the compat (JSON) decoder shares the same budget domain
 tests/test_describe.cpp	the scalar handoff MSG-0 needs: describe -> choose -> compose -> assemble	the scalar handoff a composer needs: describe -> choose -> compose -> assemble
+tests/test_schema_codec.cpp	the auditor's ceiling case N=100000 no longer even reaches decode_schema	a 100000-deep descriptor never reaches decode_schema
