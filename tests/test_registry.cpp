@@ -119,14 +119,10 @@ TEST_CASE("reads are safe under concurrent registration") {
 }
 
 // ---- a schema is discoverable while a live claim requires it (LIFE-08) -----
-//
-// The append-only registry was the demonstrated C-10/F-9 shape: a host meeting a
-// stream of distinct schemas retained every one of them forever, because
-// registration had no counterpart. What follows pins the replacement — not
-// "schemas can be deleted", but "a schema is retained by a live NEED and by
-// nothing else". Every case below is written against externally meaningful
-// behaviour (does it resolve?) rather than against a claim count, because the
-// count is bookkeeping and resolvability is the promise.
+// A host meeting a stream of distinct schemas must not retain every one: a schema is retained
+// by a live NEED and by nothing else. The cases are written against externally meaningful
+// behaviour (does it resolve?) rather than a claim count, because the count is bookkeeping and
+// resolvability is the promise.
 
 namespace {
 std::shared_ptr<const Schema> shape(const char* name, std::uint32_t v = 1) {
@@ -134,7 +130,7 @@ std::shared_ptr<const Schema> shape(const char* name, std::uint32_t v = 1) {
 }
 } // namespace
 
-TEST_CASE("BL-0: a claimed schema resolves; the final release takes it out of lookup") {
+TEST_CASE("a claimed schema resolves; the final release takes it out of lookup") {
     Registry reg;
     {
         SchemaClaimScope scope = reg.claim({shape("Foo")});
@@ -146,7 +142,7 @@ TEST_CASE("BL-0: a claimed schema resolves; the final release takes it out of lo
     CHECK(reg.size() == 0);
 }
 
-TEST_CASE("BL-0: two claims, one definition — the first release changes nothing") {
+TEST_CASE("two claims, one definition — the first release changes nothing") {
     Registry reg;
     SchemaClaimScope a = reg.claim({shape("Foo")});
     // A SEPARATELY BUILT twin, so this proves convergence and not pointer reuse.
@@ -162,7 +158,7 @@ TEST_CASE("BL-0: two claims, one definition — the first release changes nothin
     CHECK_FALSE(reg.contains("Foo", 1));
 }
 
-TEST_CASE("BL-0: a claim on a conflicting definition refuses, and changes nothing") {
+TEST_CASE("a claim on a conflicting definition refuses, and changes nothing") {
     Registry reg;
     SchemaClaimScope held = reg.claim({SchemaBuilder("Foo", 1).field("x", Kind::Int).build()});
     const ContentId before = reg.lookup("Foo", 1)->content_id();
@@ -177,7 +173,7 @@ TEST_CASE("BL-0: a claim on a conflicting definition refuses, and changes nothin
     CHECK_FALSE(reg.contains("Foo", 1));
 }
 
-TEST_CASE("BL-0: a multi-schema acquisition is all or nothing") {
+TEST_CASE("a multi-schema acquisition is all or nothing") {
     Registry reg;
     SchemaClaimScope incumbent = reg.claim({SchemaBuilder("Baz", 1).field("x", Kind::Int).build()});
 
@@ -196,7 +192,7 @@ TEST_CASE("BL-0: a multi-schema acquisition is all or nothing") {
     CHECK(reg.size() == 0);
 }
 
-TEST_CASE("BL-0: the same shape twice in one request is one claim") {
+TEST_CASE("the same shape twice in one request is one claim") {
     Registry reg;
     auto foo = shape("Foo");
     // Asked for twice — a manifest may legitimately name a component in two
@@ -234,13 +230,13 @@ TEST_CASE("two definitions of one shape inside ONE request refuse, and publish n
     }
 }
 
-TEST_CASE("BL-0: a null schema in a claim refuses before anything is published") {
+TEST_CASE("a null schema in a claim refuses before anything is published") {
     Registry reg;
     CHECK_THROWS_AS(reg.claim({shape("Foo"), nullptr}), std::invalid_argument);
     CHECK(reg.size() == 0);
 }
 
-TEST_CASE("BL-0: register_schema is a claim nobody releases") {
+TEST_CASE("register_schema is a claim nobody releases") {
     Registry reg;
     reg.register_schema(shape("Core"));
     {
@@ -255,7 +251,7 @@ TEST_CASE("BL-0: register_schema is a claim nobody releases") {
     CHECK(reg.size() == 1);
 }
 
-TEST_CASE("BL-0: claim_known pins what exists and skips what does not") {
+TEST_CASE("claim_known pins what exists and skips what does not") {
     Registry reg;
     SchemaClaimScope definer = reg.claim({shape("Spoken")});
 
@@ -272,7 +268,7 @@ TEST_CASE("BL-0: claim_known pins what exists and skips what does not") {
     CHECK_FALSE(reg.contains("Spoken", 1));
 }
 
-TEST_CASE("BL-0: an admitted Value outlives the Registry membership of its schema") {
+TEST_CASE("an admitted Value outlives the Registry membership of its schema") {
     Registry reg;
     std::optional<Value> held;
     {
@@ -298,7 +294,7 @@ TEST_CASE("BL-0: an admitted Value outlives the Registry membership of its schem
     CHECK(loom::admit(v, v.schema()).ok());
 }
 
-TEST_CASE("BL-0: a lookup taken before the final release stays valid after it") {
+TEST_CASE("a lookup taken before the final release stays valid after it") {
     Registry reg;
     std::shared_ptr<const Schema> held;
     {
@@ -310,7 +306,7 @@ TEST_CASE("BL-0: a lookup taken before the final release stays valid after it") 
     CHECK_FALSE(reg.contains("Reader", 1));
 }
 
-TEST_CASE("BL-0: a claim scope is move-only, and moving it moves the lifetime") {
+TEST_CASE("a claim scope is move-only, and moving it moves the lifetime") {
     Registry reg;
     SchemaClaimScope outer;
     {
@@ -325,7 +321,7 @@ TEST_CASE("BL-0: a claim scope is move-only, and moving it moves the lifetime") 
     CHECK_FALSE(reg.contains("Moved", 1));
 }
 
-TEST_CASE("BL-0: move-assignment acquires before it releases — a handoff has no gap") {
+TEST_CASE("move-assignment acquires before it releases — a handoff has no gap") {
     Registry reg;
     SchemaClaimScope live = reg.claim({shape("Shared"), shape("OldOnly")});
     // The successor's claim is taken FIRST, exactly as a replacement takes it.
@@ -338,7 +334,7 @@ TEST_CASE("BL-0: move-assignment acquires before it releases — a handoff has n
     CHECK_FALSE(reg.contains("OldOnly", 1)); // and the predecessor's went
 }
 
-TEST_CASE("BL-0: release is idempotent, and a scope may be reused") {
+TEST_CASE("release is idempotent, and a scope may be reused") {
     Registry reg;
     SchemaClaimScope scope = reg.claim({shape("Once")});
     scope.release();
@@ -351,7 +347,7 @@ TEST_CASE("BL-0: release is idempotent, and a scope may be reused") {
     CHECK(reg.size() == 0);
 }
 
-TEST_CASE("BL-0: a scope belongs to one Registry, and outliving it is harmless") {
+TEST_CASE("a scope belongs to one Registry, and outliving it is harmless") {
     SchemaClaimScope orphan;
     {
         Registry reg;
@@ -366,10 +362,9 @@ TEST_CASE("BL-0: a scope belongs to one Registry, and outliving it is harmless")
     CHECK(orphan.empty());
 }
 
-TEST_CASE("BL-0: a long run of distinct claimants does not grow the population") {
-    // THE C-10 BOUNDEDNESS PROOF, in the narrowest form that still means it: a
-    // host that meets 500 distinct vocabularies one after another, keeping none,
-    // ends where it started. Without claim-scoped retention it would end at 500.
+TEST_CASE("a long run of distinct claimants does not grow the population") {
+    // THE BOUNDEDNESS PROOF, in the narrowest form that still means it: a host that meets 500
+    // distinct vocabularies one after another, keeping none, ends where it started.
     Registry reg;
     reg.register_schema(shape("HostVocabulary")); // the permanent baseline
     const std::size_t baseline = reg.size();
@@ -395,10 +390,9 @@ TEST_CASE("BL-0: a long run of distinct claimants does not grow the population")
     CHECK(reg.size() == baseline);
 }
 
-TEST_CASE("BL-0: reads stay safe while claims are acquired AND released") {
-    // The existing concurrency case only ever grew the map. Removal is the new
-    // half: a reader must never see a torn map, and must never be handed a
-    // pointer that dies under it.
+TEST_CASE("reads stay safe while claims are acquired AND released") {
+    // The other concurrency case only grows the map; this one removes too. A reader must never
+    // see a torn map, and must never be handed a pointer that dies under it.
     Registry reg;
     reg.register_schema(fx::PlayerState()); // permanent: readers may rely on it
 

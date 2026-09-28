@@ -512,7 +512,7 @@ TEST_CASE("filesystem is OS-enforced: secret absent, scratch writable, host root
                             "filesystem is OS-enforced: secret absent / scratch writable / root RO");
     // A sentinel secret OUTSIDE any granted scope (under /tmp, which the allow-list view
     // does not bind), so the probe proves the secret is ABSENT from the view, not hidden.
-    { std::ofstream f("/tmp/zen_b4_secret.txt"); f << "TOPSECRET\n"; }
+    { std::ofstream f("/tmp/zen_host_secret.txt"); f << "TOPSECRET\n"; }
 
     // The fs-probe IS allowed to send FsResult, so a read/write/exec failure is the OS
     // sandbox, not the bus grant (sandbox != muzzle). These outer vars are filled by the
@@ -555,7 +555,7 @@ TEST_CASE("filesystem is OS-enforced: secret absent, scratch writable, host root
 TEST_CASE("WriteAnywhere is the honest opt-out: reaches host paths, reported not contained") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
-    { std::ofstream f("/tmp/zen_b4_secret.txt"); f << "TOPSECRET\n"; }
+    { std::ofstream f("/tmp/zen_host_secret.txt"); f << "TOPSECRET\n"; }
 
     Registered rec = register_probe(bus, {fsresult_schema()});
     std::int64_t secret = -1;
@@ -1015,7 +1015,7 @@ TEST_CASE("the child inherits NO ambient host descriptor, and the netns is still
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
-                            "C-2: ambient descriptors removed at exec while the netns holds");
+                            "ambient descriptors removed at exec while the netns holds");
 
     // ---- the host's own ambient capabilities, built for real ----------------------
     // Each is parked with F_DUPFD (never F_DUPFD_CLOEXEC), so the copy the child could inherit
@@ -1056,7 +1056,7 @@ TEST_CASE("the child inherits NO ambient host descriptor, and the netns is still
     cloexec(pipe_fds[0]);
     cloexec(pipe_fds[1]);
 
-    const std::string file_path = "/tmp/zen_c2_ambient_file.txt";
+    const std::string file_path = "/tmp/zen_ambient_file.txt";
     const int file = ::open(file_path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     REQUIRE(file >= 0);
 
@@ -1083,9 +1083,9 @@ TEST_CASE("the child inherits NO ambient host descriptor, and the netns is still
     };
     Grant grant;
     grant.allow("FdResult", 1, rec.id); // it may REPORT freely: a sandbox is not a muzzle
-    OutOfProcessResult mounted = host.mount("c2", ZEN_SO_FDPROBE, std::move(grant));
+    OutOfProcessResult mounted = host.mount("fdprobe", ZEN_SO_FDPROBE, std::move(grant));
     REQUIRE_MESSAGE(mounted.ok, mounted.error);
-    CHECK(host.containment("c2").find("network: contained") != std::string::npos);
+    CHECK(host.containment("fdprobe").find("network: contained") != std::string::npos);
 
     // One Ping per parked descriptor; `seq` names the fd the child must try to USE.
     const int parked[] = {parked_socket, parked_pipe, parked_file};
@@ -1146,7 +1146,7 @@ TEST_CASE("the child inherits NO ambient host descriptor, and the netns is still
     CHECK(from_pipe < 0);
     CHECK((pipe_errno == EAGAIN || pipe_errno == EWOULDBLOCK));
 
-    host.unmount("c2");
+    host.unmount("fdprobe");
     for (int fd : parked) {
         ::close(fd);
     }
@@ -1168,7 +1168,7 @@ TEST_CASE("the child's environment is the one Zen authored, not the host's ambie
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
     ZEN_REQUIRE_ENFORCEABLE(host.enforcement(), {Capability::Network},
-                            "C-2a: the child's environment is authored, not inherited");
+                            "the child's environment is authored, not inherited");
 
     // Plant ambient state in THIS process, the way an embedding host really would. Each
     // is chosen to be inert if it did cross: a fake secret, a loader search path that
@@ -1180,9 +1180,9 @@ TEST_CASE("the child's environment is the one Zen authored, not the host's ambie
         const char* value;
     };
     const Planted planted[] = {
-        {"ZEN_C2A_AMBIENT_SECRET", "should-not-cross"},
-        {"LD_LIBRARY_PATH", "/zen-c2a-nonexistent-lib-dir"},
-        {"LD_PRELOAD", "/zen-c2a-nonexistent-preload.so"},
+        {"ZEN_AMBIENT_SECRET", "should-not-cross"},
+        {"LD_LIBRARY_PATH", "/zen-nonexistent-lib-dir"},
+        {"LD_PRELOAD", "/zen-nonexistent-preload.so"},
         {"ASAN_OPTIONS", "verbosity=0"},
     };
     for (const Planted& p : planted) {
@@ -1209,7 +1209,7 @@ TEST_CASE("the child's environment is the one Zen authored, not the host's ambie
     };
     Grant grant;
     grant.allow("EnvResult", 1, rec.id); // it may REPORT freely: a sandbox is not a muzzle
-    OutOfProcessResult mounted = host.mount("c2a", ZEN_SO_ENVPROBE, std::move(grant));
+    OutOfProcessResult mounted = host.mount("envprobe", ZEN_SO_ENVPROBE, std::move(grant));
     REQUIRE_MESSAGE(mounted.ok, mounted.error);
 
     // The full supported child path had to work to get here and to get a reply back:
@@ -1233,7 +1233,7 @@ TEST_CASE("the child's environment is the one Zen authored, not the host's ambie
     CHECK(secret_present == 0); // the planted ambient secret is not visible to the child
     CHECK(ld_count == 0);       // no loader variable crossed -- LD_* is capability-bearing
 
-    host.unmount("c2a");
+    host.unmount("envprobe");
     for (const Planted& p : planted) {
         REQUIRE(::unsetenv(p.name) == 0); // do not leave planted state to the next case
     }
@@ -1594,7 +1594,7 @@ ChLanding ch_classify(std::size_t offset) {
 
 } // namespace
 
-TEST_CASE("a channel that is never idle still reclaims what it has already sent") {
+TEST_CASE("an out-of-process channel that is never idle still reclaims what it has already sent") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1752,7 +1752,7 @@ TEST_CASE("frames queued behind a half-sent one keep their order and bytes") {
     CHECK(got[static_cast<std::size_t>(first_untouched) + 2].payload == ch_body(first_untouched + 2));
 }
 
-TEST_CASE("reclamation moves the backlog, it does not shrink it") {
+TEST_CASE("an out-of-process channel's reclamation moves the backlog, it does not shrink it") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1806,7 +1806,7 @@ TEST_CASE("reclamation moves the backlog, it does not shrink it") {
     CHECK(P::live(ch) == live_when_failed); // and queue() is still a no-op
 }
 
-TEST_CASE("a failed channel neither sends nor reclaims") {
+TEST_CASE("a failed out-of-process channel neither sends nor reclaims") {
     using P = ChannelStorageProbe;
     const ChannelPair fds = channel_pair();
     Channel ch(fds.producer);
@@ -1844,8 +1844,8 @@ TEST_CASE("a failed channel neither sends nor reclaims") {
     CHECK(got.size() == delivered_before);  // ... so the peer received nothing more
 }
 
-TEST_CASE("the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed "
-              "history") {
+TEST_CASE("an out-of-process channel's RECEIVE buffer reclaims decoded bytes, so an incomplete "
+              "suffix pins no consumed history") {
     // The inbox reclaims decoded bytes unconditionally (`inbox_.erase(0, pos)`), so a
     // permanently incomplete suffix does NOT pin consumed history in place: measured here, not
     // assumed.

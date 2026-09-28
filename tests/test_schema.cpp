@@ -157,10 +157,9 @@ TEST_CASE("collect_referenced deduplicates by IDENTITY: an equal definition from
         CHECK(out[0].get() == part_a.get()); // the first object seen stands for both
     }
     SUBCASE("two definitions under one (name, version): BOTH survive, in order") {
-        // This is the entry the old name-keyed walk dropped, which let a weave load
-        // advertising a Box2 whose Part was silently the first one's. Whoever reads
-        // the result — a Registry claim, a manifest's loader — now sees the
-        // contradiction and refuses it.
+        // A walk keyed by name alone would drop this entry, letting a weave load advertising a
+        // Box2 whose Part was silently the first one's. Whoever reads the result (a Registry
+        // claim, a manifest's loader) sees the contradiction and refuses it.
         std::vector<std::shared_ptr<const Schema>> out;
         collect_referenced(*box, out);
         collect_referenced(*box2, out);
@@ -174,12 +173,10 @@ TEST_CASE("collect_referenced deduplicates by IDENTITY: an equal definition from
 
 TEST_CASE("collect_referenced expands a shared component once, however many paths reach it: a "
           "deep graph of two-field sharing is walked in one pass, not as a tree") {
-    // THE SHAPE THAT STALLED A HOST. Node[i] holds two message fields, `left` and `right`,
-    // both of Node[i-1]; the closure is a chain of depth+1 distinct schemas, but a walk that
-    // descends BEFORE checking what it has already carried expands it as a binary tree —
-    // 2^depth visits. At depth 26 that was a registration that never returned (an
-    // eight-second timeout, independently measured); at this depth it is astronomically
-    // more, so a wrong walk cannot finish here and a right one finishes at once.
+    // Node[i] holds two message fields, `left` and `right`, both of Node[i-1]; the closure is a
+    // chain of depth+1 distinct schemas, but a walk that descends BEFORE checking what it has
+    // already carried expands it as a binary tree, 2^depth visits: at this depth a wrong walk
+    // cannot finish and a right one finishes at once.
     constexpr int depth = 200;
     auto leaf = SchemaBuilder("Shared.Leaf", 1).field("v", Kind::Int).build();
     std::shared_ptr<const Schema> node = leaf;
@@ -191,10 +188,10 @@ TEST_CASE("collect_referenced expands a shared component once, however many path
     }
     const std::shared_ptr<const Schema> root = node;
 
-    // THE BOUNDED-COMPLETION GUARD, generous by orders of magnitude: the corrected walk
-    // takes microseconds; the old one would take longer than the machine will exist. A
-    // walk that has not returned in 30 seconds is not slow, it is the exponential — and
-    // its thread is left to the process's exit rather than joined, since it never would.
+    // THE BOUNDED-COMPLETION GUARD, generous by orders of magnitude: a right walk takes
+    // microseconds, and one that has not returned in 30 seconds is not slow, it is the
+    // exponential. Its thread is left to the process's exit rather than joined, since it never
+    // would.
     std::promise<std::vector<std::shared_ptr<const Schema>>> done;
     std::future<std::vector<std::shared_ptr<const Schema>>> result = done.get_future();
     std::thread walker([root, done = std::move(done)]() mutable {

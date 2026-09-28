@@ -58,8 +58,8 @@ TEST_CASE("content_id is optional in compat: a JSON envelope without it still ad
     CHECK(a.value().get("hp")->as_int() == 1);
 }
 
-// The strictness regression: this used to be silently dropped.
-TEST_CASE("an unknown field in the payload is now rejected (UnknownField)") {
+// The compat decoder is strict: an unknown field is refused, never silently dropped.
+TEST_CASE("an unknown field in the payload is rejected (UnknownField)") {
     std::string text = R"({"zen":1,"schema":"PlayerState","version":1,)"
                        R"("fields":{"hp":"1","name":"Ami","ghost":"x"}})";
     Unverified u = compat::parse(text);

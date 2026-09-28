@@ -375,7 +375,7 @@ function(zen_check_entry_population listing selector build_dir run_token out_cou
     zen_entry_normalise("${registered}" registered_text)
     string(REPLACE ";" " " gates_text "${gates}")
     file(WRITE "${witness}"
-         "# The CTest-entry inventory's receipt for one official-lane run (VOLATILE-B1).\n"
+         "# The CTest-entry inventory's receipt for one official-lane run.\n"
          "# Written by zen_check_entry_population() in tests/check_entry_population.cmake,\n"
          "# only after the comparison above passed; required by the `population` entry, which\n"
          "# measures every line of it again before believing it. Not an expectation: the\n"

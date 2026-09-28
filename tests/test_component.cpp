@@ -22,9 +22,9 @@
 #include <string_view>
 #include <vector>
 
-// The UI-Builder component vocabulary (Phase A): components-as-gated-Values, the ONE-tree
-// unification with the console's widget tree, tree-ness as the vocabulary's own decode check
-// AFTER the gate, stress placeholders, and the view/presenter split as separable data.
+// The component vocabulary: components as gated Values, one tree shared with the console's widget
+// tree, tree-ness as the vocabulary's own decode check AFTER the gate, stress placeholders, and
+// the view/presenter split as separable data.
 
 using namespace sbfx;
 using namespace loom;
@@ -406,18 +406,12 @@ TEST_CASE("the lossless pair is BOUNDED and says so: flatten past the depth cap 
 
 TEST_CASE("the depth cap is the FIRST bound: the exact boundary holds, and a chain thousands "
           "deeper is refused the same way — not by the C++ stack") {
-    // The cap only means something if it is what STOPS a deep frame. If the walk
-    // was made iterative it was not: on MSVC Debug the recursion died of STATUS_STACK_OVERFLOW
-    // at chain depth 240 while the cap admits 257, so the whole 240..257 window killed the
-    // process instead of being rebuilt or refused. GCC's thinner frames reached the cap and hid
-    // it — which is the point. A bound enforced by whichever compiler runs out of stack first
-    // is not a bound.
-    //
-    // These call tree_of DIRECTLY rather than through the gate, on purpose: past roughly 2,900
-    // nodes the EARLIER decode-materialization budget (kMaxDecodedCells) refuses the frame
-    // before the decoder ever sees it. That is a different law bounding a different thing and
-    // both are kept — the last subcase pins exactly that ordering — but a chain that never
-    // reaches tree_of cannot witness anything about tree_of.
+    // The cap only means something if it is what STOPS a deep frame, on every compiler: a walk
+    // that recursed natively would die of stack overflow below the cap on thin stacks (MSVC
+    // Debug) and reach it on others, and a bound enforced by whichever compiler runs out of stack
+    // first is not a bound. These call tree_of DIRECTLY: past about 2,900 nodes the decode budget
+    // (kMaxDecodedCells) refuses the frame at the gate first, a different bound the last subcase
+    // pins, and a chain that never reaches tree_of witnesses nothing about it.
 
     SUBCASE("the accepted edge: max-2, max-1 and the longest legal chain all rebuild") {
         for (const int len : {kLongestLegalChain - 2, kLongestLegalChain - 1, kLongestLegalChain}) {
@@ -445,9 +439,9 @@ TEST_CASE("the depth cap is the FIRST bound: the exact boundary holds, and a cha
     }
 
     SUBCASE("thousands deeper is the SAME refusal, not a different fate") {
-        // The core of the repair: physically larger must not mean differently handled. If any
-        // native recursion crept back in, these are the lengths that would take the process
-        // down instead of returning a sentence.
+        // Physically larger must not mean differently handled. If any native recursion crept
+        // back in, these are the lengths that would take the process down instead of returning
+        // a sentence.
         const std::string expected = tree_of(chain_component(kLongestLegalChain + 1)).error;
         REQUIRE_FALSE(expected.empty());
         for (const int len : {4000, 20000, 100000}) {

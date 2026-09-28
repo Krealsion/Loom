@@ -235,7 +235,7 @@ bool poke_read_field(const State& state, const FieldEntry<C, M>& fe, std::uint8_
     } else {
         out = Refused{"field '" + std::string(field) + "' has kind " +
                       poke_type_name(type_ref_for<M>::get()) +
-                      " — only scalar fields are message-readable this phase"};
+                      " — only scalar fields are message-readable"};
     }
     return true;
 }
@@ -263,7 +263,7 @@ bool poke_write_field(State& state, const FieldEntry<C, M>& fe, std::uint8_t sha
     } else {
         out = Refused{"field '" + std::string(field) + "' has kind " +
                       poke_type_name(type_ref_for<M>::get()) +
-                      " — only scalar fields are message-writable this phase"};
+                      " — only scalar fields are message-writable"};
     }
     return true;
 }

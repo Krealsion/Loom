@@ -121,11 +121,11 @@ private:
 // HOST PROCESS, before any grant is consulted.
 
 std::shared_ptr<const loom::Schema> bulk_nothing_schema() {
-    static const auto s = loom::SchemaBuilder("R2FA.Nothing", 1).build();
+    static const auto s = loom::SchemaBuilder("Wire.Nothing", 1).build();
     return s;
 }
 std::shared_ptr<const loom::Schema> bulk_schema() {
-    static const auto s = loom::SchemaBuilder("R2FA.Bulk", 1)
+    static const auto s = loom::SchemaBuilder("Wire.Bulk", 1)
                               .list("items", loom::type_message(bulk_nothing_schema()))
                               .build();
     return s;
@@ -472,7 +472,7 @@ Landing classify(std::size_t offset) {
 
 } // namespace
 
-TEST_CASE("a channel that is never idle still reclaims what it has already sent") {
+TEST_CASE("a bridge channel that is never idle still reclaims what it has already sent") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -649,7 +649,7 @@ TEST_CASE("frames queued behind a half-sent one keep their order and their bytes
     CHECK(got[static_cast<std::size_t>(first_untouched) + 2].payload == body(first_untouched + 2));
 }
 
-TEST_CASE("reclamation moves the backlog, it does not shrink it") {
+TEST_CASE("a bridge channel's reclamation moves the backlog, it does not shrink it") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -705,7 +705,7 @@ TEST_CASE("reclamation moves the backlog, it does not shrink it") {
     CHECK(P::live(ch) == live_when_failed); // queue() on a failed channel is still a no-op
 }
 
-TEST_CASE("a failed channel neither sends nor reclaims") {
+TEST_CASE("a failed bridge channel neither sends nor reclaims") {
     using P = BridgeChannelStorageProbe;
     const TinyPair fds = tiny_pair();
     BridgeChannel ch(static_cast<socket_t>(fds.producer));
@@ -790,8 +790,8 @@ TEST_CASE("an over-length frame is refused, and EOF arrives whole") {
     }
 }
 
-TEST_CASE("the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed "
-              "history") {
+TEST_CASE("a bridge channel's RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins "
+              "no consumed history") {
     // The inbox reclaims decoded bytes unconditionally (`inbox_.erase(0, pos)`), so a permanently
     // incomplete suffix does NOT pin consumed history in place: measured here, not assumed. The
     // partial suffix is a GENUINE prefix of the next frame; junk would merely desync the framer,
