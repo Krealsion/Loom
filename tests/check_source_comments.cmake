@@ -34,7 +34,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/hook_return/hook_enum[.]cpp$"
     "^tests/hook_return/hook_int[.]cpp$"
     "^tests/hook_return/hook_void[.]cpp$"
-    "^tests/package/witness_protocol[.]hpp$"
     "^tests/run-under-scope[.]sh$"
     "^tests/session/lifecycle/asks[.]py$"
     "^tests/session/lifecycle/cleanup[.]py$"
