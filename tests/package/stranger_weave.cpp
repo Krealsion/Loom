@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// A REAL loadable weave, written by a stranger against the installed package.
-//
-// Deliberately in a NAMED namespace. Most of Loom's own weave fixtures hide their
-// shapes in an anonymous one, where internal linkage means schema_of<T>()'s statics
-// can never take the vague-linkage binding that KERN-05's build contract exists to
-// mitigate -- so those fixtures cannot exercise it. A stranger writes ordinary
-// namespaced code, which is exactly the shape that found F-22 in the first place.
+// A REAL loadable weave, written by a stranger against the installed package, in a NAMED
+// namespace: most of Loom's own fixtures hide their shapes in an anonymous one, where
+// schema_of<T>()'s statics can never take the vague-linkage binding KERN-05's build contract
+// exists for. Ordinary namespaced code is exactly the shape that binding reaches.
 
 #include "witness_protocol.hpp"
 
@@ -39,7 +36,6 @@ public:
 
 } // namespace witness
 
-// The one line that generates the whole C ABI -- and the one that produced
-// `C2375: 'zen_weave_abi': redefinition; different linkage` under MSVC before the
-// export decoration moved beside the declaration in <zen/kernel/abi.h>.
+// The one line that generates the whole C ABI. Under MSVC it compiles because the export
+// decoration sits beside the declaration in <zen/kernel/abi.h>, not at this definition.
 ZEN_EXPORT_WEAVE(witness::Witness)
