@@ -192,3 +192,4 @@ tests/test_registry.cpp	BL-0: release is idempotent, and a scope may be reused	r
 tests/test_registry.cpp	BL-0: a scope belongs to one Registry, and outliving it is harmless	a scope belongs to one Registry, and outliving it is harmless
 tests/test_registry.cpp	BL-0: a long run of distinct claimants does not grow the population	a long run of distinct claimants does not grow the population
 tests/test_registry.cpp	BL-0: reads stay safe while claims are acquired AND released	reads stay safe while claims are acquired AND released
+tests/test_compat.cpp	an unknown field in the payload is now rejected (UnknownField)	an unknown field in the payload is rejected (UnknownField)

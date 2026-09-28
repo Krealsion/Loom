@@ -31,7 +31,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_PENDING
     "^tests/test_breathing[.]cpp$"
     "^tests/test_capabilities[.]cpp$"
-    "^tests/test_compat[.]cpp$"
     "^tests/test_dispatch_loaded[.]cpp$"
     "^tests/test_dispatch_refusal[.]cpp$"
     "^tests/test_gate[.]cpp$"
