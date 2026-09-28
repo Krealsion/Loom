@@ -176,3 +176,19 @@ tests/test_history_logger.cpp	RTH-1a: a corrupt durable stream is refused by the
 tests/test_history_logger.cpp	RTH-1a: a selected fact with nowhere to go is counted, never pretended	a selected fact with nowhere to go is counted, never pretended
 tests/test_history_logger.cpp	RTH-1a: logging changes what is remembered and nothing about delivery	logging changes what is remembered and nothing about delivery
 tests/test_history_logger.cpp	RTH-1a: the log dump names every record's ORIGIN before its content	the log dump names every record's ORIGIN before its content
+tests/test_registry.cpp	BL-0: a claimed schema resolves; the final release takes it out of lookup	a claimed schema resolves; the final release takes it out of lookup
+tests/test_registry.cpp	BL-0: two claims, one definition — the first release changes nothing	two claims, one definition — the first release changes nothing
+tests/test_registry.cpp	BL-0: a claim on a conflicting definition refuses, and changes nothing	a claim on a conflicting definition refuses, and changes nothing
+tests/test_registry.cpp	BL-0: a multi-schema acquisition is all or nothing	a multi-schema acquisition is all or nothing
+tests/test_registry.cpp	BL-0: the same shape twice in one request is one claim	the same shape twice in one request is one claim
+tests/test_registry.cpp	BL-0: a null schema in a claim refuses before anything is published	a null schema in a claim refuses before anything is published
+tests/test_registry.cpp	BL-0: register_schema is a claim nobody releases	register_schema is a claim nobody releases
+tests/test_registry.cpp	BL-0: claim_known pins what exists and skips what does not	claim_known pins what exists and skips what does not
+tests/test_registry.cpp	BL-0: an admitted Value outlives the Registry membership of its schema	an admitted Value outlives the Registry membership of its schema
+tests/test_registry.cpp	BL-0: a lookup taken before the final release stays valid after it	a lookup taken before the final release stays valid after it
+tests/test_registry.cpp	BL-0: a claim scope is move-only, and moving it moves the lifetime	a claim scope is move-only, and moving it moves the lifetime
+tests/test_registry.cpp	BL-0: move-assignment acquires before it releases — a handoff has no gap	move-assignment acquires before it releases — a handoff has no gap
+tests/test_registry.cpp	BL-0: release is idempotent, and a scope may be reused	release is idempotent, and a scope may be reused
+tests/test_registry.cpp	BL-0: a scope belongs to one Registry, and outliving it is harmless	a scope belongs to one Registry, and outliving it is harmless
+tests/test_registry.cpp	BL-0: a long run of distinct claimants does not grow the population	a long run of distinct claimants does not grow the population
+tests/test_registry.cpp	BL-0: reads stay safe while claims are acquired AND released	reads stay safe while claims are acquired AND released
