@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// WHO DECIDES WHAT A LOADED ARTIFACT MAY DO (zen/kernel/admission.hpp).
-//
-// Until this suite existed the answer was "the Kernel, always the same way": a
-// three-argument `load` minted `Grant{}.allow_any()` through three separate doors —
-// the direct load, the message-driven control door, and `load_candidate`. Every case
-// here pins one part of the replacement, and each is written so that removing the
-// behaviour makes it RED rather than merely less thorough:
-//
-//   - a Kernel nobody configured admits NOTHING, and says so;
-//   - the policy is asked twice, and the first ask happens before the file is opened;
-//   - the verdict's grant IS the baseline, exactly, and nothing wider;
-//   - a refusal leaves no artifact, no instance and no open library;
-//   - all three doors ask, so closing one does not leave another open;
-//   - a host naming the grant at the call site bypasses the policy, deliberately;
-//   - a reload asks about the NEW bytes, and cannot re-grant (GATE-05).
+// WHO DECIDES WHAT A LOADED ARTIFACT MAY DO (zen/kernel/admission.hpp). Each case is written so
+// that removing the behaviour makes it RED: a Kernel nobody configured admits NOTHING and says
+// so; the policy is asked twice, first before the file is opened; the verdict's grant IS the
+// baseline; a refusal leaves no artifact, instance or open library; all three doors ask; a grant
+// named at the call site bypasses the policy, deliberately; and a reload asks about the NEW bytes
+// and cannot re-grant (GATE-05).
 
 #include <doctest.h>
 
@@ -236,7 +227,6 @@ TEST_CASE("the verdict's grant becomes the baseline, exactly") {
     CHECK(can_answer(bus, t, allowed));
     // Narrow means narrow in BOTH directions: the same shape to another target is not
     // permitted, which is what distinguishes a real grant from a wildcard wearing one.
-    // Before this phase the second line was false for every loaded artifact in Zen.
     CHECK_FALSE(can_answer(bus, t, forbidden));
 }
 
@@ -454,12 +444,9 @@ TEST_CASE("an unreadable file still reaches the policy, named as unidentifiable"
 }
 
 // ---- the cost of identity: paid by the policy that asks, once per operation ---------
-//
-// The Kernel used to hash the whole image before asking any policy — including one that never
-// read the answer — at every door, and Zengine's replacement-timing tests went red under
-// `trust_every_artifact` for that work alone. These cases count the work itself
-// (`file_content_id_scans()`, the one place a file is hashed) rather than a stopwatch, so they
-// say whether identity work HAPPENED, on any machine.
+// Hashing the whole image before asking a policy that never reads the answer would tax every
+// door. These cases count the work itself (`file_content_id_scans()`, the one place a file is
+// hashed) rather than a stopwatch, so they say whether identity work HAPPENED, on any machine.
 
 namespace {
 
@@ -650,9 +637,8 @@ TEST_CASE("the explicit permissive policy has to be asked for by name, and carri
     const LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
     REQUIRE(lr.ok);
 
-    // It is the old default's authority, and nothing more: permissive SENDS, and no
-    // Sense read authority, because "I compiled it" is not "it may read everything
-    // anyone publishes".
+    // It grants permissive SENDS and nothing more: no Sense read authority, because "I compiled
+    // it" is not "it may read everything anyone publishes".
     Registered anyone = register_probe(bus, {sbfx::pong_schema()});
     Registered somebody_else = register_probe(bus, {sbfx::pong_schema()});
     CHECK(can_answer(bus, lr.id, anyone));
