@@ -16,10 +16,12 @@
 # left to Git whole (LEFT_TO_GIT); the checks' registration lines in tests/CMakeLists.txt and their
 # rows in tests/entry_population.txt, when START lacks them; a failure message or exemption
 # reason named below by its START literal, reworded to show no private id or stage name; a CI
-# workflow's whole-line `#` comments. Every other changed file must be markdown or this
-# directory's. Every law pointer (`// MSG-09; docs/laws/messaging-laws.md`, after `//`, `///` or
-# `//!`) must stand where it stood: the same file, above the same code, and once. A pointer written
-# over two lines is not one it sees.
+# workflow's whole-line `#` comments; a TEST_CASE or SUBCASE name the case map (cases.tsv)
+# renames, whose old name is put back before the comparison. Every other changed file must be
+# markdown or this directory's. Every law pointer (`// MSG-09; docs/laws/messaging-laws.md`, after
+# `//`, `///` or `//!`) must stand where it stood: the same file, above the same code, and once. A
+# pointer written over two lines is not one it sees. Every map row must have landed: its old name
+# once at START, its new name once now, and the old name quoted in no current-facing document.
 
 import argparse
 import collections
@@ -31,6 +33,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cases  # noqa: E402
 import grammar as grammar_mod  # noqa: E402
 import lex  # noqa: E402
 
@@ -259,6 +262,59 @@ def new_lines_for(path, start_text):
     return []
 
 
+CASE_FILES = re.compile(r"^tests/.*\.(h|hpp|ipp|inl|c|cc|cpp|cxx)$")
+DOC_FROZEN = ("docs/history/", "archive/", "tests/third_party/")
+
+
+def canonical(path, text, back=None):
+    """A test file with each case's name as one literal right after its `(`, however the source
+    wraps it; with `back` ({new: old}), a renamed case's old name put back. Returns (text, the
+    names put back)."""
+    if not CASE_FILES.match(path):
+        return text, []
+    found = cases.cases_in(path, text)
+    put, parts, pos = [], [], 0
+    for c in found:
+        name = c.name
+        if back and name in back:
+            name = back[name]
+            put.append(c.name)
+        opening = text.rfind("(", 0, c.pieces[0][0]) + 1
+        parts.append(text[pos:opening] + '"%s"' % name)
+        pos = c.pieces[-1][1]
+    parts.append(text[pos:])
+    return "".join(parts), put
+
+
+def map_verdicts(repo, rows, start_text, end_text):
+    """Failures: every row's old name must be once in its file at START and nowhere now, its new
+    name once now, and the old name quoted in no current-facing document."""
+    failures = []
+    names_at = {}
+    for (rel, old), new in sorted(rows.items()):
+        if rel not in start_text or rel not in end_text:
+            failures.append("%s: the case map names a file the proof does not hold" % rel)
+            continue
+        if rel not in names_at:
+            names_at[rel] = ([c.name for c in cases.cases_in(rel, start_text[rel])],
+                             [c.name for c in cases.cases_in(rel, end_text[rel])])
+        was, now = names_at[rel]
+        if was.count(old) != 1:
+            failures.append("%s: the map renames %r, named by %d START cases" % (rel, old[:60], was.count(old)))
+        if now.count(new) != 1 or old in now:
+            failures.append("%s: the map's rename of %r has not landed once (new name %d times, old "
+                            "%d times)" % (rel, old[:60], now.count(new), now.count(old)))
+    docs = [p for p in git_lines(repo, "ls-files") if p.endswith(".md") and not p.startswith(DOC_FROZEN)]
+    olds = {old for (_, old) in rows}
+    for p in docs:
+        with open(os.path.join(repo, p), encoding="utf-8") as f:
+            text = re.sub(r"\s+", " ", f.read())
+        for old in olds:
+            if old in text:
+                failures.append("%s: quotes the renamed case %r" % (p, old[:60]))
+    return failures
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -312,10 +368,15 @@ def main():
                 failures.append("%s: its manifest reading changed; restate it here" % check)
     compared = 0
     laws_start, laws_added, laws_single = 0, [], []
+    rows = cases.read_map()
+    ends, renamed = {}, collections.Counter()
     for p in sorted(start & end):
         with open(os.path.join(repo, p), encoding="utf-8", newline="") as f:
-            end_text = f.read().replace("\r\n", "\n")
-        law_failures, added, single = law_changes(p, start_text[p], end_text)
+            end_text = ends[p] = f.read().replace("\r\n", "\n")
+        start_p, _ = canonical(p, start_text[p])
+        end_text, put = canonical(p, end_text, {new: old for (f, old), new in rows.items() if f == p})
+        renamed[p] += len(put)
+        law_failures, added, single = law_changes(p, start_p, end_text)
         failures.extend(law_failures)
         laws_added.extend(added)
         laws_single.extend(single)
@@ -327,7 +388,7 @@ def main():
                             if d[:1] in "+-" and d[:3] not in ("+++", "---")]
             continue
         if p in REWORDED:
-            end_text, pairs, refused = put_back(p, start_text[p], end_text)
+            end_text, pairs, refused = put_back(p, start_p, end_text)
             reworded.extend((p, was, now) for was, now in pairs)
             if refused:
                 failures.append("%s: %s" % (p, refused))
@@ -335,12 +396,15 @@ def main():
         if new:
             added_lines[p] = new
         compared += 1
-        why = compare(p, start_text[p], end_text, new)
+        why = compare(p, start_p, end_text, new)
         if why:
             failures.append("%s: %s" % (p, why))
+    failures.extend(map_verdicts(repo, rows, start_text, ends))
     print("prove: %d C/C++, CMake and manifest files compared, START %s against the working tree; "
           "%d law pointers at START, each still above the same code, once" % (
               compared, args.start, laws_start))
+    print("prove: the case map (%d rows) put back %d renamed case names in %d files before comparing" % (
+        len(rows), sum(renamed.values()), sum(1 for n in renamed.values() if n)))
     for p, n in workflows:
         print("prove: %s changed its whole-line comments only: %d other lines, identical" % (p, n))
     for key in laws_added:
@@ -376,7 +440,9 @@ def main():
 DEMO_EDITS = (("one-token change", True), ("literal change", True), ("comment-only change", False),
               ("an open bracket in a manifest comment", True),
               ("a non-ASCII byte in a manifest comment", True),
-              ("a law pointer repeated", True), ("a law pointer dropped", True))
+              ("a law pointer repeated", True), ("a law pointer dropped", True),
+              ("a case name changed outside the map", True),
+              ("the map's renames, read without the map", True))
 
 
 def mutations(path, text, start_text=""):
@@ -434,29 +500,43 @@ def mutations(path, text, start_text=""):
 def demo(repo, start_text, path):
     """Edits to one END file, in memory: a code token and a literal must be caught, a comment-only
     edit must not be, and in a manifest so must the two comment edits that change what its check
-    reads. A reworded file's named literals are put back first, as the proof puts them back."""
+    reads. A reworded file's named literals and a renamed case's old name are put back first, as
+    the proof puts them back; in a test file, a case renamed outside the map must be caught, and so
+    must the map's own renames when the map is not read."""
     if path not in start_text:
         print("demo: %s is not a START file" % path)
         return 1
     with open(os.path.join(repo, path), encoding="utf-8") as f:
-        end_text = f.read()
+        raw = f.read().replace("\r\n", "\n")
+    start_p, _ = canonical(path, start_text[path])
+    back = {new: old for (f, old), new in cases.read_map().items() if f == path}
+    end_text, put = canonical(path, raw, back)
+    if put:
+        print("demo: %d renamed case name(s) put back in %s first" % (len(put), path))
     if path in REWORDED:
-        end_text, pairs, refused = put_back(path, start_text[path], end_text)
+        end_text, pairs, refused = put_back(path, start_p, end_text)
         if refused:
             print("demo: %s: %s" % (path, refused))
             return 1
         print("demo: %d named literal(s) put back in %s first" % (len(pairs), path))
     new = new_lines_for(path, start_text[path])
-    edits = mutations(path, end_text, start_text[path])
+    edits = mutations(path, end_text, start_p)
+    found = cases.cases_in(path, end_text) if CASE_FILES.match(path) else []
+    if found:
+        c = found[len(found) // 2]
+        s = c.pieces[0][0] + 1
+        edits["a case name changed outside the map"] = end_text[:s] + "z" + end_text[s:]
+    if put:
+        edits["the map's renames, read without the map"] = canonical(path, raw)[0]
     ok = tried = 0
     for what, want in DEMO_EDITS:
         if what not in edits:
-            if "manifest" not in what or path in MANIFESTS:
+            if ("manifest" not in what or path in MANIFESTS) and "map" not in what:
                 print("demo: %s: %s has nothing to change" % (what, path))
             continue
         tried += 1
-        why = compare(path, start_text[path], edits[what], new) or next(
-            iter(law_changes(path, start_text[path], edits[what])[0]), None)
+        why = compare(path, start_p, edits[what], new) or next(
+            iter(law_changes(path, start_p, edits[what])[0]), None)
         caught = why is not None
         print("demo: %s in %s: %s%s" % (what, path, "caught" if caught else "not a difference",
                                        (" -- " + why) if why else ""))

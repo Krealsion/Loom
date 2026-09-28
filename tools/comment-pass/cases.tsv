@@ -1,0 +1,5 @@
+# The case map: one row per renamed TEST_CASE or SUBCASE -- its file, its old name, its new name,
+# tab-separated, each name as the source spells it with its literals joined. It is the one owner
+# of a rename: cases.py applies it, prove.py puts each old name back before it compares, and a
+# rename it does not hold is a difference. A row struck with a leading `#` is not applied. It
+# holds the rows of one pull request; earlier rows are in Git and in their report.
