@@ -94,6 +94,8 @@ REWORDED = {
         '"R2B-1a: the lifecycle mint must not be a reachable static factory"',
         '"R2B-1a: the lifecycle mint must be private to the Switchboard"',
         '"R2B-1a: LifecycleAuthority must not be default-constructible"'),
+    "tests/package/stranger_history.cpp": (
+        '"stranger history witness (RTH-1a: the two halves, through the package)\\n"',),
 }
 # Test data renamed because it carried a plan code or a private id: in each file, every use of the
 # START value is the new one now, in literals and code alike, and the START value is left in no
