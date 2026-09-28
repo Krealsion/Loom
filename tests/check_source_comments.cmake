@@ -26,9 +26,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
     python tools/basics tools/loom-session tools/loom-session.cmd)
 set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
-# Files not yet brought to the standard, as regular expressions over the repository-relative
-# path. The list only shrinks: a file leaves it when its comments meet the standard.
-set(ZEN_COMMENT_PENDING)
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
@@ -380,14 +377,12 @@ function(zen_comments_kind rel out)
     set(${out} ${kind} PARENT_SCOPE)
 endfunction()
 
-# Whether a path is held: not vendored, not pending.
+# Whether a path is held: every first-party file is, and vendored code never is.
 function(zen_comments_held rel out)
     set(held TRUE)
-    foreach(pattern IN LISTS ZEN_COMMENT_EXCLUDED ZEN_COMMENT_PENDING)
-        if(rel MATCHES "${pattern}")
-            set(held FALSE)
-        endif()
-    endforeach()
+    if(rel MATCHES "${ZEN_COMMENT_EXCLUDED}")
+        set(held FALSE)
+    endif()
     set(${out} ${held} PARENT_SCOPE)
 endfunction()
 
@@ -417,13 +412,10 @@ endforeach()
 list(REMOVE_DUPLICATES found_under_roots)
 list(SORT found_under_roots)
 set(population "")
-set(pending_count 0)
 foreach(rel IN LISTS found_under_roots)
     zen_comments_held("${rel}" held)
     if(held)
         list(APPEND population "${rel}")
-    elseif(NOT rel MATCHES "${ZEN_COMMENT_EXCLUDED}")
-        math(EXPR pending_count "${pending_count} + 1")
     endif()
 endforeach()
 list(LENGTH population population_count)
@@ -508,10 +500,9 @@ function(zen_comments_expect_path rel want_held want_kind want_installed)
                             "${installed}; want ${want_held} as ${want_kind}, installed ${want_installed}")
     endif()
 endfunction()
-set(ZEN_COMMENT_PENDING_KEPT "${ZEN_COMMENT_PENDING}")
-set(ZEN_COMMENT_PENDING "^src/")
 zen_comments_expect_path(tests/third_party/doctest.h FALSE cxx FALSE)
-zen_comments_expect_path(src/kernel/kernel.cpp FALSE cxx FALSE)
+zen_comments_expect_path(src/kernel/kernel.cpp TRUE cxx FALSE)
+zen_comments_expect_path(tests/test_kernel.cpp TRUE cxx FALSE)
 zen_comments_expect_path(CMakeLists.txt TRUE cmake FALSE)
 zen_comments_expect_path(cmake/loomConfig.cmake.in TRUE cmake FALSE)
 zen_comments_expect_path(tests/suite_population.txt TRUE manifest FALSE)
@@ -523,7 +514,6 @@ zen_comments_expect_path(python/loom_session/tool.py TRUE script FALSE)
 zen_comments_expect_path(tools/loom-session TRUE script FALSE)
 zen_comments_expect_path(tools/loom-session.cmd TRUE cmd FALSE)
 zen_comments_expect_path(tests/run-under-scope.sh TRUE script FALSE)
-set(ZEN_COMMENT_PENDING "${ZEN_COMMENT_PENDING_KEPT}")
 zen_comments_install_excludes("" nothing)
 if(NOT nothing STREQUAL "NOTFOUND")
     message(FATAL_ERROR "source-comments: self-test 'no install call' found '${nothing}'")
@@ -590,7 +580,7 @@ list(LENGTH all_cases test_case_count)
 
 list(LENGTH findings finding_count)
 message(STATUS "source-comments: ${population_count} files held under ${ZEN_COMMENT_ROOTS}, "
-               "${lines_read} lines read; ${pending_count} files not yet held (ZEN_COMMENT_PENDING); "
+               "${lines_read} lines read; "
                "${installed_count} installed headers exempt from the ${ZEN_COMMENT_BLOCK_LIMIT}-line "
                "block rule; ${names_read} case names read, ${test_case_count} of them TEST_CASEs; "
                "self-test passed")

@@ -86,10 +86,9 @@ refuses:
   current-facing text file, whether it is spelled out or reached by climbing above it with `../`.
 
 What a private id is, `tests/private_ids.cmake` says once for both. Every current-facing
-document meets this standard; source files not yet brought to it are listed in
-`source_comments`, and the list only shrinks. No check can see history or a private process
-written in words, read a C/C++ or CMake string other than a case name, or read a comment for
-truth; that is a reviewer's.
+document and every first-party source file is held to this standard; vendored code is not. No
+check can see history or a private process written in words, read a C/C++ or CMake string other
+than a case name, or read a comment for truth; that is a reviewer's.
 `tools/comment-pass/` measures, prints and proves a comment pass (`census.py`, `blocks.py`,
 `edit.py`, `prove.py`); a renamed test case is renamed through its case map (`cases.tsv`, applied
 by `cases.py`), which the proof reads.
