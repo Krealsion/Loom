@@ -116,6 +116,8 @@ RENAMED_VALUES = {
         ("/zen-c2a-nonexistent-preload.so", "/zen-nonexistent-preload.so"),
         ('"c2a"', '"envprobe"'),
         ('"c2"', '"fdprobe"')),
+    "tests/test_bridge.cpp": (("R2FA.Nothing", "Wire.Nothing"), ("R2FA.Bulk", "Wire.Bulk")),
+    "tests/test_serialize.cpp": (("R2FA.", "Wire."),),
 }
 # The one assertion the pass changes, named by its START and END code, each once in its file: a
 # letter whose author was removed is refused SenderLifeEnded (MSG-03), never CapabilityDenied.

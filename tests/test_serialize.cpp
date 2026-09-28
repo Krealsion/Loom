@@ -87,14 +87,14 @@ void put_varint(std::string& out, std::uint64_t v) {
 // legitimate shape, not a malformation, which is exactly why the repair may not
 // simply outlaw it.
 std::shared_ptr<const Schema> nothing_schema() {
-    static const auto s = SchemaBuilder("R2FA.Nothing", 1).build();
+    static const auto s = SchemaBuilder("Wire.Nothing", 1).build();
     return s;
 }
 
 // { items: List<Nothing> } — the amplification carrier.
 std::shared_ptr<const Schema> nothing_list_schema() {
     static const auto s =
-        SchemaBuilder("R2FA.NothingList", 1).list("items", type_message(nothing_schema())).build();
+        SchemaBuilder("Wire.NothingList", 1).list("items", type_message(nothing_schema())).build();
     return s;
 }
 
@@ -109,7 +109,7 @@ std::string nothing_list_bytes(std::uint64_t count) {
 // { a: List<Nothing>?, b: List<Nothing>? } — two independently modest lists, for
 // proving the budget is one shared allowance and not one allowance per container.
 std::shared_ptr<const Schema> two_lists_schema() {
-    static const auto s = SchemaBuilder("R2FA.TwoLists", 1)
+    static const auto s = SchemaBuilder("Wire.TwoLists", 1)
                               .list("a", type_message(nothing_schema()), /*required=*/false)
                               .list("b", type_message(nothing_schema()), /*required=*/false)
                               .build();
@@ -139,7 +139,7 @@ std::string two_lists_bytes(std::optional<std::uint64_t> a, std::optional<std::u
 // A two-field message, both optional, so an element costs exactly one wire byte
 // (its presence bitmask) and exactly two decoded cells (its slot vector).
 std::shared_ptr<const Schema> pair_schema() {
-    static const auto s = SchemaBuilder("R2FA.Pair", 1)
+    static const auto s = SchemaBuilder("Wire.Pair", 1)
                               .field("x", Kind::Int, /*required=*/false)
                               .field("y", Kind::Int, /*required=*/false)
                               .build();
@@ -148,7 +148,7 @@ std::shared_ptr<const Schema> pair_schema() {
 
 std::shared_ptr<const Schema> pair_list_schema() {
     static const auto s =
-        SchemaBuilder("R2FA.PairList", 1).list("items", type_message(pair_schema())).build();
+        SchemaBuilder("Wire.PairList", 1).list("items", type_message(pair_schema())).build();
     return s;
 }
 
