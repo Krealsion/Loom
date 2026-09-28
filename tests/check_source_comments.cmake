@@ -37,7 +37,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/hook_return/hook_int[.]cpp$"
     "^tests/hook_return/hook_void[.]cpp$"
     "^tests/observe_far/probe_protocol[.]hpp$"
-    "^tests/package/macro_surface[.]cpp$"
     "^tests/package/stranger_weave[.]cpp$"
     "^tests/package/witness_protocol[.]hpp$"
     "^tests/run-under-scope[.]sh$"

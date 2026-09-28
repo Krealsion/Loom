@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE PUBLIC MACRO SURFACE, COMPILED AS A STRANGER.
-//
-// Every form of ZEN_SHAPE / ZEN_EXPOSE / ZEN_HIDE, including BOTH zero-argument
-// spellings -- which is the exact dispatch that MSVC's traditional preprocessor
-// cannot perform. Built against find_package(loom) with NO consumer-written
-// compiler switch: if the installed package stops carrying its own preprocessor
-// requirement, this file is where a stranger finds out, and it is the same place
-// the founder's Zengine build found out.
-//
-// It ASSERTS rather than merely compiles. A macro surface that expands to
-// something that builds but tags the wrong fields would otherwise pass a
+// THE PUBLIC MACRO SURFACE, COMPILED AS A STRANGER: every form of ZEN_SHAPE / ZEN_EXPOSE /
+// ZEN_HIDE, BOTH zero-argument spellings included (the dispatch MSVC's traditional
+// preprocessor cannot perform), built against find_package(loom) with no consumer-written
+// compiler switch, so a package that stops carrying its own preprocessor requirement fails
+// here. It ASSERTS the tags: a surface that builds but tags the wrong fields would pass a
 // compile-only witness.
 
 #include "witness_protocol.hpp"
