@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // A real Weave, a plain loom::Weave subclass shipped as a .so with one ZEN_EXPORT_WEAVE line.
-// tests/CMakeLists.txt builds it once per ZEN_WEAVE_* variant below; each variant's behaviour
-// is described at its branch in this file.
+// tests/CMakeLists.txt builds it many times, each under one or more of the ZEN_WEAVE_* switches
+// below; each switch's behaviour is described at its branch in this file.
 
 // The kernel's harness: MALFORMED_SNAPSHOT and MALFORMED_MESSAGE drop a required field;
 // STATE_V2 bumps the state schema; THROW_ON_MAGIC throws on seq 0xDEAD, caught at the
