@@ -182,3 +182,20 @@ tests/test_provenance.cpp	R2B-2c: changing one requester does not invalidate an 
 tests/test_provenance.cpp	R2B-2c: WeaveIds are never reused, so a later participant cannot inherit an earlier one's conversation by numbering	WeaveIds are never reused, so a later participant cannot inherit an earlier one's conversation by numbering
 tests/test_provenance.cpp	R2B-2c: a SWAP successor holds a different WeaveId, so an answer owed to its predecessor cannot reach it	a SWAP successor holds a different WeaveId, so an answer owed to its predecessor cannot reach it
 tests/test_provenance.cpp	R2B-2c: a replayed raw envelope carries no target expectation, because it carries no private provenance at all	a replayed raw envelope carries no target expectation, because it carries no private provenance at all
+tests/test_bridge.cpp	R2F-C (bridge): a channel that is never idle still reclaims what it has already sent	a channel that is never idle still reclaims what it has already sent
+tests/test_bridge.cpp	R2F-C (bridge): frames queued behind a half-sent one keep their order and their bytes	frames queued behind a half-sent one keep their order and their bytes
+tests/test_bridge.cpp	R2F-C (bridge): reclamation moves the backlog, it does not shrink it	reclamation moves the backlog, it does not shrink it
+tests/test_bridge.cpp	R2F-C (bridge): a failed channel neither sends nor reclaims	a failed channel neither sends nor reclaims
+tests/test_bridge.cpp	R2F-C (bridge): an over-length frame is still refused, and EOF still arrives whole	an over-length frame is refused, and EOF arrives whole
+tests/test_bridge.cpp	R2F-C (bridge): the RECEIVE buffer was never part of F-18	the RECEIVE buffer reclaims decoded bytes, so an incomplete suffix pins no consumed history
+tests/test_bridge.cpp	RTH-1a: a handler that fails reaches a REMOTE operator as HandlerFailed, not Delivered	a handler that fails reaches a REMOTE operator as HandlerFailed, not Delivered
+tests/test_bridge.cpp	R2F-A (end-to-end): a compact frame cannot command an unbounded host decode	a compact frame cannot command an unbounded host decode
+tests/test_bridge.cpp	R2E-0: a bridge host with a bounded turn stays responsive while a perpetual service runs — no fake yield message, no second thread, FIFO intact	a bridge host with a bounded turn stays responsive while a perpetual service runs — no fake yield message, no second thread, FIFO intact
+tests/test_bridge.cpp	R2E-0: set_bounded_dispatch needs no number — the backlog at entry bounds the turn, and the perpetual service keeps running	set_bounded_dispatch needs no number — the backlog at entry bounds the turn, and the perpetual service keeps running
+tests/test_bridge.cpp	R2E-0: unbounded is the pre-existing contract — step() still drains to empty	unbounded is the default contract — step() drains to empty
+tests/test_bridge.cpp	C-1 (bridge): the remote tap and reply buffer are bounded windows, with stable labels	the remote tap and reply buffer are bounded windows, with stable labels
+tests/test_bridge.cpp	C-1 (bridge): the absent-schema memo is bounded — a host cannot grow it forever	the absent-schema memo is bounded — a host cannot grow it forever
+tests/test_bridge.cpp	operator-protocol: discovery, a gate-sent message, and the reply buffer cross the wire	bridge protocol: discovery, a gate-sent message, and the reply buffer cross the wire
+tests/test_bridge.cpp	operator-protocol: the sender is stamped from the connection — a FORGED wire sender loses	bridge protocol: the sender is stamped from the connection — a FORGED wire sender loses
+tests/test_bridge.cpp	operator-protocol: a vanished peer is reaped as an event (the server unregisters its proxy)	bridge protocol: a vanished peer is reaped as an event (the server unregisters its proxy)
+tests/test_bridge.cpp	operator-protocol: a SIGKILLed operator PROCESS is reaped as an event (two real processes)	bridge protocol: a SIGKILLed operator PROCESS is reaped as an event (two real processes)
