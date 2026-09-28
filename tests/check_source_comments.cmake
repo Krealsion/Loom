@@ -113,7 +113,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/observe_probe_vocab[.]cpp$"
     "^tests/weavelib/office_protocol[.]hpp$"
     "^tests/weavelib/office_worker[.]cpp$"
-    "^tests/weavelib/prepared_replacement_protocol[.]hpp$"
     "^tests/weavelib/stale_abi[.]cpp$"
     "^tests/weavelib/storage_broker[.]cpp$"
     "^tests/weavelib/storage_client[.]cpp$"
