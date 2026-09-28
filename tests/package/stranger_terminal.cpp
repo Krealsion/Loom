@@ -1,19 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE STRANGER'S TERMINAL — a second presentation, built outside Loom's
-// build tree, reaching the terminal core only through `find_package(loom)`.
-//
-// The Workshop-readiness claim is that a presentation which is not in this
-// repository can own a terminal participant, drive it, and render its transcript
-// without parsing console strings or acquiring host authority. This file is that
-// claim, made falsifiable: it is what a Workshop pane would do, minus the pane.
-//
-// It links `loom::terminal` and nothing that is not exported. If the terminal
-// core ever stops being reachable that way — a header left out of the install, a
-// target dropped from the export set, a public type that needs an unexported
-// one — this fails to configure or to compile, on the DEFAULT path, which is
-// exactly where that mistake should surface.
+// THE STRANGER'S TERMINAL: a second presentation, built outside Loom's build tree, that owns a
+// terminal participant, drives it and renders its transcript through `find_package(loom)`
+// alone, without parsing console strings or acquiring host authority: what an application's
+// pane would do, minus the pane. It links `loom::terminal` and nothing unexported, so a header
+// left out of the install, a target dropped from the export set or a public type needing an
+// unexported one fails to configure or compile here, on the DEFAULT path.
 
 #include <zen/host/terminal_wiring.hpp>
 #include <zen/switchboard.hpp>
@@ -109,12 +102,10 @@ int main() {
         bus.register_weave(std::move(oracle), std::move(oracle_grant), "oracle");
     oracle_raw->zen_set_self(oracle_id);
 
-    // 3. THE COMMAND GRAMMAR IS LOOM'S, and a stranger gets it through the package (WT-1).
-    //
-    // A presentation that had to re-author `#N` / `@office` / `*` would be a second grammar
-    // pretending to be the first, and this witness is the only lane that can tell whether the
-    // shared one is actually REACHABLE from outside the build tree -- a header left out of the
-    // install fails right here rather than in a downstream repository.
+    // 3. THE COMMAND GRAMMAR IS LOOM'S, and a stranger gets it through the package: a
+    // presentation that re-authored `#N` / `@office` / `*` would be a second grammar pretending
+    // to be the first, and only this witness can tell whether the shared one is REACHABLE from
+    // outside the build tree.
     loom::Address to;
     ok(loom::parse_address("@oracle", to) && to.mode == loom::Addressing::Role &&
            to.role == "oracle",
@@ -137,12 +128,9 @@ int main() {
     ok(!session.session->awaiting(), "the answer settled the ask");
     ok(oracle_raw->heard_from == session.id, "the service heard the PARTICIPANT, not the host");
 
-    // 5b. THE RECORD BEHIND THAT `awaiting()` IS ITSELF PART OF THE PACKAGE (FRIC-2).
-    //
-    // A stranger writing an ordinary weave -- no terminal anywhere near it -- needs the same
-    // two facts the session just used, and it should not have to rewrite them. This is the
-    // only lane that can say whether `loom::AskBook` is REACHABLE through `find_package`
-    // rather than merely present in the source tree.
+    // 5b. THE RECORD BEHIND THAT `awaiting()` IS PART OF THE PACKAGE: an ordinary weave needs
+    // the same two facts the session just used, and only this lane can say whether
+    // `loom::AskBook` is REACHABLE through `find_package` rather than present in the source tree.
     loom::AskBook book(2);
     const loom::AskOpened opened = book.open(oracle_id, "Question", 1);
     ok(static_cast<bool>(opened) && opened.correlation != 0,
@@ -155,8 +143,8 @@ int main() {
     ok(closed.has_value() && closed->shape == "Question" && !book.awaiting(),
        "...and the pair closes it, handing back the record it closed");
 
-    // Existing aggregate initialization keeps its field positions; the optional
-    // attempt is appended, so an older source consumer has no migration burden.
+    // Aggregate initialization keeps its field positions, the optional attempt last, so a
+    // consumer's aggregate written without it still compiles.
     const loom::PendingAsk legacy{1, 2, oracle_id, {}, "Question", 1};
     ok(legacy.respondent == oracle_id && legacy.shape == "Question" && legacy.attempt == 0,
        "existing PendingAsk aggregate source remains usable without an attempt binding");
