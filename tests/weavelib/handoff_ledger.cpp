@@ -1,29 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE HANDOFF GARDEN'S LEDGER: one source, two REAL artifacts whose
-// state schemas are genuinely incompatible.
-//
-//   v1  (default)              LedgerV1{next_id, total, mode}
-//   v2  (ZEN_HANDOFF_V2)       LedgerV2{ids{high_water}, totals{count,sum},
-//                                       modes:List<ModeFlag>}
-//
-// One source, for the same reason the versioned.service pair is one source: the
-// artifact that prepares must be the artifact that goes live.
-//
-// WHAT EACH KNOWS HOW TO DO, and what it deliberately does not:
-//
-//   v1  accepts the OLD protocol (AddV1). It also accepts Quiesce — the FIFO
-//       handoff boundary — after which it refuses production by DOMAIN POLICY
-//       and says so. Loom chose none of that; this weave did.
-//   v2  accepts the NEW protocol (AddV2) and does NOT accept AddV1 at all. Old
-//       traffic aimed at it after the role moves refuses as NotAccepted, which
-//       is the honest outcome: Loom does not know whether an old command still
-//       means anything, so it does not pretend to.
-//
-// Both declare Claims<LedgerStatus>, so the role-bound Sense view is continuous
-// across the replacement — which is what makes "the predecessor's claim is never
-// relabelled as the successor's" a real question here.
+// The handoff fixtures' ledger: one source, two REAL artifacts with incompatible state (v1,
+// the default: LedgerV1; v2, ZEN_HANDOFF_V2: LedgerV2), one source because the artifact that
+// prepares must be the one that goes live. v1 accepts the OLD protocol (AddV1) and Quiesce, the
+// FIFO boundary after which it refuses production by DOMAIN POLICY; v2 accepts only the NEW
+// one (AddV2), so old traffic aimed at it refuses as NotAccepted. Both claim LedgerStatus, so
+// the role-bound Sense view is continuous across the replacement.
 
 #include "handoff_protocol.hpp"
 
@@ -56,13 +39,10 @@ class LedgerV2Weave
                        Accept<Issue, AddV2, AdoptMigrated, Describe, loom::Activated>, Emit<Issued>,
                        Claims<LedgerStatus>> {
 public:
-    /// THE PREPARATION CONVERSATION. The candidate is asked to adopt a migrated
-    /// v2 value; it answers for itself, through the ordinary answer rail, so the
-    /// coordinator's readiness verdict rests on an authenticated statement.
-    ///
-    /// NOTE WHAT IS NOT HAPPENING: no gate is being taught to transcode. The
-    /// value arriving here is ALREADY a valid LedgerV2 — an explicit actor made
-    /// it one. If it were not, this delivery would never have happened.
+    /// THE PREPARATION CONVERSATION: asked to adopt a migrated v2 value, the candidate answers
+    /// for itself through the ordinary answer rail, so readiness rests on an authenticated
+    /// statement. No gate transcodes: the value is ALREADY a valid LedgerV2, made one by an
+    /// explicit actor, or this delivery would never have happened.
     void on(const AdoptMigrated& m, Mail& mail) {
         // A candidate may still refuse: adopting a namespace that has already
         // been overtaken would mint duplicate identities, and this service would
@@ -151,15 +131,11 @@ public:
         claim_status(mail);
     }
 
-    /// THE FIFO HANDOFF BOUNDARY. Everything delivered before this was handled
-    /// under ordinary policy; everything after meets the policy chosen below.
-    ///
-    /// THE DOMAIN'S CHOICE, recorded here because Loom makes none: this ledger
-    /// REFUSES post-boundary production. It could equally have deferred,
-    /// buffered, redirected through an adapter, or degraded — those are all
-    /// legitimate, and the substrate would support any of them identically. This
-    /// one refuses because a ledger that keeps minting identities after handing
-    /// its namespace away is the failure the namespace witness exists to catch.
+    /// THE FIFO HANDOFF BOUNDARY: everything before it was handled under ordinary policy, and
+    /// everything after meets THE DOMAIN'S CHOICE (Loom makes none). This ledger REFUSES
+    /// post-boundary production; deferring, buffering, redirecting or degrading would be as
+    /// legitimate. It refuses because a ledger minting identities after handing its namespace
+    /// away is the failure the namespace witness exists to catch.
     void on(const Quiesce&, Mail& mail) {
         quiesced_ = true;
         // The final authored value is simply the state as of this exact FIFO
