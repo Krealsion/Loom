@@ -1,19 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The office worker — the office-authorship dynamic-parity fixture (MSG-07).
-//
-// A loadable weave that exercises every half of role authorship from the FAR
-// side of the C ABI seam, through the exact same C++ surface a native weave
-// uses: `mail.as_role(...)` outbound, `mail.authored_from_role(...)` inbound.
-// It is deliberately obedient and deliberately unprivileged: it does whatever
-// OfficeCommand asks — including asking to speak for an office it does not
-// hold — and reports what actually happened, so the suite measures the HOST's
-// verdicts, not the fixture's manners.
-//
-// The host loads it under the role "worker.a". Nothing in this source claims
-// that role as an identity: every act is a REQUEST the host verifies at the
-// authorship moment, which is the entire dynamic outgoing law.
+// The office worker, the office-authorship dynamic-parity fixture (MSG-07): a loadable weave
+// exercising both halves of role authorship from the FAR side of the C ABI seam, through the
+// C++ surface a native weave uses (`mail.as_role(...)`, `mail.authored_from_role(...)`).
+// Obedient and unprivileged, it does whatever OfficeCommand asks, offices it does not hold
+// included, and reports what happened, so the suite measures the host's verdicts. It is loaded
+// under role "worker.a", and every act is a REQUEST the host verifies at the authorship moment.
 
 #include "office_protocol.hpp"
 
