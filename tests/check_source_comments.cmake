@@ -28,19 +28,7 @@ set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
 set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # Files not yet brought to the standard, as regular expressions over the repository-relative
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
-set(ZEN_COMMENT_PENDING
-    "^tests/test_capabilities[.]cpp$"
-    "^tests/test_dispatch_loaded[.]cpp$"
-    "^tests/test_dispatch_refusal[.]cpp$"
-    "^tests/test_gate[.]cpp$"
-    "^tests/test_harness[.]cpp$"
-    "^tests/test_integration[.]cpp$"
-    "^tests/test_observe[.]cpp$"
-    "^tests/test_role_request[.]cpp$"
-    "^tests/test_runs[.]cpp$"
-    "^tests/test_session[.]cpp$"
-    "^tests/test_value[.]cpp$"
-    "^tests/test_weave_shape[.]cpp$")
+set(ZEN_COMMENT_PENDING)
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer
