@@ -13,9 +13,9 @@ using namespace loom;
 using namespace loom;
 using namespace sbfx;
 
-// The milestone: the kernel is alive. Two cooperative Weaves exchange a gated
-// directed message and a reply, a publish reaches only its accepters, one Weave
-// dies and revives through native bytes, and an observer witnesses it all.
+// The kernel, alive end to end: two cooperative Weaves exchange a gated directed message and a
+// reply, a publish reaches only its accepters, one Weave dies and revives through native bytes,
+// and an observer witnesses it all.
 
 TEST_SUITE("breathing") {
 
