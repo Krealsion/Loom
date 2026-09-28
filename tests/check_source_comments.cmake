@@ -42,7 +42,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/package/macro_surface[.]cpp$"
     "^tests/package/stranger_bridge[.]cpp$"
     "^tests/package/stranger_history[.]cpp$"
-    "^tests/package/stranger_host[.]cpp$"
     "^tests/package/stranger_terminal[.]cpp$"
     "^tests/package/stranger_weave[.]cpp$"
     "^tests/package/witness_protocol[.]hpp$"
