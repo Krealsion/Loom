@@ -94,7 +94,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/office_protocol[.]hpp$"
     "^tests/weavelib/office_worker[.]cpp$"
     "^tests/weavelib/stale_abi[.]cpp$"
-    "^tests/weavelib/storage_broker[.]cpp$"
     "^tests/weavelib/storage_client[.]cpp$"
     "^tests/weavelib/storage_protocol[.]hpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
