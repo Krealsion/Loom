@@ -85,7 +85,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_integration[.]cpp$"
     "^tests/test_isolation[.]cpp$"
     "^tests/test_joint[.]cpp$"
-    "^tests/test_kernel[.]cpp$"
     "^tests/test_manager[.]cpp$"
     "^tests/test_observe[.]cpp$"
     "^tests/test_pixel[.]cpp$"
