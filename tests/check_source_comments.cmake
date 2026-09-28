@@ -107,7 +107,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/handoff_ledger[.]cpp$"
     "^tests/weavelib/handoff_migrator[.]cpp$"
     "^tests/weavelib/handoff_protocol[.]hpp$"
-    "^tests/weavelib/host_probe[.]cpp$"
     "^tests/weavelib/joint_probe[.]cpp$"
     "^tests/weavelib/joint_protocol[.]hpp$"
     "^tests/weavelib/mod_storage[.]cpp$"

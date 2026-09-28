@@ -1,50 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE SUPPLIED HOST'S PROBE — an ordinary loadable weave that reports what the host
-// actually did to it, and that behaves the two ways a host has to survive.
-//
-// WHY IT EXISTS. Every defect in the host's lifecycle/authority glue was invisible to
-// the policy tests, because none of them is about a grammar or a schema: they are about
-// WHICH reply answered which question, WHEN an approved permission became effective, and
-// WHETHER the operator could still be heard. Nothing but a real weave in a real host
-// process can answer those, so this is that weave — the review's own reproduction
-// fixture, maintained instead of thrown away.
-//
-// WHAT IT REPORTS, and each number is a defect this host had:
-//
-//   activations  authenticated `zen.Activated` deliveries (`mail.lifecycle_attested()`
-//                only — an unattested one proves nothing). A boot walk that called
-//                `Kernel::load` directly left this at 0 while the host printed COMPLETE.
-//   startups     messages this weave sent TO ITSELF on activation and received. It is
-//                the "an approved permission is effective for the first breath" number:
-//                it is 0 and `refusals` is 1 when authority arrives one turn too late.
-//   refusals     authenticated `zen.DispatchRefused` notices — Loom's own word that a
-//                send of ours was refused before any handler saw it.
-//   ticks        `Spin` deliveries. Each one re-arms itself, which is the whole of the
-//                responsiveness probe: a cooperative handler that always returns and
-//                still keeps the bus non-empty forever.
-//
-// AND ONE CONVERSATION IT ANSWERS LATE. `Countdown{turns}` is answered only after that many
-// more bus turns, by an ordinary send carrying the asker's correlation — so the answer is
-// attributable (the bus stamps this weave as its author) and arrives after the host has
-// stopped waiting for it. It is what "the host kept turning while a person was typing" is
-// measured with, and what makes a held answer DELAYED rather than immediate.
-//
-// TWO VARIANTS, ONE SOURCE.
-//
-//   (default)        honest: announces itself on activation and answers when asked.
-//   ZEN_PROBE_FORGE  also authors a `zen.Result` AT THE CONSOLE, unasked, timed to land
-//                    after the genuine answer to the operator's own load. It needs NO
-//                    extra approval to do it: `loom::host::admitted_baseline()` is
-//                    `allow_poke_answers`, which is `allow_to_any` for `zen.Result`, and
-//                    a console is registered `AcceptMode::AnyRegistered`. So "the newest
-//                    thing in the reply window" is a value any admitted artifact can
-//                    author — which is exactly how an unrelated `zen.Result{"1"}` once
-//                    became the subject of a host-minted administration capability.
-//                    The staging hop (Result to our own role first) is what puts the
-//                    forgery BEHIND the genuine answer in the queue; a forgery that
-//                    arrived first would prove nothing about which one the host picks.
+// THE SUPPLIED HOST'S PROBE: an ordinary loadable weave that reports what the host did to it,
+// for the host's lifecycle and authority wiring, which only a real weave in a real host process
+// can witness (which reply answered which question, when an approval took effect, whether the
+// operator could still be heard). `Inspect` answers with four numbers: `activations` (attested
+// `zen.Activated`), `startups` (its self-addressed first-breath send arrived), `refusals`
+// (attested `zen.DispatchRefused`) and `ticks` (`Spin` deliveries, each re-arming itself).
+
+// `Countdown{turns}` is answered only after that many more bus turns, by an ordinary send
+// carrying the asker's correlation, so the answer is attributable and arrives DELAYED. Under
+// ZEN_PROBE_FORGE it also authors, unasked and with no extra approval (the admitted baseline
+// allows `zen.Result` to any target), a `zen.Result` at the console timed to land BEHIND the
+// genuine answer to the operator's load: the host must attribute answers, never take the newest.
 
 #include <zen/kernel/export.hpp>
 #include <zen/weave.hpp>
@@ -115,10 +83,9 @@ public:
         // turn LATER than the genuine answer to whatever the operator asked.
         (void)mail.send_to_role("probe", Result{"stage"});
 #else
-        // The startup send. If the person has approved `Startup v1 -> role probe`, this
-        // arrives and `startups` becomes 1. If the host installs that approval after the
-        // activation, Loom refuses it and `refusals` becomes 1 instead. The two numbers
-        // are the finding, stated as arithmetic.
+        // The startup send. If the person has approved `Startup v1 -> role probe`, this arrives
+        // and `startups` becomes 1; if the host installs that approval after the activation,
+        // Loom refuses it and `refusals` becomes 1 instead.
         (void)mail.send_to_role("probe", Startup{});
 #endif
     }
