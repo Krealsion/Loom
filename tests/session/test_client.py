@@ -262,7 +262,7 @@ def main():
     # ---- writing: a frame's bound is its own, whatever the last poll left behind --------------
     #
     # Reads and writes share one socket. `read(0)` deliberately makes it non-blocking, and a
-    # write that INHERITED that mode turned ordinary backpressure from a live peer into a lost
+    # write that INHERITED that mode would turn ordinary backpressure from a live peer into a lost
     # frame and a closed channel. These four say the mode is the write's own, that a slow-but-
     # live peer gets the whole frame, and that a real write failure is still a real failure.
     big = b"y" * (1 << 20)               # 1 MiB: under MAX_FRAME, over any socket buffer
