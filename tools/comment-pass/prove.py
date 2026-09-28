@@ -16,7 +16,8 @@
 # left to Git whole (LEFT_TO_GIT); the checks' registration lines in tests/CMakeLists.txt and their
 # rows in tests/entry_population.txt, when START lacks them; a failure message or exemption
 # reason named below by its START literal, reworded to show no private id or stage name; a CI
-# workflow's whole-line `#` comments; a TEST_CASE or SUBCASE name the case map (cases.tsv)
+# workflow's or shell script's whole-line `#` comments; a Python file's comments and docstrings,
+# its syntax tree otherwise identical; a TEST_CASE or SUBCASE name the case map (cases.tsv)
 # renames, whose old name is put back before the comparison. Every other changed file must be
 # markdown or this directory's. Every law pointer (`// MSG-09; docs/laws/messaging-laws.md`, after
 # `//`, `///` or `//!`) must stand where it stood: the same file, above the same code, and once. A
@@ -222,6 +223,28 @@ def workflow_code(text):
     return [l for l in text.replace("\r\n", "\n").split("\n") if not l.lstrip().startswith("#")]
 
 
+def shell_code(text):
+    """A shell script's lines with its whole-line `#` comments dropped, the first-line `#!` kept;
+    a trailing comment stays, so it may not change."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    return [l for k, l in enumerate(lines)
+            if not l.lstrip().startswith("#") or (k == 0 and l.startswith("#!"))]
+
+
+def python_code(text):
+    """A Python file's syntax tree with every docstring removed, as text: comments never reach
+    the tree, and every other string, name and statement does."""
+    import ast
+    tree = ast.parse(text)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                and body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree, include_attributes=False)
+
+
 def law_lines(path, text):
     """Counter of (path, law pointer, the first code line after it)."""
     if lex.kind_of(path) != "cxx":
@@ -345,7 +368,7 @@ def main():
             failures.append("%s: added" % p)
     changed = set(git_lines(repo, "diff", "--name-only", args.start)) | set(
         git_lines(repo, "ls-files", "--others", "--exclude-standard"))
-    workflows = []
+    workflows, scripts = [], []
     for p in sorted(changed):
         if p.startswith(WORKFLOWS) and p.endswith(".yml") and os.path.exists(os.path.join(repo, p)):
             was = workflow_code(read_start(repo, args.start, [p])[p])
@@ -358,6 +381,24 @@ def main():
                                 "line %d of %d without them" % (p, first + 1, len(now)))
             else:
                 workflows.append((p, len(now)))
+            continue
+        if p.endswith((".py", ".sh")) and not p.startswith(TOOLS) and os.path.exists(os.path.join(repo, p)):
+            if p not in start_text:
+                start_text.update(read_start(repo, args.start, [p]))
+            with open(os.path.join(repo, p), encoding="utf-8", newline="") as f:
+                now_text = f.read()
+            form = python_code if p.endswith(".py") else shell_code
+            try:
+                same = form(start_text[p]) == form(now_text)
+            except SyntaxError as e:
+                same = False
+                failures.append("%s: does not parse: %s" % (p, e))
+            if same:
+                scripts.append(p)
+            else:
+                failures.append("%s: %s" % (p, "its syntax tree changed beyond docstrings"
+                                            if p.endswith(".py") else
+                                            "a line that is not a whole-line comment changed"))
             continue
         if not lex.kind_of(p) and not p.endswith(".md") and not p.startswith(TOOLS):
             failures.append("%s: changed, and it is neither code this proof reads, markdown nor "
@@ -407,6 +448,9 @@ def main():
         len(rows), sum(renamed.values()), sum(1 for n in renamed.values() if n)))
     for p, n in workflows:
         print("prove: %s changed its whole-line comments only: %d other lines, identical" % (p, n))
+    for p in scripts:
+        print("prove: %s changed its %s only" % (
+            p, "comments and docstrings" if p.endswith(".py") else "whole-line comments"))
     for key in laws_added:
         print("prove: law pointer added in %s: %s (above: %s)" % (key[0], key[1][:70], key[2][:50]))
     for key in laws_single:
@@ -432,8 +476,56 @@ def main():
     status = 0 if not failures else 1
     if args.demo is not None:
         for path in args.demo or ["tests/CMakeLists.txt", "tests/suite_population.txt"]:
-            status |= demo(repo, start_text, path)
+            if path.endswith((".py", ".sh")):
+                status |= demo_script(repo, args.start, path)
+            else:
+                status |= demo(repo, start_text, path)
     return status
+
+
+def demo_script(repo, start, path):
+    """Edits to one Python or shell file, in memory: a code token must be caught, and a comment
+    edit (and a docstring edit, in Python) must not be."""
+    was = read_start(repo, start, [path])[path]
+    with open(os.path.join(repo, path), encoding="utf-8", newline="") as f:
+        now = f.read().replace("\r\n", "\n")
+    form = python_code if path.endswith(".py") else shell_code
+    lines = now.split("\n")
+    edits = {}
+    com = [k for k, l in enumerate(lines) if l.lstrip().startswith("#") and not l.startswith("#!")]
+    if com:
+        k = com[len(com) // 2]
+        edits["comment-only change"] = (lines[:k] + [lines[k] + " q"] + lines[k + 1:], False)
+    if path.endswith(".py"):
+        import io
+        import keyword
+        import tokenize
+        names = [t.end for t in tokenize.generate_tokens(io.StringIO(now).readline)
+                 if t.type == tokenize.NAME and not keyword.iskeyword(t.string)]
+        at = [(r - 1, c) for r, c in names]
+    else:
+        at = [(k, list(re.finditer(r"[A-Za-z_][A-Za-z0-9_]{2,}", l))[-1].end())
+              for k, l in enumerate(lines) if l.strip() and not l.lstrip().startswith("#")
+              and re.search(r"[A-Za-z_][A-Za-z0-9_]{2,}", l)]
+    if at:
+        k, c = at[len(at) // 2]
+        edits["one-token change"] = (lines[:k] + [lines[k][:c] + "z" + lines[k][c:]]
+                                     + lines[k + 1:], True)
+    if path.endswith(".py"):
+        m = re.search(r'"""(.)', now)
+        if m:
+            s = m.start(1)
+            edits["docstring-only change"] = ((now[:s] + "q" + now[s:]).split("\n"), False)
+    ok = 0
+    for what, (edited, want) in edits.items():
+        try:
+            caught = form(was) != form("\n".join(edited))
+        except SyntaxError:
+            caught = True
+        print("demo: %s in %s: %s" % (what, path, "caught" if caught else "not a difference"))
+        ok += caught == want
+    print("demo: %d of %d as expected in %s" % (ok, len(edits), path))
+    return 0 if ok == len(edits) and len(edits) >= 2 else 1
 
 
 # What each demo edit must do: be caught (True) or pass as comment-only (False).
