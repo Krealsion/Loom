@@ -106,7 +106,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/forge_client[.]cpp$"
     "^tests/weavelib/handoff_ledger[.]cpp$"
     "^tests/weavelib/handoff_migrator[.]cpp$"
-    "^tests/weavelib/handoff_protocol[.]hpp$"
     "^tests/weavelib/joint_probe[.]cpp$"
     "^tests/weavelib/joint_protocol[.]hpp$"
     "^tests/weavelib/mod_storage[.]cpp$"
