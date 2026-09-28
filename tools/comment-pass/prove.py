@@ -87,6 +87,13 @@ REWORDED = {
     "src/bridge/channel.cpp": (
         '"AF_UNIX listen is POSIX-only (the Windows<->WSL crossing uses TCP)"',
         '"AF_UNIX connect is POSIX-only (the Windows<->WSL crossing uses TCP)"'),
+    "tests/test_provenance.cpp": (
+        '"R2B-1a: a weave\'s Bus must never expose lifecycle minting"',
+        '"R2B-1a: Mail must never expose lifecycle minting"',
+        '"R2B-1a: Mail must never expose lifecycle minting under another name"',
+        '"R2B-1a: the lifecycle mint must not be a reachable static factory"',
+        '"R2B-1a: the lifecycle mint must be private to the Switchboard"',
+        '"R2B-1a: LifecycleAuthority must not be default-constructible"'),
 }
 # Test data renamed because it carried a plan code or a private id: in each file, every use of the
 # START value is the new one now, in literals and code alike, and the START value is left in no
