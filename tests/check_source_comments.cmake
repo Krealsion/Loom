@@ -49,7 +49,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/package/witness_protocol[.]hpp$"
     "^tests/run-under-scope[.]sh$"
     "^tests/runs_leader/leader[.]cpp$"
-    "^tests/session/journey[.]py$"
     "^tests/session/lifecycle/asks[.]py$"
     "^tests/session/lifecycle/cleanup[.]py$"
     "^tests/session/lifecycle/crashes[.]py$"

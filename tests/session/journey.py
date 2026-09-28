@@ -708,7 +708,7 @@ def main():
               s.wait("after-cleanup", timeout=60)["state"] == "passed")
 
     # A tool that WAITS AT NOTHING still cooperates, through the public property alone: no ask,
-    # no gate, nothing blocking -- the case a cancellation used to have no way to reach.
+    # no gate, nothing blocking for a cancellation to arrive through.
     with Session.attach(session_dir) as s:
         s.start("basics/steps", "cooperates", {"count": 3, "cooperate": 60})
         until(lambda: s.run("cooperates")["state"] == "running" and
@@ -752,7 +752,7 @@ def main():
         s.cancel("expires", reason="let the cleanup budget end it")
         out = s.wait("expires", timeout=90)
         # The VERDICT is in at `wait`; the process exiting is a separate fact, so it is waited
-        # for separately -- which is the very distinction this phase came to make.
+        # for separately.
         ended_by_itself = until(lambda: s.run("expires")["process"] == "exited", 30,
                                 "the worker to exit by itself")
         out = s.run("expires")
@@ -818,10 +818,10 @@ def main():
     # interval in which nothing would notice; this section lives in that interval.
     with Session.attach(session_dir) as s:
         # `slow` makes every answer take longer than the 0.15s after which the runtime would
-        # report an ask pending -- the condition under which a later Progress used to save the
-        # asks for free and cover a missing AskReport save. The tool collects its own answers,
-        # so the interval after each AskReport is quiet anyway; running it slow on purpose is
-        # what keeps that true rather than lucky.
+        # report an ask pending, the condition under which a later Progress would save the asks
+        # and hide a missing AskReport save. The tool collects its own answers, so the interval
+        # after each AskReport is quiet anyway; running it slow on purpose keeps that true
+        # rather than lucky.
         s.start("lifecycle/asks", "quiet-asks", {"hold": "go", "seconds": 180, "slow": 400})
         first = until(lambda: len(s.run("quiet-asks")["asks"]) == 1, 60,
                       "the first ask to be reported")
@@ -900,13 +900,11 @@ def main():
               len(asked) == 1 and asked[0]["settle"] and asked[0]["outcome"] == "answer", asked)
 
     # ---- M. the host ends; a new lifetime refuses the old handle; records remain -------------
-    #
-    # THREE RUNS, because a clean shutdown has three different things to say. One with no
-    # verdict and a live worker; one whose verdict is in while its worker still runs; and one
-    # whose worker has ALREADY exited, leaving a child this manager owns. Each leaves a record
-    # that outlives this host, so each record's account of the operating system is checked
-    # against the operating system -- a handle this driver holds open across the death, where
-    # the platform has one, and otherwise the code the manager's own signal must produce.
+    # THREE RUNS, because a clean shutdown has three things to say: no verdict and a live worker;
+    # a verdict in while its worker still runs; a worker ALREADY exited, leaving a child this
+    # manager owns. Each record outlives this host, so its account of the operating system is
+    # checked against the operating system: a handle held open across the death where the
+    # platform has one, otherwise the code the manager's own signal must produce.
     with Session.attach(session_dir) as s:
         s.start("basics/steps", "left-held", {"count": 2, "hold": "never"})
         until(lambda: s.run("left-held")["step"] == "held: never", 30, "the run to hold")
@@ -992,12 +990,10 @@ def main():
         host.wait(timeout=30)
 
     # ---- R. a host that is KILLED is not a host that shut down -------------------------------
-    #
     # The clean end runs the manager's destructor and every execution goes with it (M8, N4). An
     # abruptly killed host runs nothing at all, so what happens to its workers is the operating
-    # system's answer, not this manager's -- and the two platforms answer differently. Both
-    # answers are pinned here, because a guarantee nobody tested is not a guarantee, and a
-    # limit nobody wrote down gets mistaken for one.
+    # system's answer, and the two platforms answer differently. Both answers are pinned: a
+    # guarantee nobody tested is not one, and a limit nobody wrote down gets mistaken for one.
     abrupt = os.path.join(work, "abrupt")
     os.makedirs(abrupt)
     shutil.copy(os.path.join(session_dir, "loom-boot.json"),
