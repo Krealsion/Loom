@@ -531,11 +531,11 @@ endforeach()
 # PASS_REGULAR_EXPRESSION is set: a filter naming a suite no compiled case belongs to (what a
 # rename, an #if or a deletion produces) must exit nonzero and say why.
 add_test(NAME empty_population_refused
-    COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
+    COMMAND zen-tests --test-suite=zen_suite_that_does_not_exist --no-skipped-summary)
 set_tests_properties(empty_population_refused PROPERTIES WILL_FAIL TRUE)
 
 add_test(NAME empty_population_says_so
-    COMMAND zen-tests --test-suite=zen_no_such_suite_R2FD --no-skipped-summary)
+    COMMAND zen-tests --test-suite=zen_suite_that_does_not_exist --no-skipped-summary)
 set_tests_properties(empty_population_says_so PROPERTIES
     PASS_REGULAR_EXPRESSION "EMPTY TEST POPULATION")
 

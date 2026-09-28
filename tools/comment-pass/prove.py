@@ -99,11 +99,14 @@ REWORDED = {
     "tests/test_isolation.cpp": (
         '"C-2: ambient descriptors removed at exec while the netns holds"',
         '"C-2a: the child\'s environment is authored, not inherited"'),
+    "tests/check_entry_population.cmake": (
+        '"# The CTest-entry inventory\'s receipt for one official-lane run (VOLATILE-B1).\\n"',),
 }
 # Test data renamed because it carried a plan code or a private id: in each file, every use of the
 # START value is the new one now, in literals and code alike, and the START value is left in no
 # file's code. Each pair is put back before the comparison, so nothing else may differ.
 RENAMED_VALUES = {
+    "tests/CMakeLists.txt": (("zen_no_such_suite_R2FD", "zen_suite_that_does_not_exist"),),
     "tests/weavelib/test_weave.cpp": (
         ("COLD2-ESCAPE-PAYLOAD", "PARKED-DESCRIPTOR-PAYLOAD"),
         ("/tmp/zen_b4_secret.txt", "/tmp/zen_host_secret.txt"),
