@@ -1,22 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE STRANGER'S HISTORY — a host outside Loom's build tree that remembers what
-// its bus did and keeps a durable record of the part that matters, reaching both
-// halves only through `find_package(loom)`.
-//
-// RTH-1 exported and installed a recorder because its first consumer is a Zengine
-// application that reaches this repository solely through the package — and then
-// shipped without a witness that a stranger can actually reach it. This closes
-// that debt, and it is not a formality: the build tree can satisfy a target the
-// export set never published, and the difference only shows up in somebody else's
-// project. RTH-1a widened the surface again (a second owner, a second header, a
-// renamed target), so the claim is measured at exactly the moment it changed.
-//
-// It links `loom::history` and nothing that is not exported. If either half stops
-// being reachable that way — a header left out of the install, a target dropped
-// from the export set, a public type that needs an unexported one — this fails to
-// configure or to compile, on the DEFAULT path.
+// THE STRANGER'S HISTORY: a host outside Loom's build tree that remembers what its bus did and
+// keeps a durable record of the part that matters, reaching both halves only through
+// `find_package(loom)`. The build tree can satisfy a target the export set never published, so
+// only a consumer like this sees the difference. It links `loom::history` and nothing
+// unexported: a header left out of the install, a target dropped from the export set, or a
+// public type needing an unexported one fails to configure or compile, on the DEFAULT path.
 
 #include <zen/history/dump.hpp>
 #include <zen/history/logger.hpp>
@@ -80,8 +70,7 @@ int main() {
     // ---- the volatile half ------------------------------------------------
     loom::RecorderPolicy policy = loom::default_policy();
     policy.recent_capacity = 16;
-    // The heartbeat policy this phase exists to make expressible: keep the last
-    // one, take no recent context, keep no bytes.
+    // The heartbeat policy: keep the last one, take no recent context, keep no bytes.
     policy.rules.push_back(loom::RetentionRule{"Beat", /*last_n=*/1, /*in_recent=*/false,
                                                /*retain_payload=*/false});
     loom::Recorder recorder(bus, policy);
