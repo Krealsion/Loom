@@ -89,7 +89,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/mod_storage[.]cpp$"
     "^tests/weavelib/net_protocol[.]hpp$"
     "^tests/weavelib/observe_probe_vocab[.]cpp$"
-    "^tests/weavelib/stale_abi[.]cpp$"
     "^tests/weavelib/storage_client[.]cpp$"
     "^tests/weavelib/storage_protocol[.]hpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
