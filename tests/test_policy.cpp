@@ -614,7 +614,7 @@ TEST_CASE("broker-down degrades gracefully: a mod's storage send is NoSuchTarget
     std::filesystem::remove_all(root);
 }
 
-// ---- P2: the NetworkBroker (the powerbox generalized to a second capability) ----
+// ---- the NetworkBroker (the powerbox generalized to a second capability) ----
 
 TEST_CASE("floor denies net: a mod (even one that asks) cannot reach role net without a delta") {
     Switchboard bus;

@@ -198,7 +198,7 @@ TEST_CASE("a v1 value does not pass v2's gate — no automatic transcode, howeve
     CHECK_FALSE(as_v1.ok());
 }
 
-// ---- H1: the snapshot-tolerant migration, labelled honestly ------------------
+// ---- the snapshot-tolerant migration, labelled honestly ----------------------
 
 TEST_CASE("a snapshot taken while the incumbent is LIVE is a snapshot — it can go stale before "
           "it is used, and the witness says so rather than calling it exact") {
@@ -226,7 +226,7 @@ TEST_CASE("a snapshot taken while the incumbent is LIVE is a snapshot — it can
     CHECK(g.status().issued_high_water == 4); // the world moved on
 }
 
-// ---- H2: the exact authored boundary ----------------------------------------
+// ---- the exact authored boundary --------------------------------------------
 
 TEST_CASE("the FIFO boundary makes the incumbent's final value EXACT — A/B/C are handled "
           "ordinarily, the boundary lands at its exact position, and D/E meet the domain's "
