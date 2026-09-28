@@ -37,7 +37,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_fuzz[.]cpp$"
     "^tests/test_gate[.]cpp$"
     "^tests/test_harness[.]cpp$"
-    "^tests/test_history_logger[.]cpp$"
     "^tests/test_host_input[.]cpp$"
     "^tests/test_integration[.]cpp$"
     "^tests/test_observe[.]cpp$"

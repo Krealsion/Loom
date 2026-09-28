@@ -137,6 +137,7 @@ RENAMED_VALUES = {
     "tests/test_policy.cpp": (
         ("/tmp/zen_grant_record_perms_n2.json", "/tmp/zen_grant_record_perms.json"),
         ("zen_f1_kat", "zen_sha256_kat")),
+    "tests/test_history_logger.cpp": (("zen-rth1a-", "zen-logger-"),),
 }
 # The one assertion the pass changes, named by its START and END code, each once in its file: a
 # letter whose author was removed is refused SenderLifeEnded (MSG-03), never CapabilityDenied.

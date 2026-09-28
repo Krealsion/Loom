@@ -160,3 +160,19 @@ tests/test_serialize.cpp	R2F-A: the budget does not swallow the older, more prec
 tests/test_serialize.cpp	R2F-A: the compat (JSON) decoder shares the same budget domain	the compat (JSON) decoder shares the same budget domain
 tests/test_describe.cpp	the scalar handoff MSG-0 needs: describe -> choose -> compose -> assemble	the scalar handoff a composer needs: describe -> choose -> compose -> assemble
 tests/test_schema_codec.cpp	the auditor's ceiling case N=100000 no longer even reaches decode_schema	a 100000-deep descriptor never reaches decode_schema
+tests/test_history_logger.cpp	RTH-1a: a logger keeps what was named and nothing else	a logger keeps what was named and nothing else
+tests/test_history_logger.cpp	RTH-1a: a recorder seeing a fact does not put it in the log	a recorder seeing a fact does not put it in the log
+tests/test_history_logger.cpp	RTH-1a: a durable fact outlives the recorder window that held its live copy	a durable fact outlives the recorder window that held its live copy
+tests/test_history_logger.cpp	RTH-1a: a logger works in a process with no recorder at all	a logger works in a process with no recorder at all
+tests/test_history_logger.cpp	RTH-1a: a failed handler is durable by default, whatever shape it was	a failed handler is durable by default, whatever shape it was
+tests/test_history_logger.cpp	RTH-1a: ordinary refusals are NOT durable by default, and that is measured	ordinary refusals are NOT durable by default, and that is measured
+tests/test_history_logger.cpp	RTH-1a: a death is durable by default; it is rare and it changes who is here	a death is durable by default; it is rare and it changes who is here
+tests/test_history_logger.cpp	RTH-1a: the shipped default keeps weave-lifecycle and authority vocabulary	the shipped default keeps weave-lifecycle and authority vocabulary
+tests/test_history_logger.cpp	RTH-1a: a per-shape cap bounds ITS shape and says so, once	a per-shape cap bounds ITS shape and says so, once
+tests/test_history_logger.cpp	RTH-1a: a capped shape cannot consume the horizon of an uncapped one	a capped shape cannot consume the horizon of an uncapped one
+tests/test_history_logger.cpp	RTH-1a: a host diagnostic is durable and is never mistaken for a Loom message	a host diagnostic is durable and is never mistaken for a Loom message
+tests/test_history_logger.cpp	RTH-1a: changing what is kept is itself kept, and publishes nothing	changing what is kept is itself kept, and publishes nothing
+tests/test_history_logger.cpp	RTH-1a: a corrupt durable stream is refused by the gate, not believed	a corrupt durable stream is refused by the gate, not believed
+tests/test_history_logger.cpp	RTH-1a: a selected fact with nowhere to go is counted, never pretended	a selected fact with nowhere to go is counted, never pretended
+tests/test_history_logger.cpp	RTH-1a: logging changes what is remembered and nothing about delivery	logging changes what is remembered and nothing about delivery
+tests/test_history_logger.cpp	RTH-1a: the log dump names every record's ORIGIN before its content	the log dump names every record's ORIGIN before its content
