@@ -1,117 +1,30 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// A real Weave, woven as a clean C++ loom::Weave subclass and shipped as a
-// .so with a single ZEN_EXPORT_WEAVE line. No senses, no std::any — the same
-// Weave one would compile in. Compile-time switches produce adversarial variants
-// for the kernel's harness and the isolation host's harness:
-//   ZEN_WEAVE_MALFORMED_SNAPSHOT  — emit a snapshot missing a required field
-//   ZEN_WEAVE_MALFORMED_MESSAGE   — emit a message missing a required field
-//   ZEN_WEAVE_STATE_V2            — bump the state schema version (reload mismatch)
-//   ZEN_WEAVE_CRASH_ON_MAGIC      — abort mid-handle on the magic seq 0xDEAD
-//   ZEN_WEAVE_THROW_ON_MAGIC      — THROW mid-handle on the magic seq 0xDEAD. Not a
-//                                   crash: the exception is caught at the library's own
-//                                   ABI boundary (do_handle) and crosses back as a
-//                                   status, which is the ONE path on which the host can
-//                                   learn a loaded handler did not finish (RTH-1)
-//   ZEN_WEAVE_CRASH_ON_REVIVE     — abort on revive (drives reload-then-quarantine)
-//   ZEN_WEAVE_LOW_RELOADS         — max_reloads = 3 (fast crash-budget exhaustion)
-//   ZEN_WEAVE_SILENT              — handle never replies (liveness: cannot stall host)
-//   ZEN_WEAVE_NET_PROBE           — on handle, attempt a TCP connect to the loopback
-//                                   port named by the Ping's seq — an endpoint the TEST
-//                                   owns — push one byte down it, and report 0 or the
-//                                   errno (B3: proves the sandbox blocks the network;
-//                                   BL-VER-08: against a live endpoint the test
-//                                   established, never a closed port whose behaviour
-//                                   belongs to the host)
-//   ZEN_WEAVE_FS_PROBE            — on handle, probe filesystem reach (read a secret,
-//                                   write in/out of scratch, exec from scratch) and
-//                                   report each errno (B4: proves the mount-ns view)
-//   ZEN_WEAVE_FD_PROBE            — on handle, inventory every descriptor it actually
-//                                   holds, try to USE the one named by the Ping's seq,
-//                                   and separately attempt a fresh socket. Reports all
-//                                   three (C-2: proves ambient host descriptors do not
-//                                   cross execve, WITHOUT letting the network-namespace
-//                                   denial stand in for that — they are different facts
-//                                   and the second has been true here while the first
-//                                   was false)
-//   ZEN_WEAVE_ENV_PROBE           — on handle, report the child's COMPLETE environment:
-//                                   how many entries exist, how many are LD_*, whether
-//                                   the planted ambient secret is visible, and the NAMES
-//                                   (never the values — a value could be a real token
-//                                   from the developer's shell, and a name is enough to
-//                                   identify a leak). C-2a: the environment the child
-//                                   receives must be the one Zen authored, not the one
-//                                   the host happened to hold
-//   ZEN_WEAVE_MEM_BOMB            — on handle (and revive), allocate a large resident
-//                                   block to trip memory.max (B5: OOM-kill containment)
-//   ZEN_WEAVE_FORK_BOMB           — on handle, fork until it can't and report the count
-//                                   (B5: proves pids.max bounds a fork-bomb)
-//   ZEN_WEAVE_BEQUEATHS           — accepts zen.PrepareShutdown and answers with a
-//                                   zen.Bequest carrying its live count as an item
-//                                   (1b: the predecessor that writes a letter)
-//   ZEN_WEAVE_HEIR                — a DIFFERENTLY-SHAPED successor (Counter v2) that
-//                                   claims by role on first wake and folds what it
-//                                   inherits into its own count (1b: the heir)
-//   ZEN_WEAVE_ACTIVATES           — accepts zen.Activated and records, IN ITS OWN
-//                                   PERSISTED STATE (Counter v3), how many it has
-//                                   handled and the newest sequence (LIFE-01: the
-//                                   activation participant, observed through the
-//                                   ordinary snapshot path)
-//   ZEN_WEAVE_ACTIVATES_DRIFT     — the same weave with the SAME state schema and one
-//                                   EXTRA accepted shape, so a reload between the two
-//                                   differs in nothing but the door contract (LIFE-01:
-//                                   the accepted-schema-drift negative)
-//   ZEN_WEAVE_ANSWERS             — answers its ask IMMEDIATELY through the public
-//                                   answer surface, so the dynamic seam's meaning of
-//                                   mail.answer() can be compared with the native one
-//                                   (ANS-06)
-//   ZEN_WEAVE_DEFERS              — takes an ask's answer right AWAY WITH IT, returns
-//                                   without answering, and answers from a LATER
-//                                   handler using only the retained capability
-//                                   (ANS-02: the deferring steward, proven as a real
-//                                   .so because that is the whole question)
-//   ZEN_WEAVE_ACTIVATES_CONFLICT  — the drift twin whose extra door carries the SAME
-//                                   (name, version) with DIFFERENT content, so loading
-//                                   it meets the registry's agreement wall (LIFE-08:
-//                                   makes a rejected candidate's schema admission
-//                                   observable from outside the kernel)
-//   ZEN_WEAVE_SEAM_EMIT           — on Ping, reaches for a role with a shape THIS
-//                                   LIBRARY ALONE knows: SeamOnly v1 is built here and
-//                                   declared in no accept-set, so nothing ever
-//                                   registers it. The Night Lab III P-011 shape
-//                                   exactly (the lamp's EnsureTimer to zengine.timer
-//                                   when the sole registrar of that vocabulary was
-//                                   never loaded). The emission cannot resolve at the
-//                                   host seam; whether that leaves a Loom-owned fact
-//                                   is the question the reproducer asks.
-//   ZEN_WEAVE_SEAM_PUBLISH        — the seam-emit twin with the ADDRESS taken away: it
-//                                   PUBLISHES SeamOnly v1 instead of sending it to a
-//                                   role, and then publishes a resolvable `Pong` whose
-//                                   bytes fail the gate. One artifact, two publications,
-//                                   the two halves of MSG-08's publication rule
-//                                   (FRIC-0): unheard is not refused, undelivered is.
-//   ZEN_WEAVE_EMITS_GREET         — DECLARES Greet v1 {msg} in its emit-set (a raw
-//                                   `emitted_schemas()` override, so the manifest's
-//                                   `emits` section rides ABI v9) and sends one on Ping.
-//                                   The loaded EMITTER whose definition must meet every
-//                                   acceptor's at load, not at the first delivery.
-//   ZEN_WEAVE_GREET_CONFLICT      — with EMITS_GREET: the emitter declares Greet v1
-//                                   {text} instead — the divergent emitter, both orders.
-//   ZEN_WEAVE_NEST_OLD            — accepts Box v1 { part: Part v1 {a} }.
-//   ZEN_WEAVE_NEST_NEW            — accepts Box2 v1 { part: Part v1 {a, b} }: a
-//                                   nested-only disagreement with NEST_OLD, whose outer
-//                                   names differ, so only the component closure sees it.
-//   ZEN_WEAVE_NEST_MIXED          — accepts BOTH Box and Box2: ONE artifact whose own
-//                                   declaration carries two Part v1 definitions. Must be
-//                                   refused, never loaded advertising a substituted Box2.
-//   ZEN_WEAVE_NEST_MIXED_REVERSED — the same two doors declared in the other order.
-//   ZEN_WEAVE_NEST_AGREE          — accepts Box and Whole v1 { List<Part v1 {a}> }: two
-//                                   doors sharing ONE Part definition — the agreeing
-//                                   control, which loads and keeps its identity.
-//   ZEN_WEAVE_PING_DRIFT          — Ping v1 {seq, extra}: the guide's copied weave that
-//                                   kept a shape's name and added a field (P-LOOM-06's
-//                                   witness at the loaded altitude).
+// A real Weave, a plain loom::Weave subclass shipped as a .so with one ZEN_EXPORT_WEAVE line.
+// tests/CMakeLists.txt builds it once per ZEN_WEAVE_* variant below; each variant's behaviour
+// is described at its branch in this file.
+
+// The kernel's harness: MALFORMED_SNAPSHOT and MALFORMED_MESSAGE drop a required field;
+// STATE_V2 bumps the state schema; THROW_ON_MAGIC throws on seq 0xDEAD, caught at the
+// library's own ABI boundary; BEQUEATHS writes a letter, HEIR (Counter v2) inherits it, and
+// WEDGED declares the ceremony and never answers; ACTIVATES records each zen.Activated in its
+// persisted state, and _DRIFT and _CONFLICT add one door (a new contract; a same-named shape).
+
+// Answers and seams: ANSWERS answers at once and ANSWERS_TWICE tries a second; DEFERS keeps
+// the answer right and answers from a later handler; SEAM_EMIT sends, and SEAM_PUBLISH
+// publishes, a shape no registry knows; EMITS_GREET declares Greet v1 in its emit-set, as
+// {text} under GREET_CONFLICT; SENSES claims a Sense and reads offices back verbatim.
+
+// Nested schemas: NEST_OLD accepts Box {Part v1 {a}}, NEST_NEW Box2 {Part v1 {a, b}},
+// NEST_MIXED both (one artifact, two Part v1s; _REVERSED in the other order), NEST_AGREE Box
+// and Whole sharing one Part; PING_DRIFT is the guide's copied weave, Ping v1 with an extra
+// field; ASKS declares a capability ask.
+
+// The isolation host's harness: CRASH_ON_MAGIC and CRASH_ON_REVIVE abort, LOW_RELOADS sets
+// max_reloads to 3, SILENT never replies; NET_PROBE, FS_PROBE, FD_PROBE and ENV_PROBE report
+// what the child reaches from inside its sandbox; MEM_BOMB and FORK_BOMB trip memory.max and
+// pids.max.
 
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
@@ -184,28 +97,12 @@ namespace {
 constexpr std::int64_t kBombAllocRefused = -101;
 constexpr std::int64_t kBombSurvived = -102;
 
-/// COMMIT ~200 MiB OF REAL, RESIDENT PAGES.
-///
-/// The previous shape — `malloc(bomb)` then `memset`, into a pointer never read
-/// and never freed — is DEAD CODE, and at `-O2` GCC deletes the pair outright.
-/// The Debug build kept it and passed; the Release build dropped it, so the
-/// process never grew and was never OOM-killed.
-///
-/// Release did NOT report green — `isolation` and the aggregate `all` both
-/// failed. What was silent was the CAUSE, not the lane: the failure surfaced
-/// several steps downstream at the quarantine assertion, and nothing in it said
-/// the allocation had been deleted. A witness that stops applying its pressure
-/// still fails, just not where or why you would look.
-///
-/// Two properties make this version survive optimization, and both are needed:
-///   - the pointer is `volatile`, so every store is an observable side effect
-///     the compiler is forbidden to remove or sink out of the loop;
-///   - there is one store PER PAGE, so the writes actually fault in the whole
-///     range. A single volatile write would be equally un-removable and equally
-///     useless: it commits one page, not 200 MiB.
-///
-/// The allocation is deliberately never freed — the pages must stay resident for
-/// the cgroup to see them.
+/// COMMIT ~200 MiB OF REAL, RESIDENT PAGES. A malloc-and-memset into a pointer never read is
+/// dead code GCC deletes at -O2: the Release build never grew, and `isolation` failed downstream
+/// at the quarantine assertion with nothing saying why. Two properties survive optimization,
+/// both needed: the pointer is `volatile` (every store is observable), and there is one store
+/// PER PAGE (one volatile write commits one page). Never freed: the pages must stay resident
+/// for the cgroup to see them.
 std::int64_t detonate() {
     const std::size_t bomb = 200UL * 1024UL * 1024UL;
     auto* memory = static_cast<unsigned char*>(std::malloc(bomb));
@@ -276,13 +173,10 @@ std::int64_t detonate() {
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> envresult_schema() { // only the env-probe variant
-    // The COMPLETE environment, not a lookup of the names a test thought to ask about.
-    // `count` is what makes an unknown future variable fail this on its own; the other
-    // three are the named questions the environment policy asks, kept separate so a
-// failure says which.
-    // `names` carries NAMES ONLY: a value could be a real credential from the host
-    // shell, and putting one in test output (or a CI log) to prove it should not be
-    // there would be its own leak.
+    // The COMPLETE environment: `count` makes an unknown future variable fail on its own; the
+    // other three are the named questions, kept separate so a failure says which. `names`
+    // carries NAMES ONLY: a value could be a real credential from the host shell, and printing
+    // one in test output would be its own leak.
     static const auto s = SchemaBuilder("EnvResult", 1)
                               .field("count", Kind::Int)
                               .field("ld_count", Kind::Int)
@@ -292,10 +186,8 @@ std::int64_t detonate() {
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> fdresult_schema() { // only the fd-probe variant
-    // FOUR SEPARATE FACTS, deliberately not collapsed. The whole finding here was
-    // that `fresh_connect == ENETUNREACH` was true while an inherited connected socket
-    // was simultaneously usable — so a witness that reported only the namespace verdict
-    // would have called that host contained. Each field answers its own question:
+    // FOUR SEPARATE FACTS: `fresh_connect == ENETUNREACH` can hold while an inherited connected
+    // socket is usable, so the namespace verdict alone would call that host contained.
     //   open_low      WHICH descriptors exist at all, as a bitmap of fds 0..62
     //   open_high     whether any survived by living at a high number instead
     //   parked_write  whether the one this Ping names can still MOVE BYTES
@@ -322,13 +214,11 @@ std::int64_t detonate() {
     return s;
 }
 #if defined(ZEN_WEAVE_NEST_OLD) || defined(ZEN_WEAVE_NEST_NEW) || defined(ZEN_WEAVE_NEST_MIXED)
-// THE NESTED-COMPONENT SHAPES (the schema-admission phase). TWO DEFINITIONS OF ONE
-// PUBLISHED (name, version) LIVE HERE ON PURPOSE: `part_old()` and `part_new()` both say
-// `Part v1`, exactly as Zengine's `InventoryPane v1` did before and after it gained a
-// field. A correct program compiles one of them; the NEST_MIXED variant declares a door
-// over each so one artifact's own manifest carries the contradiction, and the two
-// single-door variants play the two sides of a cross-artifact disagreement whose outer
-// names differ (`Box` vs `Box2`) — a disagreement only the component closure can see.
+// THE NESTED-COMPONENT SHAPES. `part_old()` and `part_new()` both say `Part v1`, ON PURPOSE:
+// a shape that gained a field without a new version. NEST_MIXED declares a door over each, so
+// one manifest carries the contradiction; the single-door variants play the two sides of a
+// cross-artifact disagreement whose outer names differ (`Box`, `Box2`), which only the
+// component closure can see.
 std::shared_ptr<const Schema> part_old() {
     static const auto s = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
     return s;
@@ -353,18 +243,16 @@ std::shared_ptr<const Schema> part_new() {
 }
 #endif
 [[maybe_unused]] std::shared_ptr<const Schema> sensehealth_schema() { // only the senses variant
-    // The Sense this artifact declares it can claim. Declared in the manifest's
-    // claim-set (v6), so the host registers it at load and a consumer can ask
-    // what this artifact provides before it has claimed anything.
+    // The Sense this artifact declares it can claim. Declared in the manifest's claim-set, so
+    // the host registers it at load and a consumer can ask what this artifact provides before
+    // it has claimed anything.
     static const auto s = SchemaBuilder("SenseHealth", 1).field("hp", Kind::Int).build();
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> senseprobe_schema() { // only the senses variant
-    // "Observe this office and tell me EXACTLY what identity you were given."
-    // The role travels as Text with no bound, because the whole point of the
-    // case that uses it is a role name longer than any buffer the seam used to
-    // impose — the test names the office, the artifact reports what it saw, and
-    // the two are compared byte for byte.
+    // "Observe this office and tell me EXACTLY what identity you were given." The role travels
+    // as Text with no bound, because the case that uses it names an office longer than any
+    // fixed buffer, and compares what this artifact saw with it byte for byte.
     static const auto s = SchemaBuilder("SenseProbe", 1).field("role", Kind::Text).build();
     return s;
 }
@@ -418,15 +306,10 @@ std::shared_ptr<const Schema> counter_schema() {
                               .field("last_activation", Kind::Int)
                               .build();
 #elif defined(ZEN_WEAVE_DEFERS)
-    // Counter v4 — the deferring steward's own bookkeeping. A loaded weave has no
-    // window on itself but this one, so what the test needs to see (did I get a
-    // retained answer right? did spending it succeed?) is persisted state like
-    // anything else, rather than a back channel invented for a test.
-    // `token` is deliberately persisted so a RELOAD hands the successor a
-    // capability that LOOKS live. Without that, a successor would simply have an
-    // empty member and fail locally, proving nothing about the board. With it, the
-    // successor genuinely presents its predecessor's token and the board is the
-    // thing that has to say no.
+    // Counter v4, the deferring steward's own window: did it get a retained answer right, and
+    // did spending it succeed? `token` is persisted so a RELOAD hands the successor a capability
+    // that LOOKS live: the successor genuinely presents its predecessor's token, and the board
+    // is the thing that has to say no.
     static const auto s = SchemaBuilder("Counter", 4)
                               .field("count", Kind::Int)
                               .field("deferred", Kind::Int)
@@ -486,18 +369,18 @@ public:
     }
 
 #if defined(ZEN_WEAVE_SENSES)
-    /// THE DECLARED CLAIM-SET (v6), from a raw `loom::Weave`. It rides the
-    /// manifest, so the host registers SenseHealth at load and can answer "what
-    /// Senses does this artifact provide?" before it has claimed anything.
+    /// THE DECLARED CLAIM-SET, from a raw `loom::Weave`. It rides the manifest, so the host
+    /// registers SenseHealth at load and can answer "what Senses does this artifact provide?"
+    /// before it has claimed anything.
     std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
         return {sensehealth_schema()};
     }
 #endif
 
 #if defined(ZEN_WEAVE_EMITS_GREET)
-    /// THE DECLARED EMIT-SET (v9), from a raw `loom::Weave`. It rides the manifest's
-    /// `emits` section, so the host claims this artifact's own definition of Greet v1
-    /// into the agreement wall at load — where a divergent acceptor meets it.
+    /// THE DECLARED EMIT-SET, from a raw `loom::Weave`. It rides the manifest's `emits`
+    /// section, so the host claims this artifact's own definition of Greet v1 into the
+    /// agreement wall at load, where a divergent acceptor meets it.
     std::vector<std::shared_ptr<const Schema>> emitted_schemas() const override {
         return {greet_schema()};
     }
@@ -519,16 +402,11 @@ public:
         return;
 #endif
 #if defined(ZEN_WEAVE_DEFERS)
-        // THE DYNAMIC STEWARD (ANS-02, ANS-06). An ask arrives; the answer is not known
-        // yet; so it takes the answer right away with it and RETURNS WITHOUT
-        // ANSWERING. Nothing here retains a Bus or a Message — only the opaque
-        // capability, which is the whole point: a stored `Bus&` would be a
-        // dangling reference, and a stored Message would be an ordinary value
-        // with no authority.
-        // `count_` counts DELIVERIES, both shapes, so a test can positively
-        // observe that a handler ran — which matters most for the assertions that
-        // are absences ("it got nothing", "it answered nobody"): without it, a
-        // weave that never woke up would pass them all.
+        // THE DYNAMIC STEWARD (ANS-02, ANS-06): the answer is not known yet, so it takes the
+        // answer right away with it and RETURNS WITHOUT ANSWERING, retaining only the opaque
+        // capability (a stored `Bus&` would dangle; a stored Message carries no authority).
+        // `count_` counts DELIVERIES, so the absence assertions ("it answered nobody") cannot
+        // pass on a weave that never woke up.
         ++count_;
         if (in.payload.schema().name() == std::string_view("Ping")) {
             pending_ = bus.make_deferred_answer();
@@ -597,15 +475,10 @@ public:
 #elif defined(ZEN_WEAVE_ACTIVATES)
         if (in.payload.schema().name() == loom::Activated::zen_name) {
             (void)bus;
-            // LIFE-04: THE FACT IS TRUSTED BECAUSE LOOM ATTESTS IT, not because the
-            // shape arrived. Two questions, and both must answer yes:
-            //   - did Loom authorize a lifecycle commit for THIS incarnation?
-            //     (bound to the target by the bus; an ordinary weave sending the
-            //      same public shape produces nothing here)
-            //   - is the attested sequence the one the payload claims? (a proof
-            //     minted for one activation must not authenticate another)
-            // Anything else is an ordinary message wearing a lifecycle costume,
-            // and is ignored entirely — no count, no lineage, no notice.
+            // LIFE-04: TRUSTED BECAUSE LOOM ATTESTS IT, not because the shape arrived: Loom
+            // must have authorized a lifecycle commit for THIS incarnation, and the attested
+            // sequence must be the one the payload claims. Anything else is an ordinary message
+            // wearing a lifecycle costume, ignored entirely: no count, no lineage, no notice.
             const std::int64_t claimed = in.payload.get("sequence")->as_int();
             if (!in.provenance.lifecycle_activation() ||
                 in.provenance.attested_sequence() != claimed) {
@@ -665,9 +538,9 @@ public:
 #endif
         ++count_;
 #if defined(ZEN_WEAVE_SENSES)
-        // THE DYNAMIC-PARITY FIXTURE (SENSE-01; ABI v6). The same four public verbs a
-        // native weave writes, from the far side of the seam — and the whole
-        // question is whether they mean here what they mean natively.
+        // THE DYNAMIC-PARITY FIXTURE (SENSE-01). The same four public verbs a native weave
+        // writes, from the far side of the seam, and the whole question is whether they mean
+        // here what they mean natively.
         Value obs(sensehealth_schema());
         obs.set("hp", Cell::integer(seq));
         const SenseClaimResult claim = bus.claim(std::move(obs));
@@ -695,28 +568,19 @@ public:
         }
         return;
 #elif defined(ZEN_WEAVE_SEAM_EMIT)
-        // THE SILENT-SEAM FIXTURE (MSG-08). Reach for a
-        // service by role, carrying a shape no registry in this process knows.
-        // Both halves matter: the role may well be unheld, but the emission never
-        // gets far enough for that to be the reason — it is rejected at the
-        // library/host seam, before any target is resolved. Fire-and-forget by
-        // design (a dynamic send returns no ticket), so this weave learns nothing
-        // and asserts nothing; the test watches the HOST side.
+        // THE SILENT-SEAM FIXTURE (MSG-08): reach for a service by role with a shape no
+        // registry in this process knows. The role may be unheld, but the emission is rejected
+        // at the library/host seam before any target is resolved. A dynamic send returns no
+        // ticket, so this weave learns nothing; the test watches the HOST side.
         Value want(seamonly_schema());
         want.set("want", Cell::integer(seq));
         bus.send_to_role("nobody.home", Message(std::move(want)));
 #elif defined(ZEN_WEAVE_SEAM_PUBLISH)
-        // THE SAME UNRESOLVABLE SHAPE, SPOKEN TO NOBODY IN PARTICULAR (FRIC-0).
-        // The seam-emit twin above ADDRESSES a slot; this one publishes, which
-        // names no destination at all. Both carry SeamOnly v1, so the seam meets
-        // exactly the same unresolvable claim and only the door differs — which
-        // is the whole comparison.
-        //
-        // Then a SECOND publication, of a shape the host does know, carrying
-        // bytes that cannot pass the gate: `Pong` with 'seq' deliberately
-        // absent. Its shape resolves, so somebody accepts it and would have been
-        // handed these bytes — a real failed delivery, on a publication, and the
-        // discriminator that keeps the first half from being mere suppression.
+        // THE SAME UNRESOLVABLE SHAPE, SPOKEN TO NOBODY: the seam-emit twin addresses a slot,
+        // this one publishes, so only the door differs. Then a SECOND publication, of a shape
+        // the host knows, with 'seq' absent: its shape resolves, so an accepter would have been
+        // handed these bytes, a real failed delivery that keeps the first half from being mere
+        // suppression.
         {
             Value want(seamonly_schema());
             want.set("want", Cell::integer(seq));
@@ -730,22 +594,11 @@ public:
         (void)seq;
         bus.send(in.reply_to, Message(Value(pong_schema()))); // 'seq' deliberately absent
 #elif defined(ZEN_WEAVE_NET_PROBE)
-        // Instruction-level reach: open a TCP socket directly and USE it — the exact
-        // move a bus grant cannot stop and only an OS sandbox can.
-        //
-        // The Ping's `seq` names the TCP port of an endpoint THE TEST OWNS on loopback
-        // (bound to :0, so the kernel chose it). It used to be the literal port 1, on
-        // the reasoning that "nothing listens there, so a reachable stack answers
-        // ECONNREFUSED" — which made the positive control depend on how the HOST treats
-        // a closed port. Where a closed port is black-holed instead of refused (WSL2
-        // mirrored networking), that connect() burns the whole SYN retry budget and the
-        // probe answers minutes late. So the endpoint is now a live listener the test
-        // established, and the positive witness is success rather than a particular
-        // failure (BL-VER-08; the measurement is in BL-VER-07-RB).
-        //
-        // `code` is 0 only if the connection opened AND one byte went down it, so a
-        // handshake that cannot carry data is not reported as reach. Otherwise it is
-        // the errno the OS gave — ENETUNREACH when the sandbox removed the interface.
+        // Instruction-level reach: open a TCP socket directly and USE it, the move a bus grant
+        // cannot stop and only an OS sandbox can. The Ping's `seq` names the port of a listener
+        // THE TEST OWNS on loopback, so the positive witness is success, never a closed port's
+        // host-dependent errno. `code` is 0 only if the connection opened AND one byte went down
+        // it; otherwise the errno (ENETUNREACH when the sandbox removed the interface).
         std::int64_t code = 0;
         const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
@@ -821,13 +674,11 @@ public:
         result.set("noexec_exec", Cell::integer(noexec));
         bus.send(in.reply_to, Message(std::move(result)));
 #elif defined(ZEN_WEAVE_FD_PROBE)
-        // THE DESCRIPTOR WITNESS, from inside the sandbox. Instruction-level reach:
-        // no bus grant can stop any of this, and no namespace covers it either — an
-        // already-open descriptor that crossed execve is simply THERE, or it is not.
-        //
-        // The Ping's `seq` names the fd the host parked before spawning. Writing the
-        // payload to it is the exact escape this witness exists to catch; the host holds
-        // the other end and asserts that nothing arrives.
+        // THE DESCRIPTOR WITNESS, from inside the sandbox: an already-open descriptor that
+        // crossed execve is simply THERE or not, whatever the grant or namespace. The Ping's
+        // `seq` names the fd the host parked before spawning; writing the payload to it is the
+        // escape this witness catches, and the host, holding the other end, asserts nothing
+        // arrives.
         {
             // (1) What do we actually hold? A bitmap of the low numbers, plus a count of
             //     anything hiding higher up — so "the leak just moved to another fd" is
@@ -911,15 +762,11 @@ public:
             bus.send(in.reply_to, Message(std::move(result)));
         }
 #elif defined(ZEN_WEAVE_MEM_BOMB)
-        // Commit a large resident block to trip memory.max. Held (not freed) so RSS
-        // stays high; under the cgroup cap the kernel OOM-kills us mid-handle, and
-        // THE REPLY BELOW IS NEVER SENT. That silence is the witness: the test
-        // asserts the recorder heard nothing, so a bomb that fails to die is caught
-        // by a Pong arriving rather than by a missing one.
-        //
-        // When it does NOT die, the reply carries WHY as a sentinel seq instead of
-        // the echo, so "the kernel refused the allocation" and "the pages were all
-        // written and nothing killed us" stay distinguishable in the failure.
+        // Commit a large resident block to trip memory.max, held so RSS stays high: under the
+        // cgroup cap the kernel OOM-kills us mid-handle and THE REPLY BELOW IS NEVER SENT, so a
+        // bomb that fails to die is caught by a Pong arriving. When it does not die, the reply
+        // carries WHY as a sentinel seq: "the kernel refused the allocation" and "every page was
+        // written and nothing killed us" stay distinguishable.
         {
             const std::int64_t outcome = detonate();
             Value pong(pong_schema());

@@ -125,7 +125,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/storage_broker[.]cpp$"
     "^tests/weavelib/storage_client[.]cpp$"
     "^tests/weavelib/storage_protocol[.]hpp$"
-    "^tests/weavelib/test_weave[.]cpp$"
     "^tests/weavelib/versioned_service[.]cpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
