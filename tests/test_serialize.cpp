@@ -84,7 +84,7 @@ void put_varint(std::string& out, std::uint64_t v) {
 // A message with NO fields. Its presence bitmask is (0 + 7) / 8 = ZERO bytes
 // wide, so an element of this type consumes no body bytes at all — the encoding
 // whose decoded population is entirely unrelated to its serialized size. It is a
-// legitimate shape, not a malformation, which is exactly why the repair may not
+// legitimate shape, not a malformation, which is exactly why the decoder's bound may not
 // simply outlaw it.
 std::shared_ptr<const Schema> nothing_schema() {
     static const auto s = SchemaBuilder("Wire.Nothing", 1).build();
@@ -471,7 +471,7 @@ TEST_CASE("a payload missing a required field is refused via the gate") {
 // ---- bounded decode materialization ----------------------------------------
 // docs/reference/bounds.md#the-decode-materialization-bound
 
-TEST_CASE("R2F-A: a compact value cannot command an unbounded decoded population") {
+TEST_CASE("a compact value cannot command an unbounded decoded population") {
     // The amplification, verbatim in shape: a few dozen wire bytes claim 1,048,576
     // zero-body elements — exactly kMaxListCount, so the per-list cap has nothing to
     // say — and an UNBUDGETED decoder materialises all of them and ADMITS the value
@@ -492,8 +492,8 @@ TEST_CASE("R2F-A: a compact value cannot command an unbounded decoded population
     CHECK(a.first_error().detail.find("materialization budget") != std::string::npos);
 }
 
-TEST_CASE("R2F-A: a valid compact list of zero-field messages still decodes") {
-    // The repair must not be `count <= remaining_wire_bytes`. A zero-field Message
+TEST_CASE("a valid compact list of zero-field messages still decodes") {
+    // The bound must not be `count <= remaining_wire_bytes`. A zero-field Message
     // legitimately consumes zero body bytes, so 1,000 of them ride 4 body bytes —
     // and that is a VALID value, not an attack.
     const std::string bytes = nothing_list_bytes(1000);
@@ -509,7 +509,7 @@ TEST_CASE("R2F-A: a valid compact list of zero-field messages still decodes") {
     }
 }
 
-TEST_CASE("R2F-A: the materialization boundary is exact and inclusive") {
+TEST_CASE("the materialization boundary is exact and inclusive") {
     // The bound is INCLUSIVE: a decode whose total materialization is exactly
     // kMaxDecodedCells is accepted; the first cell beyond it is refused.
     // NothingList costs 1 (the door's own slot vector) + one cell per element.
@@ -525,7 +525,7 @@ TEST_CASE("R2F-A: the materialization boundary is exact and inclusive") {
     CHECK(over.first_error().path == "items");
 }
 
-TEST_CASE("R2F-A: the budget is ONE allowance shared by the whole value, not one per container") {
+TEST_CASE("the budget is ONE allowance shared by the whole value, not one per container") {
     // Two lists, each comfortably inside the bound on its own. Their SUM is not.
     // A per-container budget would admit the pair; one shared budget refuses it.
     const std::uint64_t each = 40000; // 2 door slots + 40,000 << 65,536
@@ -544,7 +544,7 @@ TEST_CASE("R2F-A: the budget is ONE allowance shared by the whole value, not one
     CHECK(both.first_error().detail.find("materialization budget") != std::string::npos);
 }
 
-TEST_CASE("R2F-A: a nested message charges its whole slot vector, present fields or not") {
+TEST_CASE("a nested message charges its whole slot vector, present fields or not") {
     // The unit is a decoded CELL SLOT, so the accounting is exact and checkable:
     //   PairList of N  =  1 (door slot) + N (element cells) + 2N (each Pair's slots)
     //                  =  1 + 3N
@@ -567,7 +567,7 @@ TEST_CASE("R2F-A: a nested message charges its whole slot vector, present fields
     CHECK(over.first_error().detail.find("materialization budget") != std::string::npos);
 }
 
-TEST_CASE("R2F-A: the budget counts STRUCTURE, not bytes — a big payload is one cell") {
+TEST_CASE("the budget counts STRUCTURE, not bytes — a big payload is one cell") {
     // Wire-size limits (kMaxFieldBytes, and the remaining-input check) bound how
     // many BYTES a field may carry. The materialization budget bounds how much
     // STRUCTURE the decode may build. A 1 MiB Bytes field is a single cell and must
@@ -582,7 +582,7 @@ TEST_CASE("R2F-A: the budget counts STRUCTURE, not bytes — a big payload is on
     CHECK(a.value().get("data")->as_bytes().size() == (1u << 20));
 }
 
-TEST_CASE("R2F-A: the budget does not swallow the older, more precise refusals") {
+TEST_CASE("the budget does not swallow the more precise refusals") {
     // A count past the per-list cap keeps its own diagnosis (MalformedField, "list
     // count exceeds cap") — the cheaper container check still runs first, so the
     // new bound weakened no existing malformed-input handling.
@@ -611,7 +611,7 @@ TEST_CASE("R2F-A: the budget does not swallow the older, more precise refusals")
     }
 }
 
-TEST_CASE("R2F-A: the compat (JSON) decoder shares the same budget domain") {
+TEST_CASE("the compat (JSON) decoder shares the same budget domain") {
     // The law lives in the decoder, not in a transport, and both encodings reach it
     // through the same admit(). JSON cannot express the COMPACT amplification (an
     // array element costs text), but the structure it builds is bounded identically.

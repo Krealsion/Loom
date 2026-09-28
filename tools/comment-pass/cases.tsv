@@ -150,3 +150,11 @@ tests/test_history_recorder.cpp	RTH-1a: one fact, several windows, and the mask 
 tests/test_history_recorder.cpp	RTH-1a: protection decides what is KEPT; the shape decides what takes context	protection decides what is KEPT; the shape decides what takes context
 tests/test_history_recorder.cpp	RTH-1a: a policy change reseats every shape already being watched	a policy change reseats every shape already being watched
 tests/test_poke.cpp	a non-scalar field is fully visible in the structure but not message-read/writable this phase	a non-scalar field is fully visible in the structure but not message-read/writable
+tests/test_serialize.cpp	R2F-A: a compact value cannot command an unbounded decoded population	a compact value cannot command an unbounded decoded population
+tests/test_serialize.cpp	R2F-A: a valid compact list of zero-field messages still decodes	a valid compact list of zero-field messages still decodes
+tests/test_serialize.cpp	R2F-A: the materialization boundary is exact and inclusive	the materialization boundary is exact and inclusive
+tests/test_serialize.cpp	R2F-A: the budget is ONE allowance shared by the whole value, not one per container	the budget is ONE allowance shared by the whole value, not one per container
+tests/test_serialize.cpp	R2F-A: a nested message charges its whole slot vector, present fields or not	a nested message charges its whole slot vector, present fields or not
+tests/test_serialize.cpp	R2F-A: the budget counts STRUCTURE, not bytes — a big payload is one cell	the budget counts STRUCTURE, not bytes — a big payload is one cell
+tests/test_serialize.cpp	R2F-A: the budget does not swallow the older, more precise refusals	the budget does not swallow the more precise refusals
+tests/test_serialize.cpp	R2F-A: the compat (JSON) decoder shares the same budget domain	the compat (JSON) decoder shares the same budget domain
