@@ -583,9 +583,9 @@ TEST_CASE("the budget counts STRUCTURE, not bytes — a big payload is one cell"
 }
 
 TEST_CASE("the budget does not swallow the more precise refusals") {
-    // A count past the per-list cap keeps its own diagnosis (MalformedField, "list
-    // count exceeds cap") — the cheaper container check still runs first, so the
-    // new bound weakened no existing malformed-input handling.
+    // A count past the per-list cap keeps its own diagnosis (MalformedField, "list count exceeds
+    // cap"): the cheaper container check runs first, so the budget weakens no malformed-input
+    // handling.
     {
         std::string bytes = native_header(fx::Inventory());
         bytes.push_back('\x02'); // presence: only 'items'
