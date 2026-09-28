@@ -30,7 +30,6 @@ set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 # path. The list only shrinks: a file leaves it when its comments meet the standard.
 set(ZEN_COMMENT_PENDING
     "^tests/run-under-scope[.]sh$"
-    "^tests/session/lifecycle/asks[.]py$"
     "^tests/session/lifecycle/cleanup[.]py$"
     "^tests/session/lifecycle/crashes[.]py$"
     "^tests/session/lifecycle/descendants[.]py$"
