@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The `source_comments` entry: do first-party comments and test case names meet the standard
-# (CONTRIBUTING.md#comments-and-documents)? A long block, a removal note, a private id, a label in
-# a case name or a TEST_CASE name held twice is a red naming where the text belongs, and so is an
-# empty population. It cannot see history or process in words, or a comment's truth.
+# The `source_comments` entry: do first-party comments, strings and case names meet the standard
+# (CONTRIBUTING.md#comments-and-documents)? A long block, a removal note, a private id in a
+# comment, a string or CMake code, a label in a case name or a TEST_CASE name held twice is a red,
+# and so is an empty population. It cannot see history or process in words, a label in data, or
+# a comment's truth.
 #   cmake -P tests/check_source_comments.cmake    (from the repository root, or -DZEN_REPO=<repo>)
 
 cmake_minimum_required(VERSION 3.16)
@@ -134,19 +135,24 @@ set(ZEN_CASE_MACRO "(^|[^A-Za-z0-9_])(TEST_CASE|SUBCASE)[ \t]*\\(")
 set(ZEN_CASE_LABEL "(^|[^A-Za-z0-9_])([A-Z][A-Z]?[A-Z]?[A-Z]?[0-9]+[A-Za-z]?[A-Za-z]?)([^A-Za-z0-9_]|$)")
 string(ASCII 5 ZEN_ENQ)
 
-# The literals at the start of text, joined: sets <out>_name, and <out>_more when nothing but
-# blanks follows them, so the name may go on in the next line's literals.
+# The literals at the start of text, joined: sets <out>_name, <out>_lits (each literal, quotes
+# kept), <out>_rest (what follows them), and <out>_more when nothing but blanks follows them, so
+# the name may go on in the next line's literals.
 function(zen_cases_take text out)
     set(name "")
-    while(text MATCHES "^[ \t]*\"(([^\"${ZEN_EOT}]|${ZEN_EOT}.)*)\"(.*)$")
-        string(APPEND name "${CMAKE_MATCH_1}")
-        set(text "${CMAKE_MATCH_3}")
+    set(lits "")
+    while(text MATCHES "^[ \t]*(\"(([^\"${ZEN_EOT}]|${ZEN_EOT}.)*)\")(.*)$")
+        list(APPEND lits "${CMAKE_MATCH_1}")
+        string(APPEND name "${CMAKE_MATCH_2}")
+        set(text "${CMAKE_MATCH_4}")
     endwhile()
     set(more FALSE)
     if(text MATCHES "^[ \t]*$")
         set(more TRUE)
     endif()
     set(${out}_name "${name}" PARENT_SCOPE)
+    set(${out}_lits "${lits}" PARENT_SCOPE)
+    set(${out}_rest "${text}" PARENT_SCOPE)
     set(${out}_more ${more} PARENT_SCOPE)
 endfunction()
 
@@ -195,6 +201,62 @@ macro(zen_cases_close)
     endif()
 endmacro()
 
+# Every case on the rest of a C/C++ line, left to right: strings and comments are stepped over,
+# and at each macro its name is taken; a name that runs off the line's end goes on in the next.
+macro(zen_cases_scan_rest)
+    while(NOT case_open)
+        if(NOT rest MATCHES "^([^\"/]*)(.*)$")
+            break()
+        endif()
+        set(cs_prefix "${CMAKE_MATCH_1}")
+        set(cs_tail "${CMAKE_MATCH_2}")
+        if(cs_prefix MATCHES "${ZEN_CASE_MACRO}[ \t]*$")
+            set(case_macro "${CMAKE_MATCH_2}")
+            set(case_line ${n})
+            zen_cases_take("${cs_tail}" ct)
+            set(case_name "${ct_name}")
+            list(APPEND case_lits ${ct_lits})
+            set(case_open ${ct_more})
+            set(rest "${ct_rest}")
+            if(NOT case_open)
+                zen_cases_close()
+            endif()
+        elseif(cs_tail STREQUAL "" OR cs_tail MATCHES "^//")
+            break()
+        elseif(cs_tail MATCHES "^/[*]")
+            string(FIND "${cs_tail}" "*/" cs_close)
+            if(cs_close EQUAL -1)
+                break()
+            endif()
+            math(EXPR cs_close "${cs_close} + 2")
+            string(SUBSTRING "${cs_tail}" ${cs_close} -1 rest)
+        elseif(cs_tail MATCHES "^/")
+            string(SUBSTRING "${cs_tail}" 1 -1 rest)
+        elseif(cs_tail MATCHES "^\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"(.*)$")
+            set(rest "${CMAKE_MATCH_2}")
+        else()
+            break()
+        endif()
+    endwhile()
+endmacro()
+
+# ---- strings and CMake code --------------------------------------------------------------
+# A private id is refused in every C/C++ string literal and in the code of every CMake file, as
+# in their comments: a message or a test-data value says its thing in words. Labels are not read
+# here; in data they look like ordinary values (`r1`, `Ping2`). Spared: the three checks whose
+# self-tests must spell ids to prove they refuse them; their comments are still read.
+set(ZEN_STRING_SPARED tests/private_ids.cmake tests/check_source_comments.cmake
+    tests/check_doc_standard.cmake)
+
+function(zen_strings_judge where text laws out)
+    set(found "")
+    zen_private_ids("${text}" "${laws}" ids)
+    foreach(id IN LISTS ids)
+        list(APPEND found "${where}: `${id}` in a string or in CMake code is a development-phase name or private id -- word a message without it, and rename test data in every use")
+    endforeach()
+    set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+
 # Every finding in one file's swapped text. `kind` is cxx, cmake or manifest; `exempt` is TRUE for
 # an installed header. A comment line is comment alone: `//` or `/* */` text, or `#` outside a
 # quoted CMake argument, or a line inside an open `/* */`. Every comment is judged for a removal
@@ -215,31 +277,39 @@ function(zen_comments_scan rel kind exempt content laws out)
         math(EXPR n "${n} + 1")
         set(comment "")
         set(whole FALSE)
+        set(code_text "")
         if(kind STREQUAL "cmake")
             # Quoted arguments may span lines; a `#` inside one is text, not a comment.
             set(rest "${line}")
             if(in_quote)
-                if(rest MATCHES "^([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"(.*)$")
-                    set(rest "${CMAKE_MATCH_2}")
+                if(rest MATCHES "^(([^\"${ZEN_EOT}]|${ZEN_EOT}.)*)\"(.*)$")
+                    set(code_text "${CMAKE_MATCH_1}")
+                    set(rest "${CMAKE_MATCH_3}")
                     set(in_quote FALSE)
                 else()
+                    set(code_text "${rest}")
                     set(rest "")
                 endif()
             endif()
             if(NOT in_quote)
                 # A closed argument leaves no quote behind: a `"` still found opens one.
+                string(REGEX MATCHALL "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" quoted "${rest}")
+                string(REPLACE ";" " " quoted "${quoted}")
                 string(REGEX REPLACE "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" "__" bare "${rest}")
                 string(FIND "${bare}" "#" hash)
                 string(FIND "${bare}" "\"" quote)
+                set(unquoted "${bare}")
                 if(NOT hash EQUAL -1 AND (quote EQUAL -1 OR hash LESS quote))
                     string(SUBSTRING "${bare}" ${hash} -1 comment)
                     string(SUBSTRING "${bare}" 0 ${hash} before)
+                    set(unquoted "${before}")
                     if(before MATCHES "^[ \t]*$" AND rest STREQUAL line)
                         set(whole TRUE)
                     endif()
                 elseif(NOT quote EQUAL -1)
                     set(in_quote TRUE)
                 endif()
+                string(APPEND code_text " ${unquoted} ${quoted}")
             endif()
         elseif(kind STREQUAL "script" OR kind STREQUAL "cmd")
             # Python, shell and batch: the whole line is judged, so a docstring, a string and a
@@ -271,28 +341,46 @@ function(zen_comments_scan rel kind exempt content laws out)
             if(was_open AND line MATCHES "^[ \t]*$")
                 set(whole TRUE)
             endif()
-            # A case's name: its literals after the macro, joined across the lines they span.
+            # Every case's name on the line: its literals after the macro, joined across the lines
+            # they span. The literals a name took are its rule's, not the string rule's.
+            set(case_lits "")
+            set(rest "${line}")
             if(case_open)
                 set(case_open FALSE)
-                if(line MATCHES "^[ \t]*\"")
-                    zen_cases_take("${line}" ct)
+                if(rest MATCHES "^[ \t]*\"")
+                    zen_cases_take("${rest}" ct)
                     string(APPEND case_name "${ct_name}")
+                    list(APPEND case_lits ${ct_lits})
                     set(case_open ${ct_more})
+                    set(rest "${ct_rest}")
                 endif()
-                if(NOT case_open)
-                    zen_cases_close()
-                endif()
-            elseif(cl_code MATCHES "${ZEN_CASE_MACRO}")
-                set(case_macro "${CMAKE_MATCH_2}")
-                set(case_line ${n})
-                string(REGEX MATCH "(TEST_CASE|SUBCASE)[ \t]*\\((.*)$" _ "${line}")
-                zen_cases_take("${CMAKE_MATCH_2}" ct)
-                set(case_name "${ct_name}")
-                set(case_open ${ct_more})
                 if(NOT case_open)
                     zen_cases_close()
                 endif()
             endif()
+            if(NOT case_open AND cl_code MATCHES "${ZEN_CASE_MACRO}")
+                if(was_open)
+                    string(FIND "${rest}" "*/" cs_close)
+                    if(cs_close EQUAL -1)
+                        set(rest "")
+                    else()
+                        math(EXPR cs_close "${cs_close} + 2")
+                        string(SUBSTRING "${rest}" ${cs_close} -1 rest)
+                    endif()
+                endif()
+                zen_cases_scan_rest()
+            endif()
+            # Every string on the line, after character literals (a `'"'` opens none).
+            string(REGEX REPLACE "'([^'${ZEN_EOT}]|${ZEN_EOT}.)'" "''" chars "${line}")
+            string(REGEX MATCHALL "\"([^\"${ZEN_EOT}]|${ZEN_EOT}.)*\"" strings "${chars}")
+            if(NOT case_lits STREQUAL "" AND NOT strings STREQUAL "")
+                list(REMOVE_ITEM strings ${case_lits})
+            endif()
+            string(REPLACE ";" " " code_text "${strings}")
+        endif()
+        if(NOT code_text MATCHES "^[ \t]*$" AND NOT rel IN_LIST ZEN_STRING_SPARED)
+            zen_strings_judge("${rel}:${n}" "${code_text}" "${laws}" judged_strings)
+            list(APPEND findings ${judged_strings})
         endif()
         if(whole)
             if(block EQUAL 0)
@@ -451,7 +539,25 @@ zen_comments_expect("a removal note" cxx "// ${ZEN_STAR} the old arm WAS HERE\ni
 zen_comments_expect("a private id" cxx "// see VD-27 for why\nint x;\n" 1)
 zen_comments_expect("declared laws and standards" cxx "// MSG-09, POP-01, UTF-8, button-1\nint x;\n" 0)
 zen_comments_expect("an id in a trailing comment" cxx "int x; // P-WORK-22\n" 1)
-zen_comments_expect("an id in a literal" cxx "const char* s = \"VD-27 // x\"; // fine\n" 0)
+zen_comments_expect("an id in a literal is the string rule's, not a comment" cxx
+    "const char* s = \"VD-27 // x\"; // fine\n" 1)
+zen_comments_expect("an id in a message" cxx "throw std::runtime_error(\"refused (R2E-0)\");\n" 1)
+zen_comments_expect("a label and a law in a string" cxx "f(\"c2b\", \"R2FB.Bulk\", \"Ping2\", \"MSG-09\");\n" 0)
+zen_comments_expect("a quote in a character literal opens no string" cxx "char q = '\"'; int R2E_0 = 1;\n" 0)
+zen_comments_expect("an id in CMake code" cmake "add_test(NAME x COMMAND t --test-suite=R2FD-1)\n" 1)
+zen_comments_expect("an id in a quoted CMake argument" cmake "message(STATUS \"since R2E-0\") # fine\n" 1)
+zen_comments_expect("an id inside a CMake argument spanning lines" cmake
+    "message(STATUS \"one\ntwo VD-27\nthree\")\n" 1)
+zen_comments_scan("tests/private_ids.cmake" cmake FALSE "set(x \"R2E-0a\")\n" "${laws}" spared)
+if(NOT spared STREQUAL "")
+    message(FATAL_ERROR "source-comments: self-test 'a check's own self-test spelling is spared' found '${spared}'")
+endif()
+zen_comments_expect("every case on a line" cxx "TEST_CASE(\"x\") { SUBCASE(\"S2b: y\") {} }\n" 1)
+zen_comments_expect("a case after a closed one on its continuation line" cxx
+    "TEST_CASE(\"a \"\n          \"b\") { SUBCASE(\"J3: c\") {} }\n" 1)
+zen_comments_expect("a case after a string and a comment on its line" cxx
+    "f(\"TEST_CASE(\"); /* SUBCASE( */ SUBCASE(\"H1: d\") {}\n" 1)
+zen_comments_expect("a coded name is refused once" cxx "TEST_CASE(\"R2E-0: e\") {}\n" 1)
 zen_comments_expect("a private id in a case name" cxx "TEST_CASE(\"R2E-0: a thing holds\") {\n}\n" 1)
 zen_comments_expect("a label in a subcase name" cxx "    SUBCASE(\"J1: a thing holds\") {\n    }\n" 1)
 zen_comments_expect("a label in a name's second literal" cxx
@@ -589,5 +695,5 @@ if(finding_count GREATER 0)
     string(REPLACE ";" "\n  " shown "${shown}")
     message(FATAL_ERROR "source-comments: ${finding_count} findings:\n  ${shown}")
 endif()
-message(STATUS "source-comments: PASSED -- no long block, removal note, private id, coded case "
-               "name or case name held twice")
+message(STATUS "source-comments: PASSED -- no long block, removal note, private id in a comment, "
+               "string or CMake code, coded case name or case name held twice")

@@ -76,9 +76,11 @@ refuses:
   two population manifests, Python and shell, and the session tooling's launchers: a comment
   block over six lines outside an installed header, a removal note, or a private id. A Python,
   shell or batch file is read whole for an id, docstrings and strings included; only a comment on
-  a line of its own counts toward a block there. It reads each `TEST_CASE` and `SUBCASE` name
-  too: one holding a private id or a label (`J1:`, `S3b`), or a `TEST_CASE` name another case
-  already has in the one test binary, is refused.
+  a line of its own counts toward a block there. Every C/C++ string literal and the code of
+  every CMake file are read for a private id too, as their comments are; the three checks whose
+  self-tests must spell ids are spared that reading. It reads each `TEST_CASE` and `SUBCASE`
+  name, every one on a line: one holding a private id or a label (`J1:`, `S3b`), or a
+  `TEST_CASE` name another case already has in the one test binary, is refused.
 - `doc_standard` (`tests/check_doc_standard.cmake`) reads every current-facing Markdown file for
   a private id.
 - `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every
@@ -87,8 +89,8 @@ refuses:
 
 What a private id is, `tests/private_ids.cmake` says once for both. Every current-facing
 document and every first-party source file is held to this standard; vendored code is not. No
-check can see history or a private process written in words, read a C/C++ or CMake string other
-than a case name, or read a comment for truth; that is a reviewer's.
+check can see history or a private process written in words, a label shape in a string (in data
+`c2a` looks like `r1` or `Ping2`), or a comment's truth; that is a reviewer's.
 `tools/comment-pass/` measures, prints and proves a comment pass (`census.py`, `blocks.py`,
 `edit.py`, `prove.py`); a renamed test case is renamed through its case map (`cases.tsv`, applied
 by `cases.py`), which the proof reads.
