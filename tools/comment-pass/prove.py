@@ -134,6 +134,9 @@ RENAMED_VALUES = {
     "tests/test_bridge.cpp": (("R2FA.Nothing", "Wire.Nothing"), ("R2FA.Bulk", "Wire.Bulk")),
     "tests/test_serialize.cpp": (("R2FA.", "Wire."),),
     "tests/test_joint.cpp": (("zen-joint-j22.so", "zen-joint-after-refusal.so"),),
+    "tests/test_policy.cpp": (
+        ("/tmp/zen_grant_record_perms_n2.json", "/tmp/zen_grant_record_perms.json"),
+        ("zen_f1_kat", "zen_sha256_kat")),
 }
 # The one assertion the pass changes, named by its START and END code, each once in its file: a
 # letter whose author was removed is refused SenderLifeEnded (MSG-03), never CapabilityDenied.
