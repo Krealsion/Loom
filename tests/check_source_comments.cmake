@@ -34,7 +34,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_breathing[.]cpp$"
     "^tests/test_capabilities[.]cpp$"
     "^tests/test_compat[.]cpp$"
-    "^tests/test_component[.]cpp$"
     "^tests/test_describe[.]cpp$"
     "^tests/test_dispatch_loaded[.]cpp$"
     "^tests/test_dispatch_refusal[.]cpp$"
