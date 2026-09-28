@@ -57,7 +57,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/session/observe_journey[.]py$"
     "^tests/session/observe_probe/probe[.]py$"
     "^tests/session/test_client[.]py$"
-    "^tests/switchboard_fixtures[.]hpp$"
     "^tests/test_admission[.]cpp$"
     "^tests/test_ask_book[.]cpp$"
     "^tests/test_breathing[.]cpp$"
