@@ -52,7 +52,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/test_runs[.]cpp$"
     "^tests/test_schema[.]cpp$"
     "^tests/test_schema_codec[.]cpp$"
-    "^tests/test_sense[.]cpp$"
     "^tests/test_serialize[.]cpp$"
     "^tests/test_session[.]cpp$"
     "^tests/test_value[.]cpp$"

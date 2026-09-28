@@ -1,32 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// SENSES — the S1..S6 witnesses.
+// SENSES: what a participant claims is currently so.
 // SENSE-01..05; docs/laws/sense-laws.md
-//
-// The category under test:
-//
-//   MESSAGES   what happened / what I want done      causal, FIFO, queued
-//   SENSES     what I currently claim is so          acausal, latest-only, pulled
-//
-// What each case pins, in the phase's own words:
-//
-//   S1  ordered observation      readers see claims in FIFO order, no ask/answer
-//   S2  no future knowledge      a reader queued AHEAD of a change sees the old claim
-//   S3  office across replacement a predecessor's claim is never relabelled
-//   S4  personal vs office       the same holder's two claims stay distinguishable
-//   S5  lifetime cleanup         the repository is bounded by current keys
-//   S6  authorization            unauthorized read and forged office claim refuse loudly
-//
-// Plus the structural ones: a reader cannot mutate a producer through a reading,
-// and an older revision never wins over a newer one.
+// Messages (what happened, what I want done) are causal, FIFO and queued; senses are acausal,
+// latest-only and pulled. The cases pin ordered observation, no future knowledge, an office claim
+// across replacement, personal vs office claims, cleanup bounded by current keys, and loud refusal
+// of an unauthorized read or a forged office claim; plus a reading that cannot mutate its
+// producer, and revision order.
 
 #include <doctest.h>
 
 #include "switchboard_fixtures.hpp"
 
 #include <zen/host/lifecycle_wiring.hpp>
-#include <zen/serialize.hpp> // serialize() — the swap_state snapshot in S3b
+#include <zen/serialize.hpp> // serialize(): the swap_state snapshot of a live code swap
 #include <zen/weave.hpp>
 
 #include <memory>
@@ -139,10 +127,10 @@ std::string text_of(const SenseReading& r) { return from_value<Status>(*r.value)
 
 TEST_SUITE("sense") {
 
-// ---- S1: ordered observation -----------------------------------------------
+// ---- ordered observation ---------------------------------------------------
 
-TEST_CASE("S1: many readers observe a producer's latest claim synchronously, with no "
-          "request/answer traffic, and in exact FIFO order") {
+TEST_CASE("many readers observe a producer's latest claim synchronously, with no request/answer "
+          "traffic, and in exact FIFO order") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     auto [r1, reader1] = put<Reader>(bus, observer_of_health(), "");
@@ -167,7 +155,7 @@ TEST_CASE("S1: many readers observe a producer's latest claim synchronously, wit
     CHECK(hp_of(reader1->seen[0]) == 82);
     CHECK(hp_of(reader2->seen[0]) == 82);
 
-    // THE ORDERING WITNESS, exactly as the phase states it. Queue:
+    // THE ORDERING WITNESS. Queue:
     //     Damage{18}  ReaderTick  Damage{18}  ReaderTick
     // Each ReaderTick must see the claim as of the Damage BEFORE it.
     bus.send(pid, Message(to_value(Damage{12})));
@@ -185,7 +173,7 @@ TEST_CASE("S1: many readers observe a producer's latest claim synchronously, wit
     CHECK(reader1->seen[2].by.revision == 3);
 }
 
-TEST_CASE("S1: a reading carries truthful authorship — who claimed it, under which life and "
+TEST_CASE("a reading carries truthful authorship — who claimed it, under which life and "
           "incarnation, at which revision, and personally rather than as an office") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
@@ -210,10 +198,10 @@ TEST_CASE("S1: a reading carries truthful authorship — who claimed it, under w
     CHECK(by.schema_version == 1);
 }
 
-// ---- S2: no future knowledge ------------------------------------------------
+// ---- no future knowledge ----------------------------------------------------
 
-TEST_CASE("S2: a reader delivered BEFORE a state-changing message observes the OLD claim — "
-          "queued work is never applied speculatively to make a claim look current") {
+TEST_CASE("a reader delivered BEFORE a state-changing message observes the OLD claim — queued "
+          "work is never applied speculatively to make a claim look current") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     auto [rid, reader] = put<Reader>(bus, observer_of_health(), "");
@@ -238,10 +226,10 @@ TEST_CASE("S2: a reader delivered BEFORE a state-changing message observes the O
     CHECK(producer->last_claim.revision == 2);
 }
 
-// ---- S3: office claim across replacement ------------------------------------
+// ---- office claim across replacement ----------------------------------------
 
-TEST_CASE("S3: role movement never relabels a predecessor's office claim, and the successor is "
-          "not considered to have claimed anything until it deliberately does") {
+TEST_CASE("role movement never relabels a predecessor's office claim, and the successor is not "
+          "considered to have claimed anything until it deliberately does") {
     Switchboard bus;
     auto [aid, incumbent] = put<Officer>(bus, Grant{}, "station");
     incumbent->role = "station";
@@ -287,30 +275,19 @@ TEST_CASE("S3: role movement never relabels a predecessor's office claim, and th
     CHECK(now.by.revision == 1);
 }
 
-// The other half of S3 — the role MOVING between two live holders, where the
-// predecessor's claim must survive stamped stale rather than being deleted or
-// relabelled — needs the real prepared-replacement ceremony (the only thing that
-// moves a role holder in place). It lives in the kernel suite beside that
-// ceremony: `test_kernel.cpp`, the Senses-across-replacement section.
+// The other half of that: the role MOVING between two live holders, where the predecessor's claim
+// must survive stamped stale rather than deleted or relabelled, needs the real prepared-replacement
+// ceremony, so it lives in `test_kernel.cpp`'s Senses-across-replacement section.
 
-// ---- S3b: the two generation facts are independent --------------------------
-//
-// A LIVE code swap moves the INCARNATION and leaves the LIFE alone (`swap_state`
-// bumps the counter; `begin_new_life` advances only from `!alive`). So across a
-// same-life replacement a materialized claim is in a state no single "is the
-// author still current?" flag can describe:
-//
-//     life 7 / incarnation 3   claims X
-//     ... live replacement ...
-//     life 7 / incarnation 4   is now the code at that address
-//
-// The claim stays historically truthful — it IS incarnation 3's, and Loom never
-// rewrites it — but a reader needs to know the code behind it has moved on.
-// These cases pin that the two facts are asked separately, and that neither is
+// ---- the two generation facts are independent -------------------------------
+// A LIVE code swap moves the INCARNATION and leaves the LIFE alone (`swap_state` bumps the
+// counter; `begin_new_life` advances only from `!alive`), so across a same-life replacement a
+// claim stays incarnation 3's, truthfully, while the code at that address is incarnation 4's. A
+// reader needs both facts, so these cases pin that they are asked separately and that neither is
 // derived from the other.
 
-TEST_CASE("S3b: a same-life code replacement leaves the LIFE current and the INCARNATION "
-          "stale — a predecessor's claim is distinguishable from the current incarnation's") {
+TEST_CASE("a same-life code replacement leaves the LIFE current and the INCARNATION stale — a "
+          "predecessor's claim is distinguishable from the current incarnation's") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
 
@@ -359,8 +336,8 @@ TEST_CASE("S3b: a same-life code replacement leaves the LIFE current and the INC
     CHECK(current.by.author_incarnation_is_current);
 }
 
-TEST_CASE("S3b: a DEATH-AND-REVIVAL moves both generations — incarnation-currentness is not "
-          "merely a slower copy of life-currentness") {
+TEST_CASE("a DEATH-AND-REVIVAL moves both generations — incarnation-currentness is not merely a "
+          "slower copy of life-currentness") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
 
@@ -382,9 +359,9 @@ TEST_CASE("S3b: a DEATH-AND-REVIVAL moves both generations — incarnation-curre
     CHECK_FALSE(after.by.author_incarnation_is_current);
 }
 
-// ---- S4: personal vs office -------------------------------------------------
+// ---- personal vs office -----------------------------------------------------
 
-TEST_CASE("S4: the SAME holder's personal claim and office claim stay distinguishable — merely "
+TEST_CASE("the SAME holder's personal claim and office claim stay distinguishable — merely "
           "holding the office attaches nothing") {
     Switchboard bus;
     auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
@@ -409,7 +386,7 @@ TEST_CASE("S4: the SAME holder's personal claim and office claim stay distinguis
     CHECK(personal.by.author == office.by.author); // same weave, still distinguishable
 }
 
-TEST_CASE("S4: a role holder's personal claim does NOT become the office's claim") {
+TEST_CASE("a role holder's personal claim does NOT become the office's claim") {
     Switchboard bus;
     auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
     officer->role = "station";
@@ -422,9 +399,9 @@ TEST_CASE("S4: a role holder's personal claim does NOT become the office's claim
     CHECK(bus.observe_office("station", "Status", 1).refusal == SenseRefusal::NoClaim);
 }
 
-// ---- S5: lifetime cleanup ---------------------------------------------------
+// ---- lifetime cleanup -------------------------------------------------------
 
-TEST_CASE("S5: the repository is bounded by CURRENT KEYS — a thousand claims, repeated "
+TEST_CASE("the repository is bounded by CURRENT KEYS — a thousand claims, repeated "
           "load/claim/unload, and reloads add no entries") {
     Switchboard bus;
 
@@ -442,8 +419,7 @@ TEST_CASE("S5: the repository is bounded by CURRENT KEYS — a thousand claims, 
         CHECK(bus.retained_claim_count() == 0); // removal takes its keys with it
     }
 
-    // Repeated load / claim / unload does not accumulate one entry per
-    // incarnation — the thing the phase names explicitly.
+    // Repeated load / claim / unload does not accumulate one entry per incarnation.
     for (int round = 0; round < 25; ++round) {
         auto [pid, producer] = put<Producer>(bus, Grant{}, "");
         (void)producer;
@@ -468,8 +444,8 @@ TEST_CASE("S5: the repository is bounded by CURRENT KEYS — a thousand claims, 
     }
 }
 
-TEST_CASE("S5: a revival replaces the value under one key rather than adding a key, and the "
-          "reading says the claiming life has ended") {
+TEST_CASE("a revival replaces the value under one key rather than adding a key, and the reading "
+          "says the claiming life has ended") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     (void)producer;
@@ -492,10 +468,10 @@ TEST_CASE("S5: a revival replaces the value under one key rather than adding a k
     CHECK_FALSE(r.by.author_life_is_current); // the claiming life is gone
 }
 
-// ---- S6: authorization ------------------------------------------------------
+// ---- authorization ----------------------------------------------------------
 
-TEST_CASE("S6: an unauthorized read refuses EXPLICITLY, and is not confusable with 'nothing has "
-          "been claimed'") {
+TEST_CASE("an unauthorized read refuses EXPLICITLY, and is not confusable with 'nothing has been "
+          "claimed'") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     (void)producer;
@@ -521,8 +497,8 @@ TEST_CASE("S6: an unauthorized read refuses EXPLICITLY, and is not confusable wi
     CHECK(bus.observe_as(rid, pid, "Health", 1).refusal == SenseRefusal::NotAuthorized);
 }
 
-TEST_CASE("S6: an authorized reader is authorized per SHAPE — the rule it holds, not the one it "
-          "does not") {
+TEST_CASE("an authorized reader is authorized per SHAPE — the rule it holds, not the one it does "
+          "not") {
     Switchboard bus;
     auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
     officer->role = "station";
@@ -542,7 +518,7 @@ TEST_CASE("S6: an authorized reader is authorized per SHAPE — the rule it hold
     CHECK(bus.observe_office_as(reader, "station", "Status", 1).refusal == SenseRefusal::NoClaim);
 }
 
-TEST_CASE("S6: claiming as an office you do not hold is refused, and NOTHING is stored — never "
+TEST_CASE("claiming as an office you do not hold is refused, and NOTHING is stored — never "
           "downgraded to a personal claim") {
     Switchboard bus;
     auto [aid, holder] = put<Officer>(bus, Grant{}, "station");
@@ -562,8 +538,8 @@ TEST_CASE("S6: claiming as an office you do not hold is refused, and NOTHING is 
     CHECK(bus.retained_claim_count() == 0);
 }
 
-TEST_CASE("S6: claiming a shape the weave never declared is refused — the claim-set is a "
-          "contract, not documentation") {
+TEST_CASE("claiming a shape the weave never declared is refused — the claim-set is a contract, "
+          "not documentation") {
     Switchboard bus;
     // Reader declares Claims<> (nothing).
     auto [rid, reader] = put<Reader>(bus, observer_of_health(), "");
