@@ -54,7 +54,6 @@ set(ZEN_COMMENT_PENDING
     "^tests/session/lifecycle/linger[.]py$"
     "^tests/session/lifecycle/settle[.]py$"
     "^tests/session/lifecycle/stuck[.]py$"
-    "^tests/session/observe_journey[.]py$"
     "^tests/session/observe_probe/probe[.]py$"
     "^tests/test_admission[.]cpp$"
     "^tests/test_ask_book[.]cpp$"
