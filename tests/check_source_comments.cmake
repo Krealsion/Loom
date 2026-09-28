@@ -122,8 +122,7 @@ set(ZEN_COMMENT_PENDING
     "^tests/weavelib/stale_abi[.]cpp$"
     "^tests/weavelib/storage_broker[.]cpp$"
     "^tests/weavelib/storage_client[.]cpp$"
-    "^tests/weavelib/storage_protocol[.]hpp$"
-    "^tests/weavelib/versioned_service[.]cpp$")
+    "^tests/weavelib/storage_protocol[.]hpp$")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer

@@ -1,25 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The `versioned.service` fixture pair (PR-04): two REAL loadable artifacts,
-// v1 and v2, that implement one production role and one domain query.
-//
-//   v1  the incumbent. It answers "v1" and it answers it throughout — during the
-//       whole preparation, after a refusal, after an abort, and right up to the
-//       breath before commit. Every failure case in the suite asks it again.
-//   v2  the candidate (ZEN_VERSIONED_CANDIDATE). The same production service,
-//       answering "v2", PLUS the preparation conversation: it is asked to
-//       prepare, it prepares, and it answers for itself.
-//
-// ONE SOURCE, because the artifact that prepares MUST be the artifact that goes
-// live. A candidate assembled specially for preparation and swapped for a freshly
-// loaded object at commit would prove nothing about either.
-//
-// The candidate is also the phase's hostile witness. Before it answers anything
-// it REACHES FOR THE WORLD — publishes, addresses the production role, and
-// addresses a stranger by id — and records how many times it tried. The suite
-// reads the refusals off the tap. That is deliberate: "a sealed candidate cannot
-// speak" is only a proof if something actually speaks.
+// The `versioned.service` fixture pair (PR-04): two REAL loadable artifacts implementing one
+// production role and one domain query. v1, the incumbent, answers "v1" throughout, through
+// every failure case; v2 (ZEN_VERSIONED_CANDIDATE) answers "v2" and also prepares and answers
+// for itself. ONE SOURCE, because the artifact that prepares must be the one that goes live.
+// The candidate is also a hostile witness: before answering anything it REACHES FOR THE WORLD
+// and counts its tries, since "a sealed candidate cannot speak" needs something that speaks.
 
 #include "prepared_replacement_protocol.hpp"
 
@@ -108,15 +95,10 @@ public:
             last_activation_ = claimed;
 
             // ---- FIRST BREATH IS NOT A QUESTION (LIFE-05) --------------------
-            //
-            // The fixture is the hostile witness again, and this is the whole
-            // attack surface in three lines. It TRIES, from inside an accepted
-            // activation, everything a delivery that had been an ask would
-            // grant — and then does the one thing that is genuinely still its
-            // right. Whether any of them worked is recorded, never judged here:
-            // a fixture that declined to try would pass this proof by not
-            // testing it.
-            //
+            // The hostile witness again: from inside an accepted activation it TRIES all a
+            // delivery that had been an ask would grant, then the one thing still its right,
+            // and records each result for the suite to judge; a fixture that declined to try
+            // would pass by not testing.
             // 1. answer the question nobody asked
             versioned::VersionReply forged;
             forged.version = kVersion;
@@ -124,18 +106,11 @@ public:
             // 2. keep an answer right for later
             activation_pending_ = bus.make_deferred_answer();
             act_defer_ = activation_pending_.valid();
-            // 3. ...and ORDINARY DOMAIN SPEECH, to the very weave whose
-            //    imaginary question it was just refused. This must work: not
-            //    being answerable is not being mute.
-            //
-            // RECORDED AS "ATTEMPTED", NOT "SUCCEEDED", and the distinction is
-            // the seam's rather than this phase's: the library side of an
-            // ordinary `send` returns `Ticket{}` ALWAYS — the C ABI carries no
-            // bus seq back — so `.valid()` here would be false even on a perfect
-            // delivery. (`answer` and `defer_answer` are different: ANS-06
-            // gave them real success/failure across the seam, which is exactly
-            // why the two fields above ARE verdicts.) Whether this arrived is
-            // the SUITE's to judge, from what the coordinator was handed.
+            // 3. ...and ORDINARY DOMAIN SPEECH, to the very weave whose imaginary question it
+            //    was just refused: not being answerable is not being mute. Recorded as
+            //    ATTEMPTED: across the seam an ordinary `send` always returns `Ticket{}`, while
+            //    `answer` and `defer_answer` report real success or failure (ANS-06), which is
+            //    why the two fields above are verdicts. Whether this arrived, the suite judges.
             versioned::ActivationObserved note;
             note.sequence = claimed;
             note.version = kVersion;
@@ -153,14 +128,9 @@ public:
         }
 
         if (shape == std::string_view(versioned::QueryVersion::zen_name)) {
-            // THE PRODUCTION ANSWER, and it is a real authenticated answer across
-            // the dynamic seam (ABI v4). A sealed candidate never reaches this
-            // line, because no `QueryVersion` can reach a sealed candidate.
-            //
-            // LIFE-05: before answering the REAL question, try once more to
-            // spend whatever the activation handed back. Nothing it kept may
-            // become valid later — an invalid capability is invalid forever, not
-            // merely at the moment it was refused.
+            // THE PRODUCTION ANSWER, a real authenticated answer across the dynamic seam; no
+            // `QueryVersion` can reach a sealed candidate. LIFE-05: first, try once more to
+            // spend what the activation handed back; an invalid capability stays invalid.
             if (!activation_spend_tried_) {
                 activation_spend_tried_ = true;
                 versioned::VersionReply late;
