@@ -861,6 +861,10 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
                          "on. The Weave can exhaust host memory/pids/cpu.\n",
                          name.c_str());
         } else {
+            // The link never reaches teardown_child, so the view root made above goes here.
+            if (!link->fs_root.empty()) {
+                (void)::rmdir(link->fs_root.c_str());
+            }
             return {false, {},
                     "refused (fail-safe): cannot enforce resource limits for '" + name +
                         "' on this host (no cgroup-v2 delegation — run the host under a delegated "
