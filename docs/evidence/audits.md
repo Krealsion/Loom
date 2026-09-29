@@ -13,7 +13,7 @@ audit's working papers and its reproduction programs are in Git (`git log -- doc
 | On a cgroup base that delegates `pids` but not `memory`, a weave's containment note claimed a memory cap while memory ran uncapped. | the note names only a cap it can impose | suite `isolation` |
 | The delivery journal grew without bound. | a bounded ring: recent outcomes survive, older ones are evicted | suite `switchboard` |
 | The grant key was an FNV-1a hash, and collisions could be worked for. | a SHA-256 digest truncated to 128 bits, checked against NIST vectors | suite `policy` |
-| `cgroup_confirm` recognises a leaf by substring, so `zen-weave-1` matches a process in `zen-weave-10`. | open | [known seams](../reference/known-seams.md#a-cgroup-leaf-is-confirmed-by-substring) |
+| `cgroup_confirm` recognised a leaf by substring, so `zen-weave-1` matched a process in `zen-weave-10`. | the leaf is recognised by its whole path | suite `isolation` |
 
 ## An isolation witness that stopped witnessing in Release
 
