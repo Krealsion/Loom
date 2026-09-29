@@ -8,8 +8,9 @@
 #   - a Markdown document may change freely, outside docs/history/;
 #   - a C++, CMake or manifest file, with its comments removed, keeps its tokens: an identifier
 #     changes only as a names.tsv row for that file says, and a literal only as a message may --
-#     each word of the `maker` family become its weaver form or a sheet replacement, or a whole
-#     literal messages.tsv lists;
+#     a word of the `maker` family becomes its weaver form where the grammar, read in place at
+#     the start commit, calls it the person's, or what the sheet says for that word; or the whole
+#     literal is one messages.tsv lists;
 #   - a Python file keeps its tokens the same way, a docstring counted as a comment;
 #   - a JSON file keeps its keys and structure, its strings changing only as a message may;
 #   - any other file keeps every line but its whole-line `#` comments, and changes those lines
@@ -72,40 +73,76 @@ def read_messages(path):
     return out
 
 
-def replacements(sheet):
-    return sorted({d[1:] for _, d in sheet.values() if d.startswith("=")}, key=len, reverse=True)
+def at_start(rel, src, sheet):
+    """The alternatives a word of the family has in a literal at `base` in the start commit's
+    text: its weaver form where the grammar, read in place, calls it the person's, or what the
+    sheet says for that exact word."""
+    def alternatives(base):
+        def alts(m):
+            am = words.WORD.match(src, base + m.start())
+            line = src.count("\n", 0, am.start()) + 1
+            col = am.start() - (src.rfind("\n", 0, am.start()) + 1)
+            row = sheet.get((rel, line, col))
+            if row:
+                d = row[1]
+                if d == "weaver":
+                    return [words.weaver_form(m.group(0))]
+                return [d[1:]] if d.startswith("=") else []
+            return [words.weaver_form(m.group(0))] if words.classify(src, am) == "person" else []
+        return alts
+    return alternatives
 
 
-def message_equal(old, new, extra):
-    """Does `new` differ from `old` only by words of the family becoming their weaver forms or a
-    sheet replacement?"""
+def in_itself(rel, sheet):
+    """Alternatives for a string with no place in a file's text (a JSON value): the grammar read
+    within the string, and any word the sheet decides for this file."""
+    decided = {}
+    for (r, _l, _c), (word, d) in sheet.items():
+        if r == rel and d != "keep":
+            decided.setdefault(word, []).append(words.weaver_form(word) if d == "weaver" else d[1:])
+
+    def alts_for(text):
+        def alts(m):
+            out = list(decided.get(m.group(0), []))
+            if words.classify(text, m) == "person":
+                out.append(words.weaver_form(m.group(0)))
+            return out
+        return alts
+    return alts_for
+
+
+def message_equal(old, new, alts):
+    """Does `new` differ from `old` only by words of the family becoming what `alts` allows?"""
     if old == new:
         return True
     parts = []
     pos = 0
     for m in words.WORD.finditer(old):
         parts.append(re.escape(old[pos:m.start()]))
-        alts = [m.group(0), words.weaver_form(m.group(0))] + extra
-        parts.append("(?:" + "|".join(re.escape(a) for a in alts) + ")")
+        choices = [m.group(0)] + alts(m)
+        parts.append("(?:" + "|".join(re.escape(a) for a in choices) + ")")
         pos = m.end()
     parts.append(re.escape(old[pos:]))
     return re.fullmatch("".join(parts), new, re.S) is not None
 
 
 def code_tokens(rel, text):
-    """[(kind, text)]: a literal whole, code split into tokens, comments dropped."""
+    """[(kind, text, offset)]: a literal whole, code split into tokens, comments dropped."""
     out = []
     for kind, s, e in census.spans_of(rel, text):
         if kind == "literal":
-            out.append(("lit", text[s:e]))
+            out.append(("lit", text[s:e], s))
         elif kind == "code":
-            out.extend(("code", t) for t in TOKEN.findall(text[s:e]))
+            out.extend(("code", m.group(0), s + m.start()) for m in TOKEN.finditer(text[s:e]))
     return out
 
 
 def python_tokens(text):
-    """[(kind, text)] for a Python file, comments and docstrings dropped."""
+    """[(kind, text, offset)] for a Python file, comments and docstrings dropped."""
     out = []
+    offsets = [0]
+    for line in text.split("\n"):
+        offsets.append(offsets[-1] + len(line) + 1)
     prev = tokenize.NEWLINE
     toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
     for i, tok in enumerate(toks):
@@ -117,18 +154,18 @@ def python_tokens(text):
                     nxt in (tokenize.NEWLINE, tokenize.ENDMARKER):
                 prev = tok.type
                 continue  # a docstring: the file's comment, free to change
-            out.append(("lit", tok.string))
+            out.append(("lit", tok.string, offsets[tok.start[0] - 1] + tok.start[1]))
         elif tok.type not in (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT):
-            out.append(("code", tok.string))
+            out.append(("code", tok.string, offsets[tok.start[0] - 1] + tok.start[1]))
         prev = tok.type
     return out
 
 
-def compare_tokens(rel, old, new, table, messages, extra, problems, notes):
+def compare_tokens(rel, old, new, table, messages, alternatives, problems, notes):
     if len(old) != len(new):
         problems.append(f"{rel}: {len(old)} tokens became {len(new)}")
         return
-    for k, ((ka, a), (kb, b)) in enumerate(zip(old, new)):
+    for k, ((ka, a, at), (kb, b, _)) in enumerate(zip(old, new)):
         if ka != kb:
             problems.append(f"{rel}: token {k} changed kind: {a!r} -> {b!r}")
             continue
@@ -150,11 +187,11 @@ def compare_tokens(rel, old, new, table, messages, extra, problems, notes):
                 problems.append(f"{rel}: the wire name {a} changed to {b}")
             elif messages.get((rel, a)) == b:
                 notes["reworded"].append((rel, a, b))
-            elif message_equal(a, b, extra):
+            elif message_equal(a, b, alternatives(at)):
                 notes["messages"].append((rel, a, b))
             else:
-                problems.append(f"{rel}: the literal {a} became {b}, not by a word of the family "
-                                f"and not listed in messages.tsv")
+                problems.append(f"{rel}: the literal {a} became {b}, not by a word the grammar or "
+                                f"the sheet gives the person, and not listed in messages.tsv")
 
 
 def json_walk(rel, a, b, messages, extra, problems, notes, path="$"):
@@ -174,7 +211,7 @@ def json_walk(rel, a, b, messages, extra, problems, notes, path="$"):
                 json_walk(rel, x, y, messages, extra, problems, notes, f"{path}[{i}]")
     elif isinstance(a, str):
         if a != b:
-            if message_equal(a, b, extra):
+            if message_equal(a, b, extra(a)):
                 notes["messages"].append((rel, a, b))
             else:
                 problems.append(f"{rel}: {path} changed beyond a word of the family")
@@ -182,15 +219,21 @@ def json_walk(rel, a, b, messages, extra, problems, notes, path="$"):
         problems.append(f"{rel}: {path} changed")
 
 
-def other_lines(rel, old, new, extra, problems, notes):
-    strip = lambda t: [l for l in t.split("\n") if not l.lstrip().startswith("#")]
+def other_lines(rel, old, new, alternatives, problems, notes):
+    def strip(t):
+        out, pos = [], 0
+        for line in t.split("\n"):
+            if not line.lstrip().startswith("#"):
+                out.append((line, pos))
+            pos += len(line) + 1
+        return out
     a, b = strip(old), strip(new)
     if len(a) != len(b):
         problems.append(f"{rel}: its lines outside whole-line comments changed in number")
         return
-    for x, y in zip(a, b):
+    for (x, at), (y, _) in zip(a, b):
         if x != y:
-            if message_equal(x, y, extra):
+            if message_equal(x, y, alternatives(at)):
                 notes["messages"].append((rel, x.strip(), y.strip()))
             else:
                 problems.append(f"{rel}: a line changed: {x.strip()[:80]}")
@@ -207,7 +250,6 @@ def main():
     names = apply.read_names(a.names)
     sheet = apply.read_sheet(a.sheet)
     messages = read_messages(a.messages)
-    extra = replacements(sheet)
     problems = []
     notes = {"names": 0, "messages": [], "reworded": [], "docs": 0, "comments_only": 0}
     for _, old, _new in names:
@@ -232,16 +274,18 @@ def main():
         if kind == "md":
             notes["docs"] += 1
             continue
+        alternatives = at_start(rel, old, sheet)
         if kind in ("cxx", "cmake", "manifest"):
             compare_tokens(rel, code_tokens(rel, old), code_tokens(rel, new), table, messages,
-                           extra, problems, notes)
+                           alternatives, problems, notes)
         elif kind == "py":
-            compare_tokens(rel, python_tokens(old), python_tokens(new), table, messages, extra,
-                           problems, notes)
+            compare_tokens(rel, python_tokens(old), python_tokens(new), table, messages,
+                           alternatives, problems, notes)
         elif rel.endswith(".json"):
-            json_walk(rel, json.loads(old), json.loads(new), messages, extra, problems, notes)
+            json_walk(rel, json.loads(old), json.loads(new), messages, in_itself(rel, sheet),
+                      problems, notes)
         else:
-            other_lines(rel, old, new, extra, problems, notes)
+            other_lines(rel, old, new, alternatives, problems, notes)
         after = (len(problems), notes["names"], len(notes["messages"]), len(notes["reworded"]))
         if before == after:
             notes["comments_only"] += 1
