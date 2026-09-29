@@ -53,9 +53,9 @@ by accident.
 
 ## Older records
 
-- [`../audits/2026-07-20/`](../audits/2026-07-20/) — the dated architecture
-  audit (finder briefing, hand-verification, doc-diff, legibility log, repros).
-- The 2026-07-26 trust-gate audit and its bundles live **outside the repos** in
-  the operator workspace (`Zen/zen-trust-gate-report.md`, `Zen/audit-bundles/`);
-  its repairs were ratified onto Zengine `main` (R1). Recorded here so the
-  pointer survives even though the artifact is not in-tree.
+- The 2026-07-20 architecture audit (finder briefing, hand-verification,
+  doc-diff, legibility log, repros) has left the tree and is kept in Git:
+  `git log -- docs/audits` lists its commits, and
+  `git show 0ea8913^:docs/audits/2026-07-20/` lists its files as they last stood.
+- The 2026-07-26 trust-gate audit was kept **outside the repos** and is not
+  in-tree; its repairs were ratified onto Zengine `main` (R1).
