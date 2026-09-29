@@ -91,6 +91,3 @@ What a private id is, `tests/private_ids.cmake` says once for both. Every curren
 document and every first-party source file is held to this standard; vendored code is not. No
 check can see history or a private process written in words, a label shape in a string (in data
 `c2a` looks like `r1` or `Ping2`), or a comment's truth; that is a reviewer's.
-`tools/comment-pass/` measures, prints and proves a comment pass (`census.py`, `blocks.py`,
-`edit.py`, `prove.py`); a renamed test case is renamed through its case map (`cases.tsv`, applied
-by `cases.py`), which the proof reads.
