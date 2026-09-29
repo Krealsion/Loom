@@ -208,7 +208,7 @@ TEST_CASE("a failed handler is durable by default, whatever shape it was") {
     CHECK(back[0].observation.target.value != 0);
     CHECK(back[0].observation.shape_version == 1);
     // ...AND THE MESSAGE IT CHOKED ON. A failure record without the input that
-    // produced it is the half of the record a maker cannot use. This is the seam a
+    // produced it is the half of the record a weaver cannot use. This is the seam a
     // richer failure packet (weave identity, exception text, symbols) later grows
     // from; nothing here has to be undone to add those.
     CHECK(back[0].observation.payload == PayloadDisposition::Retained);

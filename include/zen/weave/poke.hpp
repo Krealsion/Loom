@@ -38,7 +38,7 @@
 namespace loom {
 
 // ---- the protocol shapes ----------------------------------------------------
-// Registered by hand so the wire names carry the "zen." prefix; a maker's own struct named
+// Registered by hand so the wire names carry the "zen." prefix; a weaver's own struct named
 // PokeRead is "PokeRead", with no collision.
 
 /// Ask a weave for its structure: every field's name, type, and tag-state.
@@ -111,7 +111,7 @@ struct PokeStructure {
 // The replies zen.Result, zen.Ack and zen.Refused are in standard_shapes.hpp.
 
 /// True for the four request shapes the construction layer answers; WeaveBase refuses at
-/// compile time to let a maker Accept<> them, so an answered structure can be trusted.
+/// compile time to let a weaver Accept<> them, so an answered structure can be trusted.
 template <class T>
 inline constexpr bool is_poke_protocol_shape =
     std::is_same_v<T, PokeDescribe> || std::is_same_v<T, PokeRead> ||

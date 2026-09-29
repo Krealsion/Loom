@@ -14,7 +14,7 @@
 //
 // Not Error or Value: loom::Error is the gate's admission fault and loom::Value the value type,
 // while a zen.Refused is a deliberate answer by policy. These are ordinary registered, gated
-// shapes, registered by hand so their wire names carry the "zen." prefix (a maker's own `Ack`
+// shapes, registered by hand so their wire names carry the "zen." prefix (a weaver's own `Ack`
 // is "Ack").
 //
 // Any granted participant can send these, so a weave that accepts one matches each arrival
