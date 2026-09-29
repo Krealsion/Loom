@@ -38,7 +38,7 @@ struct CollectorState {
     ZEN_SHAPE(CollectorState, 1, ZEN_FIELD(count), ZEN_FIELD(last));
 };
 
-// Accepts Ping, replies Pong, counts handled messages as its state. The maker
+// Accepts Ping, replies Pong, counts handled messages as its state. The weaver
 // writes only the handler and (optionally) the policy.
 class Responder : public au::WeaveBase<Responder, CounterState, au::Accept<Ping>, au::Emit<Pong>> {
 public:
@@ -111,7 +111,7 @@ public:
     }
 };
 
-// The carve-out pair: a maker whose handler emits an UNDECLARED standard reply
+// The carve-out pair: a weaver whose handler emits an UNDECLARED standard reply
 // (zen.Refused — empty Emit<> on purpose), and a sink that accepts it.
 class StandardLeaker
     : public au::WeaveBase<StandardLeaker, CounterState, au::Accept<Ping>, au::Emit<>> {
@@ -242,10 +242,10 @@ TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is del
           "mount<>") {
     // mount<>'s ride-along allow_poke_answers grant covers the standard replies (zen.Ack,
     // zen.Refused, zen.Result, zen.PokeStructure) for every trusted weave, because the
-    // construction layer answers pokes with them, so a maker's own UNDECLARED emit of one rides
+    // construction layer answers pokes with them, so a weaver's own UNDECLARED emit of one rides
     // that grant with an empty Emit<>: a KNOWN carve-out from "the silhouette is the grant",
-    // pinned so it is never latent. Makers still declare standard replies in Emit<...>
-    // (standard_shapes.hpp); a Mail emit-gate for maker sends would close it, and flip this pin.
+    // pinned so it is never latent. Weavers still declare standard replies in Emit<...>
+    // (standard_shapes.hpp); a Mail emit-gate for weaver sends would close it, and flip this pin.
     Switchboard bus;
     WeaveId sink = au::mount<RefusedSink>(bus);
     WeaveId leaker = au::mount<StandardLeaker>(bus);
@@ -267,11 +267,11 @@ TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is del
 }
 
 TEST_CASE("the accept-set is the typed handlers plus the universal substrate doors; emit-set "
-          "stays the maker's declaration") {
+          "stays the weaver's declaration") {
     Switchboard bus;
     WeaveId responder = au::mount<Responder>(bus);
 
-    // The maker's doors (from Accept<...>) plus the FIVE substrate doors every
+    // The weaver's doors (from Accept<...>) plus the FIVE substrate doors every
     // woven Weave answers: the four poke doors (the inspect-the-structure floor)
     // and the self-description door (what may be SAID to it — the other half of
     // the same honesty, see zen/weave/describe.hpp). Always on, and this set is
@@ -289,10 +289,10 @@ TEST_CASE("the accept-set is the typed handlers plus the universal substrate doo
     CHECK(acc[0]->name() == "Ping");
     CHECK(acc[0]->content_id() == au::schema_of<Ping>()->content_id());
 
-    // emitted_schemas() remains the MAKER's declared Emit<...> alone — the
+    // emitted_schemas() remains the WEAVER's declared Emit<...> alone — the
     // construction layer's poke and self-description answers are substrate
     // machinery, granted separately by mount() (allow_poke_answers,
-    // allow_describe_answers), never smuggled into the maker's declaration.
+    // allow_describe_answers), never smuggled into the weaver's declaration.
     auto* r = static_cast<Responder*>(bus.weave(responder));
     auto emitted = r->emitted_schemas();
     REQUIRE(emitted.size() == 1);

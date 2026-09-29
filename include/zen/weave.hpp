@@ -4,7 +4,7 @@
 #ifndef ZEN_WEAVE_HPP
 #define ZEN_WEAVE_HPP
 
-/// The weave layer: the header-only weaving sugar (the tools a maker uses to build a weave).
+/// The weave layer: the header-only weaving sugar (the tools a weaver uses to build a weave).
 ///
 /// Pure sugar over loom + zen-switchboard. Write each shape once as a plain
 /// C++ struct (ZEN_SHAPE) and derive the runtime Schema, the typed conversions,

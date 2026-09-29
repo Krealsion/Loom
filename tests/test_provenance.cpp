@@ -309,7 +309,7 @@ concept MintsByAnyName = requires(T& t) { t.mint_lifecycle_authority(); };
 template <class T>
 concept MintsByStaticCall = requires { T::lifecycle_authority(); };
 
-/// A weave's own doors: a `Bus&` in `handle`, a `Mail&` in a maker's `on`.
+/// A weave's own doors: a `Bus&` in `handle`, a `Mail&` in a weaver's `on`.
 /// Neither may offer a way to mint, under this name or another.
 static_assert(!MintsByMemberCall<loom::Bus>,
               "a weave's Bus must never expose lifecycle minting");

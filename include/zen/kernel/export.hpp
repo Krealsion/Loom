@@ -4,7 +4,7 @@
 #ifndef ZEN_KERNEL_EXPORT_HPP
 #define ZEN_KERNEL_EXPORT_HPP
 
-// The weaving layer: a library maker writes an ordinary loom::Weave subclass and adds
+// The weaving layer: a library weaver writes an ordinary loom::Weave subclass and adds
 // ZEN_EXPORT_WEAVE(MyWeave), which generates the C ABI: the descriptor, every thunk and the one
 // exported symbol. The same Weave compiles in or ships in a library. The thunks serialize
 // Values for the host, rebuild a Bus that forwards across the host callbacks, and turn every
@@ -388,7 +388,7 @@ ZenStatus do_policy(void* instance, ZenByteSink sink) {
 
 /// A joint-published value of one of this weave's claims, re-admitted against its declared
 /// claim-set before `claim_published` sees it, as `do_revive` does for state. Applied returns
-/// ZEN_OK, Declined ZEN_CLAIM_DECLINED, Failed ZEN_ERR; an exception from the maker's handler is
+/// ZEN_OK, Declined ZEN_CLAIM_DECLINED, Failed ZEN_ERR; an exception from the weaver's handler is
 /// caught here and is Failed, and bytes this library's gate refuses are Failed too
 /// (ZEN_ERR_UNKNOWN_SCHEMA, ZEN_ERR_REFUSED). The host's mapping is on the slot in abi.h.
 template <class S>

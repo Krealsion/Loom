@@ -50,7 +50,7 @@ public:
     void on(const MetricsQuery&, au::Mail& mail) {
         mail.reply(MetricsAnswer{state_.raw_total * 2});
     }
-    // The maker's own code touches its own state freely, of course.
+    // The weaver's own code touches its own state freely, of course.
     std::int64_t rate() const { return state_.rate; }
     const std::string& label() const { return state_.label; }
     void seed(std::int64_t raw_total, std::string label) {

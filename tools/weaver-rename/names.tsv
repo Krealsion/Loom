@@ -1,0 +1,2 @@
+# The identifiers the rename changes in Loom: none. `maker`, `maker_id`, `maker_grant` and
+# `maker_raw` in tests/test_role_authorship.cpp abbreviate `Matchmaker`, another word.

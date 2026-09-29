@@ -121,7 +121,7 @@ struct LoggerSelection {
 /// THE CONSERVATIVE DEFAULT, source-traced and deliberately narrow.
 ///
 /// Two categories, each rare BY CONSTRUCTION rather than by hope, and each one a
-/// maker reaches for after something went wrong:
+/// weaver reaches for after something went wrong:
 ///
 ///   WHAT CODE IS LOADED   the control door's LoadLibrary / ReloadLibrary /
 ///                         UnloadLibrary / UnloadRole, and the weave manager's

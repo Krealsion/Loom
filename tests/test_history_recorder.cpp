@@ -278,7 +278,7 @@ TEST_CASE("a handler that throws is a recorded fact, not a silence") {
     CHECK(p->outcome == RecordedOutcome::HandlerFailed);
     // ...and Loom still does not say what the delivery DID (MSG-10).
     CHECK(bus.outcome(t).disposition == Disposition::Pending);
-    // The payload the handler choked on is retained, which is the thing a maker
+    // The payload the handler choked on is retained, which is the thing a weaver
     // wants most on this path.
     CHECK(p->payload == PayloadDisposition::Retained);
 }
@@ -854,7 +854,7 @@ TEST_CASE("one fact, several windows, and the mask says which") {
 
 TEST_CASE("protection decides what is KEPT; the shape decides what takes context") {
     // A muted shape's REFUSALS are still kept, in either window, and a storm of them still
-    // cannot drown the context a maker came for.
+    // cannot drown the context a weaver came for.
     Switchboard bus;
     RecorderPolicy policy = default_policy();
     policy.recent_capacity = 4;

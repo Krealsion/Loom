@@ -83,16 +83,16 @@ struct RecorderPolicy {
     std::size_t payload_byte_budget = kDefaultPayloadByteBudget;
     std::size_t max_payload_bytes = kDefaultMaxPayloadBytes;
     /// STRUCTURAL PROTECTION, keyed on what the BUS did rather than on what a shape
-    /// means. These are the facts a maker goes looking for after something went
+    /// means. These are the facts a weaver goes looking for after something went
     /// wrong, they are rare, and a single shared window loses them to ordinary
     /// traffic in seconds. A shape never asks to be protected; the recorder
-    /// decides, and a maker can decide otherwise by clearing a flag.
+    /// decides, and a weaver can decide otherwise by clearing a flag.
     ///
     /// PROTECTION DECIDES WHETHER A FACT IS KEPT. The shape's `in_recent` still
     /// decides whether it competes for RECENT CONTEXT — so `TimerFired: last_n=1,
     /// in_recent=false` means "the flood of beats is not worth recent context",
     /// the ONE beat that was refused is still kept (here), and a storm of refused
-    /// beats still cannot drown the build a maker is looking for.
+    /// beats still cannot drown the build a weaver is looking for.
     bool protect_refusals = true;
     bool protect_handler_failures = true;
     bool protect_lifecycle = true;

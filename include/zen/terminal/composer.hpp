@@ -133,7 +133,7 @@ Composition compose_message(const ComposeSource& source, std::string_view name,
 ///
 /// An unset optional field is left ABSENT rather than defaulted — the gate is the
 /// unconditional backstop at send, and a composer that invented values would be
-/// deciding something the maker did not say.
+/// deciding something the weaver did not say.
 loom::Value assemble(const Composition& composition);
 
 } // namespace loom

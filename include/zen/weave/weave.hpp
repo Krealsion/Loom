@@ -5,7 +5,7 @@
 #define ZEN_WEAVE_WEAVE_HPP
 
 // The weave-authoring layer, over the raw contract in zen/switchboard/weave_contract.hpp
-// (zen/weave.hpp is the umbrella). A maker writes a state struct, message structs (ZEN_SHAPEs)
+// (zen/weave.hpp is the umbrella). A weaver writes a state struct, message structs (ZEN_SHAPEs)
 // and a typed handler per message, `void on(const Ping&, Mail&)`. The accept-set comes from
 // the Accept<...> list, snapshot and revive from the State struct, and dispatch converts a
 // Value to its struct only after the gate has admitted it. docs/guides/writing-a-weave.md
@@ -357,7 +357,7 @@ class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>> : public lo
                   "loom: the zen.Poke* protocol shapes are answered by the construction layer; "
                   "do not list them in Accept<...>");
 
-    // zen.DescribeAccepted is answered from this class's accepted_schemas(); a maker who could
+    // zen.DescribeAccepted is answered from this class's accepted_schemas(); a weaver who could
     // intercept it could describe a vocabulary the gate does not enforce.
     static_assert((!std::is_same_v<DescribeAccepted, A> && ...) &&
                       (!std::is_base_of_v<DescribeAccepted, A> && ...),
@@ -365,7 +365,7 @@ class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>> : public lo
                   "declared accept-set; do not list it in Accept<...>");
 
 public:
-    /// The maker's declared doors plus five substrate doors: four poke doors (every woven Weave
+    /// The weaver's declared doors plus five substrate doors: four poke doors (every woven Weave
     /// can be inspected) and the self-description door. `final`, so the substrate doors are
     /// always truthfully advertised. The Switchboard matches deliveries against this vector and
     /// the self-description door answers from it, so the two cannot differ.
@@ -380,7 +380,7 @@ public:
         return out;
     }
 
-    /// The shapes this Weave declares it emits: the maker's `Emit<...>`, never the construction
+    /// The shapes this Weave declares it emits: the weaver's `Emit<...>`, never the construction
     /// layer's answers. Registered at mount with the accept-set, so a divergent definition
     /// refuses registration. `final`, like the accept-set; not a send gate.
     std::vector<std::shared_ptr<const loom::Schema>> emitted_schemas() const final {
@@ -406,16 +406,16 @@ public:
 
     void handle(const loom::Message& in, loom::Bus& bus) final {
         // `final`: dispatch goes through the loom::Weave vtable, so an override would bypass
-        // the poke doors. A maker wanting its own dispatch implements loom::Weave directly and
+        // the poke doors. A weaver wanting its own dispatch implements loom::Weave directly and
         // advertises no poke doors. A bare ZEN_EXPOSE(); or ZEN_HIDE(); in the weave class
         // instead of the State struct would do nothing, and failing open for HIDE is refused.
         static_assert(!(has_whole_state_tag<Self>() && !has_whole_state_tag<State>()),
                       "loom: a bare ZEN_EXPOSE();/ZEN_HIDE(); belongs inside the State struct "
                       "(the ZEN_SHAPE type), not the weave class — it is read from the state type");
-        // The poke doors are answered before maker dispatch, from the state's access model.
+        // The poke doors are answered before weaver dispatch, from the state's access model.
         Self* self = static_cast<Self*>(this);
         if (const PokeOutcome poked = try_poke(in, bus); poked != PokeOutcome::NotAPoke) {
-            // A poke that wrote the state changed it like a delivery, so the maker's
+            // A poke that wrote the state changed it like a delivery, so the weaver's
             // end-of-delivery hook runs; a read, a describe or a refused write does not
             // (docs/reference/senses.md#authority).
             if (poked == PokeOutcome::Mutated) {
@@ -426,7 +426,7 @@ public:
             }
             return;
         }
-        // The self-description door, also before maker dispatch; it changes nothing.
+        // The self-description door, also before weaver dispatch; it changes nothing.
         if (try_describe(in, bus)) {
             return;
         }
@@ -442,7 +442,7 @@ public:
                 std::to_string(in.payload.schema().version()) +
                 "' matched no handler — accept-set and handler set are out of sync");
         }
-        // The maker's end-of-delivery hook, run after the handler inside the same delivery, so a
+        // The weaver's end-of-delivery hook, run after the handler inside the same delivery, so a
         // weave deriving a mirror or claim from its state does it once; also after a poke that
         // wrote the state.
         if constexpr (requires(Self* s, Mail& m) { s->after_delivery(m); }) {
@@ -537,7 +537,7 @@ private:
 
     // ---- the poke doors (answered by the substrate; see poke.hpp) ------------
 
-    /// Substrate answers use the same authority as a maker's: a reply to the stamped requester
+    /// Substrate answers use the same authority as a weaver's: a reply to the stamped requester
     /// is an authenticated answer, one redirected elsewhere is ordinary grant-checked speech, and
     /// a root request with no reply address gets none.
     template <class Answer>
