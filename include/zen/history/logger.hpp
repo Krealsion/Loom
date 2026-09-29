@@ -126,7 +126,7 @@ struct LoggerSelection {
 ///   WHAT CODE IS LOADED   the control door's LoadLibrary / ReloadLibrary /
 ///                         UnloadLibrary / UnloadRole, and the weave manager's
 ///                         zen.LoadWeave / zen.SwapWeave / zen.ReloadWeave.
-///   WHO MAY SPEAK         the Weaver's zen.RequestAuthority / ApproveAuthority /
+///   WHO MAY SPEAK         `loom::Weaver`'s zen.RequestAuthority / ApproveAuthority /
 ///                         RefuseAuthority / RevokeAuthority / AuthorityGranted.
 ///
 /// Plus, structurally, every handler failure and every lifecycle transition.

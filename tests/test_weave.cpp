@@ -244,7 +244,7 @@ TEST_CASE("the known carve-out, pinned: an UNDECLARED standard-reply emit is del
     // zen.Refused, zen.Result, zen.PokeStructure) for every trusted weave, because the
     // construction layer answers pokes with them, so a weaver's own UNDECLARED emit of one rides
     // that grant with an empty Emit<>: a KNOWN carve-out from "the silhouette is the grant",
-    // pinned so it is never latent. Weavers still declare standard replies in Emit<...>
+    // pinned so it is never latent. A weaver still declares standard replies in Emit<...>
     // (standard_shapes.hpp); a Mail emit-gate for weaver sends would close it, and flip this pin.
     Switchboard bus;
     WeaveId sink = au::mount<RefusedSink>(bus);

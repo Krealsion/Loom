@@ -4,7 +4,7 @@
 #ifndef ZEN_KERNEL_EXPORT_HPP
 #define ZEN_KERNEL_EXPORT_HPP
 
-// The weaving layer: a library weaver writes an ordinary loom::Weave subclass and adds
+// The weaving layer: a weaver writes an ordinary loom::Weave subclass and adds
 // ZEN_EXPORT_WEAVE(MyWeave), which generates the C ABI: the descriptor, every thunk and the one
 // exported symbol. The same Weave compiles in or ships in a library. The thunks serialize
 // Values for the host, rebuild a Bus that forwards across the host callbacks, and turn every
