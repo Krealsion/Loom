@@ -196,6 +196,12 @@ std::string resource_note(const ResourceCaps& caps, bool memory_enforceable,
 /// the leaf's positive readback (of the delegated controllers only).
 std::string resource_attestation(const std::string& note, bool pids_enforceable, bool confirmed);
 
+/// Whether the cgroup-v2 line (`0::<path>`) of a `/proc/<pid>/cgroup` text names exactly
+/// `path`, a cgroup's path from the v2 root. A leaf is recognised by its whole name, so
+/// `/s/zen-weave-1` is neither `/s/zen-weave-10` nor a cgroup beneath it. Pure and portable like
+/// resource_note, so it is testable without a live cgroup.
+bool cgroup_v2_path_is(const std::string& proc_cgroup, const std::string& path);
+
 /// Per-Weave leaf lifecycle. `name` is a bare leaf name unique to the Weave.
 bool cgroup_create_leaf(const std::string& name, const ResourceCaps& caps);
 bool cgroup_move_pid(const std::string& name, pid_t pid);          ///< move pid into the leaf

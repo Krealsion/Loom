@@ -21,6 +21,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(__linux__)
@@ -139,6 +140,18 @@ std::string resource_attestation(const std::string& note, bool pids_enforceable,
          "cpu.weight is a fair-share weight (set-and-confirmed where the cpu controller is "
          "delegated, absent otherwise), not a hard cap";
     return s;
+}
+
+bool cgroup_v2_path_is(const std::string& proc_cgroup, const std::string& path) {
+    // Compared whole, never searched for: "/s/zen-weave-1" is a prefix of "/s/zen-weave-10".
+    std::istringstream lines(proc_cgroup);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.rfind("0::", 0) == 0) {
+            return line.compare(3, std::string::npos, path) == 0;
+        }
+    }
+    return false;
 }
 
 const CapabilityStatus* EnforcementReport::find(Capability c) const noexcept {
@@ -723,8 +736,9 @@ bool cgroup_confirm(const std::string& name, pid_t pid, const ResourceCaps& caps
     const std::string leaf = b + "/" + name;
     const std::string pc = read_text("/proc/" + std::to_string(static_cast<long long>(pid)) +
                                      "/cgroup");
-    if (pc.find("/" + name) == std::string::npos) {
-        return false; // pid is not in the expected leaf
+    // The leaf's path from the v2 root is its path below the mount cgroup_base reads.
+    if (!cgroup_v2_path_is(pc, leaf.substr(std::string_view("/sys/fs/cgroup").size()))) {
+        return false; // pid is not in exactly this leaf
     }
     if (g_cg_memory && caps.memory_max >= 0 &&
         parse_ll(read_text(leaf + "/memory.max")) != caps.memory_max) {

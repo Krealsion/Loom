@@ -511,18 +511,19 @@ the missing coverage ([capabilities](capabilities.md)); the sanitizer lane is
 not weakened to hide the messages either. What would earn a fix is a leak
 question about child-side code that the host-side lane genuinely cannot reach.
 
-## A cgroup leaf is confirmed by substring
+## A cgroup leaf is confirmed by its whole path
 
-**Status: KNOWN SEAM — latent.**
+**Status: CLOSED — current, pinned by suite `isolation`.**
 
 Before an out-of-process weave is reported resource-contained, the isolation host confirms that
 the child sits in its cgroup leaf and that the leaf's limits read back as set (`cgroup_confirm`,
-`src/isolation/sandbox.cpp`). The membership half asks whether the child's `/proc/<pid>/cgroup`
-contains `/<leaf>` anywhere, so a leaf whose name prefixes another's also matches that one:
-`zen-weave-1` is found in a child that sits in `zen-weave-10`. The host numbers every leaf itself
-and moves the child into it before asking, so no known path reaches the false match. The fix is to
-compare the whole last path component; its trigger is any change that lets a child reach a leaf
-the host did not just move it into.
+`src/isolation/sandbox.cpp`). The membership half compares the whole path on the cgroup-v2 line
+of the child's `/proc/<pid>/cgroup` with the leaf's own path from the v2 root
+(`cgroup_v2_path_is`), so a leaf whose name prefixes another's never matches it: a child in
+`zen-weave-10` is not confirmed as `zen-weave-1`, and a child in a cgroup beneath a leaf is not
+confirmed as that leaf. Suite `isolation` pins the rule twice: as a pure function, without a live
+cgroup, and under a delegated scope with a live child in one of two leaves whose names differ only
+by a trailing digit, both carrying the same limits so that only membership can tell them apart.
 
 ## Deferred-with-intent (the standing trigger map)
 
