@@ -55,7 +55,8 @@ by accident.
 
 - The 2026-07-20 architecture audit (finder briefing, hand-verification,
   doc-diff, legibility log, repros) has left the tree and is kept in Git:
-  `git log -- docs/audits` lists its commits, and
-  `git show 0ea8913^:docs/audits/2026-07-20/` lists its files as they last stood.
+  `git log -- docs/audits` lists its commits,
+  `git ls-tree -r --name-only 0ea8913^ docs/audits/2026-07-20/` names every
+  file it held before its removal, and `git show 0ea8913^:<path>` reads one.
 - The 2026-07-26 trust-gate audit was kept **outside the repos** and is not
   in-tree; its repairs were ratified onto Zengine `main` (R1).
