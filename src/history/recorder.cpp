@@ -161,7 +161,7 @@ void Recorder::admit(HistoryRecord rec, const BusEvent* e, ShapeState& st, bool 
     }
     // PROTECTION DECIDES WHETHER A FACT IS KEPT; THE SHAPE DECIDES WHETHER IT
     // COMPETES FOR RECENT CONTEXT. A muted shape's one refused beat is kept below,
-    // and a storm of refused beats still cannot drown the build a maker came for.
+    // and a storm of refused beats still cannot drown the build a weaver came for.
     if (st.in_recent) {
         claim(recent_, record_seq, Held::Recent);
     }

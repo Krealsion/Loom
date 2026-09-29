@@ -408,12 +408,12 @@ TEST_CASE("observe: revocation ends the observation visibly, and a vanished subs
     rig.ask(a_id, rig.want({tick_ref()}));
     rig.ask(b_id, rig.want({tick_ref()}));
     rig.say(1);
-    CHECK(rig.relay->revoke(a_id, "the maker stopped this guest's observation") == 1);
+    CHECK(rig.relay->revoke(a_id, "the weaver stopped this guest's observation") == 1);
     rig.bus.drain_until_idle();
     REQUIRE(a->ended.size() == 1);
     CHECK_FALSE(a->ended_answers[0]); // said, not an answer
     CHECK(a->ended[0].kind == ob::kEndedRevoked);
-    CHECK(a->ended[0].reason == "the maker stopped this guest's observation");
+    CHECK(a->ended[0].reason == "the weaver stopped this guest's observation");
     CHECK(a->ended[0].seq == 2);
     rig.say(1, 0, 5);
     CHECK(a->observed.size() == 1);

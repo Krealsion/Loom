@@ -670,7 +670,7 @@ TEST_CASE("a committed activation remains lifecycle provenance — never office 
 }
 
 // ---------------------------------------------------------------------------
-// The maker tier: the definition-of-done program, verbatim shape.
+// The weaver tier: the definition-of-done program, verbatim shape.
 // ---------------------------------------------------------------------------
 
 struct MatchCreated {

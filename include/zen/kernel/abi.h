@@ -201,7 +201,7 @@ typedef struct ZenWeaveAbi {
      *                                  of its own, re-claimed at its next delivery. Not held;
      *                                  the operator is told.
      *   any negative status  Failed.   The showing did not complete: ZEN_ERR for an exception
-     *                                  from the maker's handler or `PublishedClaim::Failed`,
+     *                                  from the weaver's handler or `PublishedClaim::Failed`,
      *                                  ZEN_ERR_UNKNOWN_SCHEMA or ZEN_ERR_REFUSED for bytes the
      *                                  library's gate refused. The weave is held (deliveries
      *                                  refused `ApplicationFailed`, its ordinary snapshot

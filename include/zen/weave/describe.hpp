@@ -7,7 +7,7 @@
 // The self-description door: ask a target by message which shapes it accepts. Every woven Weave
 // answers zen.DescribeAccepted with zen.AcceptedShapes, built from Weave::accepted_schemas(),
 // the vector the Switchboard matches deliveries against. zen.PokeDescribe says what a weave is;
-// this says what may be said to it. Answered by the construction layer, never by the maker.
+// this says what may be said to it. Answered by the construction layer, never by the weaver.
 // docs/reference/messaging.md#self-description--what-may-be-said-to-this-weave
 //
 // The request has no fields: the envelope names the target, and the target owns the answer.
@@ -33,7 +33,7 @@
 namespace loom {
 
 // ---- the protocol shapes ----------------------------------------------------
-// Registered by hand so the wire name carries the "zen." prefix; a maker's own struct named
+// Registered by hand so the wire name carries the "zen." prefix; a weaver's own struct named
 // DescribeAccepted is "DescribeAccepted", with no collision.
 
 /// Ask a weave which message shapes it accepts. Fieldless: the envelope already
