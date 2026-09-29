@@ -25,8 +25,11 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -817,6 +820,32 @@ TEST_CASE("resources: confirmation, fail-safe, dev-mode, and the memory opt-out"
         OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
         CHECK_FALSE(r.ok);
         CHECK(r.error.find("resource") != std::string::npos);
+    }
+    SUBCASE("a resource refusal leaves no filesystem view root behind") {
+        // Filesystem resolves before Resources, so its view root exists when Resources refuses.
+        // Roots are told apart by name alone: one another process makes in the same instant counts.
+        const auto view_roots = [] {
+            std::set<std::string> names;
+            for (const auto& entry : std::filesystem::directory_iterator("/tmp")) {
+                std::string name = entry.path().filename().string();
+                if (name.rfind("zen-sb-", 0) == 0) {
+                    names.insert(std::move(name));
+                }
+            }
+            return names;
+        };
+        Switchboard bus;
+        IsolationHost host(bus, kHostExe);
+        host.override_enforcement_for_test(forced());
+        const std::set<std::string> before = view_roots();
+        OutOfProcessResult r = host.mount("x", ZEN_SO_WEAVE, Grant{});
+        const std::set<std::string> after = view_roots();
+        REQUIRE_FALSE(r.ok);
+        CHECK(r.error.rfind("refused (fail-safe): cannot enforce resource limits for 'x'", 0) == 0);
+        std::vector<std::string> left;
+        std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                            std::back_inserter(left));
+        CHECK_MESSAGE(left.empty(), "view root left behind: " << (left.empty() ? "" : left.front()));
     }
     SUBCASE("dev-mode runs resource-uncontained, visibly marked") {
         Switchboard bus;
