@@ -15,7 +15,17 @@ library alone configures with CMake 3.16).
 cmake -S . -B build && cmake --build build -j"$(nproc)"
 cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
 # sanitizer lane: the same with -B build-san -DZEN_SANITIZE=ON
+cmake -P tests/documentation_lane.cmake               # the documentation lane, no build
 ```
+
+- **A change that touches no compiled line is verified by the documentation lane.** Markdown, an
+  image under `docs/`, a text check or the files only text checks read, and a C/C++ file whose
+  tokens are unchanged and only its comments differ: `tests/check_change_kind.cmake` says each
+  changed file's kind against `origin/main` and why, and the lane runs every text check
+  `tests/text_checks.cmake` lists, in seconds, passing only for a documentation-only change. CI
+  runs those checks on every change and skips the build and test jobs for a documentation-only
+  one. Anything else — a compiled line, a CMake file, CI, the lane itself — is the official
+  lane's.
 
 - `-Werror` is on; C++20. GCC 11.4 is the floor, so use nothing only a newer compiler accepts.
 - **Every loadable weave target goes through `loom_weave_build_contract()`**
