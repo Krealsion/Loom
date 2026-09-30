@@ -106,7 +106,8 @@ in `docs/laws/population-laws.md`.
   or CMake comment (read from the repository root, because a comment moves with its code), and
   refuses a path outside the repository, whether spelled out or reached by climbing above it
   with `../`. `source_comments` and `doc_standard` hold the comment and document standard. A
-  broken reference or a private id is a red in the official lane. `docs/history/`, `archive/`,
+  broken reference, a private id, or a page telling its own history or the development process
+  in a form `doc_standard` names is a red in the official lane. `docs/history/`, `archive/`,
   vendored trees and build trees are excluded by written rule.
 
 ## The supplied host, and who decides what a loaded artifact may do
