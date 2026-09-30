@@ -1,0 +1,115 @@
+# The values the code owns that a document or a comment has needed, read by `code_values`
+# (tests/check_code_values.cmake; CONTRIBUTING.md#values-the-code-owns). A line registers one:
+#
+#   <id>  <owner file>  <symbol>
+#
+# The symbol is a `#define`, a constant (`S = v;`, `S{v}`), a `set(S v)`, or a quoted shape name
+# whose version follows it (`"zen.Manifest", 5`). An id carrying `::` names the text's qualified
+# spelling, for a name another file declares too. A value written without its owner's name is
+# registered by how it is written, `{}` standing for the number:
+#
+#   claim   <id>  <spelling>   states the current value: every unmarked one is a copy
+#   mention <id>  <spelling>   a copy at the current value unless it reads "since" or "and later"
+#
+# When review finds a value copied that this file does not know, it is registered here then.
+
+# ---- versions
+ZEN_ABI_VERSION                 include/zen/kernel/abi.h                  ZEN_ABI_VERSION
+claim   ZEN_ABI_VERSION  C ABI (version **{}**)
+claim   ZEN_ABI_VERSION  current: **v{}**
+claim   ZEN_ABI_VERSION  weave ABI v{}
+mention ZEN_ABI_VERSION  ABI v{}
+mention ZEN_ABI_VERSION  ABI version {}
+zen.Manifest                    include/zen/kernel/schema_codec.hpp       "zen.Manifest"
+mention zen.Manifest  zen.Manifest` v{}
+mention zen.Manifest  zen.Manifest v{}
+mention zen.Manifest  manifest v{}
+
+# ---- the switchboard
+kMaxDeferredAnswers             include/zen/switchboard/switchboard.hpp   kMaxDeferredAnswers
+kJournalCapacity                include/zen/switchboard/switchboard.hpp   kJournalCapacity
+kMaxPreparedReplacements        include/zen/switchboard/switchboard.hpp   kMaxPreparedReplacements
+kMaxPreparationBudget           include/zen/switchboard/switchboard.hpp   kMaxPreparationBudget
+kMaxTerminalOutcomes            include/zen/switchboard/switchboard.hpp   kMaxTerminalOutcomes
+kMaxJointOperations             include/zen/switchboard/switchboard.hpp   kMaxJointOperations
+kMaxJointKeys                   include/zen/switchboard/switchboard.hpp   kMaxJointKeys
+kMaxJointOfferBytes             include/zen/switchboard/switchboard.hpp   kMaxJointOfferBytes
+kMaxFences                      include/zen/switchboard/switchboard.hpp   kMaxFences
+
+# ---- the recorder and the console
+kDefaultLastN                   include/zen/history/recorder.hpp          kDefaultLastN
+kDefaultRecentCapacity          include/zen/history/recorder.hpp          kDefaultRecentCapacity
+kDefaultProtectedCapacity       include/zen/history/recorder.hpp          kDefaultProtectedCapacity
+kDefaultPayloadByteBudget       include/zen/history/recorder.hpp          kDefaultPayloadByteBudget
+kDefaultMaxPayloadBytes         include/zen/history/recorder.hpp          kDefaultMaxPayloadBytes
+kConsoleTapCapacity             include/zen/console/console.hpp           kConsoleTapCapacity
+kConsoleAskCapacity             include/zen/console/console.hpp           kConsoleAskCapacity
+kConsoleBufferCapacity          include/zen/console/console.hpp           kConsoleBufferCapacity
+
+# ---- the terminal session and its transcript
+kTranscriptCapacity             include/zen/terminal/transcript.hpp       kTranscriptCapacity
+kAuthoredCapacity               include/zen/terminal/transcript.hpp       kAuthoredCapacity
+kReceivedCapacity               include/zen/terminal/transcript.hpp       kReceivedCapacity
+kMaxOutstandingAsks             include/zen/terminal/session.hpp          kMaxOutstandingAsks
+kMaxHistoryRows                 include/zen/session/vocabulary.hpp        kMaxHistoryRows
+
+# ---- observation
+kMaxShapes                      include/zen/observe/relay.hpp             kMaxShapes
+claim   kMaxShapes  names 1 to {} shapes
+kMaxPerSubscriber               include/zen/observe/relay.hpp             kMaxPerSubscriber
+kDefaultWindow                  include/zen/observe/relay.hpp             kDefaultWindow
+kMaxWindow                      include/zen/observe/relay.hpp             kMaxWindow
+kMaxSubscriptions               include/zen/observe/relay.hpp             kMaxSubscriptions
+
+# ---- the host, its line reader, its door and its link
+kHeldInputBytes                 src/host/line_input.hpp                   kHeldInputBytes
+kMaxCommandBytes                src/host/line_input.hpp                   kMaxCommandBytes
+claim   kMaxCommandBytes  longer than {} bytes
+kReadChunkBytes                 src/host/line_input.cpp                   kReadChunkBytes
+kIdleWaitMs                     src/host/host_main.cpp                    kIdleWaitMs
+kServeIdleWaitMs                src/host/host_main.cpp                    kServeIdleWaitMs
+kMaxExpectations                src/host/session_door.hpp                 kMaxExpectations
+kMaxRulesPerRun                 src/host/session_door.hpp                 kMaxRulesPerRun
+kMaxRunNameBytes                src/host/session_door.hpp                 kMaxRunNameBytes
+kMaxOpenAsks                    src/host/link.hpp                         kMaxOpenAsks
+kMaxWatches                     src/host/link.hpp                         kMaxWatches
+
+# ---- the run manager and its catalog
+kMaxActive                      src/runs/run_manager.hpp                  kMaxActive
+kMaxPast                        src/runs/run_manager.hpp                  kMaxPast
+kMaxRuns                        src/runs/run_manager.hpp                  kMaxRuns
+kMaxAsks                        src/runs/run_manager.hpp                  kMaxAsks
+kMaxNotes                       src/runs/run_manager.hpp                  kMaxNotes
+kMaxArtifacts                   src/runs/run_manager.hpp                  kMaxArtifacts
+kShutdownObserveMs              src/runs/run_manager.hpp                  kShutdownObserveMs
+kMaxPackages                    src/runs/catalog.hpp                      kMaxPackages
+kMaxToolsPerPackage             src/runs/catalog.hpp                      kMaxToolsPerPackage
+kMaxPackageFiles                src/runs/catalog.hpp                      kMaxPackageFiles
+kMaxPackageBytes                src/runs/catalog.hpp                      kMaxPackageBytes
+
+# ---- the bridge and the transport channels
+kMaxHelloFieldBytes             include/zen/bridge/protocol.hpp           kMaxHelloFieldBytes
+kMaxSettlingPerConnection       include/zen/bridge/server.hpp             kMaxSettlingPerConnection
+kMaxOperatorConnections         include/zen/bridge/server.hpp             kMaxOperatorConnections
+kMaxPendingDelivered            include/zen/bridge/remote_console.hpp     kMaxPendingDelivered
+kMaxAbsentSchemas               include/zen/bridge/remote_console.hpp     kMaxAbsentSchemas
+kEmitSend                       include/zen/wire.hpp                      kEmitSend
+kEmitPublish                    include/zen/wire.hpp                      kEmitPublish
+kMaxFrameLen                    include/zen/wire.hpp                      kMaxFrameLen
+bridge::kMaxBacklog             src/bridge/channel.cpp                    kMaxBacklog
+isolation::kMaxBacklog          src/isolation/channel.cpp                 kMaxBacklog
+
+# ---- the value codecs
+kMaxListCount                   src/detail/binary.hpp                     kMaxListCount
+kMaxFieldBytes                  src/detail/binary.hpp                     kMaxFieldBytes
+kMaxDecodedCells                src/detail/binary.hpp                     kMaxDecodedCells
+kMaxBinaryDepth                 src/detail/binary.hpp                     kMaxBinaryDepth
+kMaxTypeDepth                   include/zen/kernel/schema_codec.hpp       kMaxTypeDepth
+kMaxUiDepth                     include/zen/ui/component.hpp              kMaxUiDepth
+
+# ---- the Python session package
+Connection.MAX_OPEN             python/loom_session/client.py             MAX_OPEN
+Connection.MAX_UNCLAIMED        python/loom_session/client.py             MAX_UNCLAIMED
+tool.CLEANUP_SECONDS            python/loom_session/tool.py               CLEANUP_SECONDS
+wire.MAX_POLL_READS             python/loom_session/wire.py               MAX_POLL_READS
+wire.WRITE_SECONDS              python/loom_session/wire.py               WRITE_SECONDS

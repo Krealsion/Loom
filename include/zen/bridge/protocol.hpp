@@ -85,8 +85,8 @@ enum class BridgeOp : std::uint8_t {
                       ///< (SendRefused) has nothing to settle and is told nothing more.
 };
 
-/// Send kinds on the wire. The first two are the isolation protocol's own (kEmitSend = 0,
-/// kEmitPublish = 1); the third is this crossing's addition.
+/// Send kinds on the wire. The first two are the isolation protocol's own (kEmitSend and
+/// kEmitPublish); the third is this crossing's addition.
 inline constexpr std::uint8_t kSendToRole = 2;
 
 /// `Send` flags. A publication cannot ask for settlement (it has no one envelope to fence), and

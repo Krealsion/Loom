@@ -4,10 +4,9 @@
 application lab. Three experiments live side by side, each pinned to the
 substrate it ran on: `original/`, the first, against its own older Loom;
 `marathon/`, six applications against Loom `78d64ea` and Zengine `f6a4c69`
-at ABI v4, all green (159 cases, 848 assertions, 86 mutations and 6
-canaries); and `followups/role-authorship/`, which replayed three of them
-against Loom `30eab0a` at ABI v5 once office authorship existed (4 cases, 59
-assertions, 3 mutations red). Its reports are `marathon/FINAL-REPORT.md`,
+at ABI v4, all green; and `followups/role-authorship/`, which replayed three
+of them against Loom `30eab0a` at ABI v5 once office authorship existed. Its
+reports, which carry the counts, are `marathon/FINAL-REPORT.md`,
 `marathon/EVIDENCE.md`, `marathon/FRICTION.md` and
 `followups/role-authorship/REPORT.md` in that repository.
 

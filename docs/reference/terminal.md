@@ -143,7 +143,7 @@ tell **which** of several outstanding asks an answer belongs to, from Loom's own
 record — no request id is invented, and none is needed.
 
 A terminal therefore supports **several outstanding conversations**
-(`kMaxOutstandingAsks`, 8). The bound is the terminal refusing to grow
+(`kMaxOutstandingAsks`, <!-- value kMaxOutstandingAsks -->8<!-- /value -->). The bound is the terminal refusing to grow
 an unbounded map, not a limit of Loom: the (N+1)th ask is refused **locally**,
 nothing is authored, and the N already outstanding are untouched — a new ask
 must never displace a conversation somebody is waiting on.
@@ -236,6 +236,9 @@ sender, `prompt.requester` is the Weaver's own trusted fact, and
 
 ### Bounded, and never at the cost of a conversation
 
+<!-- value kTranscriptCapacity in "kTranscriptCapacity  {} entries" -->
+<!-- value kAuthoredCapacity in "kAuthoredCapacity     {} messages" -->
+<!-- value kReceivedCapacity in "kReceivedCapacity     {} messages" -->
 ```text
 kTranscriptCapacity  256 entries      metadata; a session's worth of scrollback
 kAuthoredCapacity     64 messages     submitted values, separate from replies
