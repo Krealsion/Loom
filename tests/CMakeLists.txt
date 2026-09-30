@@ -216,7 +216,7 @@ zen_add_test_weave(zen_test_weave_seam_publish ZEN_WEAVE_SEAM_PUBLISH)
 # The Sense fixture: claims, a forged office refused, and a synchronous read-back, all from the
 # far side of the seam.
 zen_add_test_weave(zen_test_weave_senses ZEN_WEAVE_SENSES)
-# Schema admission (ABI v9): the declared emitter and its divergent twin, the loaded half of the
+# Schema admission (since ABI v9): the declared emitter and its divergent twin, the loaded half of the
 # case where a stale application was admitted against a newer peer's emitted shape.
 zen_add_test_weave(zen_test_weave_emits ZEN_WEAVE_EMITS_GREET)
 zen_add_test_weave(zen_test_weave_emits_conflict ZEN_WEAVE_EMITS_GREET ZEN_WEAVE_GREET_CONFLICT)
@@ -585,9 +585,10 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
 
 # ---- The documentation checks -----------------------------------------------------------
 # They read the source tree, not a build, so they register in every configuration: `doc_links`
-# resolves every repository-relative reference, and `source_comments` and `doc_standard` hold the
-# comment and document standard (CONTRIBUTING.md#comments-and-documents). Pure CMake, as every
-# check here is: a verifier may not depend on a tool that merely happens to be installed.
+# resolves every repository-relative reference, `source_comments` and `doc_standard` hold the
+# comment and document standard (CONTRIBUTING.md#comments-and-documents), and `code_values` the
+# values the code owns. Pure CMake, as every check here is: a verifier may not depend on a tool
+# that merely happens to be installed.
 add_test(NAME doc_links COMMAND ${CMAKE_COMMAND}
     -DZEN_REPO=${CMAKE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_links.cmake)
@@ -597,6 +598,9 @@ add_test(NAME source_comments COMMAND ${CMAKE_COMMAND}
 add_test(NAME doc_standard COMMAND ${CMAKE_COMMAND}
     -DZEN_REPO=${CMAKE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_doc_standard.cmake)
+add_test(NAME code_values COMMAND ${CMAKE_COMMAND}
+    -DZEN_REPO=${CMAKE_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_code_values.cmake)
 
 # ---- The hook-return contract (SENSE-06) -------------------------------------------------
 # Compile-judged: `on_claim_published` may return `void`, `bool` or `loom::Weave::PublishedClaim`

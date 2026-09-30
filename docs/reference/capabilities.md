@@ -251,8 +251,8 @@ Two things this is **not**:
   means](../guides/dynamic-weaves.md#what-loading-it-in-process-means)).
 - **Not derived from the artifact.** `AdmissionRequest::declared` carries the
   manifest's `zen.CapabilityAsk` so a host can *show* a person what was asked for.
-  Nothing consults it to produce a grant. (The manifest's `emits` section — since
-  ABI v9 — says which shapes the artifact declares it may send, by definition:
+  Nothing consults it to produce a grant. (The manifest's `emits` section —
+  since ABI v9 — says which shapes the artifact declares it may send, by definition:
   vocabulary the host claims into its agreement wall and may show a person beside
   the ask. It names no destination and produces no grant either; send authority
   still comes from the host's own knowledge — see [known

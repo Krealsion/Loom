@@ -353,9 +353,9 @@ host as an exception; the record is the same.
 
 | Bound | Value | Overflow behavior |
 |---|---|---|
-| `kMaxJointOperations` | 8 | records live *or unreleased* per bus; `Exhausted` at `begin`, nothing reused |
-| `kMaxJointKeys` | 4 | keys per operation; `Exhausted` at `begin` |
-| `kMaxJointOfferBytes` | 64 KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
+| `kMaxJointOperations` | <!-- value kMaxJointOperations -->8<!-- /value --> | records live *or unreleased* per bus; `Exhausted` at `begin`, nothing reused |
+| `kMaxJointKeys` | <!-- value kMaxJointKeys -->4<!-- /value --> | keys per operation; `Exhausted` at `begin` |
+| `kMaxJointOfferBytes` | <!-- value kMaxJointOfferBytes KiB -->64<!-- /value --> KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
 | one live operation per key | structural | `KeyBusy` at `begin` |
 
 Offered bytes are retained only between offer and commit or abort

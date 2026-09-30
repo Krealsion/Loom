@@ -25,6 +25,7 @@ population                   portable
 doc_links                    portable
 source_comments              portable
 doc_standard                 portable
+code_values                  portable
 hook_return_types            portable
 all                          posix
 weave_contract               kernel

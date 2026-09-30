@@ -1,6 +1,6 @@
 # Declared vocabulary is agreed at admission — every list, every component, and never as authority
 
-**Status: current (2026-09-18; ABI v9, `zen.Manifest` v5).** Laws:
+**Status: current since ABI v9 (2026-09-18).** Laws:
 [GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered),
 [SENSE-04](../laws/sense-laws.md#sense-04--claiming-as-an-office-is-explicit-the-claim-set-is-a-contract),
@@ -129,7 +129,7 @@ callbacks, with both versions named).
 Suites `schema` (the traversal), `registry` (a contradiction inside one request),
 `switchboard` (emitter/acceptor both orders, the accept/claim/emit/state routes to a nested
 disagreement, a self-contradicting declaration, discovery and the denied-send control, swap
-and reclamation), `weave` (the guide's copied weave), `schema_codec` (manifest v5, the
+and reclamation), `weave` (the guide's copied weave), `schema_codec` (the manifest's emit-set, the
 Box/Box2 manifest refused at the second Part, a hand-built manifest, the v4 door),
 `kernel` (native/loaded and loaded/loaded emitters, nested-only across artifacts and against a
 native weave, one artifact contradicting itself in both orders with the agreeing control,

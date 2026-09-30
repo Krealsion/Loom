@@ -323,8 +323,8 @@ provenance across the seam, office-authorship parity + the previous-ABI
 refusal at load and at reload — the fixture always declares
 `ZEN_ABI_VERSION - 1`, so those cases never name a frozen number; the "schema
 admission" cases: a loaded emitter's definition meeting acceptors at load, in
-both orders); suite `schema_codec` (`zen.Manifest` v5 carries the emit-set and
-its components; a v4 manifest does not pass the v5 door; a manifest carrying two
+both orders); suite `schema_codec` (the manifest carries the emit-set and
+its components; a v4 manifest does not pass the current door; a manifest carrying two
 definitions of one component is refused at the second); suite `joint` (the v8
 claimant doors: offer across the seam, and the showing's three statuses); suite
 `isolation` (the fail-closed pipe, both directions; a child's emit-set);
