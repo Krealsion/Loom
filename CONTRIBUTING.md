@@ -82,12 +82,15 @@ refuses:
   name, every one on a line: one holding a private id or a label (`J1:`, `S3b`), or a
   `TEST_CASE` name another case already has in the one test binary, is refused.
 - `doc_standard` (`tests/check_doc_standard.cmake`) reads every current-facing Markdown file for
-  a private id.
+  a private id, for the development process used as a unit of time, and for a page's history in
+  the few forms that told it every time they were read by hand: a heading marked retired, a note
+  of what a thing was before or what it was called, and a bold note opening on the past. The
+  check names each form in its own words.
 - `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every
   `.md` path in a C/C++ or CMake comment, and refuses a path outside the repository in any
   current-facing text file, whether it is spelled out or reached by climbing above it with `../`.
 
 What a private id is, `tests/private_ids.cmake` says once for both. Every current-facing
 document and every first-party source file is held to this standard; vendored code is not. No
-check can see history or a private process written in words, a label shape in a string (in data
-`c2a` looks like `r1` or `Ping2`), or a comment's truth; that is a reviewer's.
+check can see history or a private process written in other words, a label shape in a string (in
+data `c2a` looks like `r1` or `Ping2`), or a comment's truth; that is a reviewer's.
