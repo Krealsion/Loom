@@ -35,7 +35,7 @@ std::shared_ptr<const Schema> round_trip(const std::shared_ptr<const Schema>& s,
 // A schema descriptor whose single field's type is a FLAT stream of `n` List tokens then one Int
 // token, i.e. List<List<…Int>> nested n deep, as a hostile .so's describe() could emit. Built
 // directly as tokens, because the point is that the stream is flat: its length is bounded only
-// by kMaxListCount (~1M), never by a value-depth cap, so it stays tiny and passes the meta-schema
+// by kMaxListCount, never by a value-depth cap, so it stays tiny and passes the meta-schema
 // gate. Returns the serialized descriptor, the bytes the host admits and then reconstructs.
 std::string deep_list_descriptor_bytes(int n) {
     std::vector<Cell> tokens;
@@ -196,7 +196,7 @@ TEST_CASE("a manifest is self-contained: nested component schemas travel in `ref
 
 TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead of "
           "overflowing the host stack") {
-    // The type-token stream is FLAT, so its length is capped by kMaxListCount (~1M), NOT by the
+    // The type-token stream is FLAT, so its length is capped by kMaxListCount, NOT by the
     // value-depth cap: a field typed List<List<…Int>> nested tens of thousands deep encodes to a
     // small descriptor that PASSES the meta-schema gate, and without kMaxTypeDepth decode_type
     // would recurse once per List token and overflow the trusted host's stack at mount. This
@@ -272,7 +272,7 @@ TEST_CASE("a descriptor that lies about its shape is refused by the meta-schema 
     CHECK(a.first_error().kind == ErrorKind::MissingField);
 }
 
-// ---- zen.Manifest v5: the emit-set crosses, and a contradiction cannot ----------------
+// ---- the manifest's emit-set crosses, and a contradiction cannot -----------------------
 // docs/decisions/declared-vocabulary-is-agreed-at-admission.md
 
 TEST_CASE("a manifest (v5) carries the declared emit-set and the components it nests, and "

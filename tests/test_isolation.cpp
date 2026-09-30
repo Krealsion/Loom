@@ -190,7 +190,7 @@ TEST_SUITE("isolation") {
 
 TEST_CASE("schema admission: an isolated child's declared emit-set meets the same walls — the "
           "bus's against a native acceptor, and this host's against another mount") {
-    // ABI v9 across the pipe: the child's manifest carries `emits`, the host decodes
+    // Across the pipe, since ABI v9, the child's manifest carries `emits`; the host decodes
     // them as it decodes the doors (top-level, this pipe's flat contract), claims them
     // with the mount, and the proxy declares them on the bus. No OS enforcement is
     // asked of this case; it is about vocabulary, and it runs wherever a child can.

@@ -250,7 +250,7 @@ A delivered request grants its handler **one** answer opportunity
   is THE authorized answer to a request it sent.
 
 Deferred capacity is **bounded at the Loom level, not per weave**
-(`kMaxDeferredAnswers = 64`); overflow refuses visibly as `Exhausted` and the
+(`kMaxDeferredAnswers`, <!-- value kMaxDeferredAnswers -->64<!-- /value -->); overflow refuses visibly as `Exhausted` and the
 immediate opportunity survives. A long-running operation that would hold a
 slot for ages may prefer an immediate authenticated acknowledgment followed by
 ordinary later speech — the ack is provable, the follow-up is ordinary, and no
@@ -466,7 +466,7 @@ carries no substrate doors at all, so nothing is narrowed by this.
 
 `add_observer` taps every delivery/refusal/lifecycle event (`BusEvent`, with
 diagnostic life/incarnation fields on the relevant refusals). The journal
-retains the last `kJournalCapacity = 1024` delivery outcomes by ticket
+retains the last `kJournalCapacity` (<!-- value kJournalCapacity -->1024<!-- /value -->) delivery outcomes by ticket
 (`outcome(Ticket)`); older entries read as `Pending`, exactly like unknown
 seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
 inspect/manipulate *by message* where a weave opts in.

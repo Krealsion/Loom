@@ -434,7 +434,7 @@ TEST_CASE("a rejected candidate leaves no schema residue") {
     CHECK(kernel.weave_id("t") == lr.id);
 }
 
-// ---- declared vocabulary is agreed at admission (ABI v9) ---------------------------------
+// ---- declared vocabulary is agreed at admission (since ABI v9) ---------------------------
 // Every shape a participant declares -- accepted, claimed, emitted, persisted -- and every
 // component those nest is claimed through one agreement wall at the door, natively and across
 // the seam, in either order. docs/decisions/declared-vocabulary-is-agreed-at-admission.md

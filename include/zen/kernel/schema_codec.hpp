@@ -78,7 +78,7 @@ inline std::shared_ptr<const Schema> capability_ask_schema() {
 }
 
 inline std::shared_ptr<const Schema> manifest_schema() {
-    // zen.Manifest v5: `referenced` (the nested schemas, listed before whatever references
+    // The manifest: `referenced` (the nested schemas, listed before whatever references
     // them, so the manifest is self-contained), `accepted`, `state`, and the optional
     // `requests` (the ask), `claims` (the claim-set) and `emits` (the emit-set: vocabulary the
     // host claims into its agreement wall, never authority). An image built for an older
@@ -228,7 +228,7 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
 
 // Refuses a type nested deeper than this on the way down. decode_type recurses once per List
 // token and the token stream is bounded only by the list cap, so a deeply nested List<List<...>>
-// would otherwise overflow the host's stack at load. It equals detail::kMaxBinaryDepth (64): a
+// would otherwise overflow the host's stack at load. It equals detail::kMaxBinaryDepth: a
 // value nested deeper can never be serialized or admitted, so no legitimate schema is refused.
 // Kept equal by hand, since this public, portable header cannot include src/detail.
 inline constexpr int kMaxTypeDepth = 64;
