@@ -2,15 +2,16 @@
 # Copyright (c) 2026 Joshua DeMoss
 #
 # The commit-attribution check, run as a CI job: no commit reachable from the ref records an AI
-# assistant as a co-author. It asks git's own trailer parser for each commit's Co-authored-by
-# trailers and judges their values only, so prose about an assistant passes and a human
-# co-author passes. The whole reachable history is scanned; narrow it with
-# -DZEN_RANGE=<base>..<head> if a deliberately retained attribution is ever adopted.
+# assistant as a co-author or credits one. It judges each Co-authored-by trailer's value (git's own
+# parser) and reads every message for an assistant's credit line, which the merge copies from a
+# pull request's description. Prose about an assistant and a human co-author pass. The whole
+# reachable history is scanned; narrow it with -DZEN_RANGE=<base>..<head>.
 
 # A CI job, not a CTest entry, because it reads history, which a source export does not carry.
-# Before scanning, it makes two dangling commits and requires opposite verdicts on them: one with
-# the forbidden trailer (caught) and one with a human co-author and prose naming an assistant (not
-# caught). They have no ref, and git discards them at its next gc.
+# Before scanning, it makes four dangling commits and requires the right verdict on each: the
+# forbidden trailer and the credit line (caught), a human co-author with prose naming an
+# assistant, and prose about the credit line (not caught). They have no ref, and git discards them
+# at its next gc.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -30,8 +31,28 @@ endif()
 
 # ---- the predicate, in one place so the self-test exercises the real one ------------
 
-# Sets ${out} to the offending trailer value, or "" if the commit is clean.
-function(zen_attribution_verdict sha out)
+# The credit line, as git's own --grep reads a message, case folded: the link the line carries or
+# its words. A sentence about the line ("the credit line was removed") names neither.
+set(ZEN_ATTRIBUTION_CREDIT "generated with \\[claude code\\]|claude\\.com/claude-code")
+
+# Sets ${out} to the commits among ${rev_args} (git log's revision arguments, a list) whose
+# message holds the credit line, one git call for any number of commits.
+function(zen_attribution_credited rev_args out)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${ZEN_REPO}" log --format=%H -i -E
+                "--grep=${ZEN_ATTRIBUTION_CREDIT}" ${rev_args}
+        OUTPUT_VARIABLE shas OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE rc ERROR_VARIABLE err)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR "attribution: could not read messages of ${rev_args} (exit ${rc}).\n${err}")
+    endif()
+    string(REPLACE "\n" ";" shas "${shas}")
+    list(REMOVE_ITEM shas "")
+    set(${out} "${shas}" PARENT_SCOPE)
+endfunction()
+
+# Sets ${out} to the offending trailer, or "" if the commit's trailers are clean.
+function(zen_attribution_trailer sha out)
     execute_process(
         COMMAND "${GIT_EXECUTABLE}" -C "${ZEN_REPO}" log -1
                 "--format=%(trailers:key=Co-authored-by,valueonly,separator=%x1F)" "${sha}"
@@ -42,10 +63,23 @@ function(zen_attribution_verdict sha out)
     endif()
     string(TOLOWER "${values}" folded)
     if(folded MATCHES "claude" OR folded MATCHES "anthropic")
-        set(${out} "${values}" PARENT_SCOPE)
+        set(${out} "Co-authored-by: ${values}" PARENT_SCOPE)
     else()
         set(${out} "" PARENT_SCOPE)
     endif()
+endfunction()
+
+# Both readings of one commit: its trailer, then its credit line. Sets ${out} to what offends,
+# or "" if the commit is clean. The population reads the credit line once for the whole range.
+function(zen_attribution_verdict sha out)
+    zen_attribution_trailer("${sha}" found)
+    if(found STREQUAL "")
+        zen_attribution_credited("-1;${sha}" credited)
+        if(credited)
+            set(found "a credit line: Generated with [Claude Code]")
+        endif()
+    endif()
+    set(${out} "${found}" PARENT_SCOPE)
 endfunction()
 
 # Manufactures a dangling commit carrying ${message} and returns its sha.
@@ -95,7 +129,29 @@ if(NOT wrongly_caught STREQUAL "")
         "collaborators, which is a different defect and not a safer one.")
 endif()
 
-message(STATUS "attribution: self-test OK -- the check catches the forbidden trailer and spares a human co-author")
+zen_throwaway_commit(
+    "Self-test: the merge of a described pull request\n\nThe change.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+    credit_sha)
+zen_attribution_verdict("${credit_sha}" credit)
+if(credit STREQUAL "")
+    message(FATAL_ERROR
+        "attribution: SELF-TEST FAILED -- the check did not catch a commit carrying the credit "
+        "line an assistant appends to a pull request's description, which the merge copies into "
+        "its commit.")
+endif()
+
+zen_throwaway_commit(
+    "Self-test: prose about the credit line\n\nThe Claude Code credit line was removed from the description before the merge."
+    prose_sha)
+zen_attribution_verdict("${prose_sha}" wrongly_credited)
+if(NOT wrongly_credited STREQUAL "")
+    message(FATAL_ERROR
+        "attribution: SELF-TEST FAILED -- the check flagged a commit that only talks about the "
+        "credit line (\"${wrongly_credited}\"). Prose about Claude is not attribution.")
+endif()
+
+message(STATUS "attribution: self-test OK -- the check catches the forbidden trailer and the credit "
+               "line, and spares a human co-author and prose")
 
 # ---- the real population ------------------------------------------------------------
 
@@ -118,13 +174,17 @@ if(commit_count EQUAL 0)
 endif()
 
 set(offenders "")
+zen_attribution_credited("${ZEN_RANGE}" credited_commits)
 foreach(sha IN LISTS commits)
-    zen_attribution_verdict("${sha}" value)
+    zen_attribution_trailer("${sha}" value)
+    if(value STREQUAL "" AND sha IN_LIST credited_commits)
+        set(value "a credit line: Generated with [Claude Code]")
+    endif()
     if(NOT value STREQUAL "")
         execute_process(
             COMMAND "${GIT_EXECUTABLE}" -C "${ZEN_REPO}" log -1 --format=%s "${sha}"
             OUTPUT_VARIABLE subject OUTPUT_STRIP_TRAILING_WHITESPACE)
-        list(APPEND offenders "  ${sha}  ${subject}\n      Co-authored-by: ${value}")
+        list(APPEND offenders "  ${sha}  ${subject}\n      ${value}")
     endif()
 endforeach()
 
@@ -133,8 +193,8 @@ if(NOT offenders STREQUAL "")
     string(REPLACE ";" "\n" text "${offenders}")
     message(FATAL_ERROR
         "attribution FAILED: ${offender_count} of ${commit_count} commit(s) reachable from "
-        "'${ZEN_RANGE}' record an AI assistant as co-author.\n${text}\n\n"
-        "  Loom records no AI co-authors. Remove the trailer from the commit message -- "
+        "'${ZEN_RANGE}' record an AI assistant as co-author or credit it.\n${text}\n\n"
+        "  Loom records no AI co-authors. Remove the trailer or credit line from the message -- "
         "amend if it is the tip, otherwise rewrite the affected messages "
         "(message-only, final tree unchanged) and force-push with an exact lease.")
 endif()
