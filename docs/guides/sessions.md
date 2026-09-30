@@ -113,6 +113,7 @@ directories under your profile). Both are removed when the host ends cleanly.
 Every `loom-session` command attaches as a fresh client, asks the owners, prints, and leaves; add
 `--json` for the owners' answers as data.
 
+<!-- value ZEN_ABI_VERSION in "weave ABI v{}" -->
 ```text
 $ loom-session status work
 session /home/you/work -- lifetime 3f17415b4ee53b1ddce611b8ac90b0f7
@@ -259,7 +260,7 @@ Its fields need the crossing record's bytes, which is your retention choice
 ([§ 11](running-loom.md#11-what-this-host-remembers-and-what-it-keeps)); without them the reader says
 the bytes were declined or evicted, and a released record is `forgotten`, never "nothing". Bulk
 answers cross as bytes too — a picture fetched in chunks is most of a run's traffic — and share
-the Recorder's payload budget (1 MiB unless `history.payload_budget` says otherwise), so the
+the Recorder's payload budget (<!-- value kDefaultPayloadByteBudget MiB -->1<!-- /value --> MiB unless `history.payload_budget` says otherwise), so the
 earliest crossings' bytes are evicted first: give the budget room for what you mean to read back.
 The CLI prints the answers to the run's asks and the crossings, and counts the rest; `--json`
 lists each delivery returned by that query, not deliveries outside its retained/read window.

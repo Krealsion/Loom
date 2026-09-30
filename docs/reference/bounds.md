@@ -4,24 +4,25 @@ Every deliberate capacity in the current system, in one place. A bound
 refusing is visible (`Exhausted`, a named `TxnReason`, or a stated shed) —
 never a silent drop.
 
-**The named constants own the values; this table mirrors them.** Nothing
-mechanically holds the two in step — the tests use the symbols, never the
-literals — so read a number here as a pointer to the constant beside it rather
-than as the contract. The names are grep-able for exactly that reason.
+**The named constants own the values, and each number here is held to its
+constant.** `code_values` reads every marked number from the constant beside it and
+fails when the two differ ([values the code owns](../../CONTRIBUTING.md#values-the-code-owns)).
+A value computed in place, with no constant to name, is said as the code computes it
+and held by review alone.
 
 ## Switchboard
 
 | Bound | Value | Overflow behavior |
 |---|---|---|
-| `kMaxDeferredAnswers` | 64 | `Exhausted` refusal on the tap; the immediate answer right survives. **Loom-wide, not per weave** |
-| `kJournalCapacity` | 1024 | ring: older ticket outcomes read as `Pending`, exactly like unknown seqs |
-| `kMaxPreparedReplacements` | 8 | `CapacityExhausted` before anything is inspected |
-| `kMaxPreparationBudget` | 1024 | larger requests refused at `begin` |
-| `kMaxTerminalOutcomes` | 16 | oldest outcome dropped (evidence, not authority) |
-| `kMaxJointOperations` | 8 | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its operator releases it, so an operator that never releases meets this bound and never another operator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |
-| `kMaxJointKeys` | 4 | keys one operation binds; `Exhausted` at `begin` |
-| `kMaxJointOfferBytes` | 64 KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
-| `kMaxFences` | 64 | fences held (open or settled, not yet released) per bus; a fenced send past it queues **nothing** and returns an invalid ticket — never an unfenced send in its place ([fences](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)). Ids are monotonic and never reused |
+| `kMaxDeferredAnswers` | <!-- value kMaxDeferredAnswers -->64<!-- /value --> | `Exhausted` refusal on the tap; the immediate answer right survives. **Loom-wide, not per weave** |
+| `kJournalCapacity` | <!-- value kJournalCapacity -->1024<!-- /value --> | ring: older ticket outcomes read as `Pending`, exactly like unknown seqs |
+| `kMaxPreparedReplacements` | <!-- value kMaxPreparedReplacements -->8<!-- /value --> | `CapacityExhausted` before anything is inspected |
+| `kMaxPreparationBudget` | <!-- value kMaxPreparationBudget -->1024<!-- /value --> | larger requests refused at `begin` |
+| `kMaxTerminalOutcomes` | <!-- value kMaxTerminalOutcomes -->16<!-- /value --> | oldest outcome dropped (evidence, not authority) |
+| `kMaxJointOperations` | <!-- value kMaxJointOperations -->8<!-- /value --> | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its operator releases it, so an operator that never releases meets this bound and never another operator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |
+| `kMaxJointKeys` | <!-- value kMaxJointKeys -->4<!-- /value --> | keys one operation binds; `Exhausted` at `begin` |
+| `kMaxJointOfferBytes` | <!-- value kMaxJointOfferBytes KiB -->64<!-- /value --> KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
+| `kMaxFences` | <!-- value kMaxFences -->64<!-- /value --> | fences held (open or settled, not yet released) per bus; a fenced send past it queues **nothing** and returns an invalid ticket — never an unfenced send in its place ([fences](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)). Ids are monotonic and never reused |
 | activation sequence | `INT64_MAX` | the door refuses further activations, naming the boundary; it does not brick |
 | deferred-answer tokens | 2^64, monotonic | deliberately unguarded: process-local, never persisted, +1 per deferral |
 
@@ -40,11 +41,11 @@ which nothing is owed, discarded oldest-first, and counted. See
 
 | Bound | Default | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
-| `kDefaultLastN` | 1 | records | **per shape**: the most recent observations of that shape | ring, its own budget per shape |
-| `kDefaultRecentCapacity` | 4096 | records | the shared recent-context FIFO | ring: oldest released, counted in `bounds().forgotten` |
-| `kDefaultProtectedCapacity` | 512 | records | facts that must not compete with ordinary traffic (a refusal, a failed handler, a lifecycle transition, a policy change) | ring, its own budget |
-| `kDefaultPayloadByteBudget` | 1 MiB | **bytes** | retained payloads, across all windows | oldest payload released; its METADATA is untouched |
-| `kDefaultMaxPayloadBytes` | 64 KiB | bytes | one payload | recorded as `TooLarge`; the metadata still stands |
+| `kDefaultLastN` | <!-- value kDefaultLastN -->1<!-- /value --> | records | **per shape**: the most recent observations of that shape | ring, its own budget per shape |
+| `kDefaultRecentCapacity` | <!-- value kDefaultRecentCapacity -->4096<!-- /value --> | records | the shared recent-context FIFO | ring: oldest released, counted in `bounds().forgotten` |
+| `kDefaultProtectedCapacity` | <!-- value kDefaultProtectedCapacity -->512<!-- /value --> | records | facts that must not compete with ordinary traffic (a refusal, a failed handler, a lifecycle transition, a policy change) | ring, its own budget |
+| `kDefaultPayloadByteBudget` | <!-- value kDefaultPayloadByteBudget MiB -->1<!-- /value --> MiB | **bytes** | retained payloads, across all windows | oldest payload released; its METADATA is untouched |
+| `kDefaultMaxPayloadBytes` | <!-- value kDefaultMaxPayloadBytes KiB -->64<!-- /value --> KiB | bytes | one payload | recorded as `TooLarge`; the metadata still stands |
 
 A record is **stored once** and claimed by whichever windows want it, so the
 total held is bounded by `recent + protected + Σ last_n` and a fact in three
@@ -87,9 +88,9 @@ type, so the local and remote operator see the same horizon.
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
-| `kConsoleTapCapacity` | 1024 | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
-| `kConsoleBufferCapacity` | 64 | received arrivals | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
-| `kConsoleAskCapacity` | 32 | conversations held for a caller | the in-process engine's tracked conversations: still open, plus answered and not yet taken | **refuses** a new tracked conversation, never evicts — see below |
+| `kConsoleTapCapacity` | <!-- value kConsoleTapCapacity -->1024<!-- /value --> | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
+| `kConsoleBufferCapacity` | <!-- value kConsoleBufferCapacity -->64<!-- /value --> | received arrivals | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+| `kConsoleAskCapacity` | <!-- value kConsoleAskCapacity -->32<!-- /value --> | conversations held for a caller | the in-process engine's tracked conversations: still open, plus answered and not yet taken | **refuses** a new tracked conversation, never evicts — see below |
 
 **A third bound, and it is deliberately not a window.** `kConsoleAskCapacity`
 bounds what the console is *holding for a caller* — conversations still open, and
@@ -156,8 +157,8 @@ thread) only move bytes into it.
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
-| `kMaxCommandBytes` | 4000 | bytes, line ending excluded | one command | **refused** where it stands (`LineInput::Status::TooLong`, with its input line number and first bytes): none of it runs — not shortened, not split — the rest of that line is discarded as it arrives, and the next line is read as usual |
-| `kHeldInputBytes` | 64 KiB | bytes | everything the reader holds for the host at once: finished lines not yet taken **and** the line still arriving | the reader **waits**, and resumes as the host takes lines; nothing is dropped, reordered, or counted against a lifetime total |
+| `kMaxCommandBytes` | <!-- value kMaxCommandBytes -->4000<!-- /value --> | bytes, line ending excluded | one command | **refused** where it stands (`LineInput::Status::TooLong`, with its input line number and first bytes): none of it runs — not shortened, not split — the rest of that line is discarded as it arrives, and the next line is read as usual |
+| `kHeldInputBytes` | <!-- value kHeldInputBytes KiB -->64<!-- /value --> KiB | bytes | everything the reader holds for the host at once: finished lines not yet taken **and** the line still arriving | the reader **waits**, and resumes as the host takes lines; nothing is dropped, reordered, or counted against a lifetime total |
 
 **A backlog, so bounded by waiting, never by discarding.** Every command a producer wrote is
 owed to the host, in order, so the bound is applied by not reading: what the host has not
@@ -172,14 +173,14 @@ that never ends cost nothing: the reader keeps reading and discarding, and the h
 serving the bus. Nothing of a refused line is ever handed out, so no shortened command and
 no second half of one can run.
 
-**Why 4000.** A Linux terminal in its ordinary (canonical) mode keeps only the first 4095
+**Why <!-- value kMaxCommandBytes -->4000<!-- /value -->.** A Linux terminal in its ordinary (canonical) mode keeps only the first 4095
 bytes of a typed line and drops the rest without a sign; a Windows console delivers a long
 typed line whole (both measured, with typed lines up to 100,000 characters). A limit below 4095 means a line that terminal cut short is always refused and
 never run, and one number on both platforms means a command either works everywhere or is
 refused everywhere. It is still far above any command the host has — a `start` with a long
 path is a few hundred bytes.
 
-**Why 64 KiB.** It must hold the longest unfinished command plus one read (4 KiB), so a
+**Why <!-- value kHeldInputBytes KiB -->64<!-- /value --> KiB.** It must hold the longest unfinished command plus one read (<!-- value kReadChunkBytes KiB -->4<!-- /value --> KiB), so a
 reader waiting for room can never be waiting for a newline it has no room to read; that is a
 compile-time assertion beside the constants. Beyond that it only sets how much of a burst is
 taken per wake-up, and one Linux pipe's worth is plenty. It counts bytes in one buffer, not
@@ -206,10 +207,10 @@ conversation. Keeping a submitted value cannot displace a received value.
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
-| `kTranscriptCapacity` | 256 | transcript entries | `Transcript::entries_` -- a participant's own record | ring: oldest evicted, counted in `Transcript::evicted()` |
-| `kReceivedCapacity` | 64 | received `Value`s | `Transcript::received_` -- the `rN` store the `$rN.field` syntax reads | ring: oldest evicted, counted in `Transcript::received_evicted()`; its **id** then refuses |
-| `kAuthoredCapacity` | 64 | submitted `Value`s | `Transcript::authored_` | ring: oldest evicted; `retained_value(observation)` then returns no value |
-| `kMaxOutstandingAsks` | 8 | conversations | how many asks one participant will track at once -- the number the terminal hands its `loom::AskBook` | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
+| `kTranscriptCapacity` | <!-- value kTranscriptCapacity -->256<!-- /value --> | transcript entries | `Transcript::entries_` -- a participant's own record | ring: oldest evicted, counted in `Transcript::evicted()` |
+| `kReceivedCapacity` | <!-- value kReceivedCapacity -->64<!-- /value --> | received `Value`s | `Transcript::received_` -- the `rN` store the `$rN.field` syntax reads | ring: oldest evicted, counted in `Transcript::received_evicted()`; its **id** then refuses |
+| `kAuthoredCapacity` | <!-- value kAuthoredCapacity -->64<!-- /value --> | submitted `Value`s | `Transcript::authored_` | ring: oldest evicted; `retained_value(observation)` then returns no value |
+| `kMaxOutstandingAsks` | <!-- value kMaxOutstandingAsks -->8<!-- /value --> | conversations | how many asks one participant will track at once -- the number the terminal hands its `loom::AskBook` | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
 
 **`loom::AskBook` has no default capacity, and that is a bound too.** The number
 above is the *terminal's* product decision, stated where that decision lives. The
@@ -250,12 +251,12 @@ What the component *is*, and what it trusts: [bridge](bridge.md).
 
 | Bound | Value | Behavior |
 |---|---|---|
-| `kMaxOperatorConnections` | 32 | accept-then-shed, `declined_count()` visible |
-| `kMaxHelloFieldBytes` | 256 | the longest claimed name or credential a Hello may carry; over it the connection is refused before the policy is asked -- a peer has earned nothing yet |
-| `kMaxSettlingPerConnection` | 8 | settle-requested sends one connection may have waiting on their settlement; past it the Send is refused before the bus (`SendRefused`), and so is one the bus's `kMaxFences` cannot fence |
-| `LinkWeave::kMaxOpenAsks` (the supplied host) | 16 | crossings one link holds open at once; a new ask past it is told `refused` and every open one is untouched. Each open crossing holds a deferred answer, which counts against the Loom-wide `kMaxDeferredAnswers`, so a link keeps well inside it |
-| `kMaxPendingDelivered` (client) | 64 | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
-| `kMaxAbsentSchemas` (client) | 64 | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
+| `kMaxOperatorConnections` | <!-- value kMaxOperatorConnections -->32<!-- /value --> | accept-then-shed, `declined_count()` visible |
+| `kMaxHelloFieldBytes` | <!-- value kMaxHelloFieldBytes -->256<!-- /value --> | the longest claimed name or credential a Hello may carry; over it the connection is refused before the policy is asked -- a peer has earned nothing yet |
+| `kMaxSettlingPerConnection` | <!-- value kMaxSettlingPerConnection -->8<!-- /value --> | settle-requested sends one connection may have waiting on their settlement; past it the Send is refused before the bus (`SendRefused`), and so is one the bus's `kMaxFences` cannot fence |
+| `LinkWeave::kMaxOpenAsks` (the supplied host) | <!-- value kMaxOpenAsks -->16<!-- /value --> | crossings one link holds open at once; a new ask past it is told `refused` and every open one is untouched. Each open crossing holds a deferred answer, which counts against the Loom-wide `kMaxDeferredAnswers`, so a link keeps well inside it |
+| `kMaxPendingDelivered` (client) | <!-- value kMaxPendingDelivered -->64<!-- /value --> | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
+| `kMaxAbsentSchemas` (client) | <!-- value kMaxAbsentSchemas -->64<!-- /value --> | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 
 ## Sessions and runs
 
@@ -265,25 +266,25 @@ refuses in words at the limit; none evicts anything a client is still owed.
 | Bound | Value | Behavior |
 |---|---|---|
 | connections to a session host | 32 | the bridge's `kMaxOperatorConnections`, shared by clients and run workers |
-| `SessionDoor::kMaxExpectations` | 32 | run registrations held at once (expected, or admitted and still connected); past it `ExpectRun` is refused and nothing is registered. A registration leaves when its worker's connection ends, when its registrar forgets it, or when its registrar leaves the bus |
-| `SessionDoor::kMaxRulesPerRun` | 32 | rules one run may ask to be granted |
-| `SessionDoor::kMaxRunNameBytes` | 64 | a run name, of letters, digits, `-`, `_` and `.` only, so an established `run:<name>` is one plain token wherever it is printed |
-| `session::kMaxHistoryRows` | 256 | rows one `loom.history` answer carries; `truncated` says when more matched |
-| `RunManager::kMaxActive` | 8 | runs not yet final; past it Start is refused |
-| `RunManager::kMaxRuns` | 64 | runs held in one lifetime, final or not; past it Start is refused until finished runs are released (their directories stay unless released with `remove`) |
-| `RunManager::kMaxNotes` | 32 | notes kept per run; older ones are dropped and COUNTED (`notes_dropped`) |
-| `RunManager::kMaxAsks` | 128 | a run's own account of its asks; the oldest leaves first and is COUNTED (`asks_dropped`) |
-| `RunManager::kMaxArtifacts` | 32 | artifacts listed per run; one more is noted, not listed |
-| `RunManager::kMaxPast` | 64 | past lifetimes' records one `Past` answer carries, newest first |
+| `SessionDoor::kMaxExpectations` | <!-- value kMaxExpectations -->32<!-- /value --> | run registrations held at once (expected, or admitted and still connected); past it `ExpectRun` is refused and nothing is registered. A registration leaves when its worker's connection ends, when its registrar forgets it, or when its registrar leaves the bus |
+| `SessionDoor::kMaxRulesPerRun` | <!-- value kMaxRulesPerRun -->32<!-- /value --> | rules one run may ask to be granted |
+| `SessionDoor::kMaxRunNameBytes` | <!-- value kMaxRunNameBytes -->64<!-- /value --> | a run name, of letters, digits, `-`, `_` and `.` only, so an established `run:<name>` is one plain token wherever it is printed |
+| `session::kMaxHistoryRows` | <!-- value kMaxHistoryRows -->256<!-- /value --> | rows one `loom.history` answer carries; `truncated` says when more matched |
+| `RunManager::kMaxActive` | <!-- value kMaxActive -->8<!-- /value --> | runs not yet final; past it Start is refused |
+| `RunManager::kMaxRuns` | <!-- value kMaxRuns -->64<!-- /value --> | runs held in one lifetime, final or not; past it Start is refused until finished runs are released (their directories stay unless released with `remove`) |
+| `RunManager::kMaxNotes` | <!-- value kMaxNotes -->32<!-- /value --> | notes kept per run; older ones are dropped and COUNTED (`notes_dropped`) |
+| `RunManager::kMaxAsks` | <!-- value kMaxAsks -->128<!-- /value --> | a run's own account of its asks; the oldest leaves first and is COUNTED (`asks_dropped`) |
+| `RunManager::kMaxArtifacts` | <!-- value kMaxArtifacts -->32<!-- /value --> | artifacts listed per run; one more is noted, not listed |
+| `RunManager::kMaxPast` | <!-- value kMaxPast -->64<!-- /value --> | past lifetimes' records one `Past` answer carries, newest first |
 | a run's inputs | 16 KiB of JSON | refused before anything is created |
-| `kMaxPackages` / `kMaxToolsPerPackage` | 64 / 32 | what one catalog and one package may name; the rest is a reported problem |
-| `kMaxPackageFiles` / `kMaxPackageBytes` | 512 / 16 MiB | what a package may hold: a snapshot is a copy |
-| `Connection.MAX_OPEN` (Python client) | 256 | conversations one Python session holds open; one more is refused before anything is sent. An ask that asked for settlement counts as open until BOTH its attested answer and its settlement have arrived |
-| `tool.CLEANUP_SECONDS` (Python tool) | 30 s | a run's cleanup phase, after its ordinary work has ended however it ended. A tool may set its own (`ctx.cleanup_seconds`) before registering cleanups. **A budget checked, not a cap imposed**: it is read between cleanups and at the context's own wait points, so a cleanup blocked inside ordinary Python is not interrupted by it — `cancel --force` is the escape for that. What the budget leaves unattempted says so; nothing is recorded as done that did not finish |
-| `wire.MAX_POLL_READS` (Python client) | 1026 | buffer-fuls one zero-timeout poll may take before returning what it has — one whole frame at `MAX_FRAME`, and a bound all the same |
-| `wire.WRITE_SECONDS` (Python client) | 30 s | one whole frame's write. The channel sets it on EVERY send, so a preceding `read(0)` — which leaves the shared socket non-blocking on purpose — never decides how a write behaves. Backpressure from a live peer is waited on inside it; a peer that takes no more ends the channel, saying how much of the frame had already gone, and nothing is sent twice. Per channel (`Channel(..., write_seconds=...)`) |
-| `RunManager::kShutdownObserveMs` | 2000 ms | the WHOLE of a clean shutdown's budget for watching the execution GROUPS it just stopped actually go, so that a final `exited`/`killed` is an end the manager saw with a leader's exit code it read. Every stop is issued before any of it is spent, so a slow group cannot take the moment another run's stop was owed. **A budget for one observation, not a cap on the shutdown**: unspent time is not waited out, a group whose end is not seen in it is recorded `killing` (which promises no code, while any leader code read by then — including one this moment of watching was the first to see — is kept, and the record's note says whether there was one), and the POSIX reap in `ChildProcess::release` is a separate wait of its own |
-| serve mode's idle wait | 5 ms | the longest a client's request waits unread on an idle host (the interactive host's is 100 ms, a console's latency) |
+| `kMaxPackages` / `kMaxToolsPerPackage` | <!-- value kMaxPackages -->64<!-- /value --> / <!-- value kMaxToolsPerPackage -->32<!-- /value --> | what one catalog and one package may name; the rest is a reported problem |
+| `kMaxPackageFiles` / `kMaxPackageBytes` | <!-- value kMaxPackageFiles -->512<!-- /value --> / <!-- value kMaxPackageBytes MiB -->16<!-- /value --> MiB | what a package may hold: a snapshot is a copy |
+| `Connection.MAX_OPEN` (Python client) | <!-- value Connection.MAX_OPEN -->256<!-- /value --> | conversations one Python session holds open; one more is refused before anything is sent. An ask that asked for settlement counts as open until BOTH its attested answer and its settlement have arrived |
+| `tool.CLEANUP_SECONDS` (Python tool) | <!-- value tool.CLEANUP_SECONDS -->30<!-- /value --> s | a run's cleanup phase, after its ordinary work has ended however it ended. A tool may set its own (`ctx.cleanup_seconds`) before registering cleanups. **A budget checked, not a cap imposed**: it is read between cleanups and at the context's own wait points, so a cleanup blocked inside ordinary Python is not interrupted by it — `cancel --force` is the escape for that. What the budget leaves unattempted says so; nothing is recorded as done that did not finish |
+| `wire.MAX_POLL_READS` (Python client) | <!-- value wire.MAX_POLL_READS -->1026<!-- /value --> | buffer-fuls one zero-timeout poll may take before returning what it has — one whole frame at `MAX_FRAME`, and a bound all the same |
+| `wire.WRITE_SECONDS` (Python client) | <!-- value wire.WRITE_SECONDS -->30<!-- /value --> s | one whole frame's write. The channel sets it on EVERY send, so a preceding `read(0)` — which leaves the shared socket non-blocking on purpose — never decides how a write behaves. Backpressure from a live peer is waited on inside it; a peer that takes no more ends the channel, saying how much of the frame had already gone, and nothing is sent twice. Per channel (`Channel(..., write_seconds=...)`) |
+| `RunManager::kShutdownObserveMs` | <!-- value kShutdownObserveMs -->2000<!-- /value --> ms | the WHOLE of a clean shutdown's budget for watching the execution GROUPS it just stopped actually go, so that a final `exited`/`killed` is an end the manager saw with a leader's exit code it read. Every stop is issued before any of it is spent, so a slow group cannot take the moment another run's stop was owed. **A budget for one observation, not a cap on the shutdown**: unspent time is not waited out, a group whose end is not seen in it is recorded `killing` (which promises no code, while any leader code read by then — including one this moment of watching was the first to see — is kept, and the record's note says whether there was one), and the POSIX reap in `ChildProcess::release` is a separate wait of its own |
+| serve mode's idle wait (`kServeIdleWaitMs`) | <!-- value kServeIdleWaitMs -->5<!-- /value --> ms | the longest a client's request waits unread on an idle host (the interactive host's, `kIdleWaitMs`, is <!-- value kIdleWaitMs -->100<!-- /value --> ms, a console's latency) |
 
 ## Observation relay
 
@@ -292,13 +293,13 @@ Every bound here either refuses in words or drops-and-SAYS; none makes a produce
 
 | Bound | Value | Behavior |
 |---|---|---|
-| `observe::kMaxSubscriptions` | 64 | subscriptions one relay holds; past it `Subscribe` is refused |
-| `observe::kMaxPerSubscriber` | 8 | held at once for one subscriber (every run on one link is ONE far subscriber); past it refused: release one first |
-| `observe::kMaxShapes` | 8 | shapes one subscription names |
-| `observe::kDefaultWindow` / `kMaxWindow` | 256 / 4096 | numbered words standing unacknowledged per subscription. Past it an occurrence is dropped, COUNTED and said as a `Gap` before anything later; a `latest` shape keeps only its newest, which says how many it stood for (`coalesced`) |
-| `LinkWeave::kMaxWatches` (the supplied host) | 32 | far subscriptions one link holds in custody, subscriptions being made and those being released for a gone asker included; past it the `Subscribe` is refused before it crosses. A gone asker's subscription is released on the host's own turn, so abandoning subscribers does not use it up |
+| `observe::kMaxSubscriptions` | <!-- value kMaxSubscriptions -->64<!-- /value --> | subscriptions one relay holds; past it `Subscribe` is refused |
+| `observe::kMaxPerSubscriber` | <!-- value kMaxPerSubscriber -->8<!-- /value --> | held at once for one subscriber (every run on one link is ONE far subscriber); past it refused: release one first |
+| `observe::kMaxShapes` | <!-- value kMaxShapes -->8<!-- /value --> | shapes one subscription names |
+| `observe::kDefaultWindow` / `kMaxWindow` | <!-- value kDefaultWindow -->256<!-- /value --> / <!-- value kMaxWindow -->4096<!-- /value --> | numbered words standing unacknowledged per subscription. Past it an occurrence is dropped, COUNTED and said as a `Gap` before anything later; a `latest` shape keeps only its newest, which says how many it stood for (`coalesced`) |
+| `LinkWeave::kMaxWatches` (the supplied host) | <!-- value kMaxWatches -->32<!-- /value --> | far subscriptions one link holds in custody, subscriptions being made and those being released for a gone asker included; past it the `Subscribe` is refused before it crosses. A gone asker's subscription is released on the host's own turn, so abandoning subscribers does not use it up |
 | `Subscription.max_pending` (Python client) | 2 × window, at least 64 | observations read here and not yet taken; past it they are dropped HERE and handed over as a local `Gap` with their count |
-| `Connection.MAX_UNCLAIMED` (Python client) | 1024 | words for a subscription not (yet) registered here — the relay's first words can arrive with its answer; past it the oldest are let go and counted (`stray_observations`) |
+| `Connection.MAX_UNCLAIMED` (Python client) | <!-- value Connection.MAX_UNCLAIMED -->1024<!-- /value --> | words for a subscription not (yet) registered here — the relay's first words can arrive with its answer; past it the oldest are let go and counted (`stray_observations`) |
 
 ## Transport channels (framed byte channels)
 
@@ -307,8 +308,8 @@ host) and the portable `BridgeChannel` -- share these.
 
 | Bound | Value | Scope | Behavior |
 |---|---|---|---|
-| `kMaxFrameLen` | 64 MiB | one frame's payload | over-cap: the channel is marked `failed()` (send) / the framer fails cleanly, no over-read (receive) |
-| `kMaxBacklog` | 64 MiB | the **unsent** send backlog, and the unread receive buffer | `failed()` -- a peer that will not drain is contained, never allowed to block, hang or OOM the host |
+| `kMaxFrameLen` | <!-- value kMaxFrameLen MiB -->64<!-- /value --> MiB | one frame's payload | over-cap: the channel is marked `failed()` (send) / the framer fails cleanly, no over-read (receive) |
+| `kMaxBacklog` | <!-- value bridge::kMaxBacklog,isolation::kMaxBacklog MiB -->64<!-- /value --> MiB | the **unsent** send backlog, and the unread receive buffer | `failed()` -- a peer that will not drain is contained, never allowed to block, hang or OOM the host |
 | live send storage | < 2x the unsent backlog | the outbox buffer | not a knob: an invariant of the amortized prefix reclamation ([LIFE-07](../laws/lifecycle-laws.md)) |
 | live receive storage | the unread/incomplete suffix | the inbox buffer | not a knob: the decoded prefix is erased at the end of every poll that decoded it |
 
@@ -354,15 +355,15 @@ bound is on what is *live and reachable*, never an RSS guarantee.
 
 Depth and size caps make hostile input total (see
 `values-and-admission` and the fuzz suite); the UI vocabulary pins tree depth
-≤ 256 and per-kind child arity.
+≤ <!-- value kMaxUiDepth -->256<!-- /value --> (`kMaxUiDepth`) and per-kind child arity.
 
 | Bound | Value | Scope | Overflow behavior |
 |---|---|---|---|
-| `kMaxBinaryDepth` | 64 | one nesting chain | `MalformedBytes` |
-| `kMaxListCount` | 2^20 | **one** list | `MalformedField`, "list count exceeds cap" |
-| `kMaxFieldBytes` | 2^28 | **one** `Text`/`Bytes` | `MalformedField` (also capped by remaining input) |
-| `kMaxDecodedCells` | **65,536** | **the whole decoded value** | `MalformedBytes`, "…exceeds the materialization budget…" |
-| `kMaxTypeDepth` | 64 | one schema descriptor's type | thrown refusal from `decode_schema` |
+| `kMaxBinaryDepth` | <!-- value kMaxBinaryDepth -->64<!-- /value --> | one nesting chain | `MalformedBytes` |
+| `kMaxListCount` | <!-- value kMaxListCount pow2 -->2^20<!-- /value --> | **one** list | `MalformedField`, "list count exceeds cap" |
+| `kMaxFieldBytes` | <!-- value kMaxFieldBytes pow2 -->2^28<!-- /value --> | **one** `Text`/`Bytes` | `MalformedField` (also capped by remaining input) |
+| `kMaxDecodedCells` | **<!-- value kMaxDecodedCells grouped -->65,536<!-- /value -->** | **the whole decoded value** | `MalformedBytes`, "…exceeds the materialization budget…" |
+| `kMaxTypeDepth` | <!-- value kMaxTypeDepth -->64<!-- /value --> | one schema descriptor's type | thrown refusal from `decode_schema` |
 
 ### The decode-materialization bound
 

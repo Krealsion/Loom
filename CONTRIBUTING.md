@@ -67,9 +67,41 @@ lifetime is at stake.
   a mutation found that the case now guards, wherever a reader would otherwise simplify the case
   into one that passes for the wrong reason.
 
+### Values the code owns
+
+A version, a limit, a count or a default the code owns is named by its owner — the constant,
+the macro, the shape — wherever a sentence needs it: "at most `kMaxFences` fences", "the current
+version is `ZEN_ABI_VERSION`". A comment names the owner and no more. Where a page's reader
+needs the number itself, it stands in a marker that renders as nothing:
+
+```markdown
+| `kMaxJointOfferBytes` | <!-- value kMaxJointOfferBytes KiB -->64<!-- /value --> KiB | … |
+<!-- value kMaxCommandBytes in "longer than {} bytes" -->
+```
+
+The first holds the number between its two comments, written as the word after the id says
+(`KiB`, `MiB`, `GiB`, `s`, `pow2`, `grouped`, or nothing for the integer); two ids joined by a
+comma are one value two owners share, and they must agree. The second holds a spelling on its
+own line, or, standing alone, the next line or the fenced block after it: the form for a
+number inside code or a transcript. A marker shown inside a fenced block, as here, is an
+example and holds nothing.
+
+`code_values` (`tests/check_code_values.cmake`) reads each value
+[`tests/code_values.txt`](tests/code_values.txt) registers from its owner, and a marker that
+says otherwise is a red; `cmake -DZEN_VALUES_WRITE=ON -P tests/check_code_values.cmake` rewrites
+the markers to the owners' values. It also refuses an unmarked copy of a value it knows: the
+owner's name with a number beside it, in a page or a comment, and a spelling the registry names
+— a claim of the current value (`C ABI (version **{}**)`) always, and a mention (`ABI v{}`) at
+the current value unless it states that version's own fact ("since ABI v9", "v5 adds").
+
+A test count outside the population files names, beside it, the commit and the command that
+measured it, or it is not written; `code_values` refuses one that names neither. No change
+sweeps for copies by hand: when review finds a moving value the registry does not know, it is
+registered in the change that found it.
+
 ### The checks
 
-Three entries on the official lane hold this, each naming the file and line of what it
+Four entries on the official lane hold this, each naming the file and line of what it
 refuses:
 
 - `source_comments` (`tests/check_source_comments.cmake`) reads first-party C/C++, CMake, the
@@ -89,6 +121,8 @@ refuses:
 - `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every
   `.md` path in a C/C++ or CMake comment, and refuses a path outside the repository in any
   current-facing text file, whether it is spelled out or reached by climbing above it with `../`.
+- `code_values` (`tests/check_code_values.cmake`) holds the values the code owns, as the
+  section above says.
 
 What a private id is, `tests/private_ids.cmake` says once for both. Every current-facing
 document and every first-party source file is held to this standard; vendored code is not. No

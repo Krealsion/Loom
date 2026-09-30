@@ -69,7 +69,7 @@ itself, visibly, and nothing in a subscriber's reach can write it for it.
 |---|---|
 | the host's policy said no | the policy's own |
 | a shape nobody on this bus declares | `no participant here declares <Name> vN` |
-| no shapes, or more than `kMaxShapes` | `a subscription names 1 to 8 shapes` |
+| no shapes, or more than `kMaxShapes` | `a subscription names 1 to 8 shapes` <!-- value kMaxShapes in "names 1 to {} shapes" --> |
 | `latest` names a shape not subscribed | said so |
 | an encoding other than `native` or `compat` | said so |
 | `kMaxSubscriptions` held by the relay, or `kMaxPerSubscriber` by this subscriber | said so; release one first |

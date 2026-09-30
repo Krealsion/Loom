@@ -33,8 +33,58 @@ jobs:
       - name: Refuse AI co-authorship in reachable history
         run: cmake -P tests/check_commit_attribution.cmake
 
+  # Does the change touch a compiled line? tests/check_change_kind.cmake answers from the base (a
+  # pull request's merge parent, or the push's previous tip) to this commit; only its explicit
+  # `false` skips the build and test jobs, so a broken answer runs them all.
+  loom-change-kind:
+    name: Loom / change kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      compiled: ${{ steps.kind.outputs.compiled }}
+    steps:
+      - name: Check out Loom with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify the change
+        id: kind
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            base="$(git rev-parse HEAD^1)"
+          else
+            base="$BEFORE"
+          fi
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "No base commit to compare with; every job runs."
+            echo "compiled=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cmake -DZEN_BASE="$base" -DZEN_HEAD=HEAD -DZEN_KIND_OUT="$GITHUB_OUTPUT" -P tests/check_change_kind.cmake
+
+  # The documentation lane's checks, on every change: they read the source tree, not a build.
+  loom-documentation:
+    name: Loom / documentation lane
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the text checks
+        run: cmake -DZEN_LANE_KIND=OFF -P tests/documentation_lane.cmake
+
   loom-linux-debug:
     name: Loom / Linux / Debug
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -81,6 +131,8 @@ jobs:
 
   loom-linux-release:
     name: Loom / Linux / Release
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -127,6 +179,8 @@ jobs:
 
   loom-linux-asan-ubsan:
     name: Loom / Linux / ASan + UBSan
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -173,6 +227,8 @@ jobs:
 
   loom-zengine-stranger:
     name: Loom -> canonical Zengine stranger
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -254,6 +310,8 @@ jobs:
 
   loom-windows-kernel-full:
     name: Loom / Windows / kernel-full (advisory)
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
     timeout-minutes: 45
@@ -305,6 +363,8 @@ jobs:
   # frames are the point.
   loom-windows-msvc:
     name: Loom / Windows / MSVC + installed-package witness (advisory)
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
     timeout-minutes: 60
@@ -356,6 +416,8 @@ jobs:
 
   loom-windows-kernel-less:
     name: Loom / Windows / default kernel-less (advisory)
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
     timeout-minutes: 45

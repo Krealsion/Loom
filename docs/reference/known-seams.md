@@ -255,7 +255,7 @@ queued attempt or supply general delivery or success knowledge.
 
 ## A manifest says what a weave accepts, and since ABI v9 what it declares it says — never what it asks leave to send where
 
-**Status: the descriptive half CLOSED (ABI v9, `zen.Manifest` v5;
+**Status: the descriptive half CLOSED since ABI v9 (
 [declared vocabulary is agreed at
 admission](../decisions/declared-vocabulary-is-agreed-at-admission.md)); the
 authority-request half a KNOWN SEAM.**

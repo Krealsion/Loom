@@ -33,7 +33,7 @@ MEANS
 - after deferring, `answer()` finds nothing left; a second `defer` finds
   nothing to convert;
 - the retained right binds the exact respondent incarnation that earned it;
-- capacity is bounded (`kMaxDeferredAnswers = 64`) **per Loom, not per weave**
+- capacity is bounded (`kMaxDeferredAnswers`) **per Loom, not per weave**
   — overflow refuses visibly as `Exhausted` and the immediate right survives.
 
 DOES NOT MEAN

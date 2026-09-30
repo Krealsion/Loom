@@ -15,7 +15,17 @@ library alone configures with CMake 3.16).
 cmake -S . -B build && cmake --build build -j"$(nproc)"
 cmake -DZEN_BUILD_DIR=build -P tests/verify.cmake     # THE official lane
 # sanitizer lane: the same with -B build-san -DZEN_SANITIZE=ON
+cmake -P tests/documentation_lane.cmake               # the documentation lane, no build
 ```
+
+- **A change that touches no compiled line is verified by the documentation lane.** Markdown, an
+  image under `docs/`, a text check or the files only text checks read, and a C/C++ file whose
+  tokens are unchanged and only its comments differ: `tests/check_change_kind.cmake` says each
+  changed file's kind against `origin/main` and why, and the lane runs every text check
+  `tests/text_checks.cmake` lists, in seconds, passing only for a documentation-only change. CI
+  runs those checks on every change and skips the build and test jobs for a documentation-only
+  one. Anything else — a compiled line, a CMake file, CI, the lane itself — is the official
+  lane's.
 
 - `-Werror` is on; C++20. GCC 11.4 is the floor, so use nothing only a newer compiler accepts.
 - **Every loadable weave target goes through `loom_weave_build_contract()`**
@@ -105,10 +115,12 @@ in `docs/laws/population-laws.md`.
   `*.md` and its `#anchor`, and every repository-relative `docs/...md` path in a first-party C/C++
   or CMake comment (read from the repository root, because a comment moves with its code), and
   refuses a path outside the repository, whether spelled out or reached by climbing above it
-  with `../`. `source_comments` and `doc_standard` hold the comment and document standard. A
-  broken reference, a private id, or a page telling its own history or the development process
-  in a form `doc_standard` names is a red in the official lane. `docs/history/`, `archive/`,
-  vendored trees and build trees are excluded by written rule.
+  with `../`. `source_comments` and `doc_standard` hold the comment and document standard, and
+  `code_values` the values the code owns, each read from its owner. A broken reference, a
+  private id, a page telling its own history or the development process in a form
+  `doc_standard` names, or a copied value out of step or unmarked is a red in the official
+  lane. `docs/history/`, `archive/`, vendored trees and build trees are excluded by written
+  rule.
 
 ## The supplied host, and who decides what a loaded artifact may do
 
@@ -133,8 +145,9 @@ prerequisites: `docs/guides/tools.md`.
    `drain_until_idle()`: one approved self-addressed message would otherwise make `stop` and `quit`
    unreadable forever. The deadline holds while a line is **half typed**: a Windows console cannot
    be asked whether a line is finished, so it is read on its own thread. What the reader holds and
-   refuses is one rule on every platform (`loom::host::HeldInput`): at most 64 KiB waiting, and a
-   line over 4000 bytes refused whole, never run shortened or split (`docs/reference/bounds.md`).
+   refuses is one rule on every platform (`loom::host::HeldInput`): at most `kHeldInputBytes`
+   waiting, and a line over `kMaxCommandBytes` refused whole, never run shortened or split
+   (`docs/reference/bounds.md`).
 
 A conversation that has not settled is reported PENDING and stays open; the host never invents a
 completion. The console holds a conversation only for a caller that asks
@@ -246,7 +259,7 @@ application; what it found is evidence (`docs/evidence/night-lab.md`), not contr
 - That `Emit<...>` is informational, or that declaring a shape anywhere grants anything. Every
   list a weave declares — accepted, claimed, emitted, persisted — and every component those shapes
   nest is claimed through one agreement wall at registration (natively) and at load
-  (`zen.Manifest` v5, ABI v9), so a divergent definition refuses at the door in either order and a
+  (in the manifest, since ABI v9), so a divergent definition refuses at the door in either order and a
   self-contradicting declaration never registers; and none of it is authority — a declared
   emitter with no send rule is still `CapabilityDenied`, and `Emit` is not an exhaustive send list
   (`docs/decisions/declared-vocabulary-is-agreed-at-admission.md`).
