@@ -445,6 +445,10 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
     }
     const loom::Cell* c = entry->value.get(ref.field);
     if (c == nullptr) {
+        if (entry->value.schema().find(ref.field) != nullptr) {
+            return fail("buffer entry " + ref.label + " (" + entry->name +
+                        ") left its optional field '" + ref.field + "' absent");
+        }
         return fail("buffer entry " + ref.label + " (" + entry->name + ") has no field '" +
                     ref.field + "'");
     }

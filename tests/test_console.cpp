@@ -462,12 +462,35 @@ TEST_CASE("reference resolution errors are clean: empty buffer, missing entry, m
 
     std::string e2;
     CHECK_FALSE(engine.resolve_ref(Ref{"m1", "nope"}, &e2).has_value()); // no such field
-    CHECK_FALSE(e2.empty());
+    CHECK(e2 == "buffer entry m1 (Pong) has no field 'nope'");
 
     // A bad reference inside compose is a hard Error (it never silently drops the arg).
     Composed c = engine.compose(responder.id, "Ping", 1, {ref("m9", "x")});
     CHECK(c.status == Composed::Status::Error);
     CHECK_FALSE(c.ticket.valid());
+}
+
+TEST_CASE("a reference to an optional field a reply left absent says it is absent, not missing") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    Registered responder = register_probe(bus, {ping_schema(), tagged_schema()});
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        Value v(tagged_schema());
+        v.set("count", Cell::integer(in.payload.get("seq")->as_int()));
+        b.send(in.reply_to, Message(std::move(v))); // label left absent
+    };
+    std::string err;
+    REQUIRE_MESSAGE(engine.submit(responder.id, "Ping", 1, {{"seq", std::int64_t{4}}},
+                                  ConsoleTracking::Untracked, &err)
+                        .ticket.valid(),
+                    err);
+    engine.pump();
+    REQUIRE(engine.buffer_size() == 1);
+
+    std::string why;
+    CHECK_FALSE(engine.resolve_ref(Ref{"m1", "label"}, &why).has_value());
+    CHECK(why == "buffer entry m1 (Tagged) left its optional field 'label' absent");
+    REQUIRE(engine.resolve_ref(Ref{"m1", "count"}, &why).has_value());
 }
 
 // ===================== UI as data: the renderer-agnostic widget tree =====================
