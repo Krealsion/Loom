@@ -129,6 +129,31 @@ public:
     void on(const ListyNudge&, au::Mail&) {}
 };
 
+// Optional fields (std::optional members) beside a required one; `limit` starts with a value
+// from its initializer.
+struct TuningState {
+    std::int64_t steps = 0;
+    std::optional<std::int64_t> limit = 3;
+    std::optional<std::string> note;
+    std::optional<std::vector<std::int64_t>> marks;
+    std::optional<std::int64_t> secret;
+    ZEN_SHAPE(TuningState, 1, ZEN_EXPOSE(steps), ZEN_EXPOSE(limit), ZEN_EXPOSE(note),
+              ZEN_EXPOSE(marks), ZEN_HIDE(secret));
+};
+class TuningWeave
+    : public au::WeaveBase<TuningWeave, TuningState, au::Accept<ListyNudge>, au::Emit<>> {
+public:
+    void on(const ListyNudge&, au::Mail&) {}
+    const TuningState& state() const { return state_; }
+};
+// Every field exposed, so reset runs: `limit` returns to its initializer's value, `note` to absent.
+struct OpenTuningState {
+    std::optional<std::int64_t> limit = 3;
+    std::optional<std::string> note;
+    ZEN_SHAPE(OpenTuningState, 1, ZEN_FIELD(limit), ZEN_FIELD(note));
+    ZEN_EXPOSE();
+};
+
 // The forger: an ordinary granted participant that emits an answer-SHAPED
 // message (a standard zen.Result), trying to speak for a poked target.
 // Emitting the shape is sayable through the honest API on purpose — the wall
@@ -377,6 +402,84 @@ TEST_CASE("a non-scalar field is fully visible in the structure but not message-
     REQUIRE(std::holds_alternative<au::Refused>(write));
 }
 
+TEST_CASE("an optional field is its kind's field: the structure spells the kind, a read of one "
+          "holding no value is refused as absent") {
+    const au::PokeStructure st = au::poke_structure<TuningState>();
+    REQUIRE(st.fields.size() == 5);
+    CHECK(st.fields[1].name == "limit");
+    CHECK(st.fields[1].type == "Int");
+    CHECK(st.fields[1].writable);
+    CHECK(st.fields[2].type == "Text");
+    CHECK(st.fields[3].type == "List<Int>");
+    CHECK(st.fields[4].hidden);
+
+    TuningState s;
+    s.limit.reset();
+    const auto absent = au::poke_read(s, "limit");
+    REQUIRE(std::holds_alternative<au::Refused>(absent));
+    CHECK(std::get<au::Refused>(absent).reason == "field 'limit' is optional and absent");
+
+    s.limit = 12;
+    const auto present = au::poke_read(s, "limit");
+    REQUIRE(std::holds_alternative<au::Result>(present));
+    CHECK(std::get<au::Result>(present).value == "12");
+
+    // An empty text is a value: present and empty never reads as absent.
+    s.note = "";
+    const auto empty = au::poke_read(s, "note");
+    REQUIRE(std::holds_alternative<au::Result>(empty));
+    CHECK(std::get<au::Result>(empty).value.empty());
+
+    // Whether a field holds a value is part of its value, so a hidden absent field is refused
+    // as hidden, never as absent.
+    const auto hidden = au::poke_read(s, "secret");
+    REQUIRE(std::holds_alternative<au::Refused>(hidden));
+    CHECK(std::get<au::Refused>(hidden).reason ==
+          "field 'secret' is hidden (ZEN_HIDE): its value is message-only — ask the weave "
+          "through its own interface");
+
+    // A non-scalar optional field is refused by its kind, present or absent.
+    const auto marks = au::poke_read(s, "marks");
+    REQUIRE(std::holds_alternative<au::Refused>(marks));
+    CHECK(std::get<au::Refused>(marks).reason ==
+          "field 'marks' has kind List<Int> — only scalar fields are message-readable");
+}
+
+TEST_CASE("a write gives an optional field a value; a bad literal leaves it as it was, and reset "
+          "restores the declared default") {
+    TuningState s;
+    s.limit.reset();
+    const auto bad_absent = au::poke_write(s, "limit", "lots");
+    REQUIRE(std::holds_alternative<au::Refused>(bad_absent));
+    CHECK(std::get<au::Refused>(bad_absent).reason ==
+          "field 'limit': value \"lots\" does not parse as Int");
+    CHECK_FALSE(s.limit.has_value());
+
+    REQUIRE(std::holds_alternative<au::Ack>(au::poke_write(s, "limit", "40")));
+    REQUIRE(s.limit.has_value());
+    CHECK(*s.limit == 40);
+
+    const auto bad_present = au::poke_write(s, "limit", "");
+    REQUIRE(std::holds_alternative<au::Refused>(bad_present));
+    CHECK(s.limit == std::optional<std::int64_t>{40});
+
+    REQUIRE(std::holds_alternative<au::Ack>(au::poke_write(s, "note", "")));
+    CHECK(s.note == std::optional<std::string>{""});
+
+    const auto list = au::poke_write(s, "marks", "[1]");
+    REQUIRE(std::holds_alternative<au::Refused>(list));
+    CHECK(std::get<au::Refused>(list).reason ==
+          "field 'marks' has kind List<Int> — only scalar fields are message-writable");
+
+    // Reset restores each field's declared default: an initializer's value, or absent.
+    OpenTuningState open;
+    open.limit = 40;
+    open.note = "kept?";
+    REQUIRE(std::holds_alternative<au::Ack>(au::poke_reset(open)));
+    CHECK(open.limit == std::optional<std::int64_t>{3});
+    CHECK_FALSE(open.note.has_value());
+}
+
 // ---- the doors on the bus (the target's construction layer answers) --------
 
 TEST_CASE("a poke is an ordinary gated message: the substrate doors answer on the bus") {
@@ -431,6 +534,36 @@ TEST_CASE("the access model holds on the wire: hidden read and un-exposed write 
     CHECK(text_field(asker.got[1], "reason") ==
           "field 'label' is not exposed (ZEN_EXPOSE opts a field into manipulation)");
     CHECK(m->label() == "steady"); // the wall held
+}
+
+TEST_CASE("on the wire an absent optional field is answered as absent, and a write makes it "
+          "present") {
+    Switchboard bus;
+    WeaveId tuning = au::mount<TuningWeave>(bus);
+    AnswerLog asker = register_answer_probe(bus);
+    capture(asker);
+
+    bus.send(tuning, Message(au::to_value(au::PokeRead{"note"}), WeaveId{}, asker.reg.id, 1));
+    bus.send(tuning,
+             Message(au::to_value(au::PokeWrite{"note", "warm"}), WeaveId{}, asker.reg.id, 2));
+    bus.send(tuning, Message(au::to_value(au::PokeRead{"note"}), WeaveId{}, asker.reg.id, 3));
+    bus.drain_until_idle();
+
+    REQUIRE(asker.got.size() == 3);
+    CHECK(asker.got[0].schema().name() == "zen.Refused");
+    CHECK(text_field(asker.got[0], "reason") == "field 'note' is optional and absent");
+    CHECK(asker.got[1].schema().name() == "zen.Ack");
+    CHECK(asker.got[2].schema().name() == "zen.Result");
+    CHECK(text_field(asker.got[2], "value") == "warm");
+    CHECK(asker.corr == std::vector<std::uint64_t>{1, 2, 3});
+
+    const auto* w = static_cast<TuningWeave*>(bus.weave(tuning));
+    REQUIRE(w != nullptr);
+    CHECK(w->state().note == std::optional<std::string>{"warm"});
+    // The weave's snapshot carries the same truth: a field still absent stays absent.
+    const Value snap = w->snapshot();
+    CHECK(snap.has("note"));
+    CHECK_FALSE(snap.has("secret"));
 }
 
 TEST_CASE("the front door stays sovereign: a hidden value is still reachable through the weave's "

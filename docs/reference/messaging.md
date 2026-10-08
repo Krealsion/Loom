@@ -469,7 +469,12 @@ diagnostic life/incarnation fields on the relevant refusals). The journal
 retains the last `kJournalCapacity` (<!-- value kJournalCapacity -->1024<!-- /value -->) delivery outcomes by ticket
 (`outcome(Ticket)`); older entries read as `Pending`, exactly like unknown
 seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
-inspect/manipulate *by message* where a weave opts in.
+inspect/manipulate *by message* where a weave opts in; they read and write
+scalar fields (`Int`, `Float`, `Text`, `Bool`) and refuse the rest by kind. An
+optional scalar field (a `std::optional` member) reads as its value, or is
+refused as absent when it holds none; a write gives it a value, and no write
+makes it absent again: `zen.PokeResetState` restores the state's declared
+default, which is absent unless the member's initializer gives a value.
 
 **What a `BusEvent` carries, and what each field is NOT:**
 
