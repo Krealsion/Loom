@@ -25,6 +25,11 @@ one half of something and hold the other:
   CANCELLING (K1..K4)  the public ``cancel_requested`` takes the manager's directive, latches, and
                        never raises -- and the cleanup phase can still ask after a cancellation.
 
+One is the codec's own rule, pinned on a hand-built shape whose fields are optional:
+
+  DECODING (D1..D3)    an optional field a value left absent is left out of the decoded fields,
+                       as encode leaves it out; a present zero or empty text is kept as said.
+
     test_client.py --runtime <dir holding loom_session>
 
 Exit 0 only when every check held.
@@ -433,6 +438,22 @@ def main():
           lines)
     check("K4 a cleanup that cannot finish is recorded as what it was, never as done",
           len(lines) == 2 and "RuntimeError" in lines[1] and "link is lost" in lines[1], lines)
+
+    # ---- decoding: absence keeps its one spelling, a missing key -----------------------------
+    int_k, text_k = values.TypeRef(values.INT), values.TypeRef(values.TEXT)
+    entry = values.Schema("Entry", 1, [values.Field("key", True, text_k),
+                                       values.Field("number", False, int_k),
+                                       values.Field("text", False, text_k)])
+    codec = values.Codec(lambda name, version: None)
+    absent = codec.decode(entry, {"key": "width", "number": "80"})
+    check("D1 an absent optional field is left out of the decoded fields, never given a value",
+          absent == {"key": "width", "number": 80}, absent)
+    zero = codec.decode(entry, {"key": "title", "number": "0", "text": ""})
+    check("D2 a present zero and a present empty text are values, kept as said",
+          zero == {"key": "title", "number": 0, "text": ""}, zero)
+    again = codec.encode(entry, absent)
+    check("D3 decode and encode spell absence alike: encoding the decoded fields leaves it out",
+          again == {"key": "width", "number": "80"}, again)
 
     # ---- observing: a subscription's words, held, numbered, decoded and acknowledged ----------
     # A real relay cannot be asked to skip a number, forge a speaker or say a word before its own

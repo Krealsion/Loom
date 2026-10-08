@@ -13,6 +13,9 @@ Kinds, as the host numbers them: Int 0, Float 1, Text 2, Bool 3, Bytes 4, Messag
 The encoding per kind: Int as a base-10 string, Float as a number (or "NaN" / "Infinity" /
 "-Infinity"), Text as a string, Bool as true/false, Bytes as base64, Message as an object of its
 fields, List as an array. A field a shape does not declare is refused here, as the gate would.
+An absent field has one spelling both ways: its key is left out. ``encode`` leaves out a key that
+is missing or None, and ``decode`` leaves out an optional field the value did not carry, so a
+reader tells absence from a zero by the key (``fields.get(name)``), never by a stand-in value.
 """
 
 import base64
@@ -178,6 +181,8 @@ class Codec(object):
         for f in schema.fields:
             if f.name in fields_json:
                 out[f.name] = self._value(fields_json[f.name], f.type)
+            elif not f.required:
+                continue
             elif f.type.kind in _DEFAULTS:
                 out[f.name] = _DEFAULTS[f.type.kind]
             elif f.type.kind == LIST:
