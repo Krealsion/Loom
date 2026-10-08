@@ -250,7 +250,8 @@ Both count what they dropped (`evicted()`), because a bounded surface that
 claimed to be complete would trade a memory lie for an observability lie. A
 received-message id is a **stable identity**: once evicted it refuses rather than
 re-binding to a newer message, and `$rN.field` references say which absence it
-was.
+was: an id that never arrived, an evicted message, a field the shape does not
+declare, or an optional field the message left absent.
 
 Outstanding asks live in the session, **not** in the transcript, so scrolling
 past the horizon can never lose the fact that this participant is still waiting
