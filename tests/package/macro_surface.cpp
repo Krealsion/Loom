@@ -10,10 +10,12 @@
 
 #include "witness_protocol.hpp"
 
+#include <zen/serialize.hpp>
 #include <zen/weave/shape.hpp>
 
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,13 @@ struct Untagged {
     ZEN_SHAPE(Untagged, 1, ZEN_FIELD(seq));
 };
 
+// A std::optional member: an optional field of its type, absent when it holds std::nullopt.
+struct Note {
+    std::string to;
+    std::optional<std::string> text;
+    ZEN_SHAPE(Note, 1, ZEN_FIELD(to), ZEN_EXPOSE(text));
+};
+
 int failures = 0;
 
 void check(bool ok, const char* what) {
@@ -66,7 +75,7 @@ int main() {
 
     // ---- field scope: ZEN_EXPOSE(x) / ZEN_HIDE(x) / ZEN_FIELD(x) -----------------
     const std::vector<loom::FieldAccess> tally = loom::access_of<witness::Tally>();
-    check(tally.size() == 3, "Tally derives three fields");
+    check(tally.size() == 5, "Tally derives five fields");
 
     const loom::FieldAccess* handled = find(tally, "handled");
     const loom::FieldAccess* raw_total = find(tally, "raw_total");
@@ -109,6 +118,23 @@ int main() {
     check(loom::schema_of<witness::Ping>()->name() == std::string("Ping"),
           "ZEN_SHAPE carries the struct's own name");
     check(loom::schema_of<witness::Ping>()->version() == 1u, "ZEN_SHAPE carries the version");
+
+    // ---- a std::optional member is an optional field of its type ------------------
+    const auto note = loom::schema_of<Note>();
+    const auto twin = loom::SchemaBuilder("Note", 1)
+                          .field("to", loom::Kind::Text)
+                          .field("text", loom::Kind::Text, /*required=*/false)
+                          .build();
+    check(note->content_id() == twin->content_id(),
+          "a std::optional member derives the hand-built optional field");
+    const loom::Value absent = loom::to_value(Note{"you", std::nullopt});
+    check(!absent.has("text"), "std::nullopt leaves the field absent");
+    const loom::Admission back = loom::admit(loom::parse(loom::serialize(absent)), note);
+    check(back.ok() && !loom::from_value<Note>(back.value()).text.has_value(),
+          "an absent field crosses the bytes and comes back as std::nullopt");
+    const std::vector<loom::FieldAccess> na = loom::access_of<Note>();
+    check(na.size() == 2 && na[1].writable && na[1].type.kind == loom::Kind::Text,
+          "ZEN_EXPOSE(text) tags a std::optional member, and its kind is the inner one");
 
     if (failures != 0) {
         std::fprintf(stderr, "package witness: macro surface FAILED (%d)\n", failures);

@@ -224,6 +224,10 @@ int main() {
     check(tally.raw_total == 41,
           "a ZEN_HIDE field still round-trips as state (hiding governs access, not the wire)");
     check(tally.label == "stranger", "a std::string field crossed the C ABI intact");
+    check(tally.last == std::optional<std::int64_t>{41},
+          "an optional state field the weave set crossed the C ABI with its value");
+    check(!tally.note.has_value(),
+          "an optional state field the weave never set crossed the C ABI absent");
 
     // ---- SELF-DESCRIPTION, asked of a real dynamically-loaded artifact -----------
     //
@@ -271,7 +275,7 @@ int main() {
             check(nested != nullptr,
                   "a stranger reconstructed a NESTED accepted root from the reply alone");
             const bool structure =
-                nested != nullptr && nested->fields().size() == 2 &&
+                nested != nullptr && nested->fields().size() == 3 &&
                 nested->fields()[0].type.kind == loom::Kind::Message &&
                 nested->fields()[0].type.message != nullptr &&
                 nested->fields()[0].type.message->name() == "Inner" &&
@@ -279,6 +283,11 @@ int main() {
                 nested->fields()[1].type.element != nullptr &&
                 nested->fields()[1].type.element->kind == loom::Kind::Message;
             check(structure, "Message(Inner) and List<Message(Inner)> both survived the wire");
+            check(nested != nullptr && nested->fields().size() == 3 &&
+                      nested->fields()[0].required && nested->fields()[1].required &&
+                      !nested->fields()[2].required &&
+                      nested->fields()[2].type.kind == loom::Kind::Message,
+                  "a std::optional member crossed the wire as an optional field of its kind");
             check(nested != nullptr &&
                       nested->content_id() == loom::schema_of<witness::Nested>()->content_id(),
                   "the reconstruction is EXACT: the same content identity, not merely similar");
