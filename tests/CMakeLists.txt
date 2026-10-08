@@ -616,6 +616,19 @@ add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
     "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
 
+# ---- Optional members of a ZEN_SHAPE (docs/reference/values-and-admission.md) -----------
+# Compile-judged in the same way: a std::optional member compiles through every derivation, and a
+# std::optional anywhere else is refused by the static assertion that names its rule
+# (tests/optional_members/CMakeLists.txt).
+add_test(NAME optional_member_types COMMAND ${CMAKE_COMMAND}
+    -S ${CMAKE_CURRENT_SOURCE_DIR}/optional_members
+    -B ${CMAKE_BINARY_DIR}/optional_members-witness
+    -G ${CMAKE_GENERATOR}
+    -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include
+    "-DZEN_MEMBERS_ENV_INCLUDE=${zen_hook_env_include}"
+    "-DZEN_MEMBERS_ENV_LIB=${zen_hook_env_lib}")
+
 # ---- The supplied host, as a real process (GATE-05, LIFE-04, MSG-09) --------------------
 # A defect in the host's glue (which message answered which question, when an approved permission
 # took effect, whether the operator is heard while a weave keeps the bus busy) is invisible to a

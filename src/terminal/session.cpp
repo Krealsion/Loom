@@ -234,6 +234,10 @@ std::optional<loom::Cell> TerminalSession::resolve_ref(const Ref& ref, std::stri
     }
     const loom::Cell* c = entry->value.get(ref.field);
     if (c == nullptr) {
+        if (entry->value.schema().find(ref.field) != nullptr) {
+            return fail("received message " + ref.label + " (" + entry->value.schema().name() +
+                        ") left its optional field '" + ref.field + "' absent");
+        }
         return fail("received message " + ref.label + " (" + entry->value.schema().name() +
                     ") has no field '" + ref.field + "'");
     }

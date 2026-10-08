@@ -11,6 +11,7 @@
 #include <zen/weave/shape.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,17 +39,22 @@ struct Inner {
 struct Nested {
     Inner one;
     std::vector<Inner> many;
-    ZEN_SHAPE(Nested, 1, ZEN_FIELD(one), ZEN_FIELD(many));
+    std::optional<Inner> spare; // an optional field, which the description must say is optional
+    ZEN_SHAPE(Nested, 1, ZEN_FIELD(one), ZEN_FIELD(many), ZEN_FIELD(spare));
 };
 
-// The weave's state, carrying BOTH field-scope tags. This shape crosses the C ABI in
-// both directions (describe/snapshot/revive), so the macro surface under test is the
-// one a real loadable artifact actually uses -- not a compile-only specimen.
+// The weave's state, carrying BOTH field-scope tags and two optional fields: `last`, which the
+// weave sets, and `note`, which it never does. This shape crosses the C ABI in both directions
+// (describe/snapshot/revive), so the macro surface under test is the one a real loadable
+// artifact actually uses -- not a compile-only specimen.
 struct Tally {
     std::int64_t handled;
     std::int64_t raw_total;
     std::string label;
-    ZEN_SHAPE(Tally, 1, ZEN_EXPOSE(handled), ZEN_HIDE(raw_total), ZEN_FIELD(label));
+    std::optional<std::int64_t> last;
+    std::optional<std::string> note;
+    ZEN_SHAPE(Tally, 1, ZEN_EXPOSE(handled), ZEN_HIDE(raw_total), ZEN_FIELD(label),
+              ZEN_FIELD(last), ZEN_FIELD(note));
 };
 
 } // namespace witness

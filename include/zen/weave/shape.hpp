@@ -15,7 +15,10 @@
 //   };
 //
 // The ZEN_FIELD list names each member once more, to capture its name as a string; that
-// repetition is confined to zen_fields(). docs/guides/writing-a-weave.md
+// repetition is confined to zen_fields(). A member is a required field, except a
+// std::optional<T> member, which is an optional field of T's type: std::nullopt is the field
+// absent. docs/guides/writing-a-weave.md,
+// docs/reference/values-and-admission.md#required-and-optional-fields
 
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
@@ -23,6 +26,7 @@
 #include <concepts>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -75,14 +79,63 @@ constexpr FieldEntry<C, M> field_entry(const char* name, M C::*ptr,
 
 // ---- Kind deduced from the C++ member type --------------------------------
 
+namespace detail {
+template <class T>
+inline constexpr bool holds_optional = false;
+template <class T>
+inline constexpr bool holds_optional<std::optional<T>> = true;
+template <class T>
+inline constexpr bool holds_optional<std::vector<T>> = holds_optional<T>;
+
+template <class T>
+struct field_type_check {
+    static_assert(!holds_optional<T>,
+                  "loom: std::optional<T> makes a ZEN_SHAPE member's field optional and is "
+                  "allowed only as the member's own type: a list's element "
+                  "(std::vector<std::optional<T>>) or an optional's value "
+                  "(std::optional<std::optional<T>>) cannot be absent");
+    using type = T;
+};
+
+template <class>
+inline constexpr bool dependent_false = false;
+} // namespace detail
+
+/// What a registered member says about its field: the type the field's kind is deduced from,
+/// and whether the field may be absent. A std::optional<T> member is an optional field of T's
+/// type; any other member is a required field of its own type. Every derivation below reads a
+/// member through it.
+template <class M>
+struct member_field {
+    using type = typename detail::field_type_check<M>::type;
+    static constexpr bool optional = false;
+};
+template <class T>
+struct member_field<std::optional<T>> {
+    using type = typename detail::field_type_check<T>::type;
+    static constexpr bool optional = true;
+};
+
 template <class M>
 struct type_ref_for {
     static loom::TypeRef get() {
         static_assert(Shape<M>,
                       "loom: unsupported field type; use a supported scalar "
                       "(std::int64_t/double/std::string/bool), loom::Bytes, std::vector<T>, "
-                      "or a registered ZEN_SHAPE struct");
+                      "or a registered ZEN_SHAPE struct; a ZEN_SHAPE member may also be "
+                      "std::optional<T> of one of them, which makes its field optional");
         return loom::type_message(schema_of<M>());
+    }
+};
+// A ZEN_SHAPE member's own std::optional is unwrapped before its type is asked for.
+template <class T>
+struct type_ref_for<std::optional<T>> {
+    static loom::TypeRef get() {
+        static_assert(detail::dependent_false<T>,
+                      "loom: std::optional<T> is a field's optionality, not a field type: only "
+                      "a ZEN_SHAPE member's own type may be std::optional<T>, and a list's "
+                      "element never is");
+        return {};
     }
 };
 template <>
@@ -168,15 +221,23 @@ void from_cell(U& d, const loom::Cell& c) {
 
 // ---- the derivations -------------------------------------------------------
 
+namespace detail {
+/// The field a registered member derives: its name, its type, and whether it is required.
+template <class M>
+loom::Field field_of(const char* name) {
+    return loom::Field{name, type_ref_for<typename member_field<M>::type>::get(),
+                       /*required=*/!member_field<M>::optional};
+}
+} // namespace detail
+
 template <class T>
 std::shared_ptr<const loom::Schema> build_schema() {
     static_assert(Shape<T>, "loom: type is not a ZEN_SHAPE (no zen_fields/zen_version)");
     loom::SchemaBuilder builder(T::zen_name, T::zen_version);
     std::apply(
         [&](auto&&... fe) {
-            (builder.add(loom::Field{fe.name,
-                                    type_ref_for<typename std::decay_t<decltype(fe)>::member_type>::get(),
-                                    /*required=*/true}),
+            (builder.add(detail::field_of<typename std::decay_t<decltype(fe)>::member_type>(
+                 fe.name)),
              ...);
         },
         T::zen_fields());
@@ -191,22 +252,53 @@ std::shared_ptr<const loom::Schema> schema_of() {
     return s;
 }
 
-/// Convert a struct to a Value claiming its derived schema. Adds no validation;
-/// the caller hands the Value to the same admit.
+namespace detail {
+template <class M>
+void put_member(loom::Value& v, const char* name, const M& member) {
+    if constexpr (member_field<M>::optional) {
+        if (member.has_value()) {
+            v.set(name, to_cell(*member));
+        }
+    } else {
+        v.set(name, to_cell(member));
+    }
+}
+
+template <class M>
+void take_member(M& member, const loom::Value& v, const char* name) {
+    const loom::Cell* c = v.get(name);
+    if constexpr (member_field<M>::optional) {
+        // Absent is std::nullopt, whatever the member's initializer holds.
+        if (c == nullptr) {
+            member.reset();
+        } else {
+            from_cell(member.emplace(), *c);
+        }
+    } else {
+        from_cell(member, *c);
+    }
+}
+} // namespace detail
+
+/// Convert a struct to a Value claiming its derived schema: an optional member holding
+/// std::nullopt leaves its field absent. Adds no validation; the caller hands the Value to the
+/// same admit.
 template <class T>
 loom::Value to_value(const T& obj) {
     static_assert(Shape<T>, "loom: to_value requires a ZEN_SHAPE struct");
     loom::Value v(schema_of<T>());
-    std::apply([&](auto&&... fe) { (v.set(fe.name, to_cell(obj.*(fe.ptr))), ...); }, T::zen_fields());
+    std::apply([&](auto&&... fe) { (detail::put_member(v, fe.name, obj.*(fe.ptr)), ...); },
+               T::zen_fields());
     return v;
 }
 
-/// Convert an already-gated Value to its struct. Precondition: `v` has passed
-/// the gate against schema_of<T>() (every required field present and well-typed).
+/// Convert an already-gated Value to its struct. Precondition: `v` has passed the gate against
+/// schema_of<T>() (every required field present, every present field well-typed). An absent
+/// optional field is std::nullopt.
 template <Shape T>
 T from_value(const loom::Value& v) {
     T obj{};
-    std::apply([&](auto&&... fe) { (from_cell(obj.*(fe.ptr), *v.get(fe.name)), ...); },
+    std::apply([&](auto&&... fe) { (detail::take_member(obj.*(fe.ptr), v, fe.name), ...); },
                T::zen_fields());
     return obj;
 }
@@ -258,7 +350,7 @@ std::vector<FieldAccess> access_of() {
         [&](auto&&... fe) {
             (out.push_back(FieldAccess{
                  fe.name,
-                 type_ref_for<typename std::decay_t<decltype(fe)>::member_type>::get(),
+                 detail::field_of<typename std::decay_t<decltype(fe)>::member_type>(fe.name).type,
                  ((fe.access | shape_bits) & access::kExpose) != 0,
                  ((fe.access | shape_bits) & access::kHide) != 0}),
              ...);

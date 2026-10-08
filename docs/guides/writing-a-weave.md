@@ -28,6 +28,23 @@ struct Count {
 A published `(name, version)` is frozen forever — to evolve a shape you
 publish a new version ([GATE-04](../laws/admission-laws.md)).
 
+Every member is a required field, except a `std::optional<T>` member, which is
+an optional field of `T`'s type: `std::nullopt` sends it absent, and an absent
+field arrives as `std::nullopt`, never as a default. This one is not part of the
+program above:
+
+```cpp
+struct Greeting {
+    std::string to;
+    std::optional<std::string> note;   // optional: std::nullopt is the field absent
+    ZEN_SHAPE(Greeting, 1, ZEN_FIELD(to), ZEN_FIELD(note));
+};
+```
+
+A list's element is never optional, and an optional field does not let one
+version's values through another's gate
+([required and optional fields](../reference/values-and-admission.md#required-and-optional-fields)).
+
 ## A weave is a class with typed doors
 
 ```cpp
