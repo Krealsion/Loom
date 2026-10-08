@@ -20,6 +20,7 @@ public:
         ++state_.handled;
         state_.raw_total += p.seq;
         state_.label = "stranger";
+        state_.last = p.seq;
         // Crossing back out through the C ABI's host callback table: this is the
         // half of the seam a load-only proof would never touch.
         mail.reply(Pong{p.seq});
