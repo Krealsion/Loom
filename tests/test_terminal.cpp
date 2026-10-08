@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,6 +74,14 @@ std::shared_ptr<const Schema> pair_schema() {
         SchemaBuilder("Pair", 1).field("a", Kind::Int).field("b", Kind::Int).build();
     return s;
 }
+
+/// A struct-derived shape with optional fields. The terminal still composes it from its schema.
+struct Setting {
+    std::string key;
+    std::optional<std::int64_t> number;
+    std::optional<std::string> text;
+    ZEN_SHAPE(Setting, 1, ZEN_FIELD(key), ZEN_FIELD(number), ZEN_FIELD(text));
+};
 
 Value notice(std::string text) {
     Value v(notice_schema());
@@ -1153,6 +1162,45 @@ TEST_CASE("a received-message id is an identity: once evicted it refuses, never 
     CHECK(why.find("evicted") != std::string::npos);
     CHECK_FALSE(c.acting().resolve_ref(Ref{"r99999", "text"}, &why).has_value());
     CHECK(why.find("no such received message") != std::string::npos);
+}
+
+TEST_CASE("an optional field left out is composed absent, received absent, and a reference to "
+          "it says it is absent") {
+    Switchboard bus;
+    TerminalVocabulary vocabulary;
+    vocabulary.knows(schema_of<Setting>()).accepts(schema_of<Setting>());
+    const MountedTerminal t = host_mount_terminal(
+        bus,
+        std::make_unique<TerminalSession>("t", std::move(vocabulary),
+                                          std::make_shared<ObservationOrder>()),
+        Grant{});
+
+    const Composition composed =
+        t.session->compose("Setting", 1, {Arg{std::string("key"), FieldValue{std::string("w")}}});
+    REQUIRE(composed.status == Composition::Status::Ready);
+    const Value assembled = assemble(composed);
+    CHECK_FALSE(assembled.has("number"));
+    CHECK_FALSE(assembled.has("text"));
+    CHECK(admit(Value(assembled), *schema_of<Setting>()).ok());
+
+    bus.send(t.id, Message(to_value(Setting{"width", 80, std::nullopt})));
+    bus.drain_until_idle();
+    const std::uint64_t id = t.session->transcript().last_received_id();
+    const std::optional<ReceivedMessage> got = t.session->received(id);
+    REQUIRE(got);
+    const Setting back = from_value<Setting>(got->value);
+    CHECK(back.number == std::optional<std::int64_t>{80});
+    CHECK_FALSE(back.text.has_value());
+
+    const std::string label = "r" + std::to_string(id);
+    std::string why;
+    CHECK_FALSE(t.session->resolve_ref(Ref{label, "text"}, &why).has_value());
+    CHECK(why == "received message " + label + " (Setting) left its optional field 'text' absent");
+    CHECK_FALSE(t.session->resolve_ref(Ref{label, "nope"}, &why).has_value());
+    CHECK(why == "received message " + label + " (Setting) has no field 'nope'");
+    const std::optional<Cell> number = t.session->resolve_ref(Ref{label, "number"}, &why);
+    REQUIRE(number.has_value());
+    CHECK(number->as_int() == 80);
 }
 
 TEST_CASE("one message's output wires into another's input, by reference") {

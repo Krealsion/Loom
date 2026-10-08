@@ -5,6 +5,7 @@
 
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/serialize.hpp>
+#include <zen/weave/shape.hpp>
 #include <zen/zen.hpp>
 
 // kMaxDecodedCells: the deep-type ceiling case meets the decode-materialization bound, and the
@@ -13,6 +14,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,23 @@ using namespace loom;
 using namespace loom;
 
 namespace {
+
+// Struct-derived shapes with optional fields: a component nested both required and optional.
+struct Mark {
+    std::int64_t at = 0;
+    std::optional<std::string> label;
+    ZEN_SHAPE(Mark, 1, ZEN_FIELD(at), ZEN_FIELD(label));
+};
+struct MarkedState {
+    std::vector<Mark> marks;
+    std::optional<Mark> current;
+    std::optional<std::int64_t> limit;
+    ZEN_SHAPE(MarkedState, 1, ZEN_FIELD(marks), ZEN_FIELD(current), ZEN_FIELD(limit));
+};
+struct Seek {
+    std::optional<std::int64_t> to;
+    ZEN_SHAPE(Seek, 1, ZEN_FIELD(to));
+};
 
 // encode a schema as a descriptor, send it through the gated bytes path, decode.
 std::shared_ptr<const Schema> round_trip(const std::shared_ptr<const Schema>& s,
@@ -127,6 +146,27 @@ TEST_CASE("a manifest carries the accept-set and state schema") {
     CHECK(rebuilt[0]->content_id() == ping->content_id());
     CHECK(rebuilt[1]->content_id() == pong->content_id());
     CHECK(state->content_id() == counter->content_id());
+}
+
+TEST_CASE("a struct-derived manifest carries each optional field as optional, nested ones too") {
+    const std::vector<std::shared_ptr<const Schema>> accepted{schema_of<Seek>()};
+    const std::string bytes = serialize(encode_manifest(accepted, *schema_of<MarkedState>()));
+    Admission a = admit(parse(bytes), manifest_schema());
+    REQUIRE(a.ok());
+
+    Registry deps; // empty: the manifest brings Mark itself
+    decode_referenced(a.value(), deps);
+    REQUIRE(deps.lookup("Mark", 1) != nullptr);
+    CHECK(deps.lookup("Mark", 1)->content_id() == schema_of<Mark>()->content_id());
+    CHECK_FALSE(deps.lookup("Mark", 1)->find("label")->required);
+    const auto seek = decode_schema(*a.value().get("accepted")->as_list()[0].as_message(), deps);
+    CHECK(seek->content_id() == schema_of<Seek>()->content_id());
+    CHECK_FALSE(seek->find("to")->required);
+    const auto state = decode_schema(*a.value().get("state")->as_message(), deps);
+    CHECK(state->content_id() == schema_of<MarkedState>()->content_id());
+    CHECK(state->find("marks")->required);
+    CHECK_FALSE(state->find("current")->required);
+    CHECK_FALSE(state->find("limit")->required);
 }
 
 TEST_CASE("a manifest is self-contained: nested component schemas travel in `referenced` "

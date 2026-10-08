@@ -18,7 +18,10 @@
 // existence. Every request not performed is answered with a zen.Refused and its reason.
 // Values cross as text, parsed against the field's declared kind at the target, so a bad
 // literal is refused; only scalar fields (Int, Float, Text, Bool) are read and written this
-// way, and every field still appears in the structure.
+// way, and every field still appears in the structure. An optional field (a std::optional
+// member) is its kind's field: a read of one holding no value is refused as absent, a write
+// gives it a value, and no literal makes it absent again (zen.PokeResetState restores the
+// default-constructed state).
 
 #include <zen/weave/shape.hpp>
 #include <zen/weave/standard_shapes.hpp>
@@ -222,6 +225,7 @@ namespace detail {
 template <class State, class C, class M>
 bool poke_read_field(const State& state, const FieldEntry<C, M>& fe, std::uint8_t shape_bits,
                      std::string_view field, std::variant<Result, Refused>& out) {
+    using V = typename member_field<M>::type;
     if (field != fe.name) {
         return false;
     }
@@ -230,11 +234,19 @@ bool poke_read_field(const State& state, const FieldEntry<C, M>& fe, std::uint8_
         out = Refused{"field '" + std::string(field) +
                       "' is hidden (ZEN_HIDE): its value is message-only — ask the weave "
                       "through its own interface"};
-    } else if constexpr (is_poke_scalar<M>) {
-        out = Result{poke_render(state.*(fe.ptr))};
+    } else if constexpr (is_poke_scalar<V>) {
+        if constexpr (member_field<M>::optional) {
+            if ((state.*(fe.ptr)).has_value()) {
+                out = Result{poke_render(*(state.*(fe.ptr)))};
+            } else {
+                out = Refused{"field '" + std::string(field) + "' is optional and absent"};
+            }
+        } else {
+            out = Result{poke_render(state.*(fe.ptr))};
+        }
     } else {
         out = Refused{"field '" + std::string(field) + "' has kind " +
-                      poke_type_name(type_ref_for<M>::get()) +
+                      poke_type_name(type_ref_for<V>::get()) +
                       " — only scalar fields are message-readable"};
     }
     return true;
@@ -244,6 +256,7 @@ template <class State, class C, class M>
 bool poke_write_field(State& state, const FieldEntry<C, M>& fe, std::uint8_t shape_bits,
                       std::string_view field, std::string_view value,
                       std::variant<Ack, Refused>& out) {
+    using V = typename member_field<M>::type;
     if (field != fe.name) {
         return false;
     }
@@ -251,18 +264,18 @@ bool poke_write_field(State& state, const FieldEntry<C, M>& fe, std::uint8_t sha
     if ((bits & access::kExpose) == 0) {
         out = Refused{"field '" + std::string(field) +
                       "' is not exposed (ZEN_EXPOSE opts a field into manipulation)"};
-    } else if constexpr (is_poke_scalar<M>) {
-        M parsed{};
+    } else if constexpr (is_poke_scalar<V>) {
+        V parsed{};
         if (poke_parse(value, parsed)) {
             state.*(fe.ptr) = std::move(parsed);
             out = Ack{};
         } else {
             out = Refused{"field '" + std::string(field) + "': value \"" + std::string(value) +
-                          "\" does not parse as " + poke_type_name(type_ref_for<M>::get())};
+                          "\" does not parse as " + poke_type_name(type_ref_for<V>::get())};
         }
     } else {
         out = Refused{"field '" + std::string(field) + "' has kind " +
-                      poke_type_name(type_ref_for<M>::get()) +
+                      poke_type_name(type_ref_for<V>::get()) +
                       " — only scalar fields are message-writable"};
     }
     return true;
@@ -271,7 +284,7 @@ bool poke_write_field(State& state, const FieldEntry<C, M>& fe, std::uint8_t sha
 } // namespace detail
 
 /// Read one field's value under the access model: any scalar field not hidden (the default);
-/// a hidden field's value is refused.
+/// a hidden field's value is refused, and so is an optional field holding no value, as absent.
 template <Shape State>
 std::variant<Result, Refused> poke_read(const State& state, std::string_view field) {
     std::variant<Result, Refused> result = Refused{
@@ -286,7 +299,7 @@ std::variant<Result, Refused> poke_read(const State& state, std::string_view fie
 }
 
 /// Write one field under the access model: only a ZEN_EXPOSEd scalar field; the literal is
-/// parsed against the field's declared kind.
+/// parsed against the field's declared kind, and an optional field takes it as its value.
 template <Shape State>
 std::variant<Ack, Refused> poke_write(State& state, std::string_view field,
                                       std::string_view value) {

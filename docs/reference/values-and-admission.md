@@ -15,6 +15,36 @@ Published schemas are immutable: evolving a shape is publishing a new version
 derive one from a struct with `ZEN_SHAPE`
 ([guide](../guides/writing-a-weave.md)).
 
+### Required and optional fields
+
+Each field is required or optional (`Field::required`; `SchemaBuilder` takes it
+as its last argument and defaults to required). The gate refuses a value that
+leaves a required field absent (`MissingField`) and admits one that leaves an
+optional field absent; a present optional field is judged exactly as a required
+one. Requiredness belongs to a field, never to a list's element type, and it is
+part of the content id.
+
+Absent is its own state, never a stand-in value: `Value::get` returns null for
+it, the canonical binary clears its presence bit and writes nothing, and the
+compat JSON leaves its key out (a JSON `null` is refused for every kind), as the
+Python session client does both ways. A present `0`, `""`, `false` or empty list
+is a value.
+
+With `ZEN_SHAPE`, a member of type `std::optional<T>` is an optional field of
+`T`'s type, for any `T` a field takes; every other member is required.
+`to_value` leaves the field absent when the member holds `std::nullopt`, and
+`from_value` gives `std::nullopt` for an absent field, whatever the member's
+initializer holds. A `std::optional` anywhere else, as a list's element or as an
+optional's value, is refused at compile time. Live inspection reads a present
+optional scalar field as its value and refuses an absent one as absent; a hidden
+or non-scalar optional field is refused as any hidden or non-scalar field is
+([observation](messaging.md#observation)).
+
+An optional field is not a versioning tool: adding one is a new version
+([GATE-04](../laws/admission-laws.md)), and a value of one version fails
+another's gate however optional its fields
+([handoff](handoff.md#different-schemas-remain-different)).
+
 ## Value
 
 A `Value` carries the schema it *claims* plus positional cells. Values are
@@ -112,4 +142,7 @@ the persistence boundary and the dynamic-library currency
 ## Tests
 
 Suites `schema`, `value`, `gate`, `registry`, `serialize`, `compat`,
-`integration`, `fuzz` (deterministic-seeded regression corpus).
+`integration`, `fuzz` (deterministic-seeded regression corpus), `weave_shape`
+(struct-derived shapes, optional members among them); the entry
+`optional_member_types` holds what a `std::optional` member compiles to and
+where one is refused.
