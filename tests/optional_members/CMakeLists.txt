@@ -30,9 +30,10 @@ if(NOT DEFINED ZEN_LOOM_INCLUDE OR NOT EXISTS "${ZEN_LOOM_INCLUDE}/zen/weave.hpp
         "contain zen/weave.hpp (got '${ZEN_LOOM_INCLUDE}')")
 endif()
 
-set(zen_members_flags "")
+# MSVC expands ZEN_EXPOSE(x) and ZEN_HIDE(x) (__VA_OPT__) only under its conforming preprocessor.
+# try_compile builds with this project's CMAKE_CXX_FLAGS, so the switch is set here.
 if(MSVC)
-    set(zen_members_flags "/Zc:preprocessor /EHsc")
+    string(APPEND CMAKE_CXX_FLAGS " /Zc:preprocessor")
 endif()
 
 function(zen_members_try name out_ok out_text)
@@ -41,7 +42,6 @@ function(zen_members_try name out_ok out_text)
     try_compile(zen_members_ok_${name} "${CMAKE_BINARY_DIR}/try-${name}"
         SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp"
         CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${ZEN_LOOM_INCLUDE}"
-                    "-DCMAKE_CXX_FLAGS=${zen_members_flags}"
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
         OUTPUT_VARIABLE text)
