@@ -12,6 +12,14 @@ change breaks is to have used the thing it breaks.
 The build and the official test lane are in [the README](README.md#build-and-test); the
 build rules a machine collaborator needs are in [AGENTS.md](AGENTS.md).
 
+## Taking an issue
+
+Bounded work is a GitHub issue labelled `ready`.
+[Taking an issue](docs/contributing/taking-an-issue.md) goes from one to a pull request ready to
+merge, with nothing outside this repository's own documentation, and
+[best practices](docs/contributing/best-practices.md) says what good work looks like here,
+subsystem by subsystem.
+
 ## Code contributions
 
 Issues, testing, design discussion, reproductions, and feedback are welcome.

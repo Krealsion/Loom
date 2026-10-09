@@ -4,7 +4,9 @@ For a machine collaborator working in this repository. The router is **`docs/CON
 (topic → reference → laws → tests); the human router is `docs/README.md`. Normative truth is
 `docs/reference/` and `docs/laws/` only; `docs/history/` is a frozen record; `docs/evidence/` is
 not the API contract. What a comment or a page may carry is in
-[CONTRIBUTING.md](CONTRIBUTING.md#comments-and-documents).
+[CONTRIBUTING.md](CONTRIBUTING.md#comments-and-documents). A `ready` issue goes to a pull request
+by [taking an issue](docs/contributing/taking-an-issue.md), and
+[best practices](docs/contributing/best-practices.md) names the owner of each practice.
 
 ## Build and test
 
