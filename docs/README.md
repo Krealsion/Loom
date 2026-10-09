@@ -62,4 +62,9 @@ manuscripts and the record of how Loom came to be this way.
 and the audits: what real applications discovered, distinct from what the API
 promises.
 
+**I want to change Loom.** [Taking an issue](contributing/taking-an-issue.md) goes from an
+issue labelled `ready` to a pull request ready to merge, and
+[best practices](contributing/best-practices.md) says what good work looks like here, subsystem
+by subsystem, each practice pointing at the law, page or check that owns it.
+
 Machine collaborators: start at [CONTEXT.md](CONTEXT.md).

@@ -12,6 +12,14 @@ change breaks is to have used the thing it breaks.
 The build and the official test lane are in [the README](README.md#build-and-test); the
 build rules a machine collaborator needs are in [AGENTS.md](AGENTS.md).
 
+## Taking an issue
+
+Bounded work is a GitHub issue labelled `ready`.
+[Taking an issue](docs/contributing/taking-an-issue.md) goes from one to a pull request ready to
+merge, with nothing outside this repository's own documentation, and
+[best practices](docs/contributing/best-practices.md) says what good work looks like here,
+subsystem by subsystem.
+
 ## Code contributions
 
 Issues, testing, design discussion, reproductions, and feedback are welcome.
@@ -26,6 +34,13 @@ This note is deliberately minimal: it is not a CLA, it requires no copyright
 assignment, and it sets no terms beyond asking that big core changes start
 with a conversation. Experimentation, packages, and weaves of your own need
 no permission at all — they are yours.
+
+## Attribution
+
+A commit is authored under the account of the person who makes it, never the AI agent they use.
+No commit and no pull request carries a co-author line or an AI credit, for anyone.
+`tests/check_commit_attribution.cmake` refuses an AI co-author and the credit line on every commit
+it reads.
 
 ## Comments and documents
 
