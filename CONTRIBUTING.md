@@ -35,6 +35,13 @@ assignment, and it sets no terms beyond asking that big core changes start
 with a conversation. Experimentation, packages, and weaves of your own need
 no permission at all — they are yours.
 
+## Attribution
+
+A commit is authored under the account of the person who makes it, never the AI agent they use.
+No commit and no pull request carries a co-author line or an AI credit, for anyone.
+`tests/check_commit_attribution.cmake` refuses an AI co-author and the credit line on every commit
+it reads.
+
 ## Comments and documents
 
 Everything current-facing here — a source comment, a page under `docs/`, this file — is written
