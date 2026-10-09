@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The commit-attribution check, run as a CI job: no commit reachable from the ref records an AI
-# assistant as a co-author or credits one. It judges each Co-authored-by trailer's value (git's own
-# parser) and reads every message for an assistant's credit line, which the merge copies from a
-# pull request's description. Prose about an assistant and a human co-author pass. The whole
-# reachable history is scanned; narrow it with -DZEN_RANGE=<base>..<head>.
+# The commit-attribution check, run as a CI job: no commit reachable from the ref carries a
+# co-author line or credits an AI assistant. It refuses every Co-authored-by trailer, whatever its
+# value (git's own parser), and reads every message for an assistant's credit line, which the merge
+# copies from a pull request's description. Prose about an assistant passes. The whole reachable
+# history is scanned; narrow it with -DZEN_RANGE=<base>..<head>.
 
 # A CI job, not a CTest entry, because it reads history, which a source export does not carry.
-# Before scanning, it makes four dangling commits and requires the right verdict on each: the
-# forbidden trailer and the credit line (caught), a human co-author with prose naming an
-# assistant, and prose about the credit line (not caught). They have no ref, and git discards them
-# at its next gc.
+# Before scanning, it makes five dangling commits and requires the right verdict on each: an AI
+# co-author, a human co-author and the credit line (caught), and prose naming an assistant and
+# prose about the credit line, with no trailer (not caught). They have no ref, and git discards
+# them at its next gc.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -51,7 +51,8 @@ function(zen_attribution_credited rev_args out)
     set(${out} "${shas}" PARENT_SCOPE)
 endfunction()
 
-# Sets ${out} to the offending trailer, or "" if the commit's trailers are clean.
+# Sets ${out} to the commit's co-author line, or "" if it carries none. Any value is refused: a
+# commit is authored by the person who makes it.
 function(zen_attribution_trailer sha out)
     execute_process(
         COMMAND "${GIT_EXECUTABLE}" -C "${ZEN_REPO}" log -1
@@ -61,11 +62,10 @@ function(zen_attribution_trailer sha out)
     if(NOT rc EQUAL 0)
         message(FATAL_ERROR "attribution: could not read trailers of ${sha} (exit ${rc}).\n${err}")
     endif()
-    string(TOLOWER "${values}" folded)
-    if(folded MATCHES "claude" OR folded MATCHES "anthropic")
-        set(${out} "Co-authored-by: ${values}" PARENT_SCOPE)
-    else()
+    if(values STREQUAL "")
         set(${out} "" PARENT_SCOPE)
+    else()
+        set(${out} "Co-authored-by: ${values}" PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -119,14 +119,24 @@ if(caught STREQUAL "")
 endif()
 
 zen_throwaway_commit(
-    "Self-test: legitimate collaboration\n\nThis message discusses Claude in prose, which is not attribution.\n\nCo-authored-by: A Human <human@example.invalid>"
+    "Self-test: a human co-author\n\nCo-authored-by: A Human <human@example.invalid>"
+    human_sha)
+zen_attribution_verdict("${human_sha}" human)
+if(human STREQUAL "")
+    message(FATAL_ERROR
+        "attribution: SELF-TEST FAILED -- the check passed a commit whose co-author is a human "
+        "being. A commit is authored by the person who makes it, so a co-author line of any "
+        "value is refused.")
+endif()
+
+zen_throwaway_commit(
+    "Self-test: prose about an assistant\n\nThis message discusses Claude and co-authorship in prose, which is not attribution."
     clean_sha)
 zen_attribution_verdict("${clean_sha}" wrongly_caught)
 if(NOT wrongly_caught STREQUAL "")
     message(FATAL_ERROR
-        "attribution: SELF-TEST FAILED -- the check flagged a commit whose only co-author "
-        "is a human being (\"${wrongly_caught}\"). It has started refusing honest "
-        "collaborators, which is a different defect and not a safer one.")
+        "attribution: SELF-TEST FAILED -- the check flagged a commit with no co-author line and "
+        "no credit line (\"${wrongly_caught}\"). Prose about an assistant is not attribution.")
 endif()
 
 zen_throwaway_commit(
@@ -150,8 +160,8 @@ if(NOT wrongly_credited STREQUAL "")
         "credit line (\"${wrongly_credited}\"). Prose about Claude is not attribution.")
 endif()
 
-message(STATUS "attribution: self-test OK -- the check catches the forbidden trailer and the credit "
-               "line, and spares a human co-author and prose")
+message(STATUS "attribution: self-test OK -- the check catches an AI co-author, a human co-author "
+               "and the credit line, and spares prose")
 
 # ---- the real population ------------------------------------------------------------
 
@@ -193,12 +203,17 @@ if(NOT offenders STREQUAL "")
     string(REPLACE ";" "\n" text "${offenders}")
     message(FATAL_ERROR
         "attribution FAILED: ${offender_count} of ${commit_count} commit(s) reachable from "
-        "'${ZEN_RANGE}' record an AI assistant as co-author or credit it.\n${text}\n\n"
-        "  Loom records no AI co-authors. Remove the trailer or credit line from the message -- "
+        "'${ZEN_RANGE}' carry a co-author line or an AI credit.\n${text}\n\n"
+        "  A commit is authored by the person who makes it, with no co-author line and no AI "
+        "credit, for anyone:\n\n"
+        "    You will be the one held accountable for the code you open a pull request for, not\n"
+        "    the agent you used. Take care in the work you do, and consider the reasons and\n"
+        "    outcomes of the choices you make.\n\n"
+        "  Remove the trailer or credit line from the message -- "
         "amend if it is the tip, otherwise rewrite the affected messages "
         "(message-only, final tree unchanged) and force-push with an exact lease.")
 endif()
 
 message(STATUS
     "attribution: PASSED -- ${commit_count} commits reachable from '${ZEN_RANGE}', none "
-    "recording an AI co-author")
+    "carrying a co-author line or an AI credit")
