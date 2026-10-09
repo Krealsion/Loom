@@ -137,4 +137,6 @@ only the conversation (PR-04) · role-authorship evidence lives in
 · admission-at-dispatch rationale lives in
 [decisions/admission-and-activation-share-one-boundary.md](decisions/admission-and-activation-share-one-boundary.md).
 
-**Build and test:** [`AGENTS.md`](../AGENTS.md) at the repository root.
+**Build and test:** [`AGENTS.md`](../AGENTS.md) at the repository root. **Taking an issue**
+labelled `ready` to a pull request: [contributing/taking-an-issue.md](contributing/taking-an-issue.md);
+**best practices**, by subsystem: [contributing/best-practices.md](contributing/best-practices.md).
