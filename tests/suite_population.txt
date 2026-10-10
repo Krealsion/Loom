@@ -6,11 +6,11 @@
 # one is free. The OS-enforcement tallies are exact instead (tests/enforcement_gate.hpp).
 
 # `gate` says why a suite may be absent: `portable` never; `kernel` rides `TARGET zen-kernel`
-# (Linux, and Windows under LOOM_ENABLE_WINDOWS_KERNEL); `posix` rides `NOT WIN32`; `runs` rides
-# `TARGET zen-runs` (the kernel and LOOM_BUILD_SESSION_TOOLS). An absent gate's suites are
-# declared absent, never passed. A suite's floor is the sum of its rows whose gate is active, so
-# a suite smaller on Windows says so with a second row: `bridge` (the unix-socket cases) and
-# `kernel` (the RTLD_NOLOAD unload observations) each have cases behind `#ifndef _WIN32`.
+# (Linux, and Windows under LOOM_ENABLE_WINDOWS_KERNEL); `posix` rides `NOT WIN32`; `windows`,
+# `WIN32` with the kernel; `runs`, `TARGET zen-runs` (the kernel and LOOM_BUILD_SESSION_TOOLS).
+# An absent gate's suites are declared absent, never passed. A suite's floor is the sum of its
+# rows whose gate is active, so a suite smaller on Windows has a second row: `bridge` (unix
+# sockets) and `kernel` (the RTLD_NOLOAD unload observations) have cases behind `#ifndef _WIN32`.
 
 # Keep this file plain ASCII: file(STRINGS) splits a line at a non-ASCII byte.
 # suite            gate      min-cases
@@ -61,3 +61,4 @@ joint              kernel    24
 session            portable  10
 observe            portable  15
 runs               runs      12
+windows_loader     windows   8
