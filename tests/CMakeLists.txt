@@ -652,6 +652,7 @@ if(zen_session_python)
         --runs $<TARGET_FILE:loom-runs>
         --runtime ${CMAKE_BINARY_DIR}/session-tools/python
         --tools ${CMAKE_SOURCE_DIR}/tools/basics
+        --launchers ${CMAKE_SOURCE_DIR}/tools
         --work ${CMAKE_BINARY_DIR}/session-journey-work
         --evidence ${CMAKE_BINARY_DIR}/session-journey-work.json)
     set_tests_properties(session_journey PROPERTIES TIMEOUT 600)

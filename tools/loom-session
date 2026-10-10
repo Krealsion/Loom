@@ -23,4 +23,4 @@ if [ -z "$py" ]; then
     echo "loom-session: needs Python 3.8 or newer, and none was found on PATH (set LOOM_PYTHON)" >&2
     exit 5
 fi
-PYTHONPATH="$runtime${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m loom_session "$@"
+PYTHONPATH="$runtime${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -B -m loom_session "$@"

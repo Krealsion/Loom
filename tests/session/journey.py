@@ -9,7 +9,8 @@ session door's description, the host's own history through the scoped reader. Wa
 harness's own decision and is never reported as anybody's outcome.
 
     journey.py --host <loom-host> --runs <loom-runs artifact> --runtime <dir with loom_session>
-               --tools <tools/basics> --work <empty dir> [--evidence <file.json>]
+               --tools <tools/basics> --launchers <dir with loom-session and loom-session.cmd>
+               --work <empty dir> [--evidence <file.json>]
 
 Exit 0 only when every check held; every check is printed and kept in the evidence file.
 """
@@ -166,11 +167,12 @@ def main():
     ap.add_argument("--runs", required=True)
     ap.add_argument("--runtime", required=True)
     ap.add_argument("--tools", required=True)
+    ap.add_argument("--launchers", required=True)
     ap.add_argument("--work", required=True)
     ap.add_argument("--evidence", default="")
     args = ap.parse_args()
     EVIDENCE["path"] = args.evidence
-    for name in ("host", "runs", "runtime", "tools", "work"):
+    for name in ("host", "runs", "runtime", "tools", "launchers", "work"):
         setattr(args, name, os.path.abspath(getattr(args, name)))
     sys.path.insert(0, args.runtime)
     from loom_session import client as lclient
@@ -237,7 +239,16 @@ def main():
     shutil.copytree(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lifecycle"),
                     lifecycle, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-    catalog = {"python": sys.executable, "runtime": os.path.abspath(args.runtime),
+    # THE RUNTIME AS AN INSTALL LAYS IT OUT, beside the CLI's launchers: the workers run from it
+    # and the launcher finds it beside itself, so whatever writes into the folder the runtime runs
+    # from is seen there (section S). This driver imports its own copy, `args.runtime`.
+    prefix = os.path.join(work, "prefix")
+    runtime = os.path.join(prefix, "lib", "loom", "python")
+    shutil.copytree(args.runtime, runtime, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    os.makedirs(os.path.join(prefix, "bin"))
+    for launcher in ("loom-session", "loom-session.cmd"):
+        shutil.copy(os.path.join(args.launchers, launcher), os.path.join(prefix, "bin", launcher))
+    catalog = {"python": sys.executable, "runtime": runtime,
                "packages": [{"path": basics, "approve": "any-revision"},
                             {"path": greedy, "approve": "any-revision"},
                             {"path": pinned, "approve": "PINNED"},
@@ -898,6 +909,32 @@ def main():
         asked = [a for a in q["asks"] if a["shape"] == "loom.runs.Start"]
         check("Q3 the run's own account says the ask asked to be settled, and was answered",
               len(asked) == 1 and asked[0]["settle"] and asked[0]["outcome"] == "answer", asked)
+
+    # ---- S. the folder the runtime runs from holds what was installed there, and nothing else --
+    # Every worker above ran from `runtime`; now the CLI's launcher runs from beside it, against
+    # this session, with no bytecode setting of the caller's. Neither may leave a cache there.
+    cli_env = dict(os.environ, LOOM_PYTHON=sys.executable)
+    for name in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"):
+        cli_env.pop(name, None)
+    if os.name == "nt":
+        cli = [os.path.join(prefix, "bin", "loom-session.cmd")]
+    else:
+        cli = ["sh", os.path.join(prefix, "bin", "loom-session")]
+    said = subprocess.run(cli + ["status", session_dir, "--json"], env=cli_env,
+                          capture_output=True, text=True, timeout=60)
+    try:
+        described = json.loads(said.stdout)
+    except ValueError:
+        described = {}
+    check("S1 the installed launcher, beside the runtime, describes the live session",
+          said.returncode == 0 and os.path.normcase(os.path.realpath(
+              described.get("directory", ""))) == os.path.normcase(os.path.realpath(session_dir)),
+          (said.returncode, (said.stdout or said.stderr)[:300]))
+    cached = sorted(os.path.relpath(os.path.join(d, n), runtime)
+                    for d, dirs, files in os.walk(runtime) for n in dirs + files
+                    if n == "__pycache__" or n.endswith(".pyc"))
+    check("S2 the runtime its workers and its launcher ran from holds no bytecode", not cached,
+          cached)
 
     # ---- M. the host ends; a new lifetime refuses the old handle; records remain -------------
     # THREE RUNS, because a clean shutdown has three things to say: no verdict and a live worker;
