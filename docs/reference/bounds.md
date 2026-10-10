@@ -425,7 +425,7 @@ leaf imposes — see
 
 A package publishes its own bounds, and this page does not copy them. Zengine's
 Timer, for one, states its handoff and beat bounds in
-[its timer-continuity reference](https://github.com/Krealsion/Zengine/blob/main/docs/reference/timer-continuity.md).
+[its timer-continuity reference](https://github.com/Krealsion/Zengine/blob/main/timer/docs/timer-continuity.md).
 
 ## Dispatch-refusal notices
 

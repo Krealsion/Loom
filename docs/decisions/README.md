@@ -17,7 +17,7 @@ to unmake without knowing what rejected them. How Loom came to be this way is in
 | [migration-is-authored-not-inferred](migration-is-authored-not-inferred.md) | supersedes automatic gate migration: an authored transformation before admission, never coercion inside it |
 | [dispatch-refusal-returns-to-its-author](dispatch-refusal-returns-to-its-author.md) | authenticated later refusal, exact attempts, original incarnation and ordinary consumer ownership |
 | [declared-vocabulary-is-agreed-at-admission](declared-vocabulary-is-agreed-at-admission.md) | every declared shape and component — accepted, claimed, emitted, persisted — meets one wall at the door, natively and across the seam; a declaration is never authority |
-| [Zengine's timer-continuity decision](https://github.com/Krealsion/Zengine/blob/main/docs/decisions/timer-continuity-carries-remaining-duration.md), a separate repository | durations cross; due times cannot |
+| [Zengine's timer-continuity decision](https://github.com/Krealsion/Zengine/blob/main/timer/docs/timer-continuity-carries-remaining-duration.md), a separate repository | durations cross; due times cannot |
 
 Shape of each: context → decision → alternatives considered → why rejected →
 consequences → current laws supported → evidence.
