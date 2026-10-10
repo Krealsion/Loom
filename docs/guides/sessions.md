@@ -36,6 +36,13 @@ looks for `python3`/`python` on `PATH`, or `LOOM_PYTHON`, and says so when there
 manager uses the interpreter the catalog names (`"python"`), or the first it finds on `PATH`, and
 refuses a run in words when there is none.
 
+**The runtime writes nothing beside itself.** The CLI runs Python with `-B` and the run manager
+starts every worker with `PYTHONDONTWRITEBYTECODE=1`, so `lib/loom/python` holds what the
+install put there and no `__pycache__`. A program of your own that imports `loom_session` from
+there into its own interpreter decides that for itself: run it with `-B`, or set
+`sys.dont_write_bytecode = True` before the import, or Python caches the runtime's modules
+beside them.
+
 ## 2. Start a session, and decide what it may do
 
 Pick a directory; it is the session. `loom-boot.json` boots the run manager:
@@ -296,8 +303,10 @@ with separate links.
 
 **What a tool can touch is not bounded by any of this.** A worker is a process of the session's
 user, with that user's files and network; its grant bounds what it may **say** on the bus. The
-worker inherits the host's environment and nothing else — its standard streams go to
-`worker.log`, and no socket or file the host holds is passed on — but it is not a sandbox, and
+worker inherits the host's environment, with the variables its manager sets (`PYTHONPATH`, the
+runtime first; `PYTHONDONTWRITEBYTECODE`; `LOOM_SESSION_ENDPOINT`, `LOOM_SESSION_LIFETIME`,
+`LOOM_RUN_NAME` and `LOOM_RUN_DIR`), and nothing else — its standard streams go to `worker.log`,
+and no socket or file the host holds is passed on — but it is not a sandbox, and
 approving a package is trusting its code. See
 [the exec boundary](../reference/capabilities.md#the-exec-boundary-three-independent-facts).
 

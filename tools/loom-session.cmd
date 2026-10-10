@@ -17,5 +17,5 @@ if errorlevel 1 if not exist "%PY%" (
     exit /b 5
 )
 set "PYTHONPATH=%RUNTIME%;%PYTHONPATH%"
-"%PY%" -m loom_session %*
+"%PY%" -B -m loom_session %*
 exit /b %ERRORLEVEL%
