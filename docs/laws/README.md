@@ -26,7 +26,7 @@ law, implementation, or test.
 | `HANDOFF-xx` | [handoff-laws.md](handoff-laws.md) | authored continuity across an incompatible schema: migration, the FIFO boundary, protocol vs state |
 | `KERN-xx` | [kernel-laws.md](kernel-laws.md) | dynamic artifacts, lifetimes, role truth |
 | `POP-xx` | [population-laws.md](population-laws.md) | what a green result means: suite/case/enforcement populations, declared absence, the opt-out |
-| `TIMER-xx` | [Zengine's timer laws](https://github.com/Krealsion/Zengine/blob/main/docs/laws/timer-laws.md), a separate repository | Timer continuity (Zengine owns that truth) |
+| `TIMER-xx` | [Zengine's timer laws](https://github.com/Krealsion/Zengine/blob/main/timer/docs/timer-laws.md), a separate repository | Timer continuity (Zengine owns that truth) |
 
 Identifiers are stable and deliberately carry **no development-phase names**: a
 law says its reason in words, and how it came to be is in
