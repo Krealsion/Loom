@@ -116,7 +116,8 @@ Install [MSYS2](https://www.msys2.org/) and, in its shell,
 `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja`. Then, in
 PowerShell, put that toolchain first on `PATH` **in every session that builds or runs** —
 the produced `.exe` loads `libstdc++-6.dll`, `libgcc_s_seh-1.dll` and
-`libwinpthread-1.dll` from there:
+`libwinpthread-1.dll` from there (a weave built through the build contract links them in
+and needs none of them):
 
 ```powershell
 $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
@@ -218,6 +219,11 @@ otherwise:
 - **MSVC needs `/Zc:preprocessor`** to compile Loom's public headers at all. The
   installed `loom::core` target carries it for you, so you get it from
   `find_package(loom)` — but a build that never links `loom::core` has to pass it itself.
+- **On MSVC, everything that links Loom uses the static C++ runtime** (`/MT`, `/MTd` in
+  Debug). A weave carries its own runtime that way, and every object of one image must
+  agree, so Loom's libraries are built for it and `find_package(loom)` makes it your
+  project's default; a project that names another runtime is refused at configure
+  ([the weave build contract](../reference/kernel.md#the-weave-build-contract)).
 - **The OS sandbox is Linux-only.** Namespaces and cgroups have no Windows equivalent in
   this tree; the out-of-process isolation host exists only there. See
   [capabilities](../reference/capabilities.md) for what is and is not claimed.

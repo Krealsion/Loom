@@ -158,6 +158,29 @@ if(exports MATCHES "\\?zen_weave_abi@")
 endif()
 message(STATUS "package witness: ${weave} exports exactly `zen_weave_abi` (via ${tool}) ok")
 
+# ---- 2b. on Windows, the weave carries its own C++ runtime --------------------------
+# Built through the installed contract, it imports no C++ runtime library (KERN-05): read from its
+# import list, which `objdump -p` printed above and `dumpbin /dependents` prints.
+if(WIN32)
+    if(ZEN_DUMPBIN)
+        execute_process(COMMAND "${ZEN_DUMPBIN}" /dependents "${weave}"
+                        OUTPUT_VARIABLE imports RESULT_VARIABLE rc ERROR_QUIET)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "package witness: dumpbin /dependents failed on ${weave} (exit ${rc})")
+        endif()
+    else()
+        set(imports "${exports}")
+    endif()
+    string(TOLOWER "${imports}" imports)
+    if(imports MATCHES "(libstdc\\+\\+|libgcc_s|libwinpthread|libc\\+\\+|libunwind|vcruntime|msvcp|ucrtbased)[^ \t\r\n]*\\.dll")
+        message(FATAL_ERROR
+            "package witness: ${weave} imports its C++ runtime (${CMAKE_MATCH_0}) although it was "
+            "built through the installed weave build contract, so the runtime it runs with is "
+            "whichever copy the machine or the host holds.\n--- imports ---\n${imports}")
+    endif()
+    message(STATUS "package witness: ${weave} imports no C++ runtime library ok")
+endif()
+
 # ---- 3. the real Kernel: load, exercise both directions, unload ----------------------
 find_program(ZEN_WITNESS_HOST witness-host PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
              NO_DEFAULT_PATH)

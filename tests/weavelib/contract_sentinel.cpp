@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The reloadable-weave build contract's sentinel (KERN-05). Two artifacts are built from this
-// source, one through loom_weave_build_contract() and one DELIBERATELY without it: the bypass
-// twin must STILL come out STB_GNU_UNIQUE, or the sentinel can no longer express an image that
-// will not unload, and the contracted half would pass for the boring reason that most fixtures
-// carry no unique symbols at all.
+// The weave build contract's sentinel (KERN-05). Two artifacts are built from this source, one
+// through loom_weave_build_contract() and one DELIBERATELY without it: the bypass twin must STILL
+// come out STB_GNU_UNIQUE on ELF and still import its C++ runtime on PE, or the sentinel can no
+// longer express the failure, and the contracted half would pass for the boring reason that it
+// had nothing to fail with.
 
 // Free of every loom header, so the bypass artifact, loaded on purpose in that state, aliases
 // nothing else in the process. The symbol copies the real hazard's shape: loom::schema_of<T>()
@@ -31,4 +31,17 @@ struct Tag {};
 // reading the statics of the image it replaced.
 extern "C" int zen_contract_touch() {
     return ++zen_contract_sentinel::reload_sentinel<zen_contract_sentinel::Tag>();
+}
+
+// The C++ runtime used out of line, by an exception thrown and caught here, so an image built from
+// this source either carries that runtime or imports it.
+extern "C" int zen_contract_runtime(int n) {
+    try {
+        if (n > 0) {
+            throw n;
+        }
+    } catch (const int caught) {
+        return caught;
+    }
+    return 0;
 }
