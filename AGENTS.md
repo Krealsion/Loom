@@ -32,8 +32,8 @@ cmake -P tests/documentation_lane.cmake               # the documentation lane, 
 - `-Werror` is on; C++20. GCC 11.4 is the floor, so use nothing only a newer compiler accepts.
 - **Every loadable weave target goes through `loom_weave_build_contract()`**
   (`cmake/loom-weave.cmake`, KERN-05), including the fixtures in `tests/` and `loom` and
-  `zen-switchboard` themselves, since their objects land inside the image. Never hand-write the
-  compiler option: the `weave_contract` entry reads the built artifacts and will say so. Which
+  `zen-switchboard` themselves, since their objects land inside the image. Never hand-write its
+  options: the `weave_contract` entry reads the built artifacts and will say so. Which
   artifacts *must* carry it is derived from the build graph by the `weave_population` entry
   (every `SHARED`/`MODULE` library in `tests/` and the static libraries in their link closures),
   and one that left the roll is named (POP-05). A deliberate exception is
@@ -49,8 +49,9 @@ cmake -P tests/documentation_lane.cmake               # the documentation lane, 
   ([capabilities](docs/reference/capabilities.md#the-granted-network-positive-control-and-the-endpoint-it-uses)).
 - Windows builds the portable subset only, on **MinGW-w64 and MSVC** alike; the kernel lanes are
   opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`). MSVC needs `/Zc:preprocessor` for Loom's public
-  `__VA_OPT__` macros, and `loom::core` carries it as an interface option, so say which compiler a
-  Windows green was proven on, never a bare "Windows".
+  `__VA_OPT__` macros, and `loom::core` carries it as an interface option; on the MSVC ABI the whole
+  build, and a project finding the package, uses the static C++ runtime a weave carries (KERN-05).
+  Say which compiler a Windows green was proven on, never a bare "Windows".
 - The installed package has its own witness, outside the build tree:
   `cmake -DZEN_PREFIX=<prefix> -DZEN_WORK=<dir> -P tests/package/run.cmake`. It is the only lane
   that can catch a requirement the package fails to carry, because it is the only one that reaches

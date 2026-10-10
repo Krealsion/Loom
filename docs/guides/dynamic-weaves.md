@@ -58,10 +58,10 @@ ZEN_EXPORT_WEAVE(Responder)   // writes the whole C-ABI descriptor for you
 ## Build it
 
 A weave is a shared library linking `loom::switchboard` and `loom::core` — the
-kernel is the *host's* dependency, not yours. Hand the target to Loom's
-reloadable-weave build contract and it applies whatever this platform and
-compiler require for `dlclose` to genuinely end that image's static lifetime
-([KERN-05](../laws/kernel-laws.md)):
+kernel is the *host's* dependency, not yours. Hand the target to Loom's weave
+build contract and it applies whatever this platform and compiler require for
+`dlclose` to genuinely end that image's static lifetime and, on Windows, for the
+image to carry its own C++ runtime ([KERN-05](../laws/kernel-laws.md)):
 
 ```cmake
 find_package(loom REQUIRED)
@@ -78,7 +78,12 @@ emitted `STB_GNU_UNIQUE`, a binding glibc resolves through a process-wide table
 that ignores `RTLD_LOCAL` and outlives `dlclose`. Skip it and the second library
 sharing your vocabulary header silently reads the first one's destroyed statics;
 `dlclose` returns success and `kernel.unload()` returns true while it happens.
-On PE-COFF there is nothing to apply and the function applies nothing.
+On PE-COFF there is no unique binding; there the function links your weave's C++
+runtime into it instead (`-static` under MinGW-w64, the static runtime on the
+MSVC ABI), so it loads on a machine that holds only Windows and runs with its own
+runtime whatever the host holds ([the contract](../reference/kernel.md#the-weave-build-contract)).
+On MSVC that is the runtime your whole project builds with: `find_package(loom)`
+makes it your default.
 
 The contract covers a **compilation**, not a file: every translation unit inside
 the image needs it. The installed `loom::core` and `loom::switchboard` already
@@ -87,14 +92,18 @@ own that you link into a weave is yours to hand over too.
 
 **Building without CMake?** Reproduce the equivalent non-unique symbol semantics
 for your toolchain yourself, and then verify the artifact rather than trusting
-the flag: `nm -D --defined-only my-weave.so | grep ' u '` must print nothing.
+the flag: `nm -D --defined-only my-weave.so | grep ' u '` must print nothing. On
+Windows link the runtime in, and check that `objdump -p my-weave.dll` (MinGW-w64)
+or `dumpbin /dependents my-weave.dll` (MSVC) names no `libstdc++`, `libgcc_s`,
+`libwinpthread`, `VCRUNTIME` or `MSVCP` library.
 On **MSVC** you additionally have to pass `/Zc:preprocessor` yourself — Loom's
 public shape macros are C++20 `__VA_OPT__` and the default traditional
 preprocessor mis-expands them. The supported CMake targets apply it for you;
 this is the one thing the package cannot hand a consumer who never links it.
 
-These are two different laws and they do not travel together. The unique-symbol
-mitigation is about a **loadable image's static lifetime** and is ELF/GNU-only
+These are two different laws and they do not travel together. The build
+contract is about a **loadable image** — its static lifetime on ELF/GNU, its own
+runtime on Windows — and reaches the target you hand it
 (`loom_weave_build_contract`, which you call). The preprocessor requirement is
 about **compiling Loom's public headers at all**, is MSVC-only, and binds every
 consumer of `ZEN_SHAPE` whether or not they ever build a weave — which is why it
