@@ -166,4 +166,24 @@ if(NOT ZEN_WITNESS_HOST)
 endif()
 zen_run("real Kernel load/exercise/unload" "${ZEN_WITNESS_HOST}")
 
-message(STATUS "package witness: PASSED -- installed package, macro surface, exact export, live weave")
+# ---- 4. on Windows, the installed host runs in the UTF-8 code page ----------------------
+# Its manifest makes every narrow path it holds UTF-8 (cmake/loom-code-page.cmake); the installed
+# bytes are read, since the installed host is the one a stranger runs.
+set(zen_host_said "")
+if(CMAKE_HOST_WIN32)
+    set(zen_host "${ZEN_PREFIX}/bin/loom-host.exe")
+    if(NOT EXISTS "${zen_host}")
+        message(FATAL_ERROR "package witness: no installed host at ${zen_host}")
+    endif()
+    file(STRINGS "${zen_host}" zen_code_page REGEX "activeCodePage[^>]*>UTF-8<")
+    if(NOT zen_code_page)
+        message(FATAL_ERROR
+            "package witness: the installed ${zen_host} carries no UTF-8 active code page, so it "
+            "reads every narrow path in the system's code page and cannot name a folder outside it")
+    endif()
+    message(STATUS "package witness: the installed loom-host runs in the UTF-8 code page ok")
+    set(zen_host_said ", installed host in the UTF-8 code page")
+endif()
+
+message(STATUS "package witness: PASSED -- installed package, macro surface, exact export, live "
+               "weave${zen_host_said}")

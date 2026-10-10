@@ -468,6 +468,11 @@ if(ZEN_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+# Every program defined above, the tests' and the examples' among them, runs in the UTF-8 code
+# page on Windows.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-code-page.cmake)
+loom_program_code_page()
+
 # ---- The consumer surface: install and export (find_package(loom)) ----------------------
 # Exported: only the substrate that is Loom's for good and that a consumer outside this repository
 # needs: the core, the switchboard, the terminal core, history, the bridge crossing and, where

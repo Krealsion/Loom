@@ -221,6 +221,12 @@ otherwise:
 - **The OS sandbox is Linux-only.** Namespaces and cgroups have no Windows equivalent in
   this tree; the out-of-process isolation host exists only there. See
   [capabilities](../reference/capabilities.md) for what is and is not claimed.
+- **Loom's programs run in the UTF-8 code page on Windows.** Each one carries a manifest
+  saying so, which Windows 10 version 1903 and later honour, so its command line, its
+  environment and every path it opens are UTF-8 there as everywhere else, and a folder named
+  in any script works. The console keeps its own code page: what you type at `loom>` arrives
+  in the console's. A program of yours that hosts weaves keeps the code page it chose, and a
+  narrow path it hands Loom is read in that page.
 - **Line endings and paths.** Paths in a boot plan are passed to the loader as written;
   on Windows either `C:/loom/weaves/mine.dll` or an escaped backslash works, and forward
   slashes are less trouble.

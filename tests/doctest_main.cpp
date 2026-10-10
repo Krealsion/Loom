@@ -16,6 +16,10 @@
 
 #include <cstdio>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace {
 
 /// What the run reported about its own size. Written by the listener below
@@ -60,6 +64,22 @@ struct PopulationListener : doctest::IReporter {
 DOCTEST_REGISTER_LISTENER("zen-population", 0, PopulationListener);
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    // THE TEST PROGRAM IS A HOST, and keeps the loader's dialogs away as one should: a case that
+    // loads a file that is not a library is refused in words, never left waiting on a modal.
+    ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    // It runs in the code page every program Loom builds runs in, UTF-8, from its manifest
+    // (cmake/loom-code-page.cmake); in any other, its narrow paths are not a shipped program's.
+    if (::GetACP() != CP_UTF8) {
+        std::fprintf(stderr,
+                     "[zen] this test program runs in code page %u, not UTF-8: it was built "
+                     "without the manifest every program here carries "
+                     "(cmake/loom-code-page.cmake), or this Windows is older than 10 version "
+                     "1903 and ignores it\n",
+                     ::GetACP());
+        return 71; // beside the empty population's 70, so the cause is legible
+    }
+#endif
     doctest::Context context(argc, argv);
     const int result = context.run();
 

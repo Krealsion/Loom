@@ -564,6 +564,26 @@ quit
     zen_check("no send ever ran out of slots" NOT text MATCHES "untracked")
     zen_check("and nothing is left held at the end" text MATCHES "no open conversations")
 
+    # 10. A FOLDER NAMED IN ANY SCRIPT. The host runs there, and its boot plan names the probe there
+    # by an absolute path holding a letter of Windows-1252 and one of no Western single-byte code
+    # page. Read in the UTF-8 code page, the row is identified and started, and in a second run its
+    # pinned build is read again. A host in a single-byte code page cannot name that file at all.
+    message(STATUS "host_process/weaves: a weave in a folder named in any script boots")
+    zen_scenario_dir("Zoë Ж" dir)
+    get_filename_component(zen_probe_name "${ZEN_PROBE_LIB}" NAME)
+    file(COPY_FILE "${ZEN_PROBE_LIB}" "${dir}/${zen_probe_name}")
+    zen_write_decisions("${dir}/decisions.json" "\"Startup v1 -> role probe\"")
+    zen_write_plan("${dir}/plan.json" "${dir}/${zen_probe_name}")
+    foreach(zen_run IN ITEMS first second)
+        zen_run_host("${dir}" "authority show probe\nquit\n"
+                     "--boot;plan.json;--authority;decisions.json" text code)
+        zen_check("${zen_run} run: the host comes back" code EQUAL 0)
+        zen_check("${zen_run} run: its build is identified"
+                  NOT text MATCHES "could not be identified")
+        zen_check("${zen_run} run: the probe from a folder named in any script is administered"
+                  text MATCHES "LIVE, weave 5")
+    endforeach()
+
 endif()
 
 # ---- the verdict -------------------------------------------------------------

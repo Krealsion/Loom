@@ -989,6 +989,28 @@ def main():
             s.shutdown("the journey is over")
         host.wait(timeout=30)
 
+    # ---- T. a session served from a folder named in any script --------------------------------
+    # The host reads its command line and every path it holds in the UTF-8 code page, so a session
+    # directory named with a letter of Windows-1252 and one of no Western single-byte code page is
+    # the one it serves: its files are written there, and a client attaches to it there.
+    named = os.path.join(work, "Zoë Ж session")
+    os.makedirs(named)
+    for name in ("loom-boot.json", "loom-tools.json"):
+        shutil.copy(os.path.join(session_dir, name), os.path.join(named, name))
+    named_host = start_host(args, named, APPROVALS + ["start runs %s loom.runs" % args.runs])
+    if check("T1 a host serves a session directory named in any script, its files written there",
+             until(lambda: os.path.exists(os.path.join(named, "session.json")) and
+                   (Session.attach(named).close() or True), 30, "the host in the named folder")):
+        with Session.attach(named) as s:
+            directory = s.describe()["directory"]
+            check("T2 the session it describes is that directory",
+                  os.path.normcase(os.path.realpath(directory)) ==
+                  os.path.normcase(os.path.realpath(named)), directory)
+            s.shutdown("the journey is done with the named folder")
+        check("T3 it ends cleanly and takes its session files with it",
+              named_host.wait(timeout=30) == 0 and
+              not os.path.exists(os.path.join(named, "session.json")))
+
     # ---- R. a host that is KILLED is not a host that shut down -------------------------------
     # The clean end runs the manager's destructor and every execution goes with it (M8, N4). An
     # abruptly killed host runs nothing at all, so what happens to its workers is the operating
@@ -1050,6 +1072,9 @@ def write_evidence():
 
 
 if __name__ == "__main__":
+    # A check names folders in any script; the console this runs under may hold a single-byte
+    # code page, and a line it cannot show is shown escaped rather than ending the driver.
+    sys.stdout.reconfigure(errors="backslashreplace")
     try:
         code = main()
     except BaseException as err:  # a driver crash is a failure, and still ends its hosts
