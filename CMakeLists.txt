@@ -128,6 +128,9 @@ if(NOT WIN32 OR LOOM_ENABLE_WINDOWS_KERNEL)
 add_library(zen-kernel
     src/kernel/kernel.cpp
     src/kernel/admission.cpp)
+if(WIN32)
+    target_sources(zen-kernel PRIVATE src/kernel/windows_loader.cpp)
+endif()
 
 target_include_directories(zen-kernel
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

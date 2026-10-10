@@ -227,9 +227,12 @@ otherwise:
   in any script works. The console keeps its own code page: what you type at `loom>` arrives
   in the console's. A program of yours that hosts weaves keeps the code page it chose, and a
   narrow path it hands Loom is read in that page.
-- **Line endings and paths.** Paths in a boot plan are passed to the loader as written;
-  on Windows either `C:/loom/weaves/mine.dll` or an escaped backslash works, and forward
-  slashes are less trouble.
+- **A weave's own libraries go beside it on Windows.** The kernel looks for what a weave
+  needs beside the weave and in the system, never in the current folder or on `PATH`
+  ([opening a weave on Windows](../reference/kernel.md#opening-a-weave-on-windows)).
+- **Line endings and paths.** Paths in a boot plan are read as written, a relative one
+  under the folder the host runs in; on Windows either `C:/loom/weaves/mine.dll` or an
+  escaped backslash works, and forward slashes are less trouble.
 
 ## Next
 

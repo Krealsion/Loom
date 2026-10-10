@@ -19,6 +19,8 @@
 #include <vector>
 
 #if defined(_WIN32)
+#include "windows_loader.hpp"
+
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -40,15 +42,9 @@ KernelLifetimeCounts& ledger() noexcept {
 
 void* lib_open(const std::string& path, std::string& error) {
 #if defined(_WIN32)
-    // The Windows backend (see Kernel::containment_note). LoadLibraryA is ANSI, so a non-ANSI
-    // path is a named limitation rather than a silent one; LoadLibraryW with a UTF-8 to UTF-16
-    // conversion would lift it.
-    void* h = static_cast<void*>(::LoadLibraryA(path.c_str()));
-    if (h == nullptr) {
-        error = "LoadLibrary failed (error " + std::to_string(::GetLastError()) +
-                "): " + path;
-    }
-    return h;
+    // The Windows backend (see Kernel::containment_note): where a weave's libraries are looked
+    // for, and the words of a refusal, are windows_loader.cpp's.
+    return detail::windows_open_library(path, error);
 #else
     ::dlerror();
     // RTLD_LOCAL keeps the library's symbols (including its own copy of loom)

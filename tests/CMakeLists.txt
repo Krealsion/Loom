@@ -79,6 +79,14 @@ if(NOT WIN32)
     list(APPEND ZEN_TEST_SOURCES_SCOPED ${ZEN_TEST_SOURCES_POSIX})
     list(APPEND ZEN_POPULATION_GATES posix)
 endif()
+# The Windows kernel backend's own cases: where a weave's libraries are looked for, and the words
+# of a refusal (src/kernel/windows_loader.cpp).
+if(WIN32 AND TARGET zen-kernel)
+    set(ZEN_TEST_SOURCES_WINDOWS test_windows_loader.cpp)
+    target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_WINDOWS})
+    list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_WINDOWS})
+    list(APPEND ZEN_POPULATION_GATES windows)
+endif()
 # THE RUN MANAGER'S TWO GATES (docs/guides/sessions.md). `runs` rides the manager having been
 # built at all -- a loadable weave, so the kernel, and LOOM_BUILD_SESSION_TOOLS -- and carries
 # the `runs` suite, which needs no Python. `python` rides that AND a Python 3.8+ interpreter:
@@ -388,6 +396,32 @@ target_compile_definitions(zen-tests PRIVATE
 # proves -- that a declaration reaches the host's policy and grants nothing -- is true
 # of the in-process kernel on every platform that has one.
 zen_add_test_weave(zen_test_weave_asks ZEN_WEAVE_ASKS)
+
+# The Windows loader's fixtures (test_windows_loader.cpp): a weave that needs a library of its
+# own, which needs another. The two libraries are built into a folder of their own, so nothing a
+# case did not copy is found beside the weave or the test program.
+if(WIN32)
+    add_library(zen_test_loader_leaf SHARED weavelib/loader_libs.cpp)
+    loom_weave_build_contract(zen_test_loader_leaf)
+    add_library(zen_test_loader_middle SHARED weavelib/loader_libs.cpp)
+    target_compile_definitions(zen_test_loader_middle PRIVATE ZEN_LOADER_MIDDLE)
+    target_link_libraries(zen_test_loader_middle PRIVATE zen_test_loader_leaf)
+    loom_weave_build_contract(zen_test_loader_middle)
+    set_target_properties(zen_test_loader_leaf zen_test_loader_middle PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/loader-libs)
+    add_library(zen_test_loader_weave SHARED weavelib/loader_weave.cpp)
+    target_link_libraries(zen_test_loader_weave
+        PRIVATE loom zen-switchboard zen_test_loader_middle zen-warnings zen-sanitize)
+    loom_weave_build_contract(zen_test_loader_weave)
+    add_dependencies(zen-tests zen_test_loader_weave)
+    target_compile_definitions(zen-tests PRIVATE
+        "ZEN_LOADER_WEAVE=\"$<TARGET_FILE:zen_test_loader_weave>\""
+        "ZEN_LOADER_MIDDLE=\"$<TARGET_FILE:zen_test_loader_middle>\""
+        "ZEN_LOADER_LEAF=\"$<TARGET_FILE:zen_test_loader_leaf>\""
+        "ZEN_LOADER_MIDDLE_NAME=\"$<TARGET_FILE_NAME:zen_test_loader_middle>\""
+        "ZEN_LOADER_LEAF_NAME=\"$<TARGET_FILE_NAME:zen_test_loader_leaf>\""
+        "ZEN_LOADER_WORK=\"${CMAKE_CURRENT_BINARY_DIR}/windows-loader-work\"")
+endif()
 
 endif() # TARGET zen-kernel (portable fixtures)
 

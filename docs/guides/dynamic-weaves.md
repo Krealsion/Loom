@@ -187,6 +187,9 @@ as natively, declaring it grants nothing
 
 Platforms: Linux is the reference, including under WSL; the opt-in Windows
 backend is development-only and says so ([reference/kernel](../reference/kernel.md)).
+On Windows a library your weave needs goes beside it: the loader looks there and in
+the system, never in the current folder or on `PATH`, and a refusal names the library
+it could not find ([opening a weave on Windows](../reference/kernel.md#opening-a-weave-on-windows)).
 
 ## Deeper
 
