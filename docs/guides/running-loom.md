@@ -723,6 +723,8 @@ what debugging this is:
 | `error: expected ';' before …` from `cmake --build` | **your compiler.** Loom is not involved and never ran | your source |
 | `Could not find a package configuration file provided by "loom"` | **CMake**, at configure time | `CMAKE_PREFIX_PATH` — the prefix, not `lib/cmake/loom` |
 | `open failed: …cannot open shared object file` | **the loader.** The path in your boot plan is wrong, or you have not built | the path, or `cmake --build` |
+| `open failed: '…' needs mine-support.dll, which is not beside the weave, …` (Windows) | **the loader.** The weave needs a library that is in none of the places Windows looks | that library beside the weave |
+| `open failed: '…' is not a Windows library` (Windows) | **the file.** Nothing loadable is at that path | the path |
 | `refused: input line N is longer than 4000 bytes` | **the line's length.** None of it ran | say it again shorter, or split it into several commands <!-- value kMaxCommandBytes in "longer than {} bytes" --> |
 | `admission refused at open: …` | **your own policy.** Nothing about the artifact is wrong | `authority trust <name>` at the console |
 | `admission refused at speak: …` | your policy again, but the code already ran — see [admission](../reference/capabilities.md#admitting-a-loaded-artifact) | the console |
