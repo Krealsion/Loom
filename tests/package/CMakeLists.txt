@@ -86,11 +86,11 @@ endif()
 add_library(witness-weave SHARED stranger_weave.cpp)
 target_link_libraries(witness-weave PRIVATE loom::core loom::switchboard)
 
-# The reloadable-weave build contract, reached through the installed package exactly as
-# a stranger reaches it. It is a DIFFERENT law from the preprocessor requirement above:
-# this one is about a loadable image's static lifetime and is platform-specific (ELF/GNU
-# only); that one is about compiling Loom's public headers at all and is MSVC-specific.
-# A consumer calls this one by hand; the other arrives on its own.
+# The weave build contract, reached through the installed package exactly as a stranger
+# reaches it. It is a DIFFERENT law from the preprocessor requirement above: this one is
+# about a loadable image (its static lifetime on ELF/GNU, its own runtime on Windows) and
+# is platform-specific; that one is about compiling Loom's public headers at all and is
+# MSVC-specific. A consumer calls this one by hand; the other arrives on its own.
 loom_weave_build_contract(witness-weave)
 
 # ---- 3. the host that loads it through the REAL kernel ----------------------------

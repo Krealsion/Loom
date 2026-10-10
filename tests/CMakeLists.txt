@@ -317,13 +317,17 @@ loom_weave_build_contract(zen_test_contract_applied)
 
 add_library(zen_test_contract_bypass SHARED weavelib/contract_sentinel.cpp)
 # (no loom_weave_build_contract here: that absence is the control)
+# On the MSVC ABI this build's default runtime is the static one the contract asks for, so the twin
+# is given the DLL runtime it would have without the contract; it links nothing to disagree with.
+set_property(TARGET zen_test_contract_bypass PROPERTY MSVC_RUNTIME_LIBRARY
+             "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 # The required-population sweep counts every shared library here as owing the contract, so the
 # exemption is written on the target with its reason, printed every run; and
 # check_weave_population.cmake fails if an exempt target ever turns up contracted.
 zen_weave_contract_exempt(zen_test_contract_bypass
     "the negative control: same source as zen_test_contract_applied, contract "
-    "deliberately withheld, so the unique-symbol sentinel it still carries is what keeps "
-    "claim 1 of weave_contract falsifiable")
+    "deliberately withheld, so the unique-symbol sentinel it still carries on ELF, and the "
+    "C++ runtime it still imports on PE, keep weave_contract's claims falsifiable")
 
 set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_badmsg zen_test_weave_v2 zen_test_weave_bequeaths zen_test_weave_heir
@@ -768,6 +772,15 @@ if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_cont
     if(NOT ZEN_NM)
         set(ZEN_NM "")
     endif()
+    # On PE-COFF the claim is each image's imports, read by binutils' objdump under MinGW-w64 or by
+    # the MSVC linker's dump mode, both named here at configure: the lane may run without the
+    # toolchain's environment. An absent reader is a FAILURE inside the script.
+    set(zen_pe_reader "")
+    if(WIN32 AND (MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"))
+        set(zen_pe_reader "${CMAKE_LINKER}")
+    elseif(WIN32)
+        set(zen_pe_reader "${CMAKE_OBJDUMP}")
+    endif()
 
     add_test(NAME weave_contract COMMAND ${CMAKE_COMMAND}
         -DZEN_MANIFEST=${CMAKE_CURRENT_BINARY_DIR}/weave_contract_manifest.txt
@@ -776,6 +789,7 @@ if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_cont
         -DZEN_BYPASS_LIB=$<TARGET_FILE:zen_test_contract_bypass>
         -DZEN_PLATFORM=${CMAKE_SYSTEM_NAME}
         -DZEN_NM=${ZEN_NM}
+        "-DZEN_PE_READER=${zen_pe_reader}"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_contract.cmake)
 
     # The required-vs-actual comparison. It reads the SAME roll manifest weave_contract

@@ -62,19 +62,47 @@ Reference platform: Linux, including under WSL (`dlopen`). `LOOM_ENABLE_WINDOWS_
 **development/demo** `LoadLibrary` backend with no isolation, truth-pinned at
 every surface (`containment_note()`); never a default.
 
-## The reloadable-weave build contract
+## The weave build contract
 
 `loom_weave_build_contract(<target>)` ships with the package
 (`lib/cmake/loom/loom-weave.cmake`, included by `loomConfig.cmake`) and is what
-keeps `dlclose` real ([KERN-05](../laws/kernel-laws.md)). It applies the
-platform's requirement to exactly the target handed to it, records the verdict
-on that target's `LOOM_WEAVE_BUILD_CONTRACT` property, and refuses a target type
-that is never `dlopen`'ed. ELF/GNU is the affected combination; PE-COFF and
-Mach-O have no unique symbol binding, and the function says so rather than
-injecting an option a compiler merely tolerates. It is present in kernel-less
-packages too — what you can *author* is not gated on what an install can *host*,
-which stays `if(TARGET loom::kernel)`. See
-[guides/dynamic-weaves](../guides/dynamic-weaves.md) for the authoring shape.
+keeps `dlclose` real and, on Windows, a weave's C++ runtime its own
+([KERN-05](../laws/kernel-laws.md)). It applies the platform's requirement to
+exactly the target handed to it, records the verdict on that target's
+`LOOM_WEAVE_BUILD_CONTRACT` property, and refuses a target type that is never
+`dlopen`'ed. ELF/GNU is the combination with unique symbol binding; PE-COFF and
+Mach-O have none, and the function says so rather than injecting an option a
+compiler merely tolerates. It is present in kernel-less packages too — what you
+can *author* is not gated on what an install can *host*, which stays
+`if(TARGET loom::kernel)`. See [guides/dynamic-weaves](../guides/dynamic-weaves.md)
+for the authoring shape.
+
+On Windows the weave carries its own C++ runtime, so whichever runtime the
+machine or the host holds never decides which one it runs with, and it loads on
+a machine that holds only Windows:
+
+- **MinGW-w64** (GCC, or Clang targeting it): a `SHARED` or `MODULE` weave links
+  with `-static`, so libgcc, libstdc++ and the thread library are inside the
+  image; the C runtime stays Windows' own. A static library has nothing to
+  apply: its runtime is chosen when the image that links it is linked. Every
+  library the weave links by `-l` name is taken from its static archive where one
+  exists, and one that has only an import library is not found. The function
+  first checks that the toolchain can link its runtime statically, and refuses
+  the target otherwise.
+- **The MSVC ABI** (MSVC, or a Clang that simulates it): every object is compiled
+  for the static runtime (`MultiThreaded`, `MultiThreadedDebug` in Debug). The
+  runtime is chosen in each object, and every object of one image must agree, so
+  Loom's libraries are built for it and `loom-weave.cmake` makes it the default
+  `CMAKE_MSVC_RUNTIME_LIBRARY` of the project that includes it; a project that
+  names another runtime is refused at configure, and one whose flags choose a
+  runtime by hand (`/MD`, or policy CMP0091 old) is refused by the function.
+- Any other Windows compiler is unclassified: the function warns, applies
+  nothing, and the verdict says so.
+
+Each image then has its runtime's state to itself: its own heap where the
+runtime keeps one, its own exception machinery. The seam never let an exception
+or a C++ object cross ([dynamic ABI](dynamic-abi.md)), and with a runtime in each
+image that is a requirement, not a convention.
 
 Why it matters: a weave's shapes instantiate Loom's inline templates, such as
 `schema_of<T>()`'s function-local static, with vague linkage. On ELF, GCC built

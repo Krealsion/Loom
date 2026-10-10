@@ -24,12 +24,18 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # rules because the exported targets below carry an INSTALL_INTERFACE include path.
 include(GNUInstallDirs)
 
-# The reloadable-weave build contract (KERN-05). ONE definition, included here for the
-# build tree and installed beside loomConfig.cmake for the stranger, so the two paths
-# cannot come to mean different things -- the same identity argument the EXPORT_NAMEs
-# make for the targets. Loom's own dynamic-weave fixtures call it too: the house builds
-# its weaves through exactly the surface it hands a guest.
+# The weave build contract (KERN-05). ONE definition, included here for the build tree and
+# installed beside loomConfig.cmake for the stranger, so the two paths cannot come to mean
+# different things -- the same identity argument the EXPORT_NAMEs make for the targets. Loom's
+# own dynamic-weave fixtures call it too: the house builds its weaves through exactly the surface
+# it hands a guest. On the MSVC ABI it also makes the static C++ runtime this build's default.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave.cmake)
+# Built inside another project, Loom's libraries are linked by that project's images too, so on
+# the MSVC ABI they take the same default runtime there, as a project finding the package does.
+get_directory_property(zen_parent_directory PARENT_DIRECTORY)
+if(zen_parent_directory AND DEFINED LOOM_MSVC_RUNTIME_LIBRARY)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}" PARENT_SCOPE)
+endif()
 
 option(ZEN_WERROR    "Treat warnings as errors (CI default)"        ON)
 option(ZEN_SANITIZE  "Build with -fsanitize=address,undefined"     OFF)
@@ -106,11 +112,11 @@ target_link_libraries(zen-switchboard
 add_library(loom::switchboard ALIAS zen-switchboard)
 
 # ---- The substrate itself is built under the weave contract (KERN-05) ------------------
-# A weave statically links these two, so their objects land inside the loadable image. Their
-# libstdc++ inline variables and template statics bind STB_GNU_UNIQUE unless the contract
-# applies, and one such symbol keeps the whole image resident after dlclose, whatever the weave
-# author's own flags. It rides the installed libraries too: a stranger contracts only their own
-# sources.
+# A weave statically links these two, so their objects land inside the loadable image. On ELF
+# their libstdc++ inline variables and template statics bind STB_GNU_UNIQUE unless the contract
+# applies, keeping the whole image resident after dlclose; on the MSVC ABI they are built for the
+# static runtime the image carries. It rides the installed libraries too: a stranger contracts
+# only their own sources.
 loom_weave_build_contract(loom)
 loom_weave_build_contract(zen-switchboard)
 

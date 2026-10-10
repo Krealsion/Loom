@@ -8,7 +8,8 @@ include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 
 # The weave-authoring surface: loom_weave_build_contract(<target>) (KERN-05). It ships in every
 # package, one without loom::kernel included, because what a consumer can author is not gated on
-# what an install can host; `if(TARGET loom::kernel)` is the question for hosting.
+# what an install can host; `if(TARGET loom::kernel)` is the question for hosting. On the MSVC ABI
+# it makes the static C++ runtime Loom's libraries are built for this project's default.
 include("${CMAKE_CURRENT_LIST_DIR}/loom-weave.cmake")
 
 # The programs this install can run, named for a consumer's tests and tools, never a link line:
