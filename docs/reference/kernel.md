@@ -62,6 +62,28 @@ Reference platform: Linux, including under WSL (`dlopen`). `LOOM_ENABLE_WINDOWS_
 **development/demo** `LoadLibrary` backend with no isolation, truth-pinned at
 every surface (`containment_note()`); never a default.
 
+### Opening a weave on Windows
+
+The Windows backend opens a weave by its full path: the path it is given, read in the
+program's code page (UTF-8 in every program Loom builds, so a path in any script opens
+there; [tools](../guides/tools.md#platform-differences-that-will-actually-bite-you)), and a
+relative one completed against the current folder, as the admission policy's read of the
+same file completes it. The libraries the weave needs are looked for **beside the weave**,
+in the host program's folder, in the system folder and in any folder the host itself added
+(`AddDllDirectory`); **never in the current folder and never on `PATH`**. A weave's own
+libraries therefore go beside it. A library the process has already loaded is used by its
+name, wherever it came from. Loom sets nothing process-wide to arrange this; each load asks
+for it.
+
+When Windows refuses a load, the refusal says what it can, after `open failed: `: that no
+file is at the path; which library the weave needs is in none of those folders, through
+which of its own libraries when it is a library's library; that the file is not a Windows
+library, or is one built for another machine; and otherwise Windows' error code with its
+own words. The explanation is worked out only after the refusal, from the files the load
+looked at; nothing is read before a load or after one that succeeds. Whether a refused
+image may show the system's error dialog is the host's to decide (`SetErrorMode`), not
+Loom's.
+
 ## The reloadable-weave build contract
 
 `loom_weave_build_contract(<target>)` ships with the package

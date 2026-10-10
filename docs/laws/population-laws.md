@@ -194,8 +194,8 @@ MEANS
 - the requirement belongs to the tests, not the package: `-DBUILD_TESTING=OFF`
   configures and builds against a kernel-less Loom, and with a kernel-full Loom it
   still builds every weave library and registers no tests;
-- absences inside the Loom's own tree are declared in `suite_population.txt` by gate
-  (`portable` / `kernel` / `posix`) and the `population` check prints them:
+- absences inside the Loom's own tree are declared in `suite_population.txt` by gate, each
+  gate named there with what it rides, and the `population` check prints them:
   `DECLARED ABSENT in this configuration (not run, and not passed)`.
 
 DOES NOT MEAN
