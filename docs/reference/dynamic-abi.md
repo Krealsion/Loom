@@ -286,12 +286,12 @@ exception thrown on the other side is undefined. So every host door answers what
 stopped the host's own work — its delivery sequence at its end, a host observer
 that threw while a refusal was being recorded, memory — as `ZEN_ERR_REFUSED`;
 `defer_answer` answers no token (0); `release_deferred` answers nothing and keeps
-it on the host's side. A byte sink, the host's handed to `describe`, `snapshot`
-and `policy` or the library's handed to an observe door, never throws into its
-caller: a write it cannot hold is recorded, and the host refuses that load or
-call in its own words ("the host could not hold the bytes library ... wrote"),
-the library that reading. Suite `dispatch_loaded` drives each door through a
-real image.
+it on the host's side. A byte sink never throws into its caller; it records a
+write it cannot hold. When the host's sink, handed to `describe`, `snapshot` and
+`policy`, records one, the host refuses that load or call in its own words ("the
+host could not hold the bytes library ... wrote"); when the library's sink,
+handed to an observe door, records one, the library refuses that reading. Suite
+`dispatch_loaded` drives each door through a real image.
 
 Delivery-side, the host passes provenance flags + the attested sequence + the
 authored role (v5: its own NUL-terminated parameter, NULL = personal — a
