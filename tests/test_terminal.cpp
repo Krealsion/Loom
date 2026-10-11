@@ -907,7 +907,8 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
     CHECK(prompt->sender == c.weaver_id);
 
     // The prompt carries its name, which the decision carries back.
-    CHECK(prompt->value.get("prompt")->as_int() == 1);
+    CHECK(prompt->value.get("prompt")->as_int() ==
+          static_cast<std::int64_t>(c.weaver_id.value) * kPromptNamesPerWeaver + 1);
 
     const std::size_t submitted_before = c.of_kind(c.acting(), TranscriptKind::Submitted).size();
     REQUIRE(submitted(decide(c, "zen.ApproveAuthority", prompts.front().message)));
@@ -962,7 +963,8 @@ TEST_CASE("an approve composed from the prompt shown answers that prompt and no 
     REQUIRE(submitted(second));
     c.bus.drain_until_idle();
     REQUIRE(last_prompt(c) != shown);
-    CHECK(c.op().received(last_prompt(c))->value.get("prompt")->as_int() == 2);
+    const std::int64_t shown_name = c.op().received(shown)->value.get("prompt")->as_int();
+    CHECK(c.op().received(last_prompt(c))->value.get("prompt")->as_int() == shown_name + 1);
 
     // The same approve again, composed from the prompt the operator was shown.
     REQUIRE(submitted(decide(c, "zen.ApproveAuthority", shown)));
@@ -971,7 +973,7 @@ TEST_CASE("an approve composed from the prompt shown answers that prompt and no 
     REQUIRE(answers.size() == 2);
     CHECK(answers.back().shape == "zen.Refused");
     CHECK(c.op().received(answers.back().message)->value.get("reason")->as_text().find(
-              "names prompt 1") != std::string::npos);
+              "names prompt " + std::to_string(shown_name)) != std::string::npos);
 
     // The session's second ask is still waiting for a person; only its first was answered.
     const std::vector<TranscriptEntry> heard = c.of_kind(c.acting(), TranscriptKind::AnswerReceived);
