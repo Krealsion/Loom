@@ -673,6 +673,13 @@ add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
     -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/console
     -DZEN_GROUP=console
     -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
+# The terminal REPL the same way: a decision a person types answers the prompt it names, and a
+# second press on a prompt already decided approves nothing the session asked since.
+add_test(NAME terminal_repl COMMAND ${CMAKE_COMMAND}
+    -DZEN_HOST_EXE=$<TARGET_FILE:zen-terminal-repl>
+    -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/repl
+    -DZEN_GROUP=repl
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)
 
 # ---- The persistent session, as independent processes (docs/guides/sessions.md) ---------
 # A real `loom-host --serve`, the `loom-runs` artifact it boots, real Python workers, and clients

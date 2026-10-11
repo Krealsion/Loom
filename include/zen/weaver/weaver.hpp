@@ -15,10 +15,11 @@
 //
 // It holds no `Switchboard&` and no privileged send path. Its Grant is what it may say and its
 // GrantAuthority what it may delegate; the host grants the two separately, and neither gives
-// the other. It keeps workflow state only, at most one request awaiting a person and the answer
-// right taken with it, and reads what a subject may do from `mail.describe_authority(...)`
-// each time, never from a record of its own. One operator seat, one governed subject, one
-// ceiling, at most one request in flight.
+// the other. It keeps workflow state only, at most one request awaiting a person, the answer
+// right taken with it and the name of the prompt that showed it, and reads what a subject may
+// do from `mail.describe_authority(...)` each time, never from a record of its own. One
+// operator seat, one governed subject, one ceiling, at most one request in flight, and a
+// decision acts only on the prompt it names.
 //
 // It governs Loom message authority and nothing else: it does not contain in-process native
 // code (a loaded weave shares this address space), authenticate a remote person, hold
@@ -34,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -148,7 +150,7 @@ struct WeaverState {
 class Weaver final
     : public WeaveBase<Weaver, WeaverState,
                        Accept<RequestAuthority, ApproveAuthority, RefuseAuthority, RevokeAuthority,
-                              DescribeAuthority>,
+                              DescribeAuthority, ApproveAuthorityV1, RefuseAuthorityV1>,
                        Emit<AuthorityPrompt, AuthorityGranted, AuthorityDescription, Refused, Ack>> {
 public:
     /// `authority` names the governed subject and the ceiling; `operator_seat` is the weave
@@ -177,6 +179,11 @@ public:
     /// is one conversation waiting to be answered, so the flag and the capability
     /// cannot disagree about whether a request exists.
     bool has_pending_request() const noexcept { return answer_.valid(); }
+
+    /// The name of the prompt awaiting a decision, or 0 when none is.
+    std::int64_t pending_prompt() const noexcept {
+        return has_pending_request() ? request_.prompt : 0;
+    }
 
     /// A Weaver is never reloaded: a new incarnation would have dropped the request a person
     /// was deciding and the answer right with it, so a failure ends it visibly. Authority it
@@ -224,6 +231,13 @@ public:
             (void)mail.answer(AuthorityGranted{"already-permitted"});
             return;
         }
+        // A prompt's name is never reused, so a Weaver that has spent every name puts no more
+        // prompts rather than wrapping onto a name a decision may still carry.
+        if (last_prompt_ == std::numeric_limits<std::int64_t>::max()) {
+            (void)mail.answer(Refused{"this Weaver has named every prompt it can; nothing was put "
+                                      "to the operator"});
+            return;
+        }
         // TAKE THE ANSWER AWAY WITH US. The human is not in this call stack, and
         // may not be at the keyboard for minutes. Loom's deferral converts this
         // delivery's one answer right into one that outlives the handler — so the
@@ -241,13 +255,15 @@ public:
             return;
         }
         answer_ = std::move(taken);
-        request_ = Requested{ask.shape, static_cast<std::uint32_t>(ask.version), ask.to_role};
+        request_ = Requested{++last_prompt_, ask.shape, static_cast<std::uint32_t>(ask.version),
+                             ask.to_role};
         ++state_.prompts;
-        // The operator sees the rule AS PARSED, the requester's identity AS
-        // STAMPED, and the requester's prose AS ESCAPED — and nothing that claims
-        // the destination office currently exists.
+        // The operator sees the prompt's name, the rule AS PARSED, the requester's
+        // identity AS STAMPED, and the requester's prose AS ESCAPED — and nothing
+        // that claims the destination office currently exists.
         (void)mail.send(operator_seat_,
-                        AuthorityPrompt{static_cast<std::int64_t>(mail.sender().value),
+                        AuthorityPrompt{request_.prompt,
+                                        static_cast<std::int64_t>(mail.sender().value),
                                         request_.shape, static_cast<std::int64_t>(request_.version),
                                         request_.to_role, kGrantLifetime,
                                         safe_operator_text(ask.purpose, kMaxPurposeBytes)});
@@ -255,15 +271,8 @@ public:
 
     // ---- the human decides --------------------------------------------------
 
-    void on(const ApproveAuthority&, Mail& mail) {
-        if (!from_operator(mail)) {
-            return;
-        }
-        if (!has_pending_request()) {
-            // A decision cannot be banked. An approval with nothing pending
-            // changes nothing and, crucially, does not wait around to be applied
-            // to whatever is requested next.
-            (void)mail.answer(Refused{"no authority request is pending; nothing was changed"});
+    void on(const ApproveAuthority& decision, Mail& mail) {
+        if (!from_operator(mail) || !names_pending(decision.prompt, mail)) {
             return;
         }
         const AuthorityView view = mail.describe_authority(authority_);
@@ -307,12 +316,8 @@ public:
         // anyone to retry. It changed authority; it does not resurrect intent.
     }
 
-    void on(const RefuseAuthority&, Mail& mail) {
-        if (!from_operator(mail)) {
-            return;
-        }
-        if (!has_pending_request()) {
-            (void)mail.answer(Refused{"no authority request is pending; nothing was changed"});
+    void on(const RefuseAuthority& decision, Mail& mail) {
+        if (!from_operator(mail) || !names_pending(decision.prompt, mail)) {
             return;
         }
         // The user said no, so the session hears no — as the authenticated answer
@@ -321,6 +326,19 @@ public:
         (void)answer_deferred(answer_, mail, Refused{"the operator refused this request"});
         clear_pending();
         (void)mail.answer(Ack{});
+    }
+
+    /// A version 1 decision names no prompt, so it cannot say which request it decides: it
+    /// changes nothing, whatever is pending, and the seat is told why.
+    void on(const ApproveAuthorityV1&, Mail& mail) {
+        if (from_operator(mail)) {
+            refuse_unnamed(mail);
+        }
+    }
+    void on(const RefuseAuthorityV1&, Mail& mail) {
+        if (from_operator(mail)) {
+            refuse_unnamed(mail);
+        }
     }
 
     void on(const RevokeAuthority&, Mail& mail) {
@@ -376,10 +394,11 @@ private:
     static constexpr const char* kGrantLifetime =
         "until the operator revokes, or the session dies (this is NOT a one-time allow)";
 
-    /// The pending request, parsed. It is the RULE, not the message: the
-    /// requester's prose never reaches here, so there is nothing kept that could
-    /// influence what gets installed.
+    /// The pending request, parsed, and the name of the prompt that showed it. It
+    /// is the RULE, not the message: the requester's prose never reaches here, so
+    /// there is nothing kept that could influence what gets installed.
     struct Requested {
+        std::int64_t prompt = 0;
         std::string shape;
         std::uint32_t version = 0;
         std::string to_role;
@@ -397,6 +416,36 @@ private:
         (void)mail.answer(Refused{"authority decisions here are only accepted from the configured "
                                   "operator seat"});
         return false;
+    }
+
+    /// Does this decision name the prompt pending now? A decision cannot be
+    /// banked, and it cannot be moved: one naming no prompt, a prompt already
+    /// decided, or one never put, changes nothing, leaves the pending prompt as it
+    /// was, and does not wait around to be applied to whatever is asked next.
+    bool names_pending(std::int64_t prompt, Mail& mail) {
+        if (prompt <= 0) {
+            refuse_unnamed(mail);
+            return false;
+        }
+        if (!has_pending_request()) {
+            (void)mail.answer(Refused{"this decision names prompt " + std::to_string(prompt) +
+                                      ", and no authority request is pending; nothing was "
+                                      "changed"});
+            return false;
+        }
+        if (prompt != request_.prompt) {
+            (void)mail.answer(Refused{
+                "this decision names prompt " + std::to_string(prompt) +
+                ", which is not the prompt awaiting a decision; nothing was changed, and prompt " +
+                std::to_string(request_.prompt) + " still awaits one"});
+            return false;
+        }
+        return true;
+    }
+
+    void refuse_unnamed(Mail& mail) {
+        (void)mail.answer(Refused{"this decision names no prompt, so it cannot say which request "
+                                  "it decides; nothing was changed"});
     }
 
     void clear_pending() {
@@ -475,6 +524,8 @@ private:
     // ---- policy workflow state (NEVER authority state) ----------------------
     Requested request_{};
     DeferredAnswer answer_{};
+    /// The last name given to a prompt; the next prompt takes the one after it.
+    std::int64_t last_prompt_ = 0;
 };
 
 } // namespace loom

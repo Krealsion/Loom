@@ -207,7 +207,12 @@ office is an address, the request is an ordinary composed message out of the
 host-supplied vocabulary, and a host that did not supply that shape gets an
 ordinary `UnknownShape`. The operator's four decisions (`Approve`, `Refuse`,
 `Revoke`, `DescribeAuthority`) are not even sugar — a presentation authors them
-as ordinary messages from the operator seat's own door.
+as ordinary messages from the operator seat's own door. Approve and refuse each
+[name the prompt they answer](weaver.md#a-decision-names-the-prompt-it-answers),
+and a presentation decides by the prompt it shows: the REPL's `approve r<N>`
+composes `zen.ApproveAuthority v2` with `prompt` read by reference from the
+received prompt `r<N>` itself, so it decides that prompt or, if another is
+pending by the time it arrives, nothing.
 
 **Approval performs nothing.** `TerminalSession::handle` contains no send of any
 kind — not a reply, not a retry, not an acknowledgement — so "authority is not a
@@ -231,7 +236,8 @@ answers_ask     provenance no ordinary enqueue can write
 
 A payload field that happens to be called `requester` is never copied into a
 trusted one. For `zen.AuthorityPrompt` specifically: the **Weaver** is the
-sender, `prompt.requester` is the Weaver's own trusted fact, and
+sender, `prompt.prompt` and `prompt.requester` are the Weaver's own trusted
+facts, and
 `requester_says` is prose the requester wrote — the field's own name says so.
 
 ### Bounded, and never at the cost of a conversation
@@ -329,15 +335,19 @@ To change authority deliberately, use the existing workflow:
 request Work 1 @some.service "so I can finish the job"
 operator
 show r1
-approve
+approve r1
 session
 send @some.service Work 1 7
 ```
 
 The operator's received id depends on its earlier traffic; use the id printed
-with its actual `AuthorityPrompt`. Approval changes authority only. The final
-send is the person's explicit retry, with a fresh attempt identity. A notice never
-requests a grant, switches the speaking participant or retries on its own.
+with its actual `AuthorityPrompt`. `approve` and `refuse` take that id and
+nothing else: the REPL refuses one naming no received message, or a message that
+is not an authority prompt from its own Weaver. A second `approve r1` after the
+grant is refused by the Weaver, even when the session has asked again since.
+Approval changes authority only. The final send is the person's explicit retry,
+with a fresh attempt identity. A notice never requests a grant, switches the
+speaking participant or retries on its own.
 
 ## What this does not govern
 
@@ -349,5 +359,6 @@ nothing here persists: restarting forgets every transcript and every approval.
 
 PROVEN BY — [`include/zen/terminal/`](../../include/zen/terminal/),
 [`include/zen/host/terminal_wiring.hpp`](../../include/zen/host/terminal_wiring.hpp),
-`tests/test_terminal.cpp` (suite `terminal`), and the `weaver`, `grant` and
-`console` suites.
+`tests/test_terminal.cpp` (suite `terminal`), the `weaver`, `grant` and
+`console` suites, and the entry `terminal_repl`, which types into
+`zen-terminal-repl` (`tests/host_process/run.cmake`, group `repl`).

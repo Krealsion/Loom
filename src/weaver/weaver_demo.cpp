@@ -6,7 +6,7 @@
 // GrantAuthority), the session acts (a tiny baseline) and the Switchboard enforces. This file
 // is the host: the mounting, which is the whole security posture, and a REPL skin over
 // `loom::ConsoleEngine` that knows nothing about authority: the operator approves by composing
-// `zen.ApproveAuthority` like any other shape. It prints the walk to try when it starts.
+// `zen.ApproveAuthority` naming the prompt shown (`$mN.prompt`). It prints the walk to try.
 
 #include <zen/console/console.hpp>
 #include <zen/terminal/input_lex.hpp>
@@ -275,7 +275,7 @@ int main() {
     // ceiling. It may say "no" to anyone who reaches it; it may say "yes" to
     // exactly two weaves.
     loom::Grant weaver_grant;
-    weaver_grant.allow("zen.AuthorityPrompt", 1, operator_seat);
+    weaver_grant.allow("zen.AuthorityPrompt", 2, operator_seat);
     weaver_grant.allow("zen.AuthorityGranted", 1, session_id);
     weaver_grant.allow("zen.AuthorityDescription", 1, operator_seat);
     weaver_grant.allow("zen.AuthorityDescription", 1, session_id);
@@ -297,7 +297,7 @@ int main() {
               << "try: send " << session_id.value << " DoWork 1        (denied — see `tap`)\n"
               << "     send " << session_id.value << " AskForAuthority 1\n"
               << "     show m1\n"
-              << "     send " << weaver_id.value << " zen.ApproveAuthority 1\n"
+              << "     send " << weaver_id.value << " zen.ApproveAuthority 2 prompt=$m1.prompt\n"
               << "     send " << session_id.value << " DoWork 1        (lands, as the SESSION)\n"
               << "     send " << weaver_id.value << " zen.DescribeAuthority 1\n"
               << "     send " << weaver_id.value << " zen.RevokeAuthority 1\n\n";

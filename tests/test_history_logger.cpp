@@ -265,6 +265,10 @@ TEST_CASE("the shipped default keeps weave-lifecycle and authority vocabulary") 
     CHECK(s.rule_for("zen.SwapWeave") != nullptr);
     CHECK(s.rule_for("zen.RevokeAuthority") != nullptr);
     CHECK(s.rule_for("zen.AuthorityGranted") != nullptr);
+    // A decision names its prompt by number, so the prompt is kept beside it.
+    CHECK(s.rule_for("zen.AuthorityPrompt") != nullptr);
+    CHECK(s.rule_for("zen.ApproveAuthority") != nullptr);
+    CHECK(s.rule_for("zen.RefuseAuthority") != nullptr);
     // ...and deliberately not the QUERIES beside them: a read is not a change.
     CHECK(s.rule_for("ListLibraries") == nullptr);
     CHECK(s.rule_for("QueryRole") == nullptr);
