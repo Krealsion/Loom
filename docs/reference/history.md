@@ -243,7 +243,12 @@ rather than invented — two categories that are rare *by construction*:
 | Category | Shapes |
 |---|---|
 | what code is loaded | `LoadLibrary`, `ReloadLibrary`, `UnloadLibrary`, `UnloadRole`, `zen.LoadWeave`, `zen.SwapWeave`, `zen.ReloadWeave` |
-| who may speak | `zen.RequestAuthority`, `zen.ApproveAuthority`, `zen.RefuseAuthority`, `zen.RevokeAuthority`, `zen.AuthorityGranted` |
+| who may speak | `zen.RequestAuthority`, `zen.AuthorityPrompt`, `zen.ApproveAuthority`, `zen.RefuseAuthority`, `zen.RevokeAuthority`, `zen.AuthorityGranted` |
+
+A Weaver's decision carries only the name of the prompt it answers
+([the Weaver](weaver.md#a-decision-names-the-prompt-it-answers)), so the prompt
+is kept beside it: the prompt says which rule, for which requester, a decision's
+number stood for.
 
 Deliberately absent, each for a stated reason: the **queries** beside those
 changes (`ListLibraries`, `QueryRole`, `ListLoaded`, `DescribeAuthority`,

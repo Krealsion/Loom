@@ -56,9 +56,9 @@ depends on the request language, never on the policy.
 | shape | direction | carries |
 |---|---|---|
 | `zen.RequestAuthority v1` | session → Weaver (an ask) | `shape`, `version`, `to_role`, `purpose` |
-| `zen.AuthorityPrompt v1` | Weaver → operator | `requester`, `shape`, `version`, `to_role`, `until`, `requester_says` |
-| `zen.ApproveAuthority v1` | operator → Weaver | *nothing* |
-| `zen.RefuseAuthority v1` | operator → Weaver | *nothing* |
+| `zen.AuthorityPrompt v2` | Weaver → operator | `prompt`, `requester`, `shape`, `version`, `to_role`, `until`, `requester_says` |
+| `zen.ApproveAuthority v2` | operator → Weaver | `prompt` |
+| `zen.RefuseAuthority v2` | operator → Weaver | `prompt` |
 | `zen.RevokeAuthority v1` | operator → Weaver | *nothing* |
 | `zen.DescribeAuthority v1` | operator **or** session → Weaver | *nothing* |
 | `zen.AuthorityGranted v1` | Weaver answers the ask | `basis` |
@@ -66,7 +66,9 @@ depends on the request language, never on the policy.
 
 Refusals are `zen.Refused` and bare successes are `zen.Ack`
 ([standard shapes](../../include/zen/weave/standard_shapes.hpp)) — not a private
-dialect.
+dialect. The decisions of version 1, `zen.ApproveAuthority v1` and
+`zen.RefuseAuthority v1`, carry nothing; a Weaver still accepts them, only to
+refuse them in words ([below](#a-decision-names-the-prompt-it-answers)).
 
 ### Four rules that live in the field lists
 
@@ -79,8 +81,9 @@ Each of these would otherwise be a runtime check somebody could delete.
   subject either. Cross-subject administration is not refused; it is a sentence
   with nowhere to put the other subject.
 - **The decision is the shape, never a value.** Approve and refuse are two
-  contentless shapes rather than one carrying a bool. A field can be defaulted or
-  mis-parsed into meaning yes; a mistyped shape name is a gate refusal.
+  shapes rather than one carrying a bool, and each carries only the name of the
+  prompt it answers. A field can be defaulted or mis-parsed into meaning yes; a
+  mistyped shape name is a gate refusal, and a defaulted `prompt` names none.
 - **The request language is narrower than `LiveAuthority`.** A request names one
   shape, one version and one office. There is no way to spell "any shape", "any
   target", an exact WeaveId, or an observe rule — regardless of how wide a
@@ -93,10 +96,11 @@ session   RequestAuthority ------------------> Weaver
                                                sender == governed subject?
                                                well-formed?
                                                already effective?  -> AuthorityGranted{already-permitted}
-                                               defer the answer
-Weaver    AuthorityPrompt --------------------> operator
-operator  ApproveAuthority -------------------> Weaver
+                                               defer the answer, name the prompt N
+Weaver    AuthorityPrompt{prompt N} ----------> operator
+operator  ApproveAuthority{prompt N} ---------> Weaver
                                                sender == operator seat?
+                                               N names the pending prompt?
                                                read AuthorityView
                                                delegate(view.delegated + rule)
 Weaver    AuthorityGranted{delegated} --------> session   (answers_ask() == true)
@@ -113,6 +117,32 @@ when to retry; no layer replays the message that was refused. This is the
 architectural discriminator between an administrator and a broker, and it is
 visible at the target: the service sees the *session* as `mail.sender()`.
 
+## A decision names the prompt it answers
+
+One pending request does not make a decision that names nothing safe. The
+request pending when a decision arrives is not always the one its operator was
+shown: a key repeats, a press is doubled, a send arrives late, or the session
+asks again the moment it hears `granted`. A contentless second approve would
+then approve the session's next ask, which nobody saw.
+
+So every `zen.AuthorityPrompt` carries `prompt`, a number its Weaver gives it
+and never gives another prompt, starting at 1; and `zen.ApproveAuthority` and
+`zen.RefuseAuthority` carry the `prompt` they answer. The Weaver acts on a
+decision only when it names the prompt pending now. A decision naming another
+prompt (one already decided, or one never put), naming none (`prompt` 0, or a
+version 1 decision, which has no field), or arriving with nothing pending
+installs nothing, leaves the pending prompt as it was, and is answered to the
+seat with a `zen.Refused` saying why; the session hears nothing. A Weaver that
+has given every name an `int64` holds refuses further requests rather than
+reuse one.
+
+The name says *which* request, never *who*: a decision is still the seat's only
+by bus stamp, and a stranger naming the right prompt is refused as a stranger.
+Names count per Weaver, so two Weavers can each have a prompt 1; a seat serving
+more than one Weaver tells them apart by the prompt's bus-stamped sender.
+`zen.RevokeAuthority` names nothing on purpose: it acts on what is installed,
+never on a request.
+
 ## Policy, stated
 
 | question | the Weaver's answer |
@@ -127,13 +157,15 @@ visible at the target: the service sees the *session* as `mail.sender()`.
 | beyond the ceiling | the Kernel refuses; nothing changes; both sides are told, and the refusal does not say whether the office exists |
 | revoke | the **whole** delegated overlay at once; the admission baseline is untouched |
 | decision with nothing pending | refused; it is never banked for a later request |
+| decision naming another prompt, or none | refused to the seat in words; nothing is installed, and the pending prompt stands as it was |
 | session dies while pending | nothing installed, pending cleared, operator told; WeaveIds are never reused, so nothing can inherit it |
 | Weaver dies after granting | **installed authority stands.** A grant is not a lease |
 
 ## No shadow state
 
-The Weaver stores the pending human question, the deferred answer right, the
-operator seat and the capability — and nothing about authority. Every time it
+The Weaver stores the pending human question and its prompt's name, the deferred
+answer right, the last name it gave a prompt, the operator seat and the
+capability — and nothing about authority. Every time it
 needs to know what a subject may do it calls `mail.describe_authority(...)`,
 which reads the values `deliver_one` reads through the predicates `deliver_one`
 applies. `zen.AuthorityDescription` is rendered from that snapshot at the moment
@@ -219,7 +251,10 @@ half of the seam remains: a WeaveId is not a person.
 boots an operator console, a Weaver, one governed session and one service. Its
 REPL is deliberately shape-agnostic — there is no `approve` or `grant` command;
 the operator composes `zen.ApproveAuthority` the way it would compose any
-registered shape, through the ordinary gated send path.
+registered shape, through the ordinary gated send path, and names the prompt it
+was shown by a reference to that prompt's own field: `send <weaver>
+zen.ApproveAuthority 2 prompt=$m1.prompt`.
 
 PROVEN BY — [`include/zen/weaver/`](../../include/zen/weaver/),
-`tests/test_weaver.cpp` (suite `weaver`), and the `grant` suite.
+`tests/test_weaver.cpp` (suite `weaver`), the `grant` suite, and the entry
+`terminal_repl`, where a decision is typed against the prompt shown.

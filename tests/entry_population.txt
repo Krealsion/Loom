@@ -15,6 +15,7 @@
 # Keep this file plain ASCII: file(STRINGS) splits a line at a non-ASCII byte.
 # entry                      gate
 host_console                 portable
+terminal_repl                portable
 host_process_weaves          kernel
 host_line_input              portable
 host_line_streams            portable

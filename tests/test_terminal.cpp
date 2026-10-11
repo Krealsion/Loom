@@ -139,8 +139,8 @@ Grant default_session_grant() {
 
 Grant operator_seat_grant() {
     Grant g;
-    g.allow_to_role("zen.ApproveAuthority", 1, kWeaverRole);
-    g.allow_to_role("zen.RefuseAuthority", 1, kWeaverRole);
+    g.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
+    g.allow_to_role("zen.RefuseAuthority", 2, kWeaverRole);
     g.allow_to_role("zen.RevokeAuthority", 1, kWeaverRole);
     g.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     return g;
@@ -196,7 +196,7 @@ public:
         GrantAuthority cap = host_grant_authority(bus, session.id, std::move(ceiling));
 
         Grant weaver_grant;
-        weaver_grant.allow("zen.AuthorityPrompt", 1, seat.id);
+        weaver_grant.allow("zen.AuthorityPrompt", 2, seat.id);
         weaver_grant.allow("zen.AuthorityGranted", 1, session.id);
         weaver_grant.allow("zen.AuthorityDescription", 1, seat.id);
         weaver_grant.allow("zen.AuthorityDescription", 1, session.id);
@@ -257,6 +257,25 @@ public:
     std::vector<Seen> tap;
 };
 
+/// The received id of the last authority prompt the operator was shown.
+std::uint64_t last_prompt(const Cast& c) {
+    std::uint64_t id = 0;
+    for (const TranscriptEntry& e : c.of_kind(c.op(), TranscriptKind::Received)) {
+        if (e.shape == "zen.AuthorityPrompt") {
+            id = e.message;
+        }
+    }
+    REQUIRE(id != 0);
+    return id;
+}
+
+/// The operator's decision on the received prompt `r`, naming it by a reference to that prompt's
+/// own `prompt` field — as the REPL's `approve r<N>` composes it.
+TerminalResult decide(Cast& c, const char* shape, std::uint64_t r) {
+    return c.op().ask(Address::to_role(kWeaverRole), shape, 2,
+                      {Arg{std::string("prompt"), Ref{"r" + std::to_string(r), "prompt"}}});
+}
+
 /// Walk the whole authority story to the point where the operator has said yes.
 /// Returns the session's local ask number for the authority request.
 std::uint64_t request_and_approve(Cast& c) {
@@ -264,9 +283,7 @@ std::uint64_t request_and_approve(Cast& c) {
         c.acting().request_authority("Work", 1, kServiceRole, "so I can finish the job");
     REQUIRE(submitted(asked));
     c.bus.drain_until_idle();
-    const TerminalResult approved = c.op().ask(Address::to_role(kWeaverRole),
-                                               "zen.ApproveAuthority", 1, {});
-    REQUIRE(submitted(approved));
+    REQUIRE(submitted(decide(c, "zen.ApproveAuthority", last_prompt(c))));
     c.bus.drain_until_idle();
     return asked.ask;
 }
@@ -889,8 +906,11 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
     CHECK(prompt->value.get("requester_says")->as_text() == "so I can finish the job");
     CHECK(prompt->sender == c.weaver_id);
 
+    // The prompt carries its name, which the decision carries back.
+    CHECK(prompt->value.get("prompt")->as_int() == 1);
+
     const std::size_t submitted_before = c.of_kind(c.acting(), TranscriptKind::Submitted).size();
-    REQUIRE(submitted(c.op().ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
+    REQUIRE(submitted(decide(c, "zen.ApproveAuthority", prompts.front().message)));
     c.bus.drain_until_idle();
 
     // The session hears yes, as LOOM's answer to the request it actually sent.
@@ -931,11 +951,40 @@ TEST_CASE("the operator's conveniences are ordinary messages from the operator's
     CHECK(acks.front().answers == 1);
 }
 
+TEST_CASE("an approve composed from the prompt shown answers that prompt and no later one") {
+    Cast c;
+    const std::uint64_t first_ask = request_and_approve(c);
+    const std::uint64_t shown = last_prompt(c);
+
+    // The session asks again after its grant: a request the operator has not looked at.
+    const TerminalResult second =
+        c.acting().request_authority("Work", 2, kServiceRole, "and this too");
+    REQUIRE(submitted(second));
+    c.bus.drain_until_idle();
+    REQUIRE(last_prompt(c) != shown);
+    CHECK(c.op().received(last_prompt(c))->value.get("prompt")->as_int() == 2);
+
+    // The same approve again, composed from the prompt the operator was shown.
+    REQUIRE(submitted(decide(c, "zen.ApproveAuthority", shown)));
+    c.bus.drain_until_idle();
+    const std::vector<TranscriptEntry> answers = c.of_kind(c.op(), TranscriptKind::AnswerReceived);
+    REQUIRE(answers.size() == 2);
+    CHECK(answers.back().shape == "zen.Refused");
+    CHECK(c.op().received(answers.back().message)->value.get("reason")->as_text().find(
+              "names prompt 1") != std::string::npos);
+
+    // The session's second ask is still waiting for a person; only its first was answered.
+    const std::vector<TranscriptEntry> heard = c.of_kind(c.acting(), TranscriptKind::AnswerReceived);
+    REQUIRE(heard.size() == 1);
+    CHECK(heard.front().answers == first_ask);
+    CHECK(c.acting().awaiting());
+}
+
 TEST_CASE("a session cannot approve its own request, even holding the shape and the route") {
     // The session is deliberately given the reach the ordinary one lacks, so the refusal being
     // measured is a POLICY refusal rather than "it could not spell the sentence".
     Grant reaches = default_session_grant();
-    reaches.allow_to_role("zen.ApproveAuthority", 1, kWeaverRole);
+    reaches.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
     Cast c(std::move(reaches));
 
     const TerminalResult asked =
@@ -945,7 +994,9 @@ TEST_CASE("a session cannot approve its own request, even holding the shape and 
 
     // The SESSION authors the approval. The presentation does not reroute it; it is authored by
     // the participant that was asked to author it, and it leaves through that participant's door.
-    REQUIRE(submitted(c.acting().ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
+    // It names the pending prompt rightly: a prompt's name is no credential.
+    REQUIRE(submitted(c.acting().ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 2,
+                                     {named("prompt", 1)})));
     c.bus.drain_until_idle();
 
     // The Weaver refuses: reaching it is not being the user.
@@ -970,7 +1021,8 @@ TEST_CASE("the session's approval attempt is refused by the KERNEL when it has n
     c.bus.drain_until_idle();
     const std::size_t weaver_heard = c.tap.size();
 
-    REQUIRE(submitted(c.acting().send(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
+    REQUIRE(submitted(c.acting().send(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 2,
+                                      {named("prompt", 1)})));
     c.bus.drain_until_idle();
     CHECK(c.tap_refused("zen.ApproveAuthority"));
     CHECK(c.tap.size() > weaver_heard);
@@ -993,7 +1045,8 @@ TEST_CASE("a third participant that can reach the Weaver is still not the user")
     const MountedTerminal intruder = host_mount_terminal(
         c.bus, std::make_unique<TerminalSession>("intruder", operator_vocabulary(), c.order),
         std::move(intruder_grant));
-    REQUIRE(submitted(intruder.session->ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 1, {})));
+    REQUIRE(submitted(intruder.session->ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 2,
+                                            {named("prompt", 1)})));
     c.bus.drain_until_idle();
 
     const std::vector<TranscriptEntry> answers =

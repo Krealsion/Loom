@@ -19,7 +19,8 @@
 //   No subject field, anywhere. The Weaver governs one subject, named by its capability, so no
 //       shape can name another.
 //   The decision is the shape, never a field. `ApproveAuthority` and `RefuseAuthority` are two
-//       contentless shapes; a mistyped shape name is a gate refusal, never a yes.
+//       shapes that carry only the name of the prompt they answer; a mistyped shape name is a
+//       gate refusal, never a yes.
 //   The request language is narrower than `LiveAuthority`: one shape, one version, one office.
 //       No "any shape", "any target", WeaveId or observe rule can be asked for, however wide
 //       the Weaver's ceiling.
@@ -65,6 +66,9 @@ struct RequestAuthority {
 /// PUT ONE AUTHORITY REQUEST TO THE OPERATOR — everything a person needs to
 /// decide, with the trusted and the untrusted told apart by name.
 ///
+///   `prompt`         TRUSTED. This prompt's name: a number the Weaver gave it
+///                    and never gives another prompt, which a decision on it
+///                    carries back so that it lands on this request or nowhere.
 ///   `requester`      TRUSTED. The bus-stamped sender, which the Weaver has
 ///                    already checked is the one subject it governs.
 ///   `shape/version/
@@ -84,6 +88,7 @@ struct RequestAuthority {
 /// FooService at #19": the Weaver does not resolve the role, is not authorized
 /// to, and authority is not service discovery.
 struct AuthorityPrompt {
+    std::int64_t prompt;        ///< TRUSTED: this prompt's name, never reused by its Weaver
     std::int64_t requester;     ///< TRUSTED: the bus-stamped requester's WeaveId
     std::string shape;          ///< TRUSTED: the requested shape, as parsed
     std::int64_t version;       ///< TRUSTED: its version, as parsed
@@ -93,36 +98,66 @@ struct AuthorityPrompt {
 
     using ZenSelf = AuthorityPrompt;
     static constexpr const char* zen_name = "zen.AuthorityPrompt";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(requester), ZEN_FIELD(shape), ZEN_FIELD(version),
-                               ZEN_FIELD(to_role), ZEN_FIELD(until), ZEN_FIELD(requester_says));
+        return std::make_tuple(ZEN_FIELD(prompt), ZEN_FIELD(requester), ZEN_FIELD(shape),
+                               ZEN_FIELD(version), ZEN_FIELD(to_role), ZEN_FIELD(until),
+                               ZEN_FIELD(requester_says));
     }
 };
 
 // ---- the human decides ------------------------------------------------------
 //
-// Four contentless shapes. They carry nothing because there is nothing left to
-// say: one Weaver, one governed subject, at most one request pending — so the
-// only thing an approval could name is the request it is already the only
-// candidate for. That is not a shortcut; it is what keeps a decision from
-// landing on a request the operator never saw (see `RevokeAuthority` below for
-// the one place the absence is load-bearing in the other direction).
+// A decision names the prompt it answers, and nothing else. One pending request
+// is not enough to make a decision safe without the name: the request pending
+// when a decision arrives is not always the one its operator was shown. A key
+// repeats, a press is doubled, a send arrives late, or the requester asks again
+// the moment it hears "granted", and a decision that named nothing would land on
+// the next request. So a Weaver names every prompt it puts, never reuses a
+// name, and acts only on a decision naming the prompt pending now; any other
+// decision, or one naming none, changes nothing and is refused to the seat in
+// words. A name is not a credential: who decides is still the seat, by bus stamp.
+// (`RevokeAuthority` below names nothing on purpose: it acts on what is
+// installed, never on a request.)
 
-/// YES — install the pending request's rule as delegated authority. Refused by
-/// the Weaver unless the bus-stamped sender is the configured operator seat: a
-/// weave that can REACH the Weaver is not thereby the user.
+/// YES — install the rule of the prompt named `prompt`, if that prompt is the
+/// one pending. Refused by the Weaver unless the bus-stamped sender is the
+/// configured operator seat: a weave that can REACH the Weaver is not thereby
+/// the user.
 struct ApproveAuthority {
+    std::int64_t prompt = 0; ///< the `AuthorityPrompt::prompt` this decides; 0 names none
+
     using ZenSelf = ApproveAuthority;
+    static constexpr const char* zen_name = "zen.ApproveAuthority";
+    static constexpr std::uint32_t zen_version = 2;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(prompt)); }
+};
+
+/// NO to the prompt named `prompt`, if that prompt is the one pending — the
+/// session is told, as the authenticated answer to the request it actually
+/// sent, and nothing about the subject's authority changes.
+struct RefuseAuthority {
+    std::int64_t prompt = 0; ///< the `AuthorityPrompt::prompt` this decides; 0 names none
+
+    using ZenSelf = RefuseAuthority;
+    static constexpr const char* zen_name = "zen.RefuseAuthority";
+    static constexpr std::uint32_t zen_version = 2;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(prompt)); }
+};
+
+/// The decisions of version 1, which carry nothing and so name no prompt. A
+/// Weaver accepts them only to refuse them in words, so a seat still sending
+/// them hears why nothing changed rather than meeting a missing door.
+struct ApproveAuthorityV1 {
+    using ZenSelf = ApproveAuthorityV1;
     static constexpr const char* zen_name = "zen.ApproveAuthority";
     static constexpr std::uint32_t zen_version = 1;
     static auto zen_fields() { return std::make_tuple(); }
 };
 
-/// NO — the session is told, as the authenticated answer to the request it
-/// actually sent, and nothing about the subject's authority changes.
-struct RefuseAuthority {
-    using ZenSelf = RefuseAuthority;
+/// See `ApproveAuthorityV1`.
+struct RefuseAuthorityV1 {
+    using ZenSelf = RefuseAuthorityV1;
     static constexpr const char* zen_name = "zen.RefuseAuthority";
     static constexpr std::uint32_t zen_version = 1;
     static auto zen_fields() { return std::make_tuple(); }
