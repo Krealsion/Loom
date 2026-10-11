@@ -66,9 +66,10 @@ struct RequestAuthority {
 /// PUT ONE AUTHORITY REQUEST TO THE OPERATOR — everything a person needs to
 /// decide, with the trusted and the untrusted told apart by name.
 ///
-///   `prompt`         TRUSTED. This prompt's name: a number the Weaver gave it
-///                    and never gives another prompt, which a decision on it
-///                    carries back so that it lands on this request or nowhere.
+///   `prompt`         TRUSTED. This prompt's name: a number no other prompt on
+///                    its bus is given, by this Weaver or any other, which a
+///                    decision on it carries back so that it lands on this
+///                    request or nowhere.
 ///   `requester`      TRUSTED. The bus-stamped sender, which the Weaver has
 ///                    already checked is the one subject it governs.
 ///   `shape/version/
@@ -88,7 +89,7 @@ struct RequestAuthority {
 /// FooService at #19": the Weaver does not resolve the role, is not authorized
 /// to, and authority is not service discovery.
 struct AuthorityPrompt {
-    std::int64_t prompt;        ///< TRUSTED: this prompt's name, never reused by its Weaver
+    std::int64_t prompt;        ///< TRUSTED: this prompt's name, unique on its bus
     std::int64_t requester;     ///< TRUSTED: the bus-stamped requester's WeaveId
     std::string shape;          ///< TRUSTED: the requested shape, as parsed
     std::int64_t version;       ///< TRUSTED: its version, as parsed
@@ -113,8 +114,9 @@ struct AuthorityPrompt {
 // when a decision arrives is not always the one its operator was shown. A key
 // repeats, a press is doubled, a send arrives late, or the requester asks again
 // the moment it hears "granted", and a decision that named nothing would land on
-// the next request. So a Weaver names every prompt it puts, never reuses a
-// name, and acts only on a decision naming the prompt pending now; any other
+// the next request, or on the prompt of a Weaver that replaced its own. So a
+// Weaver names every prompt it puts with a name no Weaver on its bus puts
+// again, and acts only on a decision naming the prompt pending now; any other
 // decision, or one naming none, changes nothing and is refused to the seat in
 // words. A name is not a credential: who decides is still the seat, by bus stamp.
 // (`RevokeAuthority` below names nothing on purpose: it acts on what is
