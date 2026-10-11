@@ -31,6 +31,10 @@ using loom::tokenize;
 
 constexpr const char* kServiceRole = "some.service";
 constexpr const char* kWeaverRole = "loom.weaver";
+/// The doors of the service's one pane that the Weaver may hand out, and the one the session asks
+/// for.
+constexpr const char* kServiceDoors = "some.service/desk:*";
+constexpr const char* kSaveDoor = "some.service/desk:save";
 
 // ---- the cast's own scenery -------------------------------------------------
 
@@ -45,6 +49,10 @@ struct DoWork {
 /// Ask the session to request the authority it lacks.
 struct AskForAuthority {
     ZEN_SHAPE(AskForAuthority, 1);
+};
+/// Ask the session to request a door: a rule the service would judge by reading it.
+struct AskForDoor {
+    ZEN_SHAPE(AskForDoor, 1);
 };
 struct Nothing {
     std::int64_t n = 0;
@@ -68,8 +76,9 @@ public:
 /// something with none of them would mislead the next reader.
 class Session final
     : public loom::WeaveBase<Session, Nothing,
-                             loom::Accept<DoWork, AskForAuthority, loom::AuthorityGranted,
-                                          loom::Refused, loom::AuthorityDescription>,
+                             loom::Accept<DoWork, AskForAuthority, AskForDoor,
+                                          loom::AuthorityGranted, loom::Refused,
+                                          loom::AuthorityDescription>,
                              loom::Emit<Work, loom::RequestAuthority, loom::DescribeAuthority>> {
 public:
     void on(const DoWork&, loom::Mail& mail) {
@@ -85,6 +94,13 @@ public:
             kWeaverRole, loom::RequestAuthority{"Work", 1, kServiceRole,
                                                 "so I can finish the job I was given"});
         std::cout << "  [session] asked the Weaver for: Work v1 -> role " << kServiceRole << '\n';
+    }
+    void on(const AskForDoor&, loom::Mail& mail) {
+        (void)mail.send_to_role(kWeaverRole,
+                                loom::RequestAuthority{"Work", 1, kServiceRole,
+                                                       "so I can save the desk", kSaveDoor});
+        std::cout << "  [session] asked the Weaver for: Work v1 -> role " << kServiceRole
+                  << " door " << kSaveDoor << '\n';
     }
     void on(const loom::AuthorityGranted& g, loom::Mail& mail) {
         std::cout << "  [session] AuthorityGranted{" << g.basis << "}"
@@ -254,7 +270,7 @@ int main() {
     // exists (the Weaver cannot be built until a capability naming THIS session
     // exists, and that needs this id).
     loom::Grant session_base;
-    session_base.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+    session_base.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
     session_base.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     auto session = std::make_unique<Session>();
     Session* session_raw = session.get();
@@ -264,18 +280,19 @@ int main() {
 
     // THE TWO POWERS, MINTED SEPARATELY.
     //
-    // What the Weaver may DELEGATE — the ceiling, on exactly one subject. Try
-    // asking for anything outside this line and watch the Kernel refuse a
-    // request the human already approved.
+    // What the Weaver may DELEGATE — the ceiling, on exactly one subject: Work, and
+    // the pane's doors, whose rule lets no Work through on its own. Ask outside it
+    // and watch the Kernel refuse a request the human already approved.
     loom::LiveAuthority ceiling;
     ceiling.allow_to_role("Work", 1, kServiceRole);
+    ceiling.allow_to_role("Work", 1, kServiceRole, *loom::Door::parse(kServiceDoors));
     loom::GrantAuthority cap = loom::host_grant_authority(bus, session_id, std::move(ceiling));
 
     // What the Weaver may SAY — an ordinary grant, and deliberately not the
     // ceiling. It may say "no" to anyone who reaches it; it may say "yes" to
     // exactly two weaves.
     loom::Grant weaver_grant;
-    weaver_grant.allow("zen.AuthorityPrompt", 2, operator_seat);
+    weaver_grant.allow("zen.AuthorityPrompt", 3, operator_seat);
     weaver_grant.allow("zen.AuthorityGranted", 1, session_id);
     weaver_grant.allow("zen.AuthorityDescription", 1, operator_seat);
     weaver_grant.allow("zen.AuthorityDescription", 1, session_id);
@@ -299,6 +316,8 @@ int main() {
               << "     show m1\n"
               << "     send " << weaver_id.value << " zen.ApproveAuthority 2 prompt=$m1.prompt\n"
               << "     send " << session_id.value << " DoWork 1        (lands, as the SESSION)\n"
+              << "     send " << session_id.value << " AskForDoor 1\n"
+              << "     send " << weaver_id.value << " zen.ApproveAuthority 2 prompt=$m3.prompt\n"
               << "     send " << weaver_id.value << " zen.DescribeAuthority 1\n"
               << "     send " << weaver_id.value << " zen.RevokeAuthority 1\n\n";
 

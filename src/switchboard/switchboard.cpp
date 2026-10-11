@@ -66,6 +66,8 @@ const char* name_of(GrantOutcome outcome) noexcept {
         return "ExceedsCeiling";
     case GrantOutcome::NoLiveDelivery:
         return "NoLiveDelivery";
+    case GrantOutcome::DescribeOnly:
+        return "DescribeOnly";
     }
     return "?";
 }
@@ -1981,6 +1983,12 @@ GrantChange Switchboard::delegate_authority_as(WeaveId caller, const GrantAuthor
     // ids this board has.
     if (!issued_here(authority)) {
         change.outcome = GrantOutcome::ForeignBoard;
+        return change;
+    }
+    // A CAPABILITY THAT ONLY READS installs nothing, the empty authority included: an owner
+    // that judges a subject's doors by reading them must not be able to take them away.
+    if (authority.describe_only()) {
+        change.outcome = GrantOutcome::DescribeOnly;
         return change;
     }
     WeaveRecord* subject = find(authority.subject());

@@ -38,6 +38,8 @@ using loom::tokenize;
 
 constexpr const char* kServiceRole = "some.service";
 constexpr const char* kWeaverRole = "loom.weaver";
+/// The doors of the service's one pane that this host's Weaver may hand out.
+constexpr const char* kServiceDoors = "some.service/desk:*";
 
 // ---- the world this demo puts a terminal into -------------------------------
 //
@@ -228,6 +230,9 @@ void print_message(const loom::ReceivedMessage& m) {
         } else if (is_prompt && f.name == "prompt") {
             std::cout << "     <- this prompt's name: `approve r" << m.id << "` or `refuse r" << m.id
                       << "` decides it, and nothing else";
+        } else if (is_prompt && f.name == "door") {
+            std::cout << "     <- the door a yes opens, as the Weaver parsed it (empty: none); "
+                         "the office it names judges it";
         } else if (is_prompt && f.name == "requester") {
             std::cout << "     <- the Weaver's own trusted fact (the bus-stamped requester)";
         }
@@ -279,7 +284,7 @@ int main() {
     // Its baseline is THREE RULES. Being a terminal confers none of them, and confers nothing
     // else either: no allow_any, no observation, no load capability, no host reach.
     loom::Grant session_grant;
-    session_grant.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+    session_grant.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
     session_grant.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     session_grant.allow_to_role("Query", 1, kServiceRole); // one ordinary verb, deliberately given
     const loom::MountedTerminal session = loom::host_mount_terminal(
@@ -314,12 +319,15 @@ int main() {
     service_raw->expected_session = session.id;
 
     // ---- the Weaver: two powers, minted separately --------------------------
+    // A door rule beside the plain one: a yes to a door installs a rule the service would judge by
+    // reading it, and lets no Work through on its own.
     loom::LiveAuthority ceiling;
     ceiling.allow_to_role("Work", 1, kServiceRole);
+    ceiling.allow_to_role("Work", 1, kServiceRole, *loom::Door::parse(kServiceDoors));
     loom::GrantAuthority cap = loom::host_grant_authority(bus, session.id, std::move(ceiling));
 
     loom::Grant weaver_grant;
-    weaver_grant.allow("zen.AuthorityPrompt", 2, seat.id);
+    weaver_grant.allow("zen.AuthorityPrompt", 3, seat.id);
     weaver_grant.allow("zen.AuthorityGranted", 1, session.id);
     weaver_grant.allow("zen.AuthorityDescription", 1, seat.id);
     weaver_grant.allow("zen.AuthorityDescription", 1, session.id);
@@ -391,7 +399,7 @@ int main() {
                   << "\n"
                   << "     weaver        weave #" << weaver_id.value << "   role " << kWeaverRole
                   << ", governs #" << session.id.value << ", ceiling: Work v1 -> role "
-                  << kServiceRole << "\n"
+                  << kServiceRole << " (and at door " << kServiceDoors << ")\n"
                   << "     service       weave #" << service_id.value << "   role " << kServiceRole
                   << "\n"
                      "     the operator seat is a WeaveId this host designated. It is NOT an\n"
@@ -409,7 +417,8 @@ as the current participant:
   describe <Shape> <v>          the fields of one known shape
   send <addr> <Shape> <v> [args...]      author one message; expect no answer
   ask  <addr> <Shape> <v> [args...]      author one message; wait for LOOM's answer to it
-  request <Shape> <v> @<role> [purpose]  ask the policy office for one exact send right
+  request <Shape> <v> @<role> [door=<door>] [purpose]
+                                ask the policy office for one exact send right, or a door
   authority                     ask the policy office what my authority is right now
   pending                       the conversations I am waiting on
   await [turns]                 pump the host loop until my asks settle (bounded)
@@ -571,14 +580,23 @@ debug lens only (the HOST looking - powers no participant has):
                 std::uint64_t v = 0;
                 if (tok.size() < 4 || !parse_u64(tok[2].text, v) || tok[3].text.size() < 2 ||
                     tok[3].text[0] != '@') {
-                    std::cout << "  usage: request <Shape> <version> @<role> [purpose]\n";
+                    std::cout << "  usage: request <Shape> <version> @<role> [door=<door>] "
+                                 "[purpose]\n";
                 } else {
+                    // The door goes as typed: the Weaver parses it, and says so if it is not one.
+                    std::string door;
+                    std::size_t from = 4;
+                    if (tok.size() > 4 && tok[4].text.rfind("door=", 0) == 0) {
+                        door = tok[4].text.substr(5);
+                        from = 5;
+                    }
                     std::string purpose;
-                    for (std::size_t i = 4; i < tok.size(); ++i) {
+                    for (std::size_t i = from; i < tok.size(); ++i) {
                         purpose += (purpose.empty() ? "" : " ") + tok[i].text;
                     }
                     print_result(me.request_authority(tok[1].text, static_cast<std::int64_t>(v),
-                                                      tok[3].text.substr(1), purpose));
+                                                      tok[3].text.substr(1), purpose,
+                                                      loom::kPolicyOffice, door));
                 }
             } else if (cmd == "authority") {
                 print_result(me.describe_authority());

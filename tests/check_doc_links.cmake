@@ -105,16 +105,41 @@ function(zen_doc_read_source path out)
     set(${out} "${content}" PARENT_SCOPE)
 endfunction()
 
-# Every comment in a C/C++ translation unit, as one blob: a file split into a list of lines
-# arrives with its tail welded, so the extraction is by pattern over the whole content. String
-# literals go first, bounded to a line, so the `//` in a URL opens no comment; character literals
-# stay, since `'/'` cannot forge a marker and `'[^']*'` would pair apostrophes in prose. Its limits
-# all read more text, never less, so a reference is at worst seen twice and the caller
-# de-duplicates.
+# Every comment in a C/C++ translation unit, as one blob. String literals go first, bounded to a
+# line, so the `//` in a URL opens no comment; character literals stay. Its limits all read more
+# text, never less, and the caller de-duplicates. A `/* */` comment is found by cutting after each
+# `*/` (`;` is gone, so it is free to cut with) and reading each piece from its first `/*`: a scan,
+# since CMake's regex recurses per character, and a `/*` in a `//` comment (`office/*`) would walk
+# a long file past a Windows thread's stack.
 function(zen_doc_comments content out)
     string(REGEX REPLACE "\"[^\"\n]*\"" "" code "${content}")
     string(REGEX MATCHALL "//[^\n]*" line_comments "${code}")
-    string(REGEX MATCHALL "/\\*([^*]|\\*+[^*/])*\\*+/" block_comments "${code}")
+    # A list would also join elements across an unbalanced `[`, so brackets stand aside meanwhile.
+    string(ASCII 1 lb)
+    string(ASCII 2 rb)
+    string(REPLACE "[" "${lb}" cut "${code}")
+    string(REPLACE "]" "${rb}" cut "${cut}")
+    string(REPLACE "*/" "*/;" pieces "${cut}")
+    set(block_comments "")
+    set(open "")
+    foreach(piece IN LISTS pieces)
+        string(APPEND open "${piece}")
+        string(FIND "${open}" "/*" at)
+        if(at EQUAL -1)
+            set(open "")
+            continue()
+        endif()
+        string(LENGTH "${open}" length)
+        math(EXPR room "${length} - ${at} - 4")
+        # A comment closes at a `*/` that begins after its `/*`: `/*/` is still open.
+        if(open MATCHES "[*]/$" AND room GREATER_EQUAL 0)
+            string(SUBSTRING "${open}" ${at} -1 block)
+            string(REPLACE "${lb}" "[" block "${block}")
+            string(REPLACE "${rb}" "]" block "${block}")
+            list(APPEND block_comments "${block}")
+            set(open "")
+        endif()
+    endforeach()
     set(${out} "${line_comments} ${block_comments}" PARENT_SCOPE)
 endfunction()
 
@@ -355,12 +380,24 @@ if(NOT n_outside_yes EQUAL 4 OR NOT outside_no STREQUAL ""
         "then be meaningless.")
 endif()
 
+# A `/*` inside a `//` comment, then a long file, then an unbalanced `[` and two real comments:
+# read without the regex engine's recursion meeting the stack, and read whole.
+string(REPEAT "// office/* is a door, said in a line comment\n" 4096 long_walk)
+zen_doc_comments("${long_walk}char c = '[' /* see docs/a.md [1] */ int b/* docs/b.md */" walked)
+if(NOT walked MATCHES "/[*] see docs/a[.]md [[]1[]] [*]/" OR NOT walked MATCHES "docs/b[.]md")
+    message(FATAL_ERROR
+        "doc-links: SELF-TEST FAILED -- after a long run of line comments that each hold `/*`, "
+        "the block comments behind them were not read whole. A reference in one would go "
+        "unchecked.")
+endif()
+
 message(STATUS
     "doc-links: self-test OK -- a missing path and a missing anchor are both refused, a "
     "live document and one of its own headings are both accepted; four planted outside paths "
     "are found, a clean sentence is not, and this file carries every declared spelling; a "
     "path climbing above the repository is refused and one staying inside is not; a CMake "
-    "comment is read and its quoted argument is not")
+    "comment is read and its quoted argument is not; block comments behind a long run of "
+    "stray `/*` are read whole")
 
 # ---- gathering the two populations -----------------------------------------------------
 

@@ -131,6 +131,21 @@ TEST_CASE("a rule naming a WeaveId is refused, because a WeaveId is minted per r
     CHECK(why.find("role") != std::string::npos);
 }
 
+TEST_CASE("a rule naming a door is refused, because an authority file holds no doors") {
+    // What `render_rule` prints for a door rule, written back: no one reads a door from this
+    // file, so it is refused in words rather than kept as an office whose name has spaces in it.
+    for (const char* text : {"ControlRequested v1 -> role zengine.workshop door zengine.files/*",
+                             "ControlRequested v1 -> role zengine.workshop  door\tx/y",
+                             "ControlRequested v1 -> role zengine.workshop door"}) {
+        LiveAuthority a;
+        std::string why;
+        CAPTURE(text);
+        CHECK_FALSE(apply_rule(text, &a, &why));
+        CHECK(why.find("holds no doors") != std::string::npos);
+        CHECK(a.empty());
+    }
+}
+
 TEST_CASE("a rule the bus has no word for is refused rather than approximated") {
     LiveAuthority a;
     std::string why;
