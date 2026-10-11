@@ -1481,6 +1481,11 @@ private:
     GrantAuthority grant_authority(WeaveId subject, LiveAuthority ceiling) {
         return GrantAuthority{identity_, subject, std::move(ceiling)};
     }
+    /// Mint the right to read one subject's authority and install nothing, behind
+    /// `host_describe_only_authority`.
+    GrantAuthority describe_only_authority(WeaveId subject) {
+        return GrantAuthority{identity_, subject, LiveAuthority::nothing(), true};
+    }
 
     /// Was this administration capability issued by this Loom, and is it still alive? Every
     /// Loom is its own authority domain.
@@ -1489,9 +1494,10 @@ private:
         return issuer != nullptr && issuer == identity_;
     }
 
-    /// The one expression that yields a GrantAuthority, defined in `zen/host/grant_wiring.hpp`.
+    /// The two expressions that yield a GrantAuthority, defined in `zen/host/grant_wiring.hpp`.
     friend GrantAuthority host_grant_authority(Switchboard& bus, WeaveId subject,
                                                LiveAuthority ceiling);
+    friend GrantAuthority host_describe_only_authority(Switchboard& bus, WeaveId subject);
 
     /// This Loom's identity, created and destroyed with the board and shared, weakly, only with
     /// the authorities it issues. A later board at the same address cannot revive a dead one's.

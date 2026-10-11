@@ -42,7 +42,7 @@ ordinary weave: from inside an ordinary handler it calls
 | what it can change | the subject's delegated send rules and observe rules — atomically, as one replacement (grant, revoke, widen, narrow are all this) |
 | what it can never change | the baseline (a union cannot subtract), any other subject (the subject is *in* the capability, so there is no argument to point elsewhere), and OS/filesystem/resource reach (`LiveAuthority` has no words for them) |
 | what it can read | that one subject's baseline, delegated and effective authority — through the same predicates the bus applies, so an administrator needs no second map that merely believes what the Kernel enforces |
-| how it fails | `NoAuthority` (inert), `ForeignBoard` (another Loom's, or a dead one), `NoSuchSubject`, `ExceedsCeiling` — and on every one of them, nothing changed |
+| how it fails | `NoAuthority` (inert), `ForeignBoard` (another Loom's, or a dead one), `DescribeOnly` (a capability that [only reads](#doors)), `NoSuchSubject`, `ExceedsCeiling` — and on every one of them, nothing changed |
 
 **The ceiling is not the holder's own grant.** "What a Weaver may say" and "what
 a Weaver may hand out" are different questions, and only the host answers the
@@ -56,6 +56,58 @@ the authority was still held: nothing on an envelope remembers what was true
 when it was authored. And the administrator never becomes the sender — no
 message is queued at all, so the governed subject retries its own action and
 the target sees the subject.
+
+### Doors
+
+A send rule to an office may name a **door**: a name finer than the office,
+which the office itself judges when an act reaches it. `allow_to_role(shape,
+version, role, door)` on a `LiveAuthority` or a `Grant` makes one; the door is a
+[`loom::Door`](../../include/zen/switchboard/door.hpp), made only by
+`Door::parse`, which refuses a malformed spelling in words.
+
+```text
+<office>/*              every door beneath the office
+<office>/<pane>         the pane's own door
+<office>/<pane>:<id>    a control of the pane; <id> may be *, or end in .*
+<root>:<id>             a root the office declares, such as arrange:<id>
+```
+
+A name is segments of letters, digits, `-` and `_` joined by single dots, and
+`*` stands only as a whole last segment or as an id's tail after a dot:
+`zengine.files*`, `builder.build*` and a bare `*` are malformed.
+
+**Containment compares whole segments.** `<office>/*` contains every pane door
+beneath the office; `<office>/<pane>:*` contains the pane's controls and not the
+pane's own door; an id ending in `.*` contains the ids beneath it. So
+`zengine.files/*` never contains `zengine.files-evil/x`, and `builder.build`
+never contains `builder.build-realize`. A ceiling judges a door rule by this: a
+ceiling of `ControlRequested v1 -> role zengine.workshop door zengine.files/*`
+lets its holder install a Files door and refuses a Builder one.
+
+**The door axis is disjoint both ways.** `permits_role(shape, version, role,
+door)` is answered by door rules alone: a door-less rule, an `any` rule
+included, answers no door question, and a door rule answers no door-less one.
+Containment follows the predicate, so a door-less ceiling holds no door rule and
+a door ceiling no door-less one. Every question delivery asks is door-less, so
+**a door rule authorizes no delivery**: no act carries a door, and the bus, the
+bridge and the dynamic ABI carry none. A door rule is read by the office it
+names, through `describe_authority`, at the act it governs. Loom holds the
+grammar; the office answers what a door names.
+
+A door is rendered with its rule, as `ControlRequested v1 -> role
+zengine.workshop door zengine.files/*`, wherever a rule is said: in an
+`AuthorityView`'s rules and in a Weaver's prompt and description. A host's
+[authority file](../guides/running-loom.md) holds no doors: a door rule is
+installed live, within a ceiling, and a door written in the file is refused in
+words.
+
+**An owner that only reads** holds
+`host_describe_only_authority(bus, subject)`
+([`zen/host/grant_wiring.hpp`](../../include/zen/host/grant_wiring.hpp)): a
+`GrantAuthority` that answers `describe_authority` and refuses every install
+through it `DescribeOnly`, the empty authority that revokes included. An office
+judging a subject's doors must read them and must not be able to take them
+away.
 
 ### When delegated authority can first be installed
 

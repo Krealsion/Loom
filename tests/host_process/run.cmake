@@ -642,7 +642,7 @@ if(ZEN_GROUP STREQUAL "repl")
     zen_check("second press: the session heard one answer, its first grant"
               zen_session_answer_count EQUAL 1)
     zen_check("second press: the session's second ask is still pending"
-              text MATCHES "ask 2  zen[.]RequestAuthority v1")
+              text MATCHES "ask 2  zen[.]RequestAuthority v2")
 
     # 3. The presentation decides only by a prompt its Weaver sent, and only from the seat.
     message(STATUS "host_process/repl: what approve refuses here")
@@ -659,6 +659,26 @@ if(ZEN_GROUP STREQUAL "repl")
               text MATCHES "[[]session[]] ANSWERED  zen[.]Refused")
     zen_check("refusals: refuse naming a message that is not a prompt"
               text MATCHES "r2 is not an authority prompt")
+
+    # 4. A door typed at the session is shown on the prompt, a yes installs that door, the
+    # description says it, and it lets no Work through; a malformed door reaches nobody. The
+    # operator's r1 is the prompt, r2 the Ack, r3 the description; the session's r3 the refusal.
+    message(STATUS "host_process/repl: a door asked, shown, approved and described")
+    zen_scenario_dir(repl-door dir)
+    zen_run_host("${dir}"
+        "request Work 1 @some.service door=some.service/desk:save \"to save\"\noperator\nshow r1\napprove r1\nauthority\nshow r3\nsession\nsend @some.service Work 1 7\nrequest Work 1 @some.service door=some.service/desk* \"bad\"\nshow r3\nquit\n"
+        "" text code)
+    zen_check("door: the REPL exits 0" code EQUAL 0)
+    zen_check("door: the prompt shows the door it asks for"
+              text MATCHES "door = .some[.]service/desk:save.")
+    zen_check("door: the session hears the grant as Loom's answer"
+              text MATCHES "[[]session[]] ANSWERED  zen[.]AuthorityGranted")
+    zen_check("door: the description renders the door rule installed"
+              text MATCHES "Work v1 -> role some[.]service door some[.]service/desk:save")
+    zen_check("door: a door rule lets no Work through"
+              NOT text MATCHES "Work.7. from weave")
+    zen_check("door: a malformed door is refused in words"
+              text MATCHES "requested door is malformed")
 
 endif()
 
