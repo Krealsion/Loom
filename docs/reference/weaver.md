@@ -55,8 +55,8 @@ depends on the request language, never on the policy.
 
 | shape | direction | carries |
 |---|---|---|
-| `zen.RequestAuthority v1` | session → Weaver (an ask) | `shape`, `version`, `to_role`, `purpose` |
-| `zen.AuthorityPrompt v2` | Weaver → operator | `prompt`, `requester`, `shape`, `version`, `to_role`, `until`, `requester_says` |
+| `zen.RequestAuthority v2` | session → Weaver (an ask) | `shape`, `version`, `to_role`, `purpose`, `door` |
+| `zen.AuthorityPrompt v3` | Weaver → operator | `prompt`, `door`, `requester`, `shape`, `version`, `to_role`, `until`, `requester_says` |
 | `zen.ApproveAuthority v2` | operator → Weaver | `prompt` |
 | `zen.RefuseAuthority v2` | operator → Weaver | `prompt` |
 | `zen.RevokeAuthority v1` | operator → Weaver | *nothing* |
@@ -68,7 +68,9 @@ Refusals are `zen.Refused` and bare successes are `zen.Ack`
 ([standard shapes](../../include/zen/weave/standard_shapes.hpp)) — not a private
 dialect. The decisions of version 1, `zen.ApproveAuthority v1` and
 `zen.RefuseAuthority v1`, carry nothing; a Weaver still accepts them, only to
-refuse them in words ([below](#a-decision-names-the-prompt-it-answers)).
+refuse them in words ([below](#a-decision-names-the-prompt-it-answers)). The
+request of version 1, `zen.RequestAuthority v1`, has no `door`; a Weaver answers
+it as the request for the door-less rule it names.
 
 ### Four rules that live in the field lists
 
@@ -85,9 +87,11 @@ Each of these would otherwise be a runtime check somebody could delete.
   prompt it answers. A field can be defaulted or mis-parsed into meaning yes; a
   mistyped shape name is a gate refusal, and a defaulted `prompt` names none.
 - **The request language is narrower than `LiveAuthority`.** A request names one
-  shape, one version and one office. There is no way to spell "any shape", "any
-  target", an exact WeaveId, or an observe rule — regardless of how wide a
-  ceiling the host handed the Weaver.
+  shape, one version, one office and at most one
+  [door](capabilities.md#doors), which the Weaver parses and refuses in words
+  when it is malformed; an empty `door` asks for a door-less rule. There is no
+  way to spell "any shape", "any target", an exact WeaveId, or an observe rule —
+  regardless of how wide a ceiling the host handed the Weaver.
 
 ## The flow
 
@@ -164,9 +168,10 @@ purpose: it acts on what is installed, never on a request.
 | who may inspect | the operator seat, and the governed session about itself |
 | how many pending | **zero or one**; a second request is refused visibly and the first is untouched |
 | already-effective request | answered `already-permitted` at once — the human is not woken, and no duplicate rule grows |
-| approval | additive: `view.delegated` **+** the one approved rule, installed as one replacement |
+| approval | additive: `view.delegated` **+** the one approved rule, its door exactly the one the prompt showed, installed as one replacement |
 | refusal | nothing changes; the session hears `zen.Refused` as the authenticated answer |
-| beyond the ceiling | the Kernel refuses; nothing changes; both sides are told, and the refusal does not say whether the office exists |
+| beyond the ceiling | the Kernel refuses; nothing changes; both sides are told, and the refusal does not say whether the office, or its door, exists |
+| a capability that only reads | describes; every approval and revoke installs nothing, and both are refused in words (`DescribeOnly`) |
 | revoke | the **whole** delegated overlay at once; the admission baseline is untouched |
 | decision with nothing pending | refused; it is never banked for a later request |
 | decision naming another prompt, or none | refused to the seat in words; nothing is installed, and the pending prompt stands as it was |
@@ -265,7 +270,9 @@ REPL is deliberately shape-agnostic — there is no `approve` or `grant` command
 the operator composes `zen.ApproveAuthority` the way it would compose any
 registered shape, through the ordinary gated send path, and names the prompt it
 was shown by a reference to that prompt's own field:
-`send <weaver> zen.ApproveAuthority 2 prompt=$m1.prompt`.
+`send <weaver> zen.ApproveAuthority 2 prompt=$m1.prompt`. Its walk asks for a
+door too: the prompt shows it, and the yes installs a door rule that
+`zen.DescribeAuthority` lists and that lets no `Work` through.
 
 PROVEN BY — [`include/zen/weaver/`](../../include/zen/weaver/),
 `tests/test_weaver.cpp` (suite `weaver`), the `grant` suite, and the entry

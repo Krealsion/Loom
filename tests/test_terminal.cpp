@@ -131,7 +131,7 @@ TerminalVocabulary operator_vocabulary() {
 
 Grant default_session_grant() {
     Grant g;
-    g.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+    g.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
     g.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     g.allow_to_role("Query", 1, kServiceRole);
     return g;
@@ -196,7 +196,7 @@ public:
         GrantAuthority cap = host_grant_authority(bus, session.id, std::move(ceiling));
 
         Grant weaver_grant;
-        weaver_grant.allow("zen.AuthorityPrompt", 2, seat.id);
+        weaver_grant.allow("zen.AuthorityPrompt", 3, seat.id);
         weaver_grant.allow("zen.AuthorityGranted", 1, session.id);
         weaver_grant.allow("zen.AuthorityDescription", 1, seat.id);
         weaver_grant.allow("zen.AuthorityDescription", 1, session.id);

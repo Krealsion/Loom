@@ -199,7 +199,8 @@ ask:
 
 ```cpp
 session.request_authority("Work", 1, "some.service", "so I can finish the job");
-// == ask(to_role("loom.weaver"), "zen.RequestAuthority" v1, {shape, version, to_role, purpose})
+// == ask(to_role("loom.weaver"), "zen.RequestAuthority" v2,
+//        {shape, version, to_role, purpose, door})   // door "" asks for a door-less rule
 ```
 
 There is **no Weaver in the terminal core**: no include, no type, no branch. The
@@ -236,8 +237,8 @@ answers_ask     provenance no ordinary enqueue can write
 
 A payload field that happens to be called `requester` is never copied into a
 trusted one. For `zen.AuthorityPrompt` specifically: the **Weaver** is the
-sender, `prompt.prompt` and `prompt.requester` are the Weaver's own trusted
-facts, and
+sender, `prompt.prompt`, `prompt.door` and `prompt.requester` are the Weaver's
+own trusted facts, and
 `requester_says` is prose the requester wrote — the field's own name says so.
 
 ### Bounded, and never at the cost of a conversation
@@ -339,6 +340,11 @@ approve r1
 session
 send @some.service Work 1 7
 ```
+
+A door is asked the same way, `request Work 1 @some.service
+door=some.service/desk:save "to save"`: the prompt shows the door, and a yes
+installs a [door rule](capabilities.md#doors), which lets no `Work` through on
+its own.
 
 The operator's received id depends on its earlier traffic; use the id printed
 with its actual `AuthorityPrompt`. `approve` and `refuse` take that id and

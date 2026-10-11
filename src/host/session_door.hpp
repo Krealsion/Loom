@@ -334,6 +334,8 @@ private:
                 g.allow_any();
             } else if (r.any_target) {
                 g.allow_to_any(r.shape_name, r.shape_version);
+            } else if (!r.target_role.empty() && r.door) {
+                g.allow_to_role(r.shape_name, r.shape_version, r.target_role, *r.door);
             } else if (!r.target_role.empty()) {
                 g.allow_to_role(r.shape_name, r.shape_version, r.target_role);
             } else if (r.any_shape) {

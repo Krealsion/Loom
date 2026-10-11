@@ -22,9 +22,11 @@
 // consumed into kernel state no later write can move, so only the first two form a
 // `LiveAuthority`, the half the delegation door can change.
 
+#include <zen/switchboard/door.hpp>
 #include <zen/switchboard/message.hpp> // WeaveId
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -71,14 +73,17 @@ inline const char* fs_access_name(FsAccess level) noexcept {
 }
 
 /// One send rule: may send shapes matching the shape-selector to targets matching
-/// the target-selector. Each selector is a specific value or "any".
+/// the target-selector. Each selector is a specific value or "any". A role rule may also name a
+/// door, which makes it a rule about that door and nothing else: it answers only a question that
+/// names a door it contains, and no delivery asks one (see `LiveAuthority::permits_role`).
 struct SendRule {
     bool any_shape = false;
     std::string shape_name; ///< used iff !any_shape
     std::uint32_t shape_version = 0;
     bool any_target = false;
-    WeaveId target{};          ///< used iff !any_target and not a role rule
-    std::string target_role{}; ///< non-empty iff a role rule (see Grant::allow_to_role)
+    WeaveId target{};           ///< used iff !any_target and not a role rule
+    std::string target_role{};  ///< non-empty iff a role rule (see Grant::allow_to_role)
+    std::optional<Door> door{}; ///< present only on a role rule that names a door
 };
 
 /// One observe rule: may read the latest claim of matching shapes (SENSE-05). Not a `SendRule`:
@@ -141,6 +146,14 @@ public:
                                   std::move(role)});
         return *this;
     }
+    /// May act at `door` with shape (name, version) to the holder of `role`: a door rule, which
+    /// the office judges by reading it, and which permits no delivery at all.
+    LiveAuthority& allow_to_role(std::string shape_name, std::uint32_t shape_version,
+                                 std::string role, Door door) {
+        rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, WeaveId{},
+                                  std::move(role), std::move(door)});
+        return *this;
+    }
     /// May read the latest claim of shape (name, version).
     LiveAuthority& allow_observe(std::string shape_name, std::uint32_t shape_version) {
         observe_.push_back(ObserveRule{false, std::move(shape_name), shape_version});
@@ -152,22 +165,22 @@ public:
         return *this;
     }
 
-    /// True iff some rule permits sending shape (name, version) to `target`.
+    /// True iff some door-less rule permits sending shape (name, version) to `target`.
     bool permits(std::string_view shape_name, std::uint32_t shape_version, WeaveId target) const {
         for (const SendRule& r : rules_) {
             const bool shape_ok =
                 r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version);
             const bool target_ok = r.any_target || r.target == target;
-            if (shape_ok && target_ok) {
+            if (shape_ok && target_ok && !r.door) {
                 return true;
             }
         }
         return false;
     }
 
-    /// True iff some rule permits sending the shape to the holder of `role`: only a role rule
-    /// for that role, or an any-target rule. A WeaveId rule never authorizes a role-addressed
-    /// send, and a role rule never a direct one.
+    /// True iff some rule permits sending the shape to the holder of `role`: only a door-less
+    /// role rule for that role, or an any-target rule. A WeaveId rule never authorizes a
+    /// role-addressed send, a role rule never a direct one, and a door rule neither.
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role) const {
         for (const SendRule& r : rules_) {
@@ -175,7 +188,24 @@ public:
                 r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version);
             const bool target_ok =
                 r.any_target || (!r.target_role.empty() && r.target_role == role);
-            if (shape_ok && target_ok) {
+            if (shape_ok && target_ok && !r.door) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// True iff some door rule for this shape and `role` names a door that contains `door`. The
+    /// door axis is disjoint both ways: a door-less rule, an any-target rule included, answers no
+    /// door question, as a door rule answers no door-less one.
+    bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
+                      std::string_view role, const Door& door) const {
+        for (const SendRule& r : rules_) {
+            const bool shape_ok =
+                r.any_shape || (r.shape_name == shape_name && r.shape_version == shape_version);
+            const bool target_ok =
+                !r.any_target && !r.target_role.empty() && r.target_role == role;
+            if (shape_ok && target_ok && r.door && r.door->contains(door)) {
                 return true;
             }
         }
@@ -193,15 +223,19 @@ public:
     }
 
     /// Attenuation: is `inner` entirely within this authority? Semantic, not textual. A rule is
-    /// a rectangle of shape selector by target selector, each "any" or one exact atom:
+    /// a box of shape selector by target selector by door, each "any" or one exact atom:
     ///
     ///   shape   Any contains Exact(name, version)
     ///   target  Any contains ExactId(T), and Any contains Role(R)
     ///           ExactId(T) and Role(R) contain one another in neither direction
+    ///   door    none contains none, and a door the doors it contains (`Door::contains`)
+    ///           none and a door contain one another in neither direction
     ///
-    /// The last line matters: a role rule follows whoever holds the office at delivery and an id
-    /// rule follows one weave, so relating them would turn today's routing into permanent
-    /// authority. Send and observe rules are checked in their own dimensions and never cross.
+    /// The target's second line matters: a role rule follows whoever holds the office at
+    /// delivery and an id rule follows one weave, so relating them would turn today's routing
+    /// into permanent authority. The door's keeps containment the predicate's: a rule without a
+    /// door, an any rule included, answers no door question, so it contains no door rule. Send
+    /// and observe rules are checked in their own dimensions and never cross.
     /// A rule is covered when one rule here contains it; where that is ever conservative it
     /// refuses a legal delegation, never admits an illegal one. The empty authority is contained
     /// by everything, so revocation is always possible.
@@ -209,7 +243,8 @@ public:
         for (const SendRule& want : inner.rules_) {
             bool covered = false;
             for (const SendRule& have : rules_) {
-                if (shape_contains(have, want) && target_contains(have, want)) {
+                if (shape_contains(have, want) && target_contains(have, want) &&
+                    door_contains(have, want)) {
                     covered = true;
                     break;
                 }
@@ -264,6 +299,12 @@ private:
         return outer_is_role ? outer.target_role == inner.target_role
                              : outer.target == inner.target;
     }
+    static bool door_contains(const SendRule& outer, const SendRule& inner) {
+        if (!inner.door) {
+            return !outer.door;
+        }
+        return outer.door && outer.door->contains(*inner.door);
+    }
     static bool observe_contains(const ObserveRule& outer, const ObserveRule& inner) {
         if (outer.any_shape) {
             return true;
@@ -311,6 +352,14 @@ public:
     /// the rule survives the holder reloading. It authorizes only role-addressed sends.
     Grant& allow_to_role(std::string shape_name, std::uint32_t shape_version, std::string role) {
         live_.allow_to_role(std::move(shape_name), shape_version, std::move(role));
+        return *this;
+    }
+    /// May act at `door` with shape (name, version) to the holder of `role`: a door rule, read
+    /// by its owner and never by delivery (see LiveAuthority::permits_role).
+    Grant& allow_to_role(std::string shape_name, std::uint32_t shape_version, std::string role,
+                         Door door) {
+        live_.allow_to_role(std::move(shape_name), shape_version, std::move(role),
+                            std::move(door));
         return *this;
     }
     /// May read the latest claim of shape (name, version), from any claimant or office
@@ -362,6 +411,11 @@ public:
                       std::string_view role) const {
         return live_.permits_role(shape_name, shape_version, role);
     }
+    /// True iff some door rule for this shape and role contains `door`.
+    bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
+                      std::string_view role, const Door& door) const {
+        return live_.permits_role(shape_name, shape_version, role, door);
+    }
 
     /// True iff some rule permits observing the latest claim of this shape (SENSE-05); send
     /// rules are never consulted.
@@ -412,6 +466,12 @@ inline bool effective_permits_role(const LiveAuthority& base, const LiveAuthorit
     return base.permits_role(shape_name, shape_version, role) ||
            delegated.permits_role(shape_name, shape_version, role);
 }
+inline bool effective_permits_role(const LiveAuthority& base, const LiveAuthority& delegated,
+                                   std::string_view shape_name, std::uint32_t shape_version,
+                                   std::string_view role, const Door& door) {
+    return base.permits_role(shape_name, shape_version, role, door) ||
+           delegated.permits_role(shape_name, shape_version, role, door);
+}
 inline bool effective_permits_observe(const LiveAuthority& base, const LiveAuthority& delegated,
                                       std::string_view shape_name, std::uint32_t shape_version) {
     return base.permits_observe(shape_name, shape_version) ||
@@ -428,7 +488,9 @@ inline bool effective_permits_observe(const LiveAuthority& base, const LiveAutho
 ///            since what a Weaver may say and what it may hand out are different questions
 ///
 /// A default-constructed one is inert, so an administrator can hold one as a member before the
-/// host hands it anything; using it fails visibly.
+/// host hands it anything; using it fails visibly. A describe-only one reads its subject's
+/// authority and installs nothing, not even the empty authority that revokes: for an owner that
+/// judges its subject's doors and must not be able to change them.
 /// docs/reference/capabilities.md#live-delegation
 class GrantAuthority {
 public:
@@ -450,16 +512,22 @@ public:
     /// before a request meets it.
     const LiveAuthority& ceiling() const noexcept { return ceiling_; }
 
+    /// Does this capability only read? Then every install through it is refused `DescribeOnly`.
+    bool describe_only() const noexcept { return describe_only_; }
+
 private:
     friend class Switchboard;
-    GrantAuthority(std::weak_ptr<const LoomIdentity> issuer, WeaveId subject, LiveAuthority ceiling)
-        : issuer_(std::move(issuer)), subject_(subject), ceiling_(std::move(ceiling)) {}
+    GrantAuthority(std::weak_ptr<const LoomIdentity> issuer, WeaveId subject, LiveAuthority ceiling,
+                   bool describe_only = false)
+        : issuer_(std::move(issuer)), subject_(subject), ceiling_(std::move(ceiling)),
+          describe_only_(describe_only) {}
 
     /// Weak, as LifecycleAuthority's is: it does not keep its board alive, and one from a dead
     /// board never validates against a later board at the same address.
     std::weak_ptr<const LoomIdentity> issuer_;
     WeaveId subject_{};
     LiveAuthority ceiling_;
+    bool describe_only_ = false;
 };
 
 /// Why an administration attempt did or did not take effect (GATE-05): each outcome sends an
@@ -471,6 +539,7 @@ enum class GrantOutcome : std::uint8_t {
     NoSuchSubject,  ///< the governed subject is not mounted here (any more)
     ExceedsCeiling, ///< the request is not a semantic subset of the ceiling
     NoLiveDelivery, ///< this Bus is not a live participating context and never had standing
+    DescribeOnly,   ///< the capability reads its subject's authority and installs nothing
 };
 
 const char* name_of(GrantOutcome outcome) noexcept;
@@ -505,6 +574,11 @@ struct AuthorityView {
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role) const {
         return effective_permits_role(base, delegated, shape_name, shape_version, role);
+    }
+    /// The door question an office asks at the act: may this subject act at `door`?
+    bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
+                      std::string_view role, const Door& door) const {
+        return effective_permits_role(base, delegated, shape_name, shape_version, role, door);
     }
     bool permits_observe(std::string_view shape_name, std::uint32_t shape_version) const {
         return effective_permits_observe(base, delegated, shape_name, shape_version);

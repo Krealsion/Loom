@@ -64,6 +64,7 @@ inline constexpr std::int64_t kRefuse = 5;   ///< operator: RefuseAuthority
 inline constexpr std::int64_t kRevoke = 6;   ///< operator: RevokeAuthority
 inline constexpr std::int64_t kApproveV1 = 7; ///< operator: ApproveAuthority v1, naming nothing
 inline constexpr std::int64_t kRefuseV1 = 8;  ///< operator: RefuseAuthority v1, naming nothing
+inline constexpr std::int64_t kAskV1 = 9;     ///< session: RequestAuthority v1, naming no door
 } // namespace step
 
 /// An ordinary service. It says nothing; it only records WHO it heard from,
@@ -84,11 +85,13 @@ public:
 /// identity, a baseline grant, an ordinary ask, an ordinary answer, and a retry it decides on.
 class Session final
     : public WeaveBase<Session, Nothing, Accept<Go, AuthorityGranted, Refused, AuthorityDescription>,
-                       Emit<Work, RequestAuthority, DescribeAuthority>> {
+                       Emit<Work, RequestAuthority, RequestAuthorityV1, DescribeAuthority>> {
 public:
     /// What the next `kAsk` will request, and of which office. Fields of the test, never of the
     /// wire.
     RequestAuthority want{"Work", 1, kServiceRole, ""};
+    /// What the next `kAskV1` will request, in the version that names no door.
+    RequestAuthorityV1 want_v1{"Work", 1, kServiceRole, ""};
     std::string asks = kWeaverRole;
     /// When set, the request this session sends the moment it hears "granted": a requester
     /// asking again before the operator's hand has left the key.
@@ -112,6 +115,8 @@ public:
             (void)mail.send_to_role(kServiceRole, Work{works_attempted});
         } else if (g.step == step::kAsk) {
             (void)mail.send_to_role(asks, want);
+        } else if (g.step == step::kAskV1) {
+            (void)mail.send_to_role(asks, want_v1);
         } else if (g.step == step::kDescribe) {
             (void)mail.send_to_role(kWeaverRole, DescribeAuthority{});
         }
@@ -235,8 +240,9 @@ struct Cast {
     std::vector<TapRecord> tap;
 
     /// `ceiling` is what the host lets this Weaver ever delegate. The default is
-    /// exactly one rule: Work v1 may be spoken to the service's office.
-    explicit Cast(LiveAuthority ceiling = default_ceiling()) {
+    /// exactly one rule: Work v1 may be spoken to the service's office. A
+    /// `describe_only` Weaver holds the capability that reads and installs nothing.
+    explicit Cast(LiveAuthority ceiling = default_ceiling(), bool describe_only = false) {
         // The service: holds the office, says nothing at all.
         std::tie(service_id, service) =
             place<Service>(bus, Grant::nothing(), std::string(kServiceRole));
@@ -244,6 +250,7 @@ struct Cast {
         // The governed session's FLOOR: it may ask its Weaver two questions and
         // may do nothing else. In particular it may NOT speak Work.
         Grant session_base;
+        session_base.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
         session_base.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
         session_base.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
         std::tie(session_id, session) = place<Session>(bus, std::move(session_base), "");
@@ -266,14 +273,16 @@ struct Cast {
         // identity, and that cannot be shown by a weave the gate stops first.
         Grant intruder_base;
         intruder_base.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
-        intruder_base.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+        intruder_base.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
         intruder_base.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
         std::tie(intruder_id, intruder) = place<Intruder>(bus, std::move(intruder_base), "");
 
         // THE TWO POWERS, MINTED SEPARATELY BY THE HOST.
         //
         // What the Weaver may DELEGATE: the ceiling, on exactly one subject.
-        GrantAuthority cap = host_grant_authority(bus, session_id, std::move(ceiling));
+        GrantAuthority cap = describe_only
+                                 ? host_describe_only_authority(bus, session_id)
+                                 : host_grant_authority(bus, session_id, std::move(ceiling));
         // What the Weaver may SAY: an ordinary grant, and it is not the ceiling.
         // Note the asymmetry — it may say "no" to anyone who reaches it (a
         // refusal is speech, and silence would be indistinguishable from a lost
@@ -300,7 +309,7 @@ struct Cast {
 
     static Grant weaver_grant(WeaveId session, WeaveId op) {
         Grant g;
-        g.allow("zen.AuthorityPrompt", 2, op);
+        g.allow("zen.AuthorityPrompt", 3, op);
         g.allow("zen.AuthorityGranted", 1, session);
         g.allow("zen.AuthorityDescription", 1, op);
         g.allow("zen.AuthorityDescription", 1, session);
@@ -371,6 +380,11 @@ TEST_CASE("the request language carries no identity and no subject to forge") {
     // This is the line that keeps the impersonation surface from being reopened
     // one plausible field at a time.
     CHECK(field_names(*schema_of<RequestAuthority>()) ==
+          std::vector<std::string>{"shape", "version", "to_role", "purpose", "door"});
+    // Version 1's request is kept as a shape, and names no door.
+    CHECK(schema_of<RequestAuthorityV1>()->name() == "zen.RequestAuthority");
+    CHECK(schema_of<RequestAuthorityV1>()->version() == 1);
+    CHECK(field_names(*schema_of<RequestAuthorityV1>()) ==
           std::vector<std::string>{"shape", "version", "to_role", "purpose"});
 
     // The operator's decisions carry the name of the prompt they answer and
@@ -398,17 +412,17 @@ TEST_CASE("the request language carries no identity and no subject to forge") {
     // The answers, and the prompt, pinned whole.
     CHECK(field_names(*schema_of<AuthorityGranted>()) == std::vector<std::string>{"basis"});
     CHECK(field_names(*schema_of<AuthorityPrompt>()) ==
-          std::vector<std::string>{"prompt", "requester", "shape", "version", "to_role", "until",
-                                   "requester_says"});
+          std::vector<std::string>{"prompt", "door", "requester", "shape", "version", "to_role",
+                                   "until", "requester_says"});
     CHECK(field_names(*schema_of<AuthorityDescription>()) ==
           std::vector<std::string>{"subject", "base", "delegated"});
 
     // Ordinary registered shapes, carrying the substrate's wire prefix — nothing
     // here is special-cased by the bus.
     CHECK(schema_of<RequestAuthority>()->name() == "zen.RequestAuthority");
-    CHECK(schema_of<RequestAuthority>()->version() == 1);
+    CHECK(schema_of<RequestAuthority>()->version() == 2);
     CHECK(schema_of<AuthorityPrompt>()->name() == "zen.AuthorityPrompt");
-    CHECK(schema_of<AuthorityPrompt>()->version() == 2);
+    CHECK(schema_of<AuthorityPrompt>()->version() == 3);
     CHECK(schema_of<ApproveAuthority>()->name() == "zen.ApproveAuthority");
     CHECK(schema_of<ApproveAuthority>()->version() == 2);
     CHECK(schema_of<RefuseAuthority>()->name() == "zen.RefuseAuthority");
@@ -489,8 +503,10 @@ TEST_CASE("a human puts one session in reach of one service, and takes it back")
     REQUIRE(c.op->described.size() == 1);
     const AuthorityDescription& d = c.op->described[0];
     CHECK(d.subject == static_cast<std::int64_t>(c.session_id.value));
-    // The baseline the host admitted: the two questions, and nothing more.
+    // The baseline the host admitted: the two questions, the request in both its versions, and
+    // nothing more.
     CHECK(d.base == std::vector<std::string>{
+                        "zen.RequestAuthority v2 -> role loom.weaver",
                         "zen.RequestAuthority v1 -> role loom.weaver",
                         "zen.DescribeAuthority v1 -> role loom.weaver"});
     // ...and, separately, what the user delegated.
@@ -512,7 +528,7 @@ TEST_CASE("a human puts one session in reach of one service, and takes it back")
     c.go(c.session_id, step::kDescribe);
     REQUIRE(c.session->described.size() == 1);
     CHECK(c.session->described[0].delegated.empty());
-    CHECK(c.session->described[0].base.size() == 2);
+    CHECK(c.session->described[0].base.size() == 3);
 }
 
 // =========================================================================
@@ -927,11 +943,11 @@ TEST_CASE("two Weavers on one bus never put the same prompt name") {
     Cast c;
     // A second session, and a second Weaver governing it, in an office of its own.
     Grant asker;
-    asker.allow_to_role("zen.RequestAuthority", 1, "loom.weaver.b");
+    asker.allow_to_role("zen.RequestAuthority", 2, "loom.weaver.b");
     auto [other_session_id, other_session] = place<Session>(c.bus, std::move(asker), "");
     other_session->want = RequestAuthority{"Work", 1, kServiceRole, ""};
     Grant say;
-    say.allow("zen.AuthorityPrompt", 2, c.operator_id);
+    say.allow("zen.AuthorityPrompt", 3, c.operator_id);
     say.allow_to_any("zen.Refused", 1);
     GrantAuthority cap = host_grant_authority(c.bus, other_session_id, Cast::default_ceiling());
     auto [b_id, b] = place<Weaver>(c.bus, std::move(say), std::string("loom.weaver.b"),
@@ -953,7 +969,7 @@ TEST_CASE("a Weaver that does not know its WeaveId names no prompt") {
     // Mounted without `zen_set_self`: it cannot make a name no other Weaver puts, so it puts none.
     Switchboard bus;
     Grant asker;
-    asker.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+    asker.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
     auto [session_id, session] = place<Session>(bus, std::move(asker), "");
     Grant op_base;
     auto [op_id, op] = place<OperatorSeat>(bus, std::move(op_base), "");
@@ -1215,6 +1231,8 @@ TEST_CASE("the rendered vocabulary states every kind of rule a description can c
     a.allow_to_any("Ping", 1);
     a.allow_any_to(WeaveId{9});
     a.allow_any();
+    a.allow_to_role("ControlRequested", 1, "zengine.workshop",
+                    *Door::parse("zengine.files/*"));
     a.allow_observe("Tick", 3);
     a.allow_observe_any();
     CHECK(render_authority(a) == std::vector<std::string>{
@@ -1223,6 +1241,8 @@ TEST_CASE("the rendered vocabulary states every kind of rule a description can c
                                      "Ping v1 -> any target",
                                      "any shape -> weave #9",
                                      "any shape -> any target",
+                                     "ControlRequested v1 -> role zengine.workshop door "
+                                     "zengine.files/*",
                                      "observe Tick v3",
                                      "observe any shape",
                                  });
@@ -1242,7 +1262,7 @@ TEST_CASE("holding the Weaver's role confers no authority at all") {
     CHECK_FALSE(weaver->governed_session().valid());
 
     Grant asker;
-    asker.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+    asker.allow_to_role("zen.RequestAuthority", 2, kWeaverRole);
     auto [session_id, session] = place<Session>(bus, std::move(asker), "");
     (void)id;
     (void)session_id;
@@ -1365,6 +1385,189 @@ TEST_CASE("revoking does not answer a question the operator has not answered") {
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.session->answers.size() == 1);
     CHECK(c.session->answers[0].kind == "granted");
+}
+
+// =========================================================================
+// A door: asked, shown, installed exactly, and never more than the ceiling.
+// =========================================================================
+
+namespace {
+/// A ceiling of one office's doors on the Work rule, and nothing door-less.
+LiveAuthority doors_of(const char* door) {
+    LiveAuthority ceiling;
+    ceiling.allow_to_role("Work", 1, kServiceRole, *Door::parse(door));
+    return ceiling;
+}
+} // namespace
+
+TEST_CASE("a door is shown beside the prompt's name, and a yes installs exactly that door") {
+    Cast c(doors_of("zengine.files/*"));
+    c.session->want =
+        RequestAuthority{"Work", 1, kServiceRole, "to open a file", "zengine.files/files:files.open"};
+    c.go(c.session_id, step::kAsk);
+
+    REQUIRE(c.op->prompts.size() == 1);
+    CHECK(c.op->prompts[0].prompt == c.name(1));
+    CHECK(c.op->prompts[0].door == "zengine.files/files:files.open");
+    CHECK(c.op->prompts[0].shape == "Work");
+    CHECK(c.op->prompts[0].to_role == kServiceRole);
+
+    c.go(c.operator_id, step::kApprove);
+    CHECK(c.op->acks == 1);
+    REQUIRE(c.session->answers.size() == 1);
+    CHECK(c.session->answers[0].kind == "granted");
+    CHECK(c.session->answers[0].detail == "delegated");
+    CHECK(c.session->answers[0].answers_ask);
+
+    // The door shown, and not the ceiling's wider one, is what the bus now holds.
+    c.go(c.operator_id, step::kDescribe);
+    REQUIRE(c.op->described.size() == 1);
+    CHECK(c.op->described[0].delegated ==
+          std::vector<std::string>{
+              "Work v1 -> role some.service door zengine.files/files:files.open"});
+
+    // A door rule is read by its office and lets no delivery through: Work is still refused.
+    c.clear_tap();
+    c.go(c.session_id, step::kWork);
+    CHECK(c.service->heard.empty());
+    CHECK(c.denied("Work"));
+}
+
+TEST_CASE("a ceiling of zengine.files/* installs a Files door and refuses a Builder door, "
+          "both told") {
+    Cast c(doors_of("zengine.files/*"));
+    c.session->want = RequestAuthority{"Work", 1, kServiceRole, "", "zengine.files/files:*"};
+    c.go(c.session_id, step::kAsk);
+    c.go(c.operator_id, step::kApprove);
+    REQUIRE(c.session->answers.size() == 1);
+    CHECK(c.session->answers[0].kind == "granted");
+
+    c.session->want =
+        RequestAuthority{"Work", 1, kServiceRole, "", "zengine.builder-pane/builder:builder.build"};
+    c.go(c.session_id, step::kAsk);
+    // The Weaver puts it to the person and the Kernel judges the yes, as for any rule.
+    REQUIRE(c.op->prompts.size() == 2);
+    CHECK(c.op->prompts[1].door == "zengine.builder-pane/builder:builder.build");
+    c.go(c.operator_id, step::kApprove);
+
+    // Both are told: the operator which no it was, the session as the answer to its ask.
+    CHECK(c.op->acks == 1);
+    REQUIRE(c.op->refusals.size() == 1);
+    CHECK(c.op->refusals[0].find("outside the authority this Weaver may delegate") !=
+          std::string::npos);
+    REQUIRE(c.session->answers.size() == 2);
+    CHECK(c.session->answers[1].kind == "refused");
+    CHECK(c.session->answers[1].answers_ask);
+    CHECK_FALSE(c.weaver->has_pending_request());
+
+    c.go(c.operator_id, step::kDescribe);
+    REQUIRE(c.op->described.size() == 1);
+    CHECK(c.op->described[0].delegated ==
+          std::vector<std::string>{"Work v1 -> role some.service door zengine.files/files:*"});
+}
+
+TEST_CASE("a door-less ceiling delegates no door, and a door ceiling no door-less rule") {
+    // The default ceiling is the door-less Work rule.
+    Cast plain;
+    plain.session->want = RequestAuthority{"Work", 1, kServiceRole, "", "zengine.files/*"};
+    plain.go(plain.session_id, step::kAsk);
+    plain.go(plain.operator_id, step::kApprove);
+    REQUIRE(plain.op->refusals.size() == 1);
+    CHECK(plain.op->refusals[0].find("outside the authority") != std::string::npos);
+
+    Cast doors(doors_of("zengine.files/*"));
+    doors.go(doors.session_id, step::kAsk); // the door-less Work rule
+    doors.go(doors.operator_id, step::kApprove);
+    REQUIRE(doors.op->refusals.size() == 1);
+    CHECK(doors.op->refusals[0].find("outside the authority") != std::string::npos);
+    doors.go(doors.session_id, step::kWork);
+    CHECK(doors.service->heard.empty());
+}
+
+TEST_CASE("a malformed door is refused in words, and nothing reaches the operator") {
+    Cast c(doors_of("zengine.files/*"));
+    std::size_t answered = 0;
+    for (const char* door : {"builder.build*", "zengine.files*", "*", "zengine.files/files*",
+                             "zengine.builder-pane/builder:builder.build*", "o/*:x", "o/p:",
+                             "zengine.files/files:files.open\x1b[2J"}) {
+        CAPTURE(door);
+        c.session->want = RequestAuthority{"Work", 1, kServiceRole, "", door};
+        c.go(c.session_id, step::kAsk);
+        REQUIRE(c.session->answers.size() == ++answered);
+        CHECK(c.session->answers.back().kind == "refused");
+        CHECK(c.session->answers.back().answers_ask);
+        CHECK(c.session->answers.back().detail.find("the requested door is malformed") !=
+              std::string::npos);
+        // The refusal never carries a raw control byte back to whoever prints it.
+        CHECK(c.session->answers.back().detail.find('\x1b') == std::string::npos);
+        CHECK_FALSE(c.weaver->has_pending_request());
+    }
+    CHECK(c.op->prompts.empty());
+}
+
+TEST_CASE("a door already held is answered, and a door does not answer a door-less ask") {
+    LiveAuthority ceiling = doors_of("zengine.files/*");
+    ceiling.allow_to_role("Work", 1, kServiceRole);
+    Cast c(std::move(ceiling));
+    c.session->want = RequestAuthority{"Work", 1, kServiceRole, "", "zengine.files/*"};
+    c.go(c.session_id, step::kAsk);
+    c.go(c.operator_id, step::kApprove);
+    REQUIRE(c.op->prompts.size() == 1);
+
+    // A door the held one contains is already permitted: no one is woken, nothing grows.
+    c.session->want = RequestAuthority{"Work", 1, kServiceRole, "", "zengine.files/files:files.open"};
+    c.go(c.session_id, step::kAsk);
+    REQUIRE(c.session->answers.size() == 2);
+    CHECK(c.session->answers[1].detail == "already-permitted");
+    CHECK(c.op->prompts.size() == 1);
+
+    // The door-less rule is a different question, and the door does not answer it.
+    c.session->want = RequestAuthority{"Work", 1, kServiceRole, ""};
+    c.go(c.session_id, step::kAsk);
+    REQUIRE(c.op->prompts.size() == 2);
+    CHECK(c.op->prompts[1].door.empty());
+
+    // Nor does the door-less rule, once held, answer a door it was never asked for.
+    c.go(c.operator_id, step::kApprove);
+    c.session->want = RequestAuthority{"Work", 1, kServiceRole, "", "zengine.files-evil/x"};
+    c.go(c.session_id, step::kAsk);
+    REQUIRE(c.op->prompts.size() == 3);
+    CHECK(c.op->prompts[2].door == "zengine.files-evil/x");
+}
+
+TEST_CASE("a version 1 request still installs a door-less rule") {
+    Cast c;
+    c.go(c.session_id, step::kAskV1);
+    REQUIRE(c.op->prompts.size() == 1);
+    CHECK(c.op->prompts[0].door.empty());
+    c.go(c.operator_id, step::kApprove);
+    REQUIRE(c.session->answers.size() == 1);
+    CHECK(c.session->answers[0].detail == "delegated");
+    CHECK(c.session->answers[0].answers_ask);
+    c.go(c.operator_id, step::kDescribe);
+    REQUIRE(c.op->described.size() == 1);
+    CHECK(c.op->described[0].delegated == std::vector<std::string>{"Work v1 -> role some.service"});
+    c.go(c.session_id, step::kWork);
+    CHECK(c.service->heard.size() == 1);
+}
+
+TEST_CASE("a Weaver holding a describe-only capability reads, and installs and revokes nothing") {
+    Cast c(Cast::default_ceiling(), /*describe_only=*/true);
+    c.go(c.operator_id, step::kDescribe);
+    REQUIRE(c.op->described.size() == 1);
+    CHECK(c.op->described[0].subject == static_cast<std::int64_t>(c.session_id.value));
+
+    c.go(c.session_id, step::kAsk);
+    c.go(c.operator_id, step::kApprove);
+    REQUIRE(c.op->refusals.size() == 1);
+    CHECK(c.op->refusals[0].find("only reads") != std::string::npos);
+    REQUIRE(c.session->answers.size() == 1);
+    CHECK(c.session->answers[0].kind == "refused");
+
+    c.go(c.operator_id, step::kRevoke);
+    REQUIRE(c.op->refusals.size() == 2);
+    CHECK(c.op->refusals[1].find("only reads") != std::string::npos);
+    CHECK(c.op->acks == 0);
 }
 
 } // TEST_SUITE("weaver")
