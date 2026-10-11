@@ -258,12 +258,52 @@ std::shared_ptr<LoadedLibrary> open_library(const std::string& path, std::string
 
 } // namespace
 
+namespace {
+
+/// What a library hands the host through a byte sink, and whether the host held all of it: a sink
+/// returns nothing, so a write the host could not hold is told to the host's own caller instead.
+struct HostBytes {
+    std::string bytes;
+    bool lost = false;
+};
+
+/// Every host callback below runs its body through this, because no exception crosses the seam
+/// (zen/kernel/abi.h): the library that called may carry its own C++ runtime, under which an
+/// exception thrown here is undefined. Whatever stopped the host -- its delivery sequence
+/// exhausted, an observer that threw while a refusal was recorded, memory -- reaches the library
+/// as ZEN_ERR_REFUSED, the status that already says the host did not take the request.
+template <class Body>
+ZenStatus seam_guarded(Body&& body) noexcept {
+    try {
+        return body();
+    } catch (...) {
+        return ZEN_ERR_REFUSED;
+    }
+}
+
+/// The library's bytes as the host holds them, or a DllBoundaryError naming the call whose bytes
+/// the host could not hold.
+const std::string& held_bytes(const HostBytes& out, const char* call) {
+    if (out.lost) {
+        throw DllBoundaryError(std::string("the host could not hold the bytes library ") + call +
+                               " wrote");
+    }
+    return out.bytes;
+}
+
+} // namespace
+
 extern "C" {
 
-// Append library bytes into a host std::string. The host copies immediately; no
-// library pointer is retained.
+// Append library bytes into the host's copy, at once; no library pointer is retained. Nothing
+// thrown here reaches the library's frames: a write the host cannot hold is recorded.
 static void zen_host_sink(void* ctx, const std::uint8_t* data, std::size_t len) {
-    static_cast<std::string*>(ctx)->append(reinterpret_cast<const char*>(data), len);
+    auto* out = static_cast<HostBytes*>(ctx);
+    try {
+        out->bytes.append(reinterpret_cast<const char*>(data), len);
+    } catch (...) {
+        out->lost = true;
+    }
 }
 
 // A library Weave sends/publishes by handing the host serialized payload bytes.
@@ -272,7 +312,7 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
                                std::uint64_t correlation, const std::uint8_t* payload,
                                std::size_t len, std::uint64_t* attempt_out) {
     if (attempt_out != nullptr) { *attempt_out = 0; }
-    try {
+    return seam_guarded([&]() -> ZenStatus {
         auto* h = static_cast<HostCtx*>(ctx);
         loom::Unverified u = loom::parse(loom::as_view(payload, len));
         std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
@@ -291,29 +331,30 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
                                         loom::WeaveId{reply_to}, correlation));
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
         return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
-    } catch (const std::overflow_error&) {
-        return ZEN_ERR_REFUSED;
-    }
+    });
 }
 
 static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64_t correlation,
                                   const std::uint8_t* payload, std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door = h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        // Unresolvable means no live accepter, which means zero recipients —
-        // the ordinary silent outcome of publishing into a world that is not
-        // listening. See kUnheardPublication.
-        return kUnheardPublication;
-    }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    h->gated->publish(loom::Message(std::move(a).value(), loom::WeaveId{},
-                                       loom::WeaveId{reply_to}, correlation));
-    return ZEN_OK;
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            // Unresolvable means no live accepter, which means zero recipients —
+            // the ordinary silent outcome of publishing into a world that is not
+            // listening. See kUnheardPublication.
+            return kUnheardPublication;
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        h->gated->publish(loom::Message(std::move(a).value(), loom::WeaveId{},
+                                           loom::WeaveId{reply_to}, correlation));
+        return ZEN_OK;
+    });
 }
 
 // A library Weave sends to a role the same way: hand the host serialized bytes + the
@@ -322,7 +363,7 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
                                        std::uint64_t correlation, const std::uint8_t* payload,
                                        std::size_t len, std::uint64_t* attempt_out) {
     if (attempt_out != nullptr) { *attempt_out = 0; }
-    try {
+    return seam_guarded([&]() -> ZenStatus {
         auto* h = static_cast<HostCtx*>(ctx);
         loom::Unverified u = loom::parse(loom::as_view(payload, len));
         std::shared_ptr<const loom::Schema> door =
@@ -341,9 +382,7 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
                                                       loom::WeaveId{reply_to}, correlation));
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
         return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
-    } catch (const std::overflow_error&) {
-        return ZEN_ERR_REFUSED;
-    }
+    });
 }
 
 // Deferred answers (ANS-02, ANS-06). Each of these is a thin pass-through to the gated
@@ -351,53 +390,66 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
 // bus checks it against the bound participants and their exact incarnations, and
 // the ctx a library can reach is only ever the one for its own live delivery.
 static uint64_t zen_host_defer_answer(void* ctx) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    return h->gated->make_deferred_answer().opaque_token();
+    // Its status is the token: 0, no conversation, whatever stopped the host (seam_guarded).
+    try {
+        auto* h = static_cast<HostCtx*>(ctx);
+        return h->gated->make_deferred_answer().opaque_token();
+    } catch (...) {
+        return 0;
+    }
 }
 
 static ZenStatus zen_host_answer_deferred(void* ctx, uint64_t token, const std::uint8_t* payload,
                                           std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        // The conversation partner is bus-private; the seam never looked it up.
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
-    }
-    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    const loom::Ticket t = h->gated->spend_deferred(
-        loom::DeferredAnswer::from_host_token(token),
-        loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{}, 0));
-    return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            // The conversation partner is bus-private; the seam never looked it up.
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        const loom::Ticket t = h->gated->spend_deferred(
+            loom::DeferredAnswer::from_host_token(token),
+            loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{}, 0));
+        return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+    });
 }
 
 static ZenStatus zen_host_answer(void* ctx, const std::uint8_t* payload, std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
-    }
-    loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    // Straight to the gated WeaveBus of the delivery in progress — the SAME
-    // trusted operation `mail.answer()` reaches natively. The host owns the
-    // recipient, the correlation and the requester-target provenance; the library
-    // supplied only what it wanted to say.
-    const loom::Ticket t = h->gated->answer(loom::Message(std::move(a).value()));
-    return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        // Straight to the gated WeaveBus of the delivery in progress — the SAME
+        // trusted operation `mail.answer()` reaches natively. The host owns the
+        // recipient, the correlation and the requester-target provenance; the library
+        // supplied only what it wanted to say.
+        const loom::Ticket t = h->gated->answer(loom::Message(std::move(a).value()));
+        return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+    });
 }
 
 static void zen_host_release_deferred(void* ctx, uint64_t token) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    h->gated->release_deferred(loom::DeferredAnswer::from_host_token(token));
+    // It answers nothing, so what stopped the host stays on the host's side (seam_guarded).
+    try {
+        auto* h = static_cast<HostCtx*>(ctx);
+        h->gated->release_deferred(loom::DeferredAnswer::from_host_token(token));
+    } catch (...) {
+    }
 }
 
 // Deliberate office authorship. As every outbound door: the payload is admitted host-side,
@@ -408,7 +460,7 @@ static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint6
                                       std::uint64_t reply_to, std::uint64_t correlation,
                                       const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
     if (attempt_out != nullptr) { *attempt_out = 0; }
-    try {
+    return seam_guarded([&]() -> ZenStatus {
         auto* h = static_cast<HostCtx*>(ctx);
         loom::Unverified u = loom::parse(loom::as_view(payload, len));
         std::shared_ptr<const loom::Schema> door =
@@ -428,16 +480,14 @@ static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint6
         // refused (shape and schema failures returned above).
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
         return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
-    } catch (const std::overflow_error&) {
-        return ZEN_ERR_REFUSED;
-    }
+    });
 }
 
 static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, const char* to_role,
                                               std::uint64_t reply_to, std::uint64_t correlation,
                                               const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
     if (attempt_out != nullptr) { *attempt_out = 0; }
-    try {
+    return seam_guarded([&]() -> ZenStatus {
         auto* h = static_cast<HostCtx*>(ctx);
         loom::Unverified u = loom::parse(loom::as_view(payload, len));
         std::shared_ptr<const loom::Schema> door =
@@ -455,38 +505,38 @@ static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, co
                           correlation));
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
         return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
-    } catch (const std::overflow_error&) {
-        return ZEN_ERR_REFUSED;
-    }
+    });
 }
 
 static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::uint64_t reply_to,
                                          std::uint64_t correlation, const std::uint8_t* payload,
                                          std::size_t len, std::uint64_t* recipients_out) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    if (recipients_out != nullptr) {
-        *recipients_out = 0;
-    }
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        return kUnheardPublication; // an office publication is a publication
-    }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    const loom::OfficePublication p = h->gated->office_publish(
-        as_role, loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
-                               correlation));
-    if (!p.authored) {
-        return ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
-    }
-    if (recipients_out != nullptr) {
-        *recipients_out = p.recipients;
-    }
-    return ZEN_OK;
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        if (recipients_out != nullptr) {
+            *recipients_out = 0;
+        }
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return kUnheardPublication; // an office publication is a publication
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        const loom::OfficePublication p = h->gated->office_publish(
+            as_role, loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                                   correlation));
+        if (!p.authored) {
+            return ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+        }
+        if (recipients_out != nullptr) {
+            *recipients_out = p.recipients;
+        }
+        return ZEN_OK;
+    });
 }
 
 // ---- Senses ----------------------------------------------------------------
@@ -543,46 +593,50 @@ static void fill_sense_by(const loom::SenseReading& r, ZenByteSink office_sink, 
 
 static ZenStatus zen_host_sense_claim(void* ctx, const std::uint8_t* payload, std::size_t len,
                                       std::uint64_t* revision_out) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        // A claim of a shape this Loom never heard of is a seam rejection like
-        // any other, and is observable for the same reason (MSG-08).
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
-    }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    const loom::SenseClaimResult r = h->gated->claim(std::move(a).value());
-    if (revision_out != nullptr) {
-        *revision_out = r.revision;
-    }
-    return r.accepted ? ZEN_OK : sense_status_of(r.why);
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            // A claim of a shape this Loom never heard of is a seam rejection like
+            // any other, and is observable for the same reason (MSG-08).
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        const loom::SenseClaimResult r = h->gated->claim(std::move(a).value());
+        if (revision_out != nullptr) {
+            *revision_out = r.revision;
+        }
+        return r.accepted ? ZEN_OK : sense_status_of(r.why);
+    });
 }
 
 static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
                                              const std::uint8_t* payload, std::size_t len,
                                              std::uint64_t* revision_out) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
-    }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    const loom::SenseClaimResult r =
-        h->gated->office_claim(as_role != nullptr ? as_role : "", std::move(a).value());
-    if (revision_out != nullptr) {
-        *revision_out = r.revision;
-    }
-    return r.accepted ? ZEN_OK : sense_status_of(r.why);
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        const loom::SenseClaimResult r =
+            h->gated->office_claim(as_role != nullptr ? as_role : "", std::move(a).value());
+        if (revision_out != nullptr) {
+            *revision_out = r.revision;
+        }
+        return r.accepted ? ZEN_OK : sense_status_of(r.why);
+    });
 }
 
 // A loaded claimant's joint offer. The bytes are admitted host-side exactly as a claim's
@@ -590,69 +644,75 @@ static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
 // bound revision (docs/reference/joint-publication.md).
 static ZenStatus zen_host_sense_offer(void* ctx, std::uint64_t op, const std::uint8_t* payload,
                                       std::size_t len) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    loom::Unverified u = loom::parse(loom::as_view(payload, len));
-    std::shared_ptr<const loom::Schema> door =
-        h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
-    if (!door) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
-    }
-    loom::Admission a = loom::admit(u, door);
-    if (!a.ok()) {
-        return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
-    }
-    const loom::JointResult r = h->gated->offer_claim(op, std::move(a).value());
-    if (r.ok) {
-        return ZEN_OK;
-    }
-    return static_cast<ZenStatus>(ZEN_ERR_JOINT_BASE - static_cast<int>(r.why));
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
+        }
+        loom::Admission a = loom::admit(u, door);
+        if (!a.ok()) {
+            return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
+        }
+        const loom::JointResult r = h->gated->offer_claim(op, std::move(a).value());
+        if (r.ok) {
+            return ZEN_OK;
+        }
+        return static_cast<ZenStatus>(ZEN_ERR_JOINT_BASE - static_cast<int>(r.why));
+    });
 }
 
 static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const char* shape_name,
                                         std::uint32_t shape_version, ZenByteSink sink,
                                         ZenByteSink office_sink, ZenSenseBy* by) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    // The host resolves the shape it was NAMED. A library asking for a shape this
-    // Loom never registered is the same seam rejection as an emission of one, and
-    // is observable for the same reason (MSG-08).
-    std::shared_ptr<const loom::Schema> shape =
-        h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
-    if (!shape) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
-    }
-    const loom::SenseReading r = h->gated->observe(loom::WeaveId{author}, std::move(shape));
-    if (!r) {
-        return sense_status_of(r.refusal);
-    }
-    fill_sense_by(r, office_sink, by);
-    // The value crosses as BYTES the library copies out of the sink — the same
-    // ownership rule every other outbound value follows. No host pointer into
-    // the repository ever reaches the library, so a loaded reader has exactly the
-    // reach a native one has: none.
-    const std::string bytes = loom::serialize(*r.value);
-    sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-    return ZEN_OK;
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        // The host resolves the shape it was NAMED. A library asking for a shape this
+        // Loom never registered is the same seam rejection as an emission of one, and
+        // is observable for the same reason (MSG-08).
+        std::shared_ptr<const loom::Schema> shape =
+            h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
+        if (!shape) {
+            return ZEN_ERR_UNKNOWN_SCHEMA;
+        }
+        const loom::SenseReading r = h->gated->observe(loom::WeaveId{author}, std::move(shape));
+        if (!r) {
+            return sense_status_of(r.refusal);
+        }
+        fill_sense_by(r, office_sink, by);
+        // The value crosses as BYTES the library copies out of the sink — the same
+        // ownership rule every other outbound value follows. No host pointer into
+        // the repository ever reaches the library, so a loaded reader has exactly the
+        // reach a native one has: none.
+        const std::string bytes = loom::serialize(*r.value);
+        sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        return ZEN_OK;
+    });
 }
 
 static ZenStatus zen_host_sense_observe_office(void* ctx, const char* role,
                                                const char* shape_name,
                                                std::uint32_t shape_version, ZenByteSink sink,
                                                ZenByteSink office_sink, ZenSenseBy* by) {
-    auto* h = static_cast<HostCtx*>(ctx);
-    std::shared_ptr<const loom::Schema> shape =
-        h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
-    if (!shape) {
-        return ZEN_ERR_UNKNOWN_SCHEMA;
-    }
-    const loom::SenseReading r =
-        h->gated->observe_office(role != nullptr ? role : "", std::move(shape));
-    if (!r) {
-        return sense_status_of(r.refusal);
-    }
-    fill_sense_by(r, office_sink, by);
-    const std::string bytes = loom::serialize(*r.value);
-    sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
-    return ZEN_OK;
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        std::shared_ptr<const loom::Schema> shape =
+            h->sb->resolve_schema(shape_name != nullptr ? shape_name : "", shape_version);
+        if (!shape) {
+            return ZEN_ERR_UNKNOWN_SCHEMA;
+        }
+        const loom::SenseReading r =
+            h->gated->observe_office(role != nullptr ? role : "", std::move(shape));
+        if (!r) {
+            return sense_status_of(r.refusal);
+        }
+        fill_sense_by(r, office_sink, by);
+        const std::string bytes = loom::serialize(*r.value);
+        sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        return ZEN_OK;
+    });
 }
 
 } // extern "C"
@@ -821,23 +881,23 @@ public:
     }
 
     loom::Value snapshot() const override {
-        std::string bytes;
-        ZenByteSink sink{&bytes, &zen_host_sink};
+        HostBytes out;
+        ZenByteSink sink{&out, &zen_host_sink};
         const ZenStatus st = abi_->snapshot(instance_, sink);
         if (st != ZEN_OK) {
             throw DllBoundaryError("library snapshot() failed with status " + std::to_string(st));
         }
-        return admit_bytes(bytes, state_schema_, "snapshot");
+        return admit_bytes(held_bytes(out, "snapshot()"), state_schema_, "snapshot");
     }
 
     loom::Value policy() const override {
-        std::string bytes;
-        ZenByteSink sink{&bytes, &zen_host_sink};
+        HostBytes out;
+        ZenByteSink sink{&out, &zen_host_sink};
         const ZenStatus st = abi_->policy(instance_, sink);
         if (st != ZEN_OK) {
             throw DllBoundaryError("library policy() failed with status " + std::to_string(st));
         }
-        return admit_bytes(bytes, loom::lifecycle_policy_schema(), "policy");
+        return admit_bytes(held_bytes(out, "policy()"), loom::lifecycle_policy_schema(), "policy");
     }
 
     void revive(const loom::Value& state) override {
@@ -962,13 +1022,13 @@ const Kernel::Loaded* Kernel::record_for(loom::WeaveId id) const {
 }
 
 Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
-    std::string bytes;
-    ZenByteSink sink{&bytes, &zen_host_sink};
+    HostBytes out;
+    ZenByteSink sink{&out, &zen_host_sink};
     const ZenStatus st = abi->describe(instance, sink);
     if (st != ZEN_OK) {
         throw DllBoundaryError("library describe() failed with status " + std::to_string(st));
     }
-    loom::Unverified u = loom::parse(bytes);
+    loom::Unverified u = loom::parse(held_bytes(out, "describe()"));
     loom::Admission a = loom::admit(u, manifest_schema()); // the gate, for the schema descriptor
     if (!a.ok()) {
         throw DllBoundaryError("library manifest refused by the gate: " + a.first_error().message());

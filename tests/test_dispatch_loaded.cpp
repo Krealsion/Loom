@@ -9,6 +9,7 @@
 #include <doctest.h>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 using namespace loom;
 using namespace sbfx;
 namespace {
@@ -202,5 +203,117 @@ TEST_SUITE("dispatch_loaded") {
             CHECK(mind(sb, a.id).get("trusted")->as_int() == 1);
             CHECK(mind(sb, a.id).get("matched")->as_int() == 1);
         }
+    }
+
+    // No exception crosses the seam from a host door (zen/kernel/abi.h): the image that called may
+    // carry its own C++ runtime. Each door below meets the end of the host's delivery sequence in
+    // the host's own work; it answers refused, the loaded handler runs to its end, and the bus
+    // records a delivery, never a handler that failed.
+    TEST_CASE("a host door that cannot carry out a request answers refused, and no exception "
+              "reaches the loaded image") {
+        for (const std::string mode :
+             {"direct", "role", "office-direct", "office-role", "publish", "office-publish",
+              "answer", "spend-unknown", "claim-unheard", "office-claim-unheard",
+              "offer-unheard"}) {
+            CAPTURE(mode);
+            Switchboard sb;
+            Kernel kernel(sb, sbfx::fixture_admission());
+            const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+            REQUIRE_MESSAGE(loaded.ok, loaded.error);
+            const auto recipient = register_probe(sb, {schema_of<dispatch_test::Payload>()});
+            std::vector<EventKind> commands;
+            sb.add_observer([&](const BusEvent& ev) {
+                if (ev.schema_name == dispatch_test::Command::zen_name) {
+                    commands.push_back(ev.kind);
+                }
+            });
+            sb.send(loaded.id, Message(to_value(dispatch_test::Command{
+                                   mode, static_cast<std::int64_t>(recipient.id.value),
+                                   "dispatch.author", "77"})));
+            DispatchRefusalProbe::exhaust_now(sb);
+            CHECK_NOTHROW(sb.pump_pending());
+            const Value state = mind(sb, loaded.id);
+            CHECK(state.get("finished")->as_text() == mode);
+            CHECK(state.get("door")->as_text() == "refused");
+            CHECK(commands == std::vector<EventKind>{EventKind::Delivered});
+        }
+    }
+
+    TEST_CASE("an observer that throws while a loaded door is refused costs the door, not the "
+              "loaded image") {
+        for (const std::string mode :
+             {"office-publish", "answer", "spend-unknown", "claim-unheard"}) {
+            CAPTURE(mode);
+            Switchboard sb;
+            Kernel kernel(sb, sbfx::fixture_admission());
+            const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+            REQUIRE_MESSAGE(loaded.ok, loaded.error);
+            std::vector<EventKind> commands;
+            int refusals = 0;
+            sb.add_observer([&](const BusEvent& ev) {
+                if (ev.schema_name == dispatch_test::Command::zen_name) {
+                    commands.push_back(ev.kind);
+                }
+                if (ev.kind == EventKind::Refused) {
+                    ++refusals;
+                    throw std::runtime_error("an observer that throws");
+                }
+            });
+            // office-publish names an office the image does not hold.
+            sb.send(loaded.id,
+                    Message(to_value(dispatch_test::Command{mode, 0, "not.held", "77"})));
+            CHECK_NOTHROW(sb.pump_pending());
+            const Value state = mind(sb, loaded.id);
+            CHECK(refusals == 1);
+            CHECK(state.get("finished")->as_text() == mode);
+            CHECK(state.get("door")->as_text() == "refused");
+            CHECK(commands == std::vector<EventKind>{EventKind::Delivered});
+        }
+    }
+
+    TEST_CASE("an answer right asked for past the host's limit, with the sequence at its end, "
+              "answers no right and costs the loaded image nothing") {
+        Switchboard sb;
+        Kernel kernel(sb, sbfx::fixture_admission());
+        const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+        REQUIRE_MESSAGE(loaded.ok, loaded.error);
+        const auto asker = register_probe(sb, {schema_of<dispatch_test::Payload>()});
+        const auto ask = [&] {
+            sb.send_as(asker.id, loaded.id,
+                       Message(to_value(dispatch_test::Command{"defer", 0, "", "0"}), WeaveId{},
+                               WeaveId{}, 77));
+        };
+        for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+            ask();
+        }
+        sb.pump_pending();
+        REQUIRE(mind(sb, loaded.id).get("deferred")->as_int() ==
+                static_cast<std::int64_t>(Switchboard::kMaxDeferredAnswers));
+        std::vector<EventKind> commands;
+        sb.add_observer([&](const BusEvent& ev) {
+            if (ev.schema_name == dispatch_test::Command::zen_name) {
+                commands.push_back(ev.kind);
+            }
+        });
+        ask();
+        DispatchRefusalProbe::exhaust_now(sb);
+        CHECK_NOTHROW(sb.pump_pending());
+        const Value state = mind(sb, loaded.id);
+        CHECK(state.get("finished")->as_text() == "defer");
+        CHECK(state.get("door")->as_text() == "refused");
+        CHECK(state.get("deferred")->as_int() ==
+              static_cast<std::int64_t>(Switchboard::kMaxDeferredAnswers));
+        CHECK(commands == std::vector<EventKind>{EventKind::Delivered});
+    }
+
+    TEST_CASE("bytes a library hands the host's sink beyond what it can hold refuse the load in "
+              "the host's words, and nothing thrown reaches the library") {
+        Switchboard sb;
+        Kernel kernel(sb, sbfx::fixture_admission());
+        const auto loaded = kernel.load("sink", ZEN_SO_SINK_OVERFLOW);
+        CHECK_FALSE(loaded.ok);
+        CHECK_MESSAGE(loaded.error.find("the host could not hold the bytes library describe() "
+                                        "wrote") != std::string::npos,
+                      loaded.error);
     }
 }
