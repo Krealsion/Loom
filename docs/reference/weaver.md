@@ -125,28 +125,35 @@ shown: a key repeats, a press is doubled, a send arrives late, or the session
 asks again the moment it hears `granted`. A contentless second approve would
 then approve the session's next ask, which nobody saw.
 
-So every `zen.AuthorityPrompt` carries `prompt`, a number its Weaver gives it
-and never gives another prompt, starting at 1; and `zen.ApproveAuthority` and
+So every `zen.AuthorityPrompt` carries `prompt`, a name no other prompt on its
+bus is given, by its Weaver or any other; and `zen.ApproveAuthority` and
 `zen.RefuseAuthority` carry the `prompt` they answer. The Weaver acts on a
 decision only when it names the prompt pending now. A decision naming another
-prompt (one already decided, or one never put), naming none (`prompt` 0, or a
-version 1 decision, which has no field), or arriving with nothing pending
-installs nothing, leaves the pending prompt as it was, and is answered to the
-seat with a `zen.Refused` saying why; the session hears nothing. A Weaver that
-has given every name an `int64` holds refuses further requests rather than
-reuse one.
+prompt (one already decided, one never put, or one another Weaver put), naming
+none (`prompt` 0, or a version 1 decision, which has no field), or arriving with
+nothing pending installs nothing, leaves the pending prompt as it was, and is
+answered to the seat with a `zen.Refused` saying why; the session hears nothing.
+
+**A name is unique among the host's Weavers, and deterministic.** It is the
+Weaver's own WeaveId times `kPromptNamesPerWeaver`
+([`weaver.hpp`](../../include/zen/weaver/weaver.hpp)), plus the prompt's place
+in that Weaver's count, from 1. A WeaveId is never reused on a bus, so a Weaver
+that replaces another in its office (a session reconnecting, say) puts names
+the old one never put, and a decision sent to the office for the old Weaver's
+prompt is refused by the new one rather than deciding the new one's prompt. A
+Weaver that was never told its WeaveId, or that has named every prompt it can,
+refuses further requests rather than repeat a name.
 
 The name says *which* request, never *who*: a decision is still the seat's only
 by bus stamp, and a stranger naming the right prompt is refused as a stranger.
-Names count per Weaver, so two Weavers can each have a prompt 1, and a Weaver
-that replaces another in the same office starts again at 1. A seat serving more
-than one Weaver, or one whose Weaver can be replaced, tells them apart by the
-prompt's bus-stamped sender and sends each decision to that Weaver's WeaveId:
-a decision sent to the office lands on whoever holds it when it arrives. The
-[terminal](terminal.md)'s REPL sends to the office because its host mounts one
-Weaver for the process's life.
-`zen.RevokeAuthority` names nothing on purpose: it acts on what is installed,
-never on a request.
+The name is the second guard, not the first: a seat serving more than one
+Weaver, or one whose Weaver can be replaced, still tells them apart by the
+prompt's bus-stamped sender and sends each decision to that Weaver's WeaveId, so
+a decision does not reach the wrong Weaver at all; a decision sent to an office
+reaches whoever holds it when it arrives, and the name is what refuses it there.
+The [terminal](terminal.md)'s REPL sends to the office because its host mounts
+one Weaver for the process's life. `zen.RevokeAuthority` names nothing on
+purpose: it acts on what is installed, never on a request.
 
 ## Policy, stated
 
@@ -169,7 +176,7 @@ never on a request.
 ## No shadow state
 
 The Weaver stores the pending human question and its prompt's name, the deferred
-answer right, the last name it gave a prompt, the operator seat and the
+answer right, how many prompts it has named, the operator seat and the
 capability — and nothing about authority. Every time it needs to know what a
 subject may do it calls `mail.describe_authority(...)`,
 which reads the values `deliver_one` reads through the predicates `deliver_one`

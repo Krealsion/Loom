@@ -57,6 +57,12 @@ inline constexpr std::size_t kMaxPurposeBytes = 200;
 /// document.
 inline constexpr std::size_t kMaxNameBytes = 128;
 
+/// How many prompts one Weaver can name. A prompt's name is its Weaver's WeaveId times this, plus
+/// the prompt's place in that Weaver's count, so no two Weavers on one bus put the same name: a
+/// WeaveId is never reused, and a Weaver replacing another in its office has a WeaveId of its own.
+/// docs/reference/weaver.md#a-decision-names-the-prompt-it-answers
+inline constexpr std::int64_t kPromptNamesPerWeaver = 1000 * 1000 * 1000;
+
 /// Render `raw` so it cannot drive the terminal it is printed on: every byte outside printable
 /// ASCII becomes a visible `\xNN` and a literal backslash is doubled, so the escaping is
 /// unambiguous. Only the first `max_bytes` of `raw` are rendered, and a cut says
@@ -231,10 +237,12 @@ public:
             (void)mail.answer(AuthorityGranted{"already-permitted"});
             return;
         }
-        // A prompt's name is never reused, so a Weaver that has spent every name puts no more
-        // prompts rather than wrapping onto a name a decision may still carry.
-        if (last_prompt_ == std::numeric_limits<std::int64_t>::max()) {
-            (void)mail.answer(Refused{"this Weaver has named every prompt it can; nothing was put "
+        // A prompt's name is never reused, by this Weaver or another on its bus, so a Weaver
+        // that cannot name one more puts no more prompts rather than repeat a name a decision
+        // may still carry.
+        const std::int64_t name = next_prompt_name();
+        if (name == 0) {
+            (void)mail.answer(Refused{"this Weaver cannot name another prompt; nothing was put "
                                       "to the operator"});
             return;
         }
@@ -255,8 +263,8 @@ public:
             return;
         }
         answer_ = std::move(taken);
-        request_ = Requested{++last_prompt_, ask.shape, static_cast<std::uint32_t>(ask.version),
-                             ask.to_role};
+        ++prompts_named_;
+        request_ = Requested{name, ask.shape, static_cast<std::uint32_t>(ask.version), ask.to_role};
         ++state_.prompts;
         // The operator sees the prompt's name, the rule AS PARSED, the requester's
         // identity AS STAMPED, and the requester's prose AS ESCAPED — and nothing
@@ -443,6 +451,20 @@ private:
         return true;
     }
 
+    /// The name the next prompt takes, or 0 when this Weaver can name none: it was never told its
+    /// own WeaveId, its WeaveId leaves no room for a name in an `int64`, or it has named every
+    /// prompt `kPromptNamesPerWeaver` allows.
+    std::int64_t next_prompt_name() const {
+        constexpr std::int64_t kHighestNamingWeave =
+            (std::numeric_limits<std::int64_t>::max() - (kPromptNamesPerWeaver - 1)) /
+            kPromptNamesPerWeaver;
+        if (!self_.valid() || self_.value > static_cast<std::uint64_t>(kHighestNamingWeave) ||
+            prompts_named_ >= kPromptNamesPerWeaver - 1) {
+            return 0;
+        }
+        return static_cast<std::int64_t>(self_.value) * kPromptNamesPerWeaver + prompts_named_ + 1;
+    }
+
     void refuse_unnamed(Mail& mail) {
         (void)mail.answer(Refused{"this decision names no prompt, so it cannot say which request "
                                   "it decides; nothing was changed"});
@@ -524,8 +546,8 @@ private:
     // ---- policy workflow state (NEVER authority state) ----------------------
     Requested request_{};
     DeferredAnswer answer_{};
-    /// The last name given to a prompt; the next prompt takes the one after it.
-    std::int64_t last_prompt_ = 0;
+    /// How many prompts this Weaver has named; the next takes the name after the last.
+    std::int64_t prompts_named_ = 0;
 };
 
 } // namespace loom

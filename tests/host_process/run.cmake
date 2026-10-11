@@ -605,7 +605,7 @@ if(ZEN_GROUP STREQUAL "repl")
         "request Work 1 @some.service \"first\"\noperator\nshow r1\napprove r1\nsession\nsend @some.service Work 1 7\nquit\n"
         "" text code)
     zen_check("approve: the REPL exits 0" code EQUAL 0)
-    zen_check("approve: the prompt shows its name" text MATCHES "prompt = 1")
+    zen_check("approve: the prompt shows its name" text MATCHES "prompt = [1-9][0-9]*")
     zen_check("approve: the session hears the grant as Loom's answer"
               text MATCHES "[[]session[]] ANSWERED  zen[.]AuthorityGranted")
     zen_check("approve: the retry lands, as the session" text MATCHES "Work.7. from weave #[0-9]+   .the SESSION")
@@ -615,15 +615,28 @@ if(ZEN_GROUP STREQUAL "repl")
     message(STATUS "host_process/repl: a second approve on the first prompt")
     zen_scenario_dir(repl-second-press dir)
     zen_run_host("${dir}"
-        "request Work 1 @some.service \"first\"\noperator\napprove r1\nsession\nrequest Work 2 @some.service \"second\"\noperator\nshow r3\napprove r1\nshow r4\nsession\npending\nquit\n"
+        "request Work 1 @some.service \"first\"\noperator\nshow r1\napprove r1\nsession\nrequest Work 2 @some.service \"second\"\noperator\nshow r3\napprove r1\nshow r4\nsession\npending\nquit\n"
         "" text code)
     zen_check("second press: the REPL exits 0" code EQUAL 0)
+    # The two names, as `show r1` and `show r3` printed them: the checks below follow what the
+    # Weaver named, never a number written here.
+    string(REGEX MATCHALL "prompt = [0-9]+" zen_names "${text}")
+    list(LENGTH zen_names zen_name_count)
+    zen_check("second press: both prompts were shown with a name" zen_name_count EQUAL 2)
+    set(zen_first "none")
+    set(zen_second "none")
+    if(zen_name_count EQUAL 2)
+        list(GET zen_names 0 zen_first)
+        list(GET zen_names 1 zen_second)
+        string(REPLACE "prompt = " "" zen_first "${zen_first}")
+        string(REPLACE "prompt = " "" zen_second "${zen_second}")
+    endif()
     zen_check("second press: the second prompt has its own name"
-              text MATCHES "prompt = 2")
-    zen_check("second press: the Weaver refuses a decision naming prompt 1"
-              text MATCHES "names prompt 1")
-    zen_check("second press: and says prompt 2 still awaits a decision"
-              text MATCHES "prompt 2 still awaits")
+              NOT zen_first STREQUAL zen_second)
+    zen_check("second press: the Weaver refuses a decision naming the first prompt"
+              text MATCHES "names prompt ${zen_first}[^0-9]")
+    zen_check("second press: and says the second still awaits a decision"
+              text MATCHES "prompt ${zen_second} still awaits")
     string(REGEX MATCHALL "[[]session[]] ANSWERED" zen_session_answers "${text}")
     list(LENGTH zen_session_answers zen_session_answer_count)
     zen_check("second press: the session heard one answer, its first grant"
