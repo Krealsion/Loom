@@ -17,13 +17,30 @@ gh issue view <n> --comments
 gh issue view <n> --json closedByPullRequestsReferences     # a pull request that already fixes it
 ```
 
-A `ready` issue has four parts, and each one binds:
+A `ready` issue has five parts, and each one binds:
 
 - **What's wrong**: the defect, and how it was found.
 - **Done when**: the outcome and the evidence that shows it. The pull request answers each line.
 - **Fences**: what the change must not do or reach. They bind as firmly as the outcome. Work
   beyond them belongs to another issue, raised in a comment, never to a wider change.
-- **Checked against**: the commit the issue was checked on.
+- **Folders**: the bounded area the change stays inside, as a fenced block, one repository path a
+  line. A path ending in `/` is that folder whole, `*` matches within one folder and `**` across
+  folders, and a line beginning `!` names a path the change must not touch. Three files this
+  repository's own rules make a change touch lie inside every issue's folders without being named:
+  `tests/suite_population.txt`, `tests/entry_population.txt` and `tests/code_values.txt`. A change
+  that needs any other path is a change of scope, raised in a comment as a fence is.
+- **Checked against**: the commit the issue was last checked on, how far that check went
+  (reproduced, read in the source, or reasoned from it), and what it did not cover.
+
+````markdown
+## Folders
+```
+include/zen/*.hpp
+src/detail/
+tests/test_serialize.cpp
+docs/reference/bounds.md
+```
+````
 
 One issue is one branch and one pull request. Terms for contributions from outside the project
 are in [CONTRIBUTING.md](../../CONTRIBUTING.md#code-contributions).
@@ -52,10 +69,10 @@ git switch -c <area>/<what> origin/main
 ```
 
 Reproduce the issue on that commit before changing anything: *checked against* may name an older
-one. If it no longer reproduces, nothing needs repairing; say so on the issue, naming the commit
-you checked, and stop. If it rests on work that has not merged, say which, and build on it only
-as the issue says. Name the branch for its area and its outcome, as `weave/optional-shape-fields`
-or `docs/state-the-present`.
+one, and says what its check did not cover. If it no longer reproduces, nothing needs repairing;
+say so on the issue, naming the commit you checked, and stop. If it rests on work that has not
+merged, say which, and build on it only as the issue says. Name the branch for its area and its
+outcome, as `weave/optional-shape-fields` or `docs/state-the-present`.
 
 Without push access to this repository, fork it with `gh repo fork --remote`, which makes the
 fork `origin` and this repository `upstream`. Then read `origin/main` below as `upstream/main`,
@@ -135,7 +152,8 @@ the page as it reads before the change, quoted, or a text check that fails on it
 ## 7. The change
 
 Before building it, the issue gets its `Proposed idea` comment, with the approach (step 1).
-Then the smallest change that meets *done when* inside the fences. Everything it writes meets
+Then the smallest change that meets *done when* inside the fences and the folders. Everything it
+writes meets
 [the standard for comments and documents](../../CONTRIBUTING.md#comments-and-documents), and
 [best practices](best-practices.md) routes each of the repository's other standards to its owner.
 
@@ -174,8 +192,9 @@ cmake -P tests/check_commit_attribution.cmake
 git diff origin/main...HEAD
 ```
 
-Read the whole diff, every file, as review will read it. What that read finds is fixed and
-verified again before the push. A green you report quotes its lane, never a bare `ctest`
+Read the whole diff, every file, as review will read it, each one inside the issue's folders. What
+that read finds is fixed and verified again before the push. A green you report quotes its lane,
+never a bare `ctest`
 ([the population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)),
 and a Windows green names its compiler ([build and test](../../AGENTS.md#build-and-test)).
 
