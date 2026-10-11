@@ -99,9 +99,9 @@ function(loom_weave_build_contract target)
             set(_loom_wv "applied: the static C++ runtime (MultiThreaded) -- ${_loom_pe}")
         elseif(MINGW AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
             if(_loom_wt MATCHES "^(SHARED|MODULE)_LIBRARY$")
-                # Only toolchains a reload has been measured on: the lowest GCC and Clang whose
-                # weave came back whole over more loads than a process has TLS indexes. An older
-                # one is refused, not assumed.
+                # Only toolchains a reload has been measured on: the lowest GCC and Clang measured
+                # whose weave came back whole over more loads than a process has TLS indexes. An
+                # older one is refused, not assumed.
                 set(LOOM_WEAVE_MINGW_GCC_LEAST 12.2)
                 set(LOOM_WEAVE_MINGW_CLANG_LEAST 18.1)
                 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

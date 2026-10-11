@@ -106,8 +106,8 @@ MEANS
   `MODULE` weave links it in (`-static`), and on the MSVC ABI every object of
   the image is compiled for the static runtime (`MSVC_RUNTIME_LIBRARY`);
 - a runtime the image carries is the image's to give back: under MinGW-w64 a
-  copy of the runtime takes Windows TLS and FLS indexes, which a process has a
-  few thousand of, and libstdc++ its emergency exception pool, and returns
+  copy of the runtime takes Windows TLS and FLS indexes, of which a process has
+  1,088 and 4,080, and libstdc++ its emergency exception pool, and returns
   neither, so the weave also links what returns them when it unloads
   (`loom-weave-tls-return.cpp`, beside `loom-weave.cmake`), and a process may
   load and free it any number of times;
