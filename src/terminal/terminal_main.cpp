@@ -225,6 +225,9 @@ void print_message(const loom::ReceivedMessage& m) {
         std::cout << "     " << f.name << " = " << (c == nullptr ? "(absent)" : render_cell(*c));
         if (is_prompt && f.name == "requester_says") {
             std::cout << "     <- UNTRUSTED: prose the requester wrote about itself";
+        } else if (is_prompt && f.name == "prompt") {
+            std::cout << "     <- this prompt's name: `approve r" << m.id << "` or `refuse r" << m.id
+                      << "` decides it, and nothing else";
         } else if (is_prompt && f.name == "requester") {
             std::cout << "     <- the Weaver's own trusted fact (the bus-stamped requester)";
         }
@@ -285,11 +288,11 @@ int main() {
 
     // ---- the operator seat: a DIFFERENT weave -------------------------------
     //
-    // Four rules, all of them "say one contentless decision to the policy office". No
-    // allow_any, no tap, no discovery, no host root: none is needed to be the user.
+    // Four rules, all of them "say one decision to the policy office". No allow_any, no tap, no
+    // discovery, no host root: none is needed to be the user.
     loom::Grant operator_grant;
-    operator_grant.allow_to_role("zen.ApproveAuthority", 1, kWeaverRole);
-    operator_grant.allow_to_role("zen.RefuseAuthority", 1, kWeaverRole);
+    operator_grant.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
+    operator_grant.allow_to_role("zen.RefuseAuthority", 2, kWeaverRole);
     operator_grant.allow_to_role("zen.RevokeAuthority", 1, kWeaverRole);
     operator_grant.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     const loom::MountedTerminal seat = loom::host_mount_terminal(
@@ -316,7 +319,7 @@ int main() {
     loom::GrantAuthority cap = loom::host_grant_authority(bus, session.id, std::move(ceiling));
 
     loom::Grant weaver_grant;
-    weaver_grant.allow("zen.AuthorityPrompt", 1, seat.id);
+    weaver_grant.allow("zen.AuthorityPrompt", 2, seat.id);
     weaver_grant.allow("zen.AuthorityGranted", 1, session.id);
     weaver_grant.allow("zen.AuthorityDescription", 1, seat.id);
     weaver_grant.allow("zen.AuthorityDescription", 1, session.id);
@@ -415,7 +418,8 @@ as the current participant:
   log [n]                       both transcripts, merged, each line labelled by lens
 
 operator lens only (each reduces to an ordinary message from the operator seat):
-  approve | refuse | revoke
+  approve r<N> | refuse r<N>    decide the authority prompt r<N>, by the name it carries
+  revoke                        take back everything delegated
 
 debug lens only (the HOST looking - powers no participant has):
   weaves | tap [n] | notify <text>
@@ -435,7 +439,7 @@ debug lens only (the HOST looking - powers no participant has):
                  "        send @some.service Work 1 7          (no authority yet; watch the refusal "
                  "receipt)\n"
                  "        request Work 1 @some.service \"so I can finish the job\"\n"
-                 "        operator   -> show r1  -> approve\n"
+                 "        operator   -> show r1  -> approve r1\n"
                  "        session    -> send @some.service Work 1 7\n\n"
                  "  'help' for everything.\n\n";
 
@@ -579,25 +583,50 @@ debug lens only (the HOST looking - powers no participant has):
             } else if (cmd == "authority") {
                 print_result(me.describe_authority());
             } else if (cmd == "approve" || cmd == "refuse" || cmd == "revoke") {
-                // A CONVENIENCE, NEVER A PRIVILEGE. Each is one ordinary contentless message from
-                // the operator seat's own door, asked so the Weaver's Ack or Refused comes back as
-                // the authenticated answer to it. The generic ask path expresses exactly the same
+                // A CONVENIENCE, NEVER A PRIVILEGE. Each is one ordinary message from the operator
+                // seat's own door, asked so the Weaver's Ack or Refused comes back as the
+                // authenticated answer to it. The generic ask path expresses exactly the same
                 // thing — and from the session lens it is judged by Loom, not by this file.
+                const bool decides = cmd != "revoke";
                 const std::string shape =
                     "zen." +
                     std::string(cmd == "approve"  ? "Approve"
                                 : cmd == "refuse" ? "Refuse"
                                                   : "Revoke") +
                     "Authority";
+                const std::uint32_t version = decides ? 2 : 1;
+                std::uint64_t n = 0;
                 if (lens != Lens::Operator) {
                     std::cout << "  refused by this PRESENTATION: `" << cmd
                               << "` is an operator-seat convenience, and this presentation will\n"
                                  "  not quietly change who is speaking. Type `operator` to move "
                                  "the hand — or author\n  it yourself with `ask @"
-                              << kWeaverRole << ' ' << shape
-                              << " 1`, which Loom will judge on its own terms.\n";
+                              << kWeaverRole << ' ' << shape << ' ' << version
+                              << (decides ? " prompt=<n>" : "")
+                              << "`, which Loom will judge on its own terms.\n";
+                } else if (!decides) {
+                    print_result(me.ask(loom::Address::to_role(kWeaverRole), shape, version, {}));
+                } else if (tok.size() != 2 || tok[1].text.size() < 2 || tok[1].text[0] != 'r' ||
+                           !parse_u64(tok[1].text.substr(1), n)) {
+                    std::cout << "  usage: " << cmd
+                              << " r<N>   (r<N> is the authority prompt you decide; `show r<N>` "
+                                 "shows it)\n";
+                } else if (const std::optional<loom::ReceivedMessage> m = me.received(n); !m) {
+                    std::cout << "  no such received message: "
+                              << loom::safe_terminal_text(tok[1].text) << '\n';
+                } else if (m->value.schema().name() != loom::AuthorityPrompt::zen_name ||
+                           m->value.schema().version() != loom::AuthorityPrompt::zen_version ||
+                           m->sender != weaver_id) {
+                    std::cout << "  refused by this PRESENTATION: r" << n
+                              << " is not an authority prompt from this host's Weaver (weave #"
+                              << weaver_id.value << "), so there is nothing in it to decide\n";
                 } else {
-                    print_result(me.ask(loom::Address::to_role(kWeaverRole), shape, 1, {}));
+                    // DECIDED BY THE PROMPT SHOWN. The decision carries the name the prompt
+                    // carried, read from that very message by reference, so it answers that
+                    // prompt or, if another is pending by the time it arrives, nothing.
+                    print_result(me.ask(loom::Address::to_role(kWeaverRole), shape, version,
+                                        {loom::Arg{std::string("prompt"),
+                                                   loom::Ref{"r" + std::to_string(n), "prompt"}}}));
                 }
             } else if (cmd == "pending") {
                 if (!me.awaiting()) {

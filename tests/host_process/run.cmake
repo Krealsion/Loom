@@ -10,7 +10,8 @@
 # It asserts identities, lifecycle counts, effective authority read back through the warden, and
 # responsiveness; never the host's sentences, only distinguishing fragments and numbers, so a
 # rewording passes and a changed meaning fails. Group `console` needs no kernel; group `weaves`
-# needs loadable artifacts.
+# needs loadable artifacts. Group `repl` drives `zen-terminal-repl` (ZEN_HOST_EXE), which hosts
+# its own Loom with a Weaver in it: a decision the person types answers the prompt it names.
 
 cmake_minimum_required(VERSION 3.22)
 
@@ -583,6 +584,68 @@ quit
         zen_check("${zen_run} run: the probe from a folder named in any script is administered"
                   text MATCHES "LIVE, weave 5")
     endforeach()
+
+endif()
+
+# ---- the repl group ------------------------------------------------------------
+
+if(ZEN_GROUP STREQUAL "repl")
+
+    # The operator's received ids follow from the script: r1 the first prompt, r2 the Weaver's
+    # Ack of the approve, r3 the second prompt, r4 the Weaver's answer to the second approve.
+    # A pattern here holds no backslash: zen_check is a macro, so its arguments are parsed a
+    # second time, where `\[` is an invalid escape; a literal bracket or dot is written as a
+    # bracket expression instead.
+
+    # 1. `approve r<N>` answers the prompt it showed: the session hears Loom's grant, and its
+    # retry lands as the session.
+    message(STATUS "host_process/repl: approve answers the prompt shown")
+    zen_scenario_dir(repl-approve dir)
+    zen_run_host("${dir}"
+        "request Work 1 @some.service \"first\"\noperator\nshow r1\napprove r1\nsession\nsend @some.service Work 1 7\nquit\n"
+        "" text code)
+    zen_check("approve: the REPL exits 0" code EQUAL 0)
+    zen_check("approve: the prompt shows its name" text MATCHES "prompt = 1")
+    zen_check("approve: the session hears the grant as Loom's answer"
+              text MATCHES "[[]session[]] ANSWERED  zen[.]AuthorityGranted")
+    zen_check("approve: the retry lands, as the session" text MATCHES "Work.7. from weave #[0-9]+   .the SESSION")
+
+    # 2. A second `approve r1`, after the session asked again, approves nothing: the Weaver
+    # refuses it by name, and the session's second ask is still waiting for a person.
+    message(STATUS "host_process/repl: a second approve on the first prompt")
+    zen_scenario_dir(repl-second-press dir)
+    zen_run_host("${dir}"
+        "request Work 1 @some.service \"first\"\noperator\napprove r1\nsession\nrequest Work 2 @some.service \"second\"\noperator\nshow r3\napprove r1\nshow r4\nsession\npending\nquit\n"
+        "" text code)
+    zen_check("second press: the REPL exits 0" code EQUAL 0)
+    zen_check("second press: the second prompt has its own name"
+              text MATCHES "prompt = 2")
+    zen_check("second press: the Weaver refuses a decision naming prompt 1"
+              text MATCHES "names prompt 1")
+    zen_check("second press: and says prompt 2 still awaits a decision"
+              text MATCHES "prompt 2 still awaits")
+    string(REGEX MATCHALL "[[]session[]] ANSWERED" zen_session_answers "${text}")
+    list(LENGTH zen_session_answers zen_session_answer_count)
+    zen_check("second press: the session heard one answer, its first grant"
+              zen_session_answer_count EQUAL 1)
+    zen_check("second press: the session's second ask is still pending"
+              text MATCHES "ask 2  zen[.]RequestAuthority v1")
+
+    # 3. The presentation decides only by a prompt its Weaver sent, and only from the seat.
+    message(STATUS "host_process/repl: what approve refuses here")
+    zen_scenario_dir(repl-refusals dir)
+    zen_run_host("${dir}"
+        "request Work 1 @some.service \"first\"\napprove r1\noperator\napprove\napprove r9\nrefuse r1\nrefuse r2\nquit\n"
+        "" text code)
+    zen_check("refusals: the REPL exits 0" code EQUAL 0)
+    zen_check("refusals: approve from the session lens is refused here"
+              text MATCHES "refused by this PRESENTATION: `approve`")
+    zen_check("refusals: approve with no prompt is a usage line" text MATCHES "usage: approve r<N>")
+    zen_check("refusals: approve naming no received message" text MATCHES "no such received message: r9")
+    zen_check("refusals: refuse r1 answers the prompt shown"
+              text MATCHES "[[]session[]] ANSWERED  zen[.]Refused")
+    zen_check("refusals: refuse naming a message that is not a prompt"
+              text MATCHES "r2 is not an authority prompt")
 
 endif()
 

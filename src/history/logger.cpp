@@ -153,12 +153,15 @@ LoggerSelection default_selection() {
                               "zen.LoadWeave", "zen.SwapWeave", "zen.ReloadWeave"}) {
         s.shapes.push_back(LogRule{shape, 0});
     }
-    // WHO MAY SPEAK. The Weaver's authority conversation — an ask, its two answers,
-    // a revocation, and the grant that resulted. Rare by construction: a grant is
+    // WHO MAY SPEAK. The Weaver's authority conversation — an ask, the prompt it
+    // put to the operator, the two decisions, a revocation, and the grant that
+    // resulted. A decision carries only the name of the prompt it answers, so the
+    // prompt is kept beside it: without it the record could not say what was
+    // decided. Rare by construction: a person decides each prompt, and a grant is
     // not a lease and is not renewed on a timer.
-    for (const char* shape : {"zen.RequestAuthority", "zen.ApproveAuthority",
-                              "zen.RefuseAuthority", "zen.RevokeAuthority",
-                              "zen.AuthorityGranted"}) {
+    for (const char* shape : {"zen.RequestAuthority", "zen.AuthorityPrompt",
+                              "zen.ApproveAuthority", "zen.RefuseAuthority",
+                              "zen.RevokeAuthority", "zen.AuthorityGranted"}) {
         s.shapes.push_back(LogRule{shape, 0});
     }
     return s;
