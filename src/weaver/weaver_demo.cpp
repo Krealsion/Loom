@@ -6,8 +6,7 @@
 // GrantAuthority), the session acts (a tiny baseline) and the Switchboard enforces. This file
 // is the host: the mounting, which is the whole security posture, and a REPL skin over
 // `loom::ConsoleEngine` that knows nothing about authority: the operator approves by composing
-// `zen.ApproveAuthority` like any other shape, naming the prompt it was shown by a reference to
-// that prompt's own `prompt` field. It prints the walk to try when it starts.
+// `zen.ApproveAuthority` naming the prompt shown (`$mN.prompt`). It prints the walk to try.
 
 #include <zen/console/console.hpp>
 #include <zen/terminal/input_lex.hpp>

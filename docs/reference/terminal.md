@@ -345,9 +345,9 @@ with its actual `AuthorityPrompt`. `approve` and `refuse` take that id and
 nothing else: the REPL refuses one naming no received message, or a message that
 is not an authority prompt from its own Weaver. A second `approve r1` after the
 grant is refused by the Weaver, even when the session has asked again since.
-Approval changes authority only. The final
-send is the person's explicit retry, with a fresh attempt identity. A notice never
-requests a grant, switches the speaking participant or retries on its own.
+Approval changes authority only. The final send is the person's explicit retry,
+with a fresh attempt identity. A notice never requests a grant, switches the
+speaking participant or retries on its own.
 
 ## What this does not govern
 

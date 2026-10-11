@@ -593,8 +593,9 @@ if(ZEN_GROUP STREQUAL "repl")
 
     # The operator's received ids follow from the script: r1 the first prompt, r2 the Weaver's
     # Ack of the approve, r3 the second prompt, r4 the Weaver's answer to the second approve.
-    # A pattern here holds no backslash: zen_check is a macro, which reads its arguments again
-    # and loses one, so a literal bracket or dot is written as a bracket expression.
+    # A pattern here holds no backslash: zen_check is a macro, so its arguments are parsed a
+    # second time, where `\[` is an invalid escape; a literal bracket or dot is written as a
+    # bracket expression instead.
 
     # 1. `approve r<N>` answers the prompt it showed: the session hears Loom's grant, and its
     # retry lands as the session.

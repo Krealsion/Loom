@@ -138,8 +138,13 @@ reuse one.
 
 The name says *which* request, never *who*: a decision is still the seat's only
 by bus stamp, and a stranger naming the right prompt is refused as a stranger.
-Names count per Weaver, so two Weavers can each have a prompt 1; a seat serving
-more than one Weaver tells them apart by the prompt's bus-stamped sender.
+Names count per Weaver, so two Weavers can each have a prompt 1, and a Weaver
+that replaces another in the same office starts again at 1. A seat serving more
+than one Weaver, or one whose Weaver can be replaced, tells them apart by the
+prompt's bus-stamped sender and sends each decision to that Weaver's WeaveId:
+a decision sent to the office lands on whoever holds it when it arrives. The
+[terminal](terminal.md)'s REPL sends to the office because its host mounts one
+Weaver for the process's life.
 `zen.RevokeAuthority` names nothing on purpose: it acts on what is installed,
 never on a request.
 
@@ -165,8 +170,8 @@ never on a request.
 
 The Weaver stores the pending human question and its prompt's name, the deferred
 answer right, the last name it gave a prompt, the operator seat and the
-capability — and nothing about authority. Every time it
-needs to know what a subject may do it calls `mail.describe_authority(...)`,
+capability — and nothing about authority. Every time it needs to know what a
+subject may do it calls `mail.describe_authority(...)`,
 which reads the values `deliver_one` reads through the predicates `deliver_one`
 applies. `zen.AuthorityDescription` is rendered from that snapshot at the moment
 of the ask, so a description cannot drift from enforcement: there is nothing
@@ -252,8 +257,8 @@ boots an operator console, a Weaver, one governed session and one service. Its
 REPL is deliberately shape-agnostic — there is no `approve` or `grant` command;
 the operator composes `zen.ApproveAuthority` the way it would compose any
 registered shape, through the ordinary gated send path, and names the prompt it
-was shown by a reference to that prompt's own field: `send <weaver>
-zen.ApproveAuthority 2 prompt=$m1.prompt`.
+was shown by a reference to that prompt's own field:
+`send <weaver> zen.ApproveAuthority 2 prompt=$m1.prompt`.
 
 PROVEN BY — [`include/zen/weaver/`](../../include/zen/weaver/),
 `tests/test_weaver.cpp` (suite `weaver`), the `grant` suite, and the entry
