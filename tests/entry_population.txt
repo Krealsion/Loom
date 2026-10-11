@@ -32,6 +32,7 @@ optional_member_types        portable
 all                          posix
 weave_contract               kernel
 weave_population             kernel
+weave_reload                 windows
 session_journey              python
 session_client               python
 observe_journey              python

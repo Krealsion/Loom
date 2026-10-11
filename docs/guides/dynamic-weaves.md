@@ -83,7 +83,10 @@ runtime into it instead (`-static` under MinGW-w64, the static runtime on the
 MSVC ABI), so it loads on a machine that holds only Windows and runs with its own
 runtime whatever the host holds ([the contract](../reference/kernel.md#the-weave-build-contract)).
 On MSVC that is the runtime your whole project builds with: `find_package(loom)`
-makes it your default.
+makes it your default. Under MinGW-w64 it also compiles one file of Loom's into
+your weave, which gives back, when the weave unloads, the Windows indexes and
+the memory its copy of the runtime took, so a host may reload it any number of
+times; and it refuses, in words, a toolchain no reload was measured on.
 
 The contract covers a **compilation**, not a file: every translation unit inside
 the image needs it. The installed `loom::core` and `loom::switchboard` already
@@ -95,7 +98,11 @@ for your toolchain yourself, and then verify the artifact rather than trusting
 the flag: `nm -D --defined-only my-weave.so | grep ' u '` must print nothing. On
 Windows link the runtime in, and check that `objdump -p my-weave.dll` (MinGW-w64)
 or `dumpbin /dependents my-weave.dll` (MSVC) names no `libstdc++`, `libgcc_s`,
-`libwinpthread`, `VCRUNTIME` or `MSVCP` library.
+`libwinpthread`, `VCRUNTIME` or `MSVCP` library. Under MinGW-w64 also compile the
+package's `lib/cmake/loom/loom-weave-tls-return.cpp` into the weave and link with
+`-Wl,--wrap=__imp_TlsAlloc,--wrap=__imp_TlsFree,--wrap=__imp_FlsAlloc,--wrap=__imp_FlsFree`;
+`objdump -t my-weave.dll` then lists `__wrap___imp_TlsAlloc` and its three
+siblings.
 On **MSVC** you additionally have to pass `/Zc:preprocessor` yourself — Loom's
 public shape macros are C++20 `__VA_OPT__` and the default traditional
 preprocessor mis-expands them. The supported CMake targets apply it for you;

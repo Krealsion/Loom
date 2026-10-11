@@ -42,6 +42,11 @@ if(COMMAND loom_weave_build_contract)
     return() # the build tree and the installed package may both include this file
 endif()
 
+# What every MinGW-w64 weave links beside its runtime, found beside this file in Loom's source and
+# in the package alike. A global property, since the function runs in whichever directory calls it.
+set_property(GLOBAL PROPERTY LOOM_WEAVE_TLS_RETURN_SOURCE
+             "${CMAKE_CURRENT_LIST_DIR}/loom-weave-tls-return.cpp")
+
 # Apply Loom's weave build contract to an existing shared-library target:
 #   add_library(my-weave SHARED my_weave.cpp)
 #   target_link_libraries(my-weave PRIVATE loom::core loom::switchboard)
@@ -94,23 +99,73 @@ function(loom_weave_build_contract target)
             set(_loom_wv "applied: the static C++ runtime (MultiThreaded) -- ${_loom_pe}")
         elseif(MINGW AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
             if(_loom_wt MATCHES "^(SHARED|MODULE)_LIBRARY$")
-                # Verify rather than assume: a toolchain without its runtime's static archives
-                # cannot link one in, and is refused rather than called self-contained.
+                # Only toolchains a reload has been measured on: the lowest GCC and Clang whose
+                # weave came back whole over more loads than a process has TLS indexes. An older
+                # one is refused, not assumed.
+                set(LOOM_WEAVE_MINGW_GCC_LEAST 12.2)
+                set(LOOM_WEAVE_MINGW_CLANG_LEAST 18.1)
+                if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                    set(_loom_least ${LOOM_WEAVE_MINGW_GCC_LEAST})
+                else()
+                    set(_loom_least ${LOOM_WEAVE_MINGW_CLANG_LEAST})
+                endif()
+                if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS _loom_least)
+                    message(FATAL_ERROR
+                        "loom_weave_build_contract: ${CMAKE_CXX_COMPILER_ID} "
+                        "${CMAKE_CXX_COMPILER_VERSION} targeting MinGW-w64 is older than any "
+                        "this Loom has measured a weave's reload on (${CMAKE_CXX_COMPILER_ID} "
+                        "${_loom_least} and later), so whether '${target}' gives back what its "
+                        "runtime takes is unknown. Refusing to build it as a weave.")
+                endif()
+                # A libstdc++ that registers a thread_local's destructor itself, rather than through
+                # the C runtime's __cxa_thread_atexit, pins the image while the thread that used it
+                # lives: an unload that reports success leaves it in place, and a thread that
+                # outlives the unload hangs the process.
                 include(CheckCXXSourceCompiles)
-                set(CMAKE_REQUIRED_LINK_OPTIONS -static)
-                string(CONCAT _loom_probe "#include <string>\n"
+                string(CONCAT _loom_probe "#include <cstdlib>\n"
+                       "#if defined(__GLIBCXX__) && !defined(_GLIBCXX_HAVE___CXA_THREAD_ATEXIT)\n"
+                       "#error the destructor of a thread_local is registered by libstdc++ itself\n"
+                       "#endif\nint main() { return 0; }")
+                check_cxx_source_compiles("${_loom_probe}" LOOM_CXX_THREAD_EXIT_FROM_CRT)
+                if(NOT LOOM_CXX_THREAD_EXIT_FROM_CRT)
+                    message(FATAL_ERROR
+                        "loom_weave_build_contract: this MinGW-w64 toolchain's libstdc++ was "
+                        "built without the C runtime's __cxa_thread_atexit "
+                        "(_GLIBCXX_HAVE___CXA_THREAD_ATEXIT is not defined), so a weave holding a "
+                        "thread_local with a destructor stays loaded after an unload that reports "
+                        "success, and a thread that outlives the unload hangs the process. "
+                        "Refusing to build '${target}' as a weave; a toolchain whose libstdc++ "
+                        "defines it does not have this.")
+                endif()
+                # The image's copy of the runtime takes Windows TLS and FLS indexes it never
+                # returns, and reserves memory for exceptions it never frees, so the image also
+                # links loom-weave-tls-return.cpp, which gives them back when it unloads, with the
+                # import slots the runtime calls wrapped. Verify rather than assume: a toolchain
+                # that cannot link its runtime statically, or whose linker cannot wrap an import
+                # slot, is refused rather than called self-contained.
+                get_property(_loom_tls GLOBAL PROPERTY LOOM_WEAVE_TLS_RETURN_SOURCE)
+                set(_loom_wrap "")
+                foreach(_loom_slot IN ITEMS TlsAlloc TlsFree FlsAlloc FlsFree)
+                    list(APPEND _loom_wrap "LINKER:--wrap=__imp_${_loom_slot}")
+                endforeach()
+                set(CMAKE_REQUIRED_LINK_OPTIONS -static ${_loom_wrap})
+                string(CONCAT _loom_probe "#include \"${_loom_tls}\"\n#include <string>\n"
                        "int main() { return static_cast<int>(std::string(\"x\").size()) - 1; }")
-                check_cxx_source_compiles("${_loom_probe}" LOOM_CXX_LINKS_RUNTIME_STATICALLY)
+                check_cxx_source_compiles("${_loom_probe}" LOOM_CXX_LINKS_WEAVE_RUNTIME)
                 unset(CMAKE_REQUIRED_LINK_OPTIONS)
-                if(NOT LOOM_CXX_LINKS_RUNTIME_STATICALLY)
+                if(NOT LOOM_CXX_LINKS_WEAVE_RUNTIME)
                     message(FATAL_ERROR
                         "loom_weave_build_contract: this MinGW-w64 toolchain cannot link its C++ "
-                        "runtime statically (-static), so '${target}' would load only beside "
-                        "whichever runtime a machine holds. Refusing to build it as a weave rather "
-                        "than call it self-contained.")
+                        "runtime statically (-static) with the import slots of TlsAlloc, TlsFree, "
+                        "FlsAlloc and FlsFree wrapped (--wrap), so '${target}' would either load "
+                        "only beside whichever runtime a machine holds or keep what its runtime "
+                        "takes after it unloads. Refusing to build it as a weave rather than call "
+                        "it self-contained.")
                 endif()
-                target_link_options(${target} PRIVATE -static)
-                string(CONCAT _loom_wv "applied: -static, the C++ runtime linked into the image "
+                target_sources(${target} PRIVATE "${_loom_tls}")
+                target_link_options(${target} PRIVATE -static ${_loom_wrap})
+                string(CONCAT _loom_wv "applied: -static, the C++ runtime linked into the image, "
+                       "and what it takes returned at unload (loom-weave-tls-return.cpp) "
                        "-- ${_loom_pe}")
             else()
                 string(CONCAT _loom_wv "not applicable to an archive: the image that links it "

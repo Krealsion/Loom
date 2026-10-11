@@ -51,6 +51,8 @@ cmake -P tests/documentation_lane.cmake               # the documentation lane, 
   opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`). MSVC needs `/Zc:preprocessor` for Loom's public
   `__VA_OPT__` macros, and `loom::core` carries it as an interface option; on the MSVC ABI the whole
   build, and a project finding the package, uses the static C++ runtime a weave carries (KERN-05).
+  Under MinGW-w64 each weave also links `cmake/loom-weave-tls-return.cpp`, which returns at unload
+  the TLS and FLS indexes its runtime took; `weave_reload` loads one past the process's TLS ceiling.
   Say which compiler a Windows green was proven on, never a bare "Windows".
 - The installed package has its own witness, outside the build tree:
   `cmake -DZEN_PREFIX=<prefix> -DZEN_WORK=<dir> -P tests/package/run.cmake`. It is the only lane
