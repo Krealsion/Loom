@@ -280,6 +280,19 @@ back as the precise `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` (never downgraded to a
 personal send), and `office_publish` carries its recipient count out-of-band
 so "authorized, zero listeners" and "denied" stay distinct.
 
+**No exception crosses a door, in either direction.** A loaded image may carry
+its own C++ runtime ([KERN-05](../laws/kernel-laws.md)), under which an
+exception thrown on the other side is undefined. So every host door answers what
+stopped the host's own work — its delivery sequence at its end, a host observer
+that threw while a refusal was being recorded, memory — as `ZEN_ERR_REFUSED`;
+`defer_answer` answers no token (0); `release_deferred` answers nothing and keeps
+it on the host's side. A byte sink, the host's handed to `describe`, `snapshot`
+and `policy` or the library's handed to an observe door, never throws into its
+caller: a write it cannot hold is recorded, and the host refuses that load or
+call in its own words ("the host could not hold the bytes library ... wrote"),
+the library that reading. Suite `dispatch_loaded` drives each door through a
+real image.
+
 Delivery-side, the host passes provenance flags + the attested sequence + the
 authored role (v5: its own NUL-terminated parameter, NULL = personal — a
 separate axis, deliberately not another `ZEN_PROV_*` kind) into the library

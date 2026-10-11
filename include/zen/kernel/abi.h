@@ -38,13 +38,15 @@ enum {
     ZEN_PROV_DISPATCH_REFUSAL = 3u
 };
 
-/* Status codes returned across the seam: 0 is OK, negatives are errors. No exception crosses;
- * the host adapter translates these. */
+/* Status codes returned across the seam: 0 is OK, negatives are errors. No exception crosses, in
+ * either direction, since each side may carry its own C++ runtime; the host adapter translates
+ * these, and every host callback answers what stopped it as a status. */
 typedef int32_t ZenStatus;
 enum {
     ZEN_OK = 0,
     ZEN_ERR = -1,                /* generic library-side failure */
-    ZEN_ERR_REFUSED = -2,        /* the host gate refused the bytes */
+    ZEN_ERR_REFUSED = -2,        /* the host refused the request: its gate refused the bytes, or
+                                    the host could not carry it out */
     ZEN_ERR_UNKNOWN_SCHEMA = -3, /* the host could not resolve the payload's schema */
     ZEN_ERR_NO_TARGET = -4,      /* the host had no such routing target */
     /* The sender does not hold the office it asked to speak for; nothing was queued. Not a

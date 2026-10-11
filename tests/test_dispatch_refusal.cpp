@@ -10,14 +10,6 @@
 #include <limits>
 #include <stdexcept>
 
-namespace loom {
-struct DispatchRefusalProbe {
-    static void exhaust_after_next(Switchboard& bus) {
-        bus.next_seq_ = std::numeric_limits<std::uint64_t>::max();
-    }
-    static std::size_t envelope_bytes() { return sizeof(Switchboard::Envelope); }
-};
-} // namespace loom
 using namespace loom;
 using namespace sbfx;
 namespace {

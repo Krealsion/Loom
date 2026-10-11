@@ -14,9 +14,24 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace loom {
+// The Switchboard's test-only boundary (a friend of it): its delivery sequence brought to its end,
+// and the size an envelope retains.
+struct DispatchRefusalProbe {
+    /// One more sequence is allocated, and the one after it is refused.
+    static void exhaust_after_next(Switchboard& bus) {
+        bus.next_seq_ = std::numeric_limits<std::uint64_t>::max();
+    }
+    /// The next sequence asked for is refused.
+    static void exhaust_now(Switchboard& bus) { bus.next_seq_ = 0; }
+    static std::size_t envelope_bytes() { return sizeof(Switchboard::Envelope); }
+};
+} // namespace loom
 
 namespace sbfx {
 
