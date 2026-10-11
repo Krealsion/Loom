@@ -86,8 +86,10 @@ class Session final
     : public WeaveBase<Session, Nothing, Accept<Go, AuthorityGranted, Refused, AuthorityDescription>,
                        Emit<Work, RequestAuthority, DescribeAuthority>> {
 public:
-    /// What the next `kAsk` will request. A field of the test, never of the wire.
+    /// What the next `kAsk` will request, and of which office. Fields of the test, never of the
+    /// wire.
     RequestAuthority want{"Work", 1, kServiceRole, ""};
+    std::string asks = kWeaverRole;
     /// When set, the request this session sends the moment it hears "granted": a requester
     /// asking again before the operator's hand has left the key.
     std::optional<RequestAuthority> ask_on_grant;
@@ -109,7 +111,7 @@ public:
             ++works_attempted;
             (void)mail.send_to_role(kServiceRole, Work{works_attempted});
         } else if (g.step == step::kAsk) {
-            (void)mail.send_to_role(kWeaverRole, want);
+            (void)mail.send_to_role(asks, want);
         } else if (g.step == step::kDescribe) {
             (void)mail.send_to_role(kWeaverRole, DescribeAuthority{});
         }
@@ -182,6 +184,8 @@ class Intruder final
 public:
     std::vector<std::string> refusals;
     std::vector<std::string> granted;
+    /// The prompt its approvals name: the Weaver's first, which the cast sets.
+    std::int64_t names = 0;
     std::vector<AuthorityDescription> described;
     int acks = 0;
 
@@ -189,7 +193,7 @@ public:
         if (g.step == step::kApprove) {
             // The first prompt's name: names are no secret, and naming the right one
             // does not make a stranger the seat.
-            (void)mail.send_to_role(kWeaverRole, ApproveAuthority{1});
+            (void)mail.send_to_role(kWeaverRole, ApproveAuthority{names});
         } else if (g.step == step::kAsk) {
             (void)mail.send_to_role(kWeaverRole, RequestAuthority{"Work", 1, kServiceRole, ""});
         } else if (g.step == step::kDescribe) {
@@ -278,7 +282,14 @@ struct Cast {
             place<Weaver>(bus, weaver_grant(session_id, operator_id), std::string(kWeaverRole),
                           std::move(cap), operator_id);
 
+        intruder->names = name(1);
+
         bus.add_observer([this](const BusEvent& e) { tap.push_back(to_record(e)); });
+    }
+
+    /// The name this cast's Weaver gives its `n`th prompt.
+    std::int64_t name(std::int64_t n) const {
+        return static_cast<std::int64_t>(weaver_id.value) * kPromptNamesPerWeaver + n;
     }
 
     static LiveAuthority default_ceiling() {
@@ -433,8 +444,8 @@ TEST_CASE("a human puts one session in reach of one service, and takes it back")
     //    it, and the rule as the Weaver parsed it.
     REQUIRE(c.op->prompts.size() == 1);
     const AuthorityPrompt& p = c.op->prompts[0];
-    CHECK(p.prompt == 1); // its name, which the operator's decision carries back
-    CHECK(c.weaver->pending_prompt() == 1);
+    CHECK(p.prompt == c.name(1)); // its name, which the operator's decision carries back
+    CHECK(c.weaver->pending_prompt() == c.name(1));
     CHECK(p.requester == static_cast<std::int64_t>(c.session_id.value));
     CHECK(p.shape == "Work");
     CHECK(p.version == 1);
@@ -624,7 +635,7 @@ TEST_CASE("reaching the Weaver does not make a weave the governed session") {
     // An approval now has nothing to approve — the intruder's ask created no
     // pending request that a later yes could land on, not even one naming the
     // first prompt a Weaver puts.
-    c.op->naming = 1;
+    c.op->naming = c.name(1);
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.op->refusals.size() == 1);
     CHECK(c.op->refusals[0].find("no authority request is pending") != std::string::npos);
@@ -673,7 +684,7 @@ TEST_CASE("a decision with nothing pending changes nothing and cannot be banked"
 
     // An approval arrives before any request exists, naming the prompt the next
     // request will be shown under.
-    c.op->naming = 1;
+    c.op->naming = c.name(1);
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.op->refusals.size() == 1);
     CHECK(c.op->refusals[0].find("no authority request is pending") != std::string::npos);
@@ -683,7 +694,7 @@ TEST_CASE("a decision with nothing pending changes nothing and cannot be banked"
     // afterwards — the earlier yes was not applied to it, though it named it.
     c.go(c.session_id, step::kAsk);
     REQUIRE(c.op->prompts.size() == 1);
-    CHECK(c.op->prompts[0].prompt == 1);
+    CHECK(c.op->prompts[0].prompt == c.name(1));
     CHECK(c.weaver->has_pending_request());
     CHECK(c.session->answers.empty());
     c.go(c.operator_id, step::kDescribe);
@@ -726,20 +737,21 @@ TEST_CASE("a decision naming another prompt installs nothing, and the pending pr
     Cast c(work_and_other_work());
     c.go(c.session_id, step::kAsk);
     REQUIRE(c.op->prompts.size() == 1);
-    REQUIRE(c.op->prompts[0].prompt == 1);
+    REQUIRE(c.op->prompts[0].prompt == c.name(1));
 
     // A yes naming a prompt that was never put.
-    c.op->naming = 2;
+    c.op->naming = c.name(2);
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.op->refusals.size() == 1);
-    CHECK(c.op->refusals[0].find("names prompt 2") != std::string::npos);
-    CHECK(c.op->refusals[0].find("prompt 1 still awaits") != std::string::npos);
+    CHECK(c.op->refusals[0].find("names prompt " + std::to_string(c.name(2))) != std::string::npos);
+    CHECK(c.op->refusals[0].find("prompt " + std::to_string(c.name(1)) + " still awaits") !=
+          std::string::npos);
     CHECK(c.op->acks == 0);
 
     // Nothing was installed, the session heard nothing, and prompt 1 is pending
     // exactly as the operator was shown it.
     CHECK(c.session->answers.empty());
-    CHECK(c.weaver->pending_prompt() == 1);
+    CHECK(c.weaver->pending_prompt() == c.name(1));
     c.go(c.operator_id, step::kDescribe);
     REQUIRE(c.op->described.size() == 1);
     CHECK(c.op->described[0].delegated.empty());
@@ -768,19 +780,20 @@ TEST_CASE("a second approve after a grant does not approve the requester's next 
     // The follow-up was put, under a new name.
     REQUIRE(c.op->prompts.size() == 2);
     CHECK(c.op->prompts[1].shape == "OtherWork");
-    CHECK(c.op->prompts[1].prompt == 2);
-    CHECK(c.weaver->pending_prompt() == 2);
+    CHECK(c.op->prompts[1].prompt == c.name(2));
+    CHECK(c.weaver->pending_prompt() == c.name(2));
 
     // THE SECOND PRESS, still on prompt 1.
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.op->refusals.size() == 1);
-    CHECK(c.op->refusals[0].find("names prompt 1") != std::string::npos);
-    CHECK(c.op->refusals[0].find("prompt 2 still awaits") != std::string::npos);
+    CHECK(c.op->refusals[0].find("names prompt " + std::to_string(c.name(1))) != std::string::npos);
+    CHECK(c.op->refusals[0].find("prompt " + std::to_string(c.name(2)) + " still awaits") !=
+          std::string::npos);
     CHECK(c.op->acks == 1);
 
     // OtherWork was NOT installed, and the session was not told it was.
     CHECK(c.session->answers.size() == 1);
-    CHECK(c.weaver->pending_prompt() == 2);
+    CHECK(c.weaver->pending_prompt() == c.name(2));
     c.go(c.operator_id, step::kDescribe);
     REQUIRE(c.op->described.size() == 1);
     CHECK(c.op->described[0].delegated == std::vector<std::string>{"Work v1 -> role some.service"});
@@ -791,14 +804,14 @@ TEST_CASE("a refuse naming another prompt changes nothing") {
     c.go(c.session_id, step::kAsk);
     REQUIRE(c.op->prompts.size() == 1);
 
-    c.op->naming = 7;
+    c.op->naming = c.name(7);
     c.go(c.operator_id, step::kRefuse);
     REQUIRE(c.op->refusals.size() == 1);
-    CHECK(c.op->refusals[0].find("names prompt 7") != std::string::npos);
+    CHECK(c.op->refusals[0].find("names prompt " + std::to_string(c.name(7))) != std::string::npos);
     CHECK(c.op->acks == 0);
     // The session was not told no, and its request is still the operator's to decide.
     CHECK(c.session->answers.empty());
-    CHECK(c.weaver->pending_prompt() == 1);
+    CHECK(c.weaver->pending_prompt() == c.name(1));
 
     c.op->naming.reset();
     c.go(c.operator_id, step::kApprove);
@@ -823,7 +836,7 @@ TEST_CASE("a decision naming no prompt is refused in words, whatever its version
     }
     CHECK(c.op->acks == 0);
     CHECK(c.session->answers.empty());
-    CHECK(c.weaver->pending_prompt() == 1);
+    CHECK(c.weaver->pending_prompt() == c.name(1));
 
     // With nothing pending, a version 1 decision says the same: what it lacks is a name.
     c.op->naming.reset();
@@ -845,21 +858,118 @@ TEST_CASE("a prompt's name is never reused in its Weaver's life") {
     c.go(c.session_id, step::kAsk);          // displaced: refused, and given no name
 
     REQUIRE(c.op->prompts.size() == 3);
-    CHECK(c.op->prompts[0].prompt == 1);
-    CHECK(c.op->prompts[1].prompt == 2);
-    CHECK(c.op->prompts[2].prompt == 3);
-    CHECK(c.weaver->pending_prompt() == 3);
+    CHECK(c.op->prompts[0].prompt == c.name(1));
+    CHECK(c.op->prompts[1].prompt == c.name(2));
+    CHECK(c.op->prompts[2].prompt == c.name(3));
+    CHECK(c.weaver->pending_prompt() == c.name(3));
 
     // A decision naming either earlier prompt, each decided already, reaches nothing.
-    c.op->naming = 2;
+    c.op->naming = c.name(2);
     c.go(c.operator_id, step::kApprove);
-    c.op->naming = 1;
+    c.op->naming = c.name(1);
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.op->refusals.size() == 2);
-    CHECK(c.weaver->pending_prompt() == 3);
+    CHECK(c.weaver->pending_prompt() == c.name(3));
     c.go(c.operator_id, step::kDescribe);
     REQUIRE(c.op->described.size() == 1);
     CHECK(c.op->described[0].delegated == std::vector<std::string>{"Work v1 -> role some.service"});
+}
+
+TEST_CASE("a decision for a replaced Weaver's prompt, sent to the office, decides nothing") {
+    Cast c;
+    c.go(c.session_id, step::kAsk);
+    REQUIRE(c.op->prompts.size() == 1);
+    const std::int64_t old_prompt = c.op->prompts[0].prompt;
+
+    // The Weaver is replaced in its office, its question undecided -- the session reconnects --
+    // and a new Weaver over the same session takes the office.
+    (void)c.bus.unregister_weave(c.weaver_id);
+    GrantAuthority cap = host_grant_authority(c.bus, c.session_id, Cast::default_ceiling());
+    auto [next_id, next] =
+        place<Weaver>(c.bus, Cast::weaver_grant(c.session_id, c.operator_id),
+                      std::string(kWeaverRole), std::move(cap), c.operator_id);
+    REQUIRE(next_id != c.weaver_id);
+
+    // The session asks again, of the new Weaver: its first prompt has a name the old one never put.
+    c.go(c.session_id, step::kAsk);
+    REQUIRE(c.op->prompts.size() == 2);
+    const std::int64_t new_prompt = c.op->prompts[1].prompt;
+    CHECK(new_prompt != old_prompt);
+    CHECK(next->pending_prompt() == new_prompt);
+    const std::size_t heard = c.session->answers.size();
+
+    // THE STALE PRESS: a decision on the old prompt, sent to the office, reaches the new Weaver.
+    c.op->naming = old_prompt;
+    c.go(c.operator_id, step::kApprove);
+    REQUIRE(c.op->refusals.size() == 1);
+    CHECK(c.op->refusals[0].find("names prompt " + std::to_string(old_prompt)) !=
+          std::string::npos);
+    CHECK(c.op->refusals[0].find("prompt " + std::to_string(new_prompt) + " still awaits") !=
+          std::string::npos);
+    CHECK(c.op->acks == 0);
+
+    // Nothing was installed, the session heard nothing, and the new prompt is pending as shown.
+    CHECK(c.session->answers.size() == heard);
+    CHECK(next->pending_prompt() == new_prompt);
+    c.go(c.operator_id, step::kDescribe);
+    REQUIRE(c.op->described.size() == 1);
+    CHECK(c.op->described[0].delegated.empty());
+
+    // The decision naming the new prompt decides it.
+    c.op->naming.reset();
+    c.go(c.operator_id, step::kApprove);
+    CHECK(c.op->acks == 1);
+    REQUIRE(c.session->answers.size() == heard + 1);
+    CHECK(c.session->answers.back().detail == "delegated");
+}
+
+TEST_CASE("two Weavers on one bus never put the same prompt name") {
+    Cast c;
+    // A second session, and a second Weaver governing it, in an office of its own.
+    Grant asker;
+    asker.allow_to_role("zen.RequestAuthority", 1, "loom.weaver.b");
+    auto [other_session_id, other_session] = place<Session>(c.bus, std::move(asker), "");
+    other_session->want = RequestAuthority{"Work", 1, kServiceRole, ""};
+    Grant say;
+    say.allow("zen.AuthorityPrompt", 2, c.operator_id);
+    say.allow_to_any("zen.Refused", 1);
+    GrantAuthority cap = host_grant_authority(c.bus, other_session_id, Cast::default_ceiling());
+    auto [b_id, b] = place<Weaver>(c.bus, std::move(say), std::string("loom.weaver.b"),
+                                   std::move(cap), c.operator_id);
+    (void)b_id;
+
+    // Each Weaver puts its first prompt.
+    c.go(c.session_id, step::kAsk);
+    REQUIRE(c.op->prompts.size() == 1);
+    other_session->asks = "loom.weaver.b";
+    c.go(other_session_id, step::kAsk);
+    REQUIRE(c.op->prompts.size() == 2);
+    CHECK(c.op->prompts[0].prompt != c.op->prompts[1].prompt);
+    CHECK(c.weaver->pending_prompt() == c.op->prompts[0].prompt);
+    CHECK(b->pending_prompt() == c.op->prompts[1].prompt);
+}
+
+TEST_CASE("a Weaver that does not know its WeaveId names no prompt") {
+    // Mounted without `zen_set_self`: it cannot make a name no other Weaver puts, so it puts none.
+    Switchboard bus;
+    Grant asker;
+    asker.allow_to_role("zen.RequestAuthority", 1, kWeaverRole);
+    auto [session_id, session] = place<Session>(bus, std::move(asker), "");
+    Grant op_base;
+    auto [op_id, op] = place<OperatorSeat>(bus, std::move(op_base), "");
+    GrantAuthority cap = host_grant_authority(bus, session_id, Cast::default_ceiling());
+    auto owned = std::make_unique<Weaver>(std::move(cap), op_id);
+    Weaver* weaver = owned.get();
+    (void)bus.register_weave(std::move(owned), Cast::weaver_grant(session_id, op_id),
+                             std::string(kWeaverRole));
+
+    bus.send(session_id, Message(to_value(Go{step::kAsk})));
+    bus.drain_until_idle();
+    REQUIRE(session->answers.size() == 1);
+    CHECK(session->answers[0].kind == "refused");
+    CHECK(session->answers[0].detail.find("cannot name another prompt") != std::string::npos);
+    CHECK(op->prompts.empty());
+    CHECK_FALSE(weaver->has_pending_request());
 }
 
 // =========================================================================
