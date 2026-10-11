@@ -4,9 +4,9 @@
 #ifndef ZEN_HOST_GRANT_WIRING_HPP
 #define ZEN_HOST_GRANT_WIRING_HPP
 
-// Host wiring, not part of the weave-authoring surface: the one expression that yields a
-// `loom::GrantAuthority`, so where the right to administer another subject's authority comes
-// from has a one-file answer. docs/reference/capabilities.md#live-delegation
+// Host wiring, not part of the weave-authoring surface: the two expressions that yield a
+// `loom::GrantAuthority`, so where the right to administer or read another subject's authority
+// comes from has a one-file answer. docs/reference/capabilities.md#live-delegation
 //
 // Baseline authority enters at admission and never changes; delegated live authority may be
 // replaced by a holder of a host-minted capability, within the ceiling the host named; the
@@ -39,6 +39,13 @@ namespace loom {
 inline GrantAuthority host_grant_authority(Switchboard& bus, WeaveId subject,
                                            LiveAuthority ceiling) {
     return bus.grant_authority(subject, std::move(ceiling));
+}
+
+/// Mint, for a host that owns `bus`, the right to read `subject`'s authority and nothing more:
+/// `describe_authority` answers through it, and every install through it, a revocation included,
+/// is refused `DescribeOnly`. For an owner that judges what a subject may do at its own door.
+inline GrantAuthority host_describe_only_authority(Switchboard& bus, WeaveId subject) {
+    return bus.describe_only_authority(subject);
 }
 
 } // namespace loom

@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -93,7 +94,8 @@ inline std::string safe_operator_text(std::string_view raw, std::size_t max_byte
     return out;
 }
 
-/// One send rule, as a person reads it: `Work v1 -> role some.service`. Rendered from the
+/// One send rule, as a person reads it: `Work v1 -> role some.service`, and a door rule with its
+/// door, `ControlRequested v1 -> role zengine.workshop door zengine.files/*`. Rendered from the
 /// snapshot the Kernel handed back, never from a string the Weaver kept, so it cannot disagree
 /// with the bus. A role is printed as a role, never as the weave holding it now: role authority
 /// follows whoever holds the office at delivery.
@@ -109,6 +111,9 @@ inline std::string render_rule(const SendRule& rule) {
         out += "role " + safe_operator_text(rule.target_role, kMaxNameBytes);
     } else {
         out += "weave #" + std::to_string(rule.target.value);
+    }
+    if (rule.door) {
+        out += " door " + safe_operator_text(rule.door->text(), kMaxDoorBytes);
     }
     return out;
 }
@@ -156,7 +161,8 @@ struct WeaverState {
 class Weaver final
     : public WeaveBase<Weaver, WeaverState,
                        Accept<RequestAuthority, ApproveAuthority, RefuseAuthority, RevokeAuthority,
-                              DescribeAuthority, ApproveAuthorityV1, RefuseAuthorityV1>,
+                              DescribeAuthority, RequestAuthorityV1, ApproveAuthorityV1,
+                              RefuseAuthorityV1>,
                        Emit<AuthorityPrompt, AuthorityGranted, AuthorityDescription, Refused, Ack>> {
 public:
     /// `authority` names the governed subject and the ceiling; `operator_seat` is the weave
@@ -208,7 +214,8 @@ public:
             return;
         }
         std::string why;
-        if (!well_formed(ask, &why)) {
+        std::optional<Door> door;
+        if (!well_formed(ask, &door, &why)) {
             (void)mail.answer(Refused{std::move(why)});
             return;
         }
@@ -233,7 +240,9 @@ public:
         // reading, and installing it again would grow a duplicate rule for no
         // authority gained. Asked through the bus's own predicate, over the bus's
         // own values, so "already permitted" means what delivery will mean.
-        if (view.permits_role(ask.shape, static_cast<std::uint32_t>(ask.version), ask.to_role)) {
+        const auto version = static_cast<std::uint32_t>(ask.version);
+        if (door ? view.permits_role(ask.shape, version, ask.to_role, *door)
+                 : view.permits_role(ask.shape, version, ask.to_role)) {
             (void)mail.answer(AuthorityGranted{"already-permitted"});
             return;
         }
@@ -264,17 +273,23 @@ public:
         }
         answer_ = std::move(taken);
         ++prompts_named_;
-        request_ = Requested{name, ask.shape, static_cast<std::uint32_t>(ask.version), ask.to_role};
+        request_ = Requested{name, ask.shape, version, ask.to_role, std::move(door)};
         ++state_.prompts;
-        // The operator sees the prompt's name, the rule AS PARSED, the requester's
-        // identity AS STAMPED, and the requester's prose AS ESCAPED — and nothing
-        // that claims the destination office currently exists.
+        // The operator sees the prompt's name, the door and the rule AS PARSED, the
+        // requester's identity AS STAMPED, and the requester's prose AS ESCAPED — and
+        // nothing that claims the destination office, or its door, currently exists.
         (void)mail.send(operator_seat_,
                         AuthorityPrompt{request_.prompt,
+                                        request_.door ? request_.door->text() : std::string{},
                                         static_cast<std::int64_t>(mail.sender().value),
                                         request_.shape, static_cast<std::int64_t>(request_.version),
                                         request_.to_role, kGrantLifetime,
                                         safe_operator_text(ask.purpose, kMaxPurposeBytes)});
+    }
+
+    /// A version 1 request names no door: it is the request for the door-less rule it names.
+    void on(const RequestAuthorityV1& ask, Mail& mail) {
+        on(RequestAuthority{ask.shape, ask.version, ask.to_role, ask.purpose, std::string{}}, mail);
     }
 
     // ---- the human decides --------------------------------------------------
@@ -299,7 +314,11 @@ public:
         // everything that is already delegated, plus this" — read fresh from the
         // enforcement store each time, never from a copy this Weaver kept.
         LiveAuthority next = view.delegated;
-        next.allow_to_role(request_.shape, request_.version, request_.to_role);
+        if (request_.door) {
+            next.allow_to_role(request_.shape, request_.version, request_.to_role, *request_.door);
+        } else {
+            next.allow_to_role(request_.shape, request_.version, request_.to_role);
+        }
         const GrantChange change = mail.delegate_authority(authority_, std::move(next));
         if (!change) {
             // THE HUMAN DOES NOT OUTRANK THE CAPABILITY. A yes that the ceiling
@@ -410,6 +429,7 @@ private:
         std::string shape;
         std::uint32_t version = 0;
         std::string to_role;
+        std::optional<Door> door; ///< the door the prompt showed, or none
     };
 
     /// Is this decision the user's? Possession of a send grant that happens to
@@ -476,12 +496,14 @@ private:
     }
 
     /// STRUCTURE ONLY. A request must name one shape, one version and one office,
-    /// in bytes that are safe to print and short enough to read. It is
-    /// deliberately NOT checked against the world: whether that role is currently
-    /// held, and whether anything currently accepts that shape, are questions
-    /// about configuration, not about authority — and answering them to an
-    /// untrusted requester would turn a policy door into a service directory.
-    static bool well_formed(const RequestAuthority& ask, std::string* why) {
+    /// and at most one door in the door grammar, in bytes that are safe to print and
+    /// short enough to read. It is deliberately NOT checked against the world:
+    /// whether that role is currently held, whether anything currently accepts that
+    /// shape, and whether the office has that door, are questions about
+    /// configuration, not about authority — and answering them to an untrusted
+    /// requester would turn a policy door into a service directory.
+    static bool well_formed(const RequestAuthority& ask, std::optional<Door>* door,
+                            std::string* why) {
         if (!plain_name(ask.shape)) {
             *why = "the requested shape name must be 1.." + std::to_string(kMaxNameBytes) +
                    " printable non-space characters";
@@ -495,6 +517,15 @@ private:
             *why = "the requested destination role must be 1.." + std::to_string(kMaxNameBytes) +
                    " printable non-space characters";
             return false;
+        }
+        if (!ask.door.empty()) {
+            std::string bad;
+            *door = Door::parse(ask.door, &bad);
+            if (!*door) {
+                *why = "the requested door is malformed: " +
+                       safe_operator_text(bad, 2 * kMaxDoorBytes);
+                return false;
+            }
         }
         return true;
     }
@@ -532,6 +563,9 @@ private:
             return "this Weaver's capability was issued by a different Loom; nothing was changed";
         case GrantOutcome::NoLiveDelivery:
             return "this Weaver has no live standing to administer; nothing was changed";
+        case GrantOutcome::DescribeOnly:
+            return "this Weaver's capability only reads the session's authority; nothing was "
+                   "changed";
         case GrantOutcome::Installed:
             break;
         }

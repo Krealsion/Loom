@@ -16,6 +16,7 @@
 #include <zen/weave.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -1093,6 +1094,7 @@ TEST_CASE("every administration outcome is reachable and named") {
     CHECK(std::string(name_of(GrantOutcome::NoSuchSubject)) == "NoSuchSubject");
     CHECK(std::string(name_of(GrantOutcome::ExceedsCeiling)) == "ExceedsCeiling");
     CHECK(std::string(name_of(GrantOutcome::NoLiveDelivery)) == "NoLiveDelivery");
+    CHECK(std::string(name_of(GrantOutcome::DescribeOnly)) == "DescribeOnly");
 
     // A Bus that is not a live participating context truthfully says so rather
     // than pretending to have administered anything.
@@ -1124,6 +1126,270 @@ TEST_CASE("every administration outcome is reachable and named") {
     CHECK(refused.previous.empty());
     CHECK(refused.installed.empty());
     CHECK_FALSE(static_cast<bool>(refused));
+}
+
+// =========================================================================
+// Doors: a name on a send rule to an office, which that office judges.
+// =========================================================================
+
+TEST_CASE("a door is read by its grammar, and every other spelling is refused in words") {
+    for (const char* text : {"zengine.files/*", "zengine.files/files", "zengine.files/files:*",
+                             "zengine.files/files:files.open",
+                             "zengine.builder-pane/builder:builder.*",
+                             "zengine.builder-pane/builder:builder.build-realize", "arrange:*",
+                             "arrange:split_1", "workshop:quit"}) {
+        CAPTURE(text);
+        std::string why;
+        const std::optional<Door> door = Door::parse(text, &why);
+        REQUIRE_MESSAGE(door.has_value(), why);
+        CHECK(door->text() == text); // one spelling per door: what was written is what is held
+    }
+
+    // `*` stands only as a whole last segment or as an id's tail after a dot; anything else is
+    // malformed, and the refusal says which rule it breaks.
+    const std::string long_door = "o/p:" + std::string(kMaxDoorBytes, 'x');
+    for (const std::string& text :
+         {std::string("zengine.files*"), std::string("builder.build*"), std::string("*"),
+          std::string("zengine.files*/x"), std::string("zengine.files/files*"),
+          std::string("zengine.builder-pane/builder:builder.build*"), std::string("o/*:x"),
+          std::string("o/p:*.x"), std::string("o/p:a.*.*"), std::string("o/p:.*"),
+          std::string("*/p"), std::string("*:x"), std::string("o/p:a..b"), std::string("o./p"),
+          std::string(".o/p"), std::string("o/p."), std::string("o/"), std::string("o/p:"),
+          std::string("o/p:a:b"), std::string("o/p/q"), std::string("zengine.files"),
+          std::string("o p/x"), std::string("o/p:x\x1b"), std::string(""), long_door}) {
+        CAPTURE(text);
+        std::string why;
+        CHECK_FALSE(Door::parse(text, &why).has_value());
+        CHECK_FALSE(why.empty());
+    }
+    std::string why;
+    CHECK_FALSE(Door::parse("builder.build*", &why).has_value());
+    CHECK(why.find("is not a door") != std::string::npos);
+    CHECK_FALSE(Door::parse("o/p:builder.build*", &why).has_value());
+    CHECK(why.find("'*' that is not a whole last segment") != std::string::npos);
+    CHECK_FALSE(Door::parse(long_door, &why).has_value());
+    CHECK(why.find(std::to_string(kMaxDoorBytes)) != std::string::npos);
+}
+
+TEST_CASE("a door contains whole segments, never a prefix of one") {
+    const auto contains = [](const char* outer, const char* inner) {
+        const std::optional<Door> o = Door::parse(outer);
+        const std::optional<Door> i = Door::parse(inner);
+        REQUIRE(o.has_value());
+        REQUIRE(i.has_value());
+        return o->contains(*i);
+    };
+    // An office's `*` contains every door beneath the office, and no other office's.
+    CHECK(contains("zengine.files/*", "zengine.files/files:files.open"));
+    CHECK(contains("zengine.files/*", "zengine.files/files"));
+    CHECK(contains("zengine.files/*", "zengine.files/files:*"));
+    CHECK(contains("zengine.files/*", "zengine.files/*"));
+    CHECK_FALSE(contains("zengine.files/*", "zengine.files-evil/x"));
+    CHECK_FALSE(contains("zengine.files/*", "zengine.files.x/files"));
+    // A pane's `*` contains its controls, not the pane's own door, and no other pane's.
+    CHECK(contains("o/p:*", "o/p:x"));
+    CHECK(contains("o/p:*", "o/p:x.y"));
+    CHECK(contains("o/p:*", "o/p:x.*"));
+    CHECK_FALSE(contains("o/p:*", "o/p2:x"));
+    CHECK_FALSE(contains("o/p:*", "o/p"));
+    CHECK_FALSE(contains("o/p:*", "o/*"));
+    // The pane's own door contains only itself, and none of its controls.
+    CHECK(contains("o/p", "o/p"));
+    CHECK_FALSE(contains("o/p", "o/p:x"));
+    CHECK_FALSE(contains("o/p", "o/p:*"));
+    // An id's tail contains the ids beneath it, and not itself without the star.
+    CHECK(contains("zengine.builder-pane/builder:builder.*",
+                   "zengine.builder-pane/builder:builder.build"));
+    CHECK(contains("zengine.builder-pane/builder:builder.*",
+                   "zengine.builder-pane/builder:builder.build-realize"));
+    CHECK_FALSE(contains("zengine.builder-pane/builder:builder.*",
+                         "zengine.builder-pane/builder:builder"));
+    CHECK_FALSE(contains("zengine.builder-pane/builder:builder.*",
+                         "zengine.builder-pane/builder:*"));
+    CHECK_FALSE(contains("o/p:a.b.*", "o/p:a.*"));
+    // An exact id is itself and nothing longer.
+    CHECK(contains("zengine.builder-pane/builder:builder.build",
+                   "zengine.builder-pane/builder:builder.build"));
+    CHECK_FALSE(contains("zengine.builder-pane/builder:builder.build",
+                         "zengine.builder-pane/builder:builder.build-realize"));
+    CHECK_FALSE(contains("zengine.builder-pane/builder:builder.build",
+                         "zengine.builder-pane/builder:builder.build.x"));
+    // A root an office declares is its own tree.
+    CHECK(contains("arrange:*", "arrange:split_1"));
+    CHECK_FALSE(contains("arrange:*", "arrange-evil:split_1"));
+    CHECK_FALSE(contains("arrange:*", "arrange/p"));
+    CHECK_FALSE(contains("o/*", "o:x"));
+    CHECK_FALSE(contains("o:*", "o/p:x"));
+}
+
+TEST_CASE("a door rule permits its door and no other") {
+    const Door open = *Door::parse("zengine.files/files:files.open");
+    LiveAuthority a;
+    a.allow_to_role("ControlRequested", 1, "zengine.workshop", open);
+
+    CHECK(a.permits_role("ControlRequested", 1, "zengine.workshop", open));
+    CHECK_FALSE(a.permits_role("ControlRequested", 1, "zengine.workshop",
+                               *Door::parse("zengine.files/files:files.delete")));
+    CHECK_FALSE(a.permits_role("ControlRequested", 1, "zengine.workshop",
+                               *Door::parse("zengine.files/files")));
+    CHECK_FALSE(a.permits_role("ControlRequested", 1, "zengine.workshop",
+                               *Door::parse("zengine.files/*")));
+    // The rest of the rule still counts: another office, shape or version is another rule.
+    CHECK_FALSE(a.permits_role("ControlRequested", 1, "zengine.other", open));
+    CHECK_FALSE(a.permits_role("OtherRequested", 1, "zengine.workshop", open));
+    CHECK_FALSE(a.permits_role("ControlRequested", 2, "zengine.workshop", open));
+
+    // A wide door rule permits each door beneath it, through a Grant as through a view.
+    Grant g;
+    g.allow_to_role("ControlRequested", 1, "zengine.workshop", *Door::parse("zengine.files/*"));
+    CHECK(g.permits_role("ControlRequested", 1, "zengine.workshop", open));
+    CHECK_FALSE(g.permits_role("ControlRequested", 1, "zengine.workshop",
+                               *Door::parse("zengine.builder-pane/builder:builder.build")));
+    REQUIRE(g.rules().size() == 1);
+    REQUIRE(g.rules().front().door.has_value());
+    CHECK(g.rules().front().door->text() == "zengine.files/*");
+}
+
+TEST_CASE("the door axis is disjoint both ways, and delivery asks only the door-less question") {
+    const Door files = *Door::parse("zengine.files/*");
+    LiveAuthority plain;
+    plain.allow_to_role("ControlRequested", 1, "zengine.workshop");
+    plain.allow_to_any("ControlRequested", 1);
+    plain.allow_any();
+    // A door-less rule, `any` rules included, answers no door question...
+    CHECK(plain.permits_role("ControlRequested", 1, "zengine.workshop"));
+    CHECK_FALSE(plain.permits_role("ControlRequested", 1, "zengine.workshop", files));
+
+    // ...and a door rule no door-less one: holding a door is not being able to speak.
+    LiveAuthority door_only;
+    door_only.allow_to_role("ControlRequested", 1, "zengine.workshop", files);
+    CHECK_FALSE(door_only.permits_role("ControlRequested", 1, "zengine.workshop"));
+    CHECK_FALSE(door_only.permits("ControlRequested", 1, WeaveId{}));
+
+    // The same at the real boundary: a subject holding only a door rule to an office is refused
+    // when it speaks to that office, since delivery asks the door-less question.
+    Switchboard bus;
+    auto owned = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
+        work_schema()});
+    ProbeWeave* service = owned.get();
+    const WeaveId service_id = bus.register_weave(std::move(owned), Grant::nothing(), "svc");
+    Grant session_base;
+    session_base.allow_to_role("Work", 1, "svc", *Door::parse("svc/desk:*"));
+    Registered session = register_probe(bus, {ping_schema()}, 2, true, session_base);
+    std::vector<TapRecord> tap;
+    bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
+    session.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
+        b.send_to_role("svc", Message(work(1)));
+    };
+    bus.send(session.id, Message(ping(1)));
+    bus.drain_until_idle();
+    CHECK(service->handled_names.empty());
+    bool denied = false;
+    for (const TapRecord& r : tap) {
+        denied = denied || (r.kind == EventKind::Refused &&
+                            r.reason == RefusalReason::CapabilityDenied && r.schema == "Work");
+    }
+    CHECK(denied);
+    (void)service_id;
+}
+
+TEST_CASE("a ceiling of doors delegates the doors it contains and nothing beside them") {
+    Switchboard bus;
+    Registered session = register_probe(bus, {ping_schema()}, 2, true, Grant::nothing());
+    Registered admin = register_probe(bus, {ask_admin_schema()}, 2, true, Grant::nothing());
+
+    LiveAuthority attempt;
+    GrantChange out{};
+    GrantAuthority cap;
+    AuthorityView view{};
+    admin.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
+        out = b.delegate_authority(cap, attempt);
+        view = b.describe_authority(cap);
+    };
+    auto try_with = [&](const GrantAuthority& c, LiveAuthority a) {
+        cap = c;
+        attempt = std::move(a);
+        bus.send(admin.id, Message(ask_admin(1)));
+        bus.drain_until_idle();
+        return out.outcome;
+    };
+    const auto door_rule = [](const char* door) {
+        return LiveAuthority{}.allow_to_role("ControlRequested", 1, "zengine.workshop",
+                                             *Door::parse(door));
+    };
+
+    const GrantAuthority files = host_grant_authority(bus, session.id,
+                                                      door_rule("zengine.files/*"));
+    CHECK(try_with(files, door_rule("zengine.files/files:files.open")) ==
+          GrantOutcome::Installed);
+    // What was installed is the door asked for, and the view answers the door question with it.
+    REQUIRE(view.delegated.rules().size() == 1);
+    CHECK(view.delegated.rules().front().door->text() == "zengine.files/files:files.open");
+    CHECK(view.permits_role("ControlRequested", 1, "zengine.workshop",
+                            *Door::parse("zengine.files/files:files.open")));
+    CHECK_FALSE(view.permits_role("ControlRequested", 1, "zengine.workshop",
+                                  *Door::parse("zengine.files/files:files.delete")));
+    CHECK_FALSE(view.permits_role("ControlRequested", 1, "zengine.workshop"));
+
+    CHECK(try_with(files, door_rule("zengine.files/*")) == GrantOutcome::Installed);
+    CHECK(try_with(files, door_rule("zengine.builder-pane/builder:builder.build")) ==
+          GrantOutcome::ExceedsCeiling);
+    CHECK(try_with(files, door_rule("zengine.files-evil/x")) == GrantOutcome::ExceedsCeiling);
+    // A door ceiling holds no door-less rule, and a door-less ceiling, `any` included, no door.
+    CHECK(try_with(files, LiveAuthority{}.allow_to_role("ControlRequested", 1,
+                                                        "zengine.workshop")) ==
+          GrantOutcome::ExceedsCeiling);
+    const GrantAuthority plain = host_grant_authority(
+        bus, session.id, LiveAuthority{}.allow_to_role("ControlRequested", 1, "zengine.workshop"));
+    CHECK(try_with(plain, door_rule("zengine.files/*")) == GrantOutcome::ExceedsCeiling);
+    const GrantAuthority wide = host_grant_authority(bus, session.id, LiveAuthority{}.allow_any());
+    CHECK(try_with(wide, door_rule("zengine.files/*")) == GrantOutcome::ExceedsCeiling);
+    // The office still counts: the same door to another office is another rule.
+    CHECK(try_with(files, LiveAuthority{}.allow_to_role("ControlRequested", 1, "zengine.other",
+                                                        *Door::parse("zengine.files/*"))) ==
+          GrantOutcome::ExceedsCeiling);
+}
+
+TEST_CASE("a describe-only capability reads its subject's authority and installs nothing") {
+    Switchboard bus;
+    Registered session = register_probe(bus, {ping_schema()}, 2, true,
+                                         Grant{}.allow_to_role("Work", 1, "svc"));
+    Registered admin = register_probe(bus, {ask_admin_schema()}, 2, true, Grant::nothing());
+    const Door files = *Door::parse("zengine.files/*");
+    const GrantAuthority full = host_grant_authority(
+        bus, session.id, LiveAuthority{}.allow_to_role("ControlRequested", 1, "zengine.workshop",
+                                                       files));
+    const GrantAuthority reader = host_describe_only_authority(bus, session.id);
+    CHECK(reader.valid());
+    CHECK(reader.describe_only());
+    CHECK_FALSE(full.describe_only());
+    CHECK(reader.ceiling().empty());
+
+    GrantChange installed{}, revoked{}, widened{};
+    AuthorityView seen{};
+    admin.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
+        installed = b.delegate_authority(
+            full, LiveAuthority{}.allow_to_role("ControlRequested", 1, "zengine.workshop", files));
+        revoked = b.delegate_authority(reader, LiveAuthority::nothing());
+        widened = b.delegate_authority(reader, LiveAuthority{}.allow_any());
+        seen = b.describe_authority(reader);
+    };
+    bus.send(admin.id, Message(ask_admin(1)));
+    bus.drain_until_idle();
+
+    REQUIRE(installed.outcome == GrantOutcome::Installed);
+    // Its revoke is refused, and what was delegated stands.
+    CHECK(revoked.outcome == GrantOutcome::DescribeOnly);
+    CHECK_FALSE(static_cast<bool>(revoked));
+    CHECK(widened.outcome == GrantOutcome::DescribeOnly);
+    // It reads what the bus will apply, the door included.
+    REQUIRE(seen.available);
+    CHECK(seen.subject == session.id);
+    CHECK(seen.permits_role("Work", 1, "svc"));
+    CHECK(seen.permits_role("ControlRequested", 1, "zengine.workshop",
+                            *Door::parse("zengine.files/files:files.open")));
+    REQUIRE(seen.delegated.rules().size() == 1);
+    CHECK(seen.delegated.rules().front().door->text() == "zengine.files/*");
 }
 
 } // TEST_SUITE

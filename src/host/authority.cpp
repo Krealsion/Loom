@@ -157,6 +157,16 @@ bool apply_rule(const std::string& raw, LiveAuthority* into, std::string* error)
             *error = "'" + text + "' names no office after 'role'";
             return false;
         }
+        const std::size_t sp = office.find_first_of(" \t");
+        const std::string after = sp == std::string::npos ? std::string{} : trim(office.substr(sp));
+        if (after == "door" || after.rfind("door ", 0) == 0 || after.rfind("door\t", 0) == 0) {
+            // A door is judged by the office it names, at the act, from authority installed live
+            // within a Weaver's ceiling; nothing reads one from this file, so none is kept here.
+            *error = "'" + text +
+                     "' names a door, and an authority file holds no doors: a door rule is "
+                     "installed live, by a Weaver within its ceiling";
+            return false;
+        }
         if (any_shape) {
             // LiveAuthority has no any-shape-to-a-role rule, and inventing one here
             // would be inventing authority the bus cannot express. Say so plainly.

@@ -227,8 +227,8 @@ public:
                        const std::vector<Arg>& args);
 
     /// ASK A POLICY OFFICE FOR ONE EXACT SEND RIGHT — sugar, and only sugar, over
-    /// `ask(to_role(office), "zen.RequestAuthority" v1, {shape, version, to_role,
-    /// purpose})`.
+    /// `ask(to_role(office), "zen.RequestAuthority" v2, {shape, version, to_role,
+    /// purpose, door})`. An empty `door` asks for a door-less rule.
     ///
     /// There is no Weaver in this core: no include, no type, no branch. The office
     /// is an address, the request is an ordinary composed message out of the
@@ -238,7 +238,8 @@ public:
     /// sends nothing at all.
     TerminalResult request_authority(std::string_view shape, std::int64_t version,
                                      std::string_view to_role, std::string_view purpose,
-                                     std::string_view office = kPolicyOffice);
+                                     std::string_view office = kPolicyOffice,
+                                     std::string_view door = {});
 
     /// Ask a policy office what this participant's authority currently is. The same
     /// sugar, over `zen.DescribeAuthority v1`. The answer is rendered by the

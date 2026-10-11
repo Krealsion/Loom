@@ -399,16 +399,17 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
 TerminalResult TerminalSession::request_authority(std::string_view shape, std::int64_t version,
                                                   std::string_view to_role,
                                                   std::string_view purpose,
-                                                  std::string_view office) {
-    // SUGAR, AND ONLY SUGAR. Four named arguments and an ordinary role-addressed ask; the shape is
+                                                  std::string_view office, std::string_view door) {
+    // SUGAR, AND ONLY SUGAR. Five named arguments and an ordinary role-addressed ask; the shape is
     // resolved out of the vocabulary the host supplied, like every other. Nothing here knows what
-    // a Weaver is, and nothing here calls one.
+    // a Weaver is, and nothing here calls one, or reads the door.
     std::vector<Arg> args;
     args.push_back(Arg{std::string("shape"), FieldValue{std::string(shape)}});
     args.push_back(Arg{std::string("version"), FieldValue{version}});
     args.push_back(Arg{std::string("to_role"), FieldValue{std::string(to_role)}});
     args.push_back(Arg{std::string("purpose"), FieldValue{std::string(purpose)}});
-    return ask(Address::to_role(std::string(office)), "zen.RequestAuthority", 1, args);
+    args.push_back(Arg{std::string("door"), FieldValue{std::string(door)}});
+    return ask(Address::to_role(std::string(office)), "zen.RequestAuthority", 2, args);
 }
 
 TerminalResult TerminalSession::describe_authority(std::string_view office) {

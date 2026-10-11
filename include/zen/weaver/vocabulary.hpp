@@ -21,9 +21,9 @@
 //   The decision is the shape, never a field. `ApproveAuthority` and `RefuseAuthority` are two
 //       shapes that carry only the name of the prompt they answer; a mistyped shape name is a
 //       gate refusal, never a yes.
-//   The request language is narrower than `LiveAuthority`: one shape, one version, one office.
-//       No "any shape", "any target", WeaveId or observe rule can be asked for, however wide
-//       the Weaver's ceiling.
+//   The request language is narrower than `LiveAuthority`: one shape, one version, one office,
+//       and at most one door. No "any shape", "any target", WeaveId or observe rule can be asked
+//       for, however wide the Weaver's ceiling.
 //
 // docs/reference/weaver.md#four-rules-that-live-in-the-field-lists. The wire names carry the
 // `zen.` prefix, so the registration blocks are written by hand, as in standard_shapes.hpp. A
@@ -40,19 +40,40 @@ namespace loom {
 
 // ---- the governed session speaks -------------------------------------------
 
-/// Ask for one exact send right: "may I say `shape v<version>` to whoever holds `to_role`?".
-/// Sent as an ordinary message, so the Weaver answers through Loom's own answer authority and
-/// the session reads `mail.answers_ask()`; there is no request id of its own. A role, not a
-/// WeaveId: authority that follows an office follows whoever holds it at delivery, as
-/// `Grant::allow_to_role` does. `purpose` is untrusted prose, never part of the decision, and
-/// escaped by the Weaver before an operator sees it (`safe_operator_text`); it may be empty.
+/// Ask for one exact send right: "may I say `shape v<version>` to whoever holds `to_role`?",
+/// or, naming a `door`, "may I act at that door with it?". Sent as an ordinary message, so the
+/// Weaver answers through Loom's own answer authority and the session reads
+/// `mail.answers_ask()`; there is no request id of its own. A role, not a WeaveId: authority
+/// that follows an office follows whoever holds it at delivery, as `Grant::allow_to_role` does.
+/// A door is parsed by the Weaver (`Door::parse`) and a malformed one refused in words; empty,
+/// the request is for a door-less rule. `purpose` is untrusted prose, never part of the
+/// decision, and escaped by the Weaver before an operator sees it (`safe_operator_text`); it may
+/// be empty.
 struct RequestAuthority {
     std::string shape;    ///< the shape name the session wants to be allowed to send
     std::int64_t version; ///< that shape's version (1 .. UINT32_MAX)
     std::string to_role;  ///< the office it wants to speak to
     std::string purpose;  ///< requester-authored prose. UNTRUSTED. may be empty
+    std::string door{};   ///< the door the rule is to name, or empty for a door-less rule
 
     using ZenSelf = RequestAuthority;
+    static constexpr const char* zen_name = "zen.RequestAuthority";
+    static constexpr std::uint32_t zen_version = 2;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(to_role),
+                               ZEN_FIELD(purpose), ZEN_FIELD(door));
+    }
+};
+
+/// The request of version 1, which names no door. A Weaver answers it as the request for the
+/// door-less rule it names.
+struct RequestAuthorityV1 {
+    std::string shape;
+    std::int64_t version;
+    std::string to_role;
+    std::string purpose;
+
+    using ZenSelf = RequestAuthorityV1;
     static constexpr const char* zen_name = "zen.RequestAuthority";
     static constexpr std::uint32_t zen_version = 1;
     static auto zen_fields() {
@@ -70,6 +91,10 @@ struct RequestAuthority {
 ///                    its bus is given, by this Weaver or any other, which a
 ///                    decision on it carries back so that it lands on this
 ///                    request or nowhere.
+///   `door`           TRUSTED. The door the rule names, as the Weaver parsed it,
+///                    beside the prompt's name, so a person reads the door a yes
+///                    opens with the name that decides it; empty for a door-less
+///                    rule. A yes installs exactly this door.
 ///   `requester`      TRUSTED. The bus-stamped sender, which the Weaver has
 ///                    already checked is the one subject it governs.
 ///   `shape/version/
@@ -87,9 +112,11 @@ struct RequestAuthority {
 /// IT DOES NOT CLAIM THE DESTINATION EXISTS. "requests: Work v1 -> role
 /// some.service" means exactly that and never "requests access to the running
 /// FooService at #19": the Weaver does not resolve the role, is not authorized
-/// to, and authority is not service discovery.
+/// to, and authority is not service discovery. Nor does a door claim that the
+/// office has such a pane or control: what a door names is the office's to answer.
 struct AuthorityPrompt {
     std::int64_t prompt;        ///< TRUSTED: this prompt's name, unique on its bus
+    std::string door;           ///< TRUSTED: the requested door, as parsed; empty for none
     std::int64_t requester;     ///< TRUSTED: the bus-stamped requester's WeaveId
     std::string shape;          ///< TRUSTED: the requested shape, as parsed
     std::int64_t version;       ///< TRUSTED: its version, as parsed
@@ -99,11 +126,11 @@ struct AuthorityPrompt {
 
     using ZenSelf = AuthorityPrompt;
     static constexpr const char* zen_name = "zen.AuthorityPrompt";
-    static constexpr std::uint32_t zen_version = 2;
+    static constexpr std::uint32_t zen_version = 3;
     static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(prompt), ZEN_FIELD(requester), ZEN_FIELD(shape),
-                               ZEN_FIELD(version), ZEN_FIELD(to_role), ZEN_FIELD(until),
-                               ZEN_FIELD(requester_says));
+        return std::make_tuple(ZEN_FIELD(prompt), ZEN_FIELD(door), ZEN_FIELD(requester),
+                               ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(to_role),
+                               ZEN_FIELD(until), ZEN_FIELD(requester_says));
     }
 };
 
