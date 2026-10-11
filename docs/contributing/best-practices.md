@@ -209,7 +209,7 @@ names; reference [terminal](../reference/terminal.md), [weaver](../reference/wea
 [history](../reference/history.md), [senses](../reference/senses.md),
 [joint publication](../reference/joint-publication.md) and [observation](../reference/observation.md);
 the suites `terminal`, `weaver`, `console`, `recorder`, `logger`, `sense` and `observe`, and
-`joint` where the kernel is built; the entry `hook_return_types`.
+`joint` where the kernel is built; the entries `hook_return_types` and `terminal_repl`.
 
 - **A terminal session is an ordinary weave**, not a host and not root.
   [What it is, and what it is not](../reference/terminal.md#what-it-is-and-what-it-is-not)
@@ -218,6 +218,9 @@ the suites `terminal`, `weaver`, `console`, `recorder`, `logger`, `sense` and `o
 - **The Weaver changes authority and performs nothing**, and a grant is not a lease.
   [The flow](../reference/weaver.md#the-flow) and
   [a policy delegate's death does not revoke what it granted](../reference/known-seams.md#a-policy-delegates-death-does-not-revoke-what-it-granted)
+- **A Weaver's decision names the prompt it answers**, and an operator decides by the prompt it
+  shows, never by whatever is pending.
+  [A decision names the prompt it answers](../reference/weaver.md#a-decision-names-the-prompt-it-answers)
 - **Reading a Sense takes its own observe rule.**
   [SENSE-05](../laws/sense-laws.md#sense-05--reading-is-authorized-and-the-repository-is-bounded)
 - **A publication shown is not a publication applied.**
