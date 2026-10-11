@@ -44,6 +44,16 @@ target_compile_options(zen-warnings INTERFACE
     $<$<AND:$<CXX_COMPILER_ID:GNU,Clang>,$<BOOL:${ZEN_WERROR}>>:-Werror>
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
     $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<BOOL:${ZEN_WERROR}>>:/WX>)
+# A COFF object holds a limited number of sections, and a heavily templated unit built with `-g`
+# (src/host/host_main.cpp under the Windows kernel) passes it; MinGW's `-mbig-obj` and MSVC's
+# `/bigobj` lift it, for every source, because the ceiling is the toolchain's and the next header
+# to grow meets it elsewhere. ELF has none, so the Linux lanes ask for nothing.
+if(MINGW)
+    target_compile_options(zen-warnings INTERFACE -Wa,-mbig-obj)
+endif()
+if(MSVC)
+    target_compile_options(zen-warnings INTERFACE /bigobj)
+endif()
 
 # Sanitizers, applied to compile and link of everything that opts in.
 add_library(zen-sanitize INTERFACE)
