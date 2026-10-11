@@ -12,7 +12,7 @@ that says so, because it is the first place it matters.
 
 | | What | Why | Tested here |
 |---|---|---|---|
-| **C++ compiler** | GCC ≥ 11.4, Clang ≥ 14, or MSVC 19.3x | C++20. Loom's public shape macros use `__VA_OPT__` | GCC 11.4 (WSL Ubuntu 22.04); MinGW-w64 GCC 13.1 and MSVC 19.5x on Windows |
+| **C++ compiler** | GCC ≥ 11.4, Clang ≥ 14, or MSVC 19.3x | C++20. Loom's public shape macros use `__VA_OPT__` | GCC 11.4 (WSL Ubuntu 22.04); MinGW-w64 GCC 15.2 and MSVC 19.5x on Windows |
 | **CMake** | ≥ 3.16 | Loom's build and its installed package are CMake; `find_package(loom)` and `loom_weave_build_contract()` are how a weave of yours gets built correctly | 3.22 (Linux), 3.31 (Windows) |
 | **A build tool** | GNU Make, Ninja, or Visual Studio | CMake generates for one of these; any of them is fine | GNU Make (Linux), Ninja (Windows) |
 
@@ -116,7 +116,8 @@ Install [MSYS2](https://www.msys2.org/) and, in its shell,
 `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja`. Then, in
 PowerShell, put that toolchain first on `PATH` **in every session that builds or runs** —
 the produced `.exe` loads `libstdc++-6.dll`, `libgcc_s_seh-1.dll` and
-`libwinpthread-1.dll` from there:
+`libwinpthread-1.dll` from there (a weave built through the build contract links them in
+and needs none of them):
 
 ```powershell
 $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
@@ -218,6 +219,19 @@ otherwise:
 - **MSVC needs `/Zc:preprocessor`** to compile Loom's public headers at all. The
   installed `loom::core` target carries it for you, so you get it from
   `find_package(loom)` — but a build that never links `loom::core` has to pass it itself.
+- **On MSVC, everything that links Loom uses the static C++ runtime** (`/MT`, `/MTd` in
+  Debug). A weave carries its own runtime that way, and every object of one image must
+  agree, so Loom's libraries are built for it and `find_package(loom)` makes it your
+  project's default; a project that names another runtime is refused at configure
+  ([the weave build contract](../reference/kernel.md#the-weave-build-contract)).
+- **Under MinGW-w64, a weave is built only by a toolchain its reload was measured on**: GCC
+  from <!-- value LOOM_WEAVE_MINGW_GCC_LEAST -->12.2<!-- /value -->, Clang from
+  <!-- value LOOM_WEAVE_MINGW_CLANG_LEAST -->18.1<!-- /value -->, and a libstdc++ built with
+  the C runtime's `__cxa_thread_atexit`. CLion 2025.2's bundled GCC 13.1 was built without
+  it and is refused, in words, at configure; Loom's libraries alone still build with it. Every
+  weave carries its runtime and gives back what that runtime takes when it unloads, so
+  `PATH` decides only where a program, such as `loom-host.exe`, finds its own runtime
+  ([the weave build contract](../reference/kernel.md#the-weave-build-contract)).
 - **The OS sandbox is Linux-only.** Namespaces and cgroups have no Windows equivalent in
   this tree; the out-of-process isolation host exists only there. See
   [capabilities](../reference/capabilities.md) for what is and is not claimed.

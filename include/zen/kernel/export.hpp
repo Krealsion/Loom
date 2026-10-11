@@ -213,8 +213,8 @@ public:
             return loom::SenseReading{};
         }
         const std::string name_z(shape->name());
-        std::string bytes;
-        std::string office; // grows to whatever the host wrote; never truncated
+        HeldBytes bytes;
+        HeldBytes office; // grows to whatever the host wrote; never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
         ZenByteSink office_sink{&office, &collect_bytes};
@@ -229,8 +229,8 @@ public:
         }
         const std::string role_z(role);
         const std::string name_z(shape->name());
-        std::string bytes;
-        std::string office; // grows to whatever the host wrote; never truncated
+        HeldBytes bytes;
+        HeldBytes office; // grows to whatever the host wrote; never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
         ZenByteSink office_sink{&office, &collect_bytes};
@@ -284,21 +284,39 @@ private:
         }
     }
 
+    /// What the host hands this library through a byte sink, and whether the library held all of
+    /// it: the sink is called from the host's frames, which no exception of this library's may
+    /// reach, so a write it could not hold is recorded instead.
+    struct HeldBytes {
+        std::string bytes;
+        bool lost = false;
+    };
+
     static void collect_bytes(void* ctx, const std::uint8_t* data, std::size_t len) {
-        static_cast<std::string*>(ctx)->append(reinterpret_cast<const char*>(data), len);
+        auto* out = static_cast<HeldBytes*>(ctx);
+        try {
+            out->bytes.append(reinterpret_cast<const char*>(data), len);
+        } catch (...) {
+            out->lost = true;
+        }
     }
 
     /// Rebuild a reading library-side, re-admitting the host's bytes against this library's own
     /// schema, so the library never holds a value its own gate did not pass.
-    loom::SenseReading decode_reading(ZenStatus st, const std::string& bytes,
-                                      const std::string& office, const ZenSenseBy& by,
+    loom::SenseReading decode_reading(ZenStatus st, const HeldBytes& bytes,
+                                      const HeldBytes& office, const ZenSenseBy& by,
                                       const std::shared_ptr<const loom::Schema>& shape) {
         loom::SenseReading out;
         if (st != ZEN_OK) {
             out.refusal = sense_refusal_of(st);
             return out;
         }
-        loom::Unverified u = loom::parse(bytes);
+        // A reading this library could not hold whole is not admitted as one.
+        if (bytes.lost || office.lost) {
+            out.refusal = loom::SenseRefusal::GateRefused;
+            return out;
+        }
+        loom::Unverified u = loom::parse(bytes.bytes);
         loom::Admission a = loom::admit(u, shape);
         if (!a.ok()) {
             out.refusal = loom::SenseRefusal::GateRefused;
@@ -313,7 +331,7 @@ private:
         // Separate from the life: a live replacement changes the incarnation, not the life.
         out.by.author_incarnation_is_current = by.author_incarnation_is_current != 0;
         // Exactly what the host wrote, at any length; empty is personal.
-        out.by.office = office;
+        out.by.office = office.bytes;
         out.by.office_holder_is_current = by.office_holder_is_current != 0;
         out.by.revision = by.revision;
         out.by.schema_name = shape->name();

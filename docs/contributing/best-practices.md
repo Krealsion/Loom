@@ -150,11 +150,11 @@ Laws KERN-01 to KERN-05 in [kernel](../laws/kernel-laws.md), and POP-05; referen
 [kernel](../reference/kernel.md) and [dynamic ABI](../reference/dynamic-abi.md); guide
 [dynamic weaves](../guides/dynamic-weaves.md); the suites `kernel`, `manager`, `dispatch_loaded`,
 `joint`, `admission` and `capabilities` where the kernel is built and `schema_codec` everywhere,
-and the entries `weave_contract` and `weave_population`.
+and the entries `weave_contract` and `weave_population`, with `weave_reload` on Windows.
 
 - **Every loadable weave target, the test fixtures included, goes through
   `loom_weave_build_contract()`.** [Build and test](../../AGENTS.md#build-and-test) and
-  [KERN-05](../laws/kernel-laws.md#kern-05--a-reloadable-artifacts-statics-live-and-die-with-it)
+  [KERN-05](../laws/kernel-laws.md#kern-05--a-weaves-statics-live-and-die-with-it-and-its-c-runtime-is-its-own)
 - **The linker is not changed without the whole lane.** [Build and test](../../AGENTS.md#build-and-test)
 - **ABI tables are built with designated initializers, in declaration order.**
   [Constructing the tables](../reference/dynamic-abi.md#constructing-the-tables)
