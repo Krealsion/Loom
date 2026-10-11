@@ -140,6 +140,13 @@ DOES NOT MEAN
 - that a program carries its runtime: under MinGW-w64 a host executable keeps
   linking its toolchain's runtime library, and finds it beside itself or on
   `PATH`;
+- that a host's C stdio reaches a weave under the MSVC ABI. There the C runtime
+  is part of what the image carries, so a weave's stdio is its own: a host's
+  redirect through its own C runtime (`_dup2`, `freopen`) does not reach a loaded
+  weave, which writes to the Windows standard handle it loaded with. A host that
+  wants a weave's output points that handle before the weave loads, and keeps it
+  open while the weave lives. Under MinGW-w64 the C runtime stays Windows' own,
+  shared by every image;
 - that anything C++ may cross the seam. Nothing ever could (`abi.h`), and with a
   runtime in each image, an exception or an object crossing it would meet a
   different runtime on the other side: every host callback answers what stopped

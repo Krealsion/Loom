@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// The reload witness's weave (`weave_reload`, tests/reload_witness.cpp). One call reaches the C++
-// runtime the image carries by every road on which a copy of that runtime takes something from the
-// process the first time it is used: a throw, a function-local static's guarded initialization,
-// std::call_once, a thread_local with a destructor, and a thread. Free of every loom header, so
-// what a load takes is this image's runtime alone.
+// The reload witness's weave (`weave_reload`, tests/reload_witness.cpp). One call reaches its C++
+// runtime by every road that takes something from the process on first use -- a throw, a guarded
+// static, std::call_once, a thread_local with a destructor, a thread -- and writes through
+// std::cout, whose streams the runtime sets up as the image starts (libstdc++ from 13 before any
+// constructor of the image's own) and tears down as it unloads. Free of every loom header, so what
+// a load takes is this image's runtime alone.
 
+#include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -51,5 +53,8 @@ extern "C" __declspec(dllexport) int zen_reload_runtime(int n) {
     std::thread worker([&from_thread] { from_thread = 1; });
     worker.join();
     roads += from_thread;
-    return roads == 5 ? n : -1;
+    if (std::cout << '.' << std::flush) {
+        ++roads;
+    }
+    return roads == 6 ? n : -1;
 }

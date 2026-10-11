@@ -144,6 +144,14 @@ a machine that holds only Windows:
   `CMAKE_MSVC_RUNTIME_LIBRARY` of the project that includes it; a project that
   names another runtime is refused at configure, and one whose flags choose a
   runtime by hand (`/MD`, or policy CMP0091 old) is refused by the function.
+
+  The static runtime includes the C runtime, so a weave's C stdio is its own: it
+  writes to the Windows standard handle it loaded with, and a host's redirect
+  through its own C runtime (`_dup2` onto descriptor 1, `freopen`) does not reach
+  it once it has loaded. A host that wants a weave's output points the standard
+  handle before the weave loads -- `_dup2` onto descriptor 1 does that too, while
+  it lasts -- and keeps that handle open until the weave has unloaded, since a
+  weave writing to a closed handle writes nowhere, or to whatever reuses it.
 - Any other Windows compiler is unclassified: the function warns, applies
   nothing, and the verdict says so.
 
