@@ -111,6 +111,32 @@ a machine that holds only Windows:
   exists, and one that has only an import library is not found. The function
   first checks that the toolchain can link its runtime statically, and refuses
   the target otherwise.
+
+  A copy of the runtime in the image takes from the process what it never gives
+  back: winpthreads, under GCC, a Windows TLS index for its thread record the
+  first time the image's code reaches it (a guarded static's first
+  initialization, `std::call_once`, `std::thread`, and under emulated TLS a
+  throw or a `thread_local`); libc++, under Clang, an FLS index for
+  `std::thread`; and libstdc++ its emergency exception pool, about 80 KB. A
+  process has 1,088 TLS indexes, so a process that loaded such a weave about a
+  thousand times would abort. The weave therefore also links
+  `loom-weave-tls-return.cpp`, installed beside `loom-weave.cmake`, with the
+  import slots of `TlsAlloc`, `TlsFree`, `FlsAlloc` and `FlsFree` wrapped
+  (`--wrap=__imp_...`): it records each index the image takes, and the image's
+  first-registered `atexit` handler, which the C runtime runs after the image's
+  other handlers, static and `thread_local` destructors, returns every index
+  still held and the pool when the image unloads. A process may then load and
+  free a weave any number of times; under GCC each reload leaves about 2 KB.
+
+  Only a toolchain a weave's reload has been measured on is accepted: GCC from
+  <!-- value LOOM_WEAVE_MINGW_GCC_LEAST -->12.2<!-- /value --> and Clang from
+  <!-- value LOOM_WEAVE_MINGW_CLANG_LEAST -->18.1<!-- /value -->, whose linker can
+  wrap an import slot (checked by linking the file above). A libstdc++ built
+  without the C runtime's `__cxa_thread_atexit` (`_GLIBCXX_HAVE___CXA_THREAD_ATEXIT`
+  undefined) registers a `thread_local`'s destructor itself and keeps the image
+  loaded while the thread that used it lives, so an unload that reports success
+  leaves it in place; it is refused, as is an older compiler, in words naming
+  the reason.
 - **The MSVC ABI** (MSVC, or a Clang that simulates it): every object is compiled
   for the static runtime (`MultiThreaded`, `MultiThreadedDebug` in Debug). The
   runtime is chosen in each object, and every object of one image must agree, so

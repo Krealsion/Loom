@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The `weave_contract` entry (KERN-05) reads the built artifacts, not the build system's opinion of
-# them. On ELF: (1) no contracted artifact carries an STB_GNU_UNIQUE symbol; (2) the uncontracted
-# twin still does; (3) the host binary caught no contracted target's options. On PE-COFF: (4) the
-# ELF-only option was applied to nothing; (5) no contracted image imports a C++ runtime library;
-# (6) the twin still does; (7) under MinGW-w64 the host binary still imports its own.
+# The `weave_contract` entry (KERN-05) reads the built artifacts. ELF: (1) no contracted artifact
+# carries an STB_GNU_UNIQUE symbol; (2) the uncontracted twin still does; (3) the host binary caught
+# no contracted target's options. PE-COFF: (4) the ELF-only option reached nothing; (5) no
+# contracted image imports a C++ runtime; (6) the twin does; (7) under MinGW-w64 the host imports
+# its own, and (8) each contracted image carries the slots that return its indexes, the twin none.
 
 foreach(v ZEN_MANIFEST ZEN_HOST_EXE ZEN_HOST_OPTIONS ZEN_BYPASS_LIB ZEN_PLATFORM)
     if(NOT DEFINED ${v})
@@ -114,6 +114,26 @@ function(zen_pe_imports path out)
     set(${out} "${names}" PARENT_SCOPE)
 endfunction()
 
+# The wrapped import slots cmake/loom-weave-tls-return.cpp defines, read from a MinGW-w64 image's
+# symbol table: an image carrying it defines all four, one without it none.
+set(zen_tls_return_slots __wrap___imp_TlsAlloc __wrap___imp_TlsFree __wrap___imp_FlsAlloc
+    __wrap___imp_FlsFree)
+function(zen_tls_return_slots path out)
+    execute_process(COMMAND "${ZEN_PE_READER}" -t "${path}"
+                    OUTPUT_VARIABLE dump RESULT_VARIABLE rc ERROR_VARIABLE err)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR
+                "weave_contract: ${ZEN_PE_READER} -t failed on ${path} (exit ${rc})\n${err}")
+    endif()
+    set(found "")
+    foreach(slot IN LISTS zen_tls_return_slots)
+        if(dump MATCHES " ${slot}\r?\n")
+            list(APPEND found "${slot}")
+        endif()
+    endforeach()
+    set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+
 function(zen_runtime_imports path out)
     zen_pe_imports("${path}" names)
     set(runtime "")
@@ -148,6 +168,7 @@ endfunction()
 file(STRINGS "${ZEN_MANIFEST}" rows)
 set(checked 0)
 set(images 0)       # PE images read for claim 5
+set(returning 0)    # MinGW-w64 images read for claim 8
 set(archives "")    # PE archives, and how each was judged
 set(failures "")
 
@@ -199,6 +220,18 @@ foreach(row IN LISTS rows)
                      "${name}: imports its C++ runtime (${runtime}) although it took the "
                      "contract (verdict '${verdict}'), so the runtime it runs with is whichever "
                      "copy the machine or the process holds")
+            endif()
+            if(NOT zen_pe_kind STREQUAL "link")
+                math(EXPR returning "${returning} + 1")
+                zen_tls_return_slots("${artifact}" slots)
+                if(NOT slots STREQUAL zen_tls_return_slots)
+                    string(REPLACE ";" ", " slots "${slots}")
+                    list(APPEND failures
+                         "${name}: carries its C++ runtime without all of the wrapped import "
+                         "slots that return what that runtime takes at unload (found: "
+                         "'${slots}'; verdict '${verdict}'), so a process that reloads it runs "
+                         "out of TLS indexes")
+                endif()
             endif()
         elseif(ZEN_PLATFORM STREQUAL "Windows" AND zen_pe_kind STREQUAL "link")
             zen_msvc_archive_runtime("${artifact}" built_for)
@@ -256,6 +289,16 @@ if(ZEN_PLATFORM STREQUAL "Windows")
              "images above prove nothing: same source, same compiler, the contract the only "
              "difference.")
     endif()
+    if(NOT zen_pe_kind STREQUAL "link")
+        zen_tls_return_slots("${ZEN_BYPASS_LIB}" bypass_slots)
+        if(bypass_slots)
+            string(REPLACE ";" ", " bypass_slots "${bypass_slots}")
+            list(APPEND failures
+                 "the BYPASS control defines ${bypass_slots}, which only the contract links in: "
+                 "something other than the contract put them there, so their presence in the "
+                 "contracted images proves nothing.")
+        endif()
+    endif()
 endif()
 
 # ---- claims 3 and 7: the host binary did not catch the contract ---------------------
@@ -307,11 +350,17 @@ elseif(ZEN_PLATFORM STREQUAL "Windows")
     else()
         set(host_said "the host binary shares this build's static runtime (the MSVC ABI)")
     endif()
+    if(zen_pe_kind STREQUAL "link")
+        set(returning_said "")
+    else()
+        string(CONCAT returning_said "; ${returning} carry the wrapped import slots that return "
+               "what their runtime takes, and the bypass control none")
+    endif()
     message(STATUS
         "weave_contract: ${checked} contracted artifacts on Windows; the ELF-only option was "
         "applied to none of them; ${images} contracted images import no C++ runtime library "
-        "(read by ${ZEN_PE_READER}); archives: ${archives}; the bypass control still imports "
-        "${bypass_runtime}; ${host_said}.")
+        "(read by ${ZEN_PE_READER})${returning_said}; archives: ${archives}; the bypass control "
+        "still imports ${bypass_runtime}; ${host_said}.")
 else()
     message(STATUS
         "weave_contract: ${checked} contracted artifacts on ${ZEN_PLATFORM}; the ELF-only "

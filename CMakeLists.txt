@@ -618,4 +618,9 @@ if(LOOM_INSTALL)
         ${CMAKE_CURRENT_BINARY_DIR}/loomConfigVersion.cmake
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+    # Beside it, what the contract links into every MinGW-w64 weave.
+    if(MINGW)
+        install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave-tls-return.cpp
+                DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+    endif()
 endif()

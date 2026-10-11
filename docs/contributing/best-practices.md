@@ -150,7 +150,7 @@ Laws KERN-01 to KERN-05 in [kernel](../laws/kernel-laws.md), and POP-05; referen
 [kernel](../reference/kernel.md) and [dynamic ABI](../reference/dynamic-abi.md); guide
 [dynamic weaves](../guides/dynamic-weaves.md); the suites `kernel`, `manager`, `dispatch_loaded`,
 `joint`, `admission` and `capabilities` where the kernel is built and `schema_codec` everywhere,
-and the entries `weave_contract` and `weave_population`.
+and the entries `weave_contract` and `weave_population`, with `weave_reload` on Windows.
 
 - **Every loadable weave target, the test fixtures included, goes through
   `loom_weave_build_contract()`.** [Build and test](../../AGENTS.md#build-and-test) and

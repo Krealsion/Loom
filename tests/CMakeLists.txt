@@ -277,6 +277,14 @@ target_link_libraries(zen_test_dispatch PRIVATE loom zen-switchboard zen-warning
 loom_weave_build_contract(zen_test_dispatch)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_DISPATCH=\"$<TARGET_FILE:zen_test_dispatch>\"")
 
+# A library whose describe() hands the host's byte sink a length no string can hold: the host
+# refuses the load in its own words, and nothing it throws reaches the library's frames.
+add_library(zen_test_sink_overflow SHARED weavelib/sink_overflow.cpp)
+target_link_libraries(zen_test_sink_overflow PRIVATE loom zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_sink_overflow)
+target_compile_definitions(zen-tests PRIVATE
+    "ZEN_SO_SINK_OVERFLOW=\"$<TARGET_FILE:zen_test_sink_overflow>\"")
+
 # Joint publication (ABI v8): a real loaded claimant that offers into a joint publication across
 # the seam and hears `claim_published` back across it, answering all three ways: Applied, Failed,
 # Declined.
@@ -349,7 +357,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_nest_mixed_rev zen_test_weave_nest_agree zen_test_weave_ping_drift
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
-    zen_test_office_worker zen_test_dispatch zen_test_joint
+    zen_test_office_worker zen_test_dispatch zen_test_sink_overflow zen_test_joint
     zen_host_probe zen_host_probe_forge
     zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
@@ -425,6 +433,19 @@ if(WIN32)
         "ZEN_LOADER_MIDDLE_NAME=\"$<TARGET_FILE_NAME:zen_test_loader_middle>\""
         "ZEN_LOADER_LEAF_NAME=\"$<TARGET_FILE_NAME:zen_test_loader_leaf>\""
         "ZEN_LOADER_WORK=\"${CMAKE_CURRENT_BINARY_DIR}/windows-loader-work\"")
+
+    # The reload witness (`weave_reload`): a contracted weave whose runtime is reached by every road
+    # that takes something from the process, loaded and freed more often than a process has TLS
+    # indexes, by a host of its own that keeps its runtime.
+    add_library(zen_test_reload_runtime SHARED weavelib/reload_runtime.cpp)
+    target_link_libraries(zen_test_reload_runtime PRIVATE zen-warnings)
+    loom_weave_build_contract(zen_test_reload_runtime)
+    add_executable(zen-reload-witness reload_witness.cpp)
+    target_link_libraries(zen-reload-witness PRIVATE zen-warnings)
+    add_dependencies(zen-reload-witness zen_test_reload_runtime)
+    add_test(NAME weave_reload
+             COMMAND zen-reload-witness $<TARGET_FILE:zen_test_reload_runtime> 1200)
+    set_tests_properties(weave_reload PROPERTIES TIMEOUT 300)
 endif()
 
 endif() # TARGET zen-kernel (portable fixtures)

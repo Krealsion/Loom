@@ -105,6 +105,17 @@ MEANS
   runtime instead: under MinGW-w64 (GCC, or Clang targeting it) a `SHARED` or
   `MODULE` weave links it in (`-static`), and on the MSVC ABI every object of
   the image is compiled for the static runtime (`MSVC_RUNTIME_LIBRARY`);
+- a runtime the image carries is the image's to give back: under MinGW-w64 a
+  copy of the runtime takes Windows TLS and FLS indexes, which a process has a
+  few thousand of, and libstdc++ its emergency exception pool, and returns
+  neither, so the weave also links what returns them when it unloads
+  (`loom-weave-tls-return.cpp`, beside `loom-weave.cmake`), and a process may
+  load and free it any number of times;
+- under MinGW-w64 only a toolchain a weave's reload was measured on is accepted:
+  GCC from <!-- value LOOM_WEAVE_MINGW_GCC_LEAST -->12.2<!-- /value --> and Clang from
+  <!-- value LOOM_WEAVE_MINGW_CLANG_LEAST -->18.1<!-- /value -->, a libstdc++ that registers a
+  `thread_local`'s destructor through the C runtime's `__cxa_thread_atexit`, and
+  a linker that can wrap an import slot; any other is refused in words;
 - on the MSVC ABI that runtime is chosen in each object as it is compiled, so
   Loom's libraries are built for the static runtime, and `loom-weave.cmake` makes
   it the default of the project that includes it (Loom's own build, a project's
@@ -131,14 +142,24 @@ DOES NOT MEAN
   `PATH`;
 - that anything C++ may cross the seam. Nothing ever could (`abi.h`), and with a
   runtime in each image, an exception or an object crossing it would meet a
-  different runtime on the other side.
+  different runtime on the other side: every host callback answers what stopped
+  it as a status, and every byte sink records a write it could not hold.
 
 PROVEN BY — `cmake/loom-weave.cmake`; CTest entry `weave_contract` (reads the
 built artifacts, the symbol tables with `nm` on ELF and each Windows image's
 imports with objdump or the MSVC linker, over a roll of contracted targets
 derived from the function itself, with a deliberately uncontracted twin as the
-control); the installed-package witness (a weave built against the installed
-package imports no C++ runtime library on Windows); CTest
+control, and under MinGW-w64 each image's symbol table for the wrapped import
+slots that return its runtime's indexes); CTest entry `weave_reload` (Windows: a
+contracted weave whose runtime is reached by a throw, a guarded static,
+`std::call_once`, a `thread_local` with a destructor and a thread, loaded and
+freed more times than a process has TLS indexes, every index back and each free
+a real unload); the installed-package witness (a weave built against the
+installed package imports no C++ runtime library on Windows, and under MinGW-w64
+carries what returns its indexes); suite `dispatch_loaded` (a host door that
+cannot carry out a request, or whose observer throws, answers refused and the
+loaded handler runs to its end; a byte sink that cannot hold a write refuses the
+load in the host's words); CTest
 entry `weave_population` (that the artifacts which must be on that roll are on
 it — a separate, build-graph-derived expectation, [POP-05](population-laws.md);
 without it, a fixture that stopped calling the function would simply leave the roll
