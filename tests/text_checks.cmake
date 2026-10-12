@@ -10,6 +10,11 @@ set(ZEN_TEXT_CHECKS doc_links source_comments doc_standard code_values)
 # text checks themselves and the files only they read.
 set(ZEN_TEXT_ONLY_FILES tests/code_values.txt tests/private_ids.cmake)
 
+# And what it may not: the Markdown a compiled case reads, whose change only a build and a run
+# can judge. Suite `weave` compares the copied-weave guide's quoted refusal with the one a mount
+# throws (tests/CMakeLists.txt hands it the page's path).
+set(ZEN_COMPILED_READS docs/guides/writing-a-weave.md)
+
 # A C/C++ change that keeps every token and changes only comments qualifies too: no compiled test
 # here reads a source file as text, and the text checks read the comments.
 set(ZEN_COMMENT_ONLY_QUALIFIES ON)

@@ -61,6 +61,11 @@ set(ZEN_TEST_SOURCES_POSIX
 
 add_executable(zen-tests doctest_main.cpp ${ZEN_TEST_SOURCES_PORTABLE})
 
+# The page whose quoted refusal suite `weave` compares with the one a mount throws; a change to it
+# is this lane's, not the documentation lane's (ZEN_COMPILED_READS, tests/text_checks.cmake).
+target_compile_definitions(zen-tests PRIVATE
+    "ZEN_TEST_WRITING_A_WEAVE_GUIDE=\"${PROJECT_SOURCE_DIR}/docs/guides/writing-a-weave.md\"")
+
 # The sources actually compiled here, split by how their suites must be LAUNCHED (the
 # sandbox suites need a delegated cgroup scope), and the gates that are actually on. Both
 # feed the derived registration and the population contract; a gate that is OFF makes its
