@@ -20,13 +20,7 @@ namespace loom::detail {
 inline constexpr int kMaxBinaryDepth = 64;            // nested message/list depth
 inline constexpr std::uint64_t kMaxListCount = 1u << 20; // elements in one list
 inline constexpr std::uint64_t kMaxFieldBytes = 1u << 28; // bytes in one Text/Bytes
-
-// The total decoded structure one top-level decode may materialise, shared by every nested
-// message and list in it. The caps above bound the serialized side; this bounds the decoded
-// side, which input length does not (a zero-field Message costs no body bytes). The unit is one
-// cell slot: one per declared field of every message entered, one per list element. Host-owned:
-// nothing on the wire widens it; 65,536 cells is about 6 MiB. See docs/reference/bounds.md.
-inline constexpr std::uint64_t kMaxDecodedCells = 1u << 16; // cells in one decode
+// The decoded side's bound, kMaxDecodedCells, is public: <zen/serialize.hpp>.
 
 // The single canonical quiet-NaN bit pattern (sign 0, exponent all ones, only the
 // most-significant mantissa bit set). Encode normalizes every NaN to this; decode

@@ -106,7 +106,7 @@ isolation::kMaxBacklog          src/isolation/channel.cpp                 kMaxBa
 # ---- the value codecs
 kMaxListCount                   src/detail/binary.hpp                     kMaxListCount
 kMaxFieldBytes                  src/detail/binary.hpp                     kMaxFieldBytes
-kMaxDecodedCells                src/detail/binary.hpp                     kMaxDecodedCells
+kMaxDecodedCells                include/zen/serialize.hpp                 kMaxDecodedCells
 kMaxBinaryDepth                 src/detail/binary.hpp                     kMaxBinaryDepth
 kMaxTypeDepth                   include/zen/kernel/schema_codec.hpp       kMaxTypeDepth
 kMaxUiDepth                     include/zen/ui/component.hpp              kMaxUiDepth

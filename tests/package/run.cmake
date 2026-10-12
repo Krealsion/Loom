@@ -92,6 +92,17 @@ if(NOT ZEN_WITNESS_BRIDGE)
 endif()
 zen_run("the crossing as a linking host sees it" "${ZEN_WITNESS_BRIDGE}")
 
+# ---- 1e. the decode allowance, as a consumer sizing its own data reads it ------------
+find_program(ZEN_WITNESS_DECODE witness-decode PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
+             NO_DEFAULT_PATH)
+if(NOT ZEN_WITNESS_DECODE)
+    message(FATAL_ERROR
+        "package witness: witness-decode was not produced in ${ZEN_WORK}. The decode allowance "
+        "is declared in an installed header precisely so a consumer can size its own data "
+        "against it; if it no longer compiles from the installed package, that claim is false.")
+endif()
+zen_run("the decode allowance as a consumer reads it" "${ZEN_WITNESS_DECODE}")
+
 # ---- the dynamic-weave half, only where the install has a kernel ---------------------
 file(GLOB weave_artifact
      "${ZEN_WORK}/*witness-weave*.dll" "${ZEN_WORK}/*witness-weave*.so"
