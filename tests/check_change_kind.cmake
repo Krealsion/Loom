@@ -32,14 +32,16 @@ string(ASCII 7 ZEN_DIR)   # the end of a preprocessing directive
 
 # ---- what a file is ------------------------------------------------------------------------
 # documentation: Markdown, an image under docs/, a text check and the files only the text checks
-# read. source: a C/C++ file, judged by its tokens. Anything else is built or run by the official
-# lane, and so is this file, the lane and the list they read.
+# read, but not a page a compiled case reads. source: a C/C++ file, judged by its tokens. Anything
+# else is built or run by the official lane, and so is this file, the lane and the list they read.
 function(zen_kind_of_path rel out)
     set(checks "")
     foreach(c IN LISTS ZEN_TEXT_CHECKS)
         list(APPEND checks "tests/check_${c}.cmake")
     endforeach()
-    if(rel MATCHES "[.]md$" OR rel MATCHES "^docs/.*[.](png|jpe?g|gif|svg)$"
+    if(rel IN_LIST ZEN_COMPILED_READS)
+        set(${out} other PARENT_SCOPE)
+    elseif(rel MATCHES "[.]md$" OR rel MATCHES "^docs/.*[.](png|jpe?g|gif|svg)$"
        OR rel IN_LIST ZEN_TEXT_ONLY_FILES OR rel IN_LIST checks)
         set(${out} documentation PARENT_SCOPE)
     elseif(rel MATCHES "[.](h|hpp|ipp|inl|c|cc|cpp|cxx)$")
@@ -145,7 +147,8 @@ if(st_raw OR NOT st_raw_why MATCHES "raw string")
 endif()
 foreach(pair "notes.md|documentation" "docs/workshop/images/a.png|documentation"
              "tests/check_code_values.cmake|documentation" "src/a.cpp|source"
-             "CMakeLists.txt|other" "tests/text_checks.cmake|other" ".github/workflows/ci.yml|other")
+             "CMakeLists.txt|other" "tests/text_checks.cmake|other" ".github/workflows/ci.yml|other"
+             "docs/guides/writing-a-weave.md|other")
     string(REPLACE "|" ";" pp "${pair}")
     list(GET pp 0 p)
     list(GET pp 1 want)
