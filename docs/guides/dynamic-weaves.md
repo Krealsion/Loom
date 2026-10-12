@@ -163,6 +163,26 @@ not the Manager's: suite `manager` (`tests/test_manager.cpp`) pins that a
 participant holding exactly `load_capability` loads with no Manager in the path,
 and exactly one activation is delivered, stamped from the door.
 
+**On Windows, decide about the loader's dialogs too.** When Windows refuses an image,
+it may show a system dialog and keep the load waiting until somebody closes it. Whether
+it may is your host's choice, made in its error mode, and Loom makes no such choice for
+you. A host that runs unattended, with nobody to close a dialog, sets
+`SEM_FAILCRITICALERRORS` before it loads anything, keeping the flags already set, and
+then reads the refusal as above:
+
+```cpp
+#if defined(_WIN32)
+#include <windows.h>
+// Nobody is here to close a dialog: a refused image comes back as a refusal in words.
+::SetErrorMode(::GetErrorMode() | SEM_FAILCRITICALERRORS);
+#endif
+```
+
+The flag changes whether a person is asked before the load fails, not what the
+refusal says. `SetErrorMode` sets it for the whole process; a host that wants it only
+where the loads run uses `SetThreadErrorMode` on that thread instead
+([opening a weave on Windows](../reference/kernel.md#opening-a-weave-on-windows)).
+
 Everything the library emits crosses as **bytes** and is re-admitted through
 the one gate host-side ([KERN-01](../laws/kernel-laws.md)) — a malformed
 message from a library is refused, never routed. Schemas agree across the seam
