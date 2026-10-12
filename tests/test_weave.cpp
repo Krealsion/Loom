@@ -8,6 +8,7 @@
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
+#include <fstream>
 #include <optional>
 #include <set>
 #include <string>
@@ -395,6 +396,84 @@ TEST_CASE("a copied weave that kept a shape's name is refused at mount, not at d
         CHECK(bus.resolve_schema("CounterStateRenamed", 1) != nullptr);
         CHECK(bus.resolve_schema("Pong2", 1) != nullptr);
     }
+}
+
+// ---- the guide's quoted refusal is the one a mount throws (docs/guides/writing-a-weave.md) --
+// The guide's own state, `Count v1`, and the copy that kept its name and grew a field. The guide
+// quotes the sentence mounting the copy throws; this case reads that quote out of the guide and
+// compares it with the sentence thrown, so neither can change without the other.
+namespace guide_count {
+struct Count {
+    std::int64_t handled;
+    ZEN_SHAPE(Count, 1, ZEN_FIELD(handled));
+};
+struct CountCopy {
+    std::int64_t handled;
+    std::int64_t extra;
+    static constexpr const char* zen_name = "Count";
+    static constexpr std::uint32_t zen_version = 1;
+    using ZenSelf = CountCopy;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(handled), ZEN_FIELD(extra)); }
+};
+class Original : public au::WeaveBase<Original, Count, au::Accept<copied::Ping2>> {
+public:
+    void on(const copied::Ping2&, au::Mail&) { ++state_.handled; }
+};
+class Copy : public au::WeaveBase<Copy, CountCopy, au::Accept<copied::Pong2>> {
+public:
+    void on(const copied::Pong2&, au::Mail&) { ++state_.handled; }
+};
+
+/// The line the guide quotes after "mounting it throws", the first of the `text` block that
+/// follows; empty, with `why` said, when the guide holds no such block.
+std::string quoted_refusal(const std::string& path, std::size_t& line, std::string& why) {
+    std::ifstream in(path);
+    if (!in) {
+        why = "cannot read " + path;
+        return {};
+    }
+    std::string text;
+    std::size_t at = 0;
+    bool said = false;
+    bool fenced = false;
+    while (std::getline(in, text)) {
+        ++at;
+        if (!text.empty() && text.back() == '\r') {
+            text.pop_back();
+        }
+        if (fenced) {
+            line = at;
+            return text;
+        }
+        if (!said) {
+            said = text.find("mounting it throws") != std::string::npos;
+        } else if (text == "```text") {
+            fenced = true;
+        }
+    }
+    why = path + " holds no `text` block after \"mounting it throws\"";
+    return {};
+}
+} // namespace guide_count
+
+TEST_CASE("the copied-weave guide quotes the sentence mounting the copy throws") {
+    const std::string guide = ZEN_TEST_WRITING_A_WEAVE_GUIDE;
+    std::size_t line = 0;
+    std::string why;
+    const std::string quote = guide_count::quoted_refusal(guide, line, why);
+    REQUIRE_MESSAGE(!quote.empty(), why);
+
+    Switchboard bus;
+    au::mount<guide_count::Original>(bus);
+    std::string thrown;
+    try {
+        au::mount<guide_count::Copy>(bus);
+        FAIL("the copy mounted");
+    } catch (const SchemaConflict& c) {
+        thrown = c.what();
+    }
+    CHECK_MESSAGE(quote == thrown, guide << ":" << line << ": the guide quotes\n  " << quote
+                                         << "\nand mounting the copy throws\n  " << thrown);
 }
 
 TEST_CASE("snapshot/revive are derived; state round-trips through the gate") {
