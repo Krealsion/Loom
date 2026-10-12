@@ -4,13 +4,9 @@
 #include <doctest.h>
 
 #include <zen/kernel/schema_codec.hpp>
-#include <zen/serialize.hpp>
+#include <zen/serialize.hpp> // kMaxDecodedCells: the deep-type ceiling case meets it, below
 #include <zen/weave/shape.hpp>
 #include <zen/zen.hpp>
-
-// kMaxDecodedCells: the deep-type ceiling case meets the decode-materialization bound, and the
-// two are pinned as ADJACENT below, so this reads the real constant.
-#include "../src/detail/binary.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -266,7 +262,7 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
     // tokens materialise 3 (SchemaDesc slots) + 1 (fields element) + 3 (Field slots) + (n+1)
     // (type-token elements) + 3(n+1) (each TypeToken's slots) = 11 + 4n decoded cells, so the gate
     // admits a stream only while 11 + 4n fits the budget; above that it never becomes a Value.
-    const int deepest_admissible = static_cast<int>((detail::kMaxDecodedCells - 11) / 4);
+    const int deepest_admissible = static_cast<int>((loom::kMaxDecodedCells - 11) / 4);
 
     SUBCASE("the deepest descriptor the budget still admits is still refused by kMaxTypeDepth") {
         // The deep descriptor at the largest size the budget leaves reachable: the gate admits

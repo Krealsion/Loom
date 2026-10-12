@@ -91,7 +91,7 @@ std::string type_label(const TypeRef& t) {
 // allocation regretted afterwards. Host-owned and automatic: no caller and nothing on the wire
 // can widen it.
 struct DecodeBudget {
-    std::uint64_t remaining = detail::kMaxDecodedCells;
+    std::uint64_t remaining = kMaxDecodedCells;
 
     /// Charge `n` cells. On refusal nothing is charged and nothing is built —
     /// the caller turns it into a fatal parse failure.
@@ -106,7 +106,7 @@ struct DecodeBudget {
 
 std::string budget_exhausted_detail() {
     return "decoded structure exceeds the materialization budget of " +
-           std::to_string(detail::kMaxDecodedCells) + " cells (shared by the whole value)";
+           std::to_string(kMaxDecodedCells) + " cells (shared by the whole value)";
 }
 
 // ===========================================================================
