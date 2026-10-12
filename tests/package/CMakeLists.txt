@@ -72,6 +72,11 @@ target_link_libraries(witness-history PRIVATE loom::history loom::switchboard lo
 add_executable(witness-bridge stranger_bridge.cpp)
 target_link_libraries(witness-bridge PRIVATE loom::bridge loom::switchboard loom::core)
 
+# ---- 2d. the decode allowance, reached the way a consumer sizing its own data reaches it --
+# Links loom::core only: the declaration and the decoder that spends it are both there.
+add_executable(witness-decode stranger_decode.cpp)
+target_link_libraries(witness-decode PRIVATE loom::core)
+
 if(NOT TARGET loom::kernel)
     # Honest, and not a skip-in-disguise: on a build of Loom with no kernel there is no
     # dynamic-weave path to witness, and saying so beats silently proving half of this.

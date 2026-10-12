@@ -400,7 +400,9 @@ effectively unbounded host work.
   message is delivered.
 - **Ownership** — host-owned and automatic. Not a `parse()` parameter, not
   widenable by a message, grant, schema, or payload; changing it is a build
-  decision (`src/detail/binary.hpp`).
+  decision. The decoder reads the installed declaration,
+  `loom::kMaxDecodedCells` in `<zen/serialize.hpp>`, so a consumer sizing its own
+  data against the allowance names that constant rather than copying the number.
 
 65,536 cells is roughly 6 MiB of worst-case decoded structure — an order of
 magnitude above the largest value any current consumer sends. A value larger
