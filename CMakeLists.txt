@@ -340,13 +340,14 @@ target_link_libraries(zen-console-tui
 # host without one still runs and says why it can load nothing.
 
 # The host's deciding half, as a library the suite reaches: the parsers of the two files a person
-# writes, `line_input` (reading a command without stopping the bus) and `store_lock` (who owns
-# these decisions). `main()` stays in the executable, driven as a real process by
-# tests/host_process/.
+# writes, `line_input` (reading a command without stopping the bus), `idle_nap` (serve mode's idle
+# wait) and `store_lock` (who owns these decisions). `main()` stays in the executable, driven as a
+# real process by tests/host_process/.
 add_library(zen-host-policy STATIC
     src/host/authority.cpp
     src/host/boot_plan.cpp
     src/host/config_file.cpp
+    src/host/idle_nap.cpp
     src/host/line_input.cpp
     src/host/store_lock.cpp)
 target_include_directories(zen-host-policy
