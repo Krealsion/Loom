@@ -513,7 +513,7 @@ TEST_CASE("the materialization boundary is exact and inclusive") {
     // The bound is INCLUSIVE: a decode whose total materialization is exactly
     // kMaxDecodedCells is accepted; the first cell beyond it is refused.
     // NothingList costs 1 (the door's own slot vector) + one cell per element.
-    const std::uint64_t at_the_bound = detail::kMaxDecodedCells - 1;
+    const std::uint64_t at_the_bound = loom::kMaxDecodedCells - 1;
 
     Admission exact = admit(parse(nothing_list_bytes(at_the_bound)), nothing_list_schema());
     REQUIRE_MESSAGE(exact.ok(), (exact.ok() ? "" : exact.first_error().message()));
@@ -551,12 +551,12 @@ TEST_CASE("a nested message charges its whole slot vector, present fields or not
     // Not one of the 2N is a *present* field — every Pair below arrives empty — and
     // they still cost, because Value allocates one std::optional<Cell> per DECLARED
     // field. A count-the-decoded-values unit would miss them entirely.
-    const std::uint64_t at_the_bound = (detail::kMaxDecodedCells - 1) / 3; // 1 + 3N == 65,536
+    const std::uint64_t at_the_bound = (loom::kMaxDecodedCells - 1) / 3; // 1 + 3N == 65,536
 
     Admission exact = admit(parse(pair_list_bytes(at_the_bound)), pair_list_schema());
     REQUIRE_MESSAGE(exact.ok(), (exact.ok() ? "" : exact.first_error().message()));
     CHECK(exact.value().get("items")->as_list().size() == at_the_bound);
-    CHECK(1 + 3 * at_the_bound == detail::kMaxDecodedCells);
+    CHECK(1 + 3 * at_the_bound == loom::kMaxDecodedCells);
 
     Admission over = admit(parse(pair_list_bytes(at_the_bound + 1)), pair_list_schema());
     REQUIRE_FALSE(over.ok());
@@ -616,7 +616,7 @@ TEST_CASE("the compat (JSON) decoder shares the same budget domain") {
     // through the same admit(). JSON cannot express the COMPACT amplification (an
     // array element costs text), but the structure it builds is bounded identically.
     std::string json = "{\"zen\":1,\"schema\":\"Inventory\",\"version\":1,\"fields\":{\"items\":[";
-    const std::uint64_t over = detail::kMaxDecodedCells + 1;
+    const std::uint64_t over = loom::kMaxDecodedCells + 1;
     json.reserve(static_cast<std::size_t>(over) * 3 + 128);
     for (std::uint64_t i = 0; i < over; ++i) {
         if (i != 0) {

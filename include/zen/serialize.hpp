@@ -9,11 +9,20 @@
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
 
 namespace loom {
+
+/// The total decoded structure one top-level decode may materialise, shared by every message
+/// and list nested in it: the allowance admit() spends, for native and compat bytes alike. The
+/// unit is one cell slot, one per declared field of every message entered and one per list
+/// element; payload bytes are not counted. A decode totalling exactly this many cells is
+/// accepted and one more is refused with MalformedBytes. Host-owned: no caller and nothing on
+/// the wire widens it; 65,536 cells is about 6 MiB. See docs/reference/bounds.md.
+inline constexpr std::uint64_t kMaxDecodedCells = 1u << 16; // cells in one decode
 
 class Registry;
 class Unverified;
