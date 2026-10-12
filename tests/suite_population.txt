@@ -62,3 +62,4 @@ session            portable  10
 observe            portable  15
 runs               runs      12
 windows_loader     windows   8
+host_nap           windows   1

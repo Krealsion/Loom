@@ -11,6 +11,7 @@
 #include "authority.hpp"
 #include "boot_plan.hpp"
 #include "history_reader.hpp"
+#include "idle_nap.hpp"
 #include "line_input.hpp"
 #include "link.hpp"
 #include "secure_random.hpp"
@@ -47,7 +48,6 @@
 #include <set>
 #include <string>
 #include <system_error>
-#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -1932,6 +1932,7 @@ int main(int argc, char** argv) {
     // (`loom.session.Shutdown`) or when someone types `quit`.
     loom::host::SessionDoor* const door = session.door();
     bool console_open = true;
+    loom::host::IdleNap idle_nap;
     while (running) {
         session.turn();
         report_late_answers(session, prompt_shown);
@@ -1947,7 +1948,7 @@ int main(int argc, char** argv) {
         }
         if (!console_open) {
             if (!session.busy()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kServeIdleWaitMs));
+                idle_nap.nap(kServeIdleWaitMs);
             }
             continue;
         }
@@ -1993,7 +1994,7 @@ int main(int argc, char** argv) {
         // flush its socket. Bounded: a client that stopped reading does not hold the host open.
         for (int i = 0; i < 8; ++i) {
             session.turn();
-            std::this_thread::sleep_for(std::chrono::milliseconds(kServeIdleWaitMs));
+            idle_nap.nap(kServeIdleWaitMs);
         }
         const std::string reason = door->ending() ? door->ending_reason()
                                                   : std::string("ended at its console");
