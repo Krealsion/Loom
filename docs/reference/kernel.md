@@ -80,9 +80,21 @@ file is at the path; which library the weave needs is in none of those folders, 
 which of its own libraries when it is a library's library; that the file is not a Windows
 library, or is one built for another machine; and otherwise Windows' error code with its
 own words. The explanation is worked out only after the refusal, from the files the load
-looked at; nothing is read before a load or after one that succeeds. Whether a refused
-image may show the system's error dialog is the host's to decide (`SetErrorMode`), not
-Loom's.
+looked at; nothing is read before a load or after one that succeeds.
+
+Whether a refused image may show the system's error dialog is the host's to decide, not
+Loom's. Nothing in Loom sets the process's error mode or a thread's, so a load runs under
+the modes the host gave its process and the thread that calls `LoadLibraryExW`. With
+`SEM_FAILCRITICALERRORS` set the system shows no dialog for the error and hands it straight
+back to the load; without it, Windows may show one, and the load waits until somebody
+closes it. The mode decides whether a person is asked before the load fails, not whether it
+fails: either way the load returns the same failure, and the refusal above is worked out
+from it. A host with nobody to answer a dialog adds the flag before its first load and
+keeps the flags it already has: process-wide with `SetErrorMode(GetErrorMode() |
+SEM_FAILCRITICALERRORS)`, or for one thread with `SetThreadErrorMode(GetThreadErrorMode() |
+SEM_FAILCRITICALERRORS, nullptr)`, on every thread that loads. Loom's own test program sets
+it process-wide when it starts, as a host ([loading a
+weave](../guides/dynamic-weaves.md#load-it)).
 
 ## The weave build contract
 
