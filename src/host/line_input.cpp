@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-#include "line_input.hpp"
+#include <zen/host/line_input.hpp>
 
 #include <algorithm>
 #include <cstddef>

@@ -11,12 +11,12 @@
 // admits a run worker with only rules its registrar's approved authority contains; anything
 // else is refused. A registrar leaving the bus severs its workers; every session is compat.
 
-#include "authority.hpp"
 #include "secure_random.hpp"
-#include "warden.hpp"
 
 #include <zen/bridge/channel.hpp>
 #include <zen/bridge/server.hpp>
+#include <zen/host/authority.hpp>
+#include <zen/host/warden.hpp>
 #include <zen/runs/vocabulary.hpp>
 #include <zen/session/vocabulary.hpp>
 #include <zen/switchboard.hpp>

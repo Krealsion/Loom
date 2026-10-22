@@ -77,6 +77,13 @@ target_link_libraries(witness-bridge PRIVATE loom::bridge loom::switchboard loom
 add_executable(witness-decode stranger_decode.cpp)
 target_link_libraries(witness-decode PRIVATE loom::core)
 
+# ---- 2e. the deciding half, reached the way a second host reaches it ----------------------
+# Links loom::host-policy, loom::switchboard and loom::core: the authority store, its warden and
+# the `authority` command, and no console. Where the install has a kernel, the load half below adds
+# loom::kernel and the weave it loads.
+add_executable(witness-authority stranger_authority.cpp)
+target_link_libraries(witness-authority PRIVATE loom::host-policy loom::switchboard loom::core)
+
 if(NOT TARGET loom::kernel)
     # Honest, and not a skip-in-disguise: on a build of Loom with no kernel there is no
     # dynamic-weave path to witness, and saying so beats silently proving half of this.
@@ -97,6 +104,12 @@ target_link_libraries(witness-weave PRIVATE loom::core loom::switchboard)
 # is platform-specific; that one is about compiling Loom's public headers at all and is
 # MSVC-specific. A consumer calls this one by hand; the other arrives on its own.
 loom_weave_build_contract(witness-weave)
+
+# The deciding half's load half: refused, decided, loaded on the retry, through the real Kernel.
+target_link_libraries(witness-authority PRIVATE loom::kernel)
+target_compile_definitions(witness-authority PRIVATE
+    "ZEN_WITNESS_WEAVE=\"$<TARGET_FILE:witness-weave>\"")
+add_dependencies(witness-authority witness-weave)
 
 # ---- 3. the host that loads it through the REAL kernel ----------------------------
 add_executable(witness-host stranger_host.cpp)

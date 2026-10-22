@@ -254,7 +254,7 @@ quit
     # 6. A line longer than any command is refused whole, and none of it runs. The first is `quit`
     # and spaces (a reader that cut it to the limit would run it), the second spaces and then
     # `quit` (a reader that split it would); either would exit before the commands after them. A
-    # command of exactly the limit runs. The limit is 4000 bytes (src/host/line_input.hpp).
+    # command of exactly the limit runs. The limit is 4000 bytes (include/zen/host/line_input.hpp).
     message(STATUS "host_process/console: over-long lines are refused, and the host reads on")
     zen_scenario_dir(long-lines dir)
     string(REPEAT " " 4000 zen_pad_4000)

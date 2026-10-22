@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-#include "store_lock.hpp"
+#include <zen/host/store_lock.hpp>
 
 #include <utility>
 

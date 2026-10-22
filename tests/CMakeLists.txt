@@ -152,7 +152,7 @@ target_include_directories(zen-tests PRIVATE
 
 target_link_libraries(zen-tests
     PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-history zen-bridge zen-bridge-console zen-tui
-            zen-host-policy zen-warnings zen-sanitize)
+            zen-host-boot zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(zen-tests PRIVATE zen-kernel)
 endif()

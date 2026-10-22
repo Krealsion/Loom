@@ -758,9 +758,15 @@ host running under decisions nobody made.
 
 `loom-host` is a **default**, not a privilege. Its console is `loom::ConsoleEngine`, its
 lifecycle steward is `loom::WeaveManager`, its kernel door is `loom::ControlWeave` — all
-ordinary participants, all replaceable by something you write, all reachable from the
-installed package. Being the thing that ships is not the same as being the only thing
-that fits.
+ordinary participants, all replaceable by something you write. The steward and the kernel door
+are in the installed package (`loom::kernel`), and so is the half that decides
+(`loom::host-policy`, headers under `zen/host/`): the authority store and its admission policy,
+the warden that installs a decision on the bus, the store's lock, the line reader, and the
+`authority` command itself, so a host of your own keeps its person's decisions in the same file
+and answers the same words. The console engine is not installed: a host of your own brings its
+own operator seat, and the command asks only that the seat carry two questions to its warden
+(`loom::host::AuthorityDesk`, `zen/host/authority_command.hpp`). Being the thing that ships is
+not the same as being the only thing that fits.
 
 And it contains nothing. An in-process weave shares this address space and is trusted at
 that level; what a grant bounds is **speech**, never what code can touch. Read

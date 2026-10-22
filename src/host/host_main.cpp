@@ -3,28 +3,29 @@
 
 // loom-host, the supplied host: a boot walk the person authors (host/boot_plan.hpp), an
 // operator console, and the authority store that carries their decisions across restarts
-// (host/authority.hpp). Every part is an ordinary, replaceable participant: ConsoleEngine,
+// (zen/host/authority.hpp). Every part is an ordinary, replaceable participant: ConsoleEngine,
 // WeaveManager, ControlWeave and HostWarden. The three rules it is built around (attributed
 // answers, adoption inside the load, a bounded turn) are in AGENTS.md, beside the code here.
 // `stop <name>` ends one application, `quit` ends the host, and a failed boot neither.
 
-#include "authority.hpp"
 #include "boot_plan.hpp"
 #include "history_reader.hpp"
 #include "idle_nap.hpp"
-#include "line_input.hpp"
 #include "link.hpp"
 #include "secure_random.hpp"
 #include "session_door.hpp"
 #include "session_files.hpp"
-#include "store_lock.hpp"
-#include "warden.hpp"
 
 #include <zen/console/console.hpp>
 #include <zen/history/dump.hpp>
 #include <zen/history/logger.hpp>
 #include <zen/history/recorder.hpp>
+#include <zen/host/authority.hpp>
+#include <zen/host/authority_command.hpp>
 #include <zen/host/grant_wiring.hpp>
+#include <zen/host/line_input.hpp>
+#include <zen/host/store_lock.hpp>
+#include <zen/host/warden.hpp>
 #include <zen/kernel/abi.h> // ZEN_ABI_VERSION — text, present on every platform
 #include <zen/switchboard.hpp>
 #include <zen/terminal/input_lex.hpp>
@@ -570,18 +571,6 @@ public:
         return a;
     }
 
-    /// Make the bus agree with the store for one artifact — the only route by which
-    /// delegated authority changes at a person's request, and it is a message, so it
-    /// shows on the tap.
-    std::string sync(const std::string& artifact) {
-        if (!warden_->governs(artifact)) {
-            return "nothing loaded under '" + artifact + "' to administer";
-        }
-        const Answer a = ask(warden_id_, loom::host::HostAuthoritySync::zen_name,
-                             loom::host::HostAuthoritySync::zen_version, {{"artifact", artifact}});
-        return a.settled() ? describe_reply(*a.reply) : a.trouble;
-    }
-
     /// The standard reply shapes, as one line. A `zen.Refused` is printed as a refusal
     /// and never flattened into "failed": the reason is the whole value of it.
     static std::string describe_reply(const loom::BufferEntry& e) {
@@ -782,17 +771,8 @@ void print_help() {
   stop <name>                   unload it: that application ends, this host does not
   list                          what the steward says is loaded, and under which offices
 
-  authority                     your standing decisions
-  authority show <name>         one decision, and what the bus actually permits now
-  authority pending             what the policy refused and is waiting on
-  authority trust <name> [--rebuilds|--ask-again]
-                                it may run, pinned to this build; --rebuilds accepts any
-                                rebuild of it, --ask-again turns that back off
-  authority deny <name>         it may not run
-  authority allow <name> <rule> it may say one more thing, e.g.  Greet v1 -> any target
-  authority revoke <name> [rule]   take one back, or all of them; live and remembered
-  authority forget <name>       drop the decision entirely
-
+)" << loom::host::authority_help()
+              << R"(
   quit                          shut this host down
 )";
 }
@@ -819,7 +799,7 @@ void print_new_notes(const loom::host::AuthorityStore& store, std::size_t* shown
 }
 
 /// A LINE REFUSED FOR ITS LENGTH, said at the point in the input where it stood. None of it
-/// ran: not a shortened command, and not its remainder as a second one (host/line_input.hpp).
+/// ran: not a shortened command, and not its remainder as a second one (zen/host/line_input.hpp).
 /// The next line is read as usual, so the way back is to send the command again, shorter —
 /// and the line number and its first bytes are how a person or a script's author finds it.
 void print_too_long(const loom::host::TooLongLine& refused) {
@@ -894,292 +874,49 @@ void cmd_status(HostSession& s, const loom::host::BootPlan& plan, const PlanSour
     }
 }
 
-/// Is `text` still permitted by what `rule` leaves behind? Asked of the AUTHORITY, not
-/// of the list of strings, so `revoke Spin v1 -> role probe` under a standing
-/// `any shape -> any target` says the honest thing instead of implying the permission is
-/// gone. The two lists are different vocabularies for the same wall.
-bool still_permitted(const loom::host::AuthorityRule& rule, const std::string& text) {
-    loom::LiveAuthority remaining;
-    loom::LiveAuthority revoked;
-    std::string ignored;
-    if (!loom::host::apply_rule(text, &revoked, &ignored)) {
-        return false;
+/// This host's half of the `authority` command (zen/host/authority_command.hpp): its console is
+/// the operator seat its warden obeys, and an answer is the one the console settled on that
+/// question's own conversation. A sync is the only route by which delegated authority changes at
+/// a person's request, and it is a message, so it shows on the tap.
+class ConsoleDesk final : public loom::host::AuthorityDesk {
+public:
+    explicit ConsoleDesk(HostSession& s) : s_(s) {}
+
+    loom::host::WardenAnswer sync(const std::string& artifact) override {
+        return answer_of(s_.ask(s_.warden_id(), loom::host::HostAuthoritySync::zen_name,
+                                loom::host::HostAuthoritySync::zen_version,
+                                {{"artifact", artifact}}));
     }
-    if (!loom::host::to_live_authority(rule, &remaining, &ignored)) {
-        return false;
+
+    loom::host::WardenAnswer describe(const std::string& artifact) override {
+        return answer_of(s_.ask(s_.warden_id(), loom::host::HostDescribeAuthority::zen_name,
+                                loom::host::HostDescribeAuthority::zen_version,
+                                {{"artifact", artifact}}));
     }
-    return remaining.contains(revoked);
-}
+
+private:
+    static loom::host::WardenAnswer answer_of(const Answer& a) {
+        loom::host::WardenAnswer w;
+        if (a.settled()) {
+            w.reply = a.reply->value;
+        } else {
+            w.trouble = a.trouble;
+        }
+        return w;
+    }
+
+    HostSession& s_;
+};
 
 void cmd_authority(HostSession& s, loom::host::AuthorityStore& store,
                    const std::vector<Token>& tok) {
-    const std::string sub = tok.size() > 1 ? tok[1].text : "";
-
-    if (sub.empty()) {
-        const std::vector<loom::host::AuthorityRule> all = store.rules();
-        if (all.empty()) {
-            std::cout << "  no standing decisions yet. Nothing may run.\n"
-                         "  approve something with:  authority trust <name>\n";
-            return;
-        }
-        for (const loom::host::AuthorityRule& r : all) {
-            std::cout << "  " << (r.may_run ? "run " : "DENY") << "  " << r.artifact;
-            if (!r.content_id.empty()) {
-                std::cout << "  build " << r.content_id.substr(0, 8);
-            }
-            if (r.trust_rebuilds) {
-                std::cout << "  (+rebuilds)";
-            }
-            std::cout << "  " << r.send.size() << " send, " << r.observe.size() << " observe\n";
-        }
-        return;
+    std::vector<std::string> words;
+    words.reserve(tok.size());
+    for (const Token& t : tok) {
+        words.push_back(t.text);
     }
-
-    if (sub == "pending") {
-        if (store.pending().empty()) {
-            std::cout << "  nothing is waiting on you.\n";
-            return;
-        }
-        for (const loom::host::PendingDecision& p : store.pending()) {
-            std::cout << "  " << p.artifact << "  " << p.path << '\n';
-            std::cout << "    " << p.why << '\n';
-            std::cout << "    build presented: " << (p.content_id.empty() ? "(unreadable)"
-                                                                          : p.content_id)
-                      << '\n';
-            if (!p.pinned.empty()) {
-                std::cout << "    build approved:  " << p.pinned << '\n';
-            }
-        }
-        return;
-    }
-
-    if (tok.size() < 3) {
-        std::cout << "  usage: authority show|trust|deny|allow|revoke|forget <name> [...]\n";
-        return;
-    }
-    const std::string name = tok[2].text;
-    const loom::host::AuthorityRule* existing = store.find(name);
-    std::string error;
-
-    if (sub == "show") {
-        if (existing == nullptr) {
-            std::cout << "  no standing decision for '" << name << "'\n";
-        } else {
-            std::cout << "  " << name << (existing->may_run ? ": may run" : ": may NOT run")
-                      << '\n';
-            std::cout << "    build pinned: "
-                      << (existing->content_id.empty() ? "(not yet)" : existing->content_id)
-                      << (existing->trust_rebuilds ? "   (any rebuild is accepted)" : "") << '\n';
-            for (const std::string& r : existing->send) {
-                std::cout << "    may say:  " << r << '\n';
-            }
-            for (const std::string& r : existing->observe) {
-                std::cout << "    may read: " << r << '\n';
-            }
-            if (!existing->note.empty()) {
-                std::cout << "    note: " << existing->note << '\n';
-            }
-        }
-        // AND WHAT THE BUS ACTUALLY THINKS, which is the line that matters: asked of
-        // the live authority through the warden, so a file that disagrees with the
-        // running system shows up here instead of being believed. Asked as a MESSAGE,
-        // by the operator seat, exactly as anything else here is — and settled on this
-        // host's own conversation, so it is this artifact's authority and not whatever
-        // description happened to arrive most recently.
-        const Answer a = s.ask(s.warden_id(), loom::host::HostDescribeAuthority::zen_name,
-                               loom::host::HostDescribeAuthority::zen_version,
-                               {{"artifact", name}});
-        if (!a.settled()) {
-            std::cout << "    (could not ask: " << a.trouble << ")\n";
-            return;
-        }
-        if (a.reply->name != loom::AuthorityDescription::zen_name) {
-            std::cout << "    " << HostSession::describe_reply(*a.reply) << '\n';
-            return;
-        }
-        std::cout << "    LIVE, weave " << a.reply->value.get("subject")->as_int() << ":\n";
-        const auto print_list = [](const loom::Cell* list, const char* label) {
-            if (list == nullptr || list->as_list().empty()) {
-                std::cout << "      " << label << ": nothing\n";
-                return;
-            }
-            for (const loom::Cell& c : list->as_list()) {
-                std::cout << "      " << label << ": " << c.as_text() << '\n';
-            }
-        };
-        print_list(a.reply->value.get("base"), "baseline (frozen at admission)");
-        print_list(a.reply->value.get("delegated"), "delegated (revocable)");
-        return;
-    }
-
-    loom::host::AuthorityRule rule =
-        (existing != nullptr) ? *existing : loom::host::AuthorityRule{};
-    rule.artifact = name;
-
-    if (sub == "trust") {
-        rule.may_run = true;
-        for (std::size_t i = 3; i < tok.size(); ++i) {
-            if (tok[i].text == "--rebuilds") {
-                rule.trust_rebuilds = true;
-            } else if (tok[i].text == "--ask-again") {
-                // The way back: without it, turning `--rebuilds` off would mean hand-editing
-                // the file, a poor answer for the one switch that lets new code run unasked.
-                rule.trust_rebuilds = false;
-            } else {
-                std::cout << "  unknown option '" << tok[i].text << "'\n";
-                return;
-            }
-        }
-        // Re-pin from whatever the policy last saw refused, if anything, so "trust"
-        // after a changed-file refusal approves THE BUILD THAT WAS REFUSED and not some
-        // other one. Otherwise clear the pin and let the next load record it.
-        rule.content_id.clear();
-        for (const loom::host::PendingDecision& p : store.pending()) {
-            if (p.artifact == name && !p.content_id.empty()) {
-                rule.content_id = p.content_id;
-            }
-        }
-        const bool trusts_rebuilds = rule.trust_rebuilds;
-        if (!store.put(std::move(rule), &error)) {
-            // NOTHING CHANGED, AND THAT IS WHY THE SENTENCE CAN SAY SO. The store writes
-            // the file before it changes what this host permits, so a failed command is
-            // a command that did not happen — rather than an approval good for this
-            // session that the next boot has never heard of.
-            std::cout << "  " << error << "\n  '" << name
-                      << "' is unchanged: it still may " << (existing != nullptr && existing->may_run
-                                                                 ? "run"
-                                                                 : "NOT run")
-                      << ", here and after a restart.\n";
-            return;
-        }
-        // BOTH HALVES OF WHAT WAS JUST DECIDED, because a person who typed one word is
-        // owed the other: this grants the right to RUN and nothing else, and whether a
-        // later rebuild will ask again is exactly what the flag changed.
-        std::cout << "  '" << name << "' may run"
-                  << (trusts_rebuilds ? ", and so will any rebuild of it"
-                                      : "; a rebuild of it will ask again")
-                  << ". It may still say nothing until you allow something.\n";
-        return;
-    }
-
-    if (sub == "deny") {
-        rule.may_run = false;
-        if (!store.put(std::move(rule), &error)) {
-            std::cout << "  " << error << "\n  '" << name << "' is unchanged.\n";
-            return;
-        }
-        std::cout << "  '" << name << "' may not run. A copy already loaded keeps running — "
-                     "end it with 'stop " << name << "'.\n";
-        return;
-    }
-
-    if (sub == "allow") {
-        if (tok.size() < 4) {
-            std::cout << "  usage: authority allow <name> <rule>\n"
-                         "  rules read exactly as 'authority show' prints them:\n"
-                         "    Greet v1 -> any target     Tick v1 -> role clock\n"
-                         "    any shape -> any target    observe Tick v1\n";
-            return;
-        }
-        std::string text;
-        for (std::size_t i = 3; i < tok.size(); ++i) {
-            text += (i == 3 ? "" : " ") + tok[i].text;
-        }
-        loom::LiveAuthority probe;
-        if (!loom::host::apply_rule(text, &probe, &error)) {
-            std::cout << "  " << error << '\n';
-            return;
-        }
-        const bool observe = text.rfind("observe", 0) == 0;
-        const std::string canonical = loom::host::canonical_rule(text, observe);
-        // Already granted is said, not stored twice: a second copy would survive one
-        // `revoke`, which would report a revocation and leave the permission installed, and a
-        // person retrying a command must not make their own decision unrevokable.
-        std::vector<std::string>& into = observe ? rule.observe : rule.send;
-        for (const std::string& r : into) {
-            if (loom::host::canonical_rule(r, observe) == canonical) {
-                std::cout << "  '" << name << "' is already allowed '" << canonical
-                          << "' — nothing to add. One 'authority revoke " << name << " "
-                          << canonical << "' takes it back.\n";
-                return;
-            }
-        }
-        into.push_back(canonical);
-        if (!store.put(std::move(rule), &error)) {
-            std::cout << "  " << error << "\n  nothing was allowed; '" << name
-                      << "' permits exactly what it permitted before.\n";
-            return;
-        }
-        std::cout << "  remembered. " << s.sync(name) << '\n';
-        return;
-    }
-
-    if (sub == "revoke") {
-        if (existing == nullptr) {
-            std::cout << "  no standing decision for '" << name << "'\n";
-            return;
-        }
-        std::string text;
-        const bool all = tok.size() == 3;
-        if (all) {
-            rule.send.clear();
-            rule.observe.clear();
-        } else {
-            for (std::size_t i = 3; i < tok.size(); ++i) {
-                text += (i == 3 ? "" : " ") + tok[i].text;
-            }
-            // Every copy, not the first: the store collapses duplicates, but a file edited by
-            // hand between two runs may still hold two, and a revoke that leaves one behind
-            // leaves the permission.
-            std::size_t removed = 0;
-            const auto drop = [&removed](std::vector<std::string>& v, const std::string& want,
-                                         bool observe) {
-                for (auto it = v.begin(); it != v.end();) {
-                    if (loom::host::canonical_rule(*it, observe) == want) {
-                        it = v.erase(it);
-                        ++removed;
-                    } else {
-                        ++it;
-                    }
-                }
-            };
-            drop(rule.send, loom::host::canonical_rule(text, /*observe=*/false), false);
-            drop(rule.observe, loom::host::canonical_rule(text, /*observe=*/true), true);
-            if (removed == 0) {
-                std::cout << "  '" << text << "' is not one of its rules (see 'authority show "
-                          << name << "')\n";
-                return;
-            }
-        }
-        const loom::host::AuthorityRule after = rule; // for the honest effective-authority line
-        if (!store.put(std::move(rule), &error)) {
-            std::cout << "  " << error << "\n  nothing was revoked; '" << name
-                      << "' permits exactly what it permitted before.\n";
-            return;
-        }
-        // BOTH HALVES, from one word. The file is the memory and the bus is the effect;
-        // a revoke that changed only one of them would be a promise half kept.
-        std::cout << "  revoked, for this run and the next. " << s.sync(name) << '\n';
-        // AND THE HONEST REMAINDER. A narrow rule taken back under a broad one that is
-        // still standing has changed the list and changed nothing about what the weave
-        // may do, and a person reading "revoked" deserves to be told which they got.
-        if (!all && still_permitted(after, text)) {
-            std::cout << "  NOTE: '" << text << "' is STILL PERMITTED by another rule you have "
-                         "granted '" << name << "'. See 'authority show " << name << "'.\n";
-        }
-        return;
-    }
-
-    if (sub == "forget") {
-        if (!store.forget(name, &error)) {
-            std::cout << "  " << error << '\n';
-            return;
-        }
-        std::cout << "  forgotten. " << s.sync(name) << '\n';
-        return;
-    }
-
-    std::cout << "  unknown: authority " << sub << " (try 'help')\n";
+    ConsoleDesk desk(s);
+    loom::host::run_authority_command(store, s.warden(), desk, words, std::cout);
 }
 
 void cmd_asks(HostSession& s, const std::vector<Token>& tok) {
@@ -1922,7 +1659,7 @@ int main(int argc, char** argv) {
     // Both parties get served, every pass: one bounded bus turn, then the person, with a
     // wait only when there is nothing else to do. There is no call in here that can fail
     // to return because a participant decided to keep talking — and the wait itself is a
-    // real deadline even while the person has typed half a command (host/line_input.hpp).
+    // real deadline even while the person has typed half a command (zen/host/line_input.hpp).
     loom::host::LineInput input;
     bool prompt_shown = false;
     bool running = true;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE SUPPLIED HOST'S INPUT LIMITS, WHERE THEY ARE DECIDED (src/host/line_input.hpp).
+// THE SUPPLIED HOST'S INPUT LIMITS, WHERE THEY ARE DECIDED (include/zen/host/line_input.hpp).
 // `HeldInput` is the one place both platform readers take their answers from: what a line is,
 // what is too long, how much may wait, and what the end of input means. These cases feed it bytes
 // directly, every boundary, split and ordering, with no threads, terminals or timing in the way.
@@ -10,7 +10,7 @@
 
 #include <doctest.h>
 
-#include "line_input.hpp"
+#include <zen/host/line_input.hpp>
 
 #include <algorithm>
 #include <cstddef>
