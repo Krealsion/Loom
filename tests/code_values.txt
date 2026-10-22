@@ -66,8 +66,8 @@ kMaxWindow                      include/zen/observe/relay.hpp             kMaxWi
 kMaxSubscriptions               include/zen/observe/relay.hpp             kMaxSubscriptions
 
 # ---- the host, its line reader, its door and its link
-kHeldInputBytes                 src/host/line_input.hpp                   kHeldInputBytes
-kMaxCommandBytes                src/host/line_input.hpp                   kMaxCommandBytes
+kHeldInputBytes                 include/zen/host/line_input.hpp           kHeldInputBytes
+kMaxCommandBytes                include/zen/host/line_input.hpp           kMaxCommandBytes
 claim   kMaxCommandBytes  longer than {} bytes
 kReadChunkBytes                 src/host/line_input.cpp                   kReadChunkBytes
 kIdleWaitMs                     src/host/host_main.cpp                    kIdleWaitMs

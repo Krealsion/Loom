@@ -5,13 +5,13 @@
 #define ZEN_HOST_WARDEN_HPP
 
 // The hand that installs what a person decided: the only thing that makes the running bus agree
-// with the authority store (host/authority.hpp). A participant, because `delegate_authority` is
+// with the authority store (zen/host/authority.hpp). A participant, because `delegate_authority` is
 // spent from a live delivery, so an operator's change is a message on the tap. One write path
 // (`install`), two entries: the seat's `zen.host.AuthoritySync`, and `adopt()` inside the load
 // (`LifecycleAdoption`). Not a Weaver, which answers a subject's ask: it installs only what the
 // file says, for subjects the host handed it, at the seat's word, and speaks as no subject.
 
-#include "authority.hpp"
+#include <zen/host/authority.hpp>
 
 #include <zen/switchboard/grant.hpp>
 #include <zen/weave.hpp>

@@ -31,7 +31,7 @@ std::optional<loom::Value> read_gated_file(const std::string& path,
 /// `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`), so a reader sees the previous complete record or
 /// the new one and never neither. Not promised: a write barrier. There is no fsync, so a machine
 /// crash can still lose the latest decision. One writer at a time is the caller's business: the
-/// supplied host holds `loom::host::StoreLock` for its whole session (host/store_lock.hpp).
+/// supplied host holds `loom::host::StoreLock` for its whole session (zen/host/store_lock.hpp).
 bool write_gated_file(const std::string& path, const loom::Value& value, std::string* error);
 
 } // namespace loom::host

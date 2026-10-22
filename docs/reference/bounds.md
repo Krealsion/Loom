@@ -149,7 +149,7 @@ the tap and buffer panes carry it in their headings.
 The console above keeps what the bus did; this is the step before it — the bytes of a
 person's or a script's commands, read from stdin before any of them becomes a message. The
 values, and the rules that apply them, live in
-[`src/host/line_input.hpp`](../../src/host/line_input.hpp). They are **the same on every
+[`include/zen/host/line_input.hpp`](../../include/zen/host/line_input.hpp). They are **the same on every
 platform**, by construction rather than by care: one platform-neutral waiting area,
 `loom::host::HeldInput`, decides what a line is, what is too long, how much may wait and
 what the end of input means, and the two platform readers (POSIX `poll`, the Windows reader

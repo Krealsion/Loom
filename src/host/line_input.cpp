@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-#include "line_input.hpp"
+#include <zen/host/line_input.hpp>
 
 #include <algorithm>
 #include <cstddef>

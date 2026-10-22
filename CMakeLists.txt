@@ -339,23 +339,38 @@ target_link_libraries(zen-console-tui
 # the terminal core and, where there is one, the kernel; ZEN_HOST_HAS_KERNEL says which, and a
 # host without one still runs and says why it can load nothing.
 
-# The host's deciding half, as a library the suite reaches: the parsers of the two files a person
-# writes, `line_input` (reading a command without stopping the bus), `idle_nap` (serve mode's idle
-# wait) and `store_lock` (who owns these decisions). `main()` stays in the executable, driven as a
-# real process by tests/host_process/.
+# The host's deciding half, installed so a second host keeps its person's decisions the same way
+# (include/zen/host/): the authority store and its admission policy, the `authority` command over
+# it, the warden that installs a decision on the bus, `store_lock` (who owns these decisions) and
+# `line_input` (reading a command without stopping the bus). The parser of the store's file is
+# shared with the boot plan and stays a private header here.
 add_library(zen-host-policy STATIC
     src/host/authority.cpp
-    src/host/boot_plan.cpp
+    src/host/authority_command.cpp
     src/host/config_file.cpp
-    src/host/idle_nap.cpp
     src/host/line_input.cpp
     src/host/store_lock.cpp)
 target_include_directories(zen-host-policy
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/host>)
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/host)
 target_compile_features(zen-host-policy PUBLIC cxx_std_20)
 target_link_libraries(zen-host-policy
     PUBLIC  loom zen-switchboard zen-sanitize
+    PRIVATE zen-warnings)
+add_library(loom::host-policy ALIAS zen-host-policy)
+
+# What stays loom-host's own, as a library the suite reaches: the boot plan's parser and serve
+# mode's idle wait. `main()` stays in the executable, driven as a real process by
+# tests/host_process/.
+add_library(zen-host-boot STATIC
+    src/host/boot_plan.cpp
+    src/host/idle_nap.cpp)
+target_include_directories(zen-host-boot
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/host>)
+target_compile_features(zen-host-boot PUBLIC cxx_std_20)
+target_link_libraries(zen-host-boot
+    PUBLIC  zen-host-policy zen-sanitize
     PRIVATE zen-warnings)
 
 add_executable(loom-host src/host/host_main.cpp)
@@ -363,7 +378,7 @@ add_executable(loom-host src/host/host_main.cpp)
 # the plan's `history` section) and holds a LinkWeave per `links` row (src/host/link.hpp), host
 # wiring over the exported client.
 target_link_libraries(loom-host
-    PRIVATE zen-host-policy zen-console zen-terminal zen-history zen-bridge zen-switchboard loom
+    PRIVATE zen-host-boot zen-console zen-terminal zen-history zen-bridge zen-switchboard loom
             zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(loom-host PRIVATE zen-kernel)
@@ -520,15 +535,18 @@ if(LOOM_INSTALL)
     set_target_properties(zen-terminal    PROPERTIES EXPORT_NAME terminal)
     set_target_properties(zen-history     PROPERTIES EXPORT_NAME history)
     set_target_properties(zen-bridge      PROPERTIES EXPORT_NAME bridge)
+    set_target_properties(zen-host-policy PROPERTIES EXPORT_NAME host-policy)
     set_target_properties(zen-sanitize    PROPERTIES EXPORT_NAME sanitize)
     set_target_properties(zen-warnings    PROPERTIES EXPORT_NAME warnings)
 
     # zen-sanitize is a PUBLIC dependency of both libraries and zen-warnings survives in a static
     # library's link interface as $<LINK_ONLY:>, so both ride the export set; they are INTERFACE
     # targets, and LINK_ONLY keeps Loom's -Werror and -Wconversion off a consumer's sources.
-    # zen-terminal, zen-history and zen-bridge qualify on their contents: participant semantics,
-    # a history lens and a crossing, with no console, UI vocabulary or renderer in any of them.
-    install(TARGETS loom zen-switchboard zen-terminal zen-history zen-bridge zen-sanitize zen-warnings
+    # zen-terminal, zen-history, zen-bridge and zen-host-policy qualify on their contents:
+    # participant semantics, a history lens, a crossing and a host's standing decisions, with no
+    # console, UI vocabulary or renderer in any of them.
+    install(TARGETS loom zen-switchboard zen-terminal zen-history zen-bridge zen-host-policy
+                    zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
