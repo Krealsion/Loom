@@ -1,8 +1,8 @@
 @PACKAGE_INIT@
 
 # Loom's consumer surface: loom::core, loom::switchboard, loom::terminal, loom::history,
-# loom::bridge and, where it was built, loom::kernel, with the same spellings the in-tree ALIASes
-# use, so a build against this package and one from source resolve the same names.
+# loom::bridge, loom::host-policy and, where it was built, loom::kernel, with the same spellings the
+# in-tree ALIASes use, so a build against this package and one from source resolve the same names.
 
 include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 

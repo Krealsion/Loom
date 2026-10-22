@@ -146,7 +146,7 @@ prerequisites: `docs/guides/tools.md`.
    it is live. Because it lives in the door, the boot walk, `start`, `reload` and an ordinary
    `zen.LoadWeave` all produce the same governed participant, and no host call site adopts
    anything.
-3. The loop is `pump_pending()` plus a line read with a deadline (`src/host/line_input.hpp`), never
+3. The loop is `pump_pending()` plus a line read with a deadline (`include/zen/host/line_input.hpp`), never
    `drain_until_idle()`: one approved self-addressed message would otherwise make `stop` and `quit`
    unreadable forever. The deadline holds while a line is **half typed**: a Windows console cannot
    be asked whether a line is finished, so it is read on its own thread. What the reader holds and
@@ -158,7 +158,7 @@ A conversation that has not settled is reported PENDING and stays open; the host
 completion. The console holds a conversation only for a caller that asks
 (`ConsoleTracking::Tracked`), until that caller takes or forgets it.
 
-**One host owns one decision store while it runs** (`src/host/store_lock.hpp`): the store is
+**One host owns one decision store while it runs** (`include/zen/host/store_lock.hpp`): the store is
 written whole, so a second writer would restore what the first one revoked. A second host naming
 the same file exits **4** and says how to proceed. Exit codes: 0 ok, 2 bad command line, 3 a file
 would not parse, 4 store (or, serving, session directory) in use, 5 a session could not be opened.

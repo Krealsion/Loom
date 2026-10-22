@@ -18,7 +18,7 @@
 // parent prints. Exit codes: 0 passed, 1 a check failed, 2 bad command line, 3 no terminal (a
 // failure: a witness without a terminal proves nothing).
 
-#include "line_input.hpp"
+#include <zen/host/line_input.hpp>
 
 #include <algorithm>
 #include <atomic>
