@@ -6,7 +6,7 @@
 
 // What boots, in what order, and what happened to each: the file a person writes listing the
 // artifacts to start, as a list and not a graph, because order is the person's to state. It is
-// not authority: the authority store (host/authority.hpp) decides separately and may refuse any
+// not authority: the authority store (zen/host/authority.hpp) decides separately and may refuse any
 // row. The report is the point: every row ends in a named state, with the refusal's own words,
 // in one table printed at boot and readable again from the console.
 

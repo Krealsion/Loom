@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-#include "store_lock.hpp"
+#include <zen/host/store_lock.hpp>
 
 #include <utility>
 

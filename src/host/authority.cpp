@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-#include "authority.hpp"
+#include <zen/host/authority.hpp>
 
 #include "config_file.hpp"
 

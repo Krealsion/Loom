@@ -103,6 +103,19 @@ if(NOT ZEN_WITNESS_DECODE)
 endif()
 zen_run("the decode allowance as a consumer reads it" "${ZEN_WITNESS_DECODE}")
 
+# ---- 1f. the deciding half, as a second host keeps its person's decisions ----------------
+find_program(ZEN_WITNESS_AUTHORITY witness-authority PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
+             NO_DEFAULT_PATH)
+if(NOT ZEN_WITNESS_AUTHORITY)
+    message(FATAL_ERROR
+        "package witness: witness-authority was not produced in ${ZEN_WORK}. The authority store, "
+        "its warden and the `authority` command are exported precisely so a second host can keep "
+        "its person's decisions in Loom's store; if they no longer configure or compile from the "
+        "installed package, that claim is false.")
+endif()
+zen_run("a second host's decisions in Loom's authority store" "${ZEN_WITNESS_AUTHORITY}"
+        "${ZEN_WORK}/authority")
+
 # ---- the dynamic-weave half, only where the install has a kernel ---------------------
 file(GLOB weave_artifact
      "${ZEN_WORK}/*witness-weave*.dll" "${ZEN_WORK}/*witness-weave*.so"
@@ -247,5 +260,5 @@ if(CMAKE_HOST_WIN32)
     set(zen_host_said ", installed host in the UTF-8 code page")
 endif()
 
-message(STATUS "package witness: PASSED -- installed package, macro surface, exact export, live "
-               "weave${zen_host_said}")
+message(STATUS "package witness: PASSED -- installed package, macro surface, a second host's "
+               "decisions, exact export, live weave${zen_host_said}")

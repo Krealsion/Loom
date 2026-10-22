@@ -10,12 +10,12 @@
 
 #include <doctest.h>
 
-#include "authority.hpp"
 #include "boot_plan.hpp"
 #include "config_file.hpp"
-#include "store_lock.hpp"
 
 #include <zen/content_id.hpp>
+#include <zen/host/authority.hpp>
+#include <zen/host/store_lock.hpp>
 #include <zen/kernel/admission.hpp>
 #include <zen/switchboard/grant.hpp>
 
