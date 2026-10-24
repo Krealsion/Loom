@@ -9,6 +9,7 @@
 
 #include <zen/isolation/protocol.hpp>
 #include <zen/kernel/abi.h>
+#include <zen/kernel/making_words.hpp>
 
 #include <cerrno>
 #include <cstddef>
@@ -172,8 +173,14 @@ int main(int argc, char** argv) {
     if (abi == nullptr || abi->abi_version != ZEN_ABI_VERSION) {
         return 5;
     }
-    void* instance = abi->create();
+    loom::MakingWords words;
+    void* instance = abi->create(words.sink());
     if (instance == nullptr) {
+        // ...SAID TO THE PARENT before the exit, so its refusal is the weave's own words.
+        std::string refused;
+        put_u8(refused, words.cut ? 1 : 0);
+        put_bytes(refused, words.said);
+        send_frame(Op::Refused, refused);
         return 6;
     }
 

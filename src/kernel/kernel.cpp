@@ -4,6 +4,7 @@
 #include <zen/kernel/kernel.hpp>
 
 #include <zen/content_id.hpp>
+#include <zen/kernel/making_words.hpp>
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/serialize.hpp>
 #include <zen/value.hpp>
@@ -100,8 +101,9 @@ void destroy_instance(const ZenWeaveAbi* abi, void* instance) {
     abi->destroy(instance);
 }
 
-void* create_instance(const ZenWeaveAbi* abi) {
-    void* instance = abi->create();
+// ...and making one, keeping what a weave says when it refuses its making.
+void* create_instance(const ZenWeaveAbi* abi, MakingWords& words) {
+    void* instance = abi->create(words.sink());
     if (instance != nullptr) {
         ++ledger().instances_created;
     }
@@ -1168,9 +1170,10 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
     if (abi == nullptr) {
         return {false, {}, error};
     }
-    void* instance = create_instance(abi);
+    MakingWords words;
+    void* instance = create_instance(abi, words);
     if (instance == nullptr) {
-        return {false, {}, "library create() returned null"};
+        return {false, {}, making_refused(words)};
     }
 
     std::unique_ptr<HostAdapter> adapter;
@@ -1306,9 +1309,10 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (new_abi == nullptr) {
         return {false, false, false, error};
     }
-    void* new_inst = create_instance(new_abi);
+    MakingWords words;
+    void* new_inst = create_instance(new_abi, words);
     if (new_inst == nullptr) {
-        return {false, false, false, "library create() returned null"};
+        return {false, false, false, making_refused(words)};
     }
 
     // Reconstruct the candidate's WHOLE manifest once: both halves of the

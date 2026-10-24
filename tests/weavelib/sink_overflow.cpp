@@ -16,7 +16,7 @@ namespace {
 
 int instance = 0;
 
-void* create() { return &instance; }
+void* create(ZenByteSink) { return &instance; }
 void destroy(void*) {}
 
 ZenStatus describe(void*, ZenByteSink sink) {

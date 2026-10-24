@@ -197,6 +197,10 @@ zen_add_test_weave(zen_test_weave_v2 ZEN_WEAVE_STATE_V2)
 # A loaded handler that throws: its exception is caught at the ABI seam and returns as a status,
 # which the bus must record rather than announce a plain Delivered.
 zen_add_test_weave(zen_test_weave_throws ZEN_WEAVE_THROW_ON_MAGIC)
+# A making refused: in words, in words past the host's bound, and by an exception that names none.
+zen_add_test_weave(zen_test_weave_refuses ZEN_WEAVE_REFUSES_MAKING)
+zen_add_test_weave(zen_test_weave_refuses_long ZEN_WEAVE_REFUSES_MAKING_AT_LENGTH)
+zen_add_test_weave(zen_test_weave_refuses_unnamed ZEN_WEAVE_REFUSES_MAKING_UNNAMED)
 # The letter: a predecessor that declares zen.PrepareShutdown and writes a Bequest, and a
 # differently shaped heir (Counter v2) that claims by role on wake.
 zen_add_test_weave(zen_test_weave_bequeaths ZEN_WEAVE_BEQUEATHS)
@@ -356,6 +360,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_wedged zen_test_weave_activates zen_test_weave_activates_b
     zen_test_weave_activates_drift zen_test_weave_activates_conflict zen_test_badabi
     zen_test_staleabi zen_test_weave_defers zen_test_weave_answers
+    zen_test_weave_refuses zen_test_weave_refuses_long zen_test_weave_refuses_unnamed
     zen_test_weave_answers_twice zen_test_weave_seam_emit zen_test_weave_seam_publish
     zen_test_weave_senses
     zen_test_weave_emits zen_test_weave_emits_conflict
@@ -377,6 +382,9 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_BADMSG=\"$<TARGET_FILE:zen_test_weave_badmsg>\""
     "ZEN_SO_V2=\"$<TARGET_FILE:zen_test_weave_v2>\""
     "ZEN_SO_THROWS=\"$<TARGET_FILE:zen_test_weave_throws>\""
+    "ZEN_SO_REFUSES=\"$<TARGET_FILE:zen_test_weave_refuses>\""
+    "ZEN_SO_REFUSES_LONG=\"$<TARGET_FILE:zen_test_weave_refuses_long>\""
+    "ZEN_SO_REFUSES_UNNAMED=\"$<TARGET_FILE:zen_test_weave_refuses_unnamed>\""
     "ZEN_SO_BEQUEATHS=\"$<TARGET_FILE:zen_test_weave_bequeaths>\""
     "ZEN_SO_HEIR=\"$<TARGET_FILE:zen_test_weave_heir>\""
     "ZEN_SO_WEDGED=\"$<TARGET_FILE:zen_test_weave_wedged>\""

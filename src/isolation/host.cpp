@@ -4,6 +4,7 @@
 #include <zen/isolation/host.hpp>
 
 #include <zen/weave/dispatch_refusal.hpp>
+#include <zen/kernel/making_words.hpp> // a refused making's words, said as the kernel says them
 #include <zen/kernel/schema_codec.hpp> // manifest_schema, decode_schema (shared encode/decode)
 #include <zen/serialize.hpp>           // parse, admit, serialize
 #include <zen/value.hpp>
@@ -78,7 +79,7 @@ bool wait_for_hello(Channel& ch, Incoming& out, int timeout_ms) {
     for (;;) {
         ch.poll(frames);
         for (auto& f : frames) {
-            if (f.op == Op::Hello) {
+            if (f.op == Op::Hello || f.op == Op::Refused) {
                 out = std::move(f);
                 return true;
             }
@@ -521,6 +522,22 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
                     "holding this host's descriptors";
         }
         return false; // caller tears down
+    }
+
+    if (hello.op == Op::Refused) {
+        // THE WEAVE REFUSED ITS MAKING, and the child said why before it exited.
+        Cursor said(hello.payload);
+        std::uint8_t cut = 0;
+        std::string_view words;
+        if (!said.u8(cut) || !said.bytes(words)) {
+            error = "malformed Refused frame";
+            return false;
+        }
+        MakingWords kept;
+        kept.cut = cut != 0;
+        MakingWords::write(&kept, reinterpret_cast<const std::uint8_t*>(words.data()), words.size());
+        error = making_refused(kept);
+        return false;
     }
 
     Cursor cursor(hello.payload);

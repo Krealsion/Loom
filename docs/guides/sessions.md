@@ -124,7 +124,7 @@ Every `loom-session` command attaches as a fresh client, asks the owners, prints
 ```text
 $ loom-session status work
 session /home/you/work -- lifetime 3f17415b4ee53b1ddce611b8ac90b0f7
-  loom-host 0.1.0, pid 36712, weave ABI v9, listening on 127.0.0.1:50113
+  loom-host 0.1.0, pid 36712, weave ABI v10, listening on 127.0.0.1:50113
   connection 4: client client (claims 'loom-session-cli') admitted, session 11, compat
   0 run connection(s) expected
 $ loom-session tools work

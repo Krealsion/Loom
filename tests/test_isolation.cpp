@@ -407,6 +407,25 @@ TEST_CASE("a crashing child is contained: the host survives, reloads, then quara
     CHECK(rec2.weave->handled_values.back() == 7);
 }
 
+TEST_CASE("an isolated weave whose making is refused in words is refused at its mount in those "
+          "words") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    OutOfProcessResult refused = host.mount("refuses", ZEN_SO_REFUSES, Grant{});
+    CHECK_FALSE(refused.ok);
+    CHECK(refused.error.find("library create() refused: no video device answered: the display is gone") !=
+          std::string::npos);
+    // ...and the host serves the next mount as ever.
+    Registered recorder = register_probe(bus, {pong_schema()});
+    Grant g;
+    g.allow("Pong", 1, recorder.id);
+    OutOfProcessResult made = host.mount("made", ZEN_SO_WEAVE, std::move(g));
+    REQUIRE_MESSAGE(made.ok, made.error);
+    bus.send(made.id, Message(ping(3), WeaveId{}, recorder.id));
+    REQUIRE(host.run_until([&] { return !recorder.weave->handled_names.empty(); }, 2000));
+    CHECK(recorder.weave->handled_values.back() == 3);
+}
+
 TEST_CASE("the host never blocks on a child: a silent child cannot stall the bus") {
     Switchboard bus;
     IsolationHost host(bus, kHostExe);
