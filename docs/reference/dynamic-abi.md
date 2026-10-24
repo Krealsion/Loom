@@ -1,12 +1,23 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v9**
+The C seam a weave library and the host agree on. Current version: **v10**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v10 carries the words of a making refused.** `ZenWeaveAbi::create` takes a `ZenByteSink`: a
+weave that makes no instance returns NULL having written why, and `ZEN_EXPORT_WEAVE` writes there
+what its constructor threw (`std::exception::what()`; an exception that is no `std::exception`
+writes nothing). The host keeps the first `kMaxMakingWordsBytes` of them
+(`include/zen/kernel/making_words.hpp`, [bounds](bounds.md#a-weaves-making)) and says them in the
+load's refusal, `library create() refused: <words>`, at load and at a replacement over a live
+participant, whose incumbent stands; a weave that wrote none is refused as `library create()
+returned null`. The isolated host's child sends the words in a `Refused` frame in place of
+its `Hello`, and the mount is refused in them. No other slot changes; a v9 image is refused at load
+with both versions named, before any callback into it.
 
 **v9 carries the declared emit-set, by definition** ([declared vocabulary is
 agreed at admission](../decisions/declared-vocabulary-is-agreed-at-admission.md)).

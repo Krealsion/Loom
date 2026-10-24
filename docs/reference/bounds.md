@@ -409,6 +409,12 @@ magnitude above the largest value any current consumer sends. A value larger
 than the bound cannot cross a serialized boundary at all: an in-process `Value`
 may exceed it, but nothing will re-admit its bytes.
 
+## A weave's making
+
+| Bound | Value | Scope | Overflow behavior |
+|---|---|---|---|
+| `kMaxMakingWordsBytes` | <!-- value kMaxMakingWordsBytes -->1024<!-- /value --> bytes | the words one refused making writes into the host's sink (`include/zen/kernel/making_words.hpp`), in process and across the isolated pipe | the rest is cut, and the load's refusal says where |
+
 ## Isolation resource defaults (computed, no knob)
 
 memory = RAM/8 (cap 1 GiB, floor 128 MiB) · pids = 512 · cpu_weight = 100.

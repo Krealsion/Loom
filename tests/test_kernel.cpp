@@ -11,6 +11,7 @@
 #include <zen/host/lifecycle_wiring.hpp>
 #include <zen/host/prepared_replacement.hpp>
 #include <zen/kernel/kernel.hpp>
+#include <zen/kernel/making_words.hpp>
 #include <zen/serialize.hpp>
 #include <zen/weave/lifecycle.hpp>
 #include <zen/weave/shape.hpp>
@@ -1983,6 +1984,63 @@ TEST_CASE("KERN-04: an image built against the previous ABI cannot replace a liv
     bus.drain_until_idle();
     CHECK(live_count(bus, id) == 4);
     CHECK(bus.list_weaves().size() == 2); // the probe and the incumbent; nothing else
+}
+
+TEST_CASE("a weave whose making is refused in words is refused at load in those words") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    LoadResult lr = kernel.load("refuses", ZEN_SO_REFUSES);
+    CHECK_FALSE(lr.ok);
+    CHECK(lr.error == "library create() refused: no video device answered: the display is gone");
+    CHECK_FALSE(kernel.is_loaded("refuses"));
+    CHECK(bus.list_weaves().empty());
+}
+
+TEST_CASE("a weave whose making is refused by something that is no std::exception is refused as "
+          "making nothing") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    LoadResult lr = kernel.load("unnamed", ZEN_SO_REFUSES_UNNAMED);
+    CHECK_FALSE(lr.ok);
+    CHECK(lr.error == "library create() returned null");
+    CHECK_FALSE(kernel.is_loaded("unnamed"));
+}
+
+TEST_CASE("a refused making's words past the bound are cut, and the refusal says so") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    LoadResult lr = kernel.load("long", ZEN_SO_REFUSES_LONG);
+    CHECK_FALSE(lr.ok);
+    const std::string head = "library create() refused: ";
+    const std::string tail = " (cut at " + std::to_string(kMaxMakingWordsBytes) + " bytes)";
+    REQUIRE(lr.error.size() == head.size() + kMaxMakingWordsBytes + tail.size());
+    CHECK(lr.error.substr(0, head.size()) == head);
+    CHECK(lr.error.substr(head.size(), kMaxMakingWordsBytes) == std::string(kMaxMakingWordsBytes, 'w'));
+    CHECK(lr.error.substr(head.size() + kMaxMakingWordsBytes) == tail);
+}
+
+TEST_CASE("a replacement whose making is refused in words is refused in those words, and the "
+          "incumbent stands") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    Registered recorder = register_probe(bus, {pong_schema()});
+    LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    const WeaveId id = lr.id;
+    bus.send(id, Message(ping(1), WeaveId{}, recorder.id));
+    bus.drain_until_idle();
+    REQUIRE(live_count(bus, id) == 1);
+
+    ReloadResult rr = kernel.reload_from("t", ZEN_SO_REFUSES);
+    CHECK_FALSE(rr.ok);
+    CHECK_FALSE(rr.reloaded);
+    CHECK(rr.error == "library create() refused: no video device answered: the display is gone");
+
+    CHECK(kernel.is_loaded("t"));
+    CHECK(kernel.weave_id("t") == id);
+    bus.send(id, Message(ping(1), WeaveId{}, recorder.id));
+    bus.drain_until_idle();
+    CHECK(live_count(bus, id) == 2);
 }
 
 // ---- the transaction remembers (PR-02) ----------------------------------------

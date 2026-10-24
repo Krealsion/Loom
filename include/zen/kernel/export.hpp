@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -344,10 +345,19 @@ private:
 
 // ---- the per-method helpers the generated thunks forward to ------------------
 
+// A making refused: what the constructor threw, written to the host's sink as its words; an
+// exception that is no std::exception says nothing.
 template <class S>
-void* do_create() {
+void* do_create(ZenByteSink refusal) {
     try {
         return static_cast<void*>(new S());
+    } catch (const std::exception& e) {
+        const std::string_view words = e.what();
+        if (refusal.write != nullptr && !words.empty()) {
+            refusal.write(refusal.ctx, reinterpret_cast<const std::uint8_t*>(words.data()),
+                          words.size());
+        }
+        return nullptr;
     } catch (...) {
         return nullptr;
     }
@@ -531,7 +541,7 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
 // C++20 and C accept.
 #define ZEN_EXPORT_WEAVE(WeaveClass)                                                                \
     extern "C" {                                                                                    \
-    static void* zen__abi_create(void) { return ::loom::detail::do_create<WeaveClass>(); }   \
+    static void* zen__abi_create(ZenByteSink r) { return ::loom::detail::do_create<WeaveClass>(r); } \
     static void zen__abi_destroy(void* i) { ::loom::detail::do_destroy<WeaveClass>(i); }      \
     static ZenStatus zen__abi_describe(void* i, ZenByteSink s) {                                    \
         return ::loom::detail::do_describe<WeaveClass>(i, s);                                \
