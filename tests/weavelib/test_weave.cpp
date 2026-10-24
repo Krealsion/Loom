@@ -21,6 +21,9 @@
 // and Whole sharing one Part; PING_DRIFT is the guide's copied weave, Ping v1 with an extra
 // field; ASKS declares a capability ask.
 
+// Its making: REFUSES_MAKING throws a std::runtime_error in words from its constructor,
+// REFUSES_MAKING_AT_LENGTH one past the host's bound, REFUSES_MAKING_UNNAMED something else.
+
 // The isolation host's harness: CRASH_ON_MAGIC and CRASH_ON_REVIVE abort, LOW_RELOADS sets
 // max_reloads to 3, SILENT never replies; NET_PROBE, FS_PROBE, FD_PROBE and ENV_PROBE report
 // what the child reaches from inside its sandbox; MEM_BOMB and FORK_BOMB trip memory.max and
@@ -330,6 +333,13 @@ std::shared_ptr<const Schema> counter_schema() {
 // Accepts Ping, replies Pong, and counts what it has handled as its state.
 class TestWeave : public Weave {
 public:
+#if defined(ZEN_WEAVE_REFUSES_MAKING)
+    TestWeave() { throw std::runtime_error("no video device answered: the display is gone"); }
+#elif defined(ZEN_WEAVE_REFUSES_MAKING_AT_LENGTH)
+    TestWeave() { throw std::runtime_error(std::string(4096, 'w') + " and the end"); }
+#elif defined(ZEN_WEAVE_REFUSES_MAKING_UNNAMED)
+    TestWeave() { throw 7; }
+#endif
     std::vector<std::shared_ptr<const Schema>> accepted_schemas() const override {
 #if defined(ZEN_WEAVE_BEQUEATHS) || defined(ZEN_WEAVE_WEDGED)
         // Declaring zen.PrepareShutdown IS the opt-in: it is what the steward

@@ -72,13 +72,16 @@ MEANS
 - the stale-artifact fixture always declares `ZEN_ABI_VERSION - 1`, so the pin
   means "the previous ABI refuses" after every future bump;
 - out-of-process children get null capability doors and fail closed rather
-  than pretending.
+  than pretending;
+- a weave that refuses its making is refused at load, and at a replacement, in the words it
+  wrote, kept to `kMaxMakingWordsBytes`; one that wrote none, as making nothing.
 
 DOES NOT MEAN
 - that a version number is observable *within* one self-consistent build — it
   protects mixed artifacts.
 
-PROVEN BY — descriptor version gate; suite `kernel` (stale-ABI case).
+PROVEN BY — descriptor version gate; suite `kernel` (stale-ABI case, the refused making's
+cases); suite `isolation` (an isolated weave whose making is refused).
 
 ## KERN-05 — A weave's statics live and die with it, and its C++ runtime is its own
 
