@@ -22,7 +22,7 @@ extern "C" {
  * and refuses any other version before calling into the image, at load and as a replacement for
  * a live participant, naming both; there is no old-image bridge. Rebuild hosts, libraries and
  * images together. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 9u
+#define ZEN_ABI_VERSION 10u
 
 /* Delivery provenance (ZEN_PROV_*), one value per delivery. Zero is an ordinary message. Set
  * by the host from bus-owned state; no payload a weave composes produces one. */
@@ -168,7 +168,10 @@ typedef struct ZenHostApi {
 typedef struct ZenWeaveAbi {
     uint32_t abi_version;
 
-    void* (*create)(void);
+    /* Make an instance, or return NULL when the weave refuses its making, having written why to
+     * `refusal` (or nothing). The host keeps the first words and says them in the load's refusal
+     * (zen/kernel/making_words.hpp). */
+    void* (*create)(ZenByteSink refusal);
     void (*destroy)(void* instance);
 
     /* Emit the manifest (zen.Manifest, zen/kernel/schema_codec.hpp) as descriptor bytes: what

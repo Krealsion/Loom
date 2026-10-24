@@ -25,6 +25,9 @@ mention zen.Manifest  zen.Manifest` v{}
 mention zen.Manifest  zen.Manifest v{}
 mention zen.Manifest  manifest v{}
 
+# ---- a weave's making
+kMaxMakingWordsBytes            include/zen/kernel/making_words.hpp       kMaxMakingWordsBytes
+
 # ---- the weave build contract
 LOOM_WEAVE_MINGW_GCC_LEAST      cmake/loom-weave.cmake                    LOOM_WEAVE_MINGW_GCC_LEAST
 LOOM_WEAVE_MINGW_CLANG_LEAST    cmake/loom-weave.cmake                    LOOM_WEAVE_MINGW_CLANG_LEAST
