@@ -257,7 +257,10 @@ MEANS
 - the requirement comes from the **build graph**: `tests/weave_population.cmake` classifies
   every `SHARED`/`MODULE` library declared in `tests/` as a loadable weave that owes the
   contract, and derives the `STATIC`/`OBJECT` libraries inside their link closures, because
-  the contract covers a compilation and not a file ([KERN-05](kernel-laws.md));
+  the contract covers a compilation and not a file ([KERN-05](kernel-laws.md)); and from the
+  **package**: every static library it installs for a weave to link, named once in
+  `LOOM_PACKAGE_LIBRARIES` (`CMakeLists.txt`, the install set), owes it too, since it lands in
+  a consumer's image that this tree never builds;
 - nothing on that side reads `LOOM_WEAVE_CONTRACT_TARGETS` or the verdict property, so the
   edit that empties the roll leaves the expectation intact — which is the entire mechanism;
 - the `weave_population` CTest entry compares them and fails **both** ways, with the artifact
