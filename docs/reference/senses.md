@@ -170,9 +170,12 @@ no weave gains reach from Senses existing — a Sense repository is not a univer
 exfiltration rail. Authorization happens *before* the lookup, so an
 unauthorized reader cannot learn whether a claim exists.
 
-Loaded artifacts get their grant from `Kernel::load`'s explicit-grant overload:
-reading another participant's claims is a host decision, not a consequence of
-being loadable.
+A loaded artifact's observe rules come from its grant, and every source of one is the host's:
+the grant its `AdmissionPolicy` answers at `AdmissionStage::Speak`, its baseline for good
+([admitting a loaded artifact](capabilities.md#admitting-a-loaded-artifact)); the grant
+`Kernel::load`'s explicit-grant overload names at the call site; and a rule a holder of a
+host-minted `GrantAuthority` delegates to it live ([live delegation](capabilities.md#live-delegation)).
+Reading another participant's claims is a host decision, not a consequence of being loadable.
 
 **The substrate's own mutation doors are mutations.** A weave that derives its
 claim from its state re-claims in `after_delivery(Mail&)`, which `WeaveBase`
