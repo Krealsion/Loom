@@ -31,12 +31,12 @@ cmake -P tests/documentation_lane.cmake               # the documentation lane, 
 
 - `-Werror` is on; C++20. GCC 11.4 is the floor, so use nothing only a newer compiler accepts.
 - **Every loadable weave target goes through `loom_weave_build_contract()`**
-  (`cmake/loom-weave.cmake`, KERN-05), including the fixtures in `tests/` and `loom` and
-  `zen-switchboard` themselves, since their objects land inside the image. Never hand-write its
-  options: the `weave_contract` entry reads the built artifacts and will say so. Which
-  artifacts *must* carry it is derived from the build graph by the `weave_population` entry
-  (every `SHARED`/`MODULE` library in `tests/` and the static libraries in their link closures),
-  and one that left the roll is named (POP-05). A deliberate exception is
+  (`cmake/loom-weave.cmake`, KERN-05), including the fixtures in `tests/` and every static
+  library the package installs for a weave to link (`LOOM_PACKAGE_LIBRARIES`), since their
+  objects land inside the image. Never hand-write its options: the `weave_contract` entry reads
+  the built artifacts and will say so. Which artifacts *must* carry it is derived by the
+  `weave_population` entry (every `SHARED`/`MODULE` library in `tests/`, the static libraries in
+  their link closures, and `LOOM_PACKAGE_LIBRARIES`), and one that left the roll is named (POP-05). A deliberate exception is
   `zen_weave_contract_exempt(<target> <reason>)`, in writing, and it fails if that target then
   turns up contracted.
 - The `isolation`, `policy` and `all` suites need a delegated cgroup scope: run the whole binary

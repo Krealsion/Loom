@@ -7,12 +7,12 @@
 # reads neither the roll nor LOOM_WEAVE_BUILD_CONTRACT, so emptying one leaves the other intact.
 # Green requires the two to agree (docs/laws/population-laws.md).
 
-# Required: every SHARED or MODULE library declared in tests/ (each is a fixture some suite
-# dlopens, and a new one forces a decision: contract it, or exempt it in writing), every weave
-# Loom itself ships, and the STATIC or OBJECT libraries in their link closures, since the contract
-# covers a compilation, not a file (KERN-05). Not required: executables, interface libraries
-# (walked through), and shared libraries in a closure, each its own image. A stranger's build is
-# never listed here.
+# Required: every SHARED or MODULE library declared in tests/ (a fixture some suite dlopens; a new
+# one forces a decision: contract it, or exempt it in writing), every weave Loom ships, the STATIC
+# or OBJECT libraries in their link closures, since the contract covers a compilation, not a file
+# (KERN-05), and every library LOOM_PACKAGE_LIBRARIES names, which lands in images this tree never
+# builds. Not required: executables, interface libraries (walked through), and shared libraries in
+# a closure, each its own image. A stranger's build is never listed here.
 
 if(COMMAND zen_required_weave_population)
     return()
@@ -236,10 +236,40 @@ function(zen_required_weave_population out_rows out_weaves out_exempt)
             endif()
         endforeach()
     endforeach()
+    # ...AND EVERY LIBRARY THE PACKAGE INSTALLS FOR A WEAVE TO LINK, from the top level's own list
+    # of them (LOOM_PACKAGE_LIBRARIES, the install set): a consumer's weave links it into an image
+    # no build graph of this tree shows, so the package's word that it installs one is the
+    # requirement. An empty list is a sweep gone blind, not a package with nothing to link.
+    if(NOT LOOM_PACKAGE_LIBRARIES)
+        message(FATAL_ERROR
+            "weave population: LOOM_PACKAGE_LIBRARIES names no library, though the package "
+            "installs the libraries a weave links. Without that list this sweep cannot require "
+            "the contract of them, and a library that left it would go unnamed.")
+    endif()
+    foreach(entry IN LISTS LOOM_PACKAGE_LIBRARIES)
+        _zen_wp_dealias("${entry}" lib)
+        if(NOT TARGET "${lib}")
+            message(FATAL_ERROR
+                "weave population: LOOM_PACKAGE_LIBRARIES names '${entry}', which is not a target.")
+        endif()
+        get_target_property(kind "${lib}" TYPE)
+        if(NOT kind STREQUAL "STATIC_LIBRARY" AND NOT kind STREQUAL "OBJECT_LIBRARY")
+            continue() # a shared library is its own image, and an interface one has no objects
+        endif()
+        list(FIND statics "${lib}" already)
+        if(already EQUAL -1)
+            list(APPEND statics "${lib}")
+            set(_zen_wp_installed_${lib} 1)
+        endif()
+    endforeach()
     foreach(lib IN LISTS statics)
         get_target_property(kind "${lib}" TYPE)
         _zen_wp_exemption("${lib}" exemption)
-        set(why "${kind} inside loadable weave '${_zen_wp_linked_by_${lib}}'")
+        if(_zen_wp_installed_${lib})
+            set(why "${kind} the package installs for a weave to link")
+        else()
+            set(why "${kind} inside loadable weave '${_zen_wp_linked_by_${lib}}'")
+        endif()
         if(_zen_wp_linkers_${lib} GREATER 1)
             string(APPEND why " (and ${_zen_wp_linkers_${lib}} weaves in total)")
         endif()

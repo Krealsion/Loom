@@ -307,7 +307,8 @@ weave.
 
 ## What crosses the ABI
 
-ABI v8 carries **the claimant's surface only**: `ZenHostApi::sense_offer`
+The dynamic ABI, at `ZEN_ABI_VERSION` (`zen/kernel/abi.h`), carries **the claimant's surface
+only**, as it has since ABI v8 brought it: `ZenHostApi::sense_offer`
 (offer) outbound and `ZenWeaveAbi::claim_published` (the showing) inbound,
 with the two statuses `ZEN_ERR_JOINT_BASE` (a refused offer, by enumerator) and
 `ZEN_CLAIM_DECLINED` (the third answer; the one positive status). The host
@@ -325,8 +326,8 @@ incarnation at every verb, which is a design of its own with its own witnesses.
 The isolated pipe supplies no offer door either: a child cannot present the
 exact identity an operation binds.
 
-Old v7 images are refused at load and at reload, naming both versions, and are
-not adapted; rebuild hosts, libraries and images together
+An image built for any version but `ZEN_ABI_VERSION` is refused at load and at reload, naming
+both versions, and is not adapted; rebuild hosts, libraries and images together
 ([dynamic ABI](dynamic-abi.md)).
 
 ## Host exception responsibility at the pump seam
