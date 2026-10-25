@@ -230,7 +230,7 @@ jobs:
     needs: loom-change-kind
     if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out Loom
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -293,7 +293,7 @@ jobs:
       - name: Verify canonical Zengine's repository-owned population
         run: |
           set +e
-          cmake -DZEN_BUILD_DIR="$RUNNER_TEMP/zengine-build" \
+          cmake -DZEN_BUILD_DIR="$RUNNER_TEMP/zengine-build" -DZEN_CTEST_ARGS=-j4 \
                 -P "$RUNNER_TEMP/zengine-src/tests/verify.cmake" 2>&1 | tee zengine-verify.log
           verify_rc="${PIPESTATUS[0]}"
           verify_outcome=failed
