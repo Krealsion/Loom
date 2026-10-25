@@ -96,10 +96,12 @@ MEANS
 - `loom_weave_build_contract(<target>)` is exported with the package and is the
   whole supported path; a consumer never spells a compiler or linker option for
   this;
-- it covers a **compilation**, not a file — the installed `loom::core` and
-  `loom::switchboard` are built under it too, because one unique symbol
-  anywhere in the image marks the whole image `NODELETE`, and on the MSVC ABI
-  every object of one image is compiled for one runtime;
+- it covers a **compilation**, not a file — every static library the package
+  installs for a weave to link is built under it too: `loom::core`,
+  `loom::switchboard`, `loom::terminal`, `loom::history`, `loom::bridge` and
+  `loom::host-policy`, because one unique symbol anywhere in the image marks the
+  whole image `NODELETE`, and on the MSVC ABI every object of one image is
+  compiled for one runtime;
 - it reaches exactly the target handed to it: a host executable, or any other
   consumer that merely links Loom, is untouched;
 - the platform predicate is semantic. ELF/GNU needs the unique-binding option;

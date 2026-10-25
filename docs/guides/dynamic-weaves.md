@@ -89,9 +89,11 @@ the memory its copy of the runtime took, so a host may reload it any number of
 times; and it refuses, in words, a toolchain no reload was measured on.
 
 The contract covers a **compilation**, not a file: every translation unit inside
-the image needs it. The installed `loom::core` and `loom::switchboard` already
-carry it, so linking them costs you nothing extra — but a static library of your
-own that you link into a weave is yours to hand over too.
+the image needs it. Every static library the package installs for a weave to link
+already carries it (`loom::core`, `loom::switchboard`, `loom::terminal`,
+`loom::history`, `loom::bridge`, `loom::host-policy`), so linking them costs you
+nothing extra — but a static library of your own that you link into a weave is
+yours to hand over too.
 
 **Building without CMake?** Reproduce the equivalent non-unique symbol semantics
 for your toolchain yourself, and then verify the artifact rather than trusting

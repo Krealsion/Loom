@@ -240,10 +240,8 @@ target_link_libraries(zen-terminal
     PRIVATE zen-warnings)
 add_library(loom::terminal ALIAS zen-terminal)
 
-# Deliberately not loom_weave_build_contract(): nothing loadable links this target, and
-# contracting an artifact the build-graph sweep does not require makes the roll and the
-# requirement diverge, the drift `weave_population` names (POP-05). When a loadable weave links
-# it, the sweep derives the requirement.
+# A consumer's weave links it, so its objects land inside that image (LOOM_PACKAGE_LIBRARIES).
+loom_weave_build_contract(zen-terminal)
 
 # ---- History: what the host knows, and what it keeps -----------
 # Two owners, one library, neither reading the other: `loom::Recorder` is volatile working
@@ -264,9 +262,8 @@ target_link_libraries(zen-history
     PRIVATE zen-warnings)
 add_library(loom::history ALIAS zen-history)
 
-# DELIBERATELY NOT loom_weave_build_contract(), for zen-terminal's reason (POP-05): nothing
-# loadable links this target, so contracting it would put an artifact on the roll that the
-# build-graph sweep does not require, which is exactly the drift `weave_population` names.
+# Installed for a weave to link, as zen-terminal is (LOOM_PACKAGE_LIBRARIES).
+loom_weave_build_contract(zen-history)
 
 # ---- Console: the engine, then a terminal ------------
 # A message-native bus participant (discover, compose, gate-send, receive replies into an indexed
@@ -359,6 +356,8 @@ target_link_libraries(zen-host-policy
     PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings)
 add_library(loom::host-policy ALIAS zen-host-policy)
+# Installed for a weave to link, as zen-terminal is (LOOM_PACKAGE_LIBRARIES).
+loom_weave_build_contract(zen-host-policy)
 
 # What stays loom-host's own, as a library the suite reaches: the boot plan's parser and serve
 # mode's idle wait. `main()` stays in the executable, driven as a real process by
@@ -451,6 +450,8 @@ if(WIN32)
     target_link_libraries(zen-bridge PUBLIC ws2_32)
 endif()
 add_library(loom::bridge ALIAS zen-bridge)
+# Installed for a weave to link, as zen-terminal is (LOOM_PACKAGE_LIBRARIES).
+loom_weave_build_contract(zen-bridge)
 
 add_library(zen-bridge-console
     src/bridge/remote_console.cpp)
@@ -491,6 +492,14 @@ target_compile_features(zen-weave-host PRIVATE cxx_std_20)
 target_link_libraries(zen-weave-host
     PRIVATE zen-warnings zen-sanitize ${CMAKE_DL_LIBS})
 endif() # NOT WIN32 (zen-weave-host)
+
+# ---- The libraries the package installs for a weave to link ------------------------------
+# A consumer's weave may link any of them, and its image then holds their objects, which no build
+# graph of this tree shows: each is built under the reloadable-weave contract (KERN-05), and the
+# `weave_population` sweep requires the contract of every one named here, read from this list and
+# never from the roll (POP-05). The kernel is not one: it is the loader a host links.
+set(LOOM_PACKAGE_LIBRARIES loom zen-switchboard zen-terminal zen-history zen-bridge
+                           zen-host-policy)
 
 # ---- Tests ----------------------------------------------------------------
 
@@ -545,8 +554,7 @@ if(LOOM_INSTALL)
     # zen-terminal, zen-history, zen-bridge and zen-host-policy qualify on their contents:
     # participant semantics, a history lens, a crossing and a host's standing decisions, with no
     # console, UI vocabulary or renderer in any of them.
-    install(TARGETS loom zen-switchboard zen-terminal zen-history zen-bridge zen-host-policy
-                    zen-sanitize zen-warnings
+    install(TARGETS ${LOOM_PACKAGE_LIBRARIES} zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
