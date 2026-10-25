@@ -7,13 +7,12 @@
 # reads neither the roll nor LOOM_WEAVE_BUILD_CONTRACT, so emptying one leaves the other intact.
 # Green requires the two to agree (docs/laws/population-laws.md).
 
-# Required: every SHARED or MODULE library declared in tests/ (each is a fixture some suite
-# dlopens, and a new one forces a decision: contract it, or exempt it in writing), every weave
-# Loom itself ships, the STATIC or OBJECT libraries in their link closures, since the contract
-# covers a compilation, not a file (KERN-05), and every static library the package installs for a
-# weave to link (LOOM_PACKAGE_LIBRARIES), which lands in images this tree never builds. Not
-# required: executables, interface libraries (walked through), and shared libraries in a closure,
-# each its own image. A stranger's build is never listed here.
+# Required: every SHARED or MODULE library declared in tests/ (a fixture some suite dlopens; a new
+# one forces a decision: contract it, or exempt it in writing), every weave Loom ships, the STATIC
+# or OBJECT libraries in their link closures, since the contract covers a compilation, not a file
+# (KERN-05), and every library LOOM_PACKAGE_LIBRARIES names, which lands in images this tree never
+# builds. Not required: executables, interface libraries (walked through), and shared libraries in
+# a closure, each its own image. A stranger's build is never listed here.
 
 if(COMMAND zen_required_weave_population)
     return()
