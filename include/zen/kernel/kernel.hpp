@@ -48,11 +48,19 @@ const char* name_of(ArtifactStatus s) noexcept;
 /// library opened and closed, counted process-wide where each happens, so a test can assert
 /// each happened exactly once by taking a difference across an operation. Diagnostics only:
 /// nothing reads it to decide anything, and it is never reset.
+///
+/// The last three count a kernel built with LOOM_ENABLE_WASM's WebAssembly backend, and stay zero
+/// elsewhere: a module compiled is a module the backend did not already hold, and a store is one
+/// instance's own memory and state, opened for a weave or for the one check made when a module is
+/// opened.
 struct KernelLifetimeCounts {
-    std::uint64_t instances_created = 0;   ///< abi->create() calls that yielded an instance
+    std::uint64_t instances_created = 0;   ///< makings that yielded an instance
     std::uint64_t instances_destroyed = 0; ///< abi->destroy() calls the host made
-    std::uint64_t libraries_opened = 0;    ///< dlopen/LoadLibrary calls that succeeded
-    std::uint64_t libraries_closed = 0;    ///< dlclose/FreeLibrary calls
+    std::uint64_t libraries_opened = 0;    ///< libraries (dlopen/LoadLibrary) and modules opened
+    std::uint64_t libraries_closed = 0;    ///< libraries (dlclose/FreeLibrary) and modules closed
+    std::uint64_t modules_compiled = 0;    ///< WebAssembly modules compiled
+    std::uint64_t stores_opened = 0;       ///< WebAssembly stores opened
+    std::uint64_t stores_closed = 0;       ///< WebAssembly stores closed
 };
 
 KernelLifetimeCounts kernel_lifetime_counts() noexcept;
@@ -253,6 +261,9 @@ private:
         /// This artifact's claim on the decoding registry (LIFE-08): its manifest's shapes, held
         /// while it is loaded and released by erasing this record, on every path out.
         loom::SchemaClaimScope schemas;
+        /// The grant it was admitted with, which never changes for its life (GATE-05): what a
+        /// reload's new image is mounted under.
+        Grant grant;
     };
 
     struct Manifest {

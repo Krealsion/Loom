@@ -96,6 +96,79 @@ SEM_FAILCRITICALERRORS, nullptr)`, on every thread that loads. Loom's own test p
 it process-wide when it starts, as a host ([loading a
 weave](../guides/dynamic-weaves.md#load-it)).
 
+## A weave built as a WebAssembly module
+
+`LOOM_ENABLE_WASM` (off by default; `LOOM_WASMTIME_DIR` names the Wasmtime C API it links,
+pinned in [tools](../guides/tools.md#the-webassembly-backends-two-pins)) builds a third kind of
+image beside a shared library: a weave compiled as a wasm32 module, run by Wasmtime inside the
+host's process (`src/kernel/wasm_box.hpp`). `load`, `load_candidate` and `reload_from` open a
+file whose first bytes are WebAssembly's magic as a module and anything else as a library;
+the module is driven through the same `ZenWeaveAbi` a library hands the kernel, so the host
+adapter, admission (the content id is the `.wasm`'s own), the manifest, `LifecycleAdoption`
+and reload are the ones above. A kernel built without the option refuses a module at `open`,
+saying it is a WebAssembly module and that `LOOM_ENABLE_WASM` is off; it never hands one to
+the platform's loader.
+
+**Building one.** `loom_wasm_weave(<target> OUTPUT <file.wasm> SOURCES ...)`
+(`cmake/loom-wasm.cmake`, with the wasi-sdk `LOOM_WASI_SDK` names) compiles the weave's own
+sources unchanged, Loom's core and switchboard, and the module glue
+(`cmake/loom-wasm-glue.cpp`), which turns the weave's descriptor into exports and the host
+table into imports. One module file serves every platform's kernel.
+
+**What a module may import, and what it is answered.** One `zen_host` import per `ZenHostApi`
+slot, and the host's byte sink: each checks every span and name the module hands it against
+the module's own memory before a byte is read, and traps the instance on one that does not fit.
+Outside a delivery every door refuses. The WASI calls wasi-libc makes are answered without
+reaching the world: an empty environment and argument list, no clock (`ENOSYS`), no descriptor
+and no preopened directory (`EBADF`), standard output and error kept to `kBoxLogBytes` an
+entry and said as one line on the host's standard error, and `proc_exit` a trap. **Every other
+import is refused at `open`, named, before anything of the module is instantiated**; no WASI
+implementation is linked.
+
+**The version, before the weave is made.** Opening a module makes one throwaway instance —
+its static initialisation runs, as a library's does when it is opened — to read the ABI
+version its weave was built against; another version is refused at `open`, naming both, before
+any slot of the weave runs (KERN-04).
+
+**The grant, at the mount.** A box carries the grant's send and observe rules as any image
+does, and its memory from `ResourceLimits`: `memory_bytes`, the backend's default
+(`kBoxDefaultMemoryBytes`) when it is 0, and wasm32's own ceiling under `unlimited_memory`. A
+box reaches nothing but the host's doors, so a grant giving an OS capability, a filesystem
+level other than `None`, or a cpu weight is **refused at the mount, in words naming what it
+gave, and never narrowed**; a `pids` ceiling holds, since a box starts no process. The mount
+runs after the `Speak` question and before registration; a reload mounts its new image under
+the incumbent's baseline grant, which the reload keeps, so a box that cannot carry it refuses
+with the incumbent untouched.
+
+**Bounds and supervision.** Each entry into a module may take `kBoxStepsPerEntry` steps
+(Wasmtime's fuel); reaching it traps the instance. A trap during a delivery ends that delivery
+as `HandlerFailed`; the box then makes a fresh instance and revives it from the state it held
+after the last entry that completed, while the weave's own `LifecyclePolicy::max_reloads`
+lasts, and quarantines it after: every slot then fails, and `snapshot` still says the last good
+state, so a reload can carry the weave out. A trapped instance's memory is never read again.
+Wasmtime runs with explicit checks rather than signal handlers, so the backend installs no
+handler in the host's process.
+
+**Lifetime.** One engine and one linker serve the process and are never torn down. A compiled
+module is shared by every image opened from the same bytes (their SHA-256), and the last
+`kBoxModulesKept` stay compiled after their images close, so unloading a module and loading it
+again compiles nothing. Each instance owns one store. `kernel_lifetime_counts()` counts the
+modules compiled and the stores opened and closed; a module's open and close count as a
+library's.
+
+The bounds above are named, not copied: `src/kernel/wasm_box.hpp` owns each value.
+`containment_note()` speaks for native images only and says nothing about a box.
+
+**The demo.** `zen-box-reload` (`tests/box_reload/`, the `box_reload` entry) reloads one live
+counter from its native build into its module and back while asks keep arriving, by
+`zen.ReloadWeave` as `loom-host` asks it, and offers the two reloads a box refuses; its
+transcript says which build gave each answer and how long each reload held the bus:
+
+```text
+zen-box-reload <build>/tests/libzen_box_counter.so <build>/wasm/box_counter.wasm \
+               <build>/wasm/box_counter_reaching.wasm [--turns <n>] [--asks <n>] [--check]
+```
+
 ## The weave build contract
 
 `loom_weave_build_contract(<target>)` ships with the package
@@ -194,4 +267,5 @@ a consumer's build system is neither enumerated nor required to adopt it.
 ## Tests
 
 Suite `kernel` (load/unload/reload/candidate/admission lifetimes), `capabilities` (the message door), Zengine's lanes as the
-stranger-consumer proof.
+stranger-consumer proof. Suite `box` and the `box_reload` entry (the `box` gate,
+`LOOM_ENABLE_WASM`): the WebAssembly backend through real modules.
