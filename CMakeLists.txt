@@ -579,7 +579,7 @@ if(LOOM_INSTALL)
             PATTERN "*.pyc" EXCLUDE)
         install(PROGRAMS tools/loom-session tools/loom-session.cmd
             DESTINATION ${CMAKE_INSTALL_BINDIR})
-        install(DIRECTORY tools/basics
+        install(DIRECTORY tools/basics tools/basics-machine
             DESTINATION ${CMAKE_INSTALL_DATADIR}/loom/tools
             PATTERN "__pycache__" EXCLUDE
             PATTERN "*.pyc" EXCLUDE)

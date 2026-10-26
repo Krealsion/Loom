@@ -19,7 +19,7 @@ import time
 
 def run(ctx):
     name = ctx.inputs["name"]
-    tool = ctx.inputs.get("tool", "basics/steps")
+    tool = ctx.inputs.get("tool", "basics-machine/steps")
     ctx.step("ask for a run, asking for the send to be settled")
     pending = ctx.ask_async("loom.runs", "loom.runs.Start",
                             {"tool": tool, "name": name, "inputs": json.dumps({"count": 1})},
