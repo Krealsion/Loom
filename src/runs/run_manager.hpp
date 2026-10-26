@@ -59,6 +59,37 @@ struct RunManagerConfig {
     std::string image_dir;    ///< this artifact's directory, when known
 };
 
+/// WHETHER A FILE LIES INSIDE A RUN'S `out/`, by whole path parts: `out/`'s resolved parts are a
+/// strict leading run of the file's, so a sibling folder whose name begins `out` is outside, and so
+/// is `out/` itself. Each path is resolved on its own, and a failure or an empty result of either
+/// is outside. On true, `*file` is the file as resolved.
+inline bool inside_out(const std::filesystem::path& run_directory, const std::string& path,
+                       std::filesystem::path* file) {
+    std::error_code out_ec;
+    const std::filesystem::path out =
+        std::filesystem::weakly_canonical(run_directory / "out", out_ec);
+    std::error_code file_ec;
+    const std::filesystem::path resolved = std::filesystem::weakly_canonical(path, file_ec);
+    if (out_ec || file_ec || out.empty() || resolved.empty()) {
+        return false;
+    }
+    auto f = resolved.begin();
+    for (const std::filesystem::path& part : out) {
+        if (f == resolved.end() || *f != part) {
+            return false;
+        }
+        ++f;
+    }
+    bool below = false;
+    for (; f != resolved.end(); ++f) {
+        below = below || !f->empty();
+    }
+    if (below) {
+        *file = resolved;
+    }
+    return below;
+}
+
 class RunManager final
     : public WeaveBase<RunManager, RunManagerState,
                        Accept<ListTools, DescribeTool, Start, List, Get, Cancel, Release, Past,
@@ -779,13 +810,8 @@ public:
                "', which holds " + std::to_string(a.bytes) + " bytes");
             return;
         }
-        std::error_code ec;
-        const std::filesystem::path out =
-            std::filesystem::weakly_canonical(std::filesystem::path(r->view.directory) / "out", ec);
-        const std::filesystem::path file = std::filesystem::weakly_canonical(a.path, ec);
-        const std::string o = out.string();
-        const std::string f = file.string();
-        if (ec || f.size() <= o.size() || f.compare(0, o.size(), o) != 0) {
+        std::filesystem::path file;
+        if (!inside_out(r->view.directory, a.path, &file)) {
             no("artifact '" + a.name + "' is no longer inside the out/ of run '" + q.run + "'");
             return;
         }
@@ -1448,15 +1474,11 @@ private:
     }
 
     std::string verify_artifact(const RunRecord& r, const Produced& p) {
-        std::error_code ec;
-        const std::filesystem::path out =
-            std::filesystem::weakly_canonical(std::filesystem::path(r.view.directory) / "out", ec);
-        const std::filesystem::path file = std::filesystem::weakly_canonical(p.path, ec);
-        const std::string o = out.string();
-        const std::string f = file.string();
-        if (ec || f.size() <= o.size() || f.compare(0, o.size(), o) != 0) {
+        std::filesystem::path file;
+        if (!inside_out(r.view.directory, p.path, &file)) {
             return "outside";
         }
+        std::error_code ec;
         if (!std::filesystem::is_regular_file(file, ec)) {
             return "missing";
         }
