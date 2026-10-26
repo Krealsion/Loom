@@ -62,10 +62,11 @@ struct RunManagerConfig {
 class RunManager final
     : public WeaveBase<RunManager, RunManagerState,
                        Accept<ListTools, DescribeTool, Start, List, Get, Cancel, Release, Past,
-                              WorkerStarted, Progress, AskReport, Produced, Finished, Control,
-                              session::RunExpected, session::RunConnection, Ack, Refused>,
-                       Emit<Tools, ToolDescription, Run, RunList, Directive, session::ExpectRun,
-                            session::ForgetRun, Ack, Refused>> {
+                              ArtifactRead, WorkerStarted, Progress, AskReport, Produced,
+                              Finished, Control, session::RunExpected, session::RunConnection,
+                              Ack, Refused>,
+                       Emit<Tools, ToolDescription, Run, RunList, ArtifactPage, Directive,
+                            session::ExpectRun, session::ForgetRun, Ack, Refused>> {
 public:
     static constexpr std::size_t kMaxRuns = 64;      ///< runs held in this lifetime, finished or not
     static constexpr std::size_t kMaxActive = 8;     ///< runs not yet final
@@ -73,6 +74,11 @@ public:
     static constexpr std::size_t kMaxAsks = 128;     ///< asks per run the record keeps
     static constexpr std::size_t kMaxArtifacts = 32; ///< artifacts per run
     static constexpr std::size_t kMaxPast = 64;      ///< past records one answer carries
+    /// The bytes one `ArtifactPage` carries at most, well inside a frame (`kMaxFrameLen`).
+    static constexpr std::size_t kMaxArtifactPage = 1024 * 1024;
+    /// The largest artifact read by message: every page reads the whole file again, on this
+    /// manager's turn of the host's loop, to prove it unchanged. A larger one is refused by size.
+    static constexpr std::uintmax_t kMaxReadableArtifact = 16u * 1024u * 1024u;
     /// The WHOLE of a shutdown's budget for watching the executions it just stopped actually
     /// end, so that a final record's `exited`/`killed` is an observation. Spent across every run
     /// the manager still holds, and normally almost none of it is used.
@@ -735,6 +741,80 @@ public:
         }
         erase(r);
         (void)mail.answer(Ack{});
+    }
+
+    /// A PAGE OF A FILE A RUN PRODUCED, read from the path this manager recorded and verified,
+    /// never from a path a request names. The whole file is read in the same pass that keeps the
+    /// page, and the page is answered only when that pass found the verified size and digest.
+    void on(const ArtifactRead& q, Mail& mail) {
+        RunRecord* r = by_handle(q.lifetime, q.run, mail);
+        if (r == nullptr) {
+            return;
+        }
+        const auto it = std::find_if(r->view.artifacts.begin(), r->view.artifacts.end(),
+                                     [&](const Artifact& a) { return a.name == q.name; });
+        const auto no = [&mail](std::string why) { (void)mail.answer(Refused{std::move(why)}); };
+        if (it == r->view.artifacts.end()) {
+            no("run '" + q.run + "' lists no artifact named '" + q.name + "'");
+            return;
+        }
+        const Artifact& a = *it;
+        if (a.state != "verified") {
+            no("artifact '" + a.name + "' of run '" + q.run + "' is " + a.state +
+               ", not verified: only a file this manager verified is read");
+            return;
+        }
+        if (q.bytes < 1 || q.from < 0) {
+            no("an artifact read names a page from 0 or later, of 1 byte or more");
+            return;
+        }
+        if (static_cast<std::uintmax_t>(a.bytes) > kMaxReadableArtifact) {
+            no("artifact '" + a.name + "' holds " + std::to_string(a.bytes) + " bytes; one read " +
+               "by message holds at most " + std::to_string(kMaxReadableArtifact) + ": read it at " +
+               a.path);
+            return;
+        }
+        if (q.from > a.bytes || (q.from == a.bytes && a.bytes > 0)) {
+            no("page from " + std::to_string(q.from) + " is past the end of artifact '" + a.name +
+               "', which holds " + std::to_string(a.bytes) + " bytes");
+            return;
+        }
+        std::error_code ec;
+        const std::filesystem::path out =
+            std::filesystem::weakly_canonical(std::filesystem::path(r->view.directory) / "out", ec);
+        const std::filesystem::path file = std::filesystem::weakly_canonical(a.path, ec);
+        const std::string o = out.string();
+        const std::string f = file.string();
+        if (ec || f.size() <= o.size() || f.compare(0, o.size(), o) != 0) {
+            no("artifact '" + a.name + "' is no longer inside the out/ of run '" + q.run + "'");
+            return;
+        }
+        const std::size_t count =
+            std::min<std::size_t>(static_cast<std::size_t>(q.bytes), kMaxArtifactPage);
+        ArtifactPage page;
+        std::uintmax_t size = 0;
+        if (!read_hashed(file, static_cast<std::uintmax_t>(q.from), count, &size, &page.sha256,
+                         &page.data)) {
+            no("artifact '" + a.name + "' cannot be read at " + a.path +
+               ": it is missing or unreadable since it was verified");
+            return;
+        }
+        if (size != static_cast<std::uintmax_t>(a.bytes)) {
+            no("artifact '" + a.name + "' changed on disk since it was verified: it holds " +
+               std::to_string(size) + " bytes, verified " + std::to_string(a.bytes));
+            return;
+        }
+        if (page.sha256 != a.sha256) {
+            no("artifact '" + a.name + "' changed on disk since it was verified: its digest is " +
+               page.sha256 + ", verified " + a.sha256);
+            return;
+        }
+        page.lifetime = r->view.lifetime;
+        page.run = r->view.name;
+        page.name = a.name;
+        page.from = q.from;
+        page.total = a.bytes;
+        (void)mail.answer(page);
     }
 
     /// RECORDS OF OTHER LIFETIMES in this session directory: evidence, never live state.

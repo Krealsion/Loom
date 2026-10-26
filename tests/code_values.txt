@@ -88,6 +88,8 @@ kMaxRuns                        src/runs/run_manager.hpp                  kMaxRu
 kMaxAsks                        src/runs/run_manager.hpp                  kMaxAsks
 kMaxNotes                       src/runs/run_manager.hpp                  kMaxNotes
 kMaxArtifacts                   src/runs/run_manager.hpp                  kMaxArtifacts
+kMaxArtifactPage                src/runs/run_manager.hpp                  kMaxArtifactPage
+kMaxReadableArtifact            src/runs/run_manager.hpp                  kMaxReadableArtifact
 kShutdownObserveMs              src/runs/run_manager.hpp                  kShutdownObserveMs
 kMaxPackages                    src/runs/catalog.hpp                      kMaxPackages
 kMaxToolsPerPackage             src/runs/catalog.hpp                      kMaxToolsPerPackage
