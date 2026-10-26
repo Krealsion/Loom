@@ -110,6 +110,12 @@ std::string check_inputs(const ToolSpec& tool, const std::string& json, std::str
 /// SHA-256 (64 hex) of one file's bytes, or empty when it cannot be read.
 std::string file_sha256(const std::filesystem::path& file);
 
+/// ONE PASS over a file: its size and SHA-256 (64 hex), and the bytes from `from`, at most `count`,
+/// kept in `*page` -- read in the same pass, so the page is bytes of the content that digest names.
+/// False when the file cannot be opened or read through.
+bool read_hashed(const std::filesystem::path& file, std::uintmax_t from, std::size_t count,
+                 std::uintmax_t* size, std::string* sha256, std::vector<std::uint8_t>* page);
+
 } // namespace loom::runs
 
 #endif // ZEN_RUNS_CATALOG_HPP

@@ -415,6 +415,42 @@ std::string file_sha256(const std::filesystem::path& file) {
     return hex(h.digest());
 }
 
+bool read_hashed(const std::filesystem::path& file, std::uintmax_t from, std::size_t count,
+                 std::uintmax_t* size, std::string* sha256, std::vector<std::uint8_t>* page) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    loom::detail::Sha256 h;
+    std::array<char, 1 << 16> buf{};
+    std::uintmax_t at = 0;
+    page->clear();
+    while (in) {
+        in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        const std::streamsize n = in.gcount();
+        if (n <= 0) {
+            continue;
+        }
+        h.update(buf.data(), static_cast<std::size_t>(n));
+        // The part of this block that falls in [from, from + count).
+        const std::uintmax_t end = at + static_cast<std::uintmax_t>(n);
+        if (page->size() < count && end > from) {
+            const std::uintmax_t lo = from > at ? from - at : 0;
+            const std::uintmax_t want = count - page->size();
+            const std::uintmax_t take = std::min<std::uintmax_t>(want, static_cast<std::uintmax_t>(n) - lo);
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(buf.data()) + lo;
+            page->insert(page->end(), bytes, bytes + take);
+        }
+        at = end;
+    }
+    if (in.bad()) {
+        return false;
+    }
+    *size = at;
+    *sha256 = hex(h.digest());
+    return true;
+}
+
 std::string package_revision(const std::filesystem::path& dir, std::string* why) {
     std::vector<std::pair<std::string, std::filesystem::path>> files;
     if (!package_files(dir, &files, why)) {

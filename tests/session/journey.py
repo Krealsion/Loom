@@ -142,6 +142,7 @@ APPROVALS = [
     "authority allow runs loom.runs.Run v1 -> any target",
     "authority allow runs loom.runs.RunList v1 -> any target",
     "authority allow runs loom.runs.Directive v1 -> any target",
+    "authority allow runs loom.runs.ArtifactPage v1 -> any target",
     "authority allow runs loom.session.Describe v1 -> role loom.session",
     # For the lifecycle package's `settle` tool: a DIRECT ask of this manager, asking to be
     # settled, made by a worker this manager may pass that rule on to.
@@ -210,8 +211,14 @@ def main():
                    "tools": [{"name": "ask", "script": "ask.py", "summary": "Ask the door N times.",
                               "inputs": [{"name": "times", "type": "int", "default": 1,
                                           "help": "how many asks"}],
-                              "asks": ["loom.session.Describe v1 -> role loom.session"]}]},
+                              "asks": ["loom.session.Describe v1 -> role loom.session"]},
+                             {"name": "empty", "script": "empty.py",
+                              "summary": "Produce an empty file."}]},
                   f, indent=1)
+    with open(os.path.join(chatty, "empty.py"), "w", encoding="utf-8") as f:
+        f.write("def run(ctx):\n"
+                "    ctx.produce('empty.txt', b'')\n"
+                "    return 'an empty file'\n")
     with open(os.path.join(chatty, "ask.py"), "w", encoding="utf-8") as f:
         f.write("def run(ctx):\n"
                 "    for _ in range(ctx.inputs['times']):\n"
@@ -373,6 +380,53 @@ def main():
         check("E6 reading the history writes none of it: the reader, asked what was delivered to "
               "it, finds nothing", about_reader["rows"] == [] and about_reader["newest_seq"] > 0,
               (reader, len(about_reader["rows"]), about_reader["newest_seq"]))
+
+        # ---- U. what a run kept, read by message: no path, no shell ----------------------------
+        held_report = on  # S3 reads it again, through the launcher
+        pages = []
+        while art and sum(len(x["data"]) for x in pages) < len(on):
+            pages.append(c2.artifact_page("held", "report.txt",
+                                          start=sum(len(x["data"]) for x in pages), size=7))
+        check("U1 a produced file reads back whole, page by page, each page naming its place, the "
+              "total and the verified digest",
+              art is not None and b"".join(x["data"] for x in pages) == on and
+              len(pages) == (len(on) + 6) // 7 and
+              [x["from"] for x in pages] == list(range(0, len(on), 7)) and
+              all(x["total"] == len(on) and x["sha256"] == art["sha256"] for x in pages),
+              [(x["from"], len(x["data"]), x["total"]) for x in pages])
+        check("U2 the client reads it whole, checked against the verified digest",
+              c2.read_artifact("held", "report.txt") == on)
+        check("U3 a name the run did not produce is refused", refuses(
+            lambda: c2.artifact_page("held", "../run.json"), "lists no artifact named"))
+        check("U4 a page past the end is refused, not answered empty",
+              refuses(lambda: c2.artifact_page("held", "report.txt", start=len(on)),
+                           "past the end") and
+              refuses(lambda: c2.artifact_page("held", "report.txt", start=len(on) + 5),
+                           "past the end"))
+        changed = bytearray(on)
+        changed[0] ^= 0x20
+        with open(art["path"], "wb") as f:
+            f.write(bytes(changed))
+        check("U5 an artifact changed on disk since it was verified is refused, its digest said",
+              refuses(lambda: c2.artifact_page("held", "report.txt"),
+                           "changed on disk since it was verified: its digest is"))
+        with open(art["path"], "wb") as f:
+            f.write(on + b"more")
+        check("U6 ...and one whose size changed, its size said",
+              refuses(lambda: c2.artifact_page("held", "report.txt"),
+                           "holds %d bytes, verified %d" % (len(on) + 4, len(on))))
+        with open(art["path"], "wb") as f:
+            f.write(on)
+        check("U7 the file as it was verified reads again", c2.read_artifact("held", "report.txt") == on)
+        c2.start("chatty/empty", "empty", {})
+        e = c2.wait("empty", timeout=60)
+        first = c2.artifact_page("empty", "empty.txt") if e["state"] == "passed" else {}
+        check("U8 an empty artifact reads as one empty page from 0",
+              first.get("data") == b"" and first.get("total") == 0 and
+              c2.read_artifact("empty", "empty.txt") == b"" and
+              refuses(lambda: c2.artifact_page("empty", "empty.txt", start=1), "past the end"),
+              (e["state"], dict((k, v) for k, v in first.items() if k != "data"),
+               len(first.get("data", b""))))
 
     # ---- F. edit the tool, run it again: no compiler, no restart, the old run kept -----------
     with Session.attach(session_dir) as s:
@@ -929,6 +983,13 @@ def main():
     check("S1 the installed launcher, beside the runtime, describes the live session",
           said.returncode == 0 and os.path.normcase(os.path.realpath(
               described.get("directory", ""))) == os.path.normcase(os.path.realpath(session_dir)),
+          (said.returncode, (said.stdout or said.stderr)[:300]))
+    kept = os.path.join(work, "held-report.txt")
+    said = subprocess.run(cli + ["artifact", session_dir, "held", "report.txt", "--out", kept],
+                          env=cli_env, capture_output=True, text=True, timeout=60)
+    check("S3 the launcher writes a run's produced file to a file, read by message",
+          said.returncode == 0 and os.path.isfile(kept) and
+          open(kept, "rb").read() == held_report,
           (said.returncode, (said.stdout or said.stderr)[:300]))
     cached = sorted(os.path.relpath(os.path.join(d, n), runtime)
                     for d, dirs, files in os.walk(runtime) for n in dirs + files
