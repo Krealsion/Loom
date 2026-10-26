@@ -30,6 +30,7 @@ include(GNUInstallDirs)
 # own dynamic-weave fixtures call it too: the house builds its weaves through exactly the surface
 # it hands a guest. On the MSVC ABI it also makes the static C++ runtime this build's default.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-wasm.cmake)
 # Built inside another project, Loom's libraries are linked by that project's images too, so on
 # the MSVC ABI they take the same default runtime there, as a project finding the package does.
 get_directory_property(zen_parent_directory PARENT_DIRECTORY)
@@ -166,6 +167,59 @@ if(WIN32)
 endif()
 
 endif() # kernel (Linux always; Windows under LOOM_ENABLE_WINDOWS_KERNEL)
+
+# ---- The kernel's WebAssembly backend (a weave built as a wasm32 module, run by Wasmtime) -------
+# A third kind of image beside a shared library: `Kernel::load` opens a module as it opens a
+# library, drives it through the same descriptor, and gives it no reach but the host table's
+# doors (src/kernel/wasm_box.hpp). Off by default; a kernel without it refuses a module in words.
+# LOOM_WASMTIME_DIR names an unpacked Wasmtime C API release, the version and digest
+# docs/guides/tools.md pins.
+option(LOOM_ENABLE_WASM
+       "Build the kernel's WebAssembly backend (Wasmtime's C API, at LOOM_WASMTIME_DIR)" OFF)
+set(LOOM_WASMTIME_DIR "" CACHE PATH "An unpacked Wasmtime C API release (its include/ and lib/)")
+if(LOOM_ENABLE_WASM)
+    if(NOT TARGET zen-kernel)
+        message(FATAL_ERROR "loom: LOOM_ENABLE_WASM is a kernel backend, and this build has no "
+                            "kernel (on Windows it needs LOOM_ENABLE_WINDOWS_KERNEL too)")
+    endif()
+    if(NOT EXISTS "${LOOM_WASMTIME_DIR}/include/wasmtime.h")
+        message(FATAL_ERROR "loom: LOOM_ENABLE_WASM needs LOOM_WASMTIME_DIR to name an unpacked "
+                            "Wasmtime C API release; '${LOOM_WASMTIME_DIR}' holds no "
+                            "include/wasmtime.h (docs/guides/tools.md)")
+    endif()
+    target_sources(zen-kernel PRIVATE src/kernel/wasm_box.cpp)
+    target_compile_definitions(zen-kernel PRIVATE LOOM_ENABLE_WASM=1)
+    target_include_directories(zen-kernel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_include_directories(zen-kernel SYSTEM PRIVATE "${LOOM_WASMTIME_DIR}/include")
+    if(MSVC)
+        # The release's DLL: its static archive is built for the DLL C runtime, and Loom's MSVC
+        # build carries the static one (cmake/loom-weave.cmake). It is loaded when a program
+        # first opens a module, so a program that never does needs no wasmtime.dll; one that does
+        # finds it beside itself (loom_wasm_runtime_beside).
+        target_link_libraries(zen-kernel PRIVATE "${LOOM_WASMTIME_DIR}/lib/wasmtime.dll.lib")
+        target_link_libraries(zen-kernel INTERFACE delayimp)
+        target_link_options(zen-kernel INTERFACE /DELAYLOAD:wasmtime.dll)
+        set(LOOM_WASMTIME_RUNTIME "${LOOM_WASMTIME_DIR}/lib/wasmtime.dll")
+    elseif(WIN32)
+        target_link_libraries(zen-kernel PRIVATE "${LOOM_WASMTIME_DIR}/lib/libwasmtime.a"
+                              ws2_32 advapi32 userenv ntdll shell32 ole32 bcrypt)
+    else()
+        find_package(Threads REQUIRED)
+        target_link_libraries(zen-kernel PRIVATE "${LOOM_WASMTIME_DIR}/lib/libwasmtime.a"
+                              Threads::Threads ${CMAKE_DL_LIBS} m)
+    endif()
+    message(STATUS "loom: the kernel's WebAssembly backend is built (${LOOM_WASMTIME_DIR})")
+endif()
+
+# A program linking the kernel finds what the backend needs beside it at run time.
+function(loom_wasm_runtime_beside target)
+    if(LOOM_WASMTIME_RUNTIME)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${LOOM_WASMTIME_RUNTIME}"
+                    "$<TARGET_FILE_DIR:${target}>"
+            VERBATIM)
+    endif()
+endfunction()
 
 # ---- Linux-only substrate: isolation (fork, mount/pid/net namespaces, cgroup-v2) ---------------
 # Isolation is the security story and is deliberately not ported: the OS sandbox, its enforced
@@ -382,6 +436,7 @@ target_link_libraries(loom-host
 if(TARGET zen-kernel)
     target_link_libraries(loom-host PRIVATE zen-kernel)
     target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=1)
+    loom_wasm_runtime_beside(loom-host)
 else()
     target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=0)
 endif()

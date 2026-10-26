@@ -93,6 +93,85 @@ if(WIN32 AND TARGET zen-kernel)
     list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_WINDOWS})
     list(APPEND ZEN_POPULATION_GATES windows)
 endif()
+# THE BOX (LOOM_ENABLE_WASM): the kernel's WebAssembly backend, through real modules. They are
+# built here by loom_wasm_weave() when LOOM_WASI_SDK names a wasi-sdk, or read from
+# LOOM_WASM_MODULES, a directory another build made them in, so that one set of files can serve
+# every platform's build; `loom-wasm-modules` builds them alone. The `box` gate is the backend:
+# with it on and no modules, configuration fails rather than leaving the suite out.
+set(LOOM_WASM_MODULES "" CACHE PATH
+    "A directory holding the box suite's modules, built elsewhere (empty: build them here)")
+set(zen_box_module_names
+    box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching)
+set(zen_box_modules "")
+if(LOOM_WASI_SDK)
+    set(zen_box_modules "${CMAKE_BINARY_DIR}/wasm")
+    loom_wasm_weave(zen_box_probe_wasm OUTPUT "${zen_box_modules}/box_probe.wasm"
+                    SOURCES weavelib/box_probe.cpp)
+    loom_wasm_weave(zen_box_probe_path_open_wasm OUTPUT "${zen_box_modules}/box_probe_path_open.wasm"
+                    SOURCES weavelib/box_probe.cpp DEFINITIONS BOX_PROBE_IMPORT_PATH_OPEN)
+    loom_wasm_weave(zen_box_probe_env_wasm OUTPUT "${zen_box_modules}/box_probe_env.wasm"
+                    SOURCES weavelib/box_probe.cpp DEFINITIONS BOX_PROBE_IMPORT_ENV)
+    loom_wasm_weave(zen_box_stale_abi_wasm OUTPUT "${zen_box_modules}/box_stale_abi.wasm"
+                    SOURCES weavelib/stale_abi.cpp)
+    loom_wasm_weave(zen_box_counter_wasm OUTPUT "${zen_box_modules}/box_counter.wasm"
+                    SOURCES box_reload/counter.cpp)
+    loom_wasm_weave(zen_box_counter_reaching_wasm
+                    OUTPUT "${zen_box_modules}/box_counter_reaching.wasm"
+                    SOURCES box_reload/counter.cpp DEFINITIONS COUNTER_REACHES_FOR_A_FILE)
+    add_custom_target(loom-wasm-modules DEPENDS
+        zen_box_probe_wasm zen_box_probe_path_open_wasm zen_box_probe_env_wasm
+        zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm)
+elseif(LOOM_WASM_MODULES)
+    set(zen_box_modules "${LOOM_WASM_MODULES}")
+endif()
+if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
+    if(NOT zen_box_modules)
+        message(FATAL_ERROR
+            "loom: the box suite needs its modules: name a wasi-sdk with LOOM_WASI_SDK to build "
+            "them here, or a directory holding them with LOOM_WASM_MODULES")
+    endif()
+    if(NOT LOOM_WASI_SDK)
+        foreach(zen_box_name IN LISTS zen_box_module_names)
+            if(NOT EXISTS "${zen_box_modules}/${zen_box_name}.wasm")
+                message(FATAL_ERROR "loom: LOOM_WASM_MODULES (${zen_box_modules}) holds no "
+                                    "${zen_box_name}.wasm")
+            endif()
+        endforeach()
+    else()
+        add_dependencies(zen-tests loom-wasm-modules)
+    endif()
+    target_sources(zen-tests PRIVATE test_box.cpp)
+    list(APPEND ZEN_TEST_SOURCES_DIRECT test_box.cpp)
+    list(APPEND ZEN_POPULATION_GATES box)
+    # The counter's native build, the one its module is reloaded from and back to.
+    add_library(zen_box_counter SHARED box_reload/counter.cpp)
+    target_link_libraries(zen_box_counter PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+    loom_weave_build_contract(zen_box_counter)
+    add_dependencies(zen-tests zen_box_counter)
+    target_compile_definitions(zen-tests PRIVATE
+        LOOM_ENABLE_WASM=1
+        "ZEN_BOX_PROBE=\"${zen_box_modules}/box_probe.wasm\""
+        "ZEN_BOX_PROBE_PATH_OPEN=\"${zen_box_modules}/box_probe_path_open.wasm\""
+        "ZEN_BOX_PROBE_ENV=\"${zen_box_modules}/box_probe_env.wasm\""
+        "ZEN_BOX_STALE_ABI=\"${zen_box_modules}/box_stale_abi.wasm\""
+        "ZEN_BOX_COUNTER_WASM=\"${zen_box_modules}/box_counter.wasm\""
+        "ZEN_BOX_COUNTER_REACHING_WASM=\"${zen_box_modules}/box_counter_reaching.wasm\""
+        "ZEN_SO_BOX_COUNTER=\"$<TARGET_FILE:zen_box_counter>\"")
+    loom_wasm_runtime_beside(zen-tests)
+    # The demo, and its run as a CTest entry: one live weave reloaded into its module and back
+    # while asks keep arriving (box_reload/main.cpp says what --check judges).
+    add_executable(zen-box-reload box_reload/main.cpp)
+    target_link_libraries(zen-box-reload PRIVATE zen-kernel zen-warnings zen-sanitize)
+    add_dependencies(zen-box-reload zen_box_counter)
+    if(LOOM_WASI_SDK)
+        add_dependencies(zen-box-reload loom-wasm-modules)
+    endif()
+    loom_wasm_runtime_beside(zen-box-reload)
+    add_test(NAME box_reload
+             COMMAND zen-box-reload $<TARGET_FILE:zen_box_counter>
+                     "${zen_box_modules}/box_counter.wasm"
+                     "${zen_box_modules}/box_counter_reaching.wasm" --check)
+endif()
 # THE RUN MANAGER'S TWO GATES (docs/guides/sessions.md). `runs` rides the manager having been
 # built at all -- a loadable weave, so the kernel, and LOOM_BUILD_SESSION_TOOLS -- and carries
 # the `runs` suite, which needs no Python. `python` rides that AND a Python 3.8+ interpreter:
