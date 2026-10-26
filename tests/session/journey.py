@@ -213,12 +213,29 @@ def main():
                                           "help": "how many asks"}],
                               "asks": ["loom.session.Describe v1 -> role loom.session"]},
                              {"name": "empty", "script": "empty.py",
-                              "summary": "Produce an empty file."}]},
+                              "summary": "Produce an empty file."},
+                             {"name": "stray", "script": "stray.py",
+                              "summary": "Report a file beside out/, not in it."}]},
                   f, indent=1)
     with open(os.path.join(chatty, "empty.py"), "w", encoding="utf-8") as f:
         f.write("def run(ctx):\n"
                 "    ctx.produce('empty.txt', b'')\n"
                 "    return 'an empty file'\n")
+    # A worker may report any path; the manager judges where it lies. `<run>/outside` begins with
+    # the characters of `<run>/out` and is still a sibling of it.
+    with open(os.path.join(chatty, "stray.py"), "w", encoding="utf-8") as f:
+        f.write("import hashlib, os\n"
+                "def run(ctx):\n"
+                "    side = os.path.join(os.path.dirname(ctx.out_dir), 'outside')\n"
+                "    os.makedirs(side, exist_ok=True)\n"
+                "    path = os.path.join(side, 'stray.txt')\n"
+                "    data = b'beside out/'\n"
+                "    with open(path, 'wb') as f:\n"
+                "        f.write(data)\n"
+                "    ctx.conn.ask('loom.runs.Produced', {'name': 'stray.txt', 'path': path,\n"
+                "                 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()},\n"
+                "                 role='loom.runs', fire=True)\n"
+                "    return 'reported a file beside out/'\n")
     with open(os.path.join(chatty, "ask.py"), "w", encoding="utf-8") as f:
         f.write("def run(ctx):\n"
                 "    for _ in range(ctx.inputs['times']):\n"
@@ -427,6 +444,33 @@ def main():
               refuses(lambda: c2.artifact_page("empty", "empty.txt", start=1), "past the end"),
               (e["state"], dict((k, v) for k, v in first.items() if k != "data"),
                len(first.get("data", b""))))
+        c2.start("chatty/stray", "stray", {})
+        st = c2.wait("stray", timeout=60)
+        stray = [a for a in st.get("artifacts", []) if a["name"] == "stray.txt"]
+        check("U9 a file reported from a sibling of out/ whose name begins `out` is listed outside, "
+              "and is not read",
+              st["state"] == "passed" and [a["state"] for a in stray] == ["outside"] and
+              refuses(lambda: c2.artifact_page("stray", "stray.txt"), "is outside, not verified"),
+              (st["state"], stray))
+        if os.name != "nt":
+            # The read judges the file again where it lies now: swapped, after verification, for a
+            # link to the same bytes in a sibling of out/ whose name begins `out`, it is outside.
+            side = os.path.join(os.path.dirname(os.path.dirname(art["path"])), "outside")
+            moved = os.path.join(side, "report.txt")
+            os.makedirs(side)
+            os.rename(art["path"], moved)
+            os.symlink(moved, art["path"])
+            try:
+                check("U10 an artifact that now leads to a sibling folder of out/ is refused, "
+                      "though its bytes match",
+                      refuses(lambda: c2.artifact_page("held", "report.txt"),
+                              "is no longer inside the out/ of run 'held'"))
+            finally:
+                os.remove(art["path"])
+                os.rename(moved, art["path"])
+                os.rmdir(side)
+            check("U11 ...and reads again once it is the file it was",
+                  c2.read_artifact("held", "report.txt") == on)
 
     # ---- F. edit the tool, run it again: no compiler, no restart, the old run kept -----------
     with Session.attach(session_dir) as s:

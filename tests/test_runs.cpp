@@ -601,6 +601,30 @@ TEST_CASE("manager: an artifact read names a run of this lifetime and an artifac
     CHECK(h.client->refused.find("lists no artifact named 'report.txt'") != std::string::npos);
 }
 
+TEST_CASE("manager: a file is inside a run's out/ by whole path parts, each path resolved on its "
+          "own -- a sibling named out..., out/ itself and an unresolvable out/ are outside") {
+    Scratch s("inside-out");
+    const fs::path run = s.path / "run";
+    write(run / "out" / "kept.txt", "kept\n");
+    write(run / "outside" / "x.txt", "beside\n");
+    write(run / "out2" / "x.txt", "beside\n");
+    write(s.path / "elsewhere.txt", "elsewhere\n");
+    fs::path file;
+    CHECK(inside_out(run, (run / "out" / "kept.txt").string(), &file));
+    CHECK(file == fs::weakly_canonical(run / "out" / "kept.txt"));
+    CHECK(inside_out(run, (run / "out" / "not-yet.txt").string(), &file));
+    CHECK_FALSE(inside_out(run, (run / "outside" / "x.txt").string(), &file));
+    CHECK_FALSE(inside_out(run, (run / "out2" / "x.txt").string(), &file));
+    CHECK_FALSE(inside_out(run, (run / "out" / ".." / "outside" / "x.txt").string(), &file));
+    CHECK_FALSE(inside_out(run, (run / "out").string(), &file));
+    CHECK_FALSE(inside_out(run, "", &file));
+    // A run directory whose out/ cannot be resolved (one part longer than a file name may be)
+    // admits nothing, whatever the file's own resolution says.
+    const fs::path unresolvable = s.path / std::string(300, 'a');
+    CHECK_FALSE(inside_out(unresolvable, (s.path / "elsewhere.txt").string(), &file));
+    CHECK_FALSE(inside_out(unresolvable, (run / "out" / "kept.txt").string(), &file));
+}
+
 TEST_CASE("manager: another lifetime's handle is refused by name; a stranger's report is refused and moves nothing") {
     RunsHost h;
     h.ask(Get{"ffffffffffffffffffffffffffffffff", "one"});
