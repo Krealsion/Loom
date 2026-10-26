@@ -39,6 +39,7 @@ function(_loom_wasm_object out source object_dir extra_flags)
     _loom_wasm_flags(_flags)
     add_custom_command(
         OUTPUT "${_object}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${object_dir}"
         COMMAND "${LOOM_WASI_SDK}/bin/clang++" ${_flags} ${extra_flags}
                 -MD -MF "${_object}.d" -c "${source}" -o "${_object}"
         DEPENDS "${source}"
@@ -48,33 +49,12 @@ function(_loom_wasm_object out source object_dir extra_flags)
     set(${out} "${_object}" PARENT_SCOPE)
 endfunction()
 
-# Loom's core and switchboard for wasm32, once a build: the archive every module links.
-function(_loom_wasm_core out)
-    get_property(_archive GLOBAL PROPERTY _LOOM_WASM_CORE)
-    if(_archive)
-        set(${out} "${_archive}" PARENT_SCOPE)
-        return()
-    endif()
-    set(_dir "${CMAKE_BINARY_DIR}/loom-wasm32")
-    set(_objects "")
-    foreach(_source IN ITEMS
-            src/schema.cpp src/value.cpp src/gate.cpp src/registry.cpp src/serialize.cpp
-            src/content_id.cpp src/detail/json.cpp src/detail/base64.cpp src/detail/binary.cpp
-            src/switchboard/switchboard.cpp)
-        _loom_wasm_object(_object "${_LOOM_WASM_ROOT}/${_source}" "${_dir}" "")
-        list(APPEND _objects "${_object}")
-    endforeach()
-    set(_archive "${_dir}/libloom-wasm32.a")
-    add_custom_command(
-        OUTPUT "${_archive}"
-        COMMAND "${CMAKE_COMMAND}" -E rm -f "${_archive}"
-        COMMAND "${LOOM_WASI_SDK}/bin/llvm-ar" rcs "${_archive}" ${_objects}
-        DEPENDS ${_objects}
-        COMMENT "wasm32: Loom's core and switchboard"
-        VERBATIM)
-    set_property(GLOBAL PROPERTY _LOOM_WASM_CORE "${_archive}")
-    set(${out} "${_archive}" PARENT_SCOPE)
-endfunction()
+# Loom's core and switchboard, which every module carries; each module compiles its own copy, so
+# no output is shared between targets that build in parallel.
+set(_LOOM_WASM_CORE
+    src/schema.cpp src/value.cpp src/gate.cpp src/registry.cpp src/serialize.cpp
+    src/content_id.cpp src/detail/json.cpp src/detail/base64.cpp src/detail/binary.cpp
+    src/switchboard/switchboard.cpp CACHE INTERNAL "")
 
 function(loom_wasm_weave target)
     cmake_parse_arguments(PARSE_ARGV 1 _w "" "OUTPUT" "SOURCES;INCLUDE_DIRECTORIES;DEFINITIONS")
@@ -100,7 +80,10 @@ function(loom_wasm_weave target)
         _loom_wasm_object(_object "${_source}" "${_dir}" "${_extra}")
         list(APPEND _objects "${_object}")
     endforeach()
-    _loom_wasm_core(_core)
+    foreach(_source IN LISTS _LOOM_WASM_CORE)
+        _loom_wasm_object(_object "${_LOOM_WASM_ROOT}/${_source}" "${_dir}/core" "")
+        list(APPEND _objects "${_object}")
+    endforeach()
     get_filename_component(_output "${_w_OUTPUT}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
     get_filename_component(_output_dir "${_output}" DIRECTORY)
     add_custom_command(
@@ -108,8 +91,8 @@ function(loom_wasm_weave target)
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${_output_dir}"
         COMMAND "${LOOM_WASI_SDK}/bin/clang++" --target=wasm32-wasip1
                 "--sysroot=${LOOM_WASI_SDK}/share/wasi-sysroot" -O2 -fwasm-exceptions
-                -mexec-model=reactor ${_objects} "${_core}" -lunwind -o "${_output}"
-        DEPENDS ${_objects} "${_core}"
+                -mexec-model=reactor ${_objects} -lunwind -o "${_output}"
+        DEPENDS ${_objects}
         COMMENT "wasm32: linking ${target}"
         VERBATIM)
     add_custom_target(${target} ALL DEPENDS "${_output}")
