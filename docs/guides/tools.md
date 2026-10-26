@@ -187,6 +187,32 @@ and cannot host weaves; that configuration is exercised by CI rather than by thi
 **You do not need an IDE**, and installing one is not a step on this path. Every command
 on the neighbouring pages is a shell command.
 
+### The WebAssembly backend's two pins
+
+The kernel's WebAssembly backend ([kernel](../reference/kernel.md#a-weave-built-as-a-webassembly-module))
+is off by default and needs nothing above. Turning it on takes two downloads, each pinned by
+version and by the SHA-256 GitHub's release API publishes for the archive:
+
+| | Archive | SHA-256 |
+|---|---|---|
+| **Wasmtime 50.0.0**, the runtime, linked into the kernel (`LOOM_WASMTIME_DIR`): Linux | `wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz` | `631643d8be5dac2a1abe026528f0ca18a515bce275bcfa7eb9731c9468a592f1` |
+| the same, MinGW-w64 | `wasmtime-v50.0.0-x86_64-mingw-c-api.zip` | `1b4dcf6d8a7b933136a1eaff708fc34ac6954efb3b105d39474aac99dee09635` |
+| the same, MSVC (its `wasmtime.dll` goes beside every program that links the kernel) | `wasmtime-v50.0.0-x86_64-windows-c-api.zip` | `3c3d04bc910d18fac9f85ad11293aab63ea023fff5021d39be858d4e3b9d058f` |
+| **wasi-sdk 34**, the compiler that builds a weave as a module (`LOOM_WASI_SDK`), on Linux | `wasi-sdk-34.0-x86_64-linux.tar.gz` | `b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4` |
+
+Both come from their projects' GitHub releases (`bytecodealliance/wasmtime`, tag `v50.0.0`;
+`WebAssembly/wasi-sdk`, tag `wasi-sdk-34`). Check an archive before unpacking it, as
+`sha256sum -c` does, and name the unpacked directory:
+
+```bash
+cmake -S . -B build -DLOOM_ENABLE_WASM=ON -DLOOM_WASMTIME_DIR=<wasmtime-v50.0.0-...-c-api> \
+      -DLOOM_WASI_SDK=<wasi-sdk-34.0-x86_64-linux>
+```
+
+A module is the same file on every platform, so a build without a wasi-sdk can read the
+suite's modules from another build's `wasm/` directory with `-DLOOM_WASM_MODULES=<dir>`
+instead of `LOOM_WASI_SDK`; that is how a Windows build gets them.
+
 ## What Loom does NOT need
 
 Said explicitly, because the absence is deliberate and a newcomer reasonably assumes

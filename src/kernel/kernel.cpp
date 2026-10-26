@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -25,6 +26,10 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#endif
+
+#if defined(LOOM_ENABLE_WASM)
+#include "wasm_box.hpp"
 #endif
 
 namespace loom {
@@ -101,13 +106,12 @@ void destroy_instance(const ZenWeaveAbi* abi, void* instance) {
     abi->destroy(instance);
 }
 
-// ...and making one, keeping what a weave says when it refuses its making.
-void* create_instance(const ZenWeaveAbi* abi, MakingWords& words) {
-    void* instance = abi->create(words.sink());
-    if (instance != nullptr) {
-        ++ledger().instances_created;
-    }
-    return instance;
+/// Does the file at `path` begin as a WebAssembly module does (`\0asm`)? Asked before anything
+/// opens it as a library, so a module is never handed to the platform's loader.
+bool is_wasm_module(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    char magic[4] = {};
+    return in.read(magic, sizeof magic) && std::memcmp(magic, "\0asm", sizeof magic) == 0;
 }
 
 std::string_view as_view(const std::uint8_t* data, std::size_t len) {
@@ -226,36 +230,106 @@ inline loom::Refusal seam_gate_refused(const loom::Admission& a) {
 
 // ---- one open dynamic library, owned by everybody who could still need it ----
 
-/// One open library, closed exactly once, by the last holder to let go: the Kernel's Loaded
-/// record while it owns the artifact name, and the HostAdapter while an instance built by the
-/// library exists. So the close cannot precede the instance's destruction and cannot happen
-/// twice, whatever order the callers use. Neither copyable nor movable: this object is the
-/// handle's identity.
+/// One open image (a library, or a WebAssembly module under LOOM_ENABLE_WASM), closed exactly
+/// once by the last holder to let go: the Kernel's Loaded record while it owns the artifact name,
+/// and the HostAdapter while an instance built from it exists. Neither copyable nor movable: this
+/// object is the image's identity. `abi`, `create` and `mount` are the only places the kernel
+/// tells the two kinds apart.
 class LoadedLibrary {
 public:
     explicit LoadedLibrary(void* handle) noexcept : handle_(handle) {}
-    ~LoadedLibrary() { lib_close(handle_); }
+#if defined(LOOM_ENABLE_WASM)
+    explicit LoadedLibrary(std::shared_ptr<detail::BoxModule> module) noexcept
+        : module_(std::move(module)) {
+        ++ledger().libraries_opened;
+    }
+#endif
+    ~LoadedLibrary() {
+        if (handle_ != nullptr) {
+            lib_close(handle_);
+        } else {
+            ++ledger().libraries_closed; // a module: its compiled code stays with the backend
+        }
+    }
 
     LoadedLibrary(const LoadedLibrary&) = delete;
     LoadedLibrary& operator=(const LoadedLibrary&) = delete;
     LoadedLibrary(LoadedLibrary&&) = delete;
     LoadedLibrary& operator=(LoadedLibrary&&) = delete;
 
-    void* get() const noexcept { return handle_; }
+    /// The descriptor this image's instances are driven through, or null with `error` set.
+    const ZenWeaveAbi* abi(std::string& error) const {
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_abi(); // the module's own version was judged when it was opened
+        }
+#endif
+        return fetch_abi(handle_, error);
+    }
+
+    /// One instance of this image's weave, made through `abi`; null when it refused its making.
+    void* create(const ZenWeaveAbi* abi, ZenByteSink refusal) const {
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_create(module_, refusal);
+        }
+#endif
+        return abi->create(refusal);
+    }
+
+    /// Give `instance` what its grant asks of the image itself. A library shares the host's
+    /// process and takes nothing here; a box carries memory from the grant and refuses, in `why`,
+    /// a grant whose reach it cannot give.
+    bool mount(void* instance, const Grant& grant, std::string& why) const {
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_mount(instance, grant, why);
+        }
+#endif
+        (void)instance, (void)grant, (void)why;
+        return true;
+    }
 
 private:
-    void* handle_;
+    void* handle_ = nullptr;
+#if defined(LOOM_ENABLE_WASM)
+    std::shared_ptr<detail::BoxModule> module_;
+#endif
 };
 
 namespace {
 
-/// Open `path` and hand back an owner for it, or nullptr with `error` set.
+/// Open `path` and hand back an owner for it, or nullptr with `error` set. A WebAssembly module
+/// goes to the box, or is refused in words where this kernel has none; it is never handed to the
+/// platform's loader.
 std::shared_ptr<LoadedLibrary> open_library(const std::string& path, std::string& error) {
+    if (is_wasm_module(path)) {
+#if defined(LOOM_ENABLE_WASM)
+        std::shared_ptr<detail::BoxModule> module = detail::box_open(path, error);
+        if (!module) {
+            return nullptr;
+        }
+        return std::make_shared<LoadedLibrary>(std::move(module));
+#else
+        error = path + " is a WebAssembly module, and this Loom was built without its loader "
+                       "(LOOM_ENABLE_WASM is off)";
+        return nullptr;
+#endif
+    }
     void* handle = lib_open_counted(path, error);
     if (handle == nullptr) {
         return nullptr;
     }
     return std::make_shared<LoadedLibrary>(handle);
+}
+
+// Making an instance goes through here, keeping what a weave says when it refuses its making.
+void* create_instance(const LoadedLibrary& lib, const ZenWeaveAbi* abi, MakingWords& words) {
+    void* instance = lib.create(abi, words.sink());
+    if (instance != nullptr) {
+        ++ledger().instances_created;
+    }
+    return instance;
 }
 
 } // namespace
@@ -961,7 +1035,16 @@ const char* name_of(ArtifactStatus s) noexcept {
     return "Unknown";
 }
 
-KernelLifetimeCounts kernel_lifetime_counts() noexcept { return ledger(); }
+KernelLifetimeCounts kernel_lifetime_counts() noexcept {
+    KernelLifetimeCounts counts = ledger();
+#if defined(LOOM_ENABLE_WASM)
+    const detail::BoxCounts box = detail::box_counts();
+    counts.modules_compiled = box.modules_compiled;
+    counts.stores_opened = box.stores_opened;
+    counts.stores_closed = box.stores_closed;
+#endif
+    return counts;
+}
 
 Kernel::Kernel(loom::Switchboard& bus) : bus_(bus), admit_(admit_nothing()) {}
 
@@ -1166,12 +1249,12 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
     if (!lib) {
         return {false, {}, "open failed: " + error};
     }
-    const ZenWeaveAbi* abi = fetch_abi(lib->get(), error);
+    const ZenWeaveAbi* abi = lib->abi(error);
     if (abi == nullptr) {
         return {false, {}, error};
     }
     MakingWords words;
-    void* instance = create_instance(abi, words);
+    void* instance = create_instance(*lib, abi, words);
     if (instance == nullptr) {
         return {false, {}, making_refused(words)};
     }
@@ -1192,6 +1275,16 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
                 throw DllBoundaryError(why);
             }
         }
+        // What the grant asks of the image itself, before anything is registered: a box refuses
+        // here, in words, a grant it cannot carry.
+        {
+            std::string why;
+            if (!lib->mount(instance, grant, why)) {
+                throw DllBoundaryError(why);
+            }
+        }
+        // The baseline is kept with the record, for the image a reload brings in (GATE-05).
+        Grant baseline = grant;
         adapter = std::make_unique<HostAdapter>(abi, instance, lib, std::move(mf.accepted),
                                                 std::move(mf.state), &bus_, std::move(mf.claims),
                                                 std::move(mf.emits));
@@ -1209,8 +1302,8 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         // loaded is why its vocabulary resolves in this Kernel. Had anything above
         // thrown — a bad manifest, a held role, a schema disagreement — `mf` would
         // have died on the way out with the claim still in it.
-        libs_.emplace(name,
-                      Loaded{name, std::move(lib), abi, raw, id, std::move(mf.schemas)});
+        libs_.emplace(name, Loaded{name, std::move(lib), abi, raw, id, std::move(mf.schemas),
+                                   std::move(baseline)});
         // THE RECORD AND THE ADAPTER ARE NOW ONE THING. From here the adapter's
         // destructor releases this record, whoever destroys it — which is the
         // whole synchronization mechanism, and it is wired last so that a failed
@@ -1305,12 +1398,12 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (!new_lib) {
         return {false, false, false, "open failed: " + error};
     }
-    const ZenWeaveAbi* new_abi = fetch_abi(new_lib->get(), error);
+    const ZenWeaveAbi* new_abi = new_lib->abi(error);
     if (new_abi == nullptr) {
         return {false, false, false, error};
     }
     MakingWords words;
-    void* new_inst = create_instance(new_abi, words);
+    void* new_inst = create_instance(*new_lib, new_abi, words);
     if (new_inst == nullptr) {
         return {false, false, false, making_refused(words)};
     }
@@ -1389,6 +1482,16 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (!same_accepted_contract(cand.accepted, bus_.accepted_schemas(rec.id))) {
         destroy_instance(new_abi, new_inst);
         return {true, false, false, "accepted schema contract mismatch; reload refused"};
+    }
+
+    // The new image under the incumbent's baseline grant, which the reload keeps: a box that
+    // cannot carry it refuses here, with the incumbent untouched.
+    {
+        std::string why;
+        if (!new_lib->mount(new_inst, rec.grant, why)) {
+            destroy_instance(new_abi, new_inst);
+            return {false, false, false, "new library refused: " + why};
+        }
     }
 
     std::string snapshot;

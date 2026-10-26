@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -98,6 +100,35 @@ TEST_CASE("the containment note tells the truth for this platform's hosting mode
     // On no platform may this surface claim containment.
     CHECK(note.find("contained") == std::string::npos);
     CHECK(note.find("sandboxed") == std::string::npos);
+}
+
+TEST_CASE("a WebAssembly module is never handed to the platform's loader") {
+    // The smallest module there is: the magic and version 1, and nothing else. A kernel with the
+    // WebAssembly backend opens it as a module and refuses it for what it lacks; one without the
+    // backend refuses it as a module, naming the option. Neither asks dlopen or LoadLibrary.
+    const std::filesystem::path file =
+        std::filesystem::temp_directory_path() / "zen-kernel-empty-module.wasm";
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        const char bytes[8] = {0, 'a', 's', 'm', 1, 0, 0, 0};
+        out.write(bytes, sizeof bytes);
+        REQUIRE(out.good());
+    }
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    const KernelLifetimeCounts before = kernel_lifetime_counts();
+    const LoadResult lr = kernel.load("module", file.string());
+    const KernelLifetimeCounts after = kernel_lifetime_counts();
+    CHECK_FALSE(lr.ok);
+#if defined(LOOM_ENABLE_WASM)
+    CHECK(lr.error.find("the module exports no memory") != std::string::npos);
+#else
+    CHECK(lr.error.find("is a WebAssembly module") != std::string::npos);
+    CHECK(lr.error.find("LOOM_ENABLE_WASM is off") != std::string::npos);
+#endif
+    CHECK(after.libraries_opened == before.libraries_opened);
+    CHECK(after.instances_created == before.instances_created);
+    std::filesystem::remove(file);
 }
 
 TEST_CASE("a loaded DLL Weave mounts and is indistinguishable; both directions are gated") {

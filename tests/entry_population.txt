@@ -6,8 +6,8 @@
 # that take this inventory are described in docs/laws/population-laws.md.
 
 # `gate` uses suite_population.txt's words: `portable` (every configuration), `kernel` (TARGET
-# zen-kernel), `posix` (NOT WIN32), `windows` (WIN32 with the kernel built), `python` (the run
-# manager built and a Python 3.8+ interpreter found at configure, or named by
+# zen-kernel), `posix` (NOT WIN32), `windows` (WIN32 with the kernel built), `box` (LOOM_ENABLE_WASM),
+# `python` (the run manager built and a Python 3.8+ interpreter found at configure, or named by
 # LOOM_SESSION_PYTHON: optional tooling, declared absent without one). `weave_contract` and
 # `weave_population` are `kernel` because every loadable fixture is declared inside
 # `if(TARGET zen-kernel)`; if their registration ever parts from that gate, this check says so.
@@ -33,6 +33,7 @@ all                          posix
 weave_contract               kernel
 weave_population             kernel
 weave_reload                 windows
+box_reload                   box
 session_journey              python
 session_client               python
 tool_reach                   python
