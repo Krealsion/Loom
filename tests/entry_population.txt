@@ -35,4 +35,5 @@ weave_population             kernel
 weave_reload                 windows
 session_journey              python
 session_client               python
+tool_reach                   python
 observe_journey              python

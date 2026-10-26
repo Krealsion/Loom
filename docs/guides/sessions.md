@@ -24,8 +24,8 @@ The transcripts below are real ones, from Windows and from Linux.
 
 Loom installed with its session tooling (the default wherever the kernel is built — see
 [the tools you need](tools.md)): `bin/loom-host`, `bin/loom-session` (and `loom-session.cmd` on
-Windows), `lib/loom/loom-runs.<so|dll>`, `lib/loom/python/loom_session`, and a small example
-package at `share/loom/tools/basics`. A project of yours that drives a session from its own
+Windows), `lib/loom/loom-runs.<so|dll>`, `lib/loom/python/loom_session`, and two small example
+packages at `share/loom/tools/basics` and `share/loom/tools/basics-machine`. A project of yours that drives a session from its own
 tests finds them through the package rather than this layout: `find_package(loom)` sets
 `LOOM_HOST_PROGRAM`, `LOOM_SESSION_TOOLS` (`TRUE` where the tooling was installed), and with it
 `LOOM_RUNS_ARTIFACT` and `LOOM_SESSION_RUNTIME` (the directory `PYTHONPATH` names).
@@ -55,7 +55,8 @@ Pick a directory; it is the session. `loom-boot.json` boots the run manager:
 `loom-tools.json` is **your** catalog: which tool packages this session knows, and which may run.
 
 ```json
-{ "packages": [ { "path": "<prefix>/share/loom/tools/basics", "approve": "any-revision" } ] }
+{ "packages": [ { "path": "<prefix>/share/loom/tools/basics", "approve": "any-revision" },
+                { "path": "<prefix>/share/loom/tools/basics-machine", "approve": "any-revision" } ] }
 ```
 
 `"approve"` is `"any-revision"` (every edit may run — your own tools, while you write them), one
@@ -130,10 +131,10 @@ session /home/you/work -- lifetime 3f17415b4ee53b1ddce611b8ac90b0f7
   connection 4: client client (claims 'loom-session-cli') admitted, session 11, compat
   0 run connection(s) expected
 $ loom-session tools work
-basics/steps                     Walk a few named steps, optionally wait at a release gate, ...
-                                 any revision; revision 51986a014e7b
 basics/session-report            Ask the session's door what this session is -- lifetime, ...
-$ loom-session describe work basics/steps
+basics-machine/steps             Walk a few named steps, optionally wait at a release gate, ...
+                                 any revision; revision 51986a014e7b
+$ loom-session describe work basics-machine/steps
 ```
 
 `describe` is the tool's help: purpose, inputs and their types, outputs, what it requires, the
@@ -147,8 +148,8 @@ From Python, the same operations:
 from loom_session.session import Session
 with Session.attach("work") as s:
     s.tools("gate")                   # search by the package's own words
-    s.tool("basics/steps")            # the description
-    s.start("basics/steps", "first", {"count": 2, "hold": "go"})
+    s.tool("basics-machine/steps")    # the description
+    s.start("basics-machine/steps", "first", {"count": 2, "hold": "go"})
     s.run("first")                    # the run, as its manager holds it
 ```
 
@@ -160,9 +161,9 @@ work. A wait timeout does not cancel the run: use `loom-session show work <name>
 or `loom-session wait work <name> --timeout SECONDS` to wait again.
 
 ```text
-$ loom-session run work basics/steps --name first --input count=2 --input message=hi --wait 30
+$ loom-session run work basics-machine/steps --name first --input count=2 --input message=hi --wait 30
 run 3f17415b/first -- passed (live)
-  tool basics/steps, revision 51986a014e7b
+  tool basics-machine/steps, revision 51986a014e7b
   worker: session 14 (run:first), pid 33776, process exited, exit 0
   summary: 2 step(s); report.txt written
   artifact report.txt: verified, 27 bytes, sha256 a42644fe78226502
@@ -341,13 +342,23 @@ and no socket or file the host holds is passed on — but it is not a sandbox, a
 approving a package is trusting its code. See
 [the exec boundary](../reference/capabilities.md#the-exec-boundary-three-independent-facts).
 
+**A package's name says how far its tools reach**, because you approve a package whole. A
+package whose name ends in `-machine` may reach this machine; every other package's tools reach
+nothing but the bus and a clock -- no process, no file and no socket of their own -- so approving
+one gives a client nothing more than its messages. Loom's own are split so: `basics/session-report`
+asks the door and keeps what it learned through `ctx.produce`, while `basics-machine/steps`
+writes its cleanup's file itself. The test lane's `tool_reach` entry holds every package under
+`tools/` to its name, following each tool's imports; it reads names, so it is a guard that a
+tool does not grow a reach, not a sandbox. Name a package of yours the same way when an operator
+may approve its message tools alone.
+
 **Credentials** stay out of the record: the manager tells the door only a credential's SHA-256,
 the worker deletes its credential file on reading it, and the owner's key is never on the bus.
 
 ## 7. Writing a tool
 
-A package is a directory with `loom-tool.json` and Python files. `tools/basics` in Loom's source
-is a complete small one. A tool:
+A package is a directory with `loom-tool.json` and Python files. `tools/basics` and
+`tools/basics-machine` in Loom's source are complete small ones. A tool:
 
 ```python
 def run(ctx):

@@ -76,7 +76,7 @@
    "description": "A DIRECT ask (no link) that asks for settlement, of an office whose answering sets more work in motion on the host's own bus. What it reports is whether its conversation was complete only once BOTH the attested answer and the host's settlement for that send had arrived.",
    "inputs": [
     {"name": "name", "type": "text", "required": true, "help": "the run name to start"},
-    {"name": "tool", "type": "text", "default": "basics/steps", "help": "the tool to start"}
+    {"name": "tool", "type": "text", "default": "basics-machine/steps", "help": "the tool to start"}
    ],
    "outputs": [
     {"name": "settlement.json", "help": "what the conversation had, and when"}

@@ -731,7 +731,7 @@ if(zen_session_python)
         --host $<TARGET_FILE:loom-host>
         --runs $<TARGET_FILE:loom-runs>
         --runtime ${CMAKE_BINARY_DIR}/session-tools/python
-        --tools ${CMAKE_SOURCE_DIR}/tools/basics
+        --tools ${CMAKE_SOURCE_DIR}/tools
         --launchers ${CMAKE_SOURCE_DIR}/tools
         --work ${CMAKE_BINARY_DIR}/session-journey-work
         --evidence ${CMAKE_BINARY_DIR}/session-journey-work.json)
@@ -742,6 +742,11 @@ if(zen_session_python)
         ${CMAKE_CURRENT_SOURCE_DIR}/session/test_client.py
         --runtime ${CMAKE_BINARY_DIR}/session-tools/python)
     set_tests_properties(session_client PROPERTIES TIMEOUT 60)
+    # WHAT A SHIPPED TOOL REACHES, BY ITS IMPORTS: a package's name says it. Every tool of a package
+    # under tools/ whose name does not end in `-machine` reaches nothing but the bus and a clock.
+    add_test(NAME tool_reach COMMAND ${zen_session_python} -I
+        ${CMAKE_CURRENT_SOURCE_DIR}/session/tool_reach.py --packages ${CMAKE_SOURCE_DIR}/tools)
+    set_tests_properties(tool_reach PROPERTIES TIMEOUT 60)
     # The observation journey: a subscription across two real hosts. The session host links to a
     # far host (observe_far/far_host.cpp: a bridge server, a relay admitting one guest to two
     # shapes, a producer it can drive), boots the probe vocabulary and runs the probe package

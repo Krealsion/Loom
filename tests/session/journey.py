@@ -9,7 +9,7 @@ session door's description, the host's own history through the scoped reader. Wa
 harness's own decision and is never reported as anybody's outcome.
 
     journey.py --host <loom-host> --runs <loom-runs artifact> --runtime <dir with loom_session>
-               --tools <tools/basics> --launchers <dir with loom-session and loom-session.cmd>
+               --tools <tools> --launchers <dir with loom-session and loom-session.cmd>
                --work <empty dir> [--evidence <file.json>]
 
 Exit 0 only when every check held; every check is printed and kept in the evidence file.
@@ -186,17 +186,23 @@ def main():
     pkgs = os.path.join(work, "packages")
     os.makedirs(session_dir)
     # EDITABLE COPIES of the packages: the journey edits them, never the source tree.
+    # `basics` reaches nothing but the session; `basics-machine` writes a file of its own, so it is
+    # the package the copies below are made from.
     basics = os.path.join(pkgs, "basics")
-    shutil.copytree(args.tools, basics, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(os.path.join(args.tools, "basics"), basics,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    machine = os.path.join(pkgs, "basics-machine")
+    shutil.copytree(os.path.join(args.tools, "basics-machine"), machine,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     pinned = os.path.join(pkgs, "pinned")
-    shutil.copytree(args.tools, pinned, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(machine, pinned, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     with open(os.path.join(pinned, "loom-tool.json"), "r", encoding="utf-8") as f:
         manifest = json.load(f)
     manifest["package"] = "pinned"
     with open(os.path.join(pinned, "loom-tool.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
     greedy = os.path.join(pkgs, "greedy")
-    shutil.copytree(args.tools, greedy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(machine, greedy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     manifest["package"] = "greedy"
     for t in manifest["tools"]:
         t["asks"] = ["any shape -> any target"]  # more than the manager may pass on
@@ -257,6 +263,7 @@ def main():
         shutil.copy(os.path.join(args.launchers, launcher), os.path.join(prefix, "bin", launcher))
     catalog = {"python": sys.executable, "runtime": runtime,
                "packages": [{"path": basics, "approve": "any-revision"},
+                            {"path": machine, "approve": "any-revision"},
                             {"path": greedy, "approve": "any-revision"},
                             {"path": pinned, "approve": "PINNED"},
                             {"path": chatty, "approve": "any-revision"},
@@ -297,14 +304,13 @@ def main():
         first_lifetime = s.lifetime
         tools = s.tools()
         ids = [r["id"] for r in tools["rows"]]
-        check("B1 the catalog lists the tools", "basics/steps" in ids and
+        check("B1 the catalog lists the tools", "basics-machine/steps" in ids and
               "basics/session-report" in ids, ids)
         found = [r["id"] for r in s.tools("gate hold")["rows"]]
-        check("B2 search narrows by the package's own words", found == ["basics/steps",
-                                                                       "pinned/steps",
-                                                                       "greedy/steps"] or
-              ("basics/steps" in found and "basics/session-report" not in found), found)
-        d = s.tool("basics/steps")
+        check("B2 search narrows by the package's own words",
+              found == ["basics-machine/steps", "pinned/steps", "greedy/steps"] or
+              ("basics-machine/steps" in found and "basics/session-report" not in found), found)
+        d = s.tool("basics-machine/steps")
         types = dict((i["name"], i["type"]) for i in d["inputs"])
         check("B3 a description names inputs with their types",
               types.get("count") == "int" and types.get("hold") == "text", types)
@@ -320,7 +326,7 @@ def main():
     # ---- C. a run left pending, the controlling client gone completely ------------------------
     with Session.attach(session_dir) as c1:
         c1_session = c1.connection.session
-        r = c1.start("basics/steps", "held", {"count": 3, "hold": "go", "message": "held-run"})
+        r = c1.start("basics-machine/steps", "held", {"count": 3, "hold": "go", "message": "held-run"})
         check("C1 the run starts", r["state"] in ("starting", "running"), r["state"])
         until(lambda: c1.run("held")["step"] == "held: go", 30, "the run to reach its gate")
         held = c1.run("held")
@@ -430,16 +436,16 @@ def main():
 
     # ---- F. edit the tool, run it again: no compiler, no restart, the old run kept -----------
     with Session.attach(session_dir) as s:
-        v1 = s.start("basics/steps", "v1", {"count": 1, "message": "one"})
+        v1 = s.start("basics-machine/steps", "v1", {"count": 1, "message": "one"})
         v1 = s.wait("v1", timeout=60)
-        steps_py = os.path.join(basics, "steps.py")
+        steps_py = os.path.join(machine, "steps.py")
         src = open(steps_py, "r", encoding="utf-8").read()
         edited = src.replace('ctx.inputs.get("message", "") + "\\n"',
                              '"EDITED: " + ctx.inputs.get("message", "") + "\\n"')
         check("F0 the edit changes the tool's source", edited != src)
         with open(steps_py, "w", encoding="utf-8") as f:
             f.write(edited)
-        v2 = s.start("basics/steps", "v2", {"count": 1, "message": "two"})
+        v2 = s.start("basics-machine/steps", "v2", {"count": 1, "message": "two"})
         v2 = s.wait("v2", timeout=60)
         # A missing artifact is a CHECK that fails, never a driver that stops: a run whose
         # reports were attributed elsewhere would otherwise end the journey with a KeyError.
@@ -462,8 +468,8 @@ def main():
 
     # ---- G. two named runs with overlapping lifetimes ----------------------------------------
     with Session.attach(session_dir) as s:
-        s.start("basics/steps", "ov-a", {"count": 2, "hold": "a", "message": "only-A"})
-        s.start("basics/steps", "ov-b", {"count": 2, "hold": "b", "message": "only-B"})
+        s.start("basics-machine/steps", "ov-a", {"count": 2, "hold": "a", "message": "only-A"})
+        s.start("basics-machine/steps", "ov-b", {"count": 2, "hold": "b", "message": "only-B"})
         until(lambda: s.run("ov-a")["step"] == "held: a" and s.run("ov-b")["step"] == "held: b",
               30, "both runs to hold")
         a, b = s.run("ov-a"), s.run("ov-b")
@@ -488,19 +494,19 @@ def main():
 
     # ---- H. a tool's own failure, a tool's bug, and a success after both ----------------------
     with Session.attach(session_dir) as s:
-        s.start("basics/steps", "fails", {"count": 3, "fail_at": 2})
+        s.start("basics-machine/steps", "fails", {"count": 3, "fail_at": 2})
         f = s.wait("fails", timeout=60)
         check("H1 a failed check ends the run failed, with the tool's words",
               f["state"] == "failed" and "step 2" in f["failure"], f["failure"])
         check("H2 its cleanup ran and says so", os.path.exists(os.path.join(
             f["directory"], "out", "cleanup.txt")) and any("cleanup" in n and "done" in n
                                                           for n in f["notes"]))
-        s.start("basics/steps", "crashes", {"count": 2, "crash_at": 1})
+        s.start("basics-machine/steps", "crashes", {"count": 2, "crash_at": 1})
         c = s.wait("crashes", timeout=60)
         check("H3 a tool bug ends the run as an error, with where it happened",
               c["state"] == "error" and "RuntimeError" in c["failure"] and
               "steps.py" in c["failure"], c["failure"][:200])
-        ok = s.wait("after", timeout=60) if s.start("basics/steps", "after", {"count": 1}) \
+        ok = s.wait("after", timeout=60) if s.start("basics-machine/steps", "after", {"count": 1}) \
             else None
         check("H4 the next run passes", ok and ok["state"] == "passed")
 
@@ -527,7 +533,7 @@ def main():
 
     # ---- J. cancellation is a request; force ends the process -------------------------------
     with Session.attach(session_dir) as s:
-        s.start("basics/steps", "cancel-me", {"count": 2, "hold": "never"})
+        s.start("basics-machine/steps", "cancel-me", {"count": 2, "hold": "never"})
         until(lambda: s.run("cancel-me")["step"] == "held: never", 30, "the run to hold")
         try:
             s.release("cancel-me")
@@ -543,7 +549,7 @@ def main():
         check("J2 the worker heard it, cleaned up, and the run is cancelled",
               done["state"] == "cancelled" and os.path.exists(os.path.join(
                   done["directory"], "out", "cleanup.txt")), done["failure"])
-        s.start("basics/steps", "force-me", {"count": 2, "hold": "never"})
+        s.start("basics-machine/steps", "force-me", {"count": 2, "hold": "never"})
         until(lambda: s.run("force-me")["step"] == "held: never", 30, "the run to hold")
         s.cancel("force-me", reason="no waiting", force=True)
         s.wait("force-me", timeout=60)
@@ -561,7 +567,7 @@ def main():
     from loom_session.session import read_session_file
     info = read_session_file(session_dir)
     raw = lclient.Connection(info["endpoint"], info["key"], claimed="lossy")
-    raw.ask("loom.runs.Start", {"tool": "basics/steps", "name": "lost-answer",
+    raw.ask("loom.runs.Start", {"tool": "basics-machine/steps", "name": "lost-answer",
                                 "inputs": json.dumps({"count": 1})}, role="loom.runs")
     with Session.attach(session_dir) as s:
         acted = until(lambda: any(r["name"] == "lost-answer" and r["pid"] != 0
@@ -569,14 +575,14 @@ def main():
         raw.close()  # leaves without reading whatever answer was sent to it
         check("K0 the first Start acted, and its client left without its answer", acted)
         first = s.run("lost-answer")
-        again = s.start("basics/steps", "lost-answer", {"count": 1})
+        again = s.start("basics-machine/steps", "lost-answer", {"count": 1})
         check("K1 asking again with the same request answers the same run",
               again["directory"] == first["directory"] and again["started_ms"] ==
               first["started_ms"])
         check("K2 there is one run of that name",
               [r["name"] for r in s.runs()["rows"]].count("lost-answer") == 1)
         try:
-            s.start("basics/steps", "lost-answer", {"count": 2})
+            s.start("basics-machine/steps", "lost-answer", {"count": 2})
             refused = ""
         except Refused as err:
             refused = str(err)
@@ -586,7 +592,7 @@ def main():
     # ---- L. approval pinned by content; attenuation by the door -------------------------------
     with Session.attach(session_dir) as s:
         rev = [r for r in s.tools()["rows"] if r["id"] == "pinned/steps"][0]["revision"]
-        catalog["packages"][2]["approve"] = rev
+        [e for e in catalog["packages"] if e["path"] == pinned][0]["approve"] = rev
         write_catalog()
         p = s.start("pinned/steps", "pinned-ok", {"count": 1})
         p = s.wait("pinned-ok", timeout=60)
@@ -768,14 +774,14 @@ def main():
               done["state"] == "cancelled" and "cleanup" in done["failure"],
               (done["state"], done["failure"][:200]))
         # AND THE SESSION IS STILL A SESSION: the next run on it works.
-        s.start("basics/steps", "after-cleanup", {"count": 1, "message": "after"})
+        s.start("basics-machine/steps", "after-cleanup", {"count": 1, "message": "after"})
         check("O5 the session serves the next run normally",
               s.wait("after-cleanup", timeout=60)["state"] == "passed")
 
     # A tool that WAITS AT NOTHING still cooperates, through the public property alone: no ask,
     # no gate, nothing blocking for a cancellation to arrive through.
     with Session.attach(session_dir) as s:
-        s.start("basics/steps", "cooperates", {"count": 3, "cooperate": 60})
+        s.start("basics-machine/steps", "cooperates", {"count": 3, "cooperate": 60})
         until(lambda: s.run("cooperates")["state"] == "running" and
               s.run("cooperates")["session"] != 0, 30, "the run to be working")
         s.cancel("cooperates", reason="the journey asks a busy tool to stop")
@@ -829,7 +835,7 @@ def main():
 
     # ---- P. evidence that could not be saved is said, not silently lost ----------------------
     with Session.attach(session_dir) as s:
-        s.start("basics/steps", "faulted", {"count": 2, "hold": "go", "message": "faulted"})
+        s.start("basics-machine/steps", "faulted", {"count": 2, "hold": "go", "message": "faulted"})
         until(lambda: s.run("faulted")["step"] == "held: go", 30, "the run to hold")
         run_dir = s.run("faulted")["directory"]
         record = os.path.join(run_dir, "run.json")
@@ -1004,7 +1010,7 @@ def main():
     # checked against the operating system: a handle held open across the death where the
     # platform has one, otherwise the code the manager's own signal must produce.
     with Session.attach(session_dir) as s:
-        s.start("basics/steps", "left-held", {"count": 2, "hold": "never"})
+        s.start("basics-machine/steps", "left-held", {"count": 2, "hold": "never"})
         until(lambda: s.run("left-held")["step"] == "held: never", 30, "the run to hold")
         held_pid = s.run("left-held")["pid"]
         held_dir = s.run("left-held")["directory"]
