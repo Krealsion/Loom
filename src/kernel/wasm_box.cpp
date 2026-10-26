@@ -1343,7 +1343,13 @@ void* box_create(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal) 
     }
     hold_state(*b);
     if (!live(*b)) {
-        return nullptr; // its first snapshot trapped and its budget was spent
+        const std::string said = "the box: the module trapped saying its first state: " +
+                                 b->last_trap;
+        if (refusal.write != nullptr) {
+            refusal.write(refusal.ctx, reinterpret_cast<const std::uint8_t*>(said.data()),
+                          said.size());
+        }
+        return nullptr;
     }
     return b.release();
 }
