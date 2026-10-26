@@ -81,9 +81,49 @@ jobs:
       - name: Run the text checks
         run: cmake -DZEN_LANE_KIND=OFF -P tests/documentation_lane.cmake
 
+  # The box suite's WebAssembly modules (LOOM_ENABLE_WASM), built once with the pinned wasi-sdk
+  # (docs/guides/tools.md#the-webassembly-backends-two-pins) and handed to every job that runs the
+  # backend, so the Linux, MinGW-w64 and MSVC jobs load the same files: each checks SHA256SUMS.
+  loom-wasm-modules:
+    name: Loom / WebAssembly modules
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the pinned wasi-sdk
+        run: |
+          archive="$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux.tar.gz"
+          curl -fsSL -o "$archive" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum -c
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux/bin/clang++" --version
+
+      - name: Build the modules
+        run: |
+          cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Debug \
+            -DLOOM_WASI_SDK="$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux"
+          cmake --build build-wasm --target loom-wasm-modules --parallel "$(nproc)"
+          cd build-wasm/wasm
+          sha256sum *.wasm | tee SHA256SUMS
+
+      - name: Hand the modules on
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: loom-wasm-modules
+          path: build-wasm/wasm/
+          if-no-files-found: error
+          retention-days: 7
+
   loom-linux-debug:
     name: Loom / Linux / Debug
-    needs: loom-change-kind
+    needs: [loom-change-kind, loom-wasm-modules]
     if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -106,8 +146,29 @@ jobs:
       - name: Permit Loom's unprivileged sandbox namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      - name: Fetch the pinned Wasmtime C API
+        run: |
+          archive="$RUNNER_TEMP/wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz"
+          curl -fsSL -o "$archive" \
+            https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.0/wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz
+          echo "631643d8be5dac2a1abe026528f0ca18a515bce275bcfa7eb9731c9468a592f1  $archive" | sha256sum -c
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+
+      - name: Take the modules
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loom-wasm-modules
+          path: ${{ runner.temp }}/loom-wasm-modules
+
+      - name: Check the modules are the ones built
+        run: cd "$RUNNER_TEMP/loom-wasm-modules" && sha256sum -c SHA256SUMS
+
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DLOOM_ENABLE_WASM=ON
+          -DLOOM_WASMTIME_DIR="$RUNNER_TEMP/wasmtime-v50.0.0-x86_64-linux-c-api"
+          -DLOOM_WASM_MODULES="$RUNNER_TEMP/loom-wasm-modules"
 
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
@@ -179,7 +240,7 @@ jobs:
 
   loom-linux-asan-ubsan:
     name: Loom / Linux / ASan + UBSan
-    needs: loom-change-kind
+    needs: [loom-change-kind, loom-wasm-modules]
     if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -202,8 +263,29 @@ jobs:
       - name: Permit Loom's unprivileged sandbox namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      - name: Fetch the pinned Wasmtime C API
+        run: |
+          archive="$RUNNER_TEMP/wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz"
+          curl -fsSL -o "$archive" \
+            https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.0/wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz
+          echo "631643d8be5dac2a1abe026528f0ca18a515bce275bcfa7eb9731c9468a592f1  $archive" | sha256sum -c
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+
+      - name: Take the modules
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loom-wasm-modules
+          path: ${{ runner.temp }}/loom-wasm-modules
+
+      - name: Check the modules are the ones built
+        run: cd "$RUNNER_TEMP/loom-wasm-modules" && sha256sum -c SHA256SUMS
+
       - name: Configure
-        run: cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DZEN_SANITIZE=ON
+        run: >-
+          cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DZEN_SANITIZE=ON
+          -DLOOM_ENABLE_WASM=ON
+          -DLOOM_WASMTIME_DIR="$RUNNER_TEMP/wasmtime-v50.0.0-x86_64-linux-c-api"
+          -DLOOM_WASM_MODULES="$RUNNER_TEMP/loom-wasm-modules"
 
       - name: Build
         run: cmake --build build-san --parallel "$(nproc)"
@@ -310,7 +392,7 @@ jobs:
 
   loom-windows-kernel-full:
     name: Loom / Windows / kernel-full (advisory)
-    needs: loom-change-kind
+    needs: [loom-change-kind, loom-wasm-modules]
     if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
@@ -329,6 +411,25 @@ jobs:
           & 'C:\mingw64\bin\nm.exe' --version
           ninja --version
 
+      - name: Fetch the pinned Wasmtime C API
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'wasmtime-v50.0.0-x86_64-mingw-c-api.zip'
+          Invoke-WebRequest -Uri 'https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.0/wasmtime-v50.0.0-x86_64-mingw-c-api.zip' -OutFile $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($digest -ne '1b4dcf6d8a7b933136a1eaff708fc34ac6954efb3b105d39474aac99dee09635') { throw "Wasmtime archive digest $digest is not the pinned one" }
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP
+
+      - name: Take the modules
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loom-wasm-modules
+          path: ${{ runner.temp }}/loom-wasm-modules
+
+      - name: Check the modules are the ones built
+        shell: bash
+        run: cd "$RUNNER_TEMP/loom-wasm-modules" && sha256sum -c SHA256SUMS
+
       - name: Configure with MinGW-w64
         shell: pwsh
         run: >-
@@ -337,6 +438,9 @@ jobs:
           -DCMAKE_C_COMPILER=C:/mingw64/bin/gcc.exe
           -DCMAKE_CXX_COMPILER=C:/mingw64/bin/g++.exe
           -DLOOM_ENABLE_WINDOWS_KERNEL=ON
+          -DLOOM_ENABLE_WASM=ON
+          "-DLOOM_WASMTIME_DIR=$env:RUNNER_TEMP/wasmtime-v50.0.0-x86_64-mingw-c-api"
+          "-DLOOM_WASM_MODULES=$env:RUNNER_TEMP/loom-wasm-modules"
 
       - name: Build
         run: cmake --build build-win-kernel
@@ -363,7 +467,7 @@ jobs:
   # frames are the point.
   loom-windows-msvc:
     name: Loom / Windows / MSVC + installed-package witness (advisory)
-    needs: loom-change-kind
+    needs: [loom-change-kind, loom-wasm-modules]
     if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
@@ -388,6 +492,25 @@ jobs:
           cmake --version
           ninja --version
 
+      - name: Fetch the pinned Wasmtime C API
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'wasmtime-v50.0.0-x86_64-windows-c-api.zip'
+          Invoke-WebRequest -Uri 'https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.0/wasmtime-v50.0.0-x86_64-windows-c-api.zip' -OutFile $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($digest -ne '3c3d04bc910d18fac9f85ad11293aab63ea023fff5021d39be858d4e3b9d058f') { throw "Wasmtime archive digest $digest is not the pinned one" }
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP
+
+      - name: Take the modules
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loom-wasm-modules
+          path: ${{ runner.temp }}/loom-wasm-modules
+
+      - name: Check the modules are the ones built
+        shell: bash
+        run: cd "$RUNNER_TEMP/loom-wasm-modules" && sha256sum -c SHA256SUMS
+
       - name: Configure and build with MSVC
         shell: pwsh
         run: |
@@ -395,7 +518,9 @@ jobs:
           $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
-          cmake -S . -B build-msvc -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLOOM_ENABLE_WINDOWS_KERNEL=ON
+          cmake -S . -B build-msvc -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLOOM_ENABLE_WINDOWS_KERNEL=ON `
+            -DLOOM_ENABLE_WASM=ON "-DLOOM_WASMTIME_DIR=$env:RUNNER_TEMP/wasmtime-v50.0.0-x86_64-windows-c-api" `
+            "-DLOOM_WASM_MODULES=$env:RUNNER_TEMP/loom-wasm-modules"
           cmake --build build-msvc
 
       - name: Install to a fresh prefix and run the installed-package witness
