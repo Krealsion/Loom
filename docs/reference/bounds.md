@@ -276,6 +276,8 @@ refuses in words at the limit; none evicts anything a client is still owed.
 | `RunManager::kMaxAsks` | <!-- value kMaxAsks -->128<!-- /value --> | a run's own account of its asks; the oldest leaves first and is COUNTED (`asks_dropped`) |
 | `RunManager::kMaxArtifacts` | <!-- value kMaxArtifacts -->32<!-- /value --> | artifacts listed per run; one more is noted, not listed |
 | `RunManager::kMaxPast` | <!-- value kMaxPast -->64<!-- /value --> | past lifetimes' records one `Past` answer carries, newest first |
+| `RunManager::kMaxArtifactPage` | <!-- value kMaxArtifactPage MiB -->1<!-- /value --> MiB | the bytes one `ArtifactPage` carries; a read asking for more is answered this many |
+| `RunManager::kMaxReadableArtifact` | <!-- value kMaxReadableArtifact MiB -->16<!-- /value --> MiB | the largest artifact read by message; a larger one is refused by its size, since every page reads the whole file again, on the manager's turn, to prove it unchanged |
 | a run's inputs | 16 KiB of JSON | refused before anything is created |
 | `kMaxPackages` / `kMaxToolsPerPackage` | <!-- value kMaxPackages -->64<!-- /value --> / <!-- value kMaxToolsPerPackage -->32<!-- /value --> | what one catalog and one package may name; the rest is a reported problem |
 | `kMaxPackageFiles` / `kMaxPackageBytes` | <!-- value kMaxPackageFiles -->512<!-- /value --> / <!-- value kMaxPackageBytes MiB -->16<!-- /value --> MiB | what a package may hold: a snapshot is a copy |

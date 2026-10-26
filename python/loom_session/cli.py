@@ -370,6 +370,23 @@ def cmd_release(args):
     return 0
 
 
+def cmd_artifact(args):
+    with _attach(args) as s:
+        try:
+            data = s.read_artifact(args.name, args.artifact, lifetime=args.lifetime)
+        except ValueError as err:  # pages that do not make the verified whole
+            print("not read whole: %s" % err)
+            return 1
+    if args.out:
+        with open(args.out, "wb") as f:
+            f.write(data)
+        print("%s of run %s: %d bytes written to %s" % (args.artifact, args.name, len(data), args.out))
+    else:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    return 0
+
+
 def cmd_crossings(args):
     with _attach(args) as s:
         r, rows, truncated = s.crossings(args.name)
@@ -478,6 +495,13 @@ def main(argv=None):
     c = command("release", cmd_release, "forget a finished run")
     c.add_argument("name")
     c.add_argument("--remove", action="store_true")
+    c = command("artifact", cmd_artifact,
+                "a file a run produced, read by message page by page and checked against the "
+                "digest its manager verified")
+    c.add_argument("name", help="the run")
+    c.add_argument("artifact", help="the artifact's name, as the run lists it")
+    c.add_argument("--out", default="", help="write it to this file (default: standard output)")
+    c.add_argument("--lifetime", default=None)
     c = command("crossings", cmd_crossings, "the crossings behind a run's answers")
     c.add_argument("name")
     c = command("delivery", cmd_delivery, "what became of one bus delivery")

@@ -13,6 +13,7 @@ A RUN HANDLE is ``(lifetime, name)``. ``Session.run(name)`` means "in the lifeti
 to"; a handle from another lifetime is refused by the manager rather than applied to new work.
 """
 
+import hashlib
 import json
 import os
 import time
@@ -24,6 +25,9 @@ from .wire import Disconnected
 SESSION_ROLE = "loom.session"
 HISTORY_ROLE = "loom.history"
 RUNS_ROLE = "loom.runs"
+#: The page an artifact is read in, which the manager cuts to its own bound
+#: (``RunManager::kMaxArtifactPage``, docs/reference/bounds.md).
+PAGE_BYTES = 1024 * 1024
 
 #: The states after which a run changes no more.
 FINAL_STATES = ("passed", "failed", "error", "cancelled", "crashed", "interrupted")
@@ -135,6 +139,37 @@ class Session(object):
 
     def past(self):
         return self._call("loom.runs.Past", {}).fields
+
+    def artifact_page(self, name, artifact, start=0, size=PAGE_BYTES, lifetime=None):
+        """One page of a file run ``name`` produced: the manager's ``ArtifactPage`` fields --
+        ``data`` (bytes), ``from``, ``total`` and the verified ``sha256``."""
+        return self._call("loom.runs.ArtifactRead", {"lifetime": lifetime or self.lifetime,
+                                                     "run": name, "name": artifact,
+                                                     "from": int(start), "bytes": int(size)}).fields
+
+    def read_artifact(self, name, artifact, page=PAGE_BYTES, lifetime=None):
+        """A file run ``name`` produced, whole, read by message page by page: for a client with no
+        shell, or on another machine. Each page is bytes of the content the manager verified; the
+        whole is checked against that digest here as well. A refusal -- a name the run does not
+        list, a file changed on disk since it was verified -- raises ``Refused``, and a page that
+        does not continue the last raises ``ValueError``."""
+        out, total, digest = b"", None, None
+        while total is None or len(out) < total:
+            p = self.artifact_page(name, artifact, start=len(out), size=page, lifetime=lifetime)
+            if p["from"] != len(out) or (total is not None and
+                                         (p["total"], p["sha256"]) != (total, digest)):
+                raise ValueError("artifact %r of run %r: a page from %d of %d (%s) does not "
+                                 "continue the read at %d of %s" % (artifact, name, p["from"],
+                                 p["total"], p["sha256"][:12], len(out), total))
+            total, digest = p["total"], p["sha256"]
+            out += p["data"]
+            if not p["data"] and len(out) < total:
+                raise ValueError("artifact %r of run %r: an empty page at %d of %d"
+                                 % (artifact, name, len(out), total))
+        if len(out) != total or hashlib.sha256(out).hexdigest() != digest:
+            raise ValueError("artifact %r of run %r: the pages read hold %d bytes with another "
+                             "digest than the %d verified" % (artifact, name, len(out), total))
+        return out
 
     def wait(self, name, until=FINAL_STATES, timeout=60.0, interval=0.1, lifetime=None):
         """Read the run from its manager until its state is in ``until``. The timeout is this
