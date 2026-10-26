@@ -833,7 +833,7 @@ constexpr Import kImports[] = {
 wasm_valtype_vec_t types(const char* spelled) {
     std::vector<wasm_valtype_t*> v;
     for (const char* c = spelled; *c != '\0'; ++c) {
-        v.push_back(wasm_valtype_new(*c == 'I' ? WASM_I64 : WASM_I32));
+        v.push_back(wasm_valtype_new(static_cast<wasm_valkind_t>(*c == 'I' ? WASM_I64 : WASM_I32)));
     }
     wasm_valtype_vec_t out;
     wasm_valtype_vec_new(&out, v.size(), v.data());
