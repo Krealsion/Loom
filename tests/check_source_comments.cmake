@@ -24,7 +24,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 # The session tooling's Python and its two launchers are installed documentation too; Python and
 # shell scripts under the roots are read as scripts.
 set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
-    python tools/basics tools/loom-session tools/loom-session.cmd)
+    python tools/basics tools/basics-machine tools/loom-session tools/loom-session.cmd)
 set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)

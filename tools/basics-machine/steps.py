@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
-"""basics/steps -- a journey with no application behind it (see loom-tool.json)."""
+"""basics-machine/steps -- a journey with no application behind it (see loom-tool.json)."""
 
 import os
 import time
