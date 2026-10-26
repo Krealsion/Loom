@@ -248,6 +248,43 @@ struct Artifact {
     }
 };
 
+/// READ A PAGE OF A FILE A RUN PRODUCED, by message: the bytes of the artifact `name` that run
+/// `run` lists, from `from`, at most `bytes` and at most the manager's page. Answered
+/// `ArtifactPage`, or `zen.Refused` for another lifetime's handle, a name the run does not list,
+/// an artifact that is not `verified`, a page past the end, or a file changed on disk since the
+/// manager verified it. The file read is the one the manager recorded, never one a request names.
+struct ArtifactRead {
+    std::string lifetime;
+    std::string run;   ///< the run's name
+    std::string name;  ///< the artifact's name, as the run lists it
+    std::int64_t from = 0;
+    std::int64_t bytes = 0; ///< how many to read, at least 1
+    LOOM_RUNS_SHAPE(ArtifactRead, "loom.runs.ArtifactRead");
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(run), ZEN_FIELD(name),
+                               ZEN_FIELD(from), ZEN_FIELD(bytes));
+    }
+};
+
+/// One page of a produced file. Every page is read in one pass that hashes the whole file, and
+/// is answered only when that pass found the size and SHA-256 the manager verified: `data` is
+/// bytes of the verified content. `from + data.size() == total` on the last page.
+struct ArtifactPage {
+    std::string lifetime;
+    std::string run;
+    std::string name;
+    std::int64_t from = 0;
+    std::int64_t total = 0; ///< the artifact's whole size
+    std::string sha256;     ///< the whole artifact's digest, as verified and as read again now
+    loom::Bytes data;
+    LOOM_RUNS_SHAPE(ArtifactPage, "loom.runs.ArtifactPage");
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(run), ZEN_FIELD(name),
+                               ZEN_FIELD(from), ZEN_FIELD(total), ZEN_FIELD(sha256),
+                               ZEN_FIELD(data));
+    }
+};
+
 /// One ask a worker made, in its own words: which of ITS conversations (`correlation`, the number
 /// the worker's session put on it), to whom, through which link, and how it came out. Joined with
 /// the host's history by that correlation (`loom.history.DeliveriesTo`).
@@ -414,8 +451,9 @@ inline std::vector<std::string> worker_report_shapes() {
 
 /// The shapes a client says to a run manager.
 inline std::vector<std::string> client_request_shapes() {
-    return {ListTools::zen_name, DescribeTool::zen_name, Start::zen_name, List::zen_name,
-            Get::zen_name,       Cancel::zen_name,       Release::zen_name, Past::zen_name};
+    return {ListTools::zen_name, DescribeTool::zen_name, Start::zen_name,  List::zen_name,
+            Get::zen_name,       Cancel::zen_name,       Release::zen_name, Past::zen_name,
+            ArtifactRead::zen_name};
 }
 
 } // namespace loom::runs

@@ -80,6 +80,7 @@ loom> authority allow runs loom.runs.Tools v1 -> any target
 loom> authority allow runs loom.runs.ToolDescription v1 -> any target
 loom> authority allow runs loom.runs.Run v1 -> any target
 loom> authority allow runs loom.runs.RunList v1 -> any target
+loom> authority allow runs loom.runs.ArtifactPage v1 -> any target
 loom> authority allow runs loom.runs.Directive v1 -> any target
 loom> start runs <prefix>/lib/loom/loom-runs.dll loom.runs
 ```
@@ -89,8 +90,9 @@ What each decision means:
 - `trust runs` — this artifact may run in your process (pinned to this build).
 - `ExpectRun`/`ForgetRun` — it may register the one worker connection each run needs, and
   forget it. Without these it can list tools and nothing more.
-- `Tools`, `ToolDescription`, `Run`, `RunList`, `Directive` — it may **answer** in its own
-  vocabulary. Every delivery is checked against its author's grant, answers included; an
+- `Tools`, `ToolDescription`, `Run`, `RunList`, `ArtifactPage`, `Directive` — it may **answer**
+  in its own vocabulary (`ArtifactPage`: a page of a file a run produced,
+  [read by message](#reading-what-a-run-produced)). Every delivery is checked against its author's grant, answers included; an
   admitted artifact's baseline covers only the standard replies (`zen.Result`, `zen.Ack`,
   `zen.Refused`), so a manager that answers in typed shapes needs these.
 - Anything more you allow `runs` is the **ceiling** of what its workers may be granted — see
@@ -182,9 +184,38 @@ run 3f17415b/first -- passed (live)
   it is waiting on, in the worker's words.
 - **Outputs** land in the run's `out/`. The manager checks each one itself — inside `out/`, its
   size, its SHA-256 — before listing it `verified`.
+- **What a run produced is read by message** as well as on disk: see below.
 - **`run.json`** in the run's directory is the manager's record, rewritten at every change and
   read back through Loom's gate. It survives the host; `loom-session runs work --past` lists
   earlier lifetimes' records — evidence of what happened, never live state.
+
+### Reading what a run produced
+
+A client with no shell, or on another machine, reads a run's produced file by message:
+`loom.runs.ArtifactRead` names the run, the artifact's name as the run lists it, where to start
+and how many bytes, and the manager answers `loom.runs.ArtifactPage` -- the bytes from there, the
+whole file's size and the digest it verified. It reads only a file it listed `verified`, at the
+path it recorded: a name the run does not list is refused, and no request names a path. Every
+page is read in one pass over the whole file, and answered only when that pass finds the size and
+the SHA-256 the manager verified, so a page is always bytes of the verified content, and a file
+changed on disk since is refused with its size or digest said. A page past the end is refused; an
+empty file reads as one empty page from 0. A page holds at most `RunManager::kMaxArtifactPage`
+bytes, and a file larger than `RunManager::kMaxReadableArtifact` is refused by its size
+([bounds](../reference/bounds.md#sessions-and-runs)), since each page reads it whole again.
+
+```text
+$ loom-session artifact work first report.txt --out report.txt
+report.txt of run first: 27 bytes written to report.txt
+```
+
+```python
+with Session.attach("work") as s:
+    data = s.read_artifact("first", "report.txt")   # page by page, checked against the digest
+```
+
+Without `--out` the command writes the bytes to standard output. The manager needs the operator's
+`authority allow runs loom.runs.ArtifactPage v1 -> any target` to answer
+([section 2](#2-start-a-session-and-decide-what-it-may-do)).
 
 ### Three things a run says, and why none stands for another
 

@@ -581,6 +581,26 @@ TEST_CASE("manager: a package that builds on another runs with that one's snapsh
     CHECK(was == "WORD = 'base'\n");
 }
 
+TEST_CASE("manager: an artifact read names a run of this lifetime and an artifact it lists; anything "
+          "else is refused before a file is read") {
+    RunsHost h;
+    h.ask(ArtifactRead{"ffffffffffffffffffffffffffffffff", "one", "report.txt", 0, 16});
+    CHECK(h.client->refused.find("another host lifetime") != std::string::npos);
+    h.ask(ArtifactRead{h.lifetime, "nobody", "report.txt", 0, 16});
+    CHECK(h.client->refused.find("no run named 'nobody'") != std::string::npos);
+    h.ask(Start{"demo/hello", "one", "{\"times\": 1}"});
+    REQUIRE(until([&] {
+        h.ask(Get{h.lifetime, "one"});
+        return h.client->run.state == "crashed";
+    }));
+    REQUIRE(h.client->run.artifacts.empty());
+    // A file of that name in the run's own out/ is not an artifact until the run reports it and
+    // the manager verifies it: the request names a name, never a path to read.
+    write(fs::path(h.client->run.directory) / "out" / "report.txt", "not reported\n");
+    h.ask(ArtifactRead{h.lifetime, "one", "report.txt", 0, 16});
+    CHECK(h.client->refused.find("lists no artifact named 'report.txt'") != std::string::npos);
+}
+
 TEST_CASE("manager: another lifetime's handle is refused by name; a stranger's report is refused and moves nothing") {
     RunsHost h;
     h.ask(Get{"ffffffffffffffffffffffffffffffff", "one"});
