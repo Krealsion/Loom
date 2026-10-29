@@ -232,21 +232,29 @@ def cmd_shape(args):
 
 # ---- runs -------------------------------------------------------------------------------------
 
+BOOL_SPELLINGS = {"true": True, "yes": True, "on": True, "1": True,
+                  "false": False, "no": False, "off": False, "0": False}
+
+
+def _typed(kind, value):
+    """`value` as the declared kind, or the text as written when it does not spell one: the
+    manager then refuses it by the input's name and type, as it refuses an undeclared name."""
+    if kind == "bool":
+        return BOOL_SPELLINGS.get(value.lower(), value)
+    try:
+        number = int(value) if kind == "int" else float(value) if kind == "number" else None
+    except ValueError:
+        return value
+    return value if number is None or number != number or abs(number) == float("inf") else number
+
+
 def _typed_inputs(s, tool, pairs, raw):
     inputs = json.loads(raw) if raw else {}
     if pairs:
         declared = dict((i["name"], i["type"]) for i in s.tool(tool)["inputs"])
         for pair in pairs:
             key, _, value = pair.partition("=")
-            kind = declared.get(key)
-            if kind == "int":
-                inputs[key] = int(value)
-            elif kind == "number":
-                inputs[key] = float(value)
-            elif kind == "bool":
-                inputs[key] = value.lower() in ("1", "true", "yes", "on")
-            else:
-                inputs[key] = value  # text, or an undeclared name the manager will refuse
+            inputs[key] = _typed(declared.get(key), value)
     return inputs
 
 
@@ -473,7 +481,9 @@ def main(argv=None):
     c.add_argument("--name", required=True,
                    help="reusing a held name with the same tool and inputs "
                         "returns the existing run, so use a new name for a new experiment")
-    c.add_argument("--input", action="append", default=[], help="name=value, typed by the tool")
+    c.add_argument("--input", action="append", default=[],
+                   help="name=value, typed by the tool: a bool is true, false, yes, no, on, off, 1 "
+                        "or 0; a value that spells nothing of its type is refused by name")
     c.add_argument("--inputs", default="", help="all inputs as one JSON object")
     c.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
                    help="wait up to SECONDS for the run's verdict (default: 0, return without "
