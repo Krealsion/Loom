@@ -9,6 +9,7 @@
 
 #include <doctest.h>
 
+#include "box_twin.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/joint_protocol.hpp"
 
@@ -559,12 +560,11 @@ TEST_CASE("every unauthorized or mistaken act is refused by name and changes not
     }
 }
 
-TEST_CASE("a loaded claimant offers across the seam and is shown its published claim back across "
-              "it") {
+static void joint_claimant_offers(const char* image) {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
     // The loaded image replaces the native document owner in the ceiling.
-    const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
+    const LoadResult loaded = kernel.load("joint-doc", image, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
     rig.o->keys = {claim_key<DocFact>(loaded.id), claim_key<ViewFact>(rig.view)};
@@ -624,7 +624,7 @@ TEST_CASE("a loaded claimant offers across the seam and is shown its published c
         const std::uint64_t pending = rig.o->op();
         const std::filesystem::path copy =
             std::filesystem::temp_directory_path() / "zen-joint-reload.so";
-        std::filesystem::copy_file(ZEN_SO_JOINT, copy,
+        std::filesystem::copy_file(image, copy,
                                    std::filesystem::copy_options::overwrite_existing);
         const ReloadResult r = kernel.reload_from("joint-doc", copy.string());
         REQUIRE_MESSAGE(r.reloaded, r.error);
@@ -658,6 +658,14 @@ TEST_CASE("a loaded claimant offers across the seam and is shown its published c
         REQUIRE(kernel.unload("joint-doc"));
     }
 }
+
+TEST_CASE("a loaded claimant offers across the seam and is shown its published claim back across "
+              "it") {
+    joint_claimant_offers(ZEN_SO_JOINT);
+}
+ZEN_BOXED_TWIN("a boxed claimant offers into a joint publication and is shown its published "
+               "claim back",
+               joint_claimant_offers, ZEN_BOX_JOINT)
 
 TEST_CASE("one live operation per key, bounded slots and keys, a terminal record kept until its "
               "operator releases it, and genuine exhaustion in words") {
@@ -957,11 +965,10 @@ ProbeState probe_state(Switchboard& bus, WeaveId who,
     return from_value<ProbeState>(a.value());
 }
 
-TEST_CASE("a loaded participant whose showing fails through the ABI is held, attributable, told "
-              "once, and repaired by a reload") {
+static void joint_showing_fails(const char* image) {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
-    const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
+    const LoadResult loaded = kernel.load("joint-doc", image, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
     rig.o->keys = {claim_key<DocFact>(loaded.id), claim_key<ViewFact>(rig.view)};
@@ -1052,7 +1059,7 @@ TEST_CASE("a loaded participant whose showing fails through the ABI is held, att
     // THE REPAIR: a real reload through the Kernel. The reload's read is not refused;
     // the successor is owed the showing (Pending again), and its own attempt applies.
     const std::filesystem::path copy = std::filesystem::temp_directory_path() / "zen-joint-held.so";
-    std::filesystem::copy_file(ZEN_SO_JOINT, copy, std::filesystem::copy_options::overwrite_existing);
+    std::filesystem::copy_file(image, copy, std::filesystem::copy_options::overwrite_existing);
     const ReloadResult r = kernel.reload_from("joint-doc", copy.string());
     REQUIRE_MESSAGE(r.reloaded, r.error);
     CHECK_FALSE(rig.bus.has_failed_application(loaded.id));
@@ -1079,6 +1086,14 @@ TEST_CASE("a loaded participant whose showing fails through the ABI is held, att
     std::error_code ec;
     std::filesystem::remove(copy, ec);
 }
+
+TEST_CASE("a loaded participant whose showing fails through the ABI is held, attributable, told "
+              "once, and repaired by a reload") {
+    joint_showing_fails(ZEN_SO_JOINT);
+}
+ZEN_BOXED_TWIN("a boxed participant whose showing fails through the ABI is held, attributable, "
+               "told once, and repaired by a reload",
+               joint_showing_fails, ZEN_BOX_JOINT)
 
 TEST_CASE("a native participant whose showing throws is recorded, then re-raised; held the same "
               "way; repaired by a swap") {
@@ -1408,11 +1423,10 @@ TEST_CASE("a substrate mutation door that changed exposed state reaches the clai
     }
 }
 
-TEST_CASE("the same doors through the ABI -- a loaded participant's performed write reaches its "
-              "claim, and its reads and refused writes do not") {
+static void joint_doors_through_the_abi(const char* image) {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
-    const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
+    const LoadResult loaded = kernel.load("joint-doc", image, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
     rig.o->keys = {claim_key<DocFact>(loaded.id), claim_key<ViewFact>(rig.view)};
@@ -1469,6 +1483,14 @@ TEST_CASE("the same doors through the ABI -- a loaded participant's performed wr
     }
     REQUIRE(kernel.unload("joint-doc"));
 }
+
+TEST_CASE("the same doors through the ABI -- a loaded participant's performed write reaches its "
+              "claim, and its reads and refused writes do not") {
+    joint_doors_through_the_abi(ZEN_SO_JOINT);
+}
+ZEN_BOXED_TWIN("the same doors through a box: a boxed participant's performed write reaches its "
+               "claim",
+               joint_doors_through_the_abi, ZEN_BOX_JOINT)
 
 // ---- outcome retention ------------------------
 // A committed operation's record is what its operator re-reads when told the application settled
@@ -1820,11 +1842,10 @@ TEST_CASE("a native owner that DECLINES a published value is recorded Declined a
     }
 }
 
-TEST_CASE("a loaded owner's declined showing crosses the seam as its own status -- recorded "
-              "Declined, not held, its next claim replacing the value") {
+static void joint_declined_showing(const char* image) {
     Rig rig;
     Kernel kernel(rig.bus, sbfx::fixture_admission());
-    const LoadResult loaded = kernel.load("joint-doc", ZEN_SO_JOINT, "joint.loaded");
+    const LoadResult loaded = kernel.load("joint-doc", image, "joint.loaded");
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.loaded", "joint.view"});
     rig.o->keys = {claim_key<DocFact>(loaded.id), claim_key<ViewFact>(rig.view)};
@@ -1884,6 +1905,14 @@ TEST_CASE("a loaded owner's declined showing crosses the seam as its own status 
     CHECK(rig.o->applied.size() == 1);
     REQUIRE(kernel.unload("joint-doc"));
 }
+
+TEST_CASE("a loaded owner's declined showing crosses the seam as its own status -- recorded "
+              "Declined, not held, its next claim replacing the value") {
+    joint_declined_showing(ZEN_SO_JOINT);
+}
+ZEN_BOXED_TWIN("a boxed owner's declined showing crosses as its own status: recorded Declined, "
+               "not held, its next claim replacing the value",
+               joint_declined_showing, ZEN_BOX_JOINT)
 
 TEST_CASE("a refused replacement runs nothing of the incumbent's -- a candidate claiming the "
               "previous ABI is judged before the incumbent's snapshot, so a pending showing stays "
