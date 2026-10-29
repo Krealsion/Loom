@@ -10,10 +10,12 @@
 #include "switchboard_fixtures.hpp"
 #include "weavelib/box_probe_shapes.hpp"
 
+#include <zen/content_id.hpp>
 #include <zen/kernel/kernel.hpp>
 
 #include <doctest.h>
 
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -350,6 +352,136 @@ TEST_CASE("a reload the box refuses leaves the native weave answering, untouched
         CHECK(r.answers[1].build == "native");
         CHECK(r.answers[1].count == 2);
     }
+}
+
+// ---- what a box says it is -------------------------------------------------------------------
+
+namespace {
+
+bool has(const std::string& line, const std::string& words) {
+    return line.find(words) != std::string::npos;
+}
+
+/// What every box's line says, whatever its posture: that it is a box and not a library, the
+/// steps it is held to, the reach it is refused, and the tier's honest scope in its own words.
+void check_box_line(const std::string& line) {
+    CAPTURE(line);
+    CHECK(line.rfind("boxed (WebAssembly, in-process, Wasmtime ", 0) == 0);
+    CHECK(line != Kernel::containment_note());
+    const std::size_t steps = line.find("steps<=");
+    REQUIRE(steps != std::string::npos);
+    CHECK(std::isdigit(static_cast<unsigned char>(line[steps + 7])));
+    CHECK(has(line, " an entry from the host."));
+    CHECK(has(line, "reach: no filesystem, no network, no clock, no process; every import "
+                    "outside the host's doors is refused at open."));
+    CHECK(has(line, "honest scope: escape-tier for memory and reach, bounded by the runtime's "
+                    "correctness; abuse-tier for time; nothing for side channels."));
+    // The capabilities page forbids the claim, and a box is not trusted code.
+    CHECK_FALSE(has(line, "hostile-proof"));
+    CHECK_FALSE(has(line, "trusted"));
+}
+
+} // namespace
+
+TEST_CASE("a box says its containment in the posture its grant gave it: the box's default "
+          "memory, the grant's, or wasm32's own") {
+    struct Posture {
+        const char* name;
+        Grant grant;
+        const char* memory;
+    };
+    ResourceLimits gib;
+    gib.memory_bytes = std::int64_t{1} << 30;
+    ResourceLimits odd;
+    odd.memory_bytes = (std::int64_t{96} << 20) + 1; // not a whole MiB: said in bytes
+    ResourceLimits lifted;
+    lifted.unlimited_memory = true;
+    for (const Posture& p :
+         {Posture{"no memory named", Grant{}.allow_any(),
+                  " memory<=64MiB (the box's default: the grant names none)."},
+          Posture{"a GiB", Grant{}.allow_any().with_resources(gib),
+                  " memory<=1024MiB (the grant's)."},
+          Posture{"an odd size", Grant{}.allow_any().with_resources(odd),
+                  " memory<=100663297 bytes (the grant's)."},
+          Posture{"unlimited", Grant{}.allow_any().with_resources(lifted),
+                  " memory: wasm32's own 4GiB (the grant lifts the box's bound)."}}) {
+        CAPTURE(p.name);
+        Rig r(ZEN_BOX_PROBE, &p.grant);
+        REQUIRE_MESSAGE(r.box.ok, r.box.error);
+        const std::string line = r.kernel.containment("box");
+        check_box_line(line);
+        CAPTURE(line);
+        CHECK(has(line, "): crash-contained, reaching only its own memory and the host's doors."));
+        CHECK(has(line, p.memory));
+        CHECK(has(line, " reloads after a trap: 0 of " + std::to_string(kMaxReloads) + " spent."));
+    }
+}
+
+TEST_CASE("a box's containment counts the reloads its traps spent, and says quarantined after the "
+          "last") {
+    Rig r(ZEN_BOX_PROBE);
+    REQUIRE_MESSAGE(r.box.ok, r.box.error);
+    for (std::int64_t spent = 1; spent <= kMaxReloads; ++spent) {
+        r.ask(kTrap);
+        CAPTURE(spent);
+        const std::string line = r.kernel.containment("box");
+        check_box_line(line);
+        CHECK(has(line, " reloads after a trap: " + std::to_string(spent) + " of " +
+                            std::to_string(kMaxReloads) + " spent."));
+    }
+    r.ask(kTrap); // past the budget
+    const std::string line = r.kernel.containment("box");
+    check_box_line(line);
+    CAPTURE(line);
+    const std::string budget = std::to_string(kMaxReloads);
+    CHECK(has(line, "); quarantined: dead after a trap, " + budget + " of " + budget +
+                        " reload(s) spent."));
+    CHECK_FALSE(has(line, "crash-contained"));
+    CHECK_FALSE(has(line, "reloads after a trap"));
+}
+
+TEST_CASE("a weave reloaded into its module says the box's containment, and back in its library "
+          "the note") {
+    CounterRig r;
+    REQUIRE_MESSAGE(r.counter.ok, r.counter.error);
+    CHECK(r.kernel.containment("c") == Kernel::containment_note());
+    const ReloadResult into = r.kernel.reload_from("c", ZEN_BOX_COUNTER_WASM);
+    REQUIRE_MESSAGE(into.reloaded, into.error);
+    check_box_line(r.kernel.containment("c"));
+    const ReloadResult back = r.kernel.reload_from("c", ZEN_SO_BOX_COUNTER);
+    REQUIRE_MESSAGE(back.reloaded, back.error);
+    CHECK(r.kernel.containment("c") == Kernel::containment_note());
+}
+
+TEST_CASE("admission sees a module's own build: a pin at Open admits its file and refuses "
+          "another before any of its code runs") {
+    const std::string pin = file_content_id(ZEN_BOX_PROBE);
+    REQUIRE_FALSE(pin.empty());
+    std::vector<std::string> seen; // every content id the policy was shown, at Open
+    const AdmissionPolicy pinned = [&](const AdmissionRequest& rq) {
+        if (rq.stage == AdmissionStage::Open) {
+            seen.push_back(rq.build.content_id());
+            if (rq.build.content_id() != pin) {
+                return AdmissionVerdict::refuse("not the pinned build");
+            }
+        }
+        return AdmissionVerdict::admit(Grant{}.allow_any());
+    };
+    Switchboard bus;
+    Kernel kernel(bus, pinned);
+    const LoadResult admitted = kernel.load("box", ZEN_BOX_PROBE);
+    REQUIRE_MESSAGE(admitted.ok, admitted.error);
+    const KernelLifetimeCounts before = kernel_lifetime_counts();
+    const LoadResult other = kernel.load("other", ZEN_BOX_COUNTER_WASM);
+    const KernelLifetimeCounts after = kernel_lifetime_counts();
+    CHECK_FALSE(other.ok);
+    CHECK(has(other.error, "not the pinned build"));
+    CHECK(after.stores_opened == before.stores_opened); // nothing of the module ran
+    CHECK(after.modules_compiled == before.modules_compiled);
+    REQUIRE(seen.size() == 2);
+    CHECK(seen[0] == pin);
+    CHECK(seen[1] == file_content_id(ZEN_BOX_COUNTER_WASM));
+    CHECK(seen[1] != pin);
 }
 
 } // TEST_SUITE("box")

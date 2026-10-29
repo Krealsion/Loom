@@ -156,8 +156,15 @@ again compiles nothing. Each instance owns one store. `kernel_lifetime_counts()`
 modules compiled and the stores opened and closed; a module's open and close count as a
 library's.
 
-The bounds above are named, not copied: `src/kernel/wasm_box.hpp` owns each value.
-`containment_note()` speaks for native images only and says nothing about a box.
+The bounds above are named, not copied: `src/kernel/wasm_box.hpp` owns each value, and
+[bounds](bounds.md#a-boxed-weave-loom_enable_wasm) states them.
+
+**What a box says it is.** `Kernel::containment(name)` says one loaded artifact's containment
+in one line: a library's is `containment_note()`, and a module's is its box's, read from what
+the box imposes on that instance now — the runtime, its memory and whose bound it is, its
+steps, the reach it is refused, the reloads its traps have spent or its quarantine, and the
+tier's honest scope
+([capabilities](capabilities.md#the-box-a-weave-built-as-a-webassembly-module)).
 
 **The demo.** `zen-box-reload` (`tests/box_reload/`, the `box_reload` entry) reloads one live
 counter from its native build into its module and back while asks keep arriving, by

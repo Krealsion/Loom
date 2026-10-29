@@ -180,6 +180,9 @@ process-memory level**, which `Kernel::containment_note()` states in one line
 boundary the OS enforces is what the next sections are for, and that is a
 different mechanism with a different threat model — see
 [guides/dynamic-weaves](../guides/dynamic-weaves.md#what-loading-it-in-process-means).
+A weave built as a WebAssembly module is not native code, and runs in
+[a box](#the-box-a-weave-built-as-a-webassembly-module) with a threat model of
+its own.
 
 ## Hosting and enforcement tiers
 
@@ -196,6 +199,7 @@ that enforces part of it, and the reach that mechanism has.
 | **B3** | OS capability | user + network namespace | `os_cap` — `Network` today |
 | **B4** | filesystem view | private mount namespace, `pivot_root` | `FsAccess`, all five graduated levels |
 | **B5** | quantitative resource | a per-weave cgroup-v2 leaf | `ResourceLimits` — memory, pids, cpu weight |
+| **the box** | the module's own memory | Wasmtime, in the host's process (`LOOM_ENABLE_WASM`) | crash containment and host-memory separation without a process; memory from `ResourceLimits` and a step bound per entry; no OS capability, no filesystem — [below](#the-box-a-weave-built-as-a-webassembly-module) |
 
 **They are not a ladder.** A higher number does not contain a lower one, and
 nothing here is monotone:
@@ -231,8 +235,9 @@ three resource dimensions ([subject to
 delegation](#delegation-is-what-makes-a-resource-cap-real)) are imposed and
 re-confirmed; `os_cap::SpawnProcess` is declared vocabulary with no enforcement
 behind it. **B2–B5 are Linux/WSL only** — the sandbox is native and
-platform-specific. A Windows build carries the portable subset, where a weave is
-in-process and B1 is the only tier that applies.
+platform-specific. A Windows build carries the portable subset, where a library
+is in-process and B1 is the only tier that applies to it; the box runs wherever
+the kernel does, Windows included.
 
 **Scope, stated narrowly.** "B3, the syscall boundary" means a withheld
 capability makes the syscall itself fail — a fresh `connect()` returns
@@ -242,6 +247,68 @@ is a separate, later decision)"*). No tier here is a claim of kernel-escape
 resistance, or of safety against arbitrary hostile native code; what each one
 covers and does not is [three separate
 facts](#the-exec-boundary-three-independent-facts).
+
+### The box: a weave built as a WebAssembly module
+
+A kernel built with `LOOM_ENABLE_WASM` runs a weave compiled as a wasm32 module
+in a box: Wasmtime, inside the host's process
+([kernel](kernel.md#a-weave-built-as-a-webassembly-module)). It is a mechanism of
+its own, not B2 plus something: it needs no child process. Against the tiers:
+
+- **B1, the same.** Every door the module calls is the host's own table for the
+  delivery in progress, so what it says is stamped, gated and authorized exactly
+  as a library's speech.
+- **What B2 gives, without a process.** A trap ends the instance and not the
+  host; the module addresses only its own linear memory, which the runtime checks
+  on every access and the box checks on every span and name a door is handed.
+  Since it runs inside the host's own delivery it keeps every door a B2 child
+  nulls: answers, deferred answers, office speech, claims and observations, joint
+  offers, and the provenance a delivery carries.
+- **B3 and B4: nothing to project.** The module can import no socket, no
+  descriptor and no clock, and every import outside the host's doors is refused
+  when the module is opened. A grant giving an OS capability or a filesystem
+  level other than `None` is **refused at the mount, in words, and never
+  narrowed**; a boxed weave that needs the network or storage asks a broker by
+  role, as a contained one does.
+- **B5, in part.** Memory comes from `ResourceLimits`; steps, which B5 has no
+  word for, are bounded per entry from the host
+  ([bounds](bounds.md#a-boxed-weave-loom_enable_wasm)); a `pids` ceiling holds,
+  since a box starts no process; a cpu weight is refused, since the box runs on
+  the host's own thread.
+
+The box is judged once and reported per instance. Its import set is judged when
+the module is opened and cannot change after; its memory is fixed at the mount
+and its steps at every entry. **`Kernel::containment(name)` says what one boxed
+instance is held to**, from the box's own state and never from the grant's ask:
+the runtime, crash containment or its quarantine, its memory and whose bound it
+is, its steps, the reach it is refused, the reloads its traps have spent, and the
+tier's scope below. After a reload it describes the image then running, so a
+weave reloaded from its library into its module says the box's line, and back in
+its library the note.
+
+**The box's honest threat tier: escape-tier for memory and reach, bounded by the
+runtime's correctness; abuse-tier for time; nothing for side channels.** The
+sandbox below stops buggy or greedy code; the box claims more, and exactly as far
+as its runtime:
+
+- **Escape, in scope.** The module's code is not native code. The runtime compiles
+  it from a format whose memory accesses are checked and whose control flow cannot
+  leave its own functions, so reaching host memory or a syscall is an escape from
+  the runtime, not an ordinary act.
+- **Bounded by the runtime's correctness.** Wasmtime is native code the host
+  trusts at the process-memory level, like any in-process code: a bug in its
+  compiler or runtime is an escape. The claim is "contained unless Wasmtime is
+  wrong". A box inside a process boundary too, and seccomp, are named and unbuilt.
+- **Abuse-tier for time.** The step bound ends every entry, and between entries
+  the module does not run at all; within the bound it may spend its steps on every
+  delivery it is given.
+- **Nothing for side channels.** The box withholds the clock, but the host's own
+  delivery rhythm is a clock; timing and speculative-execution channels are not
+  addressed.
+- **Not denial of service through the host.** Host-side decode of the module's
+  bytes spends the decode bound
+  ([below](#work-the-host-does-on-behalf-of-a-contained-participant)), and queues,
+  retained answers and service state keep their own bounds, as for any participant.
 
 ## Where a grant comes from (the powerbox)
 
@@ -514,7 +581,9 @@ design — *contained* means no external reachability, not no IPC.
 
 **The honest threat tier: abuse, not escape.** The sandbox stops buggy or
 greedy code. seccomp is the named, unbuilt escalation to escape-tier. Any
-prose implying "hostile-proof" is wrong; say abuse-tier.
+prose implying "hostile-proof" is wrong; say abuse-tier. The box's tier is its
+own, escape for memory and reach and abuse for time
+([above](#the-box-a-weave-built-as-a-webassembly-module)).
 
 ### Work the host does *on behalf of* a contained participant
 
