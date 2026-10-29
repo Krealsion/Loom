@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Joshua DeMoss
+#include "box_twin.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/dispatch_protocol.hpp"
 
@@ -18,7 +19,7 @@ Value mind(Switchboard& sb, WeaveId id) {
 }
 } // namespace
 TEST_SUITE("dispatch_loaded") {
-    TEST_CASE("ABI v7: loaded role sends and office publications have distinct successful semantics") {
+    static void dispatch_role_and_office_semantics(const char* image) {
         // Both miswired callbacks can succeed here: the addressed role is also an
         // office the author holds, and all recipients accept the SAME payload.
         // Snapshot receipts do not depend on sending a report through either door.
@@ -26,7 +27,7 @@ TEST_SUITE("dispatch_loaded") {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
-            const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+            const auto loaded = kernel.load("dispatch", image, "dispatch.author");
             REQUIRE_MESSAGE(loaded.ok, loaded.error);
             const auto first = register_probe(sb, {schema_of<dispatch_test::Payload>()});
             const auto second = register_probe(sb, {schema_of<dispatch_test::Payload>()});
@@ -85,14 +86,20 @@ TEST_SUITE("dispatch_loaded") {
         }
     }
 
-    TEST_CASE("a real image authors all addressed forms and receives exact authenticated refusal "
-              "attempts") {
+    TEST_CASE("ABI v7: loaded role sends and office publications have distinct successful semantics") {
+        dispatch_role_and_office_semantics(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("a boxed image's role sends and office publications have distinct successful "
+                   "semantics",
+                   dispatch_role_and_office_semantics, ZEN_BOX_DISPATCH)
+
+    static void dispatch_refusal_attempts(const char* image) {
         for (const std::string mode : {"direct", "role", "office-direct", "office-role"}) {
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
             auto target = register_probe(sb, {schema_of<dispatch_test::Payload>()});
             const auto loaded =
-                kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author", Grant{});
+                kernel.load("dispatch", image, "dispatch.author", Grant{});
             REQUIRE_MESSAGE(loaded.ok, loaded.error);
             const std::string role(4096, 'r');
             for (const auto corr : {"0", "77", "77", "18446744073709551615"}) {
@@ -123,10 +130,18 @@ TEST_SUITE("dispatch_loaded") {
         }
     }
 
-    TEST_CASE("loaded delivery and synchronous seam rejection do not manufacture later refusal") {
+    TEST_CASE("a real image authors all addressed forms and receives exact authenticated refusal "
+              "attempts") {
+        dispatch_refusal_attempts(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("a boxed image authors all addressed forms and accepts zen.DispatchRefused with "
+                   "the exact authenticated attempts",
+                   dispatch_refusal_attempts, ZEN_BOX_DISPATCH)
+
+    static void dispatch_no_manufactured_refusal(const char* image) {
         Switchboard sb;
         Kernel kernel(sb, sbfx::fixture_admission());
-        auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+        auto loaded = kernel.load("dispatch", image, "dispatch.author");
         REQUIRE(loaded.ok);
         auto target = register_probe(sb, {schema_of<dispatch_test::Payload>()});
         sb.send(loaded.id, Message(to_value(dispatch_test::Command{
@@ -144,7 +159,7 @@ TEST_SUITE("dispatch_loaded") {
         CHECK(mind(sb, loaded.id).get("queued")->as_int() == 1);
         CHECK(target.weave->handled_names.size() == 1);
         // A loaded office request from a non-holder remains an immediate rejection.
-        auto other = kernel.load("other", ZEN_SO_DISPATCH);
+        auto other = kernel.load("other", image);
         REQUIRE(other.ok);
         sb.send(other.id,
                 Message(to_value(dispatch_test::Command{
@@ -154,12 +169,18 @@ TEST_SUITE("dispatch_loaded") {
         CHECK(mind(sb, other.id).get("queued")->as_int() == 0);
     }
 
-    TEST_CASE("loaded forgery and native copied provenance remain ordinary at a loaded recipient") {
+    TEST_CASE("loaded delivery and synchronous seam rejection do not manufacture later refusal") {
+        dispatch_no_manufactured_refusal(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("boxed delivery and synchronous seam rejection do not manufacture a later refusal",
+                   dispatch_no_manufactured_refusal, ZEN_BOX_DISPATCH)
+
+    static void dispatch_forgery_ordinary(const char* image) {
         Switchboard sb;
         Kernel kernel(sb, sbfx::fixture_admission());
-        auto a = kernel.load("a", ZEN_SO_DISPATCH, "dispatch.author");
+        auto a = kernel.load("a", image, "dispatch.author");
         REQUIRE(a.ok);
-        auto b = kernel.load("b", ZEN_SO_DISPATCH);
+        auto b = kernel.load("b", image);
         REQUIRE(b.ok);
         sb.send(a.id, Message(to_value(dispatch_test::Command{
                           "forge", static_cast<std::int64_t>(b.id.value), "", "91"})));
@@ -175,12 +196,17 @@ TEST_SUITE("dispatch_loaded") {
         CHECK(mind(sb, b.id).get("matched")->as_int() == 0);
     }
 
-    TEST_CASE(
-        "actual loaded code replacement at either queue boundary cannot inherit an old refusal") {
+    TEST_CASE("loaded forgery and native copied provenance remain ordinary at a loaded recipient") {
+        dispatch_forgery_ordinary(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("boxed forgery and native copied provenance remain ordinary at a boxed recipient",
+                   dispatch_forgery_ordinary, ZEN_BOX_DISPATCH)
+
+    static void dispatch_replacement_no_inheritance(const char* image) {
         for (bool queued : {false, true}) {
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
-            auto a = kernel.load("a", ZEN_SO_DISPATCH, "dispatch.author", Grant{});
+            auto a = kernel.load("a", image, "dispatch.author", Grant{});
             REQUIRE(a.ok);
             sb.send(a.id,
                     Message(to_value(dispatch_test::Command{"role", 0, "missing.service", "77"})));
@@ -190,7 +216,7 @@ TEST_SUITE("dispatch_loaded") {
                 sb.pump_pending();
                 REQUIRE(sb.pending() == 1);
             }
-            auto changed = kernel.reload_from("a", ZEN_SO_DISPATCH);
+            auto changed = kernel.reload_from("a", image);
             REQUIRE_MESSAGE(changed.ok, changed.error);
             sb.pump_pending();
             CHECK(sb.pending() == 0);
@@ -205,12 +231,17 @@ TEST_SUITE("dispatch_loaded") {
         }
     }
 
+    TEST_CASE("actual loaded code replacement at either queue boundary cannot inherit an old refusal") {
+        dispatch_replacement_no_inheritance(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("a boxed image reloaded at either queue boundary cannot inherit an old refusal",
+                   dispatch_replacement_no_inheritance, ZEN_BOX_DISPATCH)
+
     // No exception crosses the seam from a host door (zen/kernel/abi.h): the image that called may
     // carry its own C++ runtime. Each door below meets the end of the host's delivery sequence in
     // the host's own work; it answers refused, the loaded handler runs to its end, and the bus
     // records a delivery, never a handler that failed.
-    TEST_CASE("a host door that cannot carry out a request answers refused, and no exception "
-              "reaches the loaded image") {
+    static void dispatch_door_refused(const char* image) {
         for (const std::string mode :
              {"direct", "role", "office-direct", "office-role", "publish", "office-publish",
               "answer", "spend-unknown", "claim-unheard", "office-claim-unheard",
@@ -218,7 +249,7 @@ TEST_SUITE("dispatch_loaded") {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
-            const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+            const auto loaded = kernel.load("dispatch", image, "dispatch.author");
             REQUIRE_MESSAGE(loaded.ok, loaded.error);
             const auto recipient = register_probe(sb, {schema_of<dispatch_test::Payload>()});
             std::vector<EventKind> commands;
@@ -239,14 +270,21 @@ TEST_SUITE("dispatch_loaded") {
         }
     }
 
-    TEST_CASE("an observer that throws while a loaded door is refused costs the door, not the "
-              "loaded image") {
+    TEST_CASE("a host door that cannot carry out a request answers refused, and no exception "
+              "reaches the loaded image") {
+        dispatch_door_refused(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("a host door that cannot carry out a boxed image's request answers refused, and "
+                   "the box runs on",
+                   dispatch_door_refused, ZEN_BOX_DISPATCH)
+
+    static void dispatch_observer_throws(const char* image) {
         for (const std::string mode :
              {"office-publish", "answer", "spend-unknown", "claim-unheard"}) {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
-            const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+            const auto loaded = kernel.load("dispatch", image, "dispatch.author");
             REQUIRE_MESSAGE(loaded.ok, loaded.error);
             std::vector<EventKind> commands;
             int refusals = 0;
@@ -271,11 +309,17 @@ TEST_SUITE("dispatch_loaded") {
         }
     }
 
-    TEST_CASE("an answer right asked for past the host's limit, with the sequence at its end, "
-              "answers no right and costs the loaded image nothing") {
+    TEST_CASE("an observer that throws while a loaded door is refused costs the door, not the "
+              "loaded image") {
+        dispatch_observer_throws(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("an observer that throws while a boxed door is refused costs the door, not the box",
+                   dispatch_observer_throws, ZEN_BOX_DISPATCH)
+
+    static void dispatch_answer_right_past_limit(const char* image) {
         Switchboard sb;
         Kernel kernel(sb, sbfx::fixture_admission());
-        const auto loaded = kernel.load("dispatch", ZEN_SO_DISPATCH, "dispatch.author");
+        const auto loaded = kernel.load("dispatch", image, "dispatch.author");
         REQUIRE_MESSAGE(loaded.ok, loaded.error);
         const auto asker = register_probe(sb, {schema_of<dispatch_test::Payload>()});
         const auto ask = [&] {
@@ -305,6 +349,14 @@ TEST_SUITE("dispatch_loaded") {
               static_cast<std::int64_t>(Switchboard::kMaxDeferredAnswers));
         CHECK(commands == std::vector<EventKind>{EventKind::Delivered});
     }
+
+    TEST_CASE("an answer right asked for past the host's limit, with the sequence at its end, "
+              "answers no right and costs the loaded image nothing") {
+        dispatch_answer_right_past_limit(ZEN_SO_DISPATCH);
+    }
+    ZEN_BOXED_TWIN("an answer right a boxed image asks past the host's limit answers no right and "
+                   "costs the box nothing",
+                   dispatch_answer_right_past_limit, ZEN_BOX_DISPATCH)
 
     TEST_CASE("bytes a library hands the host's sink beyond what it can hold refuse the load in "
               "the host's words, and nothing thrown reaches the library") {

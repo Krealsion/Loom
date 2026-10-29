@@ -100,8 +100,12 @@ endif()
 # with it on and no modules, configuration fails rather than leaving the suite out.
 set(LOOM_WASM_MODULES "" CACHE PATH
     "A directory holding the box suite's modules, built elsewhere (empty: build them here)")
+# The door fixtures follow: the native fixtures' own sources and switches, built as modules, so
+# each case that proves a door for a native image proves it for a boxed one with the same code.
 set(zen_box_module_names
-    box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching)
+    box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching
+    box_defers box_senses box_office_worker box_dispatch box_joint box_versioned_v1
+    box_versioned_v2)
 set(zen_box_modules "")
 if(LOOM_WASI_SDK)
     set(zen_box_modules "${CMAKE_BINARY_DIR}/wasm")
@@ -118,9 +122,25 @@ if(LOOM_WASI_SDK)
     loom_wasm_weave(zen_box_counter_reaching_wasm
                     OUTPUT "${zen_box_modules}/box_counter_reaching.wasm"
                     SOURCES box_reload/counter.cpp DEFINITIONS COUNTER_REACHES_FOR_A_FILE)
+    loom_wasm_weave(zen_box_defers_wasm OUTPUT "${zen_box_modules}/box_defers.wasm"
+                    SOURCES weavelib/test_weave.cpp DEFINITIONS ZEN_WEAVE_DEFERS)
+    loom_wasm_weave(zen_box_senses_wasm OUTPUT "${zen_box_modules}/box_senses.wasm"
+                    SOURCES weavelib/test_weave.cpp DEFINITIONS ZEN_WEAVE_SENSES)
+    loom_wasm_weave(zen_box_office_worker_wasm OUTPUT "${zen_box_modules}/box_office_worker.wasm"
+                    SOURCES weavelib/office_worker.cpp)
+    loom_wasm_weave(zen_box_dispatch_wasm OUTPUT "${zen_box_modules}/box_dispatch.wasm"
+                    SOURCES weavelib/dispatch_probe.cpp)
+    loom_wasm_weave(zen_box_joint_wasm OUTPUT "${zen_box_modules}/box_joint.wasm"
+                    SOURCES weavelib/joint_probe.cpp)
+    loom_wasm_weave(zen_box_versioned_v1_wasm OUTPUT "${zen_box_modules}/box_versioned_v1.wasm"
+                    SOURCES weavelib/versioned_service.cpp)
+    loom_wasm_weave(zen_box_versioned_v2_wasm OUTPUT "${zen_box_modules}/box_versioned_v2.wasm"
+                    SOURCES weavelib/versioned_service.cpp DEFINITIONS ZEN_VERSIONED_CANDIDATE)
     add_custom_target(loom-wasm-modules DEPENDS
         zen_box_probe_wasm zen_box_probe_path_open_wasm zen_box_probe_env_wasm
-        zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm)
+        zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm
+        zen_box_defers_wasm zen_box_senses_wasm zen_box_office_worker_wasm zen_box_dispatch_wasm
+        zen_box_joint_wasm zen_box_versioned_v1_wasm zen_box_versioned_v2_wasm)
 elseif(LOOM_WASM_MODULES)
     set(zen_box_modules "${LOOM_WASM_MODULES}")
 endif()
@@ -140,8 +160,10 @@ if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
     else()
         add_dependencies(zen-tests loom-wasm-modules)
     endif()
-    target_sources(zen-tests PRIVATE test_box.cpp)
-    list(APPEND ZEN_TEST_SOURCES_DIRECT test_box.cpp)
+    target_sources(zen-tests PRIVATE test_box.cpp test_box_bounds.cpp)
+    list(APPEND ZEN_TEST_SOURCES_DIRECT test_box.cpp test_box_bounds.cpp)
+    # The bounds cases read each bound from its owner, the backend's own header.
+    target_include_directories(zen-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     list(APPEND ZEN_POPULATION_GATES box)
     # The counter's native build, the one its module is reloaded from and back to.
     add_library(zen_box_counter SHARED box_reload/counter.cpp)
@@ -156,6 +178,13 @@ if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
         "ZEN_BOX_STALE_ABI=\"${zen_box_modules}/box_stale_abi.wasm\""
         "ZEN_BOX_COUNTER_WASM=\"${zen_box_modules}/box_counter.wasm\""
         "ZEN_BOX_COUNTER_REACHING_WASM=\"${zen_box_modules}/box_counter_reaching.wasm\""
+        "ZEN_BOX_DEFERS=\"${zen_box_modules}/box_defers.wasm\""
+        "ZEN_BOX_SENSES=\"${zen_box_modules}/box_senses.wasm\""
+        "ZEN_BOX_OFFICE_WORKER=\"${zen_box_modules}/box_office_worker.wasm\""
+        "ZEN_BOX_DISPATCH=\"${zen_box_modules}/box_dispatch.wasm\""
+        "ZEN_BOX_JOINT=\"${zen_box_modules}/box_joint.wasm\""
+        "ZEN_BOX_VERSIONED_V1=\"${zen_box_modules}/box_versioned_v1.wasm\""
+        "ZEN_BOX_VERSIONED_V2=\"${zen_box_modules}/box_versioned_v2.wasm\""
         "ZEN_SO_BOX_COUNTER=\"$<TARGET_FILE:zen_box_counter>\"")
     loom_wasm_runtime_beside(zen-tests)
     # The demo, and its run as a CTest entry: one live weave reloaded into its module and back
