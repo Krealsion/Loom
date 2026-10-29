@@ -304,7 +304,9 @@ private:
     std::int64_t activations_ = 0;
     std::int64_t last_activation_ = 0;
     std::int64_t escapes_ = 0;
-    std::int64_t transaction_ = 0;
+#if defined(ZEN_VERSIONED_CANDIDATE)
+    std::int64_t transaction_ = 0; ///< the preparation's
+#endif
     bool deferred_ = false;
     bool answered_ = false;
     bool retired_ = false;

@@ -3,6 +3,7 @@
 
 #include <doctest.h>
 
+#include "box_twin.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/office_protocol.hpp"
 #include "weavelib/prepared_replacement_protocol.hpp"
@@ -859,11 +860,11 @@ TEST_CASE("many rejected candidates leave no accumulation") {
 // Every case below drives a real .so: across the C seam a loaded weave keeps nothing but an
 // opaque integer and gets a new Bus on each delivery, and must still be able to answer.
 
-TEST_CASE("a loaded steward answers after its handler returned, and only once") {
+static void steward_answers_once(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
-    LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
+    LoadResult lr = kernel.load("steward", image);
     REQUIRE_MESSAGE(lr.ok, lr.error);
     const WeaveId steward = lr.id;
 
@@ -922,8 +923,13 @@ TEST_CASE("a loaded steward answers after its handler returned, and only once") 
     CHECK(s3.spent == 1);
 }
 
-TEST_CASE("a loaded successor inherits the token and is still refused — reload is a new "
-          "incarnation across the seam too") {
+TEST_CASE("a loaded steward answers after its handler returned, and only once") {
+    steward_answers_once(ZEN_SO_DEFERS);
+}
+ZEN_BOXED_TWIN("a boxed steward answers after its handler returned, and only once",
+               steward_answers_once, ZEN_BOX_DEFERS)
+
+static void successor_inherits_token(const char* image) {
     // THE SHARPEST FORM OF THE INHERITANCE QUESTION. The fixture persists its
     // token, so the successor rebuilds a capability from the real number and
     // genuinely believes it holds one. Nothing library-side says no. The board
@@ -931,7 +937,7 @@ TEST_CASE("a loaded successor inherits the token and is still refused — reload
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
-    LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
+    LoadResult lr = kernel.load("steward", image);
     REQUIRE_MESSAGE(lr.ok, lr.error);
     const WeaveId steward = lr.id;
 
@@ -973,11 +979,19 @@ TEST_CASE("a loaded successor inherits the token and is still refused — reload
     CHECK(tried.spent == 0);
 }
 
-TEST_CASE("the requester dying strands a loaded steward's answer rather than misdelivering it") {
+TEST_CASE("a loaded successor inherits the token and is still refused — reload is a new "
+          "incarnation across the seam too") {
+    successor_inherits_token(ZEN_SO_DEFERS);
+}
+ZEN_BOXED_TWIN("a boxed successor inherits the token and is still refused: a reload is a new "
+               "incarnation",
+               successor_inherits_token, ZEN_BOX_DEFERS)
+
+static void requester_dying_strands(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
-    LoadResult lr = kernel.load("steward", ZEN_SO_DEFERS);
+    LoadResult lr = kernel.load("steward", image);
     REQUIRE_MESSAGE(lr.ok, lr.error);
     const WeaveId steward = lr.id;
 
@@ -1007,6 +1021,13 @@ TEST_CASE("the requester dying strands a loaded steward's answer rather than mis
     CHECK(newcomer.weave->handled_names.empty()); // and NOT onto whoever came next
     CHECK(after.spent == 0);
 }
+
+TEST_CASE("the requester dying strands a loaded steward's answer rather than misdelivering it") {
+    requester_dying_strands(ZEN_SO_DEFERS);
+}
+ZEN_BOXED_TWIN("the requester dying strands a boxed steward's answer rather than misdelivering "
+               "it",
+               requester_dying_strands, ZEN_BOX_DEFERS)
 
 TEST_CASE("a second loaded steward holding the same token cannot finish somebody else's "
           "conversation") {
@@ -3644,10 +3665,12 @@ struct DynCast {
 /// `load_candidate` is the ordinary load followed by the seal, so the object that prepares is
 /// the object that goes live. `coordinator_grant` lets a case use a coordinator that CANNOT
 /// emit `zen.Activated`; `with_candidate=false` loads only the incumbent, for the handle cases,
-/// which must load their own candidate through the handle.
+/// which must load their own candidate through the handle. `candidate_image` is v2's build: its
+/// library, or the same source built as a module.
 DynCast load_pair(Switchboard& bus, Kernel& kernel,
                   Grant coordinator_grant = Grant{}.allow_any(),
-                  bool with_candidate = true) {
+                  bool with_candidate = true,
+                  const char* candidate_image = ZEN_SO_VERSIONED_V2) {
     DynCast d{register_probe(bus, {pong_schema()}),
               register_probe(bus,
                              {schema_of<versioned::CandidateReady>(),
@@ -3699,8 +3722,8 @@ DynCast load_pair(Switchboard& bus, Kernel& kernel,
     REQUIRE(v1.ok);
     d.incumbent = v1.id;
     if (with_candidate) {
-        LoadResult v2 = kernel.load_candidate("v2", ZEN_SO_VERSIONED_V2, d.coordinator.id);
-        REQUIRE(v2.ok);
+        LoadResult v2 = kernel.load_candidate("v2", candidate_image, d.coordinator.id);
+        REQUIRE_MESSAGE(v2.ok, v2.error);
         d.candidate = v2.id;
     }
     return d;
@@ -3760,11 +3783,10 @@ void announce_activation(Switchboard& bus, WeaveId target, std::int64_t sequence
 
 } // namespace
 
-TEST_CASE("a sealed dynamic candidate prepares across deliveries, answers for itself, and only "
-          "then becomes the service") {
+static void candidate_prepares_across_deliveries(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
-    DynCast d = load_pair(bus, kernel);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), true, image);
     // Every refusal the sealed candidate earns, counted at the source.
     std::vector<std::string> sealed_speech;
     bus.add_observer([&sealed_speech](const BusEvent& e) {
@@ -3851,10 +3873,18 @@ TEST_CASE("a sealed dynamic candidate prepares across deliveries, answers for it
     CHECK(bus.active_transactions() == 0);
 }
 
-TEST_CASE("the same readiness, answered inside the preparation handler") {
+TEST_CASE("a sealed dynamic candidate prepares across deliveries, answers for itself, and only "
+          "then becomes the service") {
+    candidate_prepares_across_deliveries(ZEN_SO_VERSIONED_V2);
+}
+ZEN_BOXED_TWIN("a sealed boxed candidate prepares across deliveries, answers for itself, is "
+               "Ready by its authenticated answer, and only then becomes the service",
+               candidate_prepares_across_deliveries, ZEN_BOX_VERSIONED_V2)
+
+static void candidate_ready_in_handler(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
-    DynCast d = load_pair(bus, kernel);
+    DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), true, image);
     REQUIRE(d.ask(bus) == "v1");
     const TxnResult t = bus.begin_prepared_replacement(d.op.id, d.coordinator.id, d.incumbent,
                                                        d.candidate, kService, 16);
@@ -3875,6 +3905,12 @@ TEST_CASE("the same readiness, answered inside the preparation handler") {
     CHECK(d.ask(bus) == "v2");
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
 }
+
+TEST_CASE("the same readiness, answered inside the preparation handler") {
+    candidate_ready_in_handler(ZEN_SO_VERSIONED_V2);
+}
+ZEN_BOXED_TWIN("a boxed candidate's readiness, answered inside the preparation handler",
+               candidate_ready_in_handler, ZEN_BOX_VERSIONED_V2)
 
 TEST_CASE("queued production waiting on the role reaches the new service only after its activation") {
     Switchboard bus;
@@ -6563,7 +6599,7 @@ struct OfficeStage {
     WeaveId dispatcher{};
     WeaveId worker{};
 
-    OfficeStage() {
+    explicit OfficeStage(const char* image) {
         auto cmd = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
             schema_of<office::OfficeReport>(), schema_of<office::WorkerNews>()});
         auto cmd_log = commander_log;
@@ -6580,8 +6616,8 @@ struct OfficeStage {
         };
         dispatcher = bus.register_weave(std::move(dsp), Grant{}.allow_any(), "dispatcher");
 
-        LoadResult lr = kernel.load("worker", ZEN_SO_OFFICE_WORKER, "worker.a");
-        REQUIRE(lr.ok);
+        LoadResult lr = kernel.load("worker", image, "worker.a");
+        REQUIRE_MESSAGE(lr.ok, lr.error);
         worker = lr.id;
     }
 
@@ -6596,9 +6632,8 @@ struct OfficeStage {
 
 } // namespace
 
-TEST_CASE("a loaded weave deliberately authors office speech through every door, and its personal "
-          "speech stays personal") {
-    OfficeStage s;
+static void office_speech_authored(const char* image) {
+    OfficeStage s(image);
 
     s.command("direct", s.commander);
     s.command("to-role");
@@ -6642,9 +6677,16 @@ TEST_CASE("a loaded weave deliberately authors office speech through every door,
     CHECK(heard[1].seen_role.empty());
 }
 
-TEST_CASE("a loaded weave's request to speak for an office it does not hold is refused across the "
-          "seam — precisely, and nothing is queued") {
-    OfficeStage s;
+TEST_CASE("a loaded weave deliberately authors office speech through every door, and its personal "
+          "speech stays personal") {
+    office_speech_authored(ZEN_SO_OFFICE_WORKER);
+}
+ZEN_BOXED_TWIN("a boxed weave deliberately authors office speech through every door, and its "
+               "personal speech stays personal",
+               office_speech_authored, ZEN_BOX_OFFICE_WORKER)
+
+static void office_speech_refused(const char* image) {
+    OfficeStage s(image);
     std::size_t denied = 0;
     s.bus.add_observer([&denied](const BusEvent& ev) {
         if (ev.kind == EventKind::Refused &&
@@ -6669,9 +6711,16 @@ TEST_CASE("a loaded weave's request to speak for an office it does not hold is r
     CHECK(denied == 2);
 }
 
-TEST_CASE("inbound office provenance crosses the seam — authored_from_role answers identically "
-          "on both sides") {
-    OfficeStage s;
+TEST_CASE("a loaded weave's request to speak for an office it does not hold is refused across the "
+          "seam — precisely, and nothing is queued") {
+    office_speech_refused(ZEN_SO_OFFICE_WORKER);
+}
+ZEN_BOXED_TWIN("a boxed weave's request to speak for an office it does not hold is refused, "
+               "precisely, and nothing is queued",
+               office_speech_refused, ZEN_BOX_OFFICE_WORKER)
+
+static void office_provenance_inbound(const char* image) {
+    OfficeStage s(image);
 
     // Office speech from ANOTHER office: the dispatcher's own.
     REQUIRE(s.bus
@@ -6692,6 +6741,14 @@ TEST_CASE("inbound office provenance crosses the seam — authored_from_role ans
     CHECK_FALSE(heard[1].authored);
     CHECK(heard[1].seen_role.empty());
 }
+
+TEST_CASE("inbound office provenance crosses the seam — authored_from_role answers identically "
+          "on both sides") {
+    office_provenance_inbound(ZEN_SO_OFFICE_WORKER);
+}
+ZEN_BOXED_TWIN("inbound office provenance reaches a boxed weave: authored_from_role answers "
+               "identically on both sides",
+               office_provenance_inbound, ZEN_BOX_OFFICE_WORKER)
 
 TEST_CASE("the previous-ABI artifact refuses at load by version — no instance becomes live, no "
           "capability goes silently missing") {
@@ -6886,11 +6943,10 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
 
 } // namespace
 
-TEST_CASE("a LOADED weave claims, is refused a forged office claim, and reads its own claim back "
-          "synchronously — the same four verbs, the same meanings") {
+static void sense_claims_and_reads(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
-    LoadResult dyn = kernel.load("sensor", ZEN_SO_SENSES, "",
+    LoadResult dyn = kernel.load("sensor", image, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
 
@@ -6933,6 +6989,14 @@ TEST_CASE("a LOADED weave claims, is refused a forged office claim, and reads it
     REQUIRE(kernel.unload("sensor"));
     CHECK(bus.retained_claim_count() == 0);
 }
+
+TEST_CASE("a LOADED weave claims, is refused a forged office claim, and reads its own claim back "
+          "synchronously — the same four verbs, the same meanings") {
+    sense_claims_and_reads(ZEN_SO_SENSES);
+}
+ZEN_BOXED_TWIN("a boxed weave claims, is refused a forged office claim, and reads its own claim "
+               "back: the same four verbs, the same meanings",
+               sense_claims_and_reads, ZEN_BOX_SENSES)
 
 // ---- the observed office identity IS the authored one (SENSE-03) ------------
 // The office name crosses the seam whole, through the same caller-owned ZenByteSink the value
@@ -6989,8 +7053,7 @@ Value sense_probe(const std::string& role) {
 
 } // namespace
 
-TEST_CASE("a dynamic observation reports the EXACT authored office identity — a name past 127 "
-          "bytes crosses whole, not as a plausible prefix") {
+static void sense_office_verbatim(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -7010,7 +7073,7 @@ TEST_CASE("a dynamic observation reports the EXACT authored office identity — 
     CHECK(native.by.office.size() == role_a.size());
 
     // DYNAMIC: the same question across the seam, and the same answer required.
-    LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
+    LoadResult dyn = kernel.load("reader", image, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
     bus.send(dyn.id, Message(sense_probe(role_a)));
@@ -7024,13 +7087,20 @@ TEST_CASE("a dynamic observation reports the EXACT authored office identity — 
     CHECK(w.read_office == native.by.office);   // native and dynamic agree exactly
 }
 
+TEST_CASE("a dynamic observation reports the EXACT authored office identity — a name past 127 "
+          "bytes crosses whole, not as a plausible prefix") {
+    sense_office_verbatim(ZEN_SO_SENSES);
+}
+ZEN_BOXED_TWIN("a boxed observation reports the exact authored office identity: a name past 127 "
+               "bytes crosses whole",
+               sense_office_verbatim, ZEN_BOX_SENSES)
+
 // The generation facts must cross the seam SEPARATELY: `author_life_is_current` and
 // `author_incarnation_is_current` disagree across a live replacement, so a dynamic reader
 // that collapses them, or drops the second, reports a predecessor's claim as the current
 // incarnation's. The native-only twin in suite `sense` cannot catch a seam that loses it.
 
-TEST_CASE("a LOADED reader is told the incarnation moved while the life stood — the two "
-          "generation facts cross the seam separately") {
+static void sense_incarnation_moved(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -7042,7 +7112,7 @@ TEST_CASE("a LOADED reader is told the incarnation moved while the life stood �
     bus.send(officer, Message(ping(42)));
     bus.drain_until_idle();
 
-    LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
+    LoadResult dyn = kernel.load("reader", image, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
 
@@ -7089,8 +7159,14 @@ TEST_CASE("a LOADED reader is told the incarnation moved while the life stood �
     CHECK(native.by.author_incarnation_is_current == current.read_inc_current);
 }
 
-TEST_CASE("two long offices differing ONLY past 127 bytes stay distinguishable across the seam — "
-          "truncation would report them as the same office") {
+TEST_CASE("a LOADED reader is told the incarnation moved while the life stood — the two "
+          "generation facts cross the seam separately") {
+    sense_incarnation_moved(ZEN_SO_SENSES);
+}
+ZEN_BOXED_TWIN("a boxed reader is told the incarnation moved while the life stood",
+               sense_incarnation_moved, ZEN_BOX_SENSES)
+
+static void sense_long_offices_apart(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
@@ -7108,7 +7184,7 @@ TEST_CASE("two long offices differing ONLY past 127 bytes stay distinguishable a
     bus.send_to_role(role_b, Message(ping(2)));
     bus.drain_until_idle();
 
-    LoadResult dyn = kernel.load("reader", ZEN_SO_SENSES, "",
+    LoadResult dyn = kernel.load("reader", image, "",
                                  Grant{}.allow_any().allow_observe("SenseHealth", 1));
     REQUIRE_MESSAGE(dyn.ok, dyn.error);
 
@@ -7128,6 +7204,14 @@ TEST_CASE("two long offices differing ONLY past 127 bytes stay distinguishable a
     CHECK(saw_a.read_hp == 1);
     CHECK(saw_b.read_hp == 2);
 }
+
+TEST_CASE("two long offices differing ONLY past 127 bytes stay distinguishable across the seam — "
+          "truncation would report them as the same office") {
+    sense_long_offices_apart(ZEN_SO_SENSES);
+}
+ZEN_BOXED_TWIN("two long offices differing only past 127 bytes stay distinguishable to a boxed "
+               "reader",
+               sense_long_offices_apart, ZEN_BOX_SENSES)
 
 TEST_CASE("a loaded weave without observe authority is refused a read, and its claim of an "
           "undeclared shape is refused — the seam carries the distinct reasons") {
