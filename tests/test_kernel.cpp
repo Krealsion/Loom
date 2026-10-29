@@ -102,6 +102,19 @@ TEST_CASE("the containment note tells the truth for this platform's hosting mode
     CHECK(note.find("sandboxed") == std::string::npos);
 }
 
+TEST_CASE("a loaded library's containment is the note, and a name never loaded has none") {
+    // Kernel::containment answers per artifact. A library shares the host's process whatever
+    // backend the kernel has, so it never says more than the hosting mode's note.
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    CHECK(kernel.containment("t") == "not loaded");
+    const LoadResult lr = kernel.load("t", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(lr.ok, lr.error);
+    CHECK(kernel.containment("t") == Kernel::containment_note());
+    REQUIRE(kernel.unload("t"));
+    CHECK(kernel.containment("t") == "not loaded");
+}
+
 TEST_CASE("a WebAssembly module is never handed to the platform's loader") {
     // The smallest module there is: the magic and version 1, and nothing else. A kernel with the
     // WebAssembly backend opens it as a module and refuses it for what it lacks; one without the

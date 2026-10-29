@@ -54,6 +54,12 @@ void* box_create(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal);
 /// capability, a filesystem level or a cpu share is refused, never narrowed.
 bool box_mount(void* instance, const Grant& grant, std::string& why);
 
+/// What `Kernel::containment` says of a boxed instance, from what the box imposes on it now: the
+/// memory and the steps it is held to, the reach it is refused, its reloads after a trap or its
+/// quarantine, and the tier's honest scope.
+/// docs/reference/capabilities.md#the-box-a-weave-built-as-a-webassembly-module
+std::string box_containment(const void* instance);
+
 /// Process-wide counts of the backend's work, for `kernel_lifetime_counts()`.
 struct BoxCounts {
     std::uint64_t modules_compiled = 0;

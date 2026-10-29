@@ -233,8 +233,8 @@ inline loom::Refusal seam_gate_refused(const loom::Admission& a) {
 /// One open image (a library, or a WebAssembly module under LOOM_ENABLE_WASM), closed exactly
 /// once by the last holder to let go: the Kernel's Loaded record while it owns the artifact name,
 /// and the HostAdapter while an instance built from it exists. Neither copyable nor movable: this
-/// object is the image's identity. `abi`, `create` and `mount` are the only places the kernel
-/// tells the two kinds apart.
+/// object is the image's identity. `abi`, `create`, `mount` and `containment` are the only places
+/// the kernel tells the two kinds apart.
 class LoadedLibrary {
 public:
     explicit LoadedLibrary(void* handle) noexcept : handle_(handle) {}
@@ -288,6 +288,17 @@ public:
 #endif
         (void)instance, (void)grant, (void)why;
         return true;
+    }
+
+    /// What `Kernel::containment` says of `instance`, an instance of this image.
+    std::string containment(const void* instance) const {
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_containment(instance);
+        }
+#endif
+        (void)instance;
+        return Kernel::containment_note();
     }
 
 private:
@@ -819,6 +830,8 @@ public:
     }
 
     void set_self(loom::WeaveId id) { self_ = id; }
+    /// The containment of the image this adapter runs now, which a reload changes.
+    std::string containment() const { return lib_->containment(instance_); }
     const std::shared_ptr<const Schema>& state_schema() const { return state_schema_; }
 
     /// Bind this adapter to the Kernel record that names it, and to nothing
@@ -1540,6 +1553,14 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         return {true, false, false, "revive after swap was refused"};
     }
     return {true, true, false, ""};
+}
+
+std::string Kernel::containment(const std::string& name) const {
+    const auto it = libs_.find(name);
+    if (it == libs_.end() || it->second.adapter == nullptr) {
+        return "not loaded";
+    }
+    return it->second.adapter->containment();
 }
 
 bool Kernel::unload(const std::string& name) {
