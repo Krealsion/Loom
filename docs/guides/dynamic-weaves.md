@@ -43,7 +43,9 @@ authored exec boundary, positively re-confirmed
 ([capabilities](../reference/capabilities.md#os-containment-out-of-process-linuxwsl)).
 That tier is **abuse, not escape**: it stops buggy or greedy code, and it is
 not a claim that hostile code cannot break out. Neither tier is a place to run
-an artifact you actively distrust.
+an artifact you actively distrust. A weave built as a WebAssembly module runs in
+a box, whose tier is its own and says how far it goes
+([capabilities](../reference/capabilities.md#the-box-a-weave-built-as-a-webassembly-module)).
 
 ## Export it
 
