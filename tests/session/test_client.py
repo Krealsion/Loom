@@ -30,6 +30,11 @@ One is the codec's own rule, pinned on a hand-built shape whose fields are optio
   DECODING (D1..D3)    an optional field a value left absent is left out of the decoded fields,
                        as encode leaves it out; a present zero or empty text is kept as said.
 
+And the command line's typing of ``--input name=value``:
+
+  INPUTS (I1..I4)      a value is typed by the tool's declaration from the spellings the client
+                       knows, and sent as written otherwise, for the manager to refuse by name.
+
     test_client.py --runtime <dir holding loom_session>
 
 Exit 0 only when every check held.
@@ -645,6 +650,34 @@ def main():
           [getattr(g, "seq", None) for g in got] == [1, 2, 3, None] and
           all(g is None or g.kind == "observed" for g in got) and sub.repeated == 0,
           ([repr(g) for g in got], sub.repeated, c.channel.described))
+
+    # ---- I. `--input name=value`, typed by the tool's declaration ----------------------------
+    # A spelling the client cannot type is sent as the text written, which the manager refuses by
+    # the input's name and type; the journey's S4 has a live manager refuse one.
+    from loom_session import cli as lcli
+
+    class Declaring(object):
+        def tool(self, name):
+            return {"inputs": [{"name": "flag", "type": "bool"}, {"name": "count", "type": "int"},
+                               {"name": "share", "type": "number"}, {"name": "word", "type": "text"}]}
+
+    def typed(*pairs):
+        return lcli._typed_inputs(Declaring(), "p/t", list(pairs), "")
+
+    spelled = [typed("flag=" + w)["flag"] for w in
+               ("true", "YES", "On", "1", "false", "No", "OFF", "0")]
+    check("I1 every bool spelling the client knows is typed, in any case",
+          spelled == [True] * 4 + [False] * 4, spelled)
+    unknown = [typed("flag=" + w)["flag"] for w in ("30", "y", "")]
+    check("I2 a bool spelling the client does not know is sent as the text written, never false",
+          unknown == ["30", "y", ""], unknown)
+    numbers = typed("count=7", "share=0.5", "word=12")
+    unparsed = [typed(p) for p in ("count=two", "count=3.5", "share=half", "share=nan", "share=inf")]
+    check("I3 an int and a number are typed from what parses as one, a text input never",
+          numbers == {"count": 7, "share": 0.5, "word": "12"}, numbers)
+    check("I4 an int or a number that does not parse as a finite one is sent as written, not raised",
+          unparsed == [{"count": "two"}, {"count": "3.5"}, {"share": "half"}, {"share": "nan"},
+                       {"share": "inf"}], unparsed)
 
     failed = [name for name, ok in CHECKS if not ok]
     print("%d of %d checks held" % (len(CHECKS) - len(failed), len(CHECKS)), flush=True)
