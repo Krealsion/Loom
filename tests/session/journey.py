@@ -1041,6 +1041,15 @@ def main():
           said.returncode == 0 and os.path.isfile(kept) and
           open(kept, "rb").read() == held_report,
           (said.returncode, (said.stdout or said.stderr)[:300]))
+    said = subprocess.run(cli + ["run", session_dir, "basics-machine/steps", "--name", "spelled-two",
+                                 "--input", "count=two"],
+                          env=cli_env, capture_output=True, text=True, timeout=60)
+    with Session.attach(session_dir) as s:
+        started = [r["name"] for r in s.runs().get("rows", []) if r["name"] == "spelled-two"]
+    check("S4 a value the launcher cannot type is refused by the manager by the input's name, and "
+          "nothing starts",
+          said.returncode == 3 and "'count' must be int" in said.stdout and not started,
+          (said.returncode, (said.stdout or said.stderr)[:300], started))
     cached = sorted(os.path.relpath(os.path.join(d, n), runtime)
                     for d, dirs, files in os.walk(runtime) for n in dirs + files
                     if n == "__pycache__" or n.endswith(".pyc"))
