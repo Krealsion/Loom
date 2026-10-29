@@ -200,6 +200,8 @@ struct Box {
     ZenByteSink sink{};
     /// The linear memory the store may grow to; negative is wasm32's own ceiling.
     std::int64_t memory_limit = kBoxDefaultMemoryBytes;
+    /// Whether `memory_limit` is the box's default, the grant having named no memory.
+    bool memory_default = true;
     /// The weave's state after its last completed entry, held by the host for a revival.
     std::string last_good;
     bool have_good = false;
@@ -1398,10 +1400,41 @@ bool box_mount(void* instance, const Grant& grant, std::string& why) {
         return false;
     }
     b->memory_limit = limit;
+    b->memory_default = !res.unlimited_memory && res.memory_bytes <= 0;
     if (b->store != nullptr) {
         apply_limits(*b);
     }
     return true;
+}
+
+std::string box_containment(const void* instance) {
+    const auto* b = static_cast<const Box*>(instance);
+    // ASCII only, as `containment_note()` is: a host may print it before any console setup.
+    std::string s = "boxed (WebAssembly, in-process, Wasmtime " WASMTIME_VERSION ")";
+    // Quarantine follows the weave's last reload, or a reload or revival that failed earlier.
+    s += b->quarantined ? "; quarantined: dead after a trap, " + std::to_string(b->reloads) +
+                              " of " + std::to_string(b->max_reloads) + " reload(s) spent."
+                        : ": crash-contained, reaching only its own memory and the host's doors.";
+    constexpr std::int64_t kMiB = std::int64_t{1} << 20;
+    if (b->memory_limit < 0) {
+        s += " memory: wasm32's own 4GiB (the grant lifts the box's bound).";
+    } else {
+        s += " memory<=" +
+             (b->memory_limit % kMiB == 0 ? std::to_string(b->memory_limit / kMiB) + "MiB"
+                                          : std::to_string(b->memory_limit) + " bytes") +
+             (b->memory_default ? " (the box's default: the grant names none)."
+                                : " (the grant's).");
+    }
+    s += " steps<=" + std::to_string(kBoxStepsPerEntry) + " an entry from the host.";
+    s += " reach: no filesystem, no network, no clock, no process; every import outside the "
+         "host's doors is refused at open.";
+    if (!b->quarantined) {
+        s += " reloads after a trap: " + std::to_string(b->reloads) + " of " +
+             std::to_string(b->max_reloads) + " spent.";
+    }
+    s += " honest scope: escape-tier for memory and reach, bounded by the runtime's correctness; "
+         "abuse-tier for time; nothing for side channels.";
+    return s;
 }
 
 BoxCounts box_counts() noexcept {

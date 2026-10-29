@@ -417,6 +417,21 @@ may exceed it, but nothing will re-admit its bytes.
 |---|---|---|---|
 | `kMaxMakingWordsBytes` | <!-- value kMaxMakingWordsBytes -->1024<!-- /value --> bytes | the words one refused making writes into the host's sink (`include/zen/kernel/making_words.hpp`), in process and across the isolated pipe | the rest is cut, and the load's refusal says where |
 
+## A boxed weave (`LOOM_ENABLE_WASM`)
+
+What the kernel's WebAssembly backend holds a module to
+([kernel](kernel.md#a-weave-built-as-a-webassembly-module)), each value owned by
+`src/kernel/wasm_box.hpp`; `Kernel::containment(name)` says the memory and steps one boxed
+instance is held to ([the box](capabilities.md#the-box-a-weave-built-as-a-webassembly-module)).
+
+| Bound | Value | Scope | Overflow behavior |
+|---|---|---|---|
+| `kBoxStepsPerEntry` | <!-- value kBoxStepsPerEntry grouped -->200,000,000<!-- /value --> steps | one entry from the host into the module (Wasmtime's fuel), refilled at each | the instance traps: a delivery ends `HandlerFailed`, and the box revives a fresh instance from its last good state or quarantines it |
+| `kBoxDefaultMemoryBytes` | <!-- value kBoxDefaultMemoryBytes MiB -->64<!-- /value --> MiB | the module's linear memory when its grant names none; `ResourceLimits::memory_bytes` names another, and `unlimited_memory` lifts it to wasm32's own 4 GiB | the module's allocation fails inside it (`bad_alloc` in C++), and the module goes on |
+| `kBoxLogBytes` | <!-- value kBoxLogBytes -->4096<!-- /value --> bytes | what the module writes to its standard output and error in one entry, said as one line on the host's standard error | the rest is counted, and the line says how many bytes were dropped |
+| `kBoxMaxNameBytes` | <!-- value kBoxMaxNameBytes -->4096<!-- /value --> bytes | one role or shape name the module hands a door, its terminator excluded | the instance traps, as for a span outside its memory |
+| `kBoxModulesKept` | <!-- value kBoxModulesKept -->8<!-- /value --> | compiled modules kept after their last image closed, most recently opened first | the least recently opened is let go; opening it again compiles it again |
+
 ## Isolation resource defaults (computed, no knob)
 
 memory = RAM/8 (cap 1 GiB, floor 128 MiB) · pids = 512 · cpu_weight = 100.

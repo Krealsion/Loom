@@ -103,9 +103,10 @@ public:
     explicit Kernel(loom::Switchboard& bus);
     ~Kernel();
 
-    /// The containment this hosting mode actually provides. The in-process Kernel isolates
-    /// nothing on any platform; out-of-process isolation is the isolation host's, on Linux only,
-    /// and the Windows backend is an explicit development opt-in.
+    /// The containment this hosting mode actually provides to a library it loads. The
+    /// in-process Kernel isolates no library on any platform; out-of-process isolation is the
+    /// isolation host's, on Linux only, and the Windows backend is an explicit development
+    /// opt-in. A WebAssembly module is held in a box, and `containment(name)` says its line.
     static constexpr const char* containment_note() {
 #if defined(_WIN32)
         // ASCII only, deliberately: this line prints before any console setup
@@ -212,6 +213,15 @@ public:
     bool unload_role(const std::string& role);
 
     loom::WeaveId weave_id(const std::string& name) const;
+
+    /// The containment one loaded artifact has now, in one line. A library's is
+    /// `containment_note()`. A WebAssembly module's (LOOM_ENABLE_WASM) is its box's, said from
+    /// what the box imposes on that instance: the memory and the steps it is held to, the reach
+    /// it is refused, its reloads after a trap or its quarantine, and the tier's honest scope
+    /// (docs/reference/capabilities.md#the-box-a-weave-built-as-a-webassembly-module). After a
+    /// reload it describes the image now running. "not loaded" when this Kernel holds no such
+    /// name.
+    std::string containment(const std::string& name) const;
 
     /// Does this Kernel hold an artifact under that name? One coarse bit; `status()` says what
     /// kind. False once released, including when a transaction discarded it.

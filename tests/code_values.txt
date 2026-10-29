@@ -28,6 +28,13 @@ mention zen.Manifest  manifest v{}
 # ---- a weave's making
 kMaxMakingWordsBytes            include/zen/kernel/making_words.hpp       kMaxMakingWordsBytes
 
+# ---- a boxed weave (LOOM_ENABLE_WASM)
+kBoxStepsPerEntry               src/kernel/wasm_box.hpp                   kBoxStepsPerEntry
+kBoxDefaultMemoryBytes          src/kernel/wasm_box.hpp                   kBoxDefaultMemoryBytes
+kBoxLogBytes                    src/kernel/wasm_box.hpp                   kBoxLogBytes
+kBoxMaxNameBytes                src/kernel/wasm_box.hpp                   kBoxMaxNameBytes
+kBoxModulesKept                 src/kernel/wasm_box.hpp                   kBoxModulesKept
+
 # ---- the weave build contract
 LOOM_WEAVE_MINGW_GCC_LEAST      cmake/loom-weave.cmake                    LOOM_WEAVE_MINGW_GCC_LEAST
 LOOM_WEAVE_MINGW_CLANG_LEAST    cmake/loom-weave.cmake                    LOOM_WEAVE_MINGW_CLANG_LEAST
