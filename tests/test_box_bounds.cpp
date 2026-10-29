@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <process.h>
+#include <share.h>
 #include <sys/stat.h>
 #else
 #include <fcntl.h>
@@ -50,8 +51,9 @@ public:
                 ("zen-box-stderr-" + std::to_string(pid()) + ".txt");
         std::fflush(stderr);
 #if defined(_WIN32)
-        const int fd = _open(path_.string().c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
-                             _S_IREAD | _S_IWRITE);
+        int fd = -1;
+        _sopen_s(&fd, path_.string().c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
+                 _SH_DENYNO, _S_IREAD | _S_IWRITE);
         saved_ = _dup(2);
         _dup2(fd, 2);
         _close(fd);
