@@ -565,4 +565,141 @@ TEST_CASE("zen.Activated is an ordinary shape, and its whole claim is one number
     CHECK_FALSE(loom::claim_item<loom::Activated>(loom::bequeath_item(Ping{7})).has_value());
 }
 
+namespace replies {
+// `Kick` tells an Asker whom to ask, and where (if anywhere) the reply should go.
+struct Kick {
+    std::int64_t responder;
+    std::int64_t reply_to;
+    ZEN_SHAPE(Kick, 1, ZEN_FIELD(responder), ZEN_FIELD(reply_to));
+};
+struct Question {
+    std::int64_t seq;
+    ZEN_SHAPE(Question, 1, ZEN_FIELD(seq));
+};
+struct Reply {
+    std::int64_t seq;
+    ZEN_SHAPE(Reply, 1, ZEN_FIELD(seq));
+};
+struct Heard {
+    std::int64_t count;
+    std::int64_t last;
+    bool answered;
+    ZEN_SHAPE(Heard, 1, ZEN_FIELD(count), ZEN_FIELD(last), ZEN_FIELD(answered));
+};
+
+class Replier
+    : public au::WeaveBase<Replier, CounterState, au::Accept<Question>, au::Emit<Reply>> {
+public:
+    void on(const Question& q, au::Mail& mail) {
+        ++state_.count;
+        mail.reply(Reply{q.seq});
+    }
+};
+
+// Asks with an ordinary weave send, so the Question carries this weave as its stamped sender.
+class Asker : public au::WeaveBase<Asker, Heard, au::Accept<Kick, Reply>, au::Emit<Question>> {
+public:
+    void on(const Kick& k, au::Mail& mail) {
+        mail.bus().send(WeaveId{static_cast<std::uint64_t>(k.responder)},
+                        Message(au::to_value(Question{++state_.count}), self_,
+                                WeaveId{static_cast<std::uint64_t>(k.reply_to)}));
+    }
+    void on(const Reply& r, au::Mail& mail) {
+        state_.last = r.seq;
+        state_.answered = state_.answered || mail.answers_ask();
+        ++replies;
+    }
+    int replies = 0;
+};
+
+class Listener : public au::WeaveBase<Listener, CounterState, au::Accept<Reply>> {
+public:
+    void on(const Reply&, au::Mail&) { ++state_.count; }
+    std::int64_t count() const { return state_.count; }
+};
+
+void kick(Switchboard& bus, WeaveId asker, WeaveId responder, WeaveId reply_to = WeaveId{}) {
+    bus.send(asker, Message(au::to_value(Kick{static_cast<std::int64_t>(responder.value),
+                                              static_cast<std::int64_t>(reply_to.value)})));
+    bus.drain_until_idle();
+}
+} // namespace replies
+
+TEST_CASE("mail.reply with no reply address goes to the stamped sender") {
+    Switchboard bus;
+    const WeaveId replier = au::mount<replies::Replier>(bus);
+    const WeaveId asker = au::mount<replies::Asker>(bus);
+
+    replies::kick(bus, asker, replier);
+
+    auto* a = static_cast<replies::Asker*>(bus.weave(asker));
+    CHECK(a->replies == 1);
+    CHECK(a->snapshot().get("last")->as_int() == 1);
+}
+
+TEST_CASE("mail.reply goes to the reply address when the message names one, not the sender") {
+    Switchboard bus;
+    const WeaveId replier = au::mount<replies::Replier>(bus);
+    const WeaveId asker = au::mount<replies::Asker>(bus);
+    const WeaveId listener = au::mount<replies::Listener>(bus);
+
+    replies::kick(bus, asker, replier, listener);
+
+    CHECK(static_cast<replies::Listener*>(bus.weave(listener))->count() == 1);
+    CHECK(static_cast<replies::Asker*>(bus.weave(asker))->replies == 0);
+}
+
+TEST_CASE("the sender mail.reply falls back to is a destination, never a permission") {
+    // The replier's grant names no Reply, so the reply to the sender that asked is refused at
+    // delivery, as any send its grant does not allow.
+    Switchboard bus;
+    const WeaveId replier = loom::mount_granted<replies::Replier>(bus, Grant{});
+    const WeaveId asker = au::mount<replies::Asker>(bus);
+    bool denied = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.sender == replier && e.schema_name == "Reply" && e.kind == EventKind::Refused &&
+            e.refusal.reason == RefusalReason::CapabilityDenied && e.target == asker) {
+            denied = true;
+        }
+    });
+
+    replies::kick(bus, asker, replier);
+
+    CHECK(denied);
+    CHECK(static_cast<replies::Asker*>(bus.weave(asker))->replies == 0);
+}
+
+TEST_CASE("a reply carries no answer provenance, to an asker or to a root's reply address") {
+    Switchboard bus;
+    const WeaveId replier = au::mount<replies::Replier>(bus);
+    const WeaveId asker = au::mount<replies::Asker>(bus);
+
+    // An ask from a weave, whose delivery holds an answer right: the reply is still not an answer.
+    replies::kick(bus, asker, replier);
+    // A root send from the host naming the asker as its reply address: no answer right at all.
+    bus.send(replier, Message(au::to_value(replies::Question{9}), WeaveId{}, asker));
+    bus.drain_until_idle();
+
+    auto* a = static_cast<replies::Asker*>(bus.weave(asker));
+    REQUIRE(a->replies == 2);
+    CHECK_FALSE(a->snapshot().get("answered")->as_bool());
+}
+
+TEST_CASE("mail.reply to a root send that names no reply address reaches no one") {
+    Switchboard bus;
+    const WeaveId replier = au::mount<replies::Replier>(bus);
+    bool no_target = false;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.sender == replier && e.schema_name == "Reply" && e.kind == EventKind::Refused &&
+            e.refusal.reason == RefusalReason::NoSuchTarget) {
+            no_target = true;
+        }
+    });
+
+    bus.send(replier, Message(au::to_value(replies::Question{1})));
+    bus.drain_until_idle();
+
+    CHECK(no_target);
+}
+
 } // TEST_SUITE

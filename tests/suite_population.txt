@@ -33,7 +33,7 @@ harness            portable  7
 breathing          portable  1
 schema_codec       portable  7
 weave_shape        portable  4
-weave              portable  10
+weave              portable  17
 ask_book           portable  21
 poke               portable  20
 describe           portable  24
