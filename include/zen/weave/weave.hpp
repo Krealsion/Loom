@@ -73,11 +73,14 @@ public:
     std::uint64_t correlation() const { return in_.correlation; }
     bool dispatch_refused() const noexcept { return in_.provenance.dispatch_refused(); }
 
-    /// Reply to the inbound sender's reply address, echoing the correlation.
+    /// Reply to the inbound message's reply address, or to its stamped sender when it names
+    /// none, echoing the correlation. Ordinary speech either way: checked against this weave's
+    /// grant and carrying no answer provenance, whether the inbound was an ask or not (an answer
+    /// is `answer`'s). A message from no one with no reply address reaches no one.
     template <class T>
     loom::Ticket reply(const T& msg) {
-        return bus_.send(in_.reply_to,
-                         loom::Message(to_value(msg), self_, self_, in_.correlation));
+        const loom::WeaveId to = in_.reply_to.valid() ? in_.reply_to : in_.sender;
+        return bus_.send(to, loom::Message(to_value(msg), self_, self_, in_.correlation));
     }
     template <class T>
     loom::Ticket send(loom::WeaveId target, const T& msg, std::uint64_t correlation = 0) {
