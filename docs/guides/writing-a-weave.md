@@ -53,7 +53,7 @@ class Responder : public loom::WeaveBase<Responder, Count,
 public:
     void on(const Ping& p, loom::Mail& mail) {
         ++state_.handled;               // Count is your state; snapshot/revive derive
-        mail.reply(Pong{p.seq});        // speak — to the Ping's reply address, as yourself
+        mail.reply(Pong{p.seq});        // speak — back to whoever asked, as yourself
     }
 };
 ```
@@ -91,10 +91,9 @@ its own `Grant` (`mount_granted`), and then decides for itself whether those
 answers may leave. Speak only through the `Mail` you are handed — it stamps your
 identity and authorizes every send against your grant.
 
-`mail.reply` sends to the reply address the incoming message carried, and only
-there. This `Ping` names none, so the `Pong` is refused `NoSuchTarget`; give the
-host's send a reply address (`loom::Message(value, {}, listener)`) and it
-reaches `listener`.
+`mail.reply` sends to the reply address the incoming message carried, or else to its sender.
+This `Ping` comes from the host with neither, so the `Pong` is refused `NoSuchTarget`; give the
+host's send a reply address (`loom::Message(value, {}, listener)`) and it reaches `listener`.
 
 ## What happens, and the common failures
 

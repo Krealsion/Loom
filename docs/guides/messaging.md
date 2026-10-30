@@ -96,10 +96,10 @@ Two truths worth designing around:
   it ([ANS-03](../laws/answer-authority-laws.md)).
 
 `mail.reply(...)` also exists — an *ordinary* send to the reply address the incoming message
-carried (`mail.reply_to()`), with no authority attached; a message that carries none gets no
-reply. Across six [Night Lab](../evidence/night-lab.md) applications, nothing ended up wanting
-it; every response wanted either an answer (provable) or a role send (replacement-surviving). It
-remains supported.
+carried (`mail.reply_to()`), or else to its sender, with no authority attached; a message from
+no one that names no reply address gets no reply. Across six [Night Lab](../evidence/night-lab.md)
+applications, nothing ended up wanting it; every response wanted either an answer (provable) or a
+role send (replacement-surviving). It remains supported.
 
 ## When something refuses
 
