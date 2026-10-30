@@ -191,6 +191,16 @@ int main() {
         std::puts("package witness: kernel path FAILED");
         return 1;
     }
+    const std::string held = kernel.containment("witness");
+    std::printf("  loaded: %s\n", held.c_str());
+#ifdef ZEN_WITNESS_BOXED
+    // A module the installed loom_wasm_weave() built is held in its box, and says so.
+    check(held.rfind("boxed (WebAssembly", 0) == 0,
+          "the artifact loaded is a module, held in its box: " + held);
+#else
+    check(held == loom::Kernel::containment_note(),
+          "the artifact loaded is a library, held as the kernel's note says: " + held);
+#endif
 
     // ---- its declared vocabulary crossed the installed seam whole ----------------
     // The manifest's `emits` section reached the host: the bus can say this loaded

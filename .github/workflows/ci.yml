@@ -190,6 +190,57 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$verify_rc"
 
+  # The installed package where the kernel hosts WebAssembly modules: a project outside this
+  # repository builds its weave as a module with the package's loom_wasm_weave() and the pinned
+  # wasi-sdk, and the witness host loads it through the installed kernel beside the library.
+  loom-linux-package-boxed:
+    name: Loom / Linux / installed package, boxed
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: |
+          g++ --version
+          cmake --version
+          nm --version
+
+      - name: Fetch the pinned Wasmtime C API and wasi-sdk
+        run: |
+          archive="$RUNNER_TEMP/wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz"
+          curl -fsSL -o "$archive" \
+            https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.0/wasmtime-v50.0.0-x86_64-linux-c-api.tar.xz
+          echo "631643d8be5dac2a1abe026528f0ca18a515bce275bcfa7eb9731c9468a592f1  $archive" | sha256sum -c
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          archive="$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux.tar.gz"
+          curl -fsSL -o "$archive" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum -c
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+
+      # Tests and examples off: the package is the subject, and the lanes above run the suites.
+      - name: Build and install Loom with the backend to a fresh prefix
+        run: |
+          prefix="$RUNNER_TEMP/loom-prefix"
+          test ! -e "$prefix"
+          cmake -S . -B build-pkg -DCMAKE_BUILD_TYPE=Debug -DZEN_BUILD_TESTS=OFF \
+            -DZEN_BUILD_EXAMPLES=OFF -DLOOM_ENABLE_WASM=ON \
+            -DLOOM_WASMTIME_DIR="$RUNNER_TEMP/wasmtime-v50.0.0-x86_64-linux-c-api"
+          cmake --build build-pkg --parallel "$(nproc)"
+          cmake --install build-pkg --prefix "$prefix"
+
+      - name: Run the installed-package witness, the module half included
+        run: >-
+          cmake -DZEN_PREFIX="$RUNNER_TEMP/loom-prefix" -DZEN_WORK="$RUNNER_TEMP/pkg-witness"
+          "-DZEN_CMAKE_ARGS=-DLOOM_WASI_SDK=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux"
+          -P tests/package/run.cmake
+
   loom-linux-release:
     name: Loom / Linux / Release
     needs: loom-change-kind

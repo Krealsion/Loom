@@ -241,6 +241,27 @@ if(NOT ZEN_WITNESS_HOST)
 endif()
 zen_run("real Kernel load/exercise/unload" "${ZEN_WITNESS_HOST}")
 
+# ---- 3b. the same weave built as a module by the installed loom_wasm_weave() ----------------
+# Where the package builds modules (its loom-wasm.cmake), the boxed host was built when a wasi-sdk
+# was named, and says in words that it was not otherwise (tests/package/CMakeLists.txt).
+set(zen_boxed_said "")
+file(GLOB zen_wasm_package "${ZEN_PREFIX}/*/cmake/loom/loom-wasm.cmake")
+find_program(ZEN_WITNESS_HOST_BOX witness-host-box PATHS "${ZEN_WORK}" "${ZEN_WORK}/${ZEN_CONFIG}"
+             NO_DEFAULT_PATH)
+if(ZEN_WITNESS_HOST_BOX)
+    if(NOT zen_wasm_package)
+        message(FATAL_ERROR
+            "package witness: a boxed host was built against a package that installs no "
+            "loom-wasm.cmake")
+    endif()
+    zen_run("the stranger's weave as a module, built from the package and boxed"
+            "${ZEN_WITNESS_HOST_BOX}")
+    set(zen_boxed_said ", the same weave boxed")
+elseif(zen_wasm_package)
+    message(STATUS "package witness: the package builds WebAssembly modules; no wasi-sdk was "
+                   "named, so the boxed half is DECLARED ABSENT")
+endif()
+
 # ---- 4. on Windows, the installed host runs in the UTF-8 code page ----------------------
 # Its manifest makes every narrow path it holds UTF-8 (cmake/loom-code-page.cmake); the installed
 # bytes are read, since the installed host is the one a stranger runs.
@@ -261,4 +282,4 @@ if(CMAKE_HOST_WIN32)
 endif()
 
 message(STATUS "package witness: PASSED -- installed package, macro surface, a second host's "
-               "decisions, exact export, live weave${zen_host_said}")
+               "decisions, exact export, live weave${zen_boxed_said}${zen_host_said}")
