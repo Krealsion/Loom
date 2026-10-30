@@ -12,7 +12,7 @@ Zengine's Timer, are defined in their own repositories.
 | **`loom::Weaver`** | an ordinary policy delegate, host-appointed to administer one session's message authority within a ceiling; the session performs its own actions | [reference/weaver.md](reference/weaver.md) |
 | **schema / shape** | a frozen `(name, version)` + fields; identity = content-id | [reference/values-and-admission.md](reference/values-and-admission.md) |
 | **the gate / admission** | `admit()`, the sole conformance authority at every boundary | [laws/admission-laws.md](laws/admission-laws.md) |
-| **`Unverified`** | parsed-but-unproven bytes; no accessors | [reference/values-and-admission.md](reference/values-and-admission.md) |
+| **`Unverified`** | parsed-but-unproven bytes; says only what it claims to be, no accessor for its data | [reference/values-and-admission.md](reference/values-and-admission.md) |
 | **grant** | a weave's authorization: which shapes it may send where. Default empty | [reference/capabilities.md](reference/capabilities.md) |
 | **`Mail` / `WeaveBus`** | the only bus a handler holds: stamps the weave's identity, routes gated | [reference/messaging.md](reference/messaging.md) |
 | **role** | a named singleton capability slot; sends resolve to its holder at delivery. Destination, never office | [laws/messaging-laws.md](laws/messaging-laws.md) (MSG-04) |

@@ -1149,7 +1149,8 @@ private:
     /// The one write path for a subject's delegated live authority. `caller` is recorded for
     /// diagnostics and never consulted: power comes from holding the capability, not from being
     /// anybody. Refusals are checked in the order that tells a holder which of its own facts went
-    /// stale: inert capability, foreign or dead board, missing subject, ceiling.
+    /// stale: inert capability, foreign or dead board, a capability that only reads, missing
+    /// subject, ceiling.
     GrantChange delegate_authority_as(WeaveId caller, const GrantAuthority& authority,
                                       LiveAuthority requested);
 

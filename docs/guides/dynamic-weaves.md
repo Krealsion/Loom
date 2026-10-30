@@ -5,8 +5,9 @@ code, indistinguishable on the bus once admitted.
 
 ## What loading it in-process means
 
-`Kernel::load` is `dlopen`. **The library's native code runs inside the host
-process's own address space, and nothing on this page changes that.** It
+For a shared library, `Kernel::load` is the platform's loader (`dlopen`, or `LoadLibrary` on
+Windows); a WebAssembly module goes to the box instead, below. **The library's native code runs
+inside the host process's own address space, and nothing on this page changes that.** It
 shares the heap, the stack, the loader's namespace and every mapping the host
 holds; it can read and write host memory directly, without sending a message.
 

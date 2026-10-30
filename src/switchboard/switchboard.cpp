@@ -2515,8 +2515,8 @@ void Switchboard::deliver_one(Envelope env) {
         // to the requester that actually asked rather than to whatever occupies that
         // id when the answer is finally written.
         const WeaveRecord* asker = find(env.msg.sender);
-        // An ask seeds an answerable conversation; its answer does not seed another. Seeded
-        // from every envelope, an answer-to-an-answer would inherit the ask's identity (and
+        // An answer's delivery earns an answer right of its own, but not the ask's identity.
+        // Seeded from every envelope, an answer-to-an-answer would inherit it (and
         // `enqueue_answer` copies the correlation forward), so a later exchange could satisfy
         // "this delivery answers that ask" when it does not.
         const TxnId answerable = env.answer_target.present ? TxnId{} : env.preparation;
