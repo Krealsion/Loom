@@ -11,6 +11,12 @@ if(COMMAND loom_wasm_weave)
     return()
 endif()
 
+# The function keeps this file's policies wherever it is called: its dependency files are read by
+# Ninja's own rule, as Loom's build reads them, whatever level a consuming project sets.
+if(POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+endif()
+
 set(LOOM_WASI_SDK "" CACHE PATH
     "An unpacked wasi-sdk release, to build weaves as WebAssembly modules (loom_wasm_weave)")
 
