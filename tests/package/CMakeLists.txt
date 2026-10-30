@@ -122,3 +122,30 @@ target_link_libraries(witness-host
 target_compile_definitions(witness-host PRIVATE
     "ZEN_WITNESS_WEAVE=\"$<TARGET_FILE:witness-weave>\"")
 add_dependencies(witness-host witness-weave)
+
+# ---- 4. the same weave built as a WebAssembly module, where the package builds them -------
+# A package whose kernel hosts modules carries loom_wasm_weave(); with a wasi-sdk named
+# (LOOM_WASI_SDK, a toolchain like the compiler), the stranger's weave is built as a module from
+# the installed core's sources alone and loaded by the same host, which reads its containment back.
+if(COMMAND loom_wasm_weave)
+    if(NOT LOOM_WASI_SDK)
+        message(STATUS
+            "package witness: this package builds WebAssembly modules and no wasi-sdk is named "
+            "(LOOM_WASI_SDK), so the boxed half is DECLARED ABSENT")
+        return()
+    endif()
+    set(witness_module "${CMAKE_CURRENT_BINARY_DIR}/witness-weave.wasm")
+    loom_wasm_weave(witness-weave-wasm OUTPUT "${witness_module}" SOURCES stranger_weave.cpp)
+    add_executable(witness-host-box stranger_host.cpp)
+    target_link_libraries(witness-host-box
+        PRIVATE loom::kernel loom::switchboard loom::terminal loom::core)
+    target_compile_definitions(witness-host-box PRIVATE
+        "ZEN_WITNESS_WEAVE=\"${witness_module}\"" ZEN_WITNESS_BOXED=1)
+    add_dependencies(witness-host-box witness-weave-wasm)
+elseif(LOOM_WASI_SDK)
+    message(FATAL_ERROR
+        "package witness: a wasi-sdk is named (LOOM_WASI_SDK) and this package defines no "
+        "loom_wasm_weave(), so a weave cannot be built as a module against it. A package built "
+        "with LOOM_ENABLE_WASM carries it beside loom-weave.cmake; one built without has no box "
+        "to load a module into.")
+endif()

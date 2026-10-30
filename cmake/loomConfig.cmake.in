@@ -4,7 +4,7 @@
 # loom::bridge, loom::host-policy and, where it was built, loom::kernel, with the same spellings the
 # in-tree ALIASes use, so a build against this package and one from source resolve the same names.
 
-include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
+@LOOM_KERNEL_DEPENDENCIES@include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 
 # The weave-authoring surface: loom_weave_build_contract(<target>) (KERN-05). It ships in every
 # package, one without loom::kernel included, because what a consumer can author is not gated on
@@ -12,7 +12,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 # it makes the static C++ runtime Loom's libraries are built for this project's default.
 include("${CMAKE_CURRENT_LIST_DIR}/loom-weave.cmake")
 
-# The programs this install can run, named for a consumer's tests and tools, never a link line:
+@LOOM_WASM_WEAVE_CONFIG@# The programs this install can run, named for a consumer's tests and tools, never a link line:
 # LOOM_HOST_PROGRAM, the installed `loom-host` (docs/guides/running-loom.md); LOOM_SESSION_TOOLS,
 # TRUE where the session tooling was built (docs/guides/sessions.md); with it, LOOM_RUNS_ARTIFACT
 # (the run manager a session host boots) and LOOM_SESSION_RUNTIME (the directory PYTHONPATH names
