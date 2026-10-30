@@ -24,8 +24,9 @@ PROVEN BY — `src/gate.cpp` (`gate_invocations()` counter); suites `gate`,
 
 ## GATE-02 — Untrusted until proven
 
-LAW — Unvalidated bytes have no accessors. `parse()` yields `Unverified`, which
-is unusable until `admit()` accepts it.
+LAW — Unvalidated bytes have no accessor for their data. `parse()` yields
+`Unverified`, which says only what it claims to be (`well_formed()`,
+`claimed_name()`, `claimed_version()`) and is unusable until `admit()` accepts it.
 
 MEANS
 - there is no road from bytes to a readable `Value` that skips the gate;
@@ -41,8 +42,9 @@ DOES NOT MEAN
 - that an in-budget value is cheap, or that the bound judges what a value
   *means* — semantic ranges stay the receiving service's contract.
 
-PROVEN BY — `include/zen/admission.hpp` (`Unverified`'s accessor-free surface is
-a compile-time fact); suites `gate`, `serialize`, `fuzz`, `schema_codec`,
+PROVEN BY — `include/zen/serialize.hpp` (`Unverified` declares its three claim
+accessors and none for field data, so reading a field before `admit()` does not
+compile); suites `gate`, `serialize`, `fuzz`, `schema_codec`,
 `bridge` (the decode-budget cases, end to end).
 
 ## GATE-03 — Authorization is not conformance

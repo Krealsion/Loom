@@ -20,8 +20,8 @@ struct DispatchRefused {
     std::string role;   // original authored role address, never its resolved holder
     std::string shape;
     std::int64_t version = 0;
-    std::string reason; // CapabilityDenied / NoSuchTarget / TargetUnavailable /
-                        // NotAccepted / GateRefused; no host error details
+    std::string reason; // name_of(RefusalReason): one of the safe reasons the reference lists;
+                        // no host error details
     using ZenSelf = DispatchRefused;
     static constexpr const char* zen_name = "zen.DispatchRefused";
     static constexpr std::uint32_t zen_version = 1;

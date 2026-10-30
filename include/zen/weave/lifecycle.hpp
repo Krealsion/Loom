@@ -78,7 +78,9 @@ struct ClaimBequest {
 // ---- activation (LIFE-01, LIFE-02) ------------------------------------------
 // `zen.Activated` means exactly: "the lifecycle operator that sent this has committed a new code
 // incarnation at this address." Not that the weave is healthy, ready, a role holder, that
-// state was kept, that a predecessor existed, or that anything should start. Do not grow it.
+// state was kept, that a predecessor existed, that a replacement was graceful, that resources
+// are there, that anything should start, that earlier work should be repeated, or that the
+// system is ready. Do not grow it.
 //
 // A weave participates by listing it in its accept-set; a sender asks first and otherwise stays
 // silent, so a non-participant hears nothing. Its identity is the bus-stamped sender plus
