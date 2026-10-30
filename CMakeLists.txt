@@ -676,6 +676,29 @@ if(LOOM_INSTALL)
     # The installed programs the package names (loomConfig.cmake.in says what each one is).
     set(LOOM_HOST_INSTALL_DIR ${CMAKE_INSTALL_BINDIR})
     set(LOOM_SESSION_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/loom)
+    # Where the kernel hosts WebAssembly modules, the package builds them too, and its config says
+    # so in a paragraph of its own; a package built without the backend is configured without it.
+    set(LOOM_WASM_SOURCE_DIR ${CMAKE_INSTALL_DATADIR}/loom/wasm)
+    set(LOOM_WASM_WEAVE_CONFIG "")
+    set(LOOM_KERNEL_DEPENDENCIES "")
+    if(LOOM_ENABLE_WASM AND NOT WIN32)
+        # The static kernel carries Wasmtime's link line, and Threads::Threads is a target, so a
+        # project finding the package finds it too.
+        string(CONCAT LOOM_KERNEL_DEPENDENCIES
+            "# The kernel's WebAssembly backend links Wasmtime, which needs the platform's threads.\n"
+            "include(CMakeFindDependencyMacro)\n"
+            "find_dependency(Threads)\n\n")
+    endif()
+    if(LOOM_ENABLE_WASM)
+        string(CONCAT LOOM_WASM_WEAVE_CONFIG
+            "# This kernel hosts WebAssembly modules (LOOM_ENABLE_WASM), and the package builds them:\n"
+            "# loom_wasm_weave(<target> OUTPUT <file.wasm> SOURCES ...) compiles a weave as a module\n"
+            "# with the wasi-sdk LOOM_WASI_SDK names. `if(COMMAND loom_wasm_weave)` is the question: a\n"
+            "# package built without the backend has no such function.\n"
+            "set(_LOOM_WASM_INCLUDE \"\${PACKAGE_PREFIX_DIR}/${CMAKE_INSTALL_INCLUDEDIR}\")\n"
+            "set(_LOOM_WASM_SOURCES \"\${PACKAGE_PREFIX_DIR}/${LOOM_WASM_SOURCE_DIR}\")\n"
+            "include(\"\${CMAKE_CURRENT_LIST_DIR}/loom-wasm.cmake\")\n\n")
+    endif()
     if(TARGET loom-runs)
         set(LOOM_SESSION_TOOLS_INSTALLED TRUE)
     else()
@@ -704,5 +727,21 @@ if(LOOM_INSTALL)
     if(MINGW)
         install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-weave-tls-return.cpp
                 DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+    endif()
+    # A package whose kernel hosts modules builds them too: loom_wasm_weave() and the glue, verbatim
+    # beside loom-weave.cmake, and the core and switchboard sources every module compiles, with the
+    # private headers they include, under the data directory as their own tree's `src/`.
+    if(LOOM_ENABLE_WASM)
+        install(FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-wasm.cmake
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/loom-wasm-glue.cpp
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom)
+        foreach(_source IN LISTS _LOOM_WASM_CORE)
+            get_filename_component(_source_dir "${_source}" DIRECTORY)
+            install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/${_source}
+                    DESTINATION ${LOOM_WASM_SOURCE_DIR}/${_source_dir})
+        endforeach()
+        install(DIRECTORY src/detail/ DESTINATION ${LOOM_WASM_SOURCE_DIR}/src/detail
+                FILES_MATCHING PATTERN "*.hpp")
     endif()
 endif()

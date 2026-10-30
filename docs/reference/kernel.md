@@ -113,7 +113,13 @@ the platform's loader.
 (`cmake/loom-wasm.cmake`, with the wasi-sdk `LOOM_WASI_SDK` names) compiles the weave's own
 sources unchanged, Loom's core and switchboard, and the module glue
 (`cmake/loom-wasm-glue.cpp`), which turns the weave's descriptor into exports and the host
-table into imports. One module file serves every platform's kernel.
+table into imports. One module file serves every platform's kernel. A package built with
+`LOOM_ENABLE_WASM` carries the function, the glue and the core's sources (under its data
+directory, `share/loom/wasm`), so a project outside this repository builds a module against
+the installed package alone: `find_package(loom)`, then `if(COMMAND loom_wasm_weave)`, with its
+own `LOOM_WASI_SDK`. A package built without the backend defines no such function. The
+installed-package witness builds its stranger's weave this way when a wasi-sdk is named
+(`tests/package/run.cmake`) and loads it through the same host as the library.
 
 **What a module may import, and what it is answered.** One `zen_host` import per `ZenHostApi`
 slot, and the host's byte sink: each checks every span and name the module hands it against

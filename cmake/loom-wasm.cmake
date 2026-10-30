@@ -11,13 +11,24 @@ if(COMMAND loom_wasm_weave)
     return()
 endif()
 
+# The function keeps this file's policies wherever it is called: its dependency files are read by
+# Ninja's own rule, as Loom's build reads them, whatever level a consuming project sets.
+if(POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+endif()
+
 set(LOOM_WASI_SDK "" CACHE PATH
     "An unpacked wasi-sdk release, to build weaves as WebAssembly modules (loom_wasm_weave)")
 
-# Where this file and the glue sit, and the Loom sources a module carries.
+# Where this file and the glue sit; where Loom's public headers are; and the directory holding the
+# core's sources (its `src/`): Loom's source tree, or what an installed loomConfig.cmake named.
 set(_LOOM_WASM_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE INTERNAL "")
-get_filename_component(_LOOM_WASM_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
-set(_LOOM_WASM_ROOT "${_LOOM_WASM_ROOT}" CACHE INTERNAL "")
+if(NOT _LOOM_WASM_SOURCES)
+    get_filename_component(_LOOM_WASM_SOURCES "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+    set(_LOOM_WASM_INCLUDE "${_LOOM_WASM_SOURCES}/include")
+endif()
+set(_LOOM_WASM_SOURCES "${_LOOM_WASM_SOURCES}" CACHE INTERNAL "")
+set(_LOOM_WASM_INCLUDE "${_LOOM_WASM_INCLUDE}" CACHE INTERNAL "")
 
 # The flags of every wasm32 compile: the target, C++20 with WebAssembly's exception form, and
 # the warning set Loom's own builds keep.
@@ -26,7 +37,7 @@ function(_loom_wasm_flags out)
         --target=wasm32-wasip1 "--sysroot=${LOOM_WASI_SDK}/share/wasi-sysroot"
         -std=c++20 -O2 -g0 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false
         -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror
-        "-I${_LOOM_WASM_ROOT}/include" "-I${_LOOM_WASM_ROOT}/src"
+        "-I${_LOOM_WASM_INCLUDE}" "-I${_LOOM_WASM_SOURCES}/src"
         PARENT_SCOPE)
 endfunction()
 
@@ -83,7 +94,7 @@ function(loom_wasm_weave target)
     # Loom's core as an archive, so the module carries only the objects its weave reaches.
     set(_core_objects "")
     foreach(_source IN LISTS _LOOM_WASM_CORE)
-        _loom_wasm_object(_object "${_LOOM_WASM_ROOT}/${_source}" "${_dir}/core" "")
+        _loom_wasm_object(_object "${_LOOM_WASM_SOURCES}/${_source}" "${_dir}/core" "")
         list(APPEND _core_objects "${_object}")
     endforeach()
     set(_core "${_dir}/core/libloom-wasm32.a")
