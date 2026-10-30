@@ -93,6 +93,10 @@ if(WIN32 AND TARGET zen-kernel)
     list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_WINDOWS})
     list(APPEND ZEN_POPULATION_GATES windows)
 endif()
+# The examples, when they are built (ZEN_BUILD_EXAMPLES): the entries that run one.
+if(ZEN_BUILD_EXAMPLES)
+    list(APPEND ZEN_POPULATION_GATES examples)
+endif()
 # THE BOX (LOOM_ENABLE_WASM): the kernel's WebAssembly backend, through real modules. They are
 # built here by loom_wasm_weave() when LOOM_WASI_SDK names a wasi-sdk, or read from
 # LOOM_WASM_MODULES, a directory another build made them in, so that one set of files can serve
@@ -809,6 +813,16 @@ add_test(NAME optional_member_types COMMAND ${CMAKE_COMMAND}
     -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include
     "-DZEN_MEMBERS_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_MEMBERS_ENV_LIB=${zen_hook_env_lib}")
+
+# A message's journey, as the page tells it: examples/message_journey.cpp prints the bus's own
+# record of each journey, and docs/guides/message-journey.md shows that record, so a change in
+# what the bus does turns this red rather than leaving the page untrue.
+if(ZEN_BUILD_EXAMPLES)
+    add_test(NAME message_journey COMMAND ${CMAKE_COMMAND}
+        -DZEN_JOURNEY_EXE=$<TARGET_FILE:message_journey>
+        -DZEN_JOURNEY_PAGE=${PROJECT_SOURCE_DIR}/docs/guides/message-journey.md
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/message_journey.cmake)
+endif()
 
 # ---- The supplied host, as a real process (GATE-05, LIFE-04, MSG-09) --------------------
 # A defect in the host's glue (which message answered which question, when an approved permission

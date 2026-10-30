@@ -7,10 +7,10 @@
 
 # `gate` uses suite_population.txt's words: `portable` (every configuration), `kernel` (TARGET
 # zen-kernel), `posix` (NOT WIN32), `windows` (WIN32 with the kernel built), `box` (LOOM_ENABLE_WASM),
-# `python` (the run manager built and a Python 3.8+ interpreter found at configure, or named by
-# LOOM_SESSION_PYTHON: optional tooling, declared absent without one). `weave_contract` and
-# `weave_population` are `kernel` because every loadable fixture is declared inside
-# `if(TARGET zen-kernel)`; if their registration ever parts from that gate, this check says so.
+# `python` (the run manager and a Python 3.8+ interpreter, found at configure or named by
+# LOOM_SESSION_PYTHON; declared absent without one), and its own `examples` (ZEN_BUILD_EXAMPLES).
+# `weave_contract` and `weave_population` are `kernel` because every loadable fixture is declared
+# inside `if(TARGET zen-kernel)`; if their registration ever parts from that gate, this check says so.
 
 # Keep this file plain ASCII: file(STRINGS) splits a line at a non-ASCII byte.
 # entry                      gate
@@ -29,6 +29,7 @@ doc_standard                 portable
 code_values                  portable
 hook_return_types            portable
 optional_member_types        portable
+message_journey              examples
 all                          posix
 weave_contract               kernel
 weave_population             kernel

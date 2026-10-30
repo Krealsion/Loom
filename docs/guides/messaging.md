@@ -1,7 +1,9 @@
 # Messaging
 
 How weaves talk: plain sends, roles, publications — and answers, which are the
-one kind of speech Loom itself vouches for.
+one kind of speech Loom itself vouches for. What to write, shape by shape; what
+the bus then does with each message, step by step and why, is
+[a message's journey](message-journey.md).
 
 ## Three ways to address
 
@@ -95,11 +97,12 @@ Two truths worth designing around:
   replaced meanwhile, the bus refuses the delivery rather than misdelivering
   it ([ANS-03](../laws/answer-authority-laws.md)).
 
-`mail.reply(...)` also exists — an *ordinary* send back at the sender's
-address, with no authority attached. Across six [Night Lab](../evidence/night-lab.md)
-applications, nothing ended up wanting it; every response wanted either an
-answer (provable) or a role send (replacement-surviving). It remains
-supported.
+`mail.reply(...)` also exists — an *ordinary* send to the reply address the
+incoming message carried (`mail.reply_to()`), with no authority attached; a
+message that carries none gets no reply ([a reply](message-journey.md#a-reply)).
+Across six [Night Lab](../evidence/night-lab.md) applications, nothing ended up
+wanting it; every response wanted either an answer (provable) or a role send
+(replacement-surviving). It remains supported.
 
 ## When something refuses
 

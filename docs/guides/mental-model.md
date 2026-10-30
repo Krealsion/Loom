@@ -37,6 +37,7 @@ grants it reach. Holding a `Mail` is being *a weave*; holding the
 `Switchboard` itself is being *the host* — the two surfaces are the trust
 boundary ([capabilities](../reference/capabilities.md)).
 
-Where next: [write your first weave](writing-a-weave.md) · then
+Where next: follow [a message's journey](message-journey.md) from the send to
+the handler · [write your first weave](writing-a-weave.md) · then
 [messaging](messaging.md). Exact semantics live in
 [reference](../reference/), invariants in [laws](../laws/README.md).

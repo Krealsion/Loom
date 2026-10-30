@@ -50,14 +50,22 @@ class Responder : public loom::WeaveBase<Responder, Count,
 public:
     void on(const Ping& p, loom::Mail& mail) { ++state_.handled; mail.reply(Pong{p.seq}); }
 };
+class Listener : public loom::WeaveBase<Listener, Count, loom::Accept<Pong>> {
+public:
+    void on(const Pong&, loom::Mail&) { ++state_.handled; }
+};
 
 loom::Switchboard bus;
-loom::WeaveId id = loom::mount<Responder>(bus);
-bus.send(id, loom::Message(loom::to_value(Ping{7})));
+loom::WeaveId responder = loom::mount<Responder>(bus);
+loom::WeaveId listener = loom::mount<Listener>(bus);
+bus.send(responder, loom::Message(loom::to_value(Ping{7}), {}, listener)); // reply to listener
 bus.drain_until_idle();
 ```
 
-`Responder` accepts `Ping`, may emit `Pong`, and keeps a `Count` as its state. Runnable versions
+`Responder` accepts `Ping`, may emit `Pong`, and keeps a `Count` as its state; its reply goes to
+the reply address the `Ping` carried, `listener`. [A message's
+journey](docs/guides/message-journey.md) follows a message like this from the send to the
+handler, and says why each step is there. Runnable versions
 live in [`examples/`](examples/): `quickstart.cpp` (values and the gate), `heartbeat.cpp` and
 `heartbeat_woven.cpp` (weaves on the bus, by hand and with the authoring layer), `answering.cpp`
 (immediate and deferred answers).

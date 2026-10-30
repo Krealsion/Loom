@@ -12,12 +12,14 @@ Python, and start named runs of editable Python tools that you can inspect later
 capability, act on a target, read a result, recover or finish, extend the harness —
 each to the page section that already answers it.
 
-**I am new.** Start with the [mental model](guides/mental-model.md), then
-[write your first weave](guides/writing-a-weave.md) — working code in two
-pages, no history required.
+**I am new.** Start with the [mental model](guides/mental-model.md), follow
+[a message's journey](guides/message-journey.md) from the send to the handler,
+then [write your first weave](guides/writing-a-weave.md) — working code, no
+history required.
 
 **I am implementing something.**
 [Messaging](guides/messaging.md) ·
+[a message's journey](guides/message-journey.md) ·
 [dynamic weaves](guides/dynamic-weaves.md) ·
 [replacing a service](guides/replacing-a-service.md).
 Timers are not Loom's: they belong to the Timer package of
