@@ -261,7 +261,9 @@ An answer is delivered only to the exact life+incarnation that asked
 authenticate ([ANS-05](../laws/answer-authority-laws.md)).
 
 **`reply_to` / ordinary replies** — a `Message` carries a `reply_to` address a
-responder may target with an ordinary send. That reply is *ordinary speech*:
+responder may target with an ordinary send; `Mail::reply` sends there and only
+there, so a message with no reply address is answered by nothing it sends this
+way (the reply is refused `NoSuchTarget`). That reply is *ordinary speech*:
 no provenance, no authority, delivered to whatever occupies the address.
 Across six [Night Lab](../evidence/night-lab.md) applications no natural use for an
 ordinary reply appeared — every response wanted either an *answer* (provable) or a
@@ -386,8 +388,9 @@ a respondent by correlation alone.
 
 An explicit `reply_to` naming a different participant remains ordinary, grant-checked speech
 to that address, without answer provenance. A root request naming neither sender nor reply
-address has no reply. An answer does not earn a second answer; a refused answer attempt is
-never silently retried as ordinary speech.
+address has no reply. One ask earns one answer. An answer is itself a delivery and may be
+answered in turn, as a new conversation that proves nothing about the ask before it; a refused
+answer attempt is never silently retried as ordinary speech.
 
 This behaviour lives in the authoring headers, not in the ABI: rebuild an artifact compiled
 against older headers before relying on its substrate replies to settle a strict asker.
@@ -468,9 +471,11 @@ carries no substrate doors at all, so nothing is narrowed by this.
 diagnostic life/incarnation fields on the relevant refusals). The journal
 retains the last `kJournalCapacity` (<!-- value kJournalCapacity -->1024<!-- /value -->) delivery outcomes by ticket
 (`outcome(Ticket)`); older entries read as `Pending`, exactly like unknown
-seqs. The Poke doors (`ZEN_EXPOSE`/`ZEN_HIDE`) allow live field
-inspect/manipulate *by message* where a weave opts in; they read and write
-scalar fields (`Int`, `Float`, `Text`, `Bool`) and refuse the rest by kind. An
+seqs. Every `WeaveBase` weave answers the Poke doors *by message*: a field reads
+unless `ZEN_HIDE` holds its value back and is written only where `ZEN_EXPOSE`
+opts it in, and the answers leave only where its grant allows them
+(`allow_poke_answers`). They read and write scalar fields (`Int`, `Float`,
+`Text`, `Bool`) and refuse the rest by kind. An
 optional scalar field (a `std::optional` member) reads as its value, or is
 refused as absent when it holds none; a write gives it a value, and no write
 makes it absent again: `zen.PokeResetState` restores the state's declared

@@ -59,8 +59,9 @@ bytes ──parse()──► Unverified ──admit(door)──► Value      (o
 ```
 
 `loom::admit(candidate, door)` is the **sole** conformance authority
-([GATE-01](../laws/admission-laws.md)). `Unverified` has no accessors — there
-is no road from bytes to readable data around the gate
+([GATE-01](../laws/admission-laws.md)). `Unverified` says only what it claims
+to be (`well_formed()`, `claimed_name()`, `claimed_version()`) and has no accessor
+for its data — there is no road from bytes to readable data around the gate
 ([GATE-02](../laws/admission-laws.md)). Admission is strict (no partial
 acceptance) and total (caps on depth/size make hostile input safe — see
 [bounds](bounds.md)). Refusals carry kind, field path, expected/actual.

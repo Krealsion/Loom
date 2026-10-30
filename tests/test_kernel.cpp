@@ -3216,8 +3216,8 @@ TEST_CASE("answering the readiness instead of consuming it does not make the nex
     // `enqueue_answer` copies the correlation forward at every hop. Were the ask's identity
     // inherited the same way, a coordinator that ANSWERED the readiness instead of consuming it
     // would find the next exchange satisfying every term: ask (T), readiness (T), an answer to
-    // that (T), and an answer to the answer (T, indistinguishable). An ask seeds an answerable
-    // conversation; its answer does not seed another.
+    // that (T), and an answer to the answer (T, indistinguishable). An answer may be answered,
+    // but the answer to it does not carry the ask's identity.
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
     const TxnResult t = bus.begin_prepared_replacement(c.op.id, c.coordinator.id, c.incumbent,

@@ -553,8 +553,8 @@ private:
             return;
         }
         // A reply to the requester spends this delivery's answer right; a redirected reply is
-        // ordinary speech, which cannot attest a conversation with somebody who did not ask. An
-        // answer seeds no answer (ANS-01), and a refused answer is never resent as ordinary speech.
+        // ordinary speech, which cannot attest a conversation with somebody who did not ask. One
+        // ask, one answer (ANS-01), and a refused answer is never resent as ordinary speech.
         if (to == in.sender) {
             (void)bus.answer(loom::Message(std::move(answer), self_, self_, in.correlation));
             return;

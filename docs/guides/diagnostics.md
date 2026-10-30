@@ -55,6 +55,8 @@ is already replacing that service; …). See
 
 ## 5. Live inspection
 
-A weave that opts in (`ZEN_EXPOSE`) can be inspected and adjusted **by
-message** from the console — see the Poke doors in
+Every weave written with `WeaveBase` can be inspected **by message** from the console: a field
+reads unless `ZEN_HIDE` holds its value back, and is written only where `ZEN_EXPOSE` opts it in
+(a reset, only when every field is). The answers leave only where the weave's grant allows them
+(`allow_poke_answers`, which `mount` adds) — see the Poke doors in
 [reference/messaging](../reference/messaging.md#observation).
