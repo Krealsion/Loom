@@ -93,9 +93,10 @@ unchanged, and still refuses everything it always refused.
 ## What remains intentionally unresolved
 
 - **No migration vocabulary is canonized.** The handoff witness's `MigrateV1ToV2`
-  / `MigrationResult` pair is a *test domain's* protocol, not a Loom shape. If
-  many packages converge on the same spelling, that is when a shared vocabulary
-  is earned — and it would be a package, not the substrate.
+  / `MigrationResult` pair is a *test domain's* protocol, not a Loom shape. A
+  shared migration vocabulary would be a package, not the substrate, built whole
+  for the uses that package names. (This line once waited for packages to
+  converge on one spelling first; the founder retired that rule, 2026-10-31.)
 - **Schema-as-value stays out of scope.** A migrator that wanted to reason about
   shapes generically would need it; this one does not, because it knows both
   schemas statically. Recorded as pressure, not built.

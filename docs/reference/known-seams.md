@@ -5,7 +5,7 @@ cannot harden into false guarantees. Statuses used here include **KNOWN SEAM**
 (a real, current limitation), **CLOSED** (a former seam, kept here with what
 still lies outside it), **GUIDELINE** (a design rule for applications),
 **KNOWN AUTHORING FRICTION** (ergonomics, not missing truth), **WATCHING** (a
-pattern seen, deliberately not yet answered).
+pattern seen, whose answer is a design decision not yet made).
 
 ## Role-authored provenance
 
@@ -101,9 +101,9 @@ back — the seat that could revoke it is the seat that is gone. Only the host,
 holding a capability of its own, can.
 
 That is stated rather than solved. Session-death-on-Weaver-failure, leases,
-supervisor restart and a host emergency revoke are all real answers and all
-speculative; adding RAII revocation would silently turn "a capability is not a
-lease" into its opposite for one caller.
+supervisor restart and a host emergency revoke are all real answers, and which
+one Loom carries is a design decision not yet made; adding RAII revocation would
+silently turn "a capability is not a lease" into its opposite for one caller.
 
 ## What an ordinary participant may observe
 
@@ -140,7 +140,7 @@ or a tap through hidden privileges: an honest terminal says *watching traffic is
 not available to an ordinary participant*, because power includes saying no
 truthfully. Closing this needs a real scoped observation law (what may be
 observed, by whom, authorized how) — the same shape `ObserveRule` gave Senses,
-and it has no consumer yet. The relay in [observation](observation.md) is the
+and that law is a design of its own, not yet made. The relay in [observation](observation.md) is the
 narrower thing that does exist: an office's own publications, under a policy.
 F and I are separate entries above and below.
 
@@ -169,15 +169,15 @@ and needs a `Switchboard&`; a [terminal session](terminal.md) does not have it,
 and neither does anything else. Enumerating live weaves is a fact about the
 running world rather than about the participant, and handing it to every
 terminal would give an ordinary weave a power nothing granted it. `send_to_role`
-addresses an office without resolving it, which is why no consumer has needed
-the list.
+addresses an office without resolving it, which is why addressing an office
+never needs the list.
 
 **Absent, and not wanted:** global schema enumeration. Nothing in Loom can
 enumerate schemas — `Registry` offers lookup/contains/size and the `Switchboard`
 publishes no `registry()` accessor — so even the console's "catalog" is derived
-from accept-sets. A `ListSchemas` would have no owner, no natural authority
-scope, and no consumer: the product question is *what can I say to THIS thing*,
-which is answered directly.
+from accept-sets. A `ListSchemas` would have no owner and no natural authority
+scope, and it answers the wrong question: the product question is *what can I
+say to THIS thing*, which is answered directly.
 
 ## The operator seat is a WeaveId, not a person
 
@@ -223,7 +223,7 @@ showing inbound — and nothing of the *operator's*. A loaded weave's
 `NoLiveDelivery`. The authority is a native capability the host mints; carrying
 it across the seam means the host keeping the minted authority in a table keyed
 by the adapter and checking the operator's exact incarnation at every verb,
-with its own witnesses. That is a design of its own, wanted by no consumer yet
+with its own witnesses. That is a design of its own, not yet made
 ([joint publication](joint-publication.md#what-crosses-the-abi)).
 
 ## Rejections at the dynamic seam
@@ -375,8 +375,8 @@ The handle is host-owned; `offer_current_answer()` must run inside the
 coordinator's current delivery. Applications bridge it with a host-provided
 handle reference in the coordinator — one `PreparedReplacement*` member. It is
 common and harmless in practice, and recorded so the pattern is recognized
-rather than re-derived. What would earn an extraction is a coordinator needing
-to pass something the handle cannot reach; an authored handoff does not (its
+rather than re-derived. An extraction answers a coordinator that must pass
+something the handle cannot reach; an authored handoff does not (its
 migration result travels as an ordinary domain message, and the transaction
 handle carries only what it always carries).
 
@@ -480,8 +480,8 @@ other: two sightings whose only meaning is *"the API needs a number"*.
 Not solved here, on purpose: the number is real authority (it is what Loom
 attests, and what consumers order their lineage by), so an allocator would have
 to decide *whose* lineage it belongs to — and neither sighting has an opinion
-about that. What would earn a fix is a consumer for which the sequence carries
-domain meaning, rather than one that needs any monotonic integer.
+about that. A fix decides whose lineage the sequence is; an allocator that only
+satisfies the call decides nothing, so none is added.
 
 Senses did **not** add a third: a claim's `revision` is minted by Loom per key
 and never passed in by a caller, so it needs no synthetic counter.
@@ -508,8 +508,9 @@ inside the child — and so is every UBSan check.
 Deliberately not solved. Mounting `/proc` into the view to satisfy LSan would
 widen the containment the suite exists to prove, which is a worse trade than
 the missing coverage ([capabilities](capabilities.md)); the sanitizer lane is
-not weakened to hide the messages either. What would earn a fix is a leak
-question about child-side code that the host-side lane genuinely cannot reach.
+not weakened to hide the messages either. A child-side leak check is a design of
+its own: it must read the children's leaks without widening the containment they
+run in.
 
 ## A cgroup leaf is confirmed by its whole path
 
