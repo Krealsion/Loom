@@ -261,10 +261,11 @@ An answer is delivered only to the exact life+incarnation that asked
 authenticate ([ANS-05](../laws/answer-authority-laws.md)).
 
 **`reply_to` / ordinary replies** — a `Message` carries a `reply_to` address a
-responder may target with an ordinary send; `Mail::reply` sends there and only
-there, so a message with no reply address is answered by nothing it sends this
-way (the reply is refused `NoSuchTarget`). That reply is *ordinary speech*:
-no provenance, no authority, delivered to whatever occupies the address.
+responder may target with an ordinary send; `Mail::reply` sends there, or to the
+stamped sender when the message names none, and a root send naming neither gets
+nothing (the reply is refused `NoSuchTarget`). That reply is *ordinary speech*:
+checked against the replier's own grant, with no provenance whether or not the
+message was an ask, delivered to whatever occupies the address.
 Across six [Night Lab](../evidence/night-lab.md) applications no natural use for an
 ordinary reply appeared — every response wanted either an *answer* (provable) or a
 *role send* (replacement-surviving). It is kept and documented, and rarely used.
