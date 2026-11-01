@@ -212,8 +212,10 @@ Before implementation and again at review, assess the complete result: does it s
 capability, preserve coherent ownership/authority/composition, and leave selected next work and
 known consumers able to build on it? Local green does not excuse avoidable coupling, duplicate
 truth, special cases, or migration burdens imposed on future owners. Revise that design; make
-necessary tradeoffs explicit for acceptance. Keep the argument proportional and grounded in
-real consumers, not speculative abstractions. Required checks still have to pass.
+necessary tradeoffs explicit for acceptance. Build a piece for the uses the direction sets,
+whole and with care: nothing waits for its absence to hurt, and nothing is argued down for
+having no consumer yet. What the direction does not name is still a guess, so say what a piece
+is for before building it. Required checks still have to pass.
 
 ## Consumers
 
