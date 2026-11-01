@@ -1,4 +1,4 @@
-> **Historical architecture record — Status: FROZEN.** Source commit: Loom `78d64ea`
+> **Historical architecture record — Status: FROZEN.** Source commit: Loom `63da2c6`
 > (pre-R2C-0 consolidation, preserved unabridged). This document keeps the reasoning,
 > experiments, intermediate laws, rejected designs and architecture state that produced
 > the current system. It is not the recommended introduction to Zen.

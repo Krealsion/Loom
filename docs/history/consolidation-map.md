@@ -6,7 +6,7 @@ CURRENT REFERENCE / CURRENT LAW / DECISION / HISTORICAL / EVIDENCE / DUPLICATE /
 STALE. Every source listed here is preserved unabridged in
 [`pre-r2c/`](pre-r2c/) regardless of classification.
 
-## Loom `DESIGN.md` (3,890 lines, frozen at `78d64ea`)
+## Loom `DESIGN.md` (3,890 lines, frozen at `63da2c6`)
 
 | Section | Status | Current destination | Verified against |
 |---|---|---|---|
@@ -32,7 +32,7 @@ STALE. Every source listed here is preserved unabridged in
 | Smaller decisions on record | DECISION | decisions/ (absorbed where still live) | — |
 | Building | DUPLICATE (of README) | README | — |
 
-## Loom `zen-design-ledger.md` (509 lines, frozen at `78d64ea`)
+## Loom `zen-design-ledger.md` (509 lines, frozen at `63da2c6`)
 
 | Part | Status | Destination |
 |---|---|---|
@@ -49,7 +49,7 @@ original frozen.
 
 CURRENT GUIDE — moved to `guides/replacing-a-service.md` unchanged in content.
 
-## Zengine `README.md` (653 lines, frozen at `f6a4c69`)
+## Zengine `README.md` (653 lines, frozen at `5ee3314`)
 
 | Section | Status | Destination |
 |---|---|---|

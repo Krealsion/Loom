@@ -3,9 +3,9 @@
 **Repository:** <https://github.com/Krealsion/zen-night-lab>, an independent
 application lab. Three experiments live side by side, each pinned to the
 substrate it ran on: `original/`, the first, against its own older Loom;
-`marathon/`, six applications against Loom `78d64ea` and Zengine `f6a4c69`
+`marathon/`, six applications against Loom `63da2c6` and Zengine `5ee3314`
 at ABI v4, all green; and `followups/role-authorship/`, which replayed three
-of them against Loom `30eab0a` at ABI v5 once office authorship existed. Its
+of them against Loom `077f30f` at ABI v5 once office authorship existed. Its
 reports, which carry the counts, are `marathon/FINAL-REPORT.md`,
 `marathon/EVIDENCE.md`, `marathon/FRICTION.md` and
 `followups/role-authorship/REPORT.md` in that repository.
