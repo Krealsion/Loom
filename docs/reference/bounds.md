@@ -198,6 +198,21 @@ most `kHeldInputBytes` — and on a pipe or a file that can include part of a li
 the next reader then receives as a line of its own; the supplied host reads stdin with one
 reader for its whole life.
 
+## A host's one wait
+
+A host that rests between turns waits on its sources once, on its dispatch thread
+([`include/zen/host/reactor.hpp`](../../include/zen/host/reactor.hpp);
+[the guide](../guides/running-loom.md#a-host-that-rests-until-something-is-ready)).
+
+| Bound | Value | Unit | What it bounds | Overflow behavior |
+|---|---|---|---|---|
+| `kMaxWaitedHandles` | <!-- value kMaxWaitedHandles -->62<!-- /value --> | handles | everything one wait holds: every held office's handles and descriptors, and a watched console's | the office whose claim would pass it is **not held**, in the order the host trusted its offices, and is told why (`loom.host.Waited`, `held` false); its source polls as it would with no host waiting |
+
+**Why <!-- value kMaxWaitedHandles -->62<!-- /value -->.** A Windows wait takes 64 handles, and the
+host's takes two of them itself: the thread's message queue and the high-resolution timer that is
+its deadline. POSIX's `poll` has no such limit, and keeps the same one, so a host holds the same
+sources on both.
+
 ## Terminal session (one participant's own record)
 
 A [terminal session](terminal.md) keeps a wide window of transcript entries and separate

@@ -207,6 +207,30 @@ struct Shared {
     HeldInput held;                     ///< under `m`
     bool stop = false;                  ///< under `m`
     HANDLE handle = nullptr;            ///< the reader's own; closed once the thread has left it
+    /// Set, under `m`, while `held` is ready: a host's one wait ends on it (wait_set). Manual
+    /// reset, so a wait never takes it; the host thread clears it once nothing is ready.
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+
+    Shared() = default;
+    Shared(const Shared&) = delete;
+    Shared& operator=(const Shared&) = delete;
+    ~Shared() {
+        if (ready != nullptr) {
+            CloseHandle(ready);
+        }
+    }
+
+    /// The event said as `held` stands; the caller holds `m`.
+    void say_ready() {
+        if (ready == nullptr) {
+            return;
+        }
+        if (held.ready()) {
+            (void)SetEvent(ready);
+        } else {
+            (void)ResetEvent(ready);
+        }
+    }
 };
 
 unsigned __stdcall read_lines(void* arg) {
@@ -238,12 +262,14 @@ unsigned __stdcall read_lines(void* arg) {
         {
             std::lock_guard<std::mutex> lock(s->m);
             s->held.add(buf, static_cast<std::size_t>(got));
+            s->say_ready();
         }
         s->for_host.notify_all();
     }
     {
         std::lock_guard<std::mutex> lock(s->m);
         s->held.end();
+        s->say_ready();
     }
     s->for_host.notify_all();
     return 0;
@@ -255,7 +281,15 @@ struct LineInput::Impl {
     std::shared_ptr<Shared> shared = std::make_shared<Shared>();
     HANDLE thread = nullptr;
     bool started = false;
+    bool closed = false;  ///< `read` said Closed
     TooLongLine too_long; ///< the host thread's alone
+
+    /// Stdin is unusable: the end, held at once.
+    void end_now() {
+        std::lock_guard<std::mutex> lock(shared->m);
+        shared->held.end();
+        shared->say_ready();
+    }
 
     /// Open the reader's own handle and start it. Anything that fails here is stdin being
     /// unusable, which is `Closed` — the same answer a missing stdin always got.
@@ -282,8 +316,7 @@ struct LineInput::Impl {
             }
         }
         if (own == nullptr) {
-            std::lock_guard<std::mutex> lock(shared->m);
-            shared->held.end();
+            end_now();
             return;
         }
         shared->handle = own;
@@ -293,8 +326,7 @@ struct LineInput::Impl {
             delete ref;
             CloseHandle(own);
             shared->handle = nullptr;
-            std::lock_guard<std::mutex> lock(shared->m);
-            shared->held.end();
+            end_now();
             return;
         }
         thread = reinterpret_cast<HANDLE>(t);
@@ -345,9 +377,13 @@ LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
                                       [&s] { return s.held.ready(); });
         }
         taken = s.held.take(out, &impl_->too_long);
+        s.say_ready();
     }
     if (taken == HeldInput::Taken::Line || taken == HeldInput::Taken::TooLong) {
         s.for_reader.notify_one(); // room was made
+    }
+    if (taken == HeldInput::Taken::Ended) {
+        impl_->closed = true;
     }
     return status_of(taken, out);
 }
@@ -357,6 +393,25 @@ LineInput::Held LineInput::held() const {
     return Held{impl_->shared->held.held(), impl_->shared->held.peak()};
 }
 
+WaitSet LineInput::wait_set() {
+    if (!impl_->started) {
+        impl_->start();
+    }
+    WaitSet set;
+    if (impl_->shared->ready != nullptr) {
+        set.handles.push_back(
+            static_cast<std::int64_t>(reinterpret_cast<std::intptr_t>(impl_->shared->ready)));
+    }
+    return set;
+}
+
+bool LineInput::ready() const {
+    std::lock_guard<std::mutex> lock(impl_->shared->m);
+    return impl_->shared->held.ready();
+}
+
+bool LineInput::closed() const noexcept { return impl_->closed; }
+
 #else // POSIX
 
 // ---- POSIX: poll, then read what poll promised, into the waiting area ------------
@@ -364,7 +419,14 @@ LineInput::Held LineInput::held() const {
 struct LineInput::Impl {
     HeldInput held;
     TooLongLine too_long;
+    bool closed = false; ///< `read` said Closed
     char buf[kReadChunkBytes];
+
+    /// What `read` answers for `taken`, a Closed remembered.
+    LineInput::Status said(HeldInput::Taken taken, std::string* out) {
+        closed = closed || taken == HeldInput::Taken::Ended;
+        return status_of(taken, out);
+    }
 };
 
 LineInput::LineInput() : impl_(std::make_unique<Impl>()) {}
@@ -378,7 +440,7 @@ LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
     // serve a script one line per timeout.
     HeldInput::Taken taken = in.held.take(out, &in.too_long);
     if (taken != HeldInput::Taken::Nothing) {
-        return status_of(taken, out);
+        return in.said(taken, out);
     }
 
     // Nothing is finished, so what is held is one unfinished line no longer than a command,
@@ -405,7 +467,7 @@ LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
                 return Status::Idle; // a signal is not end of input
             }
             in.held.end();
-            return status_of(in.held.take(out, &in.too_long), out);
+            return in.said(in.held.take(out, &in.too_long), out);
         }
         const std::size_t want = std::min(sizeof in.buf, in.held.room());
         if (want == 0) {
@@ -419,21 +481,31 @@ LineInput::Status LineInput::read(std::string* out, int timeout_ms) {
                 return Status::Idle;
             }
             in.held.end();
-            return status_of(in.held.take(out, &in.too_long), out);
+            return in.said(in.held.take(out, &in.too_long), out);
         }
         if (got == 0) {
             in.held.end(); // and the pass below flushes a newline-less last line
-            return status_of(in.held.take(out, &in.too_long), out);
+            return in.said(in.held.take(out, &in.too_long), out);
         }
         in.held.add(in.buf, static_cast<std::size_t>(got));
         taken = in.held.take(out, &in.too_long);
         if (taken != HeldInput::Taken::Nothing || Clock::now() >= deadline) {
-            return status_of(taken, out);
+            return in.said(taken, out);
         }
     }
 }
 
 LineInput::Held LineInput::held() const { return Held{impl_->held.held(), impl_->held.peak()}; }
+
+WaitSet LineInput::wait_set() {
+    WaitSet set;
+    set.handles.push_back(STDIN_FILENO);
+    return set;
+}
+
+bool LineInput::ready() const { return impl_->held.ready(); }
+
+bool LineInput::closed() const noexcept { return impl_->closed; }
 
 #endif
 

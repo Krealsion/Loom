@@ -80,6 +80,7 @@ kHeldInputBytes                 include/zen/host/line_input.hpp           kHeldI
 kMaxCommandBytes                include/zen/host/line_input.hpp           kMaxCommandBytes
 claim   kMaxCommandBytes  longer than {} bytes
 kReadChunkBytes                 src/host/line_input.cpp                   kReadChunkBytes
+kMaxWaitedHandles               include/zen/host/reactor.hpp              kMaxWaitedHandles
 kIdleWaitMs                     src/host/host_main.cpp                    kIdleWaitMs
 kServeIdleWaitMs                src/host/host_main.cpp                    kServeIdleWaitMs
 kMaxExpectations                src/host/session_door.hpp                 kMaxExpectations

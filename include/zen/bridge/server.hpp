@@ -21,8 +21,11 @@
 // drain can service the crossing from inside a delivery; `step()` adds one bus turn. A
 // misbehaving peer is contained (bounded frames and backlog, a loop that never blocks on it),
 // and a grant bounds what a session may say, never what this process's native code may touch.
+// A host that rests between turns waits on the server through `wait_set()`, and services it when
+// that wait says it is ready (docs/reference/bridge.md#a-server-a-host-waits-on).
 
 #include <zen/bridge/channel.hpp>
+#include <zen/host/wait_set.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
 #include <cstdint>
@@ -142,6 +145,7 @@ struct Connection {
 };
 
 class OperatorProxy; // a per-connection Weave on the bus (the proxy-participant); defined in server.cpp
+class BridgeWake;    // what ends a host's wait when the server owes a peer something; server.cpp
 
 class BridgeServer {
 public:
@@ -184,6 +188,18 @@ public:
     /// socket is ready.
     void run(int tick_ms = 50);
     void stop() noexcept { stop_ = true; }
+
+    /// WHAT A HOST'S ONE WAIT WAITS ON FOR THIS SERVER (zen/host/reactor.hpp): the listener, every
+    /// connection, and a signal the server raises when it owes a peer something a turn put in its
+    /// hands -- a delivery to a session, a settlement, a copy of a bus event, a fresh weave list --
+    /// so what a turn queued leaves at the `service()` the wait wakes, not at the next poll. Ready
+    /// means `service()` has work. On Windows one event: every socket is selected on it
+    /// (`WSAEventSelect`: accept, read, room to write, close) and the server sets it when it owes;
+    /// on POSIX a pipe's read end beside the listener and each connection, and as writable each
+    /// connection whose output waits on a full socket. The first call turns this on; a server no
+    /// host waits on is served as it always was. Asked anew after each `service()`, since the
+    /// connections change.
+    host::WaitSet wait_set();
 
     // ---- the decision seam, after the fact ----------------------------------------------
 
@@ -279,6 +295,7 @@ private:
     socket_t listener_;
     BridgeAdmission admission_;
     std::vector<std::unique_ptr<Conn>> conns_;
+    std::unique_ptr<BridgeWake> wake_; ///< raised when the server owes; waited on once asked
     std::set<std::uint64_t> proxy_ids_; ///< proxies are hands on the bus, not send targets
     loom::ObserverId tap_obs_ = 0;
     std::function<void(const Connection&)> tell_;

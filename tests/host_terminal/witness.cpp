@@ -19,6 +19,8 @@
 // failure: a witness without a terminal proves nothing).
 
 #include <zen/host/line_input.hpp>
+#include <zen/host/reactor.hpp>
+#include <zen/switchboard/switchboard.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -1158,6 +1160,64 @@ void stream_deadline(Report& r) {
             std::string(status_name(s)) + " '" + line + "' in " + std::to_string(waited) + " ms");
 }
 
+void stream_waited(Report& r) {
+    // A READER THE HOST'S ONE WAIT HOLDS (zen/host/reactor.hpp): the wait ends when a line is
+    // whole, not at its deadline; a second line read with the first ends the next wait at once,
+    // though nothing more is on the stream; and once the reader has said Closed the wait lasts its
+    // deadline, never spinning on a stream that has ended.
+    Pipe pipe;
+    if (!pipe.open()) {
+        r.check("a pipe could be made", false);
+        return;
+    }
+    Producer producer(pipe, "fir", "st\nsecond\n", /*pause=*/true);
+    StdinFrom from(pipe.rd);
+    LineInput input;
+    loom::Switchboard bus;
+    loom::host::Reactor wait(bus);
+    wait.watch(&input);
+    std::thread releaser([&producer] {
+        sleep_ms(300);
+        producer.release();
+    });
+    std::string line;
+    auto t = Clock::now();
+    loom::host::Reactor::Woke woke;
+    // A half line wakes a POSIX wait without finishing one; the wait is taken again until it is.
+    LineInput::Status first = LineInput::Status::Idle;
+    while (first == LineInput::Status::Idle && ms_since(t) < 5000) {
+        woke = wait.after_turn(5000 - ms_since(t));
+        first = input.read(&line, 0);
+    }
+    long long waited = ms_since(t);
+    releaser.join();
+    r.check("waited: the wait ends for a whole line, not at its deadline",
+            woke.line && waited >= 200 && waited < 2500 && first == LineInput::Status::Line &&
+                line == "first",
+            std::string(status_name(first)) + " '" + line + "' in " + std::to_string(waited) +
+                " ms");
+    t = Clock::now();
+    woke = wait.after_turn(5000);
+    waited = ms_since(t);
+    const LineInput::Status second = input.read(&line, 0);
+    r.check("waited: a line read with the one before it ends the next wait at once",
+            woke.line && waited < 2500 && second == LineInput::Status::Line && line == "second",
+            std::string(status_name(second)) + " '" + line + "' in " + std::to_string(waited) +
+                " ms");
+    // The producer has written all it had and closed its end: the end is the next thing to take.
+    LineInput::Status ended = LineInput::Status::Idle;
+    for (int i = 0; i < 20 && ended != LineInput::Status::Closed; ++i) {
+        (void)wait.after_turn(500);
+        ended = input.read(&line, 0);
+    }
+    t = Clock::now();
+    woke = wait.after_turn(60);
+    waited = ms_since(t);
+    r.check("waited: once a reader has said Closed, the wait lasts its deadline",
+            ended == LineInput::Status::Closed && input.closed() && woke.deadline && waited >= 40,
+            std::string(status_name(ended)) + ", then a wait of " + std::to_string(waited) + " ms");
+}
+
 void stream_stop_while_waiting(Report& r) {
     constexpr std::size_t kLines = 20000;
     const std::string data = numbered_burst(kLines);
@@ -1304,6 +1364,7 @@ int run_streams(Report& r, const std::string& work) {
     stream_limits(r);
     stream_endless_line(r);
     stream_deadline(r);
+    stream_waited(r);
     stream_stop_while_waiting(r);
     stream_stop_while_reading(r);
     stream_empty(r);

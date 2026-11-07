@@ -392,14 +392,16 @@ target_link_libraries(zen-console-tui
 
 # The host's deciding half, installed so a second host keeps its person's decisions the same way
 # (include/zen/host/): the authority store and its admission policy, the `authority` command over
-# it, the warden that installs a decision on the bus, `store_lock` (who owns these decisions) and
-# `line_input` (reading a command without stopping the bus). The parser of the store's file is
-# shared with the boot plan and stays a private header here.
+# it, the warden that installs a decision on the bus, `store_lock` (who owns these decisions),
+# `line_input` (reading a command without stopping the bus) and `reactor` (the one wait a host rests
+# in between turns). The parser of the store's file is shared with the boot plan and stays a private
+# header here.
 add_library(zen-host-policy STATIC
     src/host/authority.cpp
     src/host/authority_command.cpp
     src/host/config_file.cpp
     src/host/line_input.cpp
+    src/host/reactor.cpp
     src/host/store_lock.cpp)
 target_include_directories(zen-host-policy
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -409,6 +411,10 @@ target_compile_features(zen-host-policy PUBLIC cxx_std_20)
 target_link_libraries(zen-host-policy
     PUBLIC  loom zen-switchboard zen-sanitize
     PRIVATE zen-warnings)
+if(WIN32)
+    # The one wait takes the dispatch thread's window messages (MsgWaitForMultipleObjectsEx).
+    target_link_libraries(zen-host-policy PRIVATE user32)
+endif()
 add_library(loom::host-policy ALIAS zen-host-policy)
 # Installed for a weave to link, as zen-terminal is (LOOM_PACKAGE_LIBRARIES).
 loom_weave_build_contract(zen-host-policy)
