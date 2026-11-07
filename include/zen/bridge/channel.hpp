@@ -63,6 +63,10 @@ public:
     /// buffer leaves the rest queued for next time).
     void flush();
 
+    /// Whether queued output is still unwritten: the socket was full at the last flush, or
+    /// nothing has flushed since a queue.
+    bool backlogged() const noexcept { return out_pos_ < outbox_.size(); }
+
     /// Read available bytes without blocking and append every complete frame to `out`. Sets eof()
     /// on peer close and failed() on a protocol/IO error.
     void poll(std::vector<BridgeIncoming>& out);

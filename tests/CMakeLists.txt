@@ -41,6 +41,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_bridge.cpp
     test_host_policy.cpp
     test_host_input.cpp
+    test_host_reactor.cpp
     test_session.cpp
     test_observe.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.

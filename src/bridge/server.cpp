@@ -21,7 +21,136 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace loom {
+
+/// WHAT ENDS A HOST'S WAIT WHEN THE SERVER OWES A PEER SOMETHING. Off until a host first asks for
+/// the server's wait set; then `raise` makes it ready and `clear`, at the start of each service,
+/// makes it not. On Windows it is also the event every socket is selected on, so the network sets
+/// it too; on POSIX a pipe whose one byte stands for "owed".
+class BridgeWake {
+public:
+    BridgeWake() = default;
+    BridgeWake(const BridgeWake&) = delete;
+    BridgeWake& operator=(const BridgeWake&) = delete;
+    ~BridgeWake() {
+#ifdef _WIN32
+        if (event_ != WSA_INVALID_EVENT) {
+            (void)::WSACloseEvent(event_);
+        }
+#else
+        if (read_ >= 0) {
+            ::close(read_);
+        }
+        if (write_ >= 0) {
+            ::close(write_);
+        }
+#endif
+    }
+
+    /// Turn waiting on. False when the platform would not give the signal.
+    bool start() {
+        if (started_) {
+            return ok();
+        }
+        started_ = true;
+#ifdef _WIN32
+        event_ = ::WSACreateEvent();
+#else
+        int fds[2] = {-1, -1};
+        if (::pipe(fds) == 0) {
+            for (const int fd : fds) {
+                (void)::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+                (void)::fcntl(fd, F_SETFD, FD_CLOEXEC);
+            }
+            read_ = fds[0];
+            write_ = fds[1];
+        }
+#endif
+        return ok();
+    }
+    bool ok() const noexcept {
+#ifdef _WIN32
+        return event_ != WSA_INVALID_EVENT;
+#else
+        return read_ >= 0;
+#endif
+    }
+
+    /// The server owes: a waiting host wakes.
+    void raise() noexcept {
+        if (!ok()) {
+            return;
+        }
+#ifdef _WIN32
+        (void)::WSASetEvent(event_);
+#else
+        if (!raised_) {
+            const char one = 1;
+            raised_ = ::write(write_, &one, 1) == 1;
+        }
+#endif
+    }
+
+    /// A service begins: what was owed is about to be paid. Whatever the network or a later turn
+    /// says after this sets it again.
+    void clear() noexcept {
+        if (!ok()) {
+            return;
+        }
+#ifdef _WIN32
+        (void)::WSAResetEvent(event_);
+#else
+        char buf[64];
+        while (::read(read_, buf, sizeof buf) > 0) {
+        }
+        raised_ = false;
+#endif
+    }
+
+    /// Select `s` on the event (Windows), so its readiness sets it. Nothing on POSIX, where the
+    /// wait names each socket itself.
+    void select(socket_t s) noexcept {
+#ifdef _WIN32
+        if (ok() && s != kInvalidSocket) {
+            (void)::WSAEventSelect(static_cast<SOCKET>(s), event_,
+                                   FD_ACCEPT | FD_READ | FD_WRITE | FD_CLOSE);
+        }
+#else
+        (void)s;
+#endif
+    }
+
+    std::int64_t handle() const noexcept {
+#ifdef _WIN32
+        return static_cast<std::int64_t>(reinterpret_cast<std::intptr_t>(event_));
+#else
+        return read_;
+#endif
+    }
+
+private:
+    bool started_ = false;
+#ifdef _WIN32
+    WSAEVENT event_ = WSA_INVALID_EVENT;
+#else
+    int read_ = -1;
+    int write_ = -1;
+    bool raised_ = false;
+#endif
+};
 
 namespace {
 
@@ -92,8 +221,9 @@ public:
     /// dies -- which the BUS decides, not the server: at teardown the bus destroys its weaves in
     /// registry order, so a proxy may be gone before the weave that owns the server is, and the
     /// server's own destructor must find a null rather than a freed object.
-    OperatorProxy(BridgeChannel* ch, OperatorProxy** slot, PayloadEncoding encoding)
-        : ch_(ch), slot_(slot), encoding_(encoding) {}
+    OperatorProxy(BridgeChannel* ch, OperatorProxy** slot, PayloadEncoding encoding,
+                  BridgeWake* wake)
+        : ch_(ch), slot_(slot), encoding_(encoding), wake_(wake) {}
     ~OperatorProxy() override {
         if (slot_ != nullptr && *slot_ == this) {
             *slot_ = nullptr;
@@ -131,6 +261,9 @@ public:
         // are total for a conforming value, and what the bus delivered has already conformed.
         body.append(encode_for(encoding_, in.payload));
         ch_->queue(BridgeOp::Delivered, body);
+        if (wake_ != nullptr) {
+            wake_->raise(); // queued in a turn: the service the host's wait wakes ships it
+        }
     }
     loom::Value snapshot() const override {
         loom::Value v(operator_state_schema());
@@ -149,18 +282,21 @@ public:
     void detach() noexcept {
         ch_ = nullptr;
         slot_ = nullptr; // the connection is letting go first; nothing to clear later
+        wake_ = nullptr;
     }
 
 private:
     BridgeChannel* ch_;
     OperatorProxy** slot_;
     PayloadEncoding encoding_;
+    BridgeWake* wake_;
 };
 
 // ---- BridgeServer -------------------------------------------------------------------------------
 
 BridgeServer::BridgeServer(loom::Switchboard& bus, socket_t listener, BridgeAdmission admission)
-    : bus_(bus), listener_(listener), admission_(std::move(admission)) {
+    : bus_(bus), listener_(listener), admission_(std::move(admission)),
+      wake_(std::make_unique<BridgeWake>()) {
     if (!admission_) {
         admission_ = operator_admission();
     }
@@ -183,6 +319,7 @@ BridgeServer::~BridgeServer() {
     }
     conns_.clear();
     bridge_close(listener_);
+    wake_.reset(); // after every socket selected on it has closed
 }
 
 Connection BridgeServer::view(const Conn& c) const {
@@ -245,6 +382,7 @@ void BridgeServer::accept_new() {
         conn->number = next_number_++;
         conn->peer = bridge_peer_name(s);
         conn->ch = std::make_unique<BridgeChannel>(s);
+        wake_->select(s); // what an accepted socket inherits, said for it outright
         conn->state = ConnectionState::AwaitingHello;
         tell(*conn);
         conns_.push_back(std::move(conn));
@@ -285,7 +423,7 @@ void BridgeServer::send_refused(Conn& c, std::uint64_t correlation, const std::s
 }
 
 void BridgeServer::admit(Conn& c, const ConnectionAdmitted& a) {
-    auto proxy = std::make_unique<OperatorProxy>(c.ch.get(), &c.proxy, a.encoding);
+    auto proxy = std::make_unique<OperatorProxy>(c.ch.get(), &c.proxy, a.encoding, wake_.get());
     OperatorProxy* raw = proxy.get();
     loom::WeaveId id;
     try {
@@ -347,6 +485,7 @@ bool BridgeServer::decide(std::uint64_t connection, const ConnectionVerdict& ver
         return false;
     }
     apply(*c, verdict);
+    wake_->raise(); // the verdict's frames, and a refused connection's reaping, are owed
     return true;
 }
 
@@ -357,6 +496,7 @@ bool BridgeServer::disconnect(std::uint64_t connection) {
     }
     c->ch->flush();
     c->ch->fail();
+    wake_->raise(); // its proxy leaves at the next service
     return true;
 }
 
@@ -603,8 +743,22 @@ void BridgeServer::on_tap(const loom::BusEvent& e) {
             break;
         }
     }
+    // The host's own wake (`loom.host.Waited`, to whoever services this server) owes nothing at
+    // once: what it would raise is paid by the service it brings, and raising for it would wake
+    // the host for its own word, without end.
+    const bool own_wake = e.kind == loom::EventKind::Delivered &&
+                          e.schema_name == host::Waited::zen_name;
     if (e.kind == loom::EventKind::Died || e.kind == loom::EventKind::Revived) {
         weaves_dirty_ = true; // deferred: the registry is read outside dispatch (in service())
+        wake_->raise();
+    }
+    // A settlement is owed once what a session's send set in motion has been dispatched, which
+    // only a dispatch can make true: while one is followed, any event may be its last.
+    for (const auto& c : conns_) {
+        if (!own_wake && !c->settling.empty()) {
+            wake_->raise();
+            break;
+        }
     }
     if (!anyone) {
         return;
@@ -644,6 +798,9 @@ void BridgeServer::on_tap(const loom::BusEvent& e) {
             c->ch->queue(BridgeOp::Tap, body);
         }
     }
+    if (!own_wake) {
+        wake_->raise();
+    }
 }
 
 void BridgeServer::reap_dead() {
@@ -677,6 +834,7 @@ void BridgeServer::reap_dead() {
 }
 
 void BridgeServer::service() {
+    wake_->clear();
     accept_new();
     for (auto& c : conns_) {
         if (!c->ch || c->ch->done()) {
@@ -710,6 +868,7 @@ void BridgeServer::service() {
 }
 
 void BridgeServer::step() {
+    wake_->clear();
     accept_new();
     for (auto& c : conns_) {
         if (!c->ch || c->ch->done()) {
@@ -760,6 +919,49 @@ void BridgeServer::wait_and_step(int timeout_ms) {
     }
     (void)bridge_wait_readable(socks, timeout_ms);
     step();
+}
+
+host::WaitSet BridgeServer::wait_set() {
+    host::WaitSet set;
+    const bool fresh = !wake_->ok();
+    if (!wake_->start()) {
+        // No signal: the sockets alone where the platform can name them, and what a turn queues
+        // leaves when something else wakes the host.
+#ifndef _WIN32
+        set.handles.push_back(static_cast<std::int64_t>(listener_));
+        for (const auto& c : conns_) {
+            if (c->ch && !c->ch->done()) {
+                set.handles.push_back(static_cast<std::int64_t>(c->ch->fd()));
+            }
+        }
+#endif
+        return set;
+    }
+    if (fresh) {
+        // Waiting starts now: every socket already open is selected, and whatever is owed already
+        // is said, since nothing raised the signal before it existed.
+        wake_->select(listener_);
+        for (const auto& c : conns_) {
+            if (c->ch) {
+                wake_->select(c->ch->fd());
+            }
+        }
+        wake_->raise();
+    }
+    set.handles.push_back(wake_->handle());
+#ifndef _WIN32
+    set.handles.push_back(static_cast<std::int64_t>(listener_));
+    for (const auto& c : conns_) {
+        if (!c->ch || c->ch->done()) {
+            continue;
+        }
+        set.handles.push_back(static_cast<std::int64_t>(c->ch->fd()));
+        if (c->ch->backlogged()) {
+            set.writable.push_back(static_cast<std::int64_t>(c->ch->fd()));
+        }
+    }
+#endif
+    return set;
 }
 
 void BridgeServer::run(int tick_ms) {

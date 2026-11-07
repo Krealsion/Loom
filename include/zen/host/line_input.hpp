@@ -9,7 +9,10 @@
 // also turns the bus (`pump_pending()`, MSG-09). POSIX polls stdin; a Windows console cannot be
 // asked whether a line is finished, so a reader thread does the blocking read there
 // (line_input.cpp). One platform-neutral waiting area, `HeldInput`, decides what a line is and
-// applies the two input limits (docs/reference/bounds.md).
+// applies the two input limits (docs/reference/bounds.md). A host that rests through its one wait
+// (zen/host/reactor.hpp) waits on the next line there, beside every other source.
+
+#include <zen/host/wait_set.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -114,6 +117,19 @@ public:
 
     /// The line the most recent `TooLong` refused.
     const TooLongLine& too_long() const noexcept;
+
+    /// WHAT A HOST'S ONE WAIT WAITS ON FOR THE NEXT LINE: on Windows an event the reader thread
+    /// sets once a line, a refusal or the end can be taken, the one thing that thread does beside
+    /// reading; on POSIX standard input. Asking starts the reading, as a first `read` does.
+    WaitSet wait_set();
+
+    /// Whether `read` would answer now without asking the OS: a line, a refusal or the end is
+    /// already held. A wait that holds this reader asks it first, since on POSIX a second line read
+    /// with the first leaves nothing on standard input to wake the wait.
+    bool ready() const;
+
+    /// Whether `read` has said Closed: nothing more will come, so nothing is waited on.
+    bool closed() const noexcept;
 
     /// What this reader holds for its caller now, and the most it has ever held, in bytes.
     /// Both are at most kHeldInputBytes; they are how a test proves it.

@@ -563,6 +563,57 @@ loom> show m2
 
 Conversation `0` means "named none" — an announcement, not an answer to anything.
 
+### A host that rests until something is ready
+
+The supplied host waits for your next line a short while at a time. A host you write can do
+better: rest after each turn until something it serves is ready, or until its own next deadline,
+and wake at once when it is. That is `loom::host::Reactor`
+([`include/zen/host/reactor.hpp`](../../include/zen/host/reactor.hpp)), one wait on the
+host's own dispatch thread over every source the host trusts:
+
+```cpp
+loom::host::Reactor wait(bus);
+wait.trust("my.window");     // offices whose claims the host lets into the wait
+wait.trust("my.door");
+wait.watch(&console);        // a loom::host::LineInput, until it says Closed
+for (;;) {
+    bus.pump_pending();
+    const auto woke = wait.after_turn(next_deadline_ms); // 0 while the bus is busy
+    if (woke.line) { /* console.read(&line, 0) */ }
+}
+```
+
+**A source says what it waits on as a claim**: its office claims a `loom::host::WaitSet`
+([`include/zen/host/wait_set.hpp`](../../include/zen/host/wait_set.hpp)) — handles to wait on
+for readiness (a Windows `HANDLE`, a POSIX descriptor), descriptors to wait on for room to write
+(POSIX), and on Windows whether the dispatch thread's window messages count; a claim that names
+nothing says there is nothing to poll for, and is held as it stands. After each turn the
+wait reads the claim of every office the host trusts, and no other: a participant the host did
+not trust cannot put a handle in it. It tells each office's holder a `loom.host.Waited` when the
+wait first holds its claim, when it stops, and each time what the claim names is ready. Only the
+host sends it, so a source reads one from any other sender as nothing, and until it is told it
+is held a source keeps polling as it would with no host waiting. A host that never builds a
+`Reactor` serves its sources exactly as before.
+
+**A source takes each wake by claiming anew**, unchanged or not. A claim the wait finds ready
+again before that is a source that did not take what woke it, and the wait holds it no longer
+until its claim changes; so does a handle the OS will not wait on. Either way the source is told
+why and polls, and the thread never spins on it. The wait ends at the deadline the host gives,
+whatever its sources do, so nothing stalls it either.
+
+**What it holds is bounded**: at most
+<!-- value kMaxWaitedHandles -->62<!-- /value --> handles in one wait, sources and console together
+(a Windows wait takes 64, one the message queue and one the deadline's timer). Offices are held
+in the order the host trusted them; a claim that would pass the bound is not held, and its source
+is told why ([bounds](../reference/bounds.md#a-hosts-one-wait)).
+
+**Loom's own sources** say their wait sets the same way. A `LineInput`'s is an event its reader
+thread sets once a line is whole (Windows), or standard input (POSIX); that thread ends the wait
+and does nothing else, and the bus is only ever touched by the thread that turns it. A
+`BridgeServer`'s is its listener, its connections, and a signal it raises when a turn handed it
+something to send, so an answer leaves when the wait wakes rather than at the next poll
+([bridge](../reference/bridge.md#a-server-a-host-waits-on)).
+
 ## 10. Link to another host
 
 A host can hold a connection to **another running Loom** — another `loom-host`, or an

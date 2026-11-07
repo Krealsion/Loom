@@ -374,3 +374,22 @@ attempts and a reply for an ended session, a forged local record, an answer in
 the link's own vocabulary, a replaced asker, and settlement in either order and
 against real far work. `tests/package/stranger_bridge.cpp` reaches the server,
 the client and the link envelope through `find_package(loom)` alone.
+
+## A server a host waits on
+
+A host that rests between turns (`loom::host::Reactor`,
+[the guide](../guides/running-loom.md#a-host-that-rests-until-something-is-ready)) waits on a
+server through `BridgeServer::wait_set()` and calls `service()` when that wait says the server is
+ready. The set is the listener, every connection, and a signal the server raises itself when a turn
+handed it something to send: a delivery to a session, a settlement now owed, a copied bus event, a
+fresh weave list, a decision or a severance. So an answer queued in a turn leaves at the service
+the wait wakes, and an idle connection costs the host nothing.
+
+- **On Windows** it is one event: the server selects every socket on it (`WSAEventSelect`, for a
+  connection, a read, room to write and a close) and sets it when it owes.
+- **On POSIX** it is a pipe's read end beside the listener and each connection, and, as writable,
+  each connection whose output waits on a full socket.
+- **The first call turns it on**, and says once whatever was owed before. A server no host waits on
+  is served as it always was, by `service()`, `step()` or `run()`.
+- **It changes with the connections**, so a waiting source asks for it again after each
+  `service()`.
