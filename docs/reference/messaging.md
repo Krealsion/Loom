@@ -124,7 +124,7 @@ not a memory sandbox. See [dynamic ABI](dynamic-abi.md).
 
 The safe reasons are `CapabilityDenied`, `NoSuchTarget`, `TargetUnavailable`,
 `NotAccepted`, `GateRefused`, and `ApplicationFailed` (the target is held behind
-a joint-published claim it could not apply — the one an operator most needs by
+a joint-published claim it could not apply — the one a weaver most needs by
 exact attempt). The existing dispatch owner decides; no handler has run. Sealed
 candidates remain concealed. A denied send reports
 `CapabilityDenied` regardless of the addressed target's state, even when the host
@@ -163,9 +163,9 @@ See [bounds](bounds.md#dispatch-refusal-notices).
 **A notice names a record; the record's lifetime is the consumer's.** The same
 discipline governs the two joint-publication notices, `zen.JointEnded` and
 `zen.JointApplied` (`zen/weave/dispatch_refusal.hpp`): each is an ungated
-wake-up to the exact operator that began the operation, once per event, never
-an authenticated outcome in itself. The operator re-reads `joint_status` for the
-bus's own record, and that record is **kept until the operator releases it**
+wake-up to the exact initiator that began the operation, once per event, never
+an authenticated outcome in itself. The initiator re-reads `joint_status` for the
+bus's own record, and that record is **kept until the initiator releases it**
 ([SENSE-07](../laws/sense-laws.md)) — a queued notification is not consumption,
 so a notice is never the last copy of an outcome. A forged notice meets a record
 that says otherwise; a stale one, a record that says Missing.
@@ -312,7 +312,7 @@ if (const std::optional<loom::PendingAsk> closed = asks.settle(mail.correlation(
   at the far end, because there is no cancellation vocabulary to cancel it with.
 
 **Who keeps one.** `loom::TerminalSession`, and `loom::ConsoleEngine`, which is
-the operator's own asking participant. The console's case is the sharpest illustration of why the pair is
+the weaver's own asking participant. The console's case is the sharpest illustration of why the pair is
 needed: it is registered `AcceptMode::AnyRegistered`, and every artifact a host
 admits may send `zen.Result` to anyone under the ordinary poke-answer baseline
 ([capabilities](capabilities.md#admitting-a-loaded-artifact)), so "the newest
@@ -328,7 +328,7 @@ The console opens a conversation only for a caller that asks it to
 (`ConsoleTracking::Tracked`), and that caller owns it: its slot stays spent until
 the caller takes the answer or forgets the conversation, including after the
 answer has arrived, so what the console holds is bounded by the book rather than
-by how much traffic it has served ([bounds](bounds.md#console-operator-history)).
+by how much traffic it has served ([bounds](bounds.md#console-weaver-history)).
 A send through the frontend `Console` interface opens nothing.
 
 `loom::relay` ([`weave/relay.hpp`](../../include/zen/weave/relay.hpp)) is the same
@@ -463,7 +463,7 @@ widens the door set on the Switchboard's side, where the weave cannot see it and
 so cannot describe it; the two are refused together at `register_weave` rather
 than left to produce a truthful-looking understatement. So self-description is
 available exactly for finitely-declared accept-sets. Every wildcard weave in
-Loom (the console, the bridge's operator proxy) is a raw `loom::Weave` that
+Loom (the console, the bridge's connection proxy) is a raw `loom::Weave` that
 carries no substrate doors at all, so nothing is narrowed by this.
 
 ## Observation

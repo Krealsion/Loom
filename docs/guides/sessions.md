@@ -6,7 +6,7 @@ answers came from. No compiler between editing a tool and running it again, and 
 
 A **session** is `loom-host --serve <dir>`: the [supplied host](running-loom.md) kept alive for
 clients that come and go. A **run** is one execution of one **tool** — a Python file with a
-`run(ctx)` function, in a **package** the session's operator approved. The pieces, and who owns
+`run(ctx)` function, in a **package** the session's weaver approved. The pieces, and who owns
 what:
 
 | part | what it is | owns |
@@ -66,7 +66,7 @@ Pick a directory; it is the session. `loom-boot.json` boots the run manager:
 holding the `loom_session` package they import (by default, the one installed beside the run
 manager).
 
-The first time, start the host at a terminal and make the operator's decisions at its console —
+The first time, start the host at a terminal and make the weaver's decisions at its console —
 the same `authority` words as for any artifact ([running-loom § 5](running-loom.md#5-decide-what-may-run)):
 
 ```text
@@ -214,7 +214,7 @@ with Session.attach("work") as s:
     data = s.read_artifact("first", "report.txt")   # page by page, checked against the digest
 ```
 
-Without `--out` the command writes the bytes to standard output. The manager needs the operator's
+Without `--out` the command writes the bytes to standard output. The manager needs the weaver's
 `authority allow runs loom.runs.ArtifactPage v1 -> any target` to answer
 ([section 2](#2-start-a-session-and-decide-what-it-may-do)).
 
@@ -349,7 +349,7 @@ one gives a client nothing more than its messages. Loom's own are split so: `bas
 asks the door and keeps what it learned through `ctx.produce`, while `basics-machine/steps`
 writes its cleanup's file itself. The test lane's `tool_reach` entry holds every package under
 `tools/` to its name, following each tool's imports; it reads names, so it is a guard that a
-tool does not grow a reach, not a sandbox. Name a package of yours the same way when an operator
+tool does not grow a reach, not a sandbox. Name a package of yours the same way when a weaver
 may approve its message tools alone.
 
 **Credentials** stay out of the record: the manager tells the door only a credential's SHA-256,

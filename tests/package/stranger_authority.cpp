@@ -4,7 +4,7 @@
 // A SECOND HOST, FROM THE PACKAGE ALONE, KEEPS ITS PERSON'S DECISIONS IN LOOM'S AUTHORITY STORE
 // and answers Loom's `authority` command over that file: refused with the command that answers
 // it, decided through the installed command, loaded on the retry, and a decision installed on the
-// running bus by the installed warden. Its operator seat is its own, an ordinary participant with
+// running bus by the installed warden. Its weaver seat is its own, an ordinary participant with
 // an AskBook, so every answer it hands the command is one Loom attributed to the question asked.
 // The load half needs loom::kernel; without it that half is declared absent and the rest runs.
 
@@ -60,7 +60,7 @@ struct SeatState {
     ZEN_SHAPE(SeatState, 1, ZEN_FIELD(answers));
 };
 
-// The operator seat. A send it makes from inside its own delivery is a participant's send, gated
+// The weaver seat. A send it makes from inside its own delivery is a participant's send, gated
 // and stamped with its id, which is what the warden checks; a host's root send would be neither.
 class Seat final
     : public loom::WeaveBase<Seat, SeatState,

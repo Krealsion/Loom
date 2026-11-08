@@ -19,7 +19,7 @@
 //   an exact grant    permits the shape, never lifecycle provenance
 //   a Bus or Mail     confers no authority over the host Loom
 //
-// Used by `loom::mount_control` (kernel/control.hpp), by hosts wiring a lifecycle operator of
+// Used by `loom::mount_control` (kernel/control.hpp), by hosts wiring a lifecycle initiator of
 // their own, and by test harnesses, which hold the Switchboard and so are hosts. A weave may
 // inspect the provenance it receives (`Mail::answers_ask`, `Mail::lifecycle_attested`); it
 // cannot create it.

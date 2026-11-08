@@ -8,7 +8,7 @@ Zengine's Timer, are defined in their own repositories.
 |---|---|---|
 | **Loom** | the substrate: gate, bus, kernel, isolation, console. One `loom::` namespace. The Loom is everyone's | [reference/](reference/) |
 | **weave** | the unit of authorship-that-composes: a bus participant, native or loaded, whole and part at once | [guides/writing-a-weave.md](guides/writing-a-weave.md) |
-| **weaver (human)** | the person who writes and runs weaves; persistent human identity remains separate from runtime authority | [reference/known-seams.md](reference/known-seams.md#deferred-with-intent-the-standing-trigger-map) |
+| **weaver (human)** | the person who writes and runs weaves and drives a host's console; the weave a host treats as that person is the **weaver seat**. Persistent human identity remains separate from runtime authority | [reference/known-seams.md](reference/known-seams.md#deferred-with-intent-the-standing-trigger-map) |
 | **`loom::Weaver`** | an ordinary policy delegate, host-appointed to administer one session's message authority within a ceiling; the session performs its own actions | [reference/weaver.md](reference/weaver.md) |
 | **schema / shape** | a frozen `(name, version)` + fields; identity = content-id | [reference/values-and-admission.md](reference/values-and-admission.md) |
 | **the gate / admission** | `admit()`, the sole conformance authority at every boundary | [laws/admission-laws.md](laws/admission-laws.md) |
@@ -28,7 +28,7 @@ Zengine's Timer, are defined in their own repositories.
 | **sealed candidate** | a loaded, real weave with no public standing, conversing only with its coordinator | [laws/replacement-laws.md](laws/replacement-laws.md) (PR-01) |
 | **incumbent** | the current role holder a replacement names; never told, live throughout | [reference/prepared-replacement.md](reference/prepared-replacement.md) |
 | **candidate** | the sealed would-be successor | [reference/prepared-replacement.md](reference/prepared-replacement.md) |
-| **operator** | the participant that begins/commits/aborts a replacement and owns its outcome | [reference/prepared-replacement.md](reference/prepared-replacement.md) |
+| **initiator** | the participant that begins a prepared replacement or a joint publication, commits or ends it, and owns its outcome; a lifecycle initiator commits a new incarnation and attests its activation | [reference/prepared-replacement.md](reference/prepared-replacement.md), [reference/joint-publication.md](reference/joint-publication.md) |
 | **coordinator** | the participant that prepares the candidate and offers its answer | [reference/prepared-replacement.md](reference/prepared-replacement.md) |
 | **prepared replacement** | the verified-successor ceremony: seal → transaction → readiness → admission | [reference/prepared-replacement.md](reference/prepared-replacement.md) |
 | **Preparing / Ready / AdmissionPending / Committed / Aborted** | the transaction states; `AdmissionPending` = scheduled, world unchanged | [laws/replacement-laws.md](laws/replacement-laws.md) (PR-07) |
@@ -38,10 +38,10 @@ Zengine's Timer, are defined in their own repositories.
 | **claim-set / `Claims<...>`** | the Senses a weave declares it can claim; registered at mount, enforced at claim time. Not `Accept`, not `Emit` | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-04) |
 | **observe rule** | the grant rule authorizing a reader to pull a shape's latest claim; absent by default, never a send rule | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-05) |
 | **revision** | monotonic per Sense key; orders replacement of *that* claim. Not a clock, not comparable across keys | [reference/senses.md](reference/senses.md) |
-| **joint publication** | an operation, coordinated by an operator holding a host-minted `JointAuthority`, in which several claimants' offered values are exchanged into their claim records in one protected step | [reference/joint-publication.md](reference/joint-publication.md) (SENSE-06/07) |
+| **joint publication** | an operation, coordinated by an initiator holding a host-minted `JointAuthority`, in which several claimants' offered values are exchanged into their claim records in one protected step | [reference/joint-publication.md](reference/joint-publication.md) (SENSE-06/07) |
 | **showing / application** | after a joint commit, each claimant is shown its published value once before it runs again; what that came to — Applied, Declined, Failed, Lost — is recorded, attributed and never assumed. Publication is not application | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-06) |
 | **held** | a claimant whose showing failed: deliveries refused `ApplicationFailed`, ordinary snapshot refused, hook never re-run; repaired by a reload or a removal, never retried | [reference/joint-publication.md](reference/joint-publication.md#the-hold-and-diagnostic-access) |
-| **release (of a record)** | the operator's explicit retirement of a joint operation's terminal record; until then the record is kept, and a queued notice is not consumption | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-07) |
+| **release (of a record)** | the initiator's explicit retirement of a joint operation's terminal record; until then the record is kept, and a queued notice is not consumption | [laws/sense-laws.md](laws/sense-laws.md) (SENSE-07) |
 | **authored handoff** | the domain pattern by which one incarnation's meaning deliberately becomes a successor's: boundary → final value → authored migration → prepared replacement. Not a Loom API | [reference/handoff.md](reference/handoff.md) (HANDOFF-01) |
 | **migrator** | an ordinary, temporary weave that transforms one schema identity into another; inspectable, testable, versioned, refusable, attributable, and unloaded afterwards | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-01) |
 | **handoff boundary** | an ordinary domain message at an exact FIFO position, after which the domain's declared policy applies. Loom gives it no standing | [laws/handoff-laws.md](laws/handoff-laws.md) (HANDOFF-02) |

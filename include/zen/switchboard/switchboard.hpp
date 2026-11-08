@@ -31,7 +31,7 @@
 namespace loom {
 
 /// Why a delivery (or a revival) was refused. `GateRefused` carries the gate's `Error`; the
-/// others are the bus's own reasons, which the gate never sees. Each points an operator at a
+/// others are the bus's own reasons, which the gate never sees. Each points a weaver at a
 /// different fix, so a new failure gets a new reason rather than a wider old one.
 /// MSG-05; docs/laws/messaging-laws.md
 /// The order these are decided in: docs/reference/messaging.md#the-envelope-and-the-delivery-order
@@ -298,7 +298,7 @@ enum class TxnReason : std::uint8_t {
     None = 0,
     ExplicitAbort,
     PreparationExhausted,
-    OperatorChanged,
+    InitiatorChanged,
     CoordinatorChanged,
     IncumbentChanged,
     CandidateChanged,
@@ -350,7 +350,7 @@ struct TxnResult {
     explicit operator bool() const noexcept { return ok; }
 };
 
-/// How a transaction ended, kept until its exact operator takes it.
+/// How a transaction ended, kept until its exact initiator takes it.
 struct TxnOutcome {
     TxnId id{};
     TxnState state = TxnState::Aborted;
@@ -555,7 +555,7 @@ public:
     /// `using` declarations keep both reachable.
     using Bus::observe;
     using Bus::observe_role;
-    /// And the host's ungated `joint_status(op)` beside the operator's authenticated one.
+    /// And the host's ungated `joint_status(op)` beside the initiator's authenticated one.
     using Bus::joint_status;
 
     SenseReading observe(WeaveId author, std::string_view shape_name,
@@ -580,9 +580,9 @@ public:
     }
 
     // ---- Joint publication of latest claims -----------------------------------
-    // The host's half: minting the operator's authority, the `*_as` doors the gated WeaveBus
+    // The host's half: minting the initiator's authority, the `*_as` doors the gated WeaveBus
     // funnels through, and the root views. A weave's verbs are in zen/switchboard/bus.hpp, the
-    // account in zen/switchboard/sense.hpp. A commit runs inside the operator's own delivery and
+    // account in zen/switchboard/sense.hpp. A commit runs inside the initiator's own delivery and
     // calls no participant, gate, observer or I/O while it exchanges. Nothing is durable across
     // a process. SENSE-06, SENSE-07; docs/reference/joint-publication.md
 
@@ -592,14 +592,14 @@ public:
     /// documents.
     static constexpr std::size_t kMaxJointOfferBytes = 64u * 1024u;
 
-    /// Mint the right to coordinate joint publications for one operator weave over claimants
+    /// Mint the right to coordinate joint publications for one initiator weave over claimants
     /// holding one of `ceiling_roles`. A host door: a weave holds a Bus& and cannot reach it.
     ///
-    /// Bound to the operator's current life and incarnation, and expired when either changes; a
-    /// successor is authorized only by the host minting again. For an operator that is not
+    /// Bound to the initiator's current life and incarnation, and expired when either changes; a
+    /// successor is authorized only by the host minting again. For an initiator that is not
     /// registered or is dead the result is not `valid()`, and is refused `ForeignAuthority` if
     /// presented.
-    JointAuthority mint_joint_authority(WeaveId operator_id,
+    JointAuthority mint_joint_authority(WeaveId initiator_id,
                                         std::vector<std::string> ceiling_roles) const;
     bool issued_here(const JointAuthority& authority) const noexcept {
         const std::shared_ptr<const LoomIdentity> issuer = authority.issuer_.lock();
@@ -609,8 +609,8 @@ public:
     // A commit publishes: every reader sees the new values at once. Each claimant is then
     // shown its value once, before its next delivery or snapshot (`Weave::claim_published`),
     // and what that came to is recorded per key: Applied, Declined, Failed (the claimant is
-    // held until reloaded or removed) or Lost. A record is kept until its operator releases it,
-    // or the operator's life or incarnation changes; only a released slot is reused.
+    // held until reloaded or removed) or Lost. A record is kept until its initiator releases it,
+    // or the initiator's life or incarnation changes; only a released slot is reused.
     // docs/reference/joint-publication.md#the-showing-and-its-three-answers
     // docs/reference/joint-publication.md#the-records-lifetime-and-release
 
@@ -641,7 +641,7 @@ public:
                                 std::uint64_t op);
     JointStatus joint_status_as(WeaveId caller, const JointAuthority& authority,
                                 std::uint64_t op);
-    /// The operator retires a terminal record it has consumed (see `Bus::release_joint`).
+    /// The initiator retires a terminal record it has consumed (see `Bus::release_joint`).
     JointResult release_joint_as(WeaveId caller, const JointAuthority& authority,
                                  std::uint64_t op);
 
@@ -772,7 +772,7 @@ public:
     /// PR-05; docs/laws/replacement-laws.md
     ///
     /// The ordinary grant is not consulted: the activation is Loom's act, authorized by the
-    /// `LifecycleAuthority`, and the coordinator's id is stamped as the operator that admitted.
+    /// `LifecycleAuthority`, and the coordinator's id is stamped as the initiator that admitted.
     /// An ordinary `zen.Activated` from a weave still needs a grant and carries no attestation.
     /// PR-08, LIFE-05; docs/reference/prepared-replacement.md#admission
     ///
@@ -790,10 +790,10 @@ public:
     // included, which announces no event.
     // PR-02; docs/laws/replacement-laws.md
 
-    /// How many prepared replacements may be in flight at once: an operator's act, not a
+    /// How many prepared replacements may be in flight at once: an initiator's act, not a
     /// workload.
     static constexpr std::size_t kMaxPreparedReplacements = 8;
-    /// How many ended transactions are kept for their operators to collect; the oldest is dropped
+    /// How many ended transactions are kept for their initiators to collect; the oldest is dropped
     /// beyond it.
     static constexpr std::size_t kMaxTerminalOutcomes = 16;
     /// The largest preparation budget a caller may ask for.
@@ -840,7 +840,7 @@ public:
     TxnResult commit_prepared_replacement(TxnId id, const LifecycleAuthority& authority,
                                           Message activation, std::int64_t sequence);
 
-    /// Abort from any nonterminal state, by the exact operator.
+    /// Abort from any nonterminal state, by the exact initiator.
     TxnResult abort_prepared_replacement(TxnId id, WeaveId op);
 
     /// Diagnostics: the state of a transaction, and how many slots are in use.
@@ -849,7 +849,7 @@ public:
     std::size_t active_transactions() const noexcept;
 
     /// Take the terminal outcome of a transaction this weave began: once, and only by the exact
-    /// operator life and incarnation that began it.
+    /// initiator life and incarnation that began it.
     bool take_outcome(WeaveId op, TxnOutcome& out);
 
     /// As above, narrowed to one transaction, so a caller bound to one (the host authoring
@@ -1238,7 +1238,7 @@ private:
     /// minted in order. Confers nothing.
     TxnReason vanished_transaction_reason(TxnId id) const;
 
-    /// End a transaction, record its outcome for its operator, and free the slot.
+    /// End a transaction, record its outcome for its initiator, and free the slot.
     void finish_txn(PreparedReplacement& txn, TxnState state, TxnReason reason);
 
     /// Every transition that can invalidate a participant calls this: it aborts only the
@@ -1364,11 +1364,11 @@ private:
     /// free. `next_joint_id_` never repeats an id, so a released id names nothing.
     struct JointOp {
         std::uint64_t id = 0;
-        ParticipantRef operator_{};
+        ParticipantRef initiator_{};
         JointState state = JointState::Missing;
         JointRefusal reason = JointRefusal::None;
         std::vector<JointPart> parts;
-        /// The operator was told this operation ended (`zen.JointEnded`).
+        /// The initiator was told this operation ended (`zen.JointEnded`).
         bool notified = false;
         /// ...and the last application outcome it was told (`zen.JointApplied`); a repair that
         /// settles again is told again.
@@ -1379,25 +1379,25 @@ private:
 
     JointOp* find_joint(std::uint64_t id) noexcept;
     const JointOp* find_joint(std::uint64_t id) const noexcept;
-    /// Retire a record: the slot is free and the id names nothing, on the operator's release or
+    /// Retire a record: the slot is free and the id names nothing, on the initiator's release or
     /// when its life or incarnation changed.
     void retire_joint(JointOp& op) noexcept;
     /// The operation's state, reason and, after a commit, its application over its parts (Failed,
     /// then Lost, Declined, Pending, Applied), naming the part a non-applied aggregate is about.
     JointStatus status_of(const JointOp& op) const;
-    /// The notice behind `settle_application`, to the exact operator, once per settlement.
+    /// The notice behind `settle_application`, to the exact initiator, once per settlement.
     void notify_joint_applied(JointOp& op, JointApplication what, const JointPart* about);
     /// End an operation: its state, reason, and every offer released. Safe from any transition.
     void finish_joint(JointOp& op, JointState state, JointRefusal reason) noexcept;
-    /// The operator half of every operator verb's authority check: a live delivery of the
+    /// The initiator half of every initiator verb's authority check: a live delivery of the
     /// caller, an authority this board issued, and the caller being the exact participant it was
-    /// minted for. Each verb then checks the record's own `operator_`.
+    /// minted for. Each verb then checks the record's own `initiator_`.
     JointRefusal joint_authority_check(WeaveId caller, const JointAuthority& authority) const;
     /// On a lifecycle transition of `changed`: abort each Preparing operation binding it whose
-    /// bound life or incarnation no longer holds, retire each record whose operator it no longer
+    /// bound life or incarnation no longer holds, retire each record whose initiator it no longer
     /// is, and make a removed claimant's Pending part Lost.
     void invalidate_joint_for(WeaveId changed);
-    /// Tell the operator the bus ended its operation (`zen.JointEnded`), if it accepts that.
+    /// Tell the initiator the bus ended its operation (`zen.JointEnded`), if it accepts that.
     void notify_joint_ended(JointOp& op);
     /// Abort every Preparing operation that binds this personal key: its claimant claimed
     /// ordinarily, so the bound revision is stale.
@@ -1419,7 +1419,7 @@ private:
     /// Record one showing's outcome on the claim record and on the operation that published it,
     /// if still held, then settle the operation's application once every part is in.
     void note_application(const PersonalKey& key, ClaimRecord& record, JointApplication what);
-    /// Tell the operator once per settlement (`zen.JointApplied`), naming the operation and, for
+    /// Tell the initiator once per settlement (`zen.JointApplied`), naming the operation and, for
     /// a non-application, the exact claimant and the role it was bound through.
     void settle_application(JointOp& op);
     /// A code swap's successor is shown what its predecessor could not apply: every Failed key

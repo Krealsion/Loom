@@ -221,7 +221,7 @@ TEST_CASE("catalog: the revision covers every file but Python's caches; an edit 
     CHECK(why.find("never written over") != std::string::npos);
 }
 
-TEST_CASE("catalog: approval is the operator's word -- a pinned revision, any revision, or nothing, with the revision to approve named") {
+TEST_CASE("catalog: approval is the weaver's word -- a pinned revision, any revision, or nothing, with the revision to approve named") {
     Package p;
     p.name = "demo";
     std::string why;

@@ -241,7 +241,7 @@ public:
     }
 
     // ---- Joint publication: the claimant's one verb across the seam ---------------
-    // A missing door refuses with `NoLiveDelivery`. The operator's verbs do not cross: a loaded
+    // A missing door refuses with `NoLiveDelivery`. The initiator's verbs do not cross: a loaded
     // weave inherits `loom::Bus`'s refusing defaults for them, since the authority is a native
     // capability the host mints (docs/reference/joint-publication.md#what-crosses-the-abi).
     loom::JointResult offer_claim(std::uint64_t op, loom::Value value) override {

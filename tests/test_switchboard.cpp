@@ -500,7 +500,7 @@ TEST_CASE("a native handler that throws through pump_pending() leaves no poisone
 }
 
 namespace {
-/// The whole authenticated-readiness staging, native and .so-free: an operator,
+/// The whole authenticated-readiness staging, native and .so-free: a weaver,
 /// a coordinator, an incumbent holding the production role, and a candidate
 /// sealed to the coordinator. Used to witness DELIVERY-SCOPED authority, which
 /// is otherwise reachable only from inside a handler.

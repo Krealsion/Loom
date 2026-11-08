@@ -5,7 +5,7 @@
 #define ZEN_RUNS_CATALOG_HPP
 
 // The tool catalog: which packages exist, what each tool says it is, and which may run. Two
-// files, two owners: `loom-tools.json` is the operator's (which package directories, and
+// files, two owners: `loom-tools.json` is the weaver's (which package directories, and
 // whether each may run: "any-revision", a revision digest, or nothing), `loom-tool.json` the
 // package author's (each tool's inputs, outputs, needs and requested rules). Reading never runs
 // anything; a revision is the SHA-256 over the package's files; a run executes a snapshot; a
@@ -48,7 +48,7 @@ struct ToolSpec {
 };
 
 struct Package {
-    std::string declared;     ///< the path as the operator wrote it
+    std::string declared;     ///< the path as the weaver wrote it
     std::string dir;          ///< absolute
     std::string name;
     std::string version;
@@ -93,7 +93,7 @@ std::string package_revision(const std::filesystem::path& dir, std::string* why)
 bool snapshot_package(const std::filesystem::path& from, const std::filesystem::path& to,
                       std::string* why);
 
-/// May a run of `p` start at `revision`? `*why` says what the operator would have to decide.
+/// May a run of `p` start at `revision`? `*why` says what the weaver would have to decide.
 bool approved(const Package& p, const std::string& revision, std::string* why);
 
 /// THE PACKAGES `p` BUILDS ON, in its order: each listed in `c`, readable and using nothing

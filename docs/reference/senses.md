@@ -165,7 +165,7 @@ Grant{}.allow_observe_any()              // an inspector, a renderer, a console
 
 A **send rule is never consulted for a read**. They answer different questions
 ("may you emit this shape *there*" vs "may you pull it"), and reporting one as
-the other sends an operator to edit the wrong thing. Because the floor is empty,
+the other sends a weaver to edit the wrong thing. Because the floor is empty,
 no weave gains reach from Senses existing — a Sense repository is not a universal
 exfiltration rail. Authorization happens *before* the lookup, so an
 unauthorized reader cannot learn whether a claim exists.
@@ -225,7 +225,7 @@ rather than being deleted.
 **Joint publication.** Several claimants can change their latest claims
 together, in one protected exchange, and each is then shown what was published
 under its key — publication and application recorded as separate facts, and the
-operation's record kept until its operator releases it. Its own page:
+operation's record kept until its initiator releases it. Its own page:
 [joint publication](joint-publication.md) ([SENSE-06, SENSE-07](../laws/sense-laws.md)).
 
 ## Native/dynamic parity

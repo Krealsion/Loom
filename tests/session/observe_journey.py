@@ -122,7 +122,7 @@ def main():
         "authority allow runs loom.link.Ask v1 -> role loom.link.other",
         "start vocab %s" % args.vocab, "start runs %s loom.runs" % args.runs]
     host_log = open(os.path.join(session_dir, "host.log"), "wb")
-    # ITS CONSOLE STAYS OPEN: a link reconnects when its operator says so (`links connect`).
+    # ITS CONSOLE STAYS OPEN: a link reconnects when its weaver says so (`links connect`).
     host = subprocess.Popen([args.host, "--serve", session_dir], stdin=subprocess.PIPE,
                             stdout=host_log, stderr=subprocess.STDOUT, cwd=session_dir)
     PROCS.append(host)

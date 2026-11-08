@@ -5,7 +5,7 @@
 
 // Poke: live inspect / manipulate by message, under the ZEN_EXPOSE / ZEN_HIDE access model,
 // enforced by the target's own construction layer; and the Poke weave, an ordinary participant
-// that relays operator commands. Portable (in-process, no OS boundary).
+// that relays weaver commands. Portable (in-process, no OS boundary).
 
 #include <zen/console/console.hpp>
 #include <zen/switchboard.hpp>
@@ -639,7 +639,7 @@ TEST_CASE("a fire-and-forget poke is performed but has nowhere to answer") {
     CHECK(from_metrics.empty());
 }
 
-// ---- the Poke weave: an ordinary participant relaying operator commands ----
+// ---- the Poke weave: an ordinary participant relaying weaver commands ----
 
 TEST_CASE("the Poke weave relays: command in, protocol out, answer back to the asker") {
     Switchboard bus;
@@ -767,7 +767,7 @@ TEST_CASE("driven from the console, end to end: inspect, manipulate, and honest 
     }
     CHECK(poke_listed);
 
-    // "inspect weave X" — the operator composes a command AT the Poke weave.
+    // "inspect weave X" — the weaver composes a command AT the Poke weave.
     Composed inspect = engine.compose(poke, "zen.PokeInspect", 1, {lit(tid)});
     REQUIRE(inspect.status == Composed::Status::Ready);
     engine.pump();

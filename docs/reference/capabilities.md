@@ -140,7 +140,7 @@ is its baseline* — is a different question, two stages earlier, and stays with
 host with standing decisions can make them effective in time.
 
 Because the window belongs to the **door**, every route that can load anything
-passes through it: a host's own boot walk, an operator command, and an ordinary
+passes through it: a host's own boot walk, a weaver command, and an ordinary
 `zen.LoadWeave` a weave sends to the Manager of its own accord. A host that
 adopted at one of its own call sites would govern only the artifacts that
 arrived that way. The supplied host adopts here
@@ -154,8 +154,8 @@ ran, and no write in this process moves them.
 weave that puts an authority request in front of a human being and installs the
 answer. Keep the four apart: the **Kernel** enforces, a **`GrantAuthority`** is
 the administration mechanism, the **Weaver** is one policy delegate, and the
-**operator seat** is a WeaveId a host chose to treat as the user. None of them
-implies the next, and the current console is a *bootstrap* operator rather than
+**weaver seat** is a WeaveId a host chose to treat as the user. None of them
+implies the next, and the current console is a *bootstrap* weaver rather than
 a permanent user identity.
 
 **The trust boundary is which bus you hold.** A weave holds only a `WeaveBus`

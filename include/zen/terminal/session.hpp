@@ -21,7 +21,7 @@
 //     no way to speak as anybody else, because there is no verb for it
 //
 // Each absence is a power the host legitimately holds. A presentation may show a governed
-// session and an operator seat side by side (`TerminalDesk`); one keyboard never makes them
+// session and a weaver seat side by side (`TerminalDesk`); one keyboard never makes them
 // one sender. docs/reference/terminal.md#what-it-is-and-what-it-is-not
 
 #include <zen/switchboard/weave_contract.hpp>
@@ -81,7 +81,7 @@ struct Address {
 /// It names an identity and confers no authority: every message is stamped `self()` by the bus
 /// and authorized at delivery against that weave's own effective authority (baseline union
 /// delegated), by the checks every delivery gets, so an empty grant can say nothing. No method
-/// takes a sender, so a holder cannot speak as the operator seat, as the host or as anybody
+/// takes a sender, so a holder cannot speak as the weaver seat, as the host or as anybody
 /// else. The implementation is host wiring (zen/host/terminal_wiring.hpp), which holds the
 /// `Switchboard&`; nothing in this file names that type.
 class ParticipantChannel {
@@ -326,13 +326,13 @@ struct DeskEntry {
 
 /// ONE PRESENTATION, TWO PARTICIPANTS — AND NEVER ONE.
 ///
-/// A screen may show a governed session and an operator seat together; that is
+/// A screen may show a governed session and a weaver seat together; that is
 /// convenient and it is not a merge. This type is where the refusal to merge them
 /// lives:
 ///
 ///   - it will not pair a participant with itself, and says so at CONSTRUCTION
 ///     rather than at the decision that would abuse it — exactly as `loom::Weaver`
-///     refuses an operator seat that is its own governed subject, and for the same
+///     refuses a weaver seat that is its own governed subject, and for the same
 ///     reason: a session that can approve its own requests makes "no weave can
 ///     widen its own authority" false by one line of wiring, silently;
 ///   - it hands out a participant only when a caller NAMES one, so authorship is
@@ -345,13 +345,13 @@ class TerminalDesk {
 public:
     /// Throws std::invalid_argument when the two are the same participant, when
     /// either is unattached, or when they do not share an observation order.
-    TerminalDesk(TerminalSession& acting, TerminalSession& operator_seat);
+    TerminalDesk(TerminalSession& acting, TerminalSession& weaver_seat);
 
     /// The governed participant — the one that does the work.
     TerminalSession& acting() const noexcept { return *acting_; }
     /// The seat whose word a policy delegate treats as the user's. A DIFFERENT
     /// weave, with a different grant, whose messages leave through its own door.
-    TerminalSession& operator_seat() const noexcept { return *operator_; }
+    TerminalSession& weaver_seat() const noexcept { return *weaver_; }
 
     /// Both transcripts in one chronology, oldest first, each line labelled with
     /// the participant that knows it. BY VALUE — a presentation may hold it across
@@ -360,7 +360,7 @@ public:
 
 private:
     TerminalSession* acting_;
-    TerminalSession* operator_;
+    TerminalSession* weaver_;
 };
 
 } // namespace loom

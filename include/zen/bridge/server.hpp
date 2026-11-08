@@ -76,7 +76,7 @@ struct ConnectionAdmitted {
     Grant grant;
     AcceptMode accept = AcceptMode::AnyRegistered; ///< what the proxy may be TOLD (replies route here)
     std::string established_name;                  ///< the host's word for this session; may be empty
-    bool observe = false;                          ///< copy every bus event to this connection (the operator model)
+    bool observe = false;                          ///< copy every bus event to this connection (the weaver model)
     PayloadEncoding encoding = PayloadEncoding::Native; ///< the serialization its payloads cross in
 };
 
@@ -112,11 +112,11 @@ struct ConnectionVerdict {
 /// `BridgeServer::decide` when the answer is known.
 using BridgeAdmission = std::function<ConnectionVerdict(const ConnectionRequest&)>;
 
-/// Every connection is the operator: `allow_any()`, accept-any, observing the whole bus, and
+/// Every connection is the weaver: `allow_any()`, accept-any, observing the whole bus, and
 /// established under whatever name it claimed. Reaching the socket is authority under this
 /// policy, so a listener served with it must not be exposed to an untrusted network. Loom's own
 /// consoles and bridge host use it; a host that serves guests writes a policy of its own.
-BridgeAdmission operator_admission();
+BridgeAdmission weaver_admission();
 
 /// Where a connection stands. Exactly one of these at a time, and the order is the lifecycle.
 enum class ConnectionState : std::uint8_t {
@@ -144,7 +144,7 @@ struct Connection {
     std::string refusal; ///< why, when Refused
 };
 
-class OperatorProxy; // a per-connection Weave on the bus (the proxy-participant); defined in server.cpp
+class ConnectionProxy; // a per-connection Weave on the bus (the proxy-participant); defined in server.cpp
 class BridgeWake;    // what ends a host's wait when the server owes a peer something; server.cpp
 
 class BridgeServer {
@@ -152,9 +152,9 @@ public:
     /// Serve connections arriving on `listener` (a listening socket from bridge_listen_*), each
     /// admitted or refused by `admission`. The Switchboard must outlive the server.
     BridgeServer(loom::Switchboard& bus, socket_t listener, BridgeAdmission admission);
-    /// The operator model (`operator_admission()`).
+    /// The weaver model (`weaver_admission()`).
     BridgeServer(loom::Switchboard& bus, socket_t listener)
-        : BridgeServer(bus, listener, operator_admission()) {}
+        : BridgeServer(bus, listener, weaver_admission()) {}
     ~BridgeServer();
 
     BridgeServer(const BridgeServer&) = delete;
@@ -246,7 +246,7 @@ public:
     void on_connection(std::function<void(const Connection&)> tell) { tell_ = std::move(tell); }
 
     /// The most connections served at once. A stated, pinned bound far below every platform limit.
-    static constexpr std::size_t kMaxOperatorConnections = 32;
+    static constexpr std::size_t kMaxWeaverConnections = 32;
     /// The most settle-requested sends one connection may have waiting on their settlement. Past
     /// it a settle-requested Send is refused before the bus (SendRefused), never queued unfenced.
     static constexpr std::size_t kMaxSettlingPerConnection = 8;
@@ -264,7 +264,7 @@ private:
         bool observes = false;
         PayloadEncoding encoding = PayloadEncoding::Native; ///< the admission verdict's choice
         loom::WeaveId id{};             ///< the proxy's bus id == the session's STAMPED sender
-        OperatorProxy* proxy = nullptr; ///< owned by the bus; non-owning here
+        ConnectionProxy* proxy = nullptr; ///< owned by the bus; non-owning here
         bool told_closed = false;
         /// Settle-requested sends that reached the bus, each waiting on its fence (bounded by
         /// kMaxSettlingPerConnection). Released when told, and when the connection ends.

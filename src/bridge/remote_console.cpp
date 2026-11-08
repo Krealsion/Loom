@@ -21,7 +21,7 @@ RemoteConsole::RemoteConsole(socket_t sock, int handshake_timeout_ms) {
     ch_ = std::make_unique<BridgeChannel>(sock);
     std::string hello;
     put_u32(hello, kBridgeProtocolVersion);
-    put_bytes(hello, "operator"); // the console claims the operator's seat; the host's policy decides
+    put_bytes(hello, "operator"); // the console claims the weaver's seat; the host's policy decides
     put_bytes(hello, "");
     ch_->queue(BridgeOp::Hello, hello);
     ch_->flush();
@@ -106,7 +106,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         std::uint64_t id = 0;
         std::uint32_t proto = 0;
         if (cur.u64(id) && cur.u32(proto)) {
-            operator_id_ = loom::WeaveId{id};
+            weaver_seat_id_ = loom::WeaveId{id};
             connected_ = true;
         }
         break;
@@ -291,7 +291,7 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         }
         break;
     }
-    // The operator asks for no settlement, so none is owed it; a stray one is ignored.
+    // The weaver asks for no settlement, so none is owed it; a stray one is ignored.
     case BridgeOp::Settled:
         break;
     // client->host opcodes never arrive at the client; ignore.
@@ -363,7 +363,7 @@ loom::Ticket RemoteConsole::assemble_and_send(loom::WeaveId target,
         });
     std::string frame;
     put_u8(frame, kEmitSend);
-    put_u8(frame, 0); // flags: the operator asks for no settlement
+    put_u8(frame, 0); // flags: the weaver asks for no settlement
     put_u64(frame, 0);            // wire_sender: the honest client sets 0 — the bridge stamps c.id
     put_u64(frame, target.value);
     put_u64(frame, 0);            // wire_reply_to: the honest client sets 0 — the bridge stamps c.id

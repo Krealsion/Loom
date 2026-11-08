@@ -36,7 +36,7 @@ serious playground for building and sharing software ([zen-vision.md](zen-vision
 | `zen-kernel` | weaves loaded from shared libraries across a C ABI (version **<!-- value ZEN_ABI_VERSION -->11<!-- /value -->**), reloaded in place, or prepared as sealed candidates before they take over. A loaded library shares the host's address space and is trusted at that level ([why](docs/guides/dynamic-weaves.md#what-loading-it-in-process-means)) |
 | `include/zen/weave/` | the authoring layer: `ZEN_SHAPE`, `WeaveBase`, `Mail`, `mount` |
 | `include/zen/host/` | host wiring: lifecycle authority, `loom::PreparedReplacement` |
-| isolation · console · bridge | the operating-system sandbox (Linux) · the operator's console · the crossing between two hosts. The bridge **does not authenticate**: a connection acts on nothing until the host's admission policy answers it, and under the operator policy, reaching the socket is enough ([bridge](docs/reference/bridge.md)) |
+| isolation · console · bridge | the operating-system sandbox (Linux) · the weaver's console · the crossing between two hosts. The bridge **does not authenticate**: a connection acts on nothing until the host's admission policy answers it, and under the weaver policy, reaching the socket is enough ([bridge](docs/reference/bridge.md)) |
 
 ## Sixty seconds of weave
 

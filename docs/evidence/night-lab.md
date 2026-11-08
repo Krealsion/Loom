@@ -81,7 +81,7 @@ possible at all is a property of the domain.
 
 ## Rejected proposals — zero sightings from six
 
-- an **activation-sequence owner** (one operator, one counter, nothing
+- an **activation-sequence owner** (one initiator, one counter, nothing
   contended — even in the program replacing two services);
 - **outcome-observation ergonomics** (`state()`/`take_outcome()` were pleasant
   every time; not one line of glue).

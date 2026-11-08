@@ -650,7 +650,7 @@ TEST_CASE("a self-describing weave cannot also be wildcard-accepting") {
 }
 
 TEST_CASE("a wildcard weave that does NOT describe itself is unaffected") {
-    // What the console and the bridge's operator proxy actually are: a raw
+    // What the console and the bridge's connection proxy actually are: a raw
     // loom::Weave carrying no substrate doors at all.
     Switchboard bus;
     CHECK_NOTHROW(

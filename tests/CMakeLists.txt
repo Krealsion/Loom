@@ -662,7 +662,7 @@ endif() # NOT WIN32 (isolation/policy fixtures + child host)
 # How this project consumes doctest, in one place for both test binaries. Its include directory is
 # a system one, so its own warnings are not held to Zen's policy. DOCTEST_CONFIG_USE_STD_HEADERS
 # makes it include <ostream> rather than forward-declare it: with MSVC's STL a forward-declared
-# ostream hides the member operator<<(const void*), and `REQUIRE(ptr != nullptr)` on a
+# ostream hides the member weaver<<(const void*), and `REQUIRE(ptr != nullptr)` on a
 # shared_ptr fails to compile (C2676). The macro changes no assertion's meaning.
 add_library(zen-doctest INTERFACE)
 target_include_directories(zen-doctest SYSTEM INTERFACE
@@ -813,7 +813,7 @@ add_test(NAME optional_member_types COMMAND ${CMAKE_COMMAND}
 
 # ---- The supplied host, as a real process (GATE-05, LIFE-04, MSG-09) --------------------
 # A defect in the host's glue (which message answered which question, when an approved permission
-# took effect, whether the operator is heard while a weave keeps the bus busy) is invisible to a
+# took effect, whether the weaver is heard while a weave keeps the bus busy) is invisible to a
 # test of the deciding half and visible in one console transcript. `host_console` needs no kernel;
 # `host_process_weaves` rides the kernel gate. tests/host_process/run.cmake says what each holds.
 add_test(NAME host_console COMMAND ${CMAKE_COMMAND}

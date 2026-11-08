@@ -14,7 +14,7 @@ this one), starts a worker for it, and the worker calls ``run(ctx)`` with a ``Co
         return "one line saying what passed"
 
 WHAT A TOOL MAY SAY is its session's grant -- the rules its package ``asks`` for, as far as the
-operator let the run manager pass them on. A refused send is an exception here, never a silent
+weaver let the run manager pass them on. A refused send is an exception here, never a silent
 nothing. WHAT A TOOL CAN TOUCH on this machine is NOT bounded by any of that: it runs as the
 session's user, with that user's files and network. This is a working environment, not a
 sandbox, and nothing here says otherwise.

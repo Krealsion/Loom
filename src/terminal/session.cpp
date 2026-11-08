@@ -537,24 +537,24 @@ void TerminalSession::revive(const loom::Value&) {}
 
 // ---- the desk --------------------------------------------------------------
 
-TerminalDesk::TerminalDesk(TerminalSession& acting, TerminalSession& operator_seat)
-    : acting_(&acting), operator_(&operator_seat) {
-    if (!acting.attached() || !operator_seat.attached()) {
+TerminalDesk::TerminalDesk(TerminalSession& acting, TerminalSession& weaver_seat)
+    : acting_(&acting), weaver_(&weaver_seat) {
+    if (!acting.attached() || !weaver_seat.attached()) {
         throw std::invalid_argument(
             "loom::TerminalDesk: both participants must be attached — a desk pairs two live "
             "identities, and an unattached one has none to be different from");
     }
-    if (acting.id() == operator_seat.id()) {
+    if (acting.id() == weaver_seat.id()) {
         // THE SAME REFUSAL loom::Weaver makes about its own two roles, one layer up and for the
-        // same reason. A presentation whose operator seat IS its governed session is a session
+        // same reason. A presentation whose weaver seat IS its governed session is a session
         // that approves its own requests: "no weave can widen its own authority" would then be
         // false, defeated not by a bug but by one line of host wiring, silently. It is a host
         // misconfiguration, so it fails loudly, at the boot that wires it.
         throw std::invalid_argument(
-            "loom::TerminalDesk: the operator seat must not be the governed participant — one "
+            "loom::TerminalDesk: the weaver seat must not be the governed participant — one "
             "weave holding both would be able to approve its own authority requests");
     }
-    if (acting.order() != operator_seat.order()) {
+    if (acting.order() != weaver_seat.order()) {
         // A merged chronology has to MEAN something. Two independent counters interleave into an
         // order this presentation made up, and a made-up order is worse than none.
         throw std::invalid_argument(
@@ -568,8 +568,8 @@ std::vector<DeskEntry> TerminalDesk::chronology() const {
     for (TranscriptEntry& e : acting_->transcript().entries()) {
         out.push_back(DeskEntry{acting_->label(), std::move(e)});
     }
-    for (TranscriptEntry& e : operator_->transcript().entries()) {
-        out.push_back(DeskEntry{operator_->label(), std::move(e)});
+    for (TranscriptEntry& e : weaver_->transcript().entries()) {
+        out.push_back(DeskEntry{weaver_->label(), std::move(e)});
     }
     std::stable_sort(out.begin(), out.end(), [](const DeskEntry& a, const DeskEntry& b) {
         return a.entry.seq < b.entry.seq;

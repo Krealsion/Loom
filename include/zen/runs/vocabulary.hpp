@@ -78,7 +78,7 @@ struct Tool {
     std::string package;
     std::string name;
     std::string summary;   ///< the package author's one line
-    bool approved = false; ///< may a run of it start now (the operator's decision)
+    bool approved = false; ///< may a run of it start now (the weaver's decision)
     std::string approval;  ///< "any revision" / "revision <digest>" / "not approved: <why>"
     std::string revision;  ///< the package's current content digest
     LOOM_RUNS_SHAPE(Tool, "loom.runs.Tool");

@@ -154,8 +154,8 @@ const char* name_of(TxnReason r) noexcept {
         return "ExplicitAbort";
     case TxnReason::PreparationExhausted:
         return "PreparationExhausted";
-    case TxnReason::OperatorChanged:
-        return "OperatorChanged";
+    case TxnReason::InitiatorChanged:
+        return "InitiatorChanged";
     case TxnReason::CoordinatorChanged:
         return "CoordinatorChanged";
     case TxnReason::IncumbentChanged:
@@ -251,7 +251,7 @@ std::string Refusal::message() const {
         // Names the TARGET'S OWN STATE, not the message, the grant or the address:
         // the target is there and alive and could not apply a value the bus
         // published under its claim, so nothing is delivered to it until it is
-        // reloaded or removed. The record and the operator's notice say which
+        // reloaded or removed. The record and the initiator's notice say which
         // participant and which publication.
         return "the target is held behind a published claim it could not apply; "
                "nothing is delivered to it until it is reloaded or removed";
@@ -568,7 +568,7 @@ void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& e
     case RefusalReason::NotAccepted:
     case RefusalReason::GateRefused:
     // A target held behind a published claim it could not apply is a pre-handler
-    // refusal like the five above, and the one an operator most needs by exact
+    // refusal like the five above, and the one a weaver most needs by exact
     // attempt.
     case RefusalReason::ApplicationFailed:
         break;
@@ -899,7 +899,7 @@ const char* name_of(JointRefusal r) noexcept {
     case JointRefusal::None: return "None";
     case JointRefusal::NoLiveDelivery: return "NoLiveDelivery";
     case JointRefusal::ForeignAuthority: return "ForeignAuthority";
-    case JointRefusal::NotOperator: return "NotOperator";
+    case JointRefusal::NotInitiator: return "NotInitiator";
     case JointRefusal::OutsideCeiling: return "OutsideCeiling";
     case JointRefusal::NoClaim: return "NoClaim";
     case JointRefusal::KeyBusy: return "KeyBusy";
@@ -986,15 +986,15 @@ void Switchboard::finish_joint(JointOp& op, JointState state, JointRefusal reaso
     }
 }
 
-JointAuthority Switchboard::mint_joint_authority(WeaveId operator_id,
+JointAuthority Switchboard::mint_joint_authority(WeaveId initiator_id,
                                                  std::vector<std::string> ceiling_roles) const {
     // The participant as it is now, or nothing: the same three facts a bound claimant is held
     // by (`participant`), so a successor incarnation at the same address cannot present it.
-    const WeaveRecord* rec = find(operator_id);
+    const WeaveRecord* rec = find(initiator_id);
     if (rec == nullptr || !rec->alive) {
         return JointAuthority{}; // no live participant to bind: not valid()
     }
-    return JointAuthority{identity_, operator_id, rec->life, rec->incarnation,
+    return JointAuthority{identity_, initiator_id, rec->life, rec->incarnation,
                           std::move(ceiling_roles)};
 }
 
@@ -1009,18 +1009,18 @@ JointRefusal Switchboard::joint_authority_check(WeaveId caller,
     if (!authority.valid() || !issued_here(authority)) {
         return JointRefusal::ForeignAuthority;
     }
-    if (!(authority.operator_id() == caller)) {
-        return JointRefusal::NotOperator;
+    if (!(authority.initiator_id() == caller)) {
+        return JointRefusal::NotInitiator;
     }
     // THE EXACT PARTICIPANT THE AUTHORITY WAS MINTED FOR, asked the way every bound
     // participant is asked (`still`): alive, and at the life and incarnation the
     // host minted it for. A swap, a revival or a removal-and-replacement leaves a
     // weave at this address that the capability does not name; the records that
-    // operator began were retired at that transition, and its capability is refused
+    // initiator began were retired at that transition, and its capability is refused
     // here -- two obligations, both kept. The host mints again for the successor.
-    if (!still(ParticipantRef{caller, authority.operator_life(),
-                              authority.operator_incarnation()})) {
-        return JointRefusal::NotOperator;
+    if (!still(ParticipantRef{caller, authority.initiator_life(),
+                              authority.initiator_incarnation()})) {
+        return JointRefusal::NotInitiator;
     }
     return JointRefusal::None;
 }
@@ -1079,7 +1079,7 @@ JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& aut
         if (record == personal_claims_.end()) {
             return JointBegin{false, 0, JointRefusal::NoClaim};
         }
-        // ONE LIVE OPERATION PER KEY. Supersession is the operator's explicit act
+        // ONE LIVE OPERATION PER KEY. Supersession is the initiator's explicit act
         // (`cancel_joint`), never something begin performs on its behalf.
         for (const JointOp& live : joint_ops_) {
             if (live.state != JointState::Preparing) {
@@ -1097,17 +1097,17 @@ JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& aut
         // THE ROLE A FAILURE WILL BE TOLD IN: the one the key was named by, or --
         // for a key named by weave -- the one the claimant holds at this moment. A
         // fact about the bound participant, recorded now, so a later role movement
-        // does not rewrite whom the operator was coordinating.
+        // does not rewrite whom the initiator was coordinating.
         part.bound_role = named_role.empty() ? claimant->role : named_role;
         part.revision = record->second.revision;
         parts.push_back(std::move(part));
     }
     for (JointOp& slot : joint_ops_) {
         if (slot.state != JointState::Missing) {
-            // A slot is never reused while its operator has not released it: a Preparing
+            // A slot is never reused while its initiator has not released it: a Preparing
             // record is live, a Committed one is re-read when the word of its application
             // arrives, an Aborted one when the word that it ended does. Only a released slot
-            // is free, and a non-releasing operator meets the bound below, in words.
+            // is free, and a non-releasing initiator meets the bound below, in words.
             continue;
         }
         slot = JointOp{next_joint_id_++, participant(caller), JointState::Preparing,
@@ -1191,22 +1191,22 @@ JointResult Switchboard::commit_joint_as(WeaveId caller, const JointAuthority& a
         return JointResult{false, JointRefusal::NoSuchOperation};
     }
     // Somebody else's record is refused before it is touched: an operation id is never
-    // authority, and a caller naming another operator's operation is not its operator. Asked
+    // authority, and a caller naming another initiator's operation is not its initiator. Asked
     // first and with no effect, so the record's state, reason, offers and notices owed stay
     // as they were, and its owner's own commit still finds it.
-    if (!(op->operator_.who == caller)) {
-        return JointResult{false, JointRefusal::NotOperator};
+    if (!(op->initiator_.who == caller)) {
+        return JointResult{false, JointRefusal::NotInitiator};
     }
     if (op->state != JointState::Preparing) {
         return JointResult{false, JointRefusal::WrongState};
     }
-    // THE OPERATOR'S OWN RECORD, BOUND TO A LIFE OR INCARNATION THAT MOVED. Not
+    // THE INITIATOR'S OWN RECORD, BOUND TO A LIFE OR INCARNATION THAT MOVED. Not
     // reachable in the ordinary course -- `invalidate_joint_for` retires every record
-    // of an operator whose life or incarnation changed, at that transition, and the
+    // of an initiator whose life or incarnation changed, at that transition, and the
     // authority check above refuses a caller the capability does not name -- but if
     // it is ever met, it is the lifecycle rule that answers, for the record's own
-    // operator: aborted, as a bound claimant's change aborts it, never a stranger's act.
-    if (!still(op->operator_)) {
+    // initiator: aborted, as a bound claimant's change aborts it, never a stranger's act.
+    if (!still(op->initiator_)) {
         finish_joint(*op, JointState::Aborted, JointRefusal::ParticipantChanged);
         return JointResult{false, JointRefusal::ParticipantChanged};
     }
@@ -1270,14 +1270,14 @@ JointResult Switchboard::cancel_joint_as(WeaveId caller, const JointAuthority& a
     if (op == nullptr) {
         return JointResult{false, JointRefusal::NoSuchOperation};
     }
-    if (!(op->operator_.who == caller)) {
-        return JointResult{false, JointRefusal::NotOperator};
+    if (!(op->initiator_.who == caller)) {
+        return JointResult{false, JointRefusal::NotInitiator};
     }
     if (op->state != JointState::Preparing) {
         return JointResult{false, JointRefusal::WrongState};
     }
     // CANCELLED IS TERMINAL, NOT RELEASED: the record stays readable (Aborted,
-    // Cancelled) until this operator releases it, like every other terminal record.
+    // Cancelled) until this initiator releases it, like every other terminal record.
     finish_joint(*op, JointState::Aborted, JointRefusal::Cancelled);
     return JointResult{true, JointRefusal::None};
 }
@@ -1292,13 +1292,13 @@ JointResult Switchboard::release_joint_as(WeaveId caller, const JointAuthority& 
     if (op == nullptr) {
         return JointResult{false, JointRefusal::NoSuchOperation}; // never begun, or released
     }
-    if (!(op->operator_.who == caller)) {
-        return JointResult{false, JointRefusal::NotOperator};
+    if (!(op->initiator_.who == caller)) {
+        return JointResult{false, JointRefusal::NotInitiator};
     }
     if (op->state == JointState::Preparing) {
         return JointResult{false, JointRefusal::WrongState}; // live: cancel it, do not lose it
     }
-    // The operator's own retirement of a record it has consumed (SENSE-07): Committed, settled
+    // The initiator's own retirement of a record it has consumed (SENSE-07): Committed, settled
     // or still owed, or Aborted. No later re-settlement is told to anybody, because the record
     // that would carry the word is gone; the id names nothing from here. A held claimant stays
     // held and is still repaired by a reload, and its next ordinary claim replaces the value.
@@ -1320,8 +1320,8 @@ JointStatus Switchboard::joint_status_as(WeaveId caller, const JointAuthority& a
     if (op == nullptr) {
         return JointStatus{JointState::Missing, JointRefusal::NoSuchOperation};
     }
-    if (!(op->operator_.who == caller)) {
-        return JointStatus{JointState::Missing, JointRefusal::NotOperator};
+    if (!(op->initiator_.who == caller)) {
+        return JointStatus{JointState::Missing, JointRefusal::NotInitiator};
     }
     return status_of(*op);
 }
@@ -1343,7 +1343,7 @@ JointStatus Switchboard::status_of(const JointOp& op) const {
     }
     // THE WORST PART DECIDES, and it is named: Failed over Lost over Declined over
     // Pending over Applied. A non-application is about ONE participant, and the
-    // operator's words to a requester need to say which.
+    // initiator's words to a requester need to say which.
     out.application = JointApplication::Applied;
     const JointPart* about = nullptr;
     for (const JointPart& p : op.parts) {
@@ -1424,15 +1424,15 @@ void Switchboard::invalidate_joint_for(WeaveId changed) {
     // SELECTIVE, exactly as `invalidate_transactions_for` is: only operations
     // that BIND `changed`, and only when the fact they captured no longer holds.
     // A live operation is ended; an operation the bus had already ended (a
-    // bound claim moved) is not touched -- but its operator is told now, if it
+    // bound claim moved) is not touched -- but its initiator is told now, if it
     // was not told yet, because the reply it may be waiting on from this
     // participant can no longer come.
     for (JointOp& op : joint_ops_) {
         if (op.state == JointState::Missing) {
             continue;
         }
-        if (op.operator_.who == changed && !still(op.operator_)) {
-            // The operator is replaced, removed, dead or revived (SENSE-07): nobody is left
+        if (op.initiator_.who == changed && !still(op.initiator_)) {
+            // The initiator is replaced, removed, dead or revived (SENSE-07): nobody is left
             // to consume this record, and a successor inherits nothing, so it is retired now,
             // whatever its state. The claimants lose nothing: their facts live on their claim
             // records, so a hold, a repair and an owner's next claim are what they were.
@@ -1453,7 +1453,7 @@ void Switchboard::invalidate_joint_for(WeaveId changed) {
         }
     }
     // Committed operations: a claimant removed before it was shown its published value is
-    // Lost (its claim record went with it), and the operator is told. A reloaded or dead
+    // Lost (its claim record went with it), and the initiator is told. A reloaded or dead
     // claimant keeps its record, and its successor or revived life is shown. A part already
     // Failed keeps that word: its failure was told, and removal is the repair that ends the hold.
     if (find(changed) != nullptr) {
@@ -1477,15 +1477,15 @@ void Switchboard::invalidate_joint_for(WeaveId changed) {
 }
 
 void Switchboard::notify_joint_ended(JointOp& op) {
-    // TO THE EXACT OPERATOR THAT BEGAN IT, ONCE, and only if it accepts the shape: an
+    // TO THE EXACT INITIATOR THAT BEGAN IT, ONCE, and only if it accepts the shape: an
     // ordinary ungated delivery from the bus (no sender life to stamp), refused
     // NotAccepted otherwise and seeding no refusal traffic because it has no weave sender.
     if (op.notified) {
         return;
     }
     op.notified = true;
-    const WeaveRecord* who = find(op.operator_.who);
-    if (who == nullptr || !who->alive || !still(op.operator_) ||
+    const WeaveRecord* who = find(op.initiator_.who);
+    if (who == nullptr || !who->alive || !still(op.initiator_) ||
         !accept_match(*who, JointEnded::zen_name, JointEnded::zen_version)) {
         return;
     }
@@ -1494,7 +1494,7 @@ void Switchboard::notify_joint_ended(JointOp& op) {
     notice.reason = name_of(op.reason);
     const std::uint64_t seq = allocate_sequence();
     Message msg(to_value(notice), WeaveId{}, WeaveId{}, 0);
-    Envelope env{std::move(msg), op.operator_.who, seq, false, {}, 0};
+    Envelope env{std::move(msg), op.initiator_.who, seq, false, {}, 0};
     env.fence = current_dispatch_fence_;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     queue_back(std::move(env));
@@ -1593,7 +1593,7 @@ void Switchboard::note_application(const PersonalKey& key, ClaimRecord& record,
     record.application = what;
     JointOp* op = find_joint(record.published_by);
     if (op == nullptr) {
-        // RELEASED SINCE -- by its operator, or by the bus when that operator changed.
+        // RELEASED SINCE -- by its initiator, or by the bus when that initiator changed.
         // The claim record alone keeps the fact, which is all the hold, the repair and
         // the owner's next claim ever read; nothing is owed to anybody about it.
         return;
@@ -1628,11 +1628,11 @@ void Switchboard::settle_application(JointOp& op) {
 }
 
 void Switchboard::notify_joint_applied(JointOp& op, JointApplication what, const JointPart* about) {
-    // TO THE EXACT OPERATOR THAT BEGAN IT, and only if it accepts the shape: the
+    // TO THE EXACT INITIATOR THAT BEGAN IT, and only if it accepts the shape: the
     // same ungated bus notice `zen.JointEnded` is (no sender life to stamp, no
     // refusal traffic seeded). The record is the fact; this is the wake-up.
-    const WeaveRecord* who = find(op.operator_.who);
-    if (who == nullptr || !who->alive || !still(op.operator_) ||
+    const WeaveRecord* who = find(op.initiator_.who);
+    if (who == nullptr || !who->alive || !still(op.initiator_) ||
         !accept_match(*who, JointApplied::zen_name, JointApplied::zen_version)) {
         return;
     }
@@ -1644,7 +1644,7 @@ void Switchboard::notify_joint_applied(JointOp& op, JointApplication what, const
     notice.reason = name_of(what);
     const std::uint64_t seq = allocate_sequence();
     Message msg(to_value(notice), WeaveId{}, WeaveId{}, 0);
-    Envelope env{std::move(msg), op.operator_.who, seq, false, {}, 0};
+    Envelope env{std::move(msg), op.initiator_.who, seq, false, {}, 0};
     env.fence = current_dispatch_fence_;
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     queue_back(std::move(env));
@@ -2103,7 +2103,7 @@ std::size_t Switchboard::publish_as(WeaveId as_sender, Message msg) {
     // A candidate cannot publish, and not merely because nobody would hear it: a
     // publication is speech into the world by definition, so there is no coherent
     // "to the coordinator only" version of it. Refused visibly, because a candidate
-    // trying to publish is exactly what the operator wants to know about.
+    // trying to publish is exactly what the weaver wants to know about.
     if (sealed(as_sender)) {
         (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::SealedSpeech);
         return 0;
@@ -2195,7 +2195,7 @@ Ticket Switchboard::role_send(std::string_view as_role, WeaveId target, Message 
     // The root surface: a host program speaking with no weave identity. It
     // holds no role by definition, and the refusal says so on the tap rather
     // than silently returning the base default — "a root tried to author
-    // role speech" is exactly the kind of thing an operator wants to see.
+    // role speech" is exactly the kind of thing a weaver wants to see.
     (void)as_role;
     return refuse_role(target, WeaveId{}, msg);
 }
@@ -3013,7 +3013,7 @@ AdmitResult Switchboard::schedule_admission(WeaveId candidate, WeaveId incumbent
     // Ungated: a committed activation is Loom's own act, authorized by the authority checked
     // above, not the coordinator's speech, so no later question of the gated path can unmake
     // it. The sender stamp stays the coordinator's because `zen.Activated`'s lineage rule is
-    // per attesting operator: it says who admitted, not who spoke.
+    // per attesting initiator: it says who admitted, not who spoke.
     Envelope act{std::move(activation), candidate, seq, /*gated=*/false, std::string{},
                  /*sender_life=*/0};
     act.admission = PendingAdmission{true, cand_ref, inc_ref, owner, role, txn};
@@ -3119,7 +3119,7 @@ void Switchboard::deliver_admission(Envelope env) {
 
     // ---- 6. the candidate's first breath -------------------------------------
     // It is not a question (LIFE-05): there is no reply authority. The stamped sender is the
-    // operator that admitted the candidate, not a requester, so an authority naming it would
+    // initiator that admitted the candidate, not a requester, so an authority naming it would
     // let the candidate answer a request nobody made. With no valid requester, `answer()`
     // refuses visibly and `defer_answer()` returns an invalid capability before the deferred
     // registry is touched. `current_target_`, the delivery facts and the attestation stand.
@@ -3243,7 +3243,7 @@ void Switchboard::finish_txn(PreparedReplacement& txn, TxnState state, TxnReason
     }
 
     // 2. EXACTLY ONE terminal outcome. Evidence, not authority: it says what
-    //    happened and confers nothing. Kept for the exact operator that began the
+    //    happened and confers nothing. Kept for the exact initiator that began the
     //    transaction, in a separately bounded store, dropped oldest-first.
     if (outcomes_.size() >= kMaxTerminalOutcomes) {
         outcomes_.erase(outcomes_.begin());
@@ -3276,7 +3276,7 @@ void Switchboard::invalidate_transactions_for(WeaveId changed) {
         for (PreparedReplacement& t : txns_) {
             TxnReason why = TxnReason::None;
             if (t.op.who == changed && !still(t.op)) {
-                why = TxnReason::OperatorChanged;
+                why = TxnReason::InitiatorChanged;
             } else if (t.coordinator.who == changed && !still(t.coordinator)) {
                 why = TxnReason::CoordinatorChanged;
             } else if (t.incumbent.who == changed && !still(t.incumbent)) {
@@ -3302,7 +3302,7 @@ void Switchboard::invalidate_transactions_for(WeaveId changed) {
         }
     }
     // Joint publication: the same transition ends every joint operation that
-    // bound `changed` as operator or claimant. Every lifecycle path — removal,
+    // bound `changed` as initiator or claimant. Every lifecycle path — removal,
     // death, revival, reload, swap — already comes through here.
     invalidate_joint_for(changed);
 }
@@ -3345,7 +3345,7 @@ TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinato
     // One incumbent, one replacement, and one candidate, one replacement: otherwise a sealed
     // candidate could be promised to two incumbents, one readiness would answer both, and
     // aborting one would unregister the candidate under the other. Refused before a slot is
-    // consumed; the two causes are named apart because they send an operator to different places.
+    // consumed; the two causes are named apart because they send a weaver to different places.
     for (const PreparedReplacement& t : txns_) {
         if (t.incumbent.who == incumbent) {
             return {false, TxnId{}, TxnReason::IncumbentBusy};
@@ -3391,7 +3391,7 @@ TxnReason Switchboard::vanished_transaction_reason(TxnId id) const {
     // named existed and is over; anything else was never a transaction here. The
     // counter answers that without consulting — still less resurrecting — any
     // terminal record, which is deliberate: a terminal result belongs to its
-    // operator and is not a lookup table for latecomers.
+    // initiator and is not a lookup table for latecomers.
     return id.valid() && id.value < next_txn_id_ ? TxnReason::LateReadiness
                                                  : TxnReason::NoSuchTransaction;
 }
@@ -3444,7 +3444,7 @@ TxnResult Switchboard::accept_authenticated_readiness(PreparedReplacement& txn) 
     // spoke; these are the facts about everyone else, re-read from the registry
     // rather than from anything the transaction remembers being told.
     if (!still(txn.op)) {
-        return {false, txn.id, TxnReason::OperatorChanged};
+        return {false, txn.id, TxnReason::InitiatorChanged};
     }
     if (!still(txn.coordinator)) {
         return {false, txn.id, TxnReason::CoordinatorChanged};
@@ -3608,7 +3608,7 @@ bool Switchboard::take_outcome(WeaveId op, TxnOutcome& out) {
 
 bool Switchboard::take_outcome(WeaveId op, TxnId id, TxnOutcome& out) {
     // The id NARROWS the question; it never widens the authority. Everything the
-    // wider overload requires — the exact operator life and incarnation — is
+    // wider overload requires — the exact initiator life and incarnation — is
     // required here identically, so possessing a transaction id buys a stranger
     // nothing it did not already have.
     const ParticipantRef now = participant(op);

@@ -265,7 +265,7 @@ private:
 /// NOT use this — it would show a person backslash-escapes for no reason.
 ///
 /// IT KEEPS UTF-8, deliberately, and this is where it differs from the Weaver's
-/// `safe_operator_text`. That one escapes every non-ASCII byte because it guards
+/// `safe_weaver_text`. That one escapes every non-ASCII byte because it guards
 /// one small security-critical surface where being unreadable is cheaper than
 /// being wrong. A terminal that did the same would corrupt every ordinary message
 /// carrying a name, so this escapes exactly the bytes that can steer a terminal —

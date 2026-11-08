@@ -80,7 +80,7 @@ observers with a named `RefusalReason`; a refused delivery reaches nobody.
 
 MEANS
 - silence is never an outcome the bus produces on its own initiative;
-- reasons are distinct because they send an operator to distinct fixes.
+- reasons are distinct because they send a weaver to distinct fixes.
 
 DOES NOT MEAN
 - that every refusal reaches its sender. An explicit notice acceptor may learn
@@ -284,8 +284,8 @@ finite backlog cleared whole, FIFO and `stop()` across the boundary, the
 empty-queue no-op, reentrancy, the drain still draining to empty, one
 perpetually productive world left measurably different by each turn, and an
 outer host loop keeping control every lap while the service stays healthy),
-suite `bridge` (a bridge host staying responsive — accepting and welcoming an
-operator — while a perpetual driver runs, and the default still draining).
+suite `bridge` (a bridge host staying responsive — accepting and welcoming a
+weaver — while a perpetual driver runs, and the default still draining).
 
 ## MSG-10 — A callback that throws costs the delivery, not the bus
 

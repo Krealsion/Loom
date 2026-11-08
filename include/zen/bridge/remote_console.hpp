@@ -42,8 +42,8 @@ public:
     RemoteConsole& operator=(const RemoteConsole&) = delete;
 
     bool connected() const noexcept { return connected_; }
-    /// The operator's stamped bus id (from Welcome) — the sender the host attributes its sends to.
-    loom::WeaveId operator_id() const noexcept { return operator_id_; }
+    /// The weaver's stamped bus id (from Welcome) — the sender the host attributes its sends to.
+    loom::WeaveId weaver_seat_id() const noexcept { return weaver_seat_id_; }
     /// True once the host closed the connection (or it failed): the disconnect-as-an-event signal.
     bool disconnected() const noexcept { return !ch_ || ch_->done(); }
     /// The underlying socket, for a client-side multiplexer that waits on {input, this socket}.
@@ -85,7 +85,7 @@ public:
 
 private:
     /// The LIFE-07 observation instrument, applied to the client's own caches: the absent-schema memo
-    /// has no operator-visible surface (unlike the tap and the buffer, whose eviction the operator
+    /// has no weaver-visible surface (unlike the tap and the buffer, whose eviction the weaver
     /// must see), so its bound is stated as an assertion about client state rather than inferred
     /// from process memory. Adds no member and no code path.
     friend struct RemoteConsoleStorageProbe;
@@ -117,7 +117,7 @@ private:
     /// the bound needs insertion order, and at this size a linear probe is cheaper than a tree.
     mutable std::deque<std::pair<std::string, std::uint32_t>> schema_absent_;
     mutable std::vector<std::string> pending_delivered_; ///< Delivered bytes awaiting their schema
-    mutable loom::WeaveId operator_id_{}; ///< set by Welcome (processed in a const pump)
+    mutable loom::WeaveId weaver_seat_id_{}; ///< set by Welcome (processed in a const pump)
     mutable bool connected_ = false;      ///< set by Welcome (processed in a const pump)
 
     std::uint64_t correlation_ = 0; ///< bumped only in assemble_and_send (non-const)

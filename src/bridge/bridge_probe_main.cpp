@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// zen-bridge-probe: a non-interactive remote operator that proves the bridge protocol end to
+// zen-bridge-probe: a non-interactive remote weaver that proves the bridge protocol end to
 // end over a real socket: it connects, discovers the bus, fetches a shape, composes and sends a
 // message, waits for the echoed reply, prints PASS and disconnects. Run it against
 // zen-bridge-host from another process, or from a Windows client that reaches its loopback port.
@@ -62,8 +62,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "probe: handshake failed (no Welcome)\n");
         return 1;
     }
-    std::printf("probe: connected to %s:%u; stamped operator id = %llu\n", host.c_str(), port,
-                static_cast<unsigned long long>(rc.operator_id().value));
+    std::printf("probe: connected to %s:%u; stamped weaver id = %llu\n", host.c_str(), port,
+                static_cast<unsigned long long>(rc.weaver_seat_id().value));
 
     // Discovery (a message the host answers): wait for the weave set to arrive.
     if (!spin_until(rc, [&] { return !rc.weaves().empty(); }, 3000)) {

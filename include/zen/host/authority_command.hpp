@@ -9,7 +9,7 @@
 // host built from the installed package. The command owns the grammar, every sentence it prints
 // and the order of each change: a decision is written to the store first, and only a write that
 // landed is installed on the bus. What it asks of the host is one thing the host alone can do:
-// carry a question from its operator seat to its warden and bring back the answer Loom attributed
+// carry a question from its weaver seat to its warden and bring back the answer Loom attributed
 // to it (`AuthorityDesk`), because which participant is the seat, and how it waits, are the host's.
 
 #include <zen/host/authority.hpp>
@@ -32,7 +32,7 @@ struct WardenAnswer {
     std::string trouble;
 };
 
-/// The host's half of the command: two conversations from its operator seat, the participant
+/// The host's half of the command: two conversations from its weaver seat, the participant
 /// the warden was built to obey (`HostWarden`'s `seat`). Each sends one message to the warden
 /// and returns what it came to; neither prints, decides or retries anything.
 class AuthorityDesk {

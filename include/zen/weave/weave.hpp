@@ -270,10 +270,10 @@ public:
     }
 
     // ---- Joint publication -----------------------------------------------------
-    // A claimant offers the next value of a claim it declared, for the operation an operator
-    // named; an operator holding a host-minted `JointAuthority` binds, commits, cancels, reads
+    // A claimant offers the next value of a claim it declared, for the operation an initiator
+    // named; an initiator holding a host-minted `JointAuthority` binds, commits, cancels, reads
     // and releases. The bus authenticates each verb against this Mail's live delivery. A loaded
-    // weave can offer; its operator verbs are refused `NoLiveDelivery`.
+    // weave can offer; its initiator verbs are refused `NoLiveDelivery`.
     // docs/reference/joint-publication.md
 
     /// Claimant: offer `next` as my key's value for `op`; nothing is published yet.
@@ -282,12 +282,12 @@ public:
         return bus_.offer_claim(op, to_value(next));
     }
 
-    /// Operator: bind the exact claimants and revisions of `keys`.
+    /// Initiator: bind the exact claimants and revisions of `keys`.
     loom::JointBegin begin_joint(const loom::JointAuthority& authority,
                                  std::vector<loom::ClaimKey> keys) {
         return bus_.begin_joint(authority, std::move(keys));
     }
-    /// Operator: publish. `ok` is the commitment, and nothing else is.
+    /// Initiator: publish. `ok` is the commitment, and nothing else is.
     loom::JointResult commit_joint(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.commit_joint(authority, op);
     }
@@ -297,7 +297,7 @@ public:
     loom::JointStatus joint_status(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.joint_status(authority, op);
     }
-    /// Operator: retire a terminal record this weave has consumed; the operation then reads
+    /// Initiator: retire a terminal record this weave has consumed; the operation then reads
     /// Missing and its slot is free.
     loom::JointResult release_joint(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.release_joint(authority, op);
@@ -309,7 +309,7 @@ private:
     loom::WeaveId self_;
 };
 
-/// Name one latest-claim key as an operator binds it: by the exact weave, or by the role whose
+/// Name one latest-claim key as an initiator binds it: by the exact weave, or by the role whose
 /// holder the bus resolves at begin.
 template <class T>
 loom::ClaimKey claim_key(loom::WeaveId claimant) {

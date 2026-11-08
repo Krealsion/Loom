@@ -46,7 +46,7 @@
 #include <unistd.h>
 #endif
 
-// The remote-operator bridge, proven over a REAL loopback socket: the transport framing, the
+// The remote-weaver bridge, proven over a REAL loopback socket: the transport framing, the
 // bridge protocol (discovery, tap and send as messages), the connection-stamped sender against a
 // FORGED wire frame, and disconnect handled as an event (close, and a genuine SIGKILL of a real
 // peer process).
@@ -842,7 +842,7 @@ TEST_CASE("bridge protocol: discovery, a gate-sent message, and the reply buffer
 
     RemoteConsole rc(cs); // the SAME engine surface the in-process TUI drives — over the socket
     REQUIRE(rc.connected());
-    CHECK(rc.operator_id().value != 0);
+    CHECK(rc.weaver_seat_id().value != 0);
 
     // Discovery: the greeter is visible with its accepted shape (pushed by the host after Welcome).
     REQUIRE(wait_until(
@@ -885,7 +885,7 @@ TEST_CASE("bridge protocol: discovery, a gate-sent message, and the reply buffer
     REQUIRE(m1->value.get("msg") != nullptr);
     CHECK(m1->value.get("msg")->as_text() == "hello");
 
-    // The tap streamed the bus events (at least the Delivered to the operator).
+    // The tap streamed the bus events (at least the Delivered to the weaver).
     bool saw_tap = false;
     for (const TapEvent& e : rc.tap()) {
         if (e.kind == "Delivered") {
@@ -894,14 +894,14 @@ TEST_CASE("bridge protocol: discovery, a gate-sent message, and the reply buffer
     }
     CHECK(saw_tap);
 
-    // Provenance: the greeter saw the operator's STAMPED sender (its proxy id == operator_id).
-    CHECK(h.greeter->last_sender() == rc.operator_id().value);
+    // Provenance: the greeter saw the weaver's STAMPED sender (its proxy id == weaver_seat_id).
+    CHECK(h.greeter->last_sender() == rc.weaver_seat_id().value);
 }
 
-TEST_CASE("a handler that fails reaches a REMOTE operator as HandlerFailed, not Delivered") {
+TEST_CASE("a handler that fails reaches a REMOTE weaver as HandlerFailed, not Delivered") {
     // `EventKind::HandlerFailed` has its own wire kind, and this is the witness that the kind
     // survives the whole path -- Switchboard tap, server encode, wire, client decode -- rather
-    // than arriving as the `Delivered` a remote operator would believe.
+    // than arriving as the `Delivered` a remote weaver would believe.
     class Thrower final : public loom::Weave {
     public:
         std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
@@ -1005,7 +1005,7 @@ TEST_CASE("bridge protocol: the sender is stamped from the connection — a FORG
     raw.queue(BridgeOp::Hello, hello);
     raw.flush();
 
-    std::uint64_t operator_id = 0;
+    std::uint64_t weaver_seat_id = 0;
     REQUIRE(wait_until(
         [&] {
             std::vector<BridgeIncoming> frames;
@@ -1016,11 +1016,11 @@ TEST_CASE("bridge protocol: the sender is stamped from the connection — a FORG
                     std::uint64_t id = 0;
                     std::uint32_t proto = 0;
                     if (cur.u64(id) && cur.u32(proto)) {
-                        operator_id = id;
+                        weaver_seat_id = id;
                     }
                 }
             }
-            return operator_id != 0;
+            return weaver_seat_id != 0;
         },
         2000));
 
@@ -1040,12 +1040,12 @@ TEST_CASE("bridge protocol: the sender is stamped from the connection — a FORG
     raw.queue(BridgeOp::Send, frame);
     raw.flush();
 
-    // The greeter recorded the STAMPED sender (this connection's operator id), never the forged one.
+    // The greeter recorded the STAMPED sender (this connection's weaver id), never the forged one.
     REQUIRE(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
-    CHECK(h.greeter->last_sender() == operator_id);
+    CHECK(h.greeter->last_sender() == weaver_seat_id);
     CHECK(h.greeter->last_sender() != kVictim);
 
-    // And the echoed reply came back to THIS operator — the forged wire_reply_to did NOT redirect it
+    // And the echoed reply came back to THIS weaver — the forged wire_reply_to did NOT redirect it
     // to the victim (the reply_to is stamped from the connection too; the confused-deputy guard).
     bool got_reply = false;
     (void)wait_until(
@@ -1075,7 +1075,7 @@ TEST_CASE("hygiene: the connection cap sheds past kMax (a reconnecting fd-hog is
     const std::uint16_t port = bridge_socket_port(listener);
     BridgeServer server(bus, listener);
 
-    const std::size_t over = BridgeServer::kMaxOperatorConnections + 1;
+    const std::size_t over = BridgeServer::kMaxWeaverConnections + 1;
     std::vector<std::unique_ptr<BridgeChannel>> clients;
     for (std::size_t i = 0; i < over; ++i) {
         const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
@@ -1092,7 +1092,7 @@ TEST_CASE("hygiene: the connection cap sheds past kMax (a reconnecting fd-hog is
         server.step();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    CHECK(server.connection_count() == BridgeServer::kMaxOperatorConnections);
+    CHECK(server.connection_count() == BridgeServer::kMaxWeaverConnections);
     CHECK(server.declined_count() == 1);
 
     // The cap bounds the BUS, not just conns_: exactly kMax proxies (plus the greeter).
@@ -1102,7 +1102,7 @@ TEST_CASE("hygiene: the connection cap sheds past kMax (a reconnecting fd-hog is
             ++proxies;
         }
     }
-    CHECK(proxies == BridgeServer::kMaxOperatorConnections);
+    CHECK(proxies == BridgeServer::kMaxWeaverConnections);
 
     // Exactly one client — the shed one — observes a closed socket.
     std::size_t shed = 0;
@@ -1745,7 +1745,7 @@ TEST_CASE("bridge protocol: a vanished peer is reaped as an event (the server un
 }
 
 #ifndef _WIN32
-TEST_CASE("bridge protocol: a SIGKILLed operator PROCESS is reaped as an event (two real "
+TEST_CASE("bridge protocol: a SIGKILLed weaver PROCESS is reaped as an event (two real "
               "processes)") {
     loom::Switchboard bus;
     bus.register_weave(std::make_unique<RecordingGreeter>(), loom::Grant{}.allow_any());
@@ -1757,7 +1757,7 @@ TEST_CASE("bridge protocol: a SIGKILLed operator PROCESS is reaped as an event (
     const pid_t pid = ::fork();
     REQUIRE(pid >= 0);
     if (pid == 0) {
-        // Child (the operator process): drop the inherited listener, connect, Hello, then wait to be
+        // Child (the weaver process): drop the inherited listener, connect, Hello, then wait to be
         // killed. It touches only the socket — never the parent's bus.
         bridge_close(listener);
         std::string e2;
@@ -1877,7 +1877,7 @@ TEST_CASE("a bridge host with a bounded turn stays responsive while a perpetual 
     server.step();
     CHECK(driver->turns == 1);
 
-    // ...and an operator can still connect and be served, turn after turn, while
+    // ...and a weaver can still connect and be served, turn after turn, while
     // the service keeps running.
     const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
     REQUIRE_MESSAGE(cs != kInvalidSocket, err);
@@ -1899,11 +1899,11 @@ TEST_CASE("a bridge host with a bounded turn stays responsive while a perpetual 
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    // The operator was accepted and welcomed — the outer loop kept control.
+    // The weaver was accepted and welcomed — the outer loop kept control.
     CHECK(welcomed);
     CHECK(server.connection_count() == 1u);
     // The service never stopped: every step took the backlog it found and gave
-    // control back, so the driver kept advancing while the operator was served.
+    // control back, so the driver kept advancing while the weaver was served.
     CHECK(driver->turns > 1);
 }
 
@@ -1971,7 +1971,7 @@ TEST_CASE("unbounded is the default contract — step() drains to empty") {
 
 namespace loom {
 /// See the friend declaration in zen/bridge/remote_console.hpp. The absent-schema memo has no
-/// operator-visible surface (unlike the tap and the buffer, whose eviction the operator must SEE),
+/// weaver-visible surface (unlike the tap and the buffer, whose eviction the weaver must SEE),
 /// so its bound is asserted about client state rather than inferred from process memory.
 struct RemoteConsoleStorageProbe {
     static std::size_t absent(const RemoteConsole& rc) { return rc.schema_absent_.size(); }
@@ -2164,21 +2164,21 @@ TEST_CASE("wire-originated refusal-shaped speech cannot acquire Loom attestation
     BridgeChannel raw(connection);
     std::string hello;put_u32(hello,kBridgeProtocolVersion);
     raw.queue(BridgeOp::Hello,hello);raw.flush();
-    std::uint64_t operator_id=0;
+    std::uint64_t weaver_seat_id=0;
     REQUIRE(wait_until([&] {
         server.step();std::vector<BridgeIncoming> frames;raw.poll(frames);
         for(const auto& frame:frames) if(frame.op==BridgeOp::Welcome) {
             Cursor cur(frame.payload);std::uint32_t version=0;
-            if(!cur.u64(operator_id)||!cur.u32(version)) operator_id=0;
+            if(!cur.u64(weaver_seat_id)||!cur.u32(version)) weaver_seat_id=0;
         }
-        return operator_id!=0;
+        return weaver_seat_id!=0;
     },2000));
     DispatchRefused fake;fake.attempt="1";fake.target="999";
     fake.shape="Ping";fake.version=1;fake.reason="CapabilityDenied";
     raw.queue(BridgeOp::Send,make_send_frame(999999,recipient.id.value,999999,0,serialize(to_value(fake))));
     raw.flush();
     REQUIRE(wait_until([&] {server.step();return ordinary==1;},2000));
-    CHECK(trusted==0);CHECK(actual_sender.value==operator_id);
+    CHECK(trusted==0);CHECK(actual_sender.value==weaver_seat_id);
     // Same payload family, genuine dispatch owner: the recipient can distinguish it.
     const auto attempt=bus.send_as(recipient.id,WeaveId{999},Message(sbfx::ping(1)));
     REQUIRE(attempt.valid());bus.pump_pending();CHECK(trusted==0);bus.pump_pending();
@@ -2186,7 +2186,7 @@ TEST_CASE("wire-originated refusal-shaped speech cannot acquire Loom attestation
 }
 
 // ---- the two-host crossing: admission, identity, stamped context, the link ----------------------
-// The cases above prove the crossing for ONE principal, the operator. These are the guest's: a
+// The cases above prove the crossing for ONE principal, the weaver. These are the guest's: a
 // connection admitted deliberately, under a grant the host's policy chose, told what it is and is
 // not, and given nothing it was not granted. An unadmitted connection acting, or a claimed name
 // becoming an identity, fails its case.
@@ -2521,10 +2521,10 @@ TEST_CASE("admission: a peer speaking another protocol version is refused in wor
     CHECK(wait_until([&] { return raw.done() || h.server->connection_count() == 0; }, 2000));
 }
 
-TEST_CASE("admission: a guest is given no tap, and an operator still is") {
+TEST_CASE("admission: a guest is given no tap, and a weaver still is") {
     GuestHost h([](const loom::ConnectionRequest& r) {
         if (r.claimed_name == "operator") {
-            return loom::operator_admission()(r);
+            return loom::weaver_admission()(r);
         }
         return loom::ConnectionVerdict::admit(echo_only("agent"));
     });

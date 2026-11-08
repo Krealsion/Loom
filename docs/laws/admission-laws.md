@@ -55,7 +55,7 @@ LAW — A grant check (`CapabilityDenied`) is a distinct step *around* the gate
 MEANS
 - an unauthorized sender's message reaches neither the gate nor role
   resolution — it cannot even learn whether a role is held;
-- the two refusals are distinct observable reasons, sending an operator to
+- the two refusals are distinct observable reasons, sending a weaver to
   different fixes.
 
 DOES NOT MEAN

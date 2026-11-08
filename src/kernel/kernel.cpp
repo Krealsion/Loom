@@ -1213,7 +1213,7 @@ bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::
         // The stage is named in the refusal because the two mean very different
         // things to whoever reads it: refused at `open` means no code from that file
         // ran, refused at `speak` means it ran and was then not allowed to say
-        // anything. An operator triaging a refusal needs to know which.
+        // anything. A weaver triaging a refusal needs to know which.
         *why = std::string("admission refused at ") + name_of(stage) + ": " + v.reason;
         return false;
     }

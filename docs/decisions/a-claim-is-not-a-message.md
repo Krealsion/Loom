@@ -74,7 +74,7 @@ one visible line, and it being visible is the point.
 Reading requires an observe rule the host grants explicitly. Reusing a send rule
 was the convenient option and was rejected by name: a send rule answers *"may you
 emit this shape **there**"*, a read answers *"may you pull it"*, and reporting one
-as the other sends an operator to edit the wrong thing.
+as the other sends a weaver to edit the wrong thing.
 
 Because the floor is empty, **no weave gains any reach from Senses
 existing**. That is what keeps a latest-claim repository from becoming a

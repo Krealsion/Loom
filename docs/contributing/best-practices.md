@@ -218,7 +218,7 @@ the suites `terminal`, `weaver`, `console`, `recorder`, `logger`, `sense` and `o
 - **The Weaver changes authority and performs nothing**, and a grant is not a lease.
   [The flow](../reference/weaver.md#the-flow) and
   [a policy delegate's death does not revoke what it granted](../reference/known-seams.md#a-policy-delegates-death-does-not-revoke-what-it-granted)
-- **A Weaver's decision names the prompt it answers**, and an operator decides by the prompt it
+- **A Weaver's decision names the prompt it answers**, and a weaver decides by the prompt it
   shows, never by whatever is pending.
   [A decision names the prompt it answers](../reference/weaver.md#a-decision-names-the-prompt-it-answers)
 - **Reading a Sense takes its own observe rule.**

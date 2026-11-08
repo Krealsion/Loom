@@ -531,7 +531,7 @@ private:
 };
 
 /// Why an administration attempt did or did not take effect (GATE-05): each outcome sends an
-/// operator somewhere different.
+/// weaver somewhere different.
 enum class GrantOutcome : std::uint8_t {
     Installed,      ///< the delegated authority is now exactly what was requested
     NoAuthority,    ///< a default-constructed / inert capability: it names no subject

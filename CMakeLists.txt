@@ -360,18 +360,18 @@ target_link_libraries(zen-tui
     PUBLIC  zen-ui zen-sanitize
     PRIVATE zen-warnings)
 
-# The first user seat, running: a host that boots an operator console, a Weaver
+# The first user seat, running: a host that boots a weaver's console, a Weaver
 # holding one GrantAuthority, one governed session and one service — and then gets out of the
 # way. It is a HOST, not a library: the durable artifacts are the header-only Weaver
 # (include/zen/weaver/) and the console engine it drives, both of which this file only mounts.
 # Its REPL is deliberately shape-agnostic — there is no approve/grant/revoke command, because
-# the operator composes the ordinary registered policy shapes like any others.
+# the weaver composes the ordinary registered policy shapes like any others.
 add_executable(zen-weaver-demo src/weaver/weaver_demo.cpp)
 target_link_libraries(zen-weaver-demo
     PRIVATE zen-console zen-switchboard loom zen-warnings zen-sanitize)
 
 # The terminal core's console frontend: a REPL that presents the terminal core and owns none of
-# its semantics. It boots its own Loom and mounts a governed session, a separate operator seat, a
+# its semantics. It boots its own Loom and mounts a governed session, a separate weaver seat, a
 # Weaver and a service, and lets a person drive whichever participant they name; the `debug:`
 # host lens is the host's own tap and registry, labelled so. It links the terminal core and the
 # bus and nothing else from this tree.
@@ -495,7 +495,7 @@ endif()
 # on an AF_UNIX socket or loopback TCP; the bridge host listens on 127.0.0.1 only. `zen-bridge`
 # is the crossing (the framed channel, the host side with its admission seam, the console-free
 # client and the link envelope) and links only the bus and the core, so it is exported.
-# `zen-bridge-console` is the operator's console over it, and stays home with the console.
+# `zen-bridge-console` is the weaver's console over it, and stays home with the console.
 add_library(zen-bridge
     src/bridge/channel.cpp
     src/bridge/server.cpp
@@ -524,11 +524,11 @@ target_link_libraries(zen-bridge-console
     PRIVATE zen-warnings)
 add_library(loom::bridge-console ALIAS zen-bridge-console)
 
-# A host: a bus, one demo weave and the BridgeServer, listening for remote operators.
+# A host: a bus, one demo weave and the BridgeServer, listening for remote weavers.
 add_executable(zen-bridge-host src/bridge/bridge_host_main.cpp)
 target_link_libraries(zen-bridge-host PRIVATE zen-bridge zen-switchboard loom zen-warnings zen-sanitize)
 
-# A non-interactive remote operator that drives the protocol end to end and prints PASS or FAIL.
+# A non-interactive remote weaver that drives the protocol end to end and prints PASS or FAIL.
 # Portable, so it can cross a real boundary (TCP localhost).
 add_executable(zen-bridge-probe src/bridge/bridge_probe_main.cpp)
 target_link_libraries(zen-bridge-probe PRIVATE zen-bridge-console zen-bridge zen-console zen-switchboard loom zen-warnings zen-sanitize)

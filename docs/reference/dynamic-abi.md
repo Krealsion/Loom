@@ -63,7 +63,7 @@ functioning, did not apply the value and keeps state of its own.
 
 The host maps every status of the showing slot, and the mapping is on the slot
 in `abi.h`: `ZEN_OK` is Applied; `ZEN_CLAIM_DECLINED` is Declined (not held; the
-operator told; the library re-claims its own truth at its next delivery); every
+initiator told; the library re-claims its own truth at its next delivery); every
 negative status is Failed (`ZEN_ERR` for an exception that escaped the library's
 handler or a returned `PublishedClaim::Failed`, `ZEN_ERR_UNKNOWN_SCHEMA` /
 `ZEN_ERR_REFUSED` for bytes the library's gate would not admit) and the weave is
@@ -72,8 +72,8 @@ A descriptor whose slot is NULL is shown nothing and read as Failed. Each of
 the three answers is witnessed through the real image (suite `joint`: a loaded
 claimant that applies, one whose showing fails, and one that declines).
 
-Only the claimant's verbs cross. The operator's — begin, commit, cancel,
-status, release — and the authority they need are native; a loaded operator's
+Only the claimant's verbs cross. The initiator's — begin, commit, cancel,
+status, release — and the authority they need are native; a loaded initiator's
 Bus inherits the refusing defaults and answers `NoLiveDelivery`
 ([known seams](known-seams.md#loaded-coordination-of-a-joint-publication)). The
 isolated pipe supplies no offer door. No compatibility with v7 is claimed: a v7
@@ -325,7 +325,7 @@ Since v8 the **claimant's joint-publication door**: `sense_offer` outbound
 (`Mail::offer` on the library side), and `claim_published` inbound — not a
 delivery, no host table crosses, and the status crosses back as the
 application fact ([joint publication](joint-publication.md#what-crosses-the-abi)).
-The operator's verbs keep the refusing defaults across the seam.
+The initiator's verbs keep the refusing defaults across the seam.
 
 Out-of-process children receive **null** capability doors and fail closed
 (cross-process attestation is deliberately out of scope) — including

@@ -156,7 +156,7 @@ typedef struct ZenHostApi {
     /* Offer the next value of one of this weave's own latest claims for the joint operation
      * `op` (docs/reference/joint-publication.md). Admitted against the declared claim-set; the
      * host checks the operation, bound revision and exact claimant, and keeps the value until
-     * the operator commits or the operation aborts. Nothing is published here. Returns ZEN_OK
+     * the initiator commits or the operation aborts. Nothing is published here. Returns ZEN_OK
      * or ZEN_ERR_JOINT_BASE minus the refusal. The isolated pipe supplies NULL: a child cannot
      * present the exact identity an operation binds. */
     ZenStatus (*sense_offer)(void* ctx, uint64_t op, const uint8_t* payload, size_t len);
@@ -204,14 +204,14 @@ typedef struct ZenWeaveAbi {
      *   ZEN_OK               Applied.  The library applied the value and stands behind it.
      *   ZEN_CLAIM_DECLINED   Declined. Functioning, it did not apply the value and keeps state
      *                                  of its own, re-claimed at its next delivery. Not held;
-     *                                  the operator is told.
+     *                                  the initiator is told.
      *   any negative status  Failed.   The showing did not complete: ZEN_ERR for an exception
      *                                  from the weaver's handler or `PublishedClaim::Failed`,
      *                                  ZEN_ERR_UNKNOWN_SCHEMA or ZEN_ERR_REFUSED for bytes the
      *                                  library's gate refused. The weave is held (deliveries
      *                                  refused `ApplicationFailed`, its ordinary snapshot
      *                                  refused, this slot not called again for that value)
-     *                                  until reloaded or removed; the operator is told.
+     *                                  until reloaded or removed; the initiator is told.
      *   any other positive   Failed.   Undefined for this slot; never Applied. */
     ZenStatus (*claim_published)(void* instance, const uint8_t* value, size_t len);
 } ZenWeaveAbi;

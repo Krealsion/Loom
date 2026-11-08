@@ -11,7 +11,7 @@ host-side handle for exactly that.
 loom::PreparedReplacement upgrade(bus, kernel);
 
 auto started = upgrade.start({
-    .operator_id    = operator_id,   // who owns this replacement (and its outcome)
+    .initiator_id    = initiator_id,   // who owns this replacement (and its outcome)
     .coordinator    = coordinator,   // who talks the candidate through preparation
     .role           = "storage",
     .candidate_name = "storage-v2",
@@ -114,7 +114,7 @@ if (auto outcome = upgrade.take_outcome()) {
 }
 ```
 
-Exactly one outcome exists, it belongs to the operator that started the
+Exactly one outcome exists, it belongs to the initiator that started the
 replacement, and this handle collects only its own — never a sibling
 replacement's. Until something has actually ended, `take_outcome()` is empty.
 

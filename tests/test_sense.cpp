@@ -486,7 +486,7 @@ TEST_CASE("an unauthorized read refuses EXPLICITLY, and is not confusable with '
     REQUIRE(reader->seen.size() == 1);
     CHECK_FALSE(reader->seen[0]);
     // NOT NoClaim: a claim exists and the reader simply may not read it. The two
-    // send an operator to opposite places, so they are different answers.
+    // send a weaver to opposite places, so they are different answers.
     CHECK(reader->seen[0].refusal == SenseRefusal::NotAuthorized);
     CHECK_FALSE(reader->seen[0].value.has_value());
     CHECK(bus.observe(pid, "Health", 1)); // ...and the claim really is there

@@ -196,7 +196,7 @@ Two things about the code, because they are the two a first weave gets wrong:
   answers in one of them. An unsolicited send is speech, and speech is granted.
 - **The counter answers with `zen.Result`, not a shape of its own.** The baseline covers
   the standard replies and nothing else, so a typed answer would need a rule of its own. And
-  a shape reaches a generic operator console only if the registry can resolve it: the
+  a shape reaches a generic weaver's console only if the registry can resolve it: the
   registry learns shapes from what weaves *accept* and what they declare they *emit*
   (`Emit<...>`), so a custom shape a weave sends without declaring it has nobody to define
   it, and the send is refused `SeamUnresolved` before it reaches any door. The standard
@@ -815,7 +815,7 @@ are in the installed package (`loom::kernel`), and so is the half that decides
 the warden that installs a decision on the bus, the store's lock, the line reader, and the
 `authority` command itself, so a host of your own keeps its person's decisions in the same file
 and answers the same words. The console engine is not installed: a host of your own brings its
-own operator seat, and the command asks only that the seat carry two questions to its warden
+own weaver seat, and the command asks only that the seat carry two questions to its warden
 (`loom::host::AuthorityDesk`, `zen/host/authority_command.hpp`). Being the thing that ships is
 not the same as being the only thing that fits.
 

@@ -6,7 +6,7 @@
 
 // The hand that installs what a person decided: the only thing that makes the running bus agree
 // with the authority store (zen/host/authority.hpp). A participant, because `delegate_authority` is
-// spent from a live delivery, so an operator's change is a message on the tap. One write path
+// spent from a live delivery, so a weaver's change is a message on the tap. One write path
 // (`install`), two entries: the seat's `zen.host.AuthoritySync`, and `adopt()` inside the load
 // (`LifecycleAdoption`). Not a Weaver, which answers a subject's ask: it installs only what the
 // file says, for subjects the host handed it, at the seat's word, and speaks as no subject.
@@ -170,7 +170,7 @@ public:
 
 private:
     /// THE ONE WRITE PATH, and the reason there is only one. Two entry points reach it —
-    /// the operator's `AuthoritySync` and the host's adoption of a freshly loaded
+    /// the weaver's `AuthoritySync` and the host's adoption of a freshly loaded
     /// artifact — and if each installed authority its own way, "what did I approve" would
     /// have two answers that could drift. Everything policy-shaped is here; the entry
     /// points decide only who may ask.

@@ -38,22 +38,22 @@ One screen may present several participants. That does not merge them.
 
 ```text
 session>   the governed participant       weave A, grant A, vocabulary A
-operator>  the seat the Weaver obeys      weave B, grant B, vocabulary B
+weaver>  the seat the Weaver obeys      weave B, grant B, vocabulary B
 debug>     the HOST looking                not a participant at all
 ```
 
 Every command is authored by exactly one participant, named at the moment it is
 given. There is **no fallback**: a command the session lacks authority for is not
-retried as the operator, and one the operator lacks authority for is not retried
+retried as the weaver seat, and one the seat lacks authority for is not retried
 as the host. That would be privilege escalation by convenience.
 
 `TerminalDesk` is where the refusal to merge lives, and it refuses at
 construction rather than at the decision that would abuse it — the same wall
-`loom::Weaver` puts between its operator seat and its governed subject, one layer
+`loom::Weaver` puts between its weaver seat and its governed subject, one layer
 up:
 
 ```cpp
-loom::TerminalDesk desk(session, operator_seat);  // throws if they are the same weave
+loom::TerminalDesk desk(session, weaver_seat);  // throws if they are the same weave
 ```
 
 ## Three powers one "inspect" would conflate
@@ -206,9 +206,9 @@ session.request_authority("Work", 1, "some.service", "so I can finish the job");
 There is **no Weaver in the terminal core**: no include, no type, no branch. The
 role is an address, the request is an ordinary composed message out of the
 host-supplied vocabulary, and a host that did not supply that shape gets an
-ordinary `UnknownShape`. The operator's four decisions (`Approve`, `Refuse`,
+ordinary `UnknownShape`. The weaver's four decisions (`Approve`, `Refuse`,
 `Revoke`, `DescribeAuthority`) are not even sugar — a presentation authors them
-as ordinary messages from the operator seat's own door. Approve and refuse each
+as ordinary messages from the weaver seat's own door. Approve and refuse each
 [name the prompt they answer](weaver.md#a-decision-names-the-prompt-it-answers),
 and a presentation decides by the prompt it shows: the REPL's `approve r<N>`
 composes `zen.ApproveAuthority v2` with `prompt` read by reference from the
@@ -284,7 +284,7 @@ that can steer one — C0 controls and DEL — and passes everything at 0x80 and
 above through untouched, so UTF-8 survives. That is sufficient: no UTF-8
 sequence can encode a C0 byte.
 
-It is deliberately **not** the Weaver's `safe_operator_text`, which escapes every
+It is deliberately **not** the Weaver's `safe_weaver_text`, which escapes every
 non-ASCII byte. That one guards one small security-critical surface where being
 unreadable is cheaper than being wrong; a terminal that did the same would
 corrupt every ordinary message carrying a name. Both exist, and neither is
@@ -294,7 +294,7 @@ applied to a value.
 
 | | `loom::ConsoleEngine` | `loom::TerminalSession` |
 |---|---|---|
-| what it is | a trusted **host/debug operator lens** | an ordinary delegated participant |
+| what it is | a trusted **host/debug lens** for the weaver | an ordinary delegated participant |
 | holds | `Switchboard&`, a whole-bus tap, the journal | a vocabulary and one identity-bound door |
 | grant | `allow_any()` | whatever the host gave it, and nothing more |
 | accepts | `AcceptMode::AnyRegistered` | exactly its declared doors |
@@ -312,7 +312,7 @@ and one ring buffer rather than two of each.
 
 `zen-terminal-repl`
 ([`src/terminal/terminal_main.cpp`](../../src/terminal/terminal_main.cpp)) boots a
-governed session, a separate operator seat, a Weaver and a service, and lets a
+governed session, a separate weaver seat, a Weaver and a service, and lets a
 person drive whichever participant they name.
 
 **It hosts its own Loom.** It does not attach to another process: there is no
@@ -334,7 +334,7 @@ To change authority deliberately, use the existing workflow:
 
 ```text
 request Work 1 @some.service "so I can finish the job"
-operator
+weaver
 show r1
 approve r1
 session
@@ -346,7 +346,7 @@ door=some.service/desk:save "to save"`: the prompt shows the door, and a yes
 installs a [door rule](capabilities.md#doors), which lets no `Work` through on
 its own.
 
-The operator's received id depends on its earlier traffic; use the id printed
+The weaver's received id depends on its earlier traffic; use the id printed
 with its actual `AuthorityPrompt`. `approve` and `refuse` take that id and
 nothing else: the REPL refuses one naming no received message, or a message that
 is not an authority prompt from its own Weaver. A second `approve r1` after the
@@ -357,7 +357,7 @@ speaking participant or retries on its own.
 
 ## What this does not govern
 
-The [operator seat is a WeaveId, not a person](known-seams.md#the-operator-seat-is-a-weaveid-not-a-person):
+The [weaver seat is a WeaveId, not a person](known-seams.md#the-weaver-seat-is-a-weaveid-not-a-person):
 the host designated it. There is no account, no login and no authenticated human
 anywhere in this. A Weaver's death does not revoke what it installed, so a
 terminal must not tell a person that closing anything took authority back. And

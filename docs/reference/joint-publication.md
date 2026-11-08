@@ -7,19 +7,19 @@ boundary, and each is then shown what was published under its own key. Laws:
 [dynamic ABI](dynamic-abi.md) (v8). Bounds: [bounds](bounds.md#switchboard).
 
 ```text
-begin     an OPERATOR binds exact claimants + current revisions of several keys
+begin     an INITIATOR binds exact claimants + current revisions of several keys
 offer     each CLAIMANT, from inside its own delivery, offers its key's next value
 commit    the bus revalidates, then exchanges every offer into its record in ONE step
 showing   each claimant is shown its published value before it runs again
-release   the operator retires the record it has consumed
+release   the initiator retires the record it has consumed
 ```
 
 **Publication and application are separate facts.** A commit *publishes*: from
 that instant every reader sees the new values. Whether each claimant then
 *applied* what was published under its key is a second fact the bus records,
 attributes and never assumes. **The record outlives the publication**: an
-operation's record is kept until its operator releases it, so the notice that
-wakes the operator always finds the record it names.
+operation's record is kept until its initiator releases it, so the notice that
+wakes the initiator always finds the record it names.
 
 ## What it is for, and what is not here
 
@@ -40,50 +40,50 @@ supplies the mechanism and no vocabulary of either.
   hears nothing and is applied trivially.
 - **No role keys.** An operation binds personal keys; a claimant may be *named*
   by the role it holds at `begin`, which resolves to the exact holder then.
-- **No loaded coordination.** A loaded weave can offer; the operator's verbs are
+- **No loaded coordination.** A loaded weave can offer; the initiator's verbs are
   native ([what crosses the ABI](#what-crosses-the-abi)).
 - **No durability across a process**, and single-threaded, FIFO, non-reentrant
   dispatch is assumed throughout ([MSG-01](../laws/messaging-laws.md)).
 
 ## Authority
 
-The right to coordinate is a host-minted, operator-bound capability:
+The right to coordinate is a host-minted, initiator-bound capability:
 
 ```cpp
 loom::JointAuthority authority =
-    bus.mint_joint_authority(operator_id, {"editor.role", "desk.role"});
+    bus.mint_joint_authority(initiator_id, {"editor.role", "desk.role"});
 ```
 
-Every operator verb checks that the presenter is the *exact* operator (weave,
+Every initiator verb checks that the presenter is the *exact* initiator (weave,
 life and incarnation) the authority names, that this Loom issued it, and that
-it is spoken from inside the operator's own live delivery. Only claimants
+it is spoken from inside the initiator's own live delivery. Only claimants
 holding one of the ceiling's roles at `begin` may be bound. **An operation id,
 a role name, a payload field or a correlation is never authority** — a forged
-`op` meets `NoSuchOperation` or `NotOperator`, and a copied authority in another
-weave's hands meets `NotOperator`.
+`op` meets `NoSuchOperation` or `NotInitiator`, and a copied authority in another
+weave's hands meets `NotInitiator`.
 
 **What the capability names is a participant, not an address.** Minting
-captures the operator's life and incarnation at that moment, and the
+captures the initiator's life and incarnation at that moment, and the
 capability expires with either: a code swap or reload (new incarnation), a
-death and revival (new life), or removal. Retiring the operator's records at
+death and revival (new life), or removal. Retiring the initiator's records at
 that transition ([lifetime](#the-records-lifetime-and-release)) and refusing
 its retained capability are **two obligations**, kept separately: a successor
 at the same address inherits neither, and a capability the predecessor kept —
-in the same object's member, for a native operator — meets `NotOperator` at
+in the same object's member, for a native initiator — meets `NotInitiator` at
 every verb, against the retired records and against any record the successor
 begins under fresh authority. **The host authorizes the successor by minting
 again.** Nothing in the bus or the SDK renews a capability, and ordinary
 activity (a snapshot, a Poke) is not a new incarnation. Minting for an absent
-or dead operator yields an authority that is not `valid()` (refused
+or dead initiator yields an authority that is not `valid()` (refused
 `ForeignAuthority` if ever presented): there is no live participant to bind,
 so it cannot become a future life's by accident — mint after the revival, for
-the life that exists. `JointAuthority::operator_life()` and
-`operator_incarnation()` say what a capability names.
+the life that exists. `JointAuthority::initiator_life()` and
+`initiator_incarnation()` say what a capability names.
 
 **What a valid capability authorizes is the holder's own records.** It is the
 right to coordinate the operations its holder began, never an effect on
-another operator's record: every verb named with somebody else's operation id
-is refused `NotOperator` *before* the record is touched — its state, reason,
+another initiator's record: every verb named with somebody else's operation id
+is refused `NotInitiator` *before* the record is touched — its state, reason,
 offers and the notices owed on it stay exactly as they were, and its owner
 still commits. **A refusal is judged by what it changed, which must be
 nothing, not by its return value alone**: an ownership test that shared a
@@ -91,11 +91,11 @@ branch with the lifecycle abort could refuse a foreign commit by the right name
 while aborting the record it named and discarding its offers, and a test of the
 refusal's name alone would pass.
 
-Proof, in suite `joint`: a foreign operator's *own valid* authority named with
-another operator's operation id (every verb refused, the record untouched, the
+Proof, in suite `joint`: a foreign initiator's *own valid* authority named with
+another initiator's operation id (every verb refused, the record untouched, the
 owner commits), and the retained capability across a swap and across a death
 and revival (nothing minted for the dead; the fresh-authority path). The copied
-capability and the operator's lifetime are neighbouring cases, not proof of
+capability and the initiator's lifetime are neighbouring cases, not proof of
 these two: the copy is refused at the authority before any record is looked
 at, and the lifetime case retires the record.
 
@@ -106,12 +106,12 @@ the live delivery the Mail is.
 
 | Verb | Who | Does | Refuses |
 |---|---|---|---|
-| `begin_joint(authority, keys)` | operator | binds each key's exact claimant (life + incarnation) and current revision; one live operation per key | `ForeignAuthority`, `NotOperator`, `OutsideCeiling`, `NoClaim` (no current claim, or a key naming both weave and role), `KeyBusy`, `Exhausted` (no free slot, or more than `kMaxJointKeys`) |
+| `begin_joint(authority, keys)` | initiator | binds each key's exact claimant (life + incarnation) and current revision; one live operation per key | `ForeignAuthority`, `NotInitiator`, `OutsideCeiling`, `NoClaim` (no current claim, or a key naming both weave and role), `KeyBusy`, `Exhausted` (no free slot, or more than `kMaxJointKeys`) |
 | `offer(op, next)` | claimant | admits `next` through the one gate against the claimant's declared claim-set, checks the bound revision, stores it until commit or abort. **Nothing is published here** | `NoSuchOperation`, `WrongState`, `NotBound`, `NotClaimant`, `StaleRevision` (aborts), `Undeclared`, `GateRefused`, `TooLarge` |
-| `commit_joint(authority, op)` | operator | revalidates every participant, revision and offer, **then exchanges every offered value into its claim record in one protected step**: no participant code, gate, allocation, observer, I/O or lifecycle path runs between two exchanges. `ok` *is* the commitment; `false` means nothing was published. A failed revalidation of the operator's own Preparing operation ends it (Aborted with `why`); a request that was not this operator's to make — another operator's operation, a capability that names a life or incarnation that is gone — is refused with **no effect on the record** | `NotOperator` (another operator's operation; nothing changed), `WrongState`, `ParticipantChanged`, `NoClaim`, `StaleRevision`, `OfferMissing` |
-| `cancel_joint(authority, op)` | operator | ends a Preparing operation; offers released; the record reads Aborted/`Cancelled` | `WrongState`, `NotOperator` |
-| `joint_status(authority, op)` | operator | the record: state, reason, and after a commit the application (below) | `Missing`/`NoSuchOperation` after a release |
-| `release_joint(authority, op)` | operator | retires a terminal record it has consumed; the slot is free, the id names nothing again | `WrongState` while Preparing (cancel it), `NoSuchOperation` once released, `NotOperator` |
+| `commit_joint(authority, op)` | initiator | revalidates every participant, revision and offer, **then exchanges every offered value into its claim record in one protected step**: no participant code, gate, allocation, observer, I/O or lifecycle path runs between two exchanges. `ok` *is* the commitment; `false` means nothing was published. A failed revalidation of the initiator's own Preparing operation ends it (Aborted with `why`); a request that was not this initiator's to make — another initiator's operation, a capability that names a life or incarnation that is gone — is refused with **no effect on the record** | `NotInitiator` (another initiator's operation; nothing changed), `WrongState`, `ParticipantChanged`, `NoClaim`, `StaleRevision`, `OfferMissing` |
+| `cancel_joint(authority, op)` | initiator | ends a Preparing operation; offers released; the record reads Aborted/`Cancelled` | `WrongState`, `NotInitiator` |
+| `joint_status(authority, op)` | initiator | the record: state, reason, and after a commit the application (below) | `Missing`/`NoSuchOperation` after a release |
+| `release_joint(authority, op)` | initiator | retires a terminal record it has consumed; the slot is free, the id names nothing again | `WrongState` while Preparing (cancel it), `NoSuchOperation` once released, `NotInitiator` |
 
 A key is named with `loom::claim_key<Shape>(weave_id)` or
 `loom::claim_key<Shape>("role")`. The host's ungated views are
@@ -125,7 +125,7 @@ released, the moment a bound participant's life or incarnation changes
 (`ParticipantChanged`), or a bound claimant claims ordinarily over a bound key
 (`StaleRevision` — the owner spoke, so the bound revision is stale). The
 authorship of a published claim is the claimant's own, at its exact
-incarnation, never the operator's.
+incarnation, never the initiator's.
 
 ## The showing and its three answers
 
@@ -141,8 +141,8 @@ publication and this revision:
 |---|---|---|
 | `Pending` | published, not yet shown | shown before the claimant's next delivery or snapshot |
 | `Applied` | shown; the hook completed and answered Applied | nothing owed |
-| `Declined` | shown; the claimant **answered** that it does not apply this value and keeps or reconciles state of its own | functioning, **not held**; deliveries and the ordinary snapshot proceed; the published value stands on the record, attributed Declined, until the claimant's next ordinary claim replaces it (then `None`); the operator is told once, naming the claimant; a reload re-shows nothing |
-| `Failed` | shown; the hook did not complete | the claimant is **held** (below); the operator is told once |
+| `Declined` | shown; the claimant **answered** that it does not apply this value and keeps or reconciles state of its own | functioning, **not held**; deliveries and the ordinary snapshot proceed; the published value stands on the record, attributed Declined, until the claimant's next ordinary claim replaces it (then `None`); the initiator is told once, naming the claimant; a reload re-shows nothing |
+| `Failed` | shown; the hook did not complete | the claimant is **held** (below); the initiator is told once |
 | `Lost` | the claimant was removed before it was shown | its record is gone with it; the operation keeps the word |
 
 **The answer is the handler's return type**, and there are exactly three:
@@ -179,7 +179,7 @@ showing and leaves later keys Pending, never attempted.
 
 **The operation's word is the worst part's**: Failed over Lost over Declined
 over Pending over Applied, and `JointStatus::failed` / `failed_role` name the
-participant a non-application is about, so an operator can tell a requester
+participant a non-application is about, so an initiator can tell a requester
 *which* owner and not merely that something did.
 
 ## The hold, and diagnostic access
@@ -211,7 +211,7 @@ A reload is the repair of a held weave, and removal is the other.
   retried and does not refuse the read), and `Switchboard::swap_state` returns
   every Failed key to Pending for the successor, which is shown it at its first
   delivery or snapshot — new code's own attempt. That successor may apply,
-  decline or fail; a re-settlement is told to the operator again, with the
+  decline or fail; a re-settlement is told to the initiator again, with the
   successor's own answer. A candidate image is judged (ABI version, descriptor,
   manifest) **before** the incumbent's snapshot is taken, so a refused
   replacement runs no code of the incumbent's and leaves it held exactly as it
@@ -223,8 +223,8 @@ A reload is the repair of a held weave, and removal is the other.
 ## The record's lifetime and release
 
 A record — Committed with its application, settled or still owed, or Aborted
-with its reason — **is kept until its operator releases it**
-([SENSE-07](../laws/sense-laws.md)), or until the operator's own life or
+with its reason — **is kept until its initiator releases it**
+([SENSE-07](../laws/sense-laws.md)), or until the initiator's own life or
 incarnation changes. Publication is not the end of an outcome's lifetime, and
 **a queued notification is not consumption**: the notice in the queue is a
 promise the record will still be there.
@@ -233,10 +233,10 @@ promise the record will still be there.
   with a queued notice, and Aborted records all occupy a slot until released.
 - **Only a released slot is reused.** `kMaxJointOperations` bounds the records
   live *or unreleased* on one bus; the next `begin` past it is refused
-  `Exhausted`, in words, and takes nothing from any record. An operator that
-  never releases meets that bound; it never causes another operator's
+  `Exhausted`, in words, and takes nothing from any record. An initiator that
+  never releases meets that bound; it never causes another initiator's
   outstanding outcome to be reused under it. No fairness or partition between
-  operators is promised: what one keeps, every operator on that bus pays for,
+  initiators is promised: what one keeps, every initiator on that bus pays for,
   as a documented finite bound.
 - **An authorized early release of a committed record deliberately relinquishes
   its later notices.** After a release, no re-settlement of that operation — a
@@ -245,41 +245,41 @@ promise the record will still be there.
   the claim records, so a held claimant is still held, still refused, still
   repaired by its own reload, and its next ordinary claim still replaces the
   value.
-- **The operator's replacement, removal, death or revival retires every record
+- **The initiator's replacement, removal, death or revival retires every record
   it began**, whatever its state, at that transition: nobody is left to consume
   it, and a successor at the same address inherits no record, as it inherits no
   authority — the capability minted for the predecessor is refused from that
   transition on, and the host mints again for the successor
   ([authority](#authority)). The claimants lose nothing by it.
-- A duplicate release is `NoSuchOperation`; a stale notice makes the operator
+- A duplicate release is `NoSuchOperation`; a stale notice makes the initiator
   consult a record that says Missing and decide nothing. **Missing is
-  legitimate exactly after a release or after the operator's own lifecycle
+  legitimate exactly after a release or after the initiator's own lifecycle
   change, and never otherwise.**
 
-An operator that wants a late word about a repair keeps the record until it
+An initiator that wants a late word about a repair keeps the record until it
 has it, and states the bound it keeps it under. The consumer is the owner of
 that policy; Loom keeps what it is asked to keep, up to the bound.
 
-## The operator's notices
+## The initiator's notices
 
 Two shapes, in `zen/weave/dispatch_refusal.hpp`, delivered to the exact
-operator that began the operation and only if it explicitly accepts them:
+initiator that began the operation and only if it explicitly accepts them:
 
 - **`zen.JointEnded {op, reason}`** — a bound participant of the operation was
   replaced or removed, ending it (`ParticipantChanged`) or ending the
   possibility of an answer to one the bus had already aborted. Once per
   operation. Deliberately *not* sent when a bound claim merely moves: that owner
-  is alive and answers the operator in its own words.
+  is alive and answers the initiator in its own words.
 - **`zen.JointApplied {op, applied, claimant, role, reason}`** — the application
   settled: every claimant applied, or one Declined, Failed or was Lost, named
   with the role it was bound through. Once per settlement; a repair that
   re-settles is said again.
 
-A notice **wakes an operator to read authoritative state**; its ordinary
-payload is not an authenticated outcome. The operator re-reads `joint_status`
+A notice **wakes an initiator to read authoritative state**; its ordinary
+payload is not an authenticated outcome. The initiator re-reads `joint_status`
 for the bus's own record, which is the fact — and that record is kept until the
-operator releases it, so the re-read always finds it. A forged notice makes the
-operator consult a record that says otherwise; a stale one, a record that says
+initiator releases it, so the re-read always finds it. A forged notice makes the
+initiator consult a record that says otherwise; a stale one, a record that says
 Missing; and it does nothing. Absence proves nothing.
 
 ## Mutation doors and the mirror's bookkeeping
@@ -316,12 +316,12 @@ maps every status of the showing slot exactly as the [three-answer
 table](#the-showing-and-its-three-answers) says; the raw mapping, including
 undefined values, is on the slot in `zen/kernel/abi.h`.
 
-The operator's verbs do not cross. A loaded weave's `begin_joint`,
+The initiator's verbs do not cross. A loaded weave's `begin_joint`,
 `commit_joint`, `cancel_joint`, `joint_status` and `release_joint` inherit the
 refusing defaults of `loom::Bus` and answer `NoLiveDelivery`: **loaded
 coordination is unsupported by decision.** The authority is a native capability
 the host mints; carrying it across the seam means the host keeping the minted
-authority in a table keyed by the adapter and checking the operator's exact
+authority in a table keyed by the adapter and checking the initiator's exact
 incarnation at every verb, which is a design of its own with its own witnesses.
 The isolated pipe supplies no offer door either: a child cannot present the
 exact identity an operation binds.
@@ -374,9 +374,9 @@ and exhaustion in words; nothing running inside the exchange;
 re-raised, then repaired by a swap; several publications under one weave;
 Lost; the mutation doors, native and loaded; the committed record outliving an
 unrelated begin (both schedules), and the aborted record outliving one; the
-operator's lifetime; Declined, native (and Failed by answer) and loaded; a
-refused replacement running nothing of the incumbent's; a foreign operator's
-valid authority changing nothing of another operator's record; and the
+initiator's lifetime; Declined, native (and Failed by answer) and loaded; a
+refused replacement running nothing of the incumbent's; a foreign initiator's
+valid authority changing nothing of another initiator's record; and the
 capability naming the exact life and incarnation, with the host authorizing a
 successor by minting again. The `hook_return_types` entry pins the compile-time
 refusal of an unsupported hook return type; suite `kernel` pins the v8 gate at

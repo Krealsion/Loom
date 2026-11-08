@@ -4,7 +4,7 @@
 // zen-bridge-host: a minimal host that stands up a bus with one demo weave (a Greeter that
 // echoes Greet), listens on 127.0.0.1:<port> and runs the BridgeServer's multiplexer, so a
 // remote console or the probe, from another process or a Windows client, drives this bus. It
-// uses the operator admission policy, so reaching this socket is operator authority: keeping it
+// uses the weaver admission policy, so reaching this socket is weaver authority: keeping it
 // unreachable is a deployment's responsibility, and the bridge adds no transport security.
 
 #include <zen/bridge/server.hpp>
@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
     std::printf("zen-bridge-host: listening on 127.0.0.1:%u (one demo weave: Greeter accepting "
                 "Greet v1)\n",
                 port);
-    std::printf("zen-bridge-host: containment — reachability of this socket IS operator authority "
+    std::printf("zen-bridge-host: containment — reachability of this socket IS weaver authority "
                 "(a deployment responsibility; the bridge does not authenticate; abuse-tier)\n");
     std::fflush(stdout);
 

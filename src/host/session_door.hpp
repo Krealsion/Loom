@@ -172,7 +172,7 @@ public:
                                       " rules"});
             return;
         }
-        // THE CEILING: what the operator approved for the artifact this registrar IS, read from
+        // THE CEILING: what the weaver approved for the artifact this registrar IS, read from
         // the warden's capability and the store -- never from anything the message says.
         const std::string artifact = warden_ != nullptr ? warden_->artifact_of(registrar)
                                                         : std::string();

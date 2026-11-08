@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // loom-host, the supplied host: a boot walk the person authors (host/boot_plan.hpp), an
-// operator console, and the authority store that carries their decisions across restarts
+// weaver's console, and the authority store that carries their decisions across restarts
 // (zen/host/authority.hpp). Every part is an ordinary, replaceable participant: ConsoleEngine,
 // WeaveManager, ControlWeave and HostWarden. The three rules it is built around (attributed
 // answers, adoption inside the load, a bounded turn) are in AGENTS.md, beside the code here.
@@ -203,7 +203,7 @@ Options parse_options(int argc, char** argv) {
 
 // ---- the session ------------------------------------------------------------
 
-/// WHAT AN OPERATOR-INITIATED CONVERSATION CAME TO.
+/// WHAT AN WEAVER-INITIATED CONVERSATION CAME TO.
 ///
 /// `Pending` is a real outcome and the reason this is not an `optional<BufferEntry>`: a
 /// weave is entitled to take longer than this host's patience, and the honest report is
@@ -262,9 +262,9 @@ public:
             selection.shapes.push_back(loom::LogRule{k.shape, static_cast<std::size_t>(k.cap)});
         }
         journal_ = std::make_unique<loom::Logger>(bus_, std::move(selection));
-        // The console first: the warden needs its id as the operator seat. It declares its
+        // The console first: the warden needs its id as the weaver seat. It declares its
         // vocabulary because its wildcard accept means "any shape the registry can resolve",
-        // and a shape that only travels to the operator (`zen.AuthorityDescription`, which
+        // and a shape that only travels to the weaver (`zen.AuthorityDescription`, which
         // the warden emits and nothing accepts) would otherwise be refused `SeamUnresolved`.
         console_ = std::make_unique<loom::ConsoleEngine>(
             bus_, std::vector<std::shared_ptr<const loom::Schema>>{
@@ -516,8 +516,8 @@ public:
         return ask != 0 && console_->settled(ask).has_value();
     }
 
-    /// Compose a message from the operator seat, deliver it, and settle its answer: the one
-    /// public path for every operator-initiated conversation here. The console's weave speaks
+    /// Compose a message from the weaver seat, deliver it, and settle its answer: the one
+    /// public path for every weaver-initiated conversation here. The console's weave speaks
     /// as itself under its own grant, and what comes back is an arrival Loom attributed to
     /// this conversation (the correlation it minted, the bus's stamp of who spoke).
     Answer ask(loom::WeaveId target, const char* shape, std::uint32_t version,
@@ -875,7 +875,7 @@ void cmd_status(HostSession& s, const loom::host::BootPlan& plan, const PlanSour
 }
 
 /// This host's half of the `authority` command (zen/host/authority_command.hpp): its console is
-/// the operator seat its warden obeys, and an answer is the one the console settled on that
+/// the weaver seat its warden obeys, and an answer is the one the console settled on that
 /// question's own conversation. A sync is the only route by which delegated authority changes at
 /// a person's request, and it is a message, so it shows on the tap.
 class ConsoleDesk final : public loom::host::AuthorityDesk {
@@ -1295,7 +1295,7 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
         }
         // BOUNDED, like everything else here. A weave whose handler queues its own next
         // message keeps the bus busy for as long as it likes; this host spends a fixed
-        // number of turns on the operator's send and then goes back to serving both.
+        // number of turns on the weaver's send and then goes back to serving both.
         (void)session.service(c.ask, kSettleTurns);
         const loom::SendOutcome o = session.console().outcome(c.ticket);
         if (o.refused) {

@@ -701,7 +701,7 @@ private:
     ActivationLog* log_;
 };
 
-/// A lifecycle operator, holding a real authority because a HOST handed it one.
+/// A lifecycle initiator, holding a real authority because a HOST handed it one.
 struct AttestOrder {
     std::int64_t target = 0;
     std::int64_t announce = 0;
@@ -709,10 +709,10 @@ struct AttestOrder {
     ZEN_SHAPE(AttestOrder, 1, ZEN_FIELD(target), ZEN_FIELD(announce), ZEN_FIELD(claim));
 };
 
-class Operator : public WeaveBase<Operator, ProvState, Accept<AttestOrder>,
+class Initiator : public WeaveBase<Initiator, ProvState, Accept<AttestOrder>,
                                   Emit<loom::Activated>> {
 public:
-    explicit Operator(loom::LifecycleAuthority authority) : authority_(authority) {}
+    explicit Initiator(loom::LifecycleAuthority authority) : authority_(authority) {}
     void on(const AttestOrder& o, Mail& mail) {
         ++state_.n;
         mail.announce_lifecycle(authority_, WeaveId{static_cast<std::uint64_t>(o.target)},
@@ -749,7 +749,7 @@ TEST_CASE("an ordinary weave with an exact zen.Activated grant, the victim's id 
     // THE POSITIVE CONTROL. The same victim, the same sequence, the same bus —
     // announced by a weave a HOST handed an authority. Without this the checks
     // above are satisfied just as well by a victim that ignores everything.
-    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    const WeaveId op = mount<Initiator>(bus, host_lifecycle_authority(bus));
     bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
     bus.drain_until_idle();
     CHECK(log.delivered == 2);
@@ -766,7 +766,7 @@ TEST_CASE("a genuine authority still binds to one target and one sequence, and a
     // The bystander: never named in any minting call, and its log is what makes
     // "bound to the target" an observation rather than an assumption.
     (void)mount<ActivationConsumer>(bus, second);
-    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    const WeaveId op = mount<Initiator>(bus, host_lifecycle_authority(bus));
 
     const auto attest = [&](WeaveId target, std::int64_t announce, std::int64_t claim) {
         bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(target.value),
@@ -961,7 +961,7 @@ TEST_CASE("an ordinary weave mints a REAL authority from its own decoy board —
     CHECK(tap.delivered == 0);
     // THE DIAGNOSTIC IS ACCURATE, not merely present. The grant here is
     // perfectly correct; what is wrong is the authority DOMAIN, and saying
-    // "CapabilityDenied" would send an operator looking at grants.
+    // "CapabilityDenied" would send a weaver looking at grants.
     CHECK(tap.foreign_authority == 1);
     CHECK(tap.capability_denied == 0);
     CHECK(tap.other_refusals == 0);
@@ -975,7 +975,7 @@ TEST_CASE("an ordinary weave mints a REAL authority from its own decoy board —
     // THE POSITIVE CONTROL. Same bus, same victim, same target, same sequence —
     // an authority issued by THIS board. Without this the checks above would be
     // satisfied just as well by an attacker that never fired.
-    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    const WeaveId op = mount<Initiator>(bus, host_lifecycle_authority(bus));
     bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
     bus.drain_until_idle();
     CHECK(tap.delivered == 1);
@@ -1001,7 +1001,7 @@ TEST_CASE("an authority whose issuing Loom has been destroyed cannot be spent �
     CHECK(log.accepted == 0);
 
     // Destroying somebody else's board did nothing to THIS one's authority.
-    const WeaveId op = mount<Operator>(bus, host_lifecycle_authority(bus));
+    const WeaveId op = mount<Initiator>(bus, host_lifecycle_authority(bus));
     bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
     bus.drain_until_idle();
     CHECK(log.accepted == 1);
@@ -1026,7 +1026,7 @@ TEST_CASE("authority does not follow a board's ADDRESS — reusing a dead Loom's
     tap.arm(*second);
     ActivationLog log;
     const WeaveId victim = mount<ActivationConsumer>(*second, log);
-    const WeaveId smuggler = mount<Operator>(*second, from_first);
+    const WeaveId smuggler = mount<Initiator>(*second, from_first);
 
     second->send(smuggler,
                  Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
@@ -1037,7 +1037,7 @@ TEST_CASE("authority does not follow a board's ADDRESS — reusing a dead Loom's
     CHECK(log.accepted == 0);
 
     // THE POSITIVE CONTROL, on this very board at this very address.
-    const WeaveId op = mount<Operator>(*second, host_lifecycle_authority(*second));
+    const WeaveId op = mount<Initiator>(*second, host_lifecycle_authority(*second));
     second->send(op,
                  Message(to_value(AttestOrder{static_cast<std::int64_t>(victim.value), 1, 1})));
     second->drain_until_idle();
@@ -1061,12 +1061,12 @@ TEST_CASE("two worlds, the same logical ids and the same sequences — and autho
     const WeaveId victim_b = mount<ActivationConsumer>(world_b, log_b);
     REQUIRE(victim_a.value == victim_b.value); // identical logical identity
 
-    // Each world's operator holds ITS OWN board's authority...
-    const WeaveId op_a = mount<Operator>(world_a, host_lifecycle_authority(world_a));
-    const WeaveId op_b = mount<Operator>(world_b, host_lifecycle_authority(world_b));
+    // Each world's initiator holds ITS OWN board's authority...
+    const WeaveId op_a = mount<Initiator>(world_a, host_lifecycle_authority(world_a));
+    const WeaveId op_b = mount<Initiator>(world_b, host_lifecycle_authority(world_b));
     // ...and a smuggler in each world holding the OTHER world's authority.
-    const WeaveId smuggler_a = mount<Operator>(world_a, host_lifecycle_authority(world_b));
-    const WeaveId smuggler_b = mount<Operator>(world_b, host_lifecycle_authority(world_a));
+    const WeaveId smuggler_a = mount<Initiator>(world_a, host_lifecycle_authority(world_b));
+    const WeaveId smuggler_b = mount<Initiator>(world_b, host_lifecycle_authority(world_a));
 
     const auto attest = [](Switchboard& bus, WeaveId op, WeaveId target, std::int64_t seq) {
         bus.send(op, Message(to_value(AttestOrder{static_cast<std::int64_t>(target.value), seq,
@@ -1092,7 +1092,7 @@ TEST_CASE("two worlds, the same logical ids and the same sequences — and autho
     CHECK(log_a.lineage == 1);
     CHECK(log_b.lineage == 1);
 
-    // ...and the legitimate operators still work afterwards, so the refusals
+    // ...and the legitimate initiators still work afterwards, so the refusals
     // above are refusals rather than a wedged world.
     attest(world_a, op_a, victim_a, 2);
     attest(world_b, op_b, victim_b, 2);
@@ -2420,7 +2420,7 @@ TEST_CASE("killing one speaker leaves another living speaker's queued message al
 TEST_CASE("a queued message from a PERMANENTLY REMOVED sender is refused as a life that ended, not "
           "as a missing grant") {
     // An unloaded weave's in-flight replies die with it, reported by the real cause: a
-    // vanished sender has no grant to check either, and CapabilityDenied would send an operator
+    // vanished sender has no grant to check either, and CapabilityDenied would send an initiator
     // to edit a grant that was never wrong.
     Switchboard bus;
     Received heard;

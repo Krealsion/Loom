@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Joshua DeMoss
 """WHAT A SHIPPED TOOL REACHES, BY ITS IMPORTS: a package's name says how far its tools reach.
 
-An operator approves a tool package whole (docs/guides/sessions.md, section 2), so a package is
+A weaver approves a tool package whole (docs/guides/sessions.md, section 2), so a package is
 the unit of reach. A package whose name ends in ``-machine`` may reach the machine; every other
 package is a MESSAGE package, and each of its tools reaches nothing but the bus and a clock: no
 process, no file, no socket of its own. A tool's reach is read from its CLOSURE -- its script and

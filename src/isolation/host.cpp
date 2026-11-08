@@ -453,7 +453,7 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
                                         sizeof(kChildKeepFds) / sizeof(kChildKeepFds[0])) != 0) {
             // Fail SAFE, loudly. stderr is in the allow-list and still open, and a raw
             // write of a fixed string is async-signal-safe; the parent turns the exit
-            // code below into the refusal the operator reads.
+            // code below into the refusal the weaver reads.
             static const char msg[] =
                 "[zen-isolation] refusing to exec zen-weave-host: the exec-boundary "
                 "descriptor sweep could not be established\n";

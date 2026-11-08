@@ -2435,7 +2435,7 @@ TEST_CASE("one prepared replacement, remembered from Preparing to Committed") {
 
     bus.drain_until_idle();
 
-    // One terminal result, for the exact operator, consumed once.
+    // One terminal result, for the exact initiator, consumed once.
     TxnOutcome out{};
     REQUIRE(bus.take_outcome(c.op.id, out));
     CHECK(out.state == TxnState::Committed);
@@ -2569,8 +2569,8 @@ TEST_CASE("a participant that changes aborts its own transaction and only its ow
     // The failure ladder, one rung per subcase, each proving the same seven things
     // about the incumbent and one thing about the transaction.
     int who = 0;
-    SUBCASE("the operator dies") { who = 0; }
-    SUBCASE("the operator's code is replaced") { who = 1; }
+    SUBCASE("the initiator dies") { who = 0; }
+    SUBCASE("the initiator's code is replaced") { who = 1; }
     SUBCASE("the coordinator dies") { who = 2; }
     SUBCASE("the coordinator's code is replaced") { who = 3; }
     SUBCASE("the candidate dies") { who = 4; }
@@ -2601,8 +2601,8 @@ TEST_CASE("a participant that changes aborts its own transaction and only its ow
     };
     TxnReason expected = TxnReason::None;
     switch (who) {
-    case 0: churn(c.op.id, true, false);          expected = TxnReason::OperatorChanged; break;
-    case 1: churn(c.op.id, false, false);         expected = TxnReason::OperatorChanged; break;
+    case 0: churn(c.op.id, true, false);          expected = TxnReason::InitiatorChanged; break;
+    case 1: churn(c.op.id, false, false);         expected = TxnReason::InitiatorChanged; break;
     case 2: churn(c.coordinator.id, true, false); expected = TxnReason::CoordinatorChanged; break;
     case 3: churn(c.coordinator.id, false, false);expected = TxnReason::CoordinatorChanged; break;
     case 4: churn(c.candidate, true, false);      expected = TxnReason::CandidateChanged; break;
@@ -2621,7 +2621,7 @@ TEST_CASE("a participant that changes aborts its own transaction and only its ow
 
     TxnOutcome out{};
     if (who <= 1) {
-        // A successor operator inherits nothing — not even the news.
+        // A successor initiator inherits nothing — not even the news.
         CHECK_FALSE(bus.take_outcome(c.op.id, out));
     } else {
         REQUIRE(bus.take_outcome(c.op.id, out));
@@ -2871,7 +2871,7 @@ TEST_CASE("a duplicate terminalization cannot consume two slots of the bounded t
     std::vector<TxnId> ids;
     const std::size_t store = Switchboard::kMaxTerminalOutcomes;
 
-    // Each operator gets exactly one terminal result, so survivors are countable.
+    // Each initiator gets exactly one terminal result, so survivors are countable.
     for (std::size_t i = 0; i < store; ++i) {
         const std::string role = "fill" + std::to_string(i);
         casts.push_back(cast_with_role(bus, role.c_str()));
@@ -2918,7 +2918,7 @@ TEST_CASE("one sealed candidate belongs to at most one active transaction") {
                                                            "role-a", 8);
     REQUIRE(first.ok);
 
-    // A different incumbent, a different operator — and the SAME candidate. Every
+    // A different incumbent, a different initiator — and the SAME candidate. Every
     // other precondition holds: it is sealed by its coordinator, holds no role, and
     // is alive. Only exclusivity stands in the way.
     const TxnResult second = bus.begin_prepared_replacement(b.op.id, a.coordinator.id,
@@ -3462,7 +3462,7 @@ TEST_CASE("the budget keeps running through a deferred preparation, and exhausti
     REQUIRE(c.candidate_raw->pending.valid());
 
     // A conversation in progress does not stop the accounting. No wall clock is
-    // involved: these are steps the operator chose to spend.
+    // involved: these are steps the initiator chose to spend.
     REQUIRE(bus.tick_preparation(t.id).ok);
     CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
     REQUIRE(bus.tick_preparation(t.id).ok);
@@ -3493,7 +3493,7 @@ TEST_CASE("a lifecycle change during preparation aborts before any answer can la
     SUBCASE("the candidate's code is replaced") { how = 1; }
     SUBCASE("the coordinator dies") { how = 2; }
     SUBCASE("the coordinator's code is replaced") { how = 3; }
-    SUBCASE("the operator dies") { how = 4; }
+    SUBCASE("the initiator dies") { how = 4; }
 
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
@@ -3519,7 +3519,7 @@ TEST_CASE("a lifecycle change during preparation aborts before any answer can la
         expected = TxnReason::CoordinatorChanged;
     } else {
         bus.kill(c.op.id);
-        expected = TxnReason::OperatorChanged;
+        expected = TxnReason::InitiatorChanged;
     }
 
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
@@ -3527,7 +3527,7 @@ TEST_CASE("a lifecycle change during preparation aborts before any answer can la
     if (how != 4) {
         exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, expected);
     } else {
-        // THE OPERATOR SUCCESSOR INHERITS NOTHING. The result is kept for the
+        // THE INITIATOR SUCCESSOR INHERITS NOTHING. The result is kept for the
         // exact life and incarnation that began the transaction, and that life is
         // over — so bringing the same id back produces a participant with no
         // standing to collect, exactly as it has no standing to converse.
@@ -3637,7 +3637,7 @@ std::int64_t state_field(Switchboard& bus, WeaveId id, const char* field) {
 }
 
 /// The whole dynamic cast: real artifacts for both services, native probes for the
-/// three roles the substrate does not care about (operator, coordinator, observer).
+/// three roles the substrate does not care about (initiator, coordinator, observer).
 struct DynCast {
     Registered op;
     Registered coordinator;
@@ -3993,8 +3993,8 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
     SUBCASE("the candidate's code is replaced") { how = 1; }
     SUBCASE("the coordinator dies") { how = 2; }
     SUBCASE("the incumbent dies") { how = 3; }
-    SUBCASE("the operator dies") { how = 4; }
-    SUBCASE("the operator is explicitly abandoned") { how = 5; }
+    SUBCASE("the initiator dies") { how = 4; }
+    SUBCASE("the initiator is explicitly abandoned") { how = 5; }
     SUBCASE("preparation runs out of budget") { how = 6; }
     SUBCASE("the incumbent's code is replaced") { how = 7; }
 
@@ -4010,7 +4010,7 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
     const std::size_t offered = d.log->readiness.size();
 
     TxnReason expected = TxnReason::CandidateChanged;
-    bool operator_can_collect = true;
+    bool initiator_can_collect = true;
     if (how == 0) {
         bus.kill(d.candidate);
     } else if (how == 1) {
@@ -4023,8 +4023,8 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
         expected = TxnReason::IncumbentChanged;
     } else if (how == 4) {
         bus.kill(d.op.id);
-        expected = TxnReason::OperatorChanged;
-        operator_can_collect = false; // a result is kept for a life that has ended
+        expected = TxnReason::InitiatorChanged;
+        initiator_can_collect = false; // a result is kept for a life that has ended
     } else if (how == 5) {
         REQUIRE(bus.abort_prepared_replacement(t.id, d.op.id).ok);
         expected = TxnReason::ExplicitAbort;
@@ -4042,7 +4042,7 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
 
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
     CHECK(bus.active_transactions() == 0); // capacity reclaimed
-    if (operator_can_collect) {
+    if (initiator_can_collect) {
         exactly_one_outcome(bus, d.op.id, t.id, TxnState::Aborted, expected);
     }
 
@@ -4110,7 +4110,7 @@ TEST_CASE("after a successful commit, retirement failing changes nothing about t
     REQUIRE(d.ask(bus) == "v2");
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
 
-    // RETIREMENT IS A CONVERSATION THE OPERATOR OWNS, and the substrate's only
+    // RETIREMENT IS A CONVERSATION THE INITIATOR OWNS, and the substrate's only
     // part in it is that a sealed weave can still hear its coordinator. Here it
     // works, and then it stops working — the retired incumbent dies before the
     // word reaches it.
@@ -4241,10 +4241,10 @@ TEST_CASE("a lifecycle-driven abort releases the candidate's artifact, and nobod
     SUBCASE("the candidate dies") { route = 1; }
     SUBCASE("the candidate's code is replaced") { route = 2; }
     SUBCASE("the coordinator dies") { route = 3; }
-    SUBCASE("the operator dies") { route = 4; }
+    SUBCASE("the initiator dies") { route = 4; }
     SUBCASE("the incumbent's code is replaced") { route = 5; }
     SUBCASE("preparation runs out of budget") { route = 6; }
-    SUBCASE("the operator aborts explicitly") { route = 7; }
+    SUBCASE("the initiator aborts explicitly") { route = 7; }
 
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
@@ -4724,7 +4724,7 @@ TEST_CASE("every artifact status is reachable, and aliveness outranks the seal")
     REQUIRE(bus.swap_state(d.candidate, bus.snapshot_bytes(d.candidate)).revived);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
 
-    // The spellings exist for operators, and each is its own word.
+    // The spellings exist for weavers, and each is its own word.
     CHECK(std::string(name_of(ArtifactStatus::NotLoaded)) == "NotLoaded");
     CHECK(std::string(name_of(ArtifactStatus::Live)) == "Live");
     CHECK(std::string(name_of(ArtifactStatus::Sealed)) == "Sealed");
@@ -5093,7 +5093,7 @@ TEST_CASE("a candidate that cannot receive its own activation is not admissible,
     SUBCASE("its gate refuses this exact activation") {
         accept.push_back(schema_of<loom::Activated>());
         // The same (name, version), a different shape, so the door MATCHES and the gate is
-        // what refuses. An honest operator cannot produce this; it is here because "the door
+        // what refuses. An honest initiator cannot produce this; it is here because "the door
         // accepted it" and "the gate admitted it" are two questions, both asked before commit.
         const auto impostor = SchemaBuilder(std::string(loom::Activated::zen_name),
                                             loom::Activated::zen_version)
@@ -5284,7 +5284,7 @@ TEST_CASE("aborting a pending admission stops it, once — the queued action can
                 .ok);
     REQUIRE(bus.transaction_state(begun.id) == TxnState::AdmissionPending);
 
-    // The operator changes its mind while the admission is in flight.
+    // The initiator changes its mind while the admission is in flight.
     REQUIRE(bus.abort_prepared_replacement(begun.id, c.op.id).ok);
     exactly_one_outcome(bus, c.op.id, begun.id, TxnState::Aborted, TxnReason::ExplicitAbort);
     CHECK(bus.active_transactions() == 0); // capacity reclaimed at once
@@ -5497,7 +5497,7 @@ TEST_CASE("a stale queued admission cannot land on a namesake artifact loaded in
     REQUIRE(r.scheduled);
 
     // The artifact is unloaded and the SAME NAME is loaded again from the same
-    // file, sealed to the same coordinator. Everything an operator would recognise
+    // file, sealed to the same coordinator. Everything a weaver would recognise
     // is identical; the only thing that is not is the identity the envelope wrote
     // down when it was scheduled.
     REQUIRE(kernel.unload("v2"));
@@ -5514,7 +5514,7 @@ TEST_CASE("a stale queued admission cannot land on a namesake artifact loaded in
 
 // ---- first breath is not a question (LIFE-05) -------------------------------
 // The committed activation is Loom's own act, not the coordinator's speech: its stamped sender
-// is the operator that admitted the candidate, not a weave that asked anything, so a reply
+// is the initiator that admitted the candidate, not a weave that asked anything, so a reply
 // authority naming it would let a candidate answer a request nobody made. It is delivered as
 // from a root, where `answer_as` and `defer_answer_as` refuse: there is no requester.
 
@@ -5869,7 +5869,7 @@ TEST_CASE("a whole v1->v2 replacement drives only the handle, and the substrate 
     PreparedReplacement upgrade(bus, kernel);
     CHECK_FALSE(upgrade.started());
     const PreparedReplacement::StartResult started = upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -5956,7 +5956,7 @@ TEST_CASE("the deferred candidate is identical from the coordinator's side") {
 
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6011,7 +6011,7 @@ TEST_CASE("the candidate's refusal arrives whole — reason, cleanup, and a serv
 
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6056,7 +6056,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         Registered op = register_probe(bus, {pong_schema()});
         PreparedReplacement upgrade(bus, kernel);
         const auto r = upgrade.start({
-            .operator_id = op.id,
+            .initiator_id = op.id,
             .coordinator = coordinator.id,
             .role = "nobody.holds.this",
             .candidate_name = "v2",
@@ -6074,7 +6074,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
         PreparedReplacement upgrade(bus, kernel);
         const auto r = upgrade.start({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate_name = "v2",
@@ -6097,7 +6097,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         const WeaveId other = native_candidate(bus, d.coordinator.id, &other_raw);
         PreparedReplacement occupier(bus);
         REQUIRE(occupier.start_existing({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate = other,
@@ -6107,7 +6107,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         LifetimeDelta cleanup;
         PreparedReplacement upgrade(bus, kernel);
         const auto r = upgrade.start({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate_name = "v2",
@@ -6140,7 +6140,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         const WeaveId candidate = native_candidate(bus, other_coordinator.id);
         PreparedReplacement upgrade(bus);
         const auto r = upgrade.start_existing({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate = candidate,
@@ -6177,9 +6177,9 @@ TEST_CASE("a delivery offered to the wrong handle refuses, consumes nothing, and
 
     PreparedReplacement a(bus);
     PreparedReplacement b(bus);
-    REQUIRE(a.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(a.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-a", .candidate = cand_a, .budget = 8}).ok);
-    REQUIRE(b.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(b.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-b", .candidate = cand_b, .budget = 8}).ok);
 
     // Candidate A answers; inside that ONE delivery the coordinator offers it to
@@ -6214,7 +6214,7 @@ TEST_CASE("a delivery offered to the wrong handle refuses, consumes nothing, and
     CHECK(b.offer_current_answer(PreparationAnswer::Ready).why == TxnReason::InvalidReadiness);
 }
 
-TEST_CASE("two handles, one operator — each collects exactly its own outcome") {
+TEST_CASE("two handles, one initiator — each collects exactly its own outcome") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -6230,12 +6230,12 @@ TEST_CASE("two handles, one operator — each collects exactly its own outcome")
 
     PreparedReplacement a(bus);
     PreparedReplacement b(bus);
-    REQUIRE(a.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(a.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-a", .candidate = cand_a, .budget = 8}).ok);
-    REQUIRE(b.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(b.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-b", .candidate = cand_b, .budget = 8}).ok);
 
-    // B ends first. A — same operator — must see NOTHING: not B's outcome, and
+    // B ends first. A — same initiator — must see NOTHING: not B's outcome, and
     // no outcome of its own, because A has not ended.
     REQUIRE(b.abort().ok);
     CHECK_FALSE(a.take_outcome().has_value());
@@ -6262,7 +6262,7 @@ TEST_CASE("dropping a live handle changes nothing — a scope is not a lifecycle
     {
         PreparedReplacement upgrade(bus, kernel);
         REQUIRE(upgrade.start({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate_name = "v2",
@@ -6304,7 +6304,7 @@ TEST_CASE("the handle's state is the Switchboard's, under every mutation the fac
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6359,7 +6359,7 @@ TEST_CASE("the activation sequence is the caller's, passed through exactly — a
     // First replacement, with a distinctive sequence.
     PreparedReplacement first(bus, kernel);
     REQUIRE(first.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6389,7 +6389,7 @@ TEST_CASE("the activation sequence is the caller's, passed through exactly — a
     // neither invents nor reuses.
     PreparedReplacement second(bus, kernel);
     REQUIRE(second.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2b",
@@ -6418,7 +6418,7 @@ TEST_CASE("the budget is the author's, one unit per tick, and nothing ticks it s
 
     SUBCASE("exactly one unit per tick") {
         PreparedReplacement r(bus);
-        REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+        REQUIRE(r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                                   .role = "worker", .candidate = candidate, .budget = 2}).ok);
         REQUIRE(r.tick().ok);                                  // 2 -> 1
         const TxnResult exhausted = r.tick();                  // 1 -> 0: aborts
@@ -6428,7 +6428,7 @@ TEST_CASE("the budget is the author's, one unit per tick, and nothing ticks it s
     }
     SUBCASE("a budget of one survives the whole ceremony: nothing else spends it") {
         PreparedReplacement r(bus);
-        REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+        REQUIRE(r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                                   .role = "worker", .candidate = candidate, .budget = 1}).ok);
         std::vector<TxnResult> offers;
         coordinator.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
@@ -6469,17 +6469,17 @@ TEST_CASE("every refusal keeps the substrate's own words") {
     CHECK_FALSE(unstarted.take_outcome().has_value());
 
     PreparedReplacement r(bus);
-    REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "worker", .candidate = candidate, .budget = 8}).ok);
     // A second start on a bound handle refuses as the FACADE's own fact — the
     // one truth it owns is which transaction it is.
-    const auto again = r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    const auto again = r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                                          .role = "worker", .candidate = candidate, .budget = 8});
     CHECK_FALSE(again.ok);
     CHECK(again.stage == PreparedReplacement::StartStage::AlreadyStarted);
     // Dynamic start without a Kernel refuses as itself, too.
     PreparedReplacement kernel_less(bus);
-    const auto no_kernel = kernel_less.start({.operator_id = op.id,
+    const auto no_kernel = kernel_less.start({.initiator_id = op.id,
                                               .coordinator = coordinator.id,
                                               .role = "worker",
                                               .candidate_name = "x",

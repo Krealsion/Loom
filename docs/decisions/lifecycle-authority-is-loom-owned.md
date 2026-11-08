@@ -14,7 +14,7 @@ Switchboard; nobody thereby owns yours.
 **Alternatives considered.**
 - *Grant-based* ("an `Emit<zen.Activated>` grant is authority") — rejected:
   three tiers (shape / grant / authority) must never imply each other; a
-  consumer could not tell an operator from a well-granted impostor.
+  consumer could not tell an initiator from a well-granted impostor.
 - *Public static mint* — rejected: reachable from every weave, no boundary
   at all.
 - *Un-scoped authority object* — rejected: a weave could stand up a decoy

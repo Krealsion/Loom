@@ -108,17 +108,17 @@ struct SenseClaimResult {
 
 // ---- Joint publication of latest claims ------------------------------------------------
 // An operation over several claim keys, for owners whose facts must change together at one
-// observable boundary. An operator holding a host-minted `JointAuthority` begins it, binding
+// observable boundary. An initiator holding a host-minted `JointAuthority` begins it, binding
 // each key's exact claimant and revision; each claimant offers its key's next value from its
 // own delivery; commit publishes every value in one step, running no participant code
 // between two. Each claimant is then shown its value before its next delivery or snapshot,
 // and the outcome is recorded (`JointApplication`); a claimant that failed is held. A record
-// is kept until its operator releases it or the operator's life or incarnation changes.
+// is kept until its initiator releases it or the initiator's life or incarnation changes.
 // Bounded; no queue, answer, retry, timeout or durability; an operation aborts when a bound
 // participant changes or a claimant claims ordinarily over a bound key.
 // SENSE-06, SENSE-07; docs/reference/joint-publication.md
 
-/// One latest-claim key as an operator names it: a claimant and a declared shape. Personal keys
+/// One latest-claim key as an initiator names it: a claimant and a declared shape. Personal keys
 /// only (docs/reference/joint-publication.md#what-is-not-here). The claimant may be named by
 /// `role` instead, with `claimant` invalid: `begin` binds the role's holder at that moment, so
 /// the role moving afterwards does not move the operation. A key naming both is refused.
@@ -141,9 +141,9 @@ enum class JointRefusal : std::uint8_t {
     NoLiveDelivery,
     /// The authority was not issued by this Loom, or its board is gone.
     ForeignAuthority,
-    /// The caller is not the exact operator (id, life, incarnation) the authority names, or the
-    /// operation is another operator's; refused before the record is touched.
-    NotOperator,
+    /// The caller is not the exact initiator (id, life, incarnation) the authority names, or the
+    /// operation is another initiator's; refused before the record is touched.
+    NotInitiator,
     /// A named claimant holds none of the roles the authority's ceiling names.
     OutsideCeiling,
     /// The key has no current claim to bind or to offer against.
@@ -171,14 +171,14 @@ enum class JointRefusal : std::uint8_t {
     ParticipantChanged,
     /// Commit asked before every bound key had an offer.
     OfferMissing,
-    /// The operator cancelled it explicitly.
+    /// The initiator cancelled it explicitly.
     Cancelled,
 };
 
 const char* name_of(JointRefusal r) noexcept;
 
 /// An operation's state. `Preparing` is the only live one. A terminal record stays readable in
-/// its slot until its operator releases it or is replaced, removed or dead; only then is the
+/// its slot until its initiator releases it or is replaced, removed or dead; only then is the
 /// slot reused, and `Exhausted` is the answer when none is free.
 enum class JointState : std::uint8_t { Missing, Preparing, Committed, Aborted };
 
@@ -236,15 +236,15 @@ struct JointStatus {
 };
 
 /// The right to coordinate joint publications, minted by the host
-/// (`Switchboard::mint_joint_authority`) for one operator weave over a ceiling of roles: only
+/// (`Switchboard::mint_joint_authority`) for one initiator weave over a ceiling of roles: only
 /// claims whose claimants hold one of them at `begin` may be bound. Every verb checks that the
-/// presenter is the exact operator it names and that this Loom issued it; an operation id in a
+/// presenter is the exact initiator it names and that this Loom issued it; an operation id in a
 /// payload is never authority.
 ///
-/// It names a participant, not an address: it expires when the operator's life or incarnation
+/// It names a participant, not an address: it expires when the initiator's life or incarnation
 /// changes (a swap, a reload, a revival, a removal), and a successor holding a copy meets
-/// `NotOperator` until the host mints again. It reaches only its holder's own operations:
-/// another operator's id is refused `NotOperator` before that record is touched.
+/// `NotInitiator` until the host mints again. It reaches only its holder's own operations:
+/// another initiator's id is refused `NotInitiator` before that record is touched.
 /// docs/reference/joint-publication.md#authority; SENSE-07.
 class JointAuthority {
 public:
@@ -254,30 +254,30 @@ public:
     JointAuthority(JointAuthority&&) = default;
     JointAuthority& operator=(JointAuthority&&) = default;
 
-    /// Does this name an operator? False for a default one and for one minted for an absent or
-    /// dead operator. It does not promise the operator is still that life and incarnation; only
+    /// Does this name an initiator? False for a default one and for one minted for an absent or
+    /// dead initiator. It does not promise the initiator is still that life and incarnation; only
     /// the issuing Switchboard says that, at the moment of use.
-    bool valid() const noexcept { return operator_.valid(); }
-    WeaveId operator_id() const noexcept { return operator_; }
+    bool valid() const noexcept { return initiator_.valid(); }
+    WeaveId initiator_id() const noexcept { return initiator_; }
     /// The exact life and incarnation this was minted for, so a host can check it still names
-    /// the operator it is about to hand it to.
-    std::uint64_t operator_life() const noexcept { return life_; }
-    std::uint64_t operator_incarnation() const noexcept { return incarnation_; }
+    /// the initiator it is about to hand it to.
+    std::uint64_t initiator_life() const noexcept { return life_; }
+    std::uint64_t initiator_incarnation() const noexcept { return incarnation_; }
     const std::vector<std::string>& ceiling() const noexcept { return ceiling_; }
 
 private:
     friend class Switchboard;
     JointAuthority(std::weak_ptr<const LoomIdentity> issuer, WeaveId op, std::uint64_t life,
                    std::uint64_t incarnation, std::vector<std::string> ceiling)
-        : issuer_(std::move(issuer)), operator_(op), life_(life), incarnation_(incarnation),
+        : issuer_(std::move(issuer)), initiator_(op), life_(life), incarnation_(incarnation),
           ceiling_(std::move(ceiling)) {}
 
     /// Weak, like every authority's issuer: it does not keep its board alive, and one from a
     /// dead board never validates against a later one.
     std::weak_ptr<const LoomIdentity> issuer_;
-    /// The operator's id, and its life and incarnation when minted, as a `ParticipantRef`
+    /// The initiator's id, and its life and incarnation when minted, as a `ParticipantRef`
     /// would carry them; that type sits above this header.
-    WeaveId operator_{};
+    WeaveId initiator_{};
     std::uint64_t life_ = 0;
     std::uint64_t incarnation_ = 0;
     std::vector<std::string> ceiling_;

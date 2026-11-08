@@ -197,10 +197,10 @@ public:
     }
 
     // ---- Joint publication of latest claims ------------------------------------
-    // On the Bus, so an operator is an ordinary weave holding a capability and a claimant
+    // On the Bus, so an initiator is an ordinary weave holding a capability and a claimant
     // offers from its own delivery (zen/switchboard/sense.hpp,
     // docs/reference/joint-publication.md). The defaults refuse with `NoLiveDelivery`. A loaded
-    // weave's Bus overrides `offer_claim` only, so its operator verbs are refused by name.
+    // weave's Bus overrides `offer_claim` only, so its initiator verbs are refused by name.
 
     /// Claimant: offer the next value of my own key (me, the value's shape) for operation `op`:
     /// admitted against the declared claim-set, checked against the bound revision, and kept
@@ -211,20 +211,20 @@ public:
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: bind the exact claimants and current revisions of `keys` into one operation.
+    /// Initiator: bind the exact claimants and current revisions of `keys` into one operation.
     /// Each key must hold a claim whose claimant holds a role in the authority's ceiling, and
     /// no other live operation may bind it. The authority must name this weave's current life
-    /// and incarnation, or the call meets `NotOperator`.
+    /// and incarnation, or the call meets `NotInitiator`.
     virtual JointBegin begin_joint(const JointAuthority& authority, std::vector<ClaimKey> keys) {
         (void)authority;
         (void)keys;
         return JointBegin{false, 0, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: publish. Revalidates everything, then exchanges every offered value into its
+    /// Initiator: publish. Revalidates everything, then exchanges every offered value into its
     /// claim record in one step. `ok` is the commitment: false means nothing was published. A
-    /// failed revalidation of this operator's own Preparing operation aborts it with `why`; a
-    /// request that was not its to make (another operator's operation, or a capability for a
+    /// failed revalidation of this initiator's own Preparing operation aborts it with `why`; a
+    /// request that was not its to make (another initiator's operation, or a capability for a
     /// life or incarnation that is gone) is refused with no effect on that record.
     virtual JointResult commit_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
@@ -232,22 +232,22 @@ public:
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: end a Preparing operation without publishing; its offers are released.
+    /// Initiator: end a Preparing operation without publishing; its offers are released.
     virtual JointResult cancel_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: the operation's state and, when terminal, why.
+    /// Initiator: the operation's state and, when terminal, why.
     virtual JointStatus joint_status(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointStatus{JointState::Missing, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: release a terminal record it has consumed, Committed or Aborted, so its slot
-    /// may be reused (SENSE-07). The bus never reuses an unreleased record under its operator.
+    /// Initiator: release a terminal record it has consumed, Committed or Aborted, so its slot
+    /// may be reused (SENSE-07). The bus never reuses an unreleased record under its initiator.
     /// Afterwards the operation reads Missing; the per-key facts stay on the claim records.
     /// Refused `WrongState` while Preparing (cancel it instead), `NoSuchOperation` once released.
     virtual JointResult release_joint(const JointAuthority& authority, std::uint64_t op) {

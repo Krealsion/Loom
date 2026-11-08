@@ -33,7 +33,7 @@
 // connection whose credential hashes to an expected digest, once.
 //
 // ATTENUATION, NOT A RUN LABEL. A run is admitted with the rules its registrar asked for, and the
-// door grants a rule only when the registrar's OWN approved authority (the operator's decision
+// door grants a rule only when the registrar's OWN approved authority (the weaver's decision
 // in the authority store) already contains it -- or when the rule addresses a role the
 // registrar itself holds, which lets a worker report to its manager and nothing else. A run name
 // narrows nothing on its own.
