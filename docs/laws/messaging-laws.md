@@ -53,7 +53,7 @@ DOES NOT MEAN
 PROVEN BY — `Envelope::sender_life`; suite `provenance` (life/incarnation
 cases).
 
-## MSG-04 — Role addressing is destination, not role
+## MSG-04 — Role addressing is destination, not authorship
 
 LAW — `send_to_role(R, m)` means *deliver to whoever holds R at delivery time*.
 It proves nothing about the sender having spoken *as* R.
@@ -139,7 +139,7 @@ DOES NOT MEAN
 - payload role strings have standing — provenance has no wire form, and a
   copied Message re-sent is personal speech;
 - a successor inherits predecessor identity — the role survives its
-  role holder precisely *without* conflating the two.
+  holder precisely *without* conflating the two.
 
 PROVEN BY — `Switchboard::role_send_as` / `role_send_to_role_as` /
 `role_publish_as` (`holds_role_now` at enqueue); suite `role_authorship`

@@ -215,13 +215,13 @@ public:
         }
         const std::string name_z(shape->name());
         HeldBytes bytes;
-        HeldBytes role; // grows to whatever the host wrote; never truncated
+        HeldBytes authored; // the role authored as: grows to whatever the host wrote, never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
-        ZenByteSink role_sink{&role, &collect_bytes};
+        ZenByteSink role_sink{&authored, &collect_bytes};
         const ZenStatus st = host_->sense_observe(host_->ctx, author.value, name_z.c_str(),
                                                   shape->version(), sink, role_sink, &by);
-        return decode_reading(st, bytes, role, by, shape);
+        return decode_reading(st, bytes, authored, by, shape);
     }
 
     loom::SenseReading observe_role(std::string_view role, std::shared_ptr<const loom::Schema> shape) override {
@@ -231,13 +231,13 @@ public:
         const std::string role_z(role);
         const std::string name_z(shape->name());
         HeldBytes bytes;
-        HeldBytes role; // grows to whatever the host wrote; never truncated
+        HeldBytes authored; // the role authored as: grows to whatever the host wrote, never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
-        ZenByteSink role_sink{&role, &collect_bytes};
+        ZenByteSink role_sink{&authored, &collect_bytes};
         const ZenStatus st = host_->sense_observe_role(
             host_->ctx, role_z.c_str(), name_z.c_str(), shape->version(), sink, role_sink, &by);
-        return decode_reading(st, bytes, role, by, shape);
+        return decode_reading(st, bytes, authored, by, shape);
     }
 
     // ---- Joint publication: the claimant's one verb across the seam ---------------
@@ -305,7 +305,7 @@ private:
     /// Rebuild a reading library-side, re-admitting the host's bytes against this library's own
     /// schema, so the library never holds a value its own gate did not pass.
     loom::SenseReading decode_reading(ZenStatus st, const HeldBytes& bytes,
-                                      const HeldBytes& role, const ZenSenseBy& by,
+                                      const HeldBytes& authored, const ZenSenseBy& by,
                                       const std::shared_ptr<const loom::Schema>& shape) {
         loom::SenseReading out;
         if (st != ZEN_OK) {
@@ -313,7 +313,7 @@ private:
             return out;
         }
         // A reading this library could not hold whole is not admitted as one.
-        if (bytes.lost || role.lost) {
+        if (bytes.lost || authored.lost) {
             out.refusal = loom::SenseRefusal::GateRefused;
             return out;
         }
@@ -332,7 +332,7 @@ private:
         // Separate from the life: a live replacement changes the incarnation, not the life.
         out.by.author_incarnation_is_current = by.author_incarnation_is_current != 0;
         // Exactly what the host wrote, at any length; empty is personal.
-        out.by.role = role.bytes;
+        out.by.role = authored.bytes;
         out.by.role_holder_is_current = by.role_holder_is_current != 0;
         out.by.revision = by.revision;
         out.by.schema_name = shape->name();

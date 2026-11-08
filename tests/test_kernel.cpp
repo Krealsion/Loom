@@ -6555,8 +6555,8 @@ void record_role(std::shared_ptr<std::vector<RoleHeard>> log, const Message& in)
     RoleHeard h;
     h.schema = in.payload.schema().name();
     h.authored_role = std::string(in.provenance.authored_role());
-    if (h.schema == role::RoleReport::zen_name) {
-        const role::RoleReport r = from_value<role::RoleReport>(in.payload);
+    if (h.schema == role_speech::RoleReport::zen_name) {
+        const role_speech::RoleReport r = from_value<role_speech::RoleReport>(in.payload);
         h.what = r.what;
         h.authored = r.authored;
         h.recipients = r.recipients;
@@ -6570,7 +6570,7 @@ std::vector<RoleHeard> reports_named(const std::vector<RoleHeard>& log,
                                        const std::string& what) {
     std::vector<RoleHeard> out;
     for (const RoleHeard& h : log) {
-        if (h.schema == role::RoleReport::zen_name && h.what == what) {
+        if (h.schema == role_speech::RoleReport::zen_name && h.what == what) {
             out.push_back(h);
         }
     }
@@ -6581,7 +6581,7 @@ std::vector<RoleHeard> reports_named(const std::vector<RoleHeard>& log,
 std::vector<RoleHeard> news_of(const std::vector<RoleHeard>& log) {
     std::vector<RoleHeard> out;
     for (const RoleHeard& h : log) {
-        if (h.schema == role::WorkerNews::zen_name) {
+        if (h.schema == role_speech::WorkerNews::zen_name) {
             out.push_back(h);
         }
     }
@@ -6601,7 +6601,7 @@ struct RoleStage {
 
     explicit RoleStage(const char* image) {
         auto cmd = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
-            schema_of<role::RoleReport>(), schema_of<role::WorkerNews>()});
+            schema_of<role_speech::RoleReport>(), schema_of<role_speech::WorkerNews>()});
         auto cmd_log = commander_log;
         cmd->on_handle = [cmd_log](const Message& in, Bus&, ProbeWeave&) {
             record_role(cmd_log, in);
@@ -6609,7 +6609,7 @@ struct RoleStage {
         commander = bus.register_weave(std::move(cmd), Grant{}.allow_any(), "commander");
 
         auto dsp = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
-            schema_of<role::WorkerNews>()});
+            schema_of<role_speech::WorkerNews>()});
         auto dsp_log = dispatcher_log;
         dsp->on_handle = [dsp_log](const Message& in, Bus&, ProbeWeave&) {
             record_role(dsp_log, in);
@@ -6622,7 +6622,7 @@ struct RoleStage {
     }
 
     void command(const char* mode, WeaveId target = WeaveId{}) {
-        role::RoleCommand c;
+        role_speech::RoleCommand c;
         c.mode = mode;
         c.target = static_cast<std::int64_t>(target.value);
         bus.send_as(commander, worker, Message(to_value(c)));
@@ -6725,10 +6725,10 @@ static void role_provenance_inbound(const char* image) {
     // Role speech from ANOTHER role: the dispatcher's own.
     REQUIRE(s.bus
                 .role_send_as(s.dispatcher, "dispatcher", s.worker,
-                                Message(to_value(role::WorkerNews{"flash"})))
+                                Message(to_value(role_speech::WorkerNews{"flash"})))
                 .valid());
     // Personal speech from the same dispatcher.
-    s.bus.send_as(s.dispatcher, s.worker, Message(to_value(role::WorkerNews{"psst"})));
+    s.bus.send_as(s.dispatcher, s.worker, Message(to_value(role_speech::WorkerNews{"psst"})));
     s.bus.drain_until_idle();
 
     const auto heard = reports_named(*s.commander_log, "heard");

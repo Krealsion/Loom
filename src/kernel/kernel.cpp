@@ -542,7 +542,7 @@ static void zen_host_release_deferred(void* ctx, uint64_t token) {
 // Deliberate role authorship. As every outbound door: the payload is admitted host-side,
 // then routed through the gated WeaveBus, which stamps the loaded weave's id from the
 // connection and asks the Switchboard's authorship door to verify membership. An invalid
-// result maps to the precise status, so a loaded role learns "you do not hold that role".
+// result maps to the precise status, so a loaded weave learns "you do not hold that role".
 static ZenStatus zen_host_role_send(void* ctx, const char* as_role, std::uint64_t target,
                                       std::uint64_t reply_to, std::uint64_t correlation,
                                       const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {

@@ -39,7 +39,7 @@ queues nothing and is never a silent downgrade to personal speech
 **Consequences.** A strict receiver writes `if
 (!mail.authored_from_role("matchmaker")) return;` with no Switchboard access,
 no role lookup, and no payload identity field. The role survives its
-role holder without pretending successor identity equals predecessor
+holder without pretending successor identity equals predecessor
 identity. Nothing widens: the ordinary grant, sender-life, seal, and routing
 laws all still refuse independently. The `as_role()` view is syntax, not
 stored authority — every emission re-verifies, and the type resists being
@@ -47,7 +47,7 @@ kept (non-copyable, rvalue-qualified verbs).
 
 **Laws supported.**
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
-[MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-role).
+[MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-authorship).
 
 **Evidence / history.** The priced workarounds, the five sightings and the
 focused role-authorship replay in [night-lab evidence](../evidence/night-lab.md);

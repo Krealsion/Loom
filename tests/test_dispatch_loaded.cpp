@@ -23,7 +23,7 @@ TEST_SUITE("dispatch_loaded") {
         // Both miswired callbacks can succeed here: the addressed role is also a
         // role the author holds, and all recipients accept the SAME payload.
         // Snapshot receipts do not depend on sending a report through either door.
-        for (const std::string mode : {"role", "role-publish", "publish", "direct", "role-denied"}) {
+        for (const std::string mode : {"role", "as-role-publish", "publish", "direct", "as-role-denied"}) {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
@@ -51,16 +51,16 @@ TEST_SUITE("dispatch_loaded") {
             }
             sb.pump_pending();
             REQUIRE(sb.pending() == 0);
-            const bool denied = mode == "role-denied";
-            const bool role = mode == "role-publish";
+            const bool denied = mode == "as-role-denied";
+            const bool authored = mode == "as-role-publish";
             const bool addressed = mode == "role" || mode == "direct";
             sb.send(loaded.id, Message(to_value(dispatch_test::Command{
-                denied ? "role-publish" : mode, static_cast<std::int64_t>(first.id.value),
+                denied ? "as-role-publish" : mode, static_cast<std::int64_t>(first.id.value),
                 denied ? "not-held" : "dispatch.author", "77"})));
             sb.pump_pending();
             const auto state = mind(sb, loaded.id);
-            CHECK(state.get("authored")->as_bool() == role);
-            CHECK(state.get("recipients")->as_int() == (role ? 3 : 0));
+            CHECK(state.get("authored")->as_bool() == authored);
+            CHECK(state.get("recipients")->as_int() == (authored ? 3 : 0));
             CHECK(state.get("queued")->as_int() == (addressed ? 1 : 0));
             const auto& attempts = state.get("attempts")->as_list();
             REQUIRE(attempts.size() == (addressed ? 1u : 0u));
@@ -71,9 +71,9 @@ TEST_SUITE("dispatch_loaded") {
             std::vector<std::uint64_t> actual;
             for (const auto& delivery : deliveries) {
                 actual.push_back(delivery.target);
-                CHECK(delivery.role == (role ? "dispatch.author" : ""));
+                CHECK(delivery.role == (authored ? "dispatch.author" : ""));
                 if (addressed) { CHECK(delivery.attempt == attempt); }
-                if (role) { CHECK(delivery.attempt > 3); }
+                if (authored) { CHECK(delivery.attempt > 3); }
             }
             std::vector<std::uint64_t> expected;
             if (mode == "role") { expected = {loaded.id.value}; }
@@ -94,7 +94,7 @@ TEST_SUITE("dispatch_loaded") {
                    dispatch_role_and_role_semantics, ZEN_BOX_DISPATCH)
 
     static void dispatch_refusal_attempts(const char* image) {
-        for (const std::string mode : {"direct", "role", "role-direct", "role-role"}) {
+        for (const std::string mode : {"direct", "role", "as-role-direct", "as-role-to-role"}) {
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
             auto target = register_probe(sb, {schema_of<dispatch_test::Payload>()});
@@ -163,7 +163,7 @@ TEST_SUITE("dispatch_loaded") {
         REQUIRE(other.ok);
         sb.send(other.id,
                 Message(to_value(dispatch_test::Command{
-                    "role-direct", static_cast<std::int64_t>(target.id.value), "", "1"})));
+                    "as-role-direct", static_cast<std::int64_t>(target.id.value), "", "1"})));
         sb.pump_pending();
         CHECK(sb.pending() == 0);
         CHECK(mind(sb, other.id).get("queued")->as_int() == 0);
@@ -243,8 +243,8 @@ TEST_SUITE("dispatch_loaded") {
     // records a delivery, never a handler that failed.
     static void dispatch_door_refused(const char* image) {
         for (const std::string mode :
-             {"direct", "role", "role-direct", "role-role", "publish", "role-publish",
-              "answer", "spend-unknown", "claim-unheard", "role-claim-unheard",
+             {"direct", "role", "as-role-direct", "as-role-to-role", "publish", "as-role-publish",
+              "answer", "spend-unknown", "claim-unheard", "as-role-claim-unheard",
               "offer-unheard"}) {
             CAPTURE(mode);
             Switchboard sb;
@@ -280,7 +280,7 @@ TEST_SUITE("dispatch_loaded") {
 
     static void dispatch_observer_throws(const char* image) {
         for (const std::string mode :
-             {"role-publish", "answer", "spend-unknown", "claim-unheard"}) {
+             {"as-role-publish", "answer", "spend-unknown", "claim-unheard"}) {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
@@ -297,7 +297,7 @@ TEST_SUITE("dispatch_loaded") {
                     throw std::runtime_error("an observer that throws");
                 }
             });
-            // role-publish names a role the image does not hold.
+            // as-role-publish names a role the image does not hold.
             sb.send(loaded.id,
                     Message(to_value(dispatch_test::Command{mode, 0, "not.held", "77"})));
             CHECK_NOTHROW(sb.pump_pending());

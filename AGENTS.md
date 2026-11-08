@@ -240,7 +240,7 @@ application; what it found is evidence (`docs/evidence/night-lab.md`), not contr
   (`Switchboard::send_as_fenced`, `docs/reference/messaging.md`), and across a link, `settle`.
 - `Committed` at commit-call time — commit *schedules*; `AdmissionPending` is real (PR-07).
 - Prepared replacement preserves incumbent state — it does not (PR-09).
-- `send_to_role` says anything about the sender's role (MSG-04) — role speech is its own
+- `send_to_role` says the sender speaks as a role (MSG-04) — speaking as one is its own
   explicit, verified act (`mail.as_role(...)`, MSG-07), and merely holding a role attaches nothing.
 - A committed activation is answerable (LIFE-05).
 - A reachable bridge socket is admitted — it is not; a connection has no proxy and acts on

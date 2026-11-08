@@ -96,11 +96,11 @@ class RoleHolder : public WeaveBase<RoleHolder, WatcherState, Accept<ClaimPerson
 public:
     void on(const ClaimPersonally& c, Mail& mail) { personal = mail.claim(Status{c.text}); }
     void on(const ClaimAsRole& c, Mail& mail) {
-        role = mail.as_role(role).claim(Status{c.text});
+        as_role_claim = mail.as_role(role).claim(Status{c.text});
     }
     std::string role = "station";
     SenseClaimResult personal{};
-    SenseClaimResult role{};
+    SenseClaimResult as_role_claim{};
 };
 
 /// Register a weave and hand back its raw pointer, the way these tests want it.
@@ -236,7 +236,7 @@ TEST_CASE("role movement never relabels a predecessor's role claim, and the succ
 
     bus.send(aid, Message(to_value(ClaimAsRole{"A is on duty"})));
     bus.drain_until_idle();
-    REQUIRE(incumbent->role.accepted);
+    REQUIRE(incumbent->as_role_claim.accepted);
 
     // The role claim reads as A's, and A currently holds the role.
     SenseReading before = bus.observe_role("station", "Status", 1);
@@ -371,7 +371,7 @@ TEST_CASE("the SAME holder's personal claim and role claim stay distinguishable 
     bus.send(oid, Message(to_value(ClaimAsRole{"officially speaking"})));
     bus.drain_until_idle();
     REQUIRE(holder->personal.accepted);
-    REQUIRE(holder->role.accepted);
+    REQUIRE(holder->as_role_claim.accepted);
 
     // Two claims, same weave, same shape, same instant — two different keys.
     SenseReading personal = bus.observe(oid, "Status", 1);
@@ -529,8 +529,8 @@ TEST_CASE("claiming as a role you do not hold is refused, and NOTHING is stored 
     bus.send(bid, Message(to_value(ClaimAsRole{"I am the station"})));
     bus.drain_until_idle();
 
-    CHECK_FALSE(pretender->role.accepted);
-    CHECK(pretender->role.why == SenseRefusal::RoleNotHeld);
+    CHECK_FALSE(pretender->as_role_claim.accepted);
+    CHECK(pretender->as_role_claim.why == SenseRefusal::RoleNotHeld);
     // Nothing was stored anywhere: not under the role key...
     CHECK_FALSE(bus.observe_role("station", "Status", 1));
     // ...and not, quietly, under the pretender's own personal key.

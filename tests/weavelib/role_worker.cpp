@@ -27,37 +27,37 @@ struct RoleWorkerState {
 
 class RoleWorker
     : public WeaveBase<RoleWorker, RoleWorkerState,
-                       Accept<role::RoleCommand, role::WorkerNews>,
-                       Emit<role::WorkerNews, role::RoleReport>> {
+                       Accept<role_speech::RoleCommand, role_speech::WorkerNews>,
+                       Emit<role_speech::WorkerNews, role_speech::RoleReport>> {
 public:
-    void on(const role::RoleCommand& cmd, Mail& mail) {
+    void on(const role_speech::RoleCommand& cmd, Mail& mail) {
         ++state_.acts;
         const WeaveId target{static_cast<std::uint64_t>(cmd.target)};
-        role::RoleReport report;
+        role_speech::RoleReport report;
         report.what = cmd.mode;
         if (cmd.mode == "direct") {
             report.authored =
-                mail.as_role("worker.a").send(target, role::WorkerNews{"direct"}).valid();
+                mail.as_role("worker.a").send(target, role_speech::WorkerNews{"direct"}).valid();
         } else if (cmd.mode == "to-role") {
             report.authored = mail.as_role("worker.a")
-                                  .send_to_role("dispatcher", role::WorkerNews{"to-role"})
+                                  .send_to_role("dispatcher", role_speech::WorkerNews{"to-role"})
                                   .valid();
         } else if (cmd.mode == "publish") {
             const RolePublication p =
-                mail.as_role("worker.a").publish(role::WorkerNews{"open"});
+                mail.as_role("worker.a").publish(role_speech::WorkerNews{"open"});
             report.authored = p.authored;
             report.recipients = static_cast<std::int64_t>(p.recipients);
         } else if (cmd.mode == "personal") {
-            (void)mail.publish(role::WorkerNews{"open"});
+            (void)mail.publish(role_speech::WorkerNews{"open"});
             report.authored = false;
         } else if (cmd.mode == "forge-direct") {
             // A role this weave does NOT hold. The host must refuse; the
             // report carries the refusal home.
             report.authored =
-                mail.as_role("dispatcher").send(target, role::WorkerNews{"forged"}).valid();
+                mail.as_role("dispatcher").send(target, role_speech::WorkerNews{"forged"}).valid();
         } else if (cmd.mode == "forge-publish") {
             const RolePublication p =
-                mail.as_role("dispatcher").publish(role::WorkerNews{"forged"});
+                mail.as_role("dispatcher").publish(role_speech::WorkerNews{"forged"});
             report.authored = p.authored;
             report.recipients = static_cast<std::int64_t>(p.recipients);
         }
@@ -68,9 +68,9 @@ public:
 
     /// Inbound role speech: report the delivery facts this side of the seam
     /// reconstructed — the parity question itself.
-    void on(const role::WorkerNews&, Mail& mail) {
+    void on(const role_speech::WorkerNews&, Mail& mail) {
         ++state_.acts;
-        role::RoleReport report;
+        role_speech::RoleReport report;
         report.what = "heard";
         report.authored = mail.authored_from_role("worker.a");
         report.seen_role = std::string(mail.authored_role());

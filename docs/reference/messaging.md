@@ -78,7 +78,7 @@ and is not refused for this, see [diagnostics](#diagnostics-and-the-seam)).
 
 - **Directed** — `send(WeaveId, msg)`.
 - **Role** — `send_to_role(role, msg)`: resolved to the singleton holder *at
-  delivery* ([MSG-04](../laws/messaging-laws.md) — destination, not role).
+  delivery* ([MSG-04](../laws/messaging-laws.md) — destination, not authorship).
   Unheld role → `NoSuchTarget`, indistinguishable from an unknown id.
 - **Publish** — every alive, unsealed, accept-matching weave at *enqueue*
   time, each delivery independently gated ([MSG-06](../laws/messaging-laws.md)).

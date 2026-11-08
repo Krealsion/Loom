@@ -1341,7 +1341,7 @@ private:
     SenseAuthorship authorship_of(const ClaimRecord& rec, const std::string& role,
                                   const std::string& name, std::uint32_t version) const;
     /// Drop the claims under keys that stopped meaning anything: a removed weave's personal keys,
-    /// an unheld role's role keys. An admission moves a role in place and never leaves it
+    /// an unheld role's claim keys. An admission moves a role in place and never leaves it
     /// unheld, so the predecessor's role claim survives it, marked stale.
     void forget_personal_claims(WeaveId id);
     void forget_role_claims(const std::string& role);

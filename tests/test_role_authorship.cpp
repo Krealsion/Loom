@@ -243,11 +243,11 @@ TEST_CASE("authorship and destination are orthogonal — all four combinations, 
         // personal -> role destination (the sender HOLDS a role; addressing a
         // role still attaches nothing — MSG-04 is not authorship)
         (void)b.send_to_role("dispatcher", Message(greet("p-role")));
-        // role -> direct
-        CHECK(b.role_send("worker.a", dispatcher, Message(greet("o-direct"))).valid());
-        // role -> role destination: authored as worker.a, delivered to the
+        // as a role -> direct
+        CHECK(b.role_send("worker.a", dispatcher, Message(greet("r-direct"))).valid());
+        // as a role -> role destination: authored as worker.a, delivered to the
         // dispatcher role. BOTH facts, never conflated.
-        CHECK(b.role_send_to_role("worker.a", "dispatcher", Message(greet("o-role"))).valid());
+        CHECK(b.role_send_to_role("worker.a", "dispatcher", Message(greet("r-role"))).valid());
     };
     bus.send(worker.id, Message(ping(1)));
     bus.drain_until_idle();
@@ -255,8 +255,8 @@ TEST_CASE("authorship and destination are orthogonal — all four combinations, 
     REQUIRE(log->heard.size() == 4);
     CHECK(log->heard[0].authored_role.empty());           // personal -> direct
     CHECK(log->heard[1].authored_role.empty());           // personal -> role
-    CHECK(log->heard[2].authored_role == "worker.a");     // role -> direct
-    CHECK(log->heard[3].authored_role == "worker.a");     // role -> role: the
+    CHECK(log->heard[2].authored_role == "worker.a");     // as a role -> direct
+    CHECK(log->heard[3].authored_role == "worker.a");     // as a role -> role: the
     // authored role is worker.a; the DESTINATION was the dispatcher role —
     // never "authored as dispatcher".
     for (const Heard& h : log->heard) {

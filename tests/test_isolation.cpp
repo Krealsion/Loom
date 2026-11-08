@@ -1562,16 +1562,16 @@ TEST_CASE("an out-of-process weave really holding the role still cannot author r
     static const auto worker_state =
         SchemaBuilder("RoleWorkerState", 1).field("acts", Kind::Int).build();
 
-    auto reports = std::make_shared<std::vector<role::RoleReport>>();
+    auto reports = std::make_shared<std::vector<role_speech::RoleReport>>();
     auto news_count = std::make_shared<int>(0);
     auto commander_probe = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
-        schema_of<role::RoleReport>(), schema_of<role::WorkerNews>()});
+        schema_of<role_speech::RoleReport>(), schema_of<role_speech::WorkerNews>()});
     ProbeWeave* commander_raw = commander_probe.get();
     const WeaveId commander =
         bus.register_weave(std::move(commander_probe), Grant{}.allow_any(), "commander");
     commander_raw->on_handle = [reports, news_count](const Message& in, Bus&, ProbeWeave&) {
-        if (in.payload.schema().name() == std::string_view(role::RoleReport::zen_name)) {
-            reports->push_back(from_value<role::RoleReport>(in.payload));
+        if (in.payload.schema().name() == std::string_view(role_speech::RoleReport::zen_name)) {
+            reports->push_back(from_value<role_speech::RoleReport>(in.payload));
         } else {
             ++*news_count;
         }
@@ -1594,7 +1594,7 @@ TEST_CASE("an out-of-process weave really holding the role still cannot author r
     };
 
     // OUTBOUND: the child deliberately asks to speak as the role it holds.
-    role::RoleCommand cmd;
+    role_speech::RoleCommand cmd;
     cmd.mode = "direct";
     cmd.target = static_cast<std::int64_t>(commander.value);
     bus.send_as(commander, out.id, Message(to_value(cmd)));
@@ -1612,7 +1612,7 @@ TEST_CASE("an out-of-process weave really holding the role still cannot author r
     const WeaveId dispatcher =
         bus.register_weave(std::move(dispatcher_probe), Grant{}.allow_any(), "dispatcher");
     REQUIRE(bus.role_send_as(dispatcher, "dispatcher", out.id,
-                               Message(to_value(role::WorkerNews{"flash"})))
+                               Message(to_value(role_speech::WorkerNews{"flash"})))
                 .valid());
     REQUIRE(host.run_until([&] { return acts() >= 2 && reports->size() >= 2; }, 2000));
     CHECK((*reports)[1].what == "heard");

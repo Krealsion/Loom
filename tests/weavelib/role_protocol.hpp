@@ -13,10 +13,10 @@
 #include <cstdint>
 #include <string>
 
-namespace role {
+namespace role_speech {
 
 /// Tell the worker which act to perform. `mode` is one of:
-///   "direct", "to-role"  a role send as worker.a, to `target` or to the dispatcher role
+///   "direct", "to-role"  a send as the role worker.a, to `target` or to the dispatcher role
 ///   "publish"            a role publication as worker.a
 ///   "personal"           an ordinary personal publication of the same shape
 ///   "forge-direct"       an attempt to author as a role it does NOT hold
@@ -47,6 +47,6 @@ struct RoleReport {
               ZEN_FIELD(seen_role));
 };
 
-} // namespace role
+} // namespace role_speech
 
 #endif // ZEN_TESTS_WEAVELIB_ROLE_PROTOCOL_HPP
