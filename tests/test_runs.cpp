@@ -362,10 +362,11 @@ struct RunsHost {
         Grant g;
         g.allow_to_role(session::ExpectRun::zen_name, 1, session::kSessionRole);
         g.allow_to_role(session::ForgetRun::zen_name, 1, session::kSessionRole);
-        for (const char* shape : {Tools::zen_name, ToolDescription::zen_name, Run::zen_name,
-                                  RunList::zen_name, Directive::zen_name, Ack::zen_name,
-                                  Refused::zen_name}) {
-            g.allow_to_any(shape, 1);
+        for (const NamedShape& shape :
+             {named_shape<Tools>(), named_shape<ToolDescription>(), named_shape<Run>(),
+              named_shape<RunList>(), named_shape<Directive>(), named_shape<Ack>(),
+              named_shape<Refused>()}) {
+            g.allow_to_any(shape.name, shape.version);
         }
         manager_id = bus.register_weave(std::move(m), g, std::string(kRunsRole));
         manager->zen_set_self(manager_id);
@@ -377,8 +378,8 @@ struct RunsHost {
         auto c = std::make_unique<RunsClient>();
         client = c.get();
         Grant cg;
-        for (const std::string& shape : client_request_shapes()) {
-            cg.allow_to_role(shape, 1, kRunsRole);
+        for (const NamedShape& shape : client_request_shapes()) {
+            cg.allow_to_role(shape.name, shape.version, kRunsRole);
         }
         client_id = bus.register_weave(std::move(c), cg);
         client->zen_set_self(client_id);

@@ -414,8 +414,9 @@ public:
         session::ExpectRun expect;
         expect.run = s.name;
         expect.digest = loom::host::credential_digest(credential);
-        for (const std::string& shape : worker_report_shapes()) {
-            expect.may_say.push_back(shape + " v1 -> role " + kRunsRole);
+        for (const NamedShape& shape : worker_report_shapes()) {
+            expect.may_say.push_back(shape.name + " v" + std::to_string(shape.version) +
+                                     " -> role " + kRunsRole);
         }
         for (const std::string& rule : tool->asks) {
             expect.may_say.push_back(rule);

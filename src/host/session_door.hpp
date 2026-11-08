@@ -281,8 +281,8 @@ public:
                         session::kHistoryRole);
         g.allow_to_role(session::Delivery::zen_name, session::Delivery::zen_version,
                         session::kHistoryRole);
-        for (const std::string& shape : runs::client_request_shapes()) {
-            g.allow_to_role(shape, 1, runs::kRunsRole);
+        for (const runs::NamedShape& shape : runs::client_request_shapes()) {
+            g.allow_to_role(shape.name, shape.version, runs::kRunsRole);
         }
         return g;
     }

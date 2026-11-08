@@ -443,18 +443,29 @@ struct Directive {
 
 #undef LOOM_RUNS_SHAPE
 
+/// One shape by its name and version, as a rule names it.
+struct NamedShape {
+    std::string name;
+    std::uint32_t version = 0;
+};
+
+template <class T>
+NamedShape named_shape() {
+    return NamedShape{T::zen_name, T::zen_version};
+}
+
 /// The shapes a worker must be able to say to its manager, for the rules its manager asks the door
-/// to grant (each `<Name> v1 -> role loom.runs`).
-inline std::vector<std::string> worker_report_shapes() {
-    return {WorkerStarted::zen_name, Progress::zen_name, AskReport::zen_name, Produced::zen_name,
-            Finished::zen_name, Control::zen_name};
+/// to grant (each `<Name> v<version> -> role loom.runs`).
+inline std::vector<NamedShape> worker_report_shapes() {
+    return {named_shape<WorkerStarted>(), named_shape<Progress>(), named_shape<AskReport>(),
+            named_shape<Produced>(),      named_shape<Finished>(), named_shape<Control>()};
 }
 
 /// The shapes a client says to a run manager.
-inline std::vector<std::string> client_request_shapes() {
-    return {ListTools::zen_name, DescribeTool::zen_name, Start::zen_name,  List::zen_name,
-            Get::zen_name,       Cancel::zen_name,       Release::zen_name, Past::zen_name,
-            ArtifactRead::zen_name};
+inline std::vector<NamedShape> client_request_shapes() {
+    return {named_shape<ListTools>(), named_shape<DescribeTool>(), named_shape<Start>(),
+            named_shape<List>(),      named_shape<Get>(),          named_shape<Cancel>(),
+            named_shape<Release>(),   named_shape<Past>(),         named_shape<ArtifactRead>()};
 }
 
 } // namespace loom::runs

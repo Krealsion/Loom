@@ -122,10 +122,10 @@ TEST_SUITE("dispatch_loaded") {
             CHECK_FALSE(state.get("answer_right")->as_bool());
             CHECK(state.get("reason")->as_text() == "CapabilityDenied");
             CHECK(state.get("correlation")->as_text() == "18446744073709551615");
-            CHECK(state.get("role")->as_text() ==
-                  (mode.find("role") != std::string::npos ? role : ""));
+            const bool to_role = mode == "role" || mode == "as-role-to-role";
+            CHECK(state.get("role")->as_text() == (to_role ? role : ""));
             CHECK(state.get("target")->as_text() ==
-                  (mode.find("role") != std::string::npos ? "" : std::to_string(target.id.value)));
+                  (to_role ? "" : std::to_string(target.id.value)));
             CHECK(sb.pending() == 0);
         }
     }
