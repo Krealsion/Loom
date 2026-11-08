@@ -261,8 +261,8 @@ class Context(object):
         descriptors the relay sends. The subscription is released in this run's cleanup phase,
         however the run ends. See ``loom_session.observe`` for what each item means."""
         requested = observe.shape_refs(shapes)
-        for word in observe.WORDS:  # described now, so no word waits on the host as it arrives
-            self.conn.schema(word, 1)
+        for word, version in observe.WORD_VERSIONS:  # described now, so none waits as it arrives
+            self.conn.schema(word, version)
         fields = {"producer": producer, "shapes": requested, "latest": list(latest),
                   "encoding": "compat", "window": int(window),
                   "label": label or ("run:" + self.name)}

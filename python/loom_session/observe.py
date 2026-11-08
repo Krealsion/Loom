@@ -39,7 +39,9 @@ import time
 from . import values
 
 ROLE = "loom.observe"
-WORDS = ("loom.observe.Observed", "loom.observe.Gap", "loom.observe.Ended")
+# The relay's words by name and version (zen/observe/vocabulary.hpp).
+WORD_VERSIONS = (("loom.observe.Observed", 2), ("loom.observe.Gap", 1), ("loom.observe.Ended", 1))
+WORDS = tuple(name for name, _ in WORD_VERSIONS)
 
 
 class Observation(object):
