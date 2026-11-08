@@ -37,7 +37,7 @@ using loom::Token;
 using loom::tokenize;
 
 constexpr const char* kServiceRole = "some.service";
-constexpr const char* kWeaverRole = "loom.weaver";
+constexpr const char* kWeaverRole = loom::kPolicyRole;
 /// The doors of the service's one pane that this host's Weaver may hand out.
 constexpr const char* kServiceDoors = "some.service/desk:*";
 

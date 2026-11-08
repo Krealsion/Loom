@@ -44,7 +44,7 @@ using namespace sbfx;
 namespace {
 
 constexpr const char* kServiceRole = "some.service";
-constexpr const char* kWeaverRole = "loom.weaver";
+constexpr const char* kWeaverRole = loom::kPolicyRole;
 
 // ---- the world these cases happen in ----------------------------------------
 //
