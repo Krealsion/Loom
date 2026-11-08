@@ -85,7 +85,7 @@ its OS/filesystem/resource containment was consumed into a namespace, a mount
 view and a cgroup leaf before the child ran, where no later write reaches it
 (GATE-05) · **a Weaver is not a broker** — approval changes authority and
 performs nothing, so the governed session retries its own action and the target
-sees the *session* as sender; and a Weaver's death revokes nothing it installed,
+sees the *governed session* as sender; and a Weaver's death revokes nothing it installed,
 because a grant is not a lease
 ([weaver](reference/weaver.md)) · **a terminal is not root** — a `TerminalSession` is an
 ordinary weave with no `Switchboard&`, no tap, no registry read and no
