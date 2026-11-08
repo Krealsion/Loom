@@ -128,13 +128,13 @@ struct ObserveSinks {
 };
 
 ZenStatus g_sense_observe(void*, uint64_t author, const char* name, uint32_t version,
-                          ZenByteSink value, ZenByteSink role, ZenSenseBy* by) {
-    const ObserveSinks held(value, role);
+                          ZenByteSink value, ZenByteSink role_sink, ZenSenseBy* by) {
+    const ObserveSinks held(value, role_sink);
     return zh_sense_observe(author, name, version, by);
 }
 ZenStatus g_sense_observe_role(void*, const char* role, const char* name, uint32_t version,
-                                 ZenByteSink value, ZenByteSink role, ZenSenseBy* by) {
-    const ObserveSinks held(value, role);
+                               ZenByteSink value, ZenByteSink role_sink, ZenSenseBy* by) {
+    const ObserveSinks held(value, role_sink);
     return zh_sense_observe_role(role, name, version, by);
 }
 ZenStatus g_sense_offer(void*, uint64_t op, const uint8_t* p, size_t n) {
