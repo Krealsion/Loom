@@ -48,7 +48,7 @@ struct Countdown {
     ZEN_SHAPE(Countdown, 1, ZEN_FIELD(turns));
 };
 
-/// One turn of a countdown, addressed to this weave's own office, carrying who asked and the
+/// One turn of a countdown, addressed to this weave's own role, carrying who asked and the
 /// conversation they named. The person approves `Tock v1 -> role probe` for it to run.
 struct Tock {
     std::int64_t remaining = 0;

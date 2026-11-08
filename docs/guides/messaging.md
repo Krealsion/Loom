@@ -7,20 +7,20 @@ one kind of speech Loom itself vouches for.
 
 ```cpp
 mail.send(target_id, Job{...});          // to a weave you know
-mail.send_to_role("storage", Put{...});  // to whoever holds the office right now
+mail.send_to_role("storage", Put{...});  // to whoever holds the role right now
 mail.publish(Tick{...});                 // to everyone who declared they hear it
 ```
 
 Role sends resolve **at delivery**, so they keep working across a service
 replacement — that is why production traffic addresses roles, not ids. A role
 send says where the message *goes*; it proves nothing about the sender having
-spoken *as* that role — speaking for an office is its own deliberate act,
+spoken *as* that role — speaking for a role is its own deliberate act,
 below.
 
-## Speaking as the office
+## Speaking as the role
 
-Holding an office is not speaking for it. When your statement should be
-trusted because of the *office* — a matchmaker's match, a worker's completion,
+Holding a role is not speaking for it. When your statement should be
+trusted because of the *role* — a matchmaker's match, a worker's completion,
 a service's announcement — author it deliberately, per statement:
 
 ```cpp
@@ -29,34 +29,34 @@ void make_match(loom::Mail& mail) {
 }
 ```
 
-Loom verifies you hold the office at that moment and stamps the fact onto the
-delivery. The receiver trusts the office, not the occupant:
+Loom verifies you hold the role at that moment and stamps the fact onto the
+delivery. The receiver trusts the role, not the occupant:
 
 ```cpp
 void on(const MatchCreated& match, loom::Mail& mail) {
     if (!mail.authored_from_role("matchmaker")) {
-        return; // personal speech, or a forger — not the office
+        return; // personal speech, or a forger — not the role
     }
     join(match.server);
 }
 ```
 
 That check survives replacement for free: an honest successor authors as the
-inherited office and passes it; the retired predecessor's *new* attempts
+inherited role and passes it; the retired predecessor's *new* attempts
 refuse. Publications work identically —
 `mail.as_role("worker.a").publish(WorkerOpen{...})` lets every listener verify
 the announcement, and the result keeps "not authored" distinct from
 "authored, nobody listening". Your ordinary sends stay personal — from the
-very same handler, holding the very same office — and everything ordinary
-still applies to office speech: your grant, your life, routing.
+very same handler, holding the very same role — and everything ordinary
+still applies to role speech: your grant, your life, routing.
 
 When do you need it? When trust follows a **replaceable role** rather than one
 exact weave. If your counterparty is one specific weave, the sender stamp
 already answers everything (`mail.sender()`); if it is "whoever holds the
-office", the stamp cannot, and this can. Guide-level law:
+role", the stamp cannot, and this can. Guide-level law:
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
 exact semantics:
-[reference](../reference/messaging.md#office-authorship-role-authored-provenance).
+[reference](../reference/messaging.md#role-authorship-role-authored-provenance).
 
 ## Asks and answers
 

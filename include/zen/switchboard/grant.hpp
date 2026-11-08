@@ -88,7 +88,7 @@ struct SendRule {
 
 /// One observe rule: may read the latest claim of matching shapes (SENSE-05). Not a `SendRule`:
 /// one says "may you send this there", the other "may you pull this". It selects by shape only,
-/// with no author or office selector.
+/// with no author or role selector.
 struct ObserveRule {
     bool any_shape = false;
     std::string shape_name; ///< used iff !any_shape
@@ -147,7 +147,7 @@ public:
         return *this;
     }
     /// May act at `door` with shape (name, version) to the holder of `role`: a door rule, which
-    /// the office judges by reading it, and which permits no delivery at all.
+    /// the role judges by reading it, and which permits no delivery at all.
     LiveAuthority& allow_to_role(std::string shape_name, std::uint32_t shape_version,
                                  std::string role, Door door) {
         rules_.push_back(SendRule{false, std::move(shape_name), shape_version, false, WeaveId{},
@@ -231,7 +231,7 @@ public:
     ///   door    none contains none, and a door the doors it contains (`Door::contains`)
     ///           none and a door contain one another in neither direction
     ///
-    /// The target's second line matters: a role rule follows whoever holds the office at
+    /// The target's second line matters: a role rule follows whoever holds the role at
     /// delivery and an id rule follows one weave, so relating them would turn today's routing
     /// into permanent authority. The door's keeps containment the predicate's: a rule without a
     /// door, an any rule included, answers no door question, so it contains no door rule. Send
@@ -294,7 +294,7 @@ private:
         const bool outer_is_role = !outer.target_role.empty();
         const bool inner_is_role = !inner.target_role.empty();
         if (outer_is_role != inner_is_role) {
-            return false; // an office and a weave are different kinds of destination
+            return false; // a role and a weave are different kinds of destination
         }
         return outer_is_role ? outer.target_role == inner.target_role
                              : outer.target == inner.target;
@@ -362,7 +362,7 @@ public:
                             std::move(door));
         return *this;
     }
-    /// May read the latest claim of shape (name, version), from any claimant or office
+    /// May read the latest claim of shape (name, version), from any claimant or role
     /// (SENSE-05). Absent by default like every authority here, so reading Senses takes a
     /// deliberate host decision, as sending does.
     Grant& allow_observe(std::string shape_name, std::uint32_t shape_version) {
@@ -575,7 +575,7 @@ struct AuthorityView {
                       std::string_view role) const {
         return effective_permits_role(base, delegated, shape_name, shape_version, role);
     }
-    /// The door question an office asks at the act: may this subject act at `door`?
+    /// The door question a role asks at the act: may this subject act at `door`?
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role, const Door& door) const {
         return effective_permits_role(base, delegated, shape_name, shape_version, role, door);

@@ -42,7 +42,7 @@ inline std::string_view as_view(const std::uint8_t* data, std::size_t len) {
 
 // A Bus inside the library that forwards a Weave's sends across the host callback table as
 // serialized payload bytes; the host stamps the sender and admits the bytes before routing.
-// Ordinary and office sends return the real queued attempt; answer tickets are status markers,
+// Ordinary and role sends return the real queued attempt; answer tickets are status markers,
 // and publication counts do not cross.
 class HostApiBus final : public loom::Bus {
 public:
@@ -126,56 +126,56 @@ public:
         }
     }
 
-    // ---- deliberate office authorship across the seam (MSG-07) ---------------
+    // ---- deliberate role authorship across the seam (MSG-07) ---------------
     // The library requests; the host verifies membership and stamps. A missing door (the
     // isolated pipe supplies none) refuses, and never falls back to an ordinary send.
 
-    loom::Ticket office_send(std::string_view as_role, loom::WeaveId target,
+    loom::Ticket role_send(std::string_view as_role, loom::WeaveId target,
                              loom::Message msg) override {
-        if (host_ == nullptr || host_->office_send == nullptr) {
+        if (host_ == nullptr || host_->role_send == nullptr) {
             return loom::Ticket{}; // no door: refused, never sent as personal speech
         }
         std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         const std::string role_z(as_role); // NUL-terminated for the C ABI
-        const ZenStatus st = host_->office_send(
+        const ZenStatus st = host_->role_send(
             host_->ctx, role_z.c_str(), target.value, msg.reply_to.value, msg.correlation,
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
         return st == ZEN_OK ? loom::Ticket{attempt} : loom::Ticket{};
     }
 
-    loom::Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+    loom::Ticket role_send_to_role(std::string_view as_role, std::string_view to_role,
                                      loom::Message msg) override {
-        if (host_ == nullptr || host_->office_send_to_role == nullptr) {
+        if (host_ == nullptr || host_->role_send_to_role == nullptr) {
             return loom::Ticket{};
         }
         std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         const std::string as_z(as_role);
         const std::string to_z(to_role);
-        const ZenStatus st = host_->office_send_to_role(
+        const ZenStatus st = host_->role_send_to_role(
             host_->ctx, as_z.c_str(), to_z.c_str(), msg.reply_to.value, msg.correlation,
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
         return st == ZEN_OK ? loom::Ticket{attempt} : loom::Ticket{};
     }
 
-    loom::OfficePublication office_publish(std::string_view as_role,
+    loom::RolePublication role_publish(std::string_view as_role,
                                            loom::Message msg) override {
-        if (host_ == nullptr || host_->office_publish == nullptr) {
-            return loom::OfficePublication{};
+        if (host_ == nullptr || host_->role_publish == nullptr) {
+            return loom::RolePublication{};
         }
         const std::string bytes = loom::serialize(msg.payload);
         const std::string role_z(as_role);
         std::uint64_t recipients = 0;
-        const ZenStatus st = host_->office_publish(
+        const ZenStatus st = host_->role_publish(
             host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &recipients);
         if (st != ZEN_OK) {
-            return loom::OfficePublication{};
+            return loom::RolePublication{};
         }
-        // Unlike an ordinary publish, the count crosses, so an office nobody hears is not
+        // Unlike an ordinary publish, the count crosses, so a role nobody hears is not
         // confused with a refused one.
-        return loom::OfficePublication{true, static_cast<std::size_t>(recipients)};
+        return loom::RolePublication{true, static_cast<std::size_t>(recipients)};
     }
 
     // ---- Senses -------------------------------------------------------------
@@ -195,14 +195,14 @@ public:
                             : loom::SenseClaimResult{false, sense_refusal_of(st), 0};
     }
 
-    loom::SenseClaimResult office_claim(std::string_view as_role, loom::Value value) override {
-        if (host_ == nullptr || host_->sense_office_claim == nullptr) {
+    loom::SenseClaimResult role_claim(std::string_view as_role, loom::Value value) override {
+        if (host_ == nullptr || host_->sense_role_claim == nullptr) {
             return loom::SenseClaimResult{};
         }
         const std::string bytes = loom::serialize(value);
         const std::string role_z(as_role);
         std::uint64_t revision = 0;
-        const ZenStatus st = host_->sense_office_claim(
+        const ZenStatus st = host_->sense_role_claim(
             host_->ctx, role_z.c_str(), reinterpret_cast<const std::uint8_t*>(bytes.data()),
             bytes.size(), &revision);
         return st == ZEN_OK ? loom::SenseClaimResult{true, loom::SenseRefusal::None, revision}
@@ -215,29 +215,29 @@ public:
         }
         const std::string name_z(shape->name());
         HeldBytes bytes;
-        HeldBytes office; // grows to whatever the host wrote; never truncated
+        HeldBytes role; // grows to whatever the host wrote; never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
-        ZenByteSink office_sink{&office, &collect_bytes};
+        ZenByteSink role_sink{&role, &collect_bytes};
         const ZenStatus st = host_->sense_observe(host_->ctx, author.value, name_z.c_str(),
-                                                  shape->version(), sink, office_sink, &by);
-        return decode_reading(st, bytes, office, by, shape);
+                                                  shape->version(), sink, role_sink, &by);
+        return decode_reading(st, bytes, role, by, shape);
     }
 
-    loom::SenseReading observe_office(std::string_view role, std::shared_ptr<const loom::Schema> shape) override {
-        if (host_ == nullptr || host_->sense_observe_office == nullptr) {
+    loom::SenseReading observe_role(std::string_view role, std::shared_ptr<const loom::Schema> shape) override {
+        if (host_ == nullptr || host_->sense_observe_role == nullptr) {
             return loom::SenseReading{};
         }
         const std::string role_z(role);
         const std::string name_z(shape->name());
         HeldBytes bytes;
-        HeldBytes office; // grows to whatever the host wrote; never truncated
+        HeldBytes role; // grows to whatever the host wrote; never truncated
         ZenSenseBy by{};
         ZenByteSink sink{&bytes, &collect_bytes};
-        ZenByteSink office_sink{&office, &collect_bytes};
-        const ZenStatus st = host_->sense_observe_office(
-            host_->ctx, role_z.c_str(), name_z.c_str(), shape->version(), sink, office_sink, &by);
-        return decode_reading(st, bytes, office, by, shape);
+        ZenByteSink role_sink{&role, &collect_bytes};
+        const ZenStatus st = host_->sense_observe_role(
+            host_->ctx, role_z.c_str(), name_z.c_str(), shape->version(), sink, role_sink, &by);
+        return decode_reading(st, bytes, role, by, shape);
     }
 
     // ---- Joint publication: the claimant's one verb across the seam ---------------
@@ -276,8 +276,8 @@ private:
             return loom::SenseRefusal::NotAuthorized;
         case ZEN_ERR_SENSE_UNDECLARED:
             return loom::SenseRefusal::Undeclared;
-        case ZEN_ERR_SENSE_OFFICE_NOT_HELD:
-            return loom::SenseRefusal::OfficeNotHeld;
+        case ZEN_ERR_SENSE_ROLE_NOT_HELD:
+            return loom::SenseRefusal::RoleNotHeld;
         case ZEN_ERR_REFUSED:
             return loom::SenseRefusal::GateRefused;
         default:
@@ -305,7 +305,7 @@ private:
     /// Rebuild a reading library-side, re-admitting the host's bytes against this library's own
     /// schema, so the library never holds a value its own gate did not pass.
     loom::SenseReading decode_reading(ZenStatus st, const HeldBytes& bytes,
-                                      const HeldBytes& office, const ZenSenseBy& by,
+                                      const HeldBytes& role, const ZenSenseBy& by,
                                       const std::shared_ptr<const loom::Schema>& shape) {
         loom::SenseReading out;
         if (st != ZEN_OK) {
@@ -313,7 +313,7 @@ private:
             return out;
         }
         // A reading this library could not hold whole is not admitted as one.
-        if (bytes.lost || office.lost) {
+        if (bytes.lost || role.lost) {
             out.refusal = loom::SenseRefusal::GateRefused;
             return out;
         }
@@ -332,8 +332,8 @@ private:
         // Separate from the life: a live replacement changes the incarnation, not the life.
         out.by.author_incarnation_is_current = by.author_incarnation_is_current != 0;
         // Exactly what the host wrote, at any length; empty is personal.
-        out.by.office = office.bytes;
-        out.by.office_holder_is_current = by.office_holder_is_current != 0;
+        out.by.role = role.bytes;
+        out.by.role_holder_is_current = by.role_holder_is_current != 0;
         out.by.revision = by.revision;
         out.by.schema_name = shape->name();
         out.by.schema_version = shape->version();
@@ -471,7 +471,7 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
     }
 }
 
-/// Translate the host's provenance and authored office back into the C++ fact, for this
+/// Translate the host's provenance and authored role back into the C++ fact, for this
 /// library's own dispatch only: the outbound callbacks have no field to carry one.
 inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequence,
                                         const char* authored_role) {
@@ -489,7 +489,7 @@ inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequen
     default:
         break;
     }
-    // The authored office composes with any Kind; NULL or empty is personal speech.
+    // The authored role composes with any Kind; NULL or empty is personal speech.
     if (authored_role != nullptr && authored_role[0] != '\0') {
         p = std::move(p).with_authored_role(std::string(authored_role));
     }

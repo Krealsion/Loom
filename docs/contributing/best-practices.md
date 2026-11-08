@@ -114,8 +114,8 @@ Laws MSG-01 to MSG-12 in [messaging](../laws/messaging-laws.md) and ANS-01 to AN
   [MSG-09](../laws/messaging-laws.md#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo)
 - **A correlation identifies and never authenticates.**
   [ANS-05](../laws/answer-authority-laws.md#ans-05--correlation-identifies-it-never-authenticates)
-- **Addressing a role says nothing about the sender's office.**
-  [MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-office)
+- **Addressing a role says nothing about the sender's role.**
+  [MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-role)
 - **A handler that throws costs its delivery, not the bus.**
   [MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)
 - **When something did not arrive, tap the bus and read the refusal's reason as a direction.**

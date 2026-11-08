@@ -94,10 +94,10 @@ class LinkOutcome(Exception):
 class Pending(object):
     """One ask in flight. ``wait()`` returns its Answer or raises what became of it."""
 
-    def __init__(self, ctx, correlation, office, shape, version, via, settle):
+    def __init__(self, ctx, correlation, role, shape, version, via, settle):
         self.ctx = ctx
         self.correlation = correlation
-        self.office = office
+        self.role = role
         self.shape = shape
         self.version = version
         self.via = via
@@ -106,7 +106,7 @@ class Pending(object):
         self.outcome = None
 
     def describe(self):
-        where = "%s via link %s" % (self.office, self.via) if self.via else self.office
+        where = "%s via link %s" % (self.role, self.via) if self.via else self.role
         return "%s v%d -> %s%s (conversation %d)" % (self.shape, self.version, where,
                                                      " [settle]" if self.settle else "",
                                                      self.correlation)
@@ -229,24 +229,24 @@ class Context(object):
 
     # ---- asking -----------------------------------------------------------------------------
 
-    def ask_async(self, office, shape, fields=None, version=1, via=None, settle=False):
+    def ask_async(self, role, shape, fields=None, version=1, via=None, settle=False):
         """Send one ask; returns a ``Pending``. ``via`` names a link: the ask crosses to the far
-        host's ``office`` and is answered through the link (``zen/bridge/link.hpp``)."""
+        host's ``role`` and is answered through the link (``zen/bridge/link.hpp``)."""
         self._check_cancel()
         if via:
             inner = self.conn.encode(shape, fields, version)
-            corr = self.conn.ask("loom.link.Ask", {"role": office, "target": 0,
+            corr = self.conn.ask("loom.link.Ask", {"role": role, "target": 0,
                                                    "payload": inner, "settle": bool(settle)},
                                  role="loom.link." + via)
         else:
-            corr = self.conn.ask(shape, fields, version, role=office, settle=settle)
-        p = Pending(self, corr, office, shape, version, via, settle)
+            corr = self.conn.ask(shape, fields, version, role=role, settle=settle)
+        p = Pending(self, corr, role, shape, version, via, settle)
         self._pending[corr] = p
         return p
 
-    def ask(self, office, shape, fields=None, version=1, via=None, settle=False, timeout=60.0):
+    def ask(self, role, shape, fields=None, version=1, via=None, settle=False, timeout=60.0):
         """Ask and wait for its answer (see ``Pending.wait``)."""
-        return self.ask_async(office, shape, fields, version, via, settle).wait(timeout)
+        return self.ask_async(role, shape, fields, version, via, settle).wait(timeout)
 
     # ---- observing --------------------------------------------------------------------------
 
@@ -317,7 +317,7 @@ class Context(object):
 
     def _report_ask(self, p, outcome, detail):
         self.conn.ask("loom.runs.AskReport", {"ask": {
-            "correlation": p.correlation, "office": p.office, "via": p.via or "",
+            "correlation": p.correlation, "role": p.role, "via": p.via or "",
             "shape": p.shape, "version": p.version, "settle": bool(p.settle),
             "outcome": outcome, "detail": detail[:400]}}, role=RUNS_ROLE, fire=True)
 

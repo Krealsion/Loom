@@ -67,8 +67,8 @@ apply a value the bus published under its claim
 exist: `ForeignAuthority` (an authority this Loom did not issue), `Exhausted`
 (a published bound), `AdmissionRevoked` (a scheduled admission whose world
 drifted — an admission refusal, not a message failure),
-`RoleAuthorshipDenied` (an office-authorship request from a sender that does
-not hold the office — refused at the *authorship* moment, before anything is
+`RoleAuthorshipDenied` (a role-authorship request from a sender that does
+not hold the role — refused at the *authorship* moment, before anything is
 queued; see below), and `SeamUnresolved` (a loaded weave *addressed* something
 with a shape this Loom has never heard of — rejected at the library/host seam
 before routing, so no target was ever consulted; a publication addresses nothing
@@ -78,7 +78,7 @@ and is not refused for this, see [diagnostics](#diagnostics-and-the-seam)).
 
 - **Directed** — `send(WeaveId, msg)`.
 - **Role** — `send_to_role(role, msg)`: resolved to the singleton holder *at
-  delivery* ([MSG-04](../laws/messaging-laws.md) — destination, not office).
+  delivery* ([MSG-04](../laws/messaging-laws.md) — destination, not role).
   Unheld role → `NoSuchTarget`, indistinguishable from an unknown id.
 - **Publish** — every alive, unsealed, accept-matching weave at *enqueue*
   time, each delivery independently gated ([MSG-06](../laws/messaging-laws.md)).
@@ -94,7 +94,7 @@ An ordinary native or in-process loaded weave opts in by **explicitly accepting
 `zen.DispatchRefused` v1** (`loom::DispatchRefused`, in
 `zen/weave/dispatch_refusal.hpp`). `AcceptMode::AnyRegistered` alone does not opt in.
 The declaration is captured at authorship. Ordinary directed and role-addressed
-sends participate, including verified office-authored sends; publication, answers,
+sends participate, including verified role-authored sends; publication, answers,
 preparation and lifecycle operations do not acquire this contract.
 
 ```cpp
@@ -137,7 +137,7 @@ safe reason. The original unsigned correlation is on the delivery envelope.
 value grammar's integer is signed; `refused_attempt()` and `addressed_weave()`
 decode without truncation. Role addresses and shape names are carried whole.
 The original payload and `reply_to` are not copied. The notice returns to the
-actual author, never its reply address or a subsequent holder of its office.
+actual author, never its reply address or a subsequent holder of its role.
 
 Loom captures the author's life **and incarnation at authorship**, checks both
 before generating a notice, and checks both again before delivering it. Death,
@@ -173,13 +173,13 @@ that says otherwise; a stale one, a record that says Missing.
 **Absence proves nothing about delivery or success.** Handler failure, a
 delivered-but-unanswered request, or a later released/invalidated deferred answer
 right produces no dispatch-refusal claim. Malformed dynamic bytes, unresolved
-dynamic shapes, refused office authorship and invalid deferred rights can fail
+dynamic shapes, refused role authorship and invalid deferred rights can fail
 synchronously before ordinary dispatch begins. Timeout, cancellation, abandonment,
 retry, authority requests and publication aggregation are separate capabilities.
 The isolated pipe refuses a manifest requesting the notice door; its attestation
 protocol is not extended. Wire-originated payloads cannot attest this fact.
 
-## Office authorship (role-authored provenance)
+## Role authorship (role-authored provenance)
 
 A weave may **deliberately** author one statement in the capacity of a role it
 currently holds ([MSG-07](../laws/messaging-laws.md)). The authoring surface is a
@@ -196,7 +196,7 @@ sender`, at enqueue) and stamps the fact as delivery provenance. The view
 carries a role name and no authority — every emission re-verifies; it is
 non-copyable with rvalue-qualified verbs, so the one-expression spelling is
 the intended one. Raw `loom::Weave` authors use the underlying Bus verbs
-(`office_send` / `office_send_to_role` / `office_publish`, office first,
+(`role_send` / `role_send_to_role` / `role_publish`, role first,
 ordinary parameters after).
 
 The recipient reads the stamped fact off the delivery — no Switchboard
@@ -204,7 +204,7 @@ access, no role lookup, no payload field:
 
 ```cpp
 if (!mail.authored_from_role("matchmaker")) { reject(); return; }
-// mail.authored_role() — the exact office, empty for personal speech
+// mail.authored_role() — the exact role, empty for personal speech
 ```
 
 Semantics, exactly:
@@ -215,24 +215,24 @@ Semantics, exactly:
   deliberately spoke as R *when the statement was made*" — later role
   movement never rewrites or clears it, and delivery never recomputes it.
   Current membership is `role_holder`'s question, a different one.
-- **Refusal is loud and precise.** A sender that does not hold the office gets
-  the invalid Ticket / `OfficePublication{authored=false}`, nothing is queued,
+- **Refusal is loud and precise.** A sender that does not hold the role gets
+  the invalid Ticket / `RolePublication{authored=false}`, nothing is queued,
   and the tap shows `RoleAuthorshipDenied` — never a downgrade to personal
-  speech. `OfficePublication{authored=true, recipients=0}` is the different,
-  honest fact of an office that spoke to an empty room.
-- **Orthogonal to destination** (MSG-04): an office-authored send to another
-  office preserves both facts — authored as `worker.a`, delivered to
+  speech. `RolePublication{authored=true, recipients=0}` is the different,
+  honest fact of a role that spoke to an empty room.
+- **Orthogonal to destination** (MSG-04): a role-authored send to another
+  role preserves both facts — authored as `worker.a`, delivered to
   `dispatcher` — in separate representations end to end.
-- **Not a super-grant.** Every office-authored delivery is still authorized
+- **Not a super-grant.** Every role-authored delivery is still authorized
   against the sender's ordinary grant, and sender-life/seal/routing laws
-  refuse independently — office speech from a dead life is `SenderLifeEnded`.
+  refuse independently — role speech from a dead life is `SenderLifeEnded`.
 - **Unlaunderable.** Provenance has no wire form; every ordinary enqueue
   clears it, so a stored-and-resent Message is personal speech.
-- **Orthogonal to answers/activations in representation**: the authored office
+- **Orthogonal to answers/activations in representation**: the authored role
   is a second axis beside `answers_ask()`/`lifecycle_attested()`, so the type
   admits combined facts (no public door produces them; an answer's
-  provenance never inherits the ask's office).
-- **Dynamic parity** ([dynamic-abi](dynamic-abi.md); the office doors are in
+  provenance never inherits the ask's role).
+- **Dynamic parity** ([dynamic-abi](dynamic-abi.md); the role doors are in
   ABI v5 and later): the same authoring and reading surface works in a loaded
   weave, with the host verifying every request. Out-of-process weaves fail
   closed in both directions — the isolation pipe carries no attestation.
@@ -296,8 +296,8 @@ if (const std::optional<loom::PendingAsk> closed = asks.settle(mail.correlation(
   ([ANS-05](../laws/answer-authority-laws.md)) — it is guessable by design — and
   the respondent you *are* waiting on is perfectly able to say something
   admissible about a different conversation.
-- **An ask to an office cannot name its respondent**, because whoever holds the
-  office at delivery is not knowable when you ask. `open_to_role` is that case
+- **An ask to a role cannot name its respondent**, because whoever holds the
+  role at delivery is not knowable when you ask. `open_to_role` is that case
   said out loud; its record constrains the correlation and nothing narrower.
 - **Recognizing and closing are two acts.** `match(...)` looks without removing;
   `settle(...)` closes and hands the record back, so a consumer never has to
@@ -348,7 +348,7 @@ the record of that exact attempt; it adds no authority or new wire protocol.
 loom::RoleRequest request; // image-local, alongside the operation's domain state
 // In a handler; next_correlation belongs to this participant, not this helper:
 request.send_to_role(mail, "service", MyRequest{value}, ++next_correlation);
-// Or pass mail.as_role("my.office") for explicitly office-authored speech.
+// Or pass mail.as_role("my.role") for explicitly role-authored speech.
 // In the corresponding answer handler:
 if (request.matches_answer(mail) && valid_for_this_operation(answer)) {
     request.forget();
@@ -488,7 +488,7 @@ default, which is absent unless the member's initializer gives a value.
 |---|---|---|
 | `seq` | the delivery's identity on this bus | 0 on a lifecycle event, which is not a delivery |
 | `sender` / `target` | the bus's own stamp, and the RESOLVED recipient | anything the sender chose |
-| `addressed_role` | the office the sender NAMED, resolved to `target` at dispatch | the office the sender spoke as — that is `authored_role` |
+| `addressed_role` | the role the sender NAMED, resolved to `target` at dispatch | the role the sender spoke as — that is `authored_role` |
 | `correlation` | the number the sender put on the conversation | authority of any kind ([ANS-05](../laws/answer-authority-laws.md)); 0 is both "none stated" and a legal choice |
 | `dispatch_parent` | which delivery was being dispatched when this one was ENQUEUED | causality. An async observation names the delivery that *drained* it — a timer beat, say — not the request its operation belongs to |
 | `handler_elapsed_ns` | how long the handler held the one mind, on the steady clock | a time. Loom stamps no message with a clock reading; this is one call's elapsed measure and is 0 wherever no handler ran |

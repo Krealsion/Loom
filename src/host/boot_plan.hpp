@@ -27,12 +27,12 @@ enum class OnFailure {
 struct BootEntry {
     std::string name;  ///< the artifact name the host will know it by
     std::string path;  ///< the file
-    std::string role;  ///< the office it should hold, or empty
+    std::string role;  ///< the role it should hold, or empty
     bool enabled = true;
     OnFailure on_failure = OnFailure::Continue;
 };
 
-/// A LINK TO ANOTHER RUNNING HOST, as the person wrote it: a name (the office local weaves
+/// A LINK TO ANOTHER RUNNING HOST, as the person wrote it: a name (the role local weaves
 /// address is `loom.link.<name>`), where to connect, and what this host says about itself when
 /// it does. The far host's policy decides what that is worth; nothing here is authority.
 struct LinkEntry {

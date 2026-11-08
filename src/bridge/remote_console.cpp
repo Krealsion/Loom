@@ -368,7 +368,7 @@ loom::Ticket RemoteConsole::assemble_and_send(loom::WeaveId target,
     put_u64(frame, target.value);
     put_u64(frame, 0);            // wire_reply_to: the honest client sets 0 — the bridge stamps c.id
     put_u64(frame, ++correlation_);
-    put_bytes(frame, ""); // no office address: this console sends to WeaveIds
+    put_bytes(frame, ""); // no role address: this console sends to WeaveIds
     try {
         frame.append(loom::serialize(v)); // a Ready compose is complete + type-checked, so this holds
     } catch (...) {

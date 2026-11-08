@@ -40,8 +40,8 @@ namespace {
 /// What a source is last told, so it hears each change once.
 enum class Told { Nothing, Held, NotHeld };
 
-/// ONE TRUSTED OFFICE: its claim as last read, and what its source was told.
-struct Office {
+/// ONE TRUSTED ROLE: its claim as last read, and what its source was told.
+struct Role {
     std::string name;
     bool claimed = false;
     WeaveId author{};
@@ -83,7 +83,7 @@ struct Office {
     }
 };
 
-/// Who one waited handle answers for: an office, or the watched console.
+/// Who one waited handle answers for: a role, or the watched console.
 constexpr std::size_t kLine = static_cast<std::size_t>(-1);
 
 } // namespace
@@ -109,7 +109,7 @@ struct Reactor::Impl {
     Impl& operator=(const Impl&) = delete;
 
     Switchboard& bus;
-    std::vector<Office> offices; ///< in the order trusted
+    std::vector<Role> roles; ///< in the order trusted
     LineInput* line = nullptr;
     std::uint64_t woken = 0;
     std::uint64_t lasted = 0;
@@ -117,7 +117,7 @@ struct Reactor::Impl {
     HANDLE timer = nullptr;
 #endif
 
-    void say(Office& o, bool held, bool ready, const std::string& why) {
+    void say(Role& o, bool held, bool ready, const std::string& why) {
         Waited w;
         w.revision = static_cast<std::int64_t>(o.revision);
         w.held = held;
@@ -126,8 +126,8 @@ struct Reactor::Impl {
         (void)bus.send_to_role(o.name, Message(to_value(w)));
     }
 
-    /// Tell the office what the wait does with its claim now, if that changed.
-    void tell(Office& o) {
+    /// Tell the role what the wait does with its claim now, if that changed.
+    void tell(Role& o) {
         const Told now = o.held ? Told::Held : Told::NotHeld;
         if (now != o.told) {
             o.told = now;
@@ -136,7 +136,7 @@ struct Reactor::Impl {
     }
 
     /// Hold a claim no longer, until it changes, and say why.
-    void refuse(Office& o, std::string why) {
+    void refuse(Role& o, std::string why) {
         o.refused = true;
         o.refused_revision = o.revision;
         o.held = false;
@@ -144,12 +144,12 @@ struct Reactor::Impl {
         tell(o);
     }
 
-    /// Read every trusted office's claim and decide, in trust order, which the wait holds.
+    /// Read every trusted role's claim and decide, in trust order, which the wait holds.
     std::size_t hold(std::size_t used) {
-        for (Office& o : offices) {
-            const SenseReading r = bus.observe_office(o.name, WaitSet::zen_name,
+        for (Role& o : roles) {
+            const SenseReading r = bus.observe_role(o.name, WaitSet::zen_name,
                                                       WaitSet::zen_version);
-            const bool current = r && r.value.has_value() && r.by.office_holder_is_current &&
+            const bool current = r && r.value.has_value() && r.by.role_holder_is_current &&
                                  r.by.author_life_is_current && r.by.author_incarnation_is_current;
             if (!current) {
                 o.forget_holder();
@@ -195,7 +195,7 @@ struct Reactor::Impl {
     }
 
     /// The source woke: tell it, unless its claim is the very one its last wake answered.
-    void wake(Office& o, Woke& woke) {
+    void wake(Role& o, Woke& woke) {
         if (!o.held) {
             return;
         }
@@ -207,7 +207,7 @@ struct Reactor::Impl {
         o.woken = true;
         o.woken_revision = o.revision;
         ++o.wakes;
-        ++woke.offices;
+        ++woke.roles;
         say(o, true, true, std::string());
     }
 
@@ -232,14 +232,14 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
         owners[it->second].push_back(owner);
     };
     bool messages = false;
-    for (std::size_t i = 0; i < offices.size(); ++i) {
-        if (!offices[i].held) {
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        if (!roles[i].held) {
             continue;
         }
-        for (const std::int64_t h : offices[i].set.handles) {
+        for (const std::int64_t h : roles[i].set.handles) {
             add(h, i);
         }
-        messages = messages || offices[i].set.messages;
+        messages = messages || roles[i].set.messages;
     }
     bool now = false;
     if (line != nullptr && !line->closed()) {
@@ -285,8 +285,8 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
                 continue;
             }
             for (const std::size_t owner : owners[i]) {
-                if (owner != kLine && offices[owner].held) {
-                    refuse(offices[owner], "a handle it names is not one this process can wait "
+                if (owner != kLine && roles[owner].held) {
+                    refuse(roles[owner], "a handle it names is not one this process can wait "
                                            "on; the wait holds it again once its claim changes");
                     blamed = true;
                 }
@@ -308,7 +308,7 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
             ready[i] = true;
         }
     }
-    std::vector<bool> office_ready(offices.size(), false);
+    std::vector<bool> role_ready(roles.size(), false);
     for (DWORD i = 0; i < sources; ++i) {
         if (!ready[i]) {
             continue;
@@ -317,20 +317,20 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
             if (owner == kLine) {
                 woke.line = true;
             } else {
-                office_ready[owner] = true;
+                role_ready[owner] = true;
             }
         }
     }
     if (messages && (r == WAIT_OBJECT_0 + count || HIWORD(::GetQueueStatus(QS_ALLINPUT)) != 0)) {
-        for (std::size_t i = 0; i < offices.size(); ++i) {
-            if (offices[i].held && offices[i].set.messages) {
-                office_ready[i] = true;
+        for (std::size_t i = 0; i < roles.size(); ++i) {
+            if (roles[i].held && roles[i].set.messages) {
+                role_ready[i] = true;
             }
         }
     }
-    for (std::size_t i = 0; i < offices.size(); ++i) {
-        if (office_ready[i]) {
-            wake(offices[i], woke);
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        if (role_ready[i]) {
+            wake(roles[i], woke);
         }
     }
     return woke;
@@ -355,14 +355,14 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
         fds[it->second].events = static_cast<short>(fds[it->second].events | events);
         owners[it->second].push_back(owner);
     };
-    for (std::size_t i = 0; i < offices.size(); ++i) {
-        if (!offices[i].held) {
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        if (!roles[i].held) {
             continue;
         }
-        for (const std::int64_t h : offices[i].set.handles) {
+        for (const std::int64_t h : roles[i].set.handles) {
             add(h, POLLIN, i);
         }
-        for (const std::int64_t h : offices[i].set.writable) {
+        for (const std::int64_t h : roles[i].set.writable) {
             add(h, POLLOUT, i);
         }
     }
@@ -390,7 +390,7 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
         return woke; // a signal ended it, which is no source's readiness and no deadline
     }
     woke.deadline = r == 0 && !now && timeout > 0;
-    std::vector<bool> office_ready(offices.size(), false);
+    std::vector<bool> role_ready(roles.size(), false);
     for (std::size_t i = 0; r > 0 && i < fds.size(); ++i) {
         const short got = fds[i].revents;
         if (got == 0) {
@@ -399,20 +399,20 @@ Reactor::Woke Reactor::Impl::wait(std::int64_t ms) {
         for (const std::size_t owner : owners[i]) {
             if ((got & POLLNVAL) != 0) {
                 // Not an open descriptor: its sources are held no longer, so it never spins.
-                if (owner != kLine && offices[owner].held) {
-                    refuse(offices[owner], "a descriptor it names is not open; the wait holds it "
+                if (owner != kLine && roles[owner].held) {
+                    refuse(roles[owner], "a descriptor it names is not open; the wait holds it "
                                            "again once its claim changes");
                 }
             } else if (owner == kLine) {
                 woke.line = true;
             } else {
-                office_ready[owner] = true;
+                role_ready[owner] = true;
             }
         }
     }
-    for (std::size_t i = 0; i < offices.size(); ++i) {
-        if (office_ready[i]) {
-            wake(offices[i], woke);
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        if (role_ready[i]) {
+            wake(roles[i], woke);
         }
     }
     return woke;
@@ -424,31 +424,31 @@ Reactor::Reactor(Switchboard& bus) : impl_(std::make_unique<Impl>(bus)) {}
 
 Reactor::~Reactor() = default;
 
-void Reactor::trust(std::string office) {
-    if (trusts(office)) {
+void Reactor::trust(std::string role) {
+    if (trusts(role)) {
         return;
     }
-    Office o;
-    o.name = std::move(office);
-    impl_->offices.push_back(std::move(o));
+    Role o;
+    o.name = std::move(role);
+    impl_->roles.push_back(std::move(o));
 }
 
-void Reactor::distrust(std::string_view office) {
-    auto& offices = impl_->offices;
-    const auto it = std::find_if(offices.begin(), offices.end(),
-                                 [office](const Office& o) { return o.name == office; });
-    if (it == offices.end()) {
+void Reactor::distrust(std::string_view role) {
+    auto& roles = impl_->roles;
+    const auto it = std::find_if(roles.begin(), roles.end(),
+                                 [role](const Role& o) { return o.name == role; });
+    if (it == roles.end()) {
         return;
     }
     if (it->told == Told::Held) {
-        impl_->say(*it, false, false, "the host no longer waits on this office");
+        impl_->say(*it, false, false, "the host no longer waits on this role");
     }
-    offices.erase(it);
+    roles.erase(it);
 }
 
-bool Reactor::trusts(std::string_view office) const {
-    return std::any_of(impl_->offices.begin(), impl_->offices.end(),
-                       [office](const Office& o) { return o.name == office; });
+bool Reactor::trusts(std::string_view role) const {
+    return std::any_of(impl_->roles.begin(), impl_->roles.end(),
+                       [role](const Role& o) { return o.name == role; });
 }
 
 void Reactor::watch(LineInput* input) { impl_->line = input; }
@@ -462,7 +462,7 @@ Reactor::Woke Reactor::after_turn(std::int64_t ms) {
     const Woke woke = impl_->wait(ms);
     if (woke.deadline) {
         ++impl_->lasted;
-    } else if (woke.line || woke.offices > 0) {
+    } else if (woke.line || woke.roles > 0) {
         ++impl_->woken;
     }
     return woke;
@@ -470,9 +470,9 @@ Reactor::Woke Reactor::after_turn(std::int64_t ms) {
 
 std::vector<Reactor::Source> Reactor::sources() const {
     std::vector<Source> out;
-    for (const Office& o : impl_->offices) {
+    for (const Role& o : impl_->roles) {
         Source s;
-        s.office = o.name;
+        s.role = o.name;
         s.claimed = o.claimed;
         s.held = o.held;
         s.revision = o.revision;

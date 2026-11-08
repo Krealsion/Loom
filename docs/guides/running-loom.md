@@ -303,7 +303,7 @@ two:
 
 ```text
 Greet v1 -> any target        …to anyone who accepts it
-Tick v1 -> role clock         …to whoever holds that office, now and after a swap
+Tick v1 -> role clock         …to whoever holds that role, now and after a swap
 any shape -> any target       broad authority, and it took writing it out
 observe Tick v1               may READ a published claim (a different permission)
 ```
@@ -573,7 +573,7 @@ host's own dispatch thread over every source the host trusts:
 
 ```cpp
 loom::host::Reactor wait(bus);
-wait.trust("my.window");     // offices whose claims the host lets into the wait
+wait.trust("my.window");     // roles whose claims the host lets into the wait
 wait.trust("my.door");
 wait.watch(&console);        // a loom::host::LineInput, until it says Closed
 for (;;) {
@@ -583,13 +583,13 @@ for (;;) {
 }
 ```
 
-**A source says what it waits on as a claim**: its office claims a `loom::host::WaitSet`
+**A source says what it waits on as a claim**: its role claims a `loom::host::WaitSet`
 ([`include/zen/host/wait_set.hpp`](../../include/zen/host/wait_set.hpp)) — handles to wait on
 for readiness (a Windows `HANDLE`, a POSIX descriptor), descriptors to wait on for room to write
 (POSIX), and on Windows whether the dispatch thread's window messages count; a claim that names
 nothing says there is nothing to poll for, and is held as it stands. After each turn the
-wait reads the claim of every office the host trusts, and no other: a participant the host did
-not trust cannot put a handle in it. It tells each office's holder a `loom.host.Waited` when the
+wait reads the claim of every role the host trusts, and no other: a participant the host did
+not trust cannot put a handle in it. It tells each role's holder a `loom.host.Waited` when the
 wait first holds its claim, when it stops, and each time what the claim names is ready. Only the
 host sends it, so a source reads one from any other sender as nothing, and until it is told it
 is held a source keeps polling as it would with no host waiting. A host that never builds a
@@ -603,7 +603,7 @@ whatever its sources do, so nothing stalls it either.
 
 **What it holds is bounded**: at most
 <!-- value kMaxWaitedHandles -->62<!-- /value --> handles in one wait, sources and console together
-(a Windows wait takes 64, one the message queue and one the deadline's timer). Offices are held
+(a Windows wait takes 64, one the message queue and one the deadline's timer). Roles are held
 in the order the host trusted them; a claim that would pass the bound is not held, and its source
 is told why ([bounds](../reference/bounds.md#a-hosts-one-wait)).
 
@@ -617,7 +617,7 @@ something to send, so an answer leaves when the wait wakes rather than at the ne
 ## 10. Link to another host
 
 A host can hold a connection to **another running Loom** — another `loom-host`, or an
-application built on Loom such as Zengine's Workshop — and put an office in front of it
+application built on Loom such as Zengine's Workshop — and put a role in front of it
 that your own weaves ask through. That is a
 `links` row in the boot plan:
 
@@ -633,7 +633,7 @@ At boot the host connects, says who it claims to be and what it presents, and re
 the far host decided:
 
 ```text
-  link workshop -> 127.0.0.1:7654: admitted as 'agent' (session 9; office loom.link.workshop, weave 3)
+  link workshop -> 127.0.0.1:7654: admitted as 'agent' (session 9; role loom.link.workshop, weave 3)
 ```
 
 **The far host decides.** `identity` is what this host *claims*; the far host's own policy —
@@ -642,8 +642,8 @@ in its own words, or keeps the connection waiting for a person to decide. A refu
 unreachable link is still mounted: it answers `unlinked` to every ask, and `links connect
 <name>` tries again (a new session; nothing from the old one carries over).
 
-**Asking across.** A weave of yours sends the link's office one `loom.link.Ask` — the far
-office it means and its message as bytes — under a correlation of its own
+**Asking across.** A weave of yours sends the link's role one `loom.link.Ask` — the far
+role it means and its message as bytes — under a correlation of its own
 (`zen/bridge/link.hpp` has the one-line composer). The link answers that ask **exactly once,
 through Loom's own answer door**, so what comes back is attested by *your* bus as the answer
 to your ask (`mail.answers_ask()`), under your correlation, from the link:
@@ -694,7 +694,7 @@ confirmed.
 
 **What the history keeps of a crossing.** Every frame the far host ships to the link's session
 becomes a `loom.link.Crossed` record the link says to itself before it acts on it: the far
-session and the name the far host established, the far bus's stamp and office, the crossing's
+session and the name the far host established, the far bus's stamp and role, the crossing's
 attempt, what kind of frame it was (`answer`, `dispatch-refused`, `message`, `send-refused`,
 `settled`, `ended`) and the bytes. Your Recorder and Logger hold it as the ordinary delivery it
 is — the link's account of what arrived, never an observation of the far execution — and the

@@ -14,7 +14,7 @@
 // reaches it the way it reaches every listener -- at enqueue, gated by the PUBLISHER'S own grant
 // -- so a producer that may not publish a shape to others cannot be observed publishing it either,
 // and a producer needs no change to be observable. The relay tells the subscriber only what the
-// bus-stamped holder of the named office published; the same shape from anyone else is counted
+// bus-stamped holder of the named role published; the same shape from anyone else is counted
 // (`foreign`) and not told. The listener leaves the bus when the subscription ends, and with it the
 // schema claim its declaration made (LIFE-08).
 //
@@ -35,7 +35,7 @@
 // the producer does waits for a subscriber. Subscriptions are bounded in all and per subscriber.
 //
 // HOST WIRING, NOT A TAP. The relay holds the `Switchboard` to register listeners, read who holds
-// an office, and speak as itself outside its own deliveries; that reach is its host's, like a
+// a role, and speak as itself outside its own deliveries; that reach is its host's, like a
 // bridge server's. It reads no registry beyond the shapes asked for, keeps no history and
 // forwards nothing it was not subscribed to.
 
@@ -306,7 +306,7 @@ public:
             return;
         }
         if (ask.producer.empty()) {
-            refuse("a subscription names the office whose publications it follows");
+            refuse("a subscription names the role whose publications it follows");
             return;
         }
         if (ask.shapes.empty() || ask.shapes.size() > kMaxShapes) {
@@ -462,7 +462,7 @@ public:
         }
         const WeaveId holder = bus_->role_holder(s->producer);
         if (!holder.valid() || in.sender != holder) {
-            ++s->foreign; // the same shape from someone who does not hold the office
+            ++s->foreign; // the same shape from someone who does not hold the role
             return;
         }
         ++s->heard;
@@ -475,7 +475,7 @@ public:
         o.payload = bytes_of(in.payload, s->compat);
         o.producer = static_cast<std::int64_t>(in.sender.value);
         o.incarnation = static_cast<std::int64_t>(bus_->participant(in.sender).incarnation);
-        o.office = std::string(in.provenance.authored_role());
+        o.role = std::string(in.provenance.authored_role());
         o.delivery = static_cast<std::int64_t>(at.seq);
         o.published_in = static_cast<std::int64_t>(at.parent);
         if (at.fence.valid() && origins_) {

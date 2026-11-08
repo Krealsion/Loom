@@ -470,10 +470,10 @@ BOX_CB(zh_answer) {
     return answer(results, d.b.host->answer(d.b.host->ctx, p, u32(args, 1)));
 }
 
-BOX_CB(zh_office_send) {
+BOX_CB(zh_role_send) {
     BOX_UNUSED;
     Door d(caller);
-    if (!d.open(&ZenHostApi::office_send)) {
+    if (!d.open(&ZenHostApi::role_send)) {
         return answer(results, ZEN_ERR_REFUSED);
     }
     std::string as;
@@ -489,17 +489,17 @@ BOX_CB(zh_office_send) {
         return outside_out();
     }
     std::uint64_t attempt = 0;
-    const ZenStatus st = d.b.host->office_send(d.b.host->ctx, as.c_str(), u64(args, 1),
+    const ZenStatus st = d.b.host->role_send(d.b.host->ctx, as.c_str(), u64(args, 1),
                                                u64(args, 2), u64(args, 3), p, u32(args, 5),
                                                attempt_at != nullptr ? &attempt : nullptr);
     write64(attempt_at, attempt);
     return answer(results, st);
 }
 
-BOX_CB(zh_office_send_to_role) {
+BOX_CB(zh_role_send_to_role) {
     BOX_UNUSED;
     Door d(caller);
-    if (!d.open(&ZenHostApi::office_send_to_role)) {
+    if (!d.open(&ZenHostApi::role_send_to_role)) {
         return answer(results, ZEN_ERR_REFUSED);
     }
     std::string as;
@@ -517,17 +517,17 @@ BOX_CB(zh_office_send_to_role) {
         return outside_out();
     }
     std::uint64_t attempt = 0;
-    const ZenStatus st = d.b.host->office_send_to_role(
+    const ZenStatus st = d.b.host->role_send_to_role(
         d.b.host->ctx, as.c_str(), to.c_str(), u64(args, 2), u64(args, 3), p, u32(args, 5),
         attempt_at != nullptr ? &attempt : nullptr);
     write64(attempt_at, attempt);
     return answer(results, st);
 }
 
-BOX_CB(zh_office_publish) {
+BOX_CB(zh_role_publish) {
     BOX_UNUSED;
     Door d(caller);
-    if (!d.open(&ZenHostApi::office_publish)) {
+    if (!d.open(&ZenHostApi::role_publish)) {
         return answer(results, ZEN_ERR_REFUSED);
     }
     std::string as;
@@ -543,7 +543,7 @@ BOX_CB(zh_office_publish) {
         return outside_out();
     }
     std::uint64_t recipients = 0;
-    const ZenStatus st = d.b.host->office_publish(d.b.host->ctx, as.c_str(), u64(args, 1),
+    const ZenStatus st = d.b.host->role_publish(d.b.host->ctx, as.c_str(), u64(args, 1),
                                                   u64(args, 2), p, u32(args, 4),
                                                   recipients_at != nullptr ? &recipients : nullptr);
     write64(recipients_at, recipients);
@@ -571,10 +571,10 @@ BOX_CB(zh_sense_claim) {
     return answer(results, st);
 }
 
-BOX_CB(zh_sense_office_claim) {
+BOX_CB(zh_sense_role_claim) {
     BOX_UNUSED;
     Door d(caller);
-    if (!d.open(&ZenHostApi::sense_office_claim)) {
+    if (!d.open(&ZenHostApi::sense_role_claim)) {
         return answer(results, ZEN_ERR_REFUSED);
     }
     std::string as;
@@ -590,7 +590,7 @@ BOX_CB(zh_sense_office_claim) {
         return outside_out();
     }
     std::uint64_t revision = 0;
-    const ZenStatus st = d.b.host->sense_office_claim(d.b.host->ctx, as.c_str(), p, u32(args, 2),
+    const ZenStatus st = d.b.host->sense_role_claim(d.b.host->ctx, as.c_str(), p, u32(args, 2),
                                                       revision_at != nullptr ? &revision : nullptr);
     write64(revision_at, revision);
     return answer(results, st);
@@ -608,7 +608,7 @@ void held_write(void* ctx, const std::uint8_t* data, std::size_t len) {
     h->bytes.append(reinterpret_cast<const char*>(data), len);
 }
 
-/// Each written reading into the library's sink (0 the value, 1 the office) through
+/// Each written reading into the library's sink (0 the value, 1 the role) through
 /// `zw_sink_deliver`, while the observe import is still on the stack; then the authorship.
 /// "Never written" stays distinct from "written empty", so a personal claim reads as personal.
 wasm_trap_t* deliver_reading(Box& b, std::uint32_t by_ptr, const ZenSenseBy& by, Held (&held)[2]) {
@@ -661,10 +661,10 @@ BOX_CB(zh_sense_observe) {
     return answer(results, st);
 }
 
-BOX_CB(zh_sense_observe_office) {
+BOX_CB(zh_sense_observe_role) {
     BOX_UNUSED;
     Door d(caller);
-    if (!d.open(&ZenHostApi::sense_observe_office)) {
+    if (!d.open(&ZenHostApi::sense_observe_role)) {
         return answer(results, ZEN_ERR_REFUSED);
     }
     std::string role;
@@ -675,7 +675,7 @@ BOX_CB(zh_sense_observe_office) {
     }
     Held held[2];
     ZenSenseBy by{};
-    const ZenStatus st = d.b.host->sense_observe_office(
+    const ZenStatus st = d.b.host->sense_observe_role(
         d.b.host->ctx, role.c_str(), shape.c_str(), u32(args, 2),
         ZenByteSink{&held[0], &held_write}, ZenByteSink{&held[1], &held_write}, &by);
     if (wasm_trap_t* t = deliver_reading(d.b, u32(args, 3), by, held)) {
@@ -810,13 +810,13 @@ constexpr Import kImports[] = {
     {kHost, "answer_deferred", "Iii", "i", zh_answer_deferred},
     {kHost, "release_deferred", "I", "", zh_release_deferred},
     {kHost, "answer", "ii", "i", zh_answer},
-    {kHost, "office_send", "iIIIiii", "i", zh_office_send},
-    {kHost, "office_send_to_role", "iiIIiii", "i", zh_office_send_to_role},
-    {kHost, "office_publish", "iIIiii", "i", zh_office_publish},
+    {kHost, "role_send", "iIIIiii", "i", zh_role_send},
+    {kHost, "role_send_to_role", "iiIIiii", "i", zh_role_send_to_role},
+    {kHost, "role_publish", "iIIiii", "i", zh_role_publish},
     {kHost, "sense_claim", "iii", "i", zh_sense_claim},
-    {kHost, "sense_office_claim", "iiii", "i", zh_sense_office_claim},
+    {kHost, "sense_role_claim", "iiii", "i", zh_sense_role_claim},
     {kHost, "sense_observe", "Iiii", "i", zh_sense_observe},
-    {kHost, "sense_observe_office", "iiii", "i", zh_sense_observe_office},
+    {kHost, "sense_observe_role", "iiii", "i", zh_sense_observe_role},
     {kHost, "sense_offer", "Iii", "i", zh_sense_offer},
     {kWasi, "environ_sizes_get", "ii", "i", wasi_empty_sizes},
     {kWasi, "environ_get", "ii", "i", wasi_empty_list},

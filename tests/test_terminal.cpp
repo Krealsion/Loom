@@ -157,7 +157,7 @@ struct Seen {
 };
 
 /// The whole cast, wired the way the standalone terminal wires it: a governed session, a
-/// SEPARATE operator seat, a service in an office, and a real Weaver holding one capability.
+/// SEPARATE operator seat, a service in a role, and a real Weaver holding one capability.
 ///
 /// The `tap` is the HOST's — this fixture owns the Switchboard, so it is entitled to one. It
 /// exists to prove facts NEITHER participant is told, and nothing it collects is ever allowed to
@@ -461,7 +461,7 @@ TEST_CASE("a channel names an identity and confers no authority whatever") {
 
 TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
     Cast c;
-    SUBCASE("role: resolved to whoever holds the office at delivery") {
+    SUBCASE("role: resolved to whoever holds the role at delivery") {
         REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1,
                                 {bare(std::string("hi"))})));
         c.bus.drain_until_idle();
@@ -517,7 +517,7 @@ TEST_CASE("the address grammar is three sigils, and a bareword is not a fourth")
         CHECK(a.target.value == 12u);
         CHECK(a.well_formed());
     }
-    SUBCASE("`@office` is whoever holds it AT DELIVERY") {
+    SUBCASE("`@role` is whoever holds it AT DELIVERY") {
         REQUIRE(parse_address("@some.service", a));
         CHECK(a.mode == Addressing::Role);
         CHECK(a.role == "some.service");
@@ -682,7 +682,7 @@ TEST_CASE("an unsolicited message is recorded as one, with its trusted provenanc
     CHECK(got.front().shape == "Notice");
     CHECK_FALSE(got.front().answers_ask);
     CHECK(got.front().answers == 0);
-    CHECK(got.front().authored_role.empty()); // spoken personally, and empty is never an office
+    CHECK(got.front().authored_role.empty()); // spoken personally, and empty is never a role
 
     const std::optional<ReceivedMessage> m = c.acting().received(got.front().message);
     REQUIRE(m);

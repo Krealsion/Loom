@@ -42,7 +42,7 @@ struct Request {
 
 struct Host {
     std::vector<Request> requests;
-    std::int64_t said = 0; ///< the office's own numbering, carried to a replacing producer
+    std::int64_t said = 0; ///< the role's own numbering, carried to a replacing producer
 };
 
 struct TickerState {
@@ -50,7 +50,7 @@ struct TickerState {
     ZEN_SHAPE(TickerState, 1, ZEN_FIELD(heard));
 };
 
-/// THE PRODUCER, in the office `far.ticker`. It knows nothing of observers: it publishes.
+/// THE PRODUCER, in the role `far.ticker`. It knows nothing of observers: it publishes.
 class Ticker : public loom::WeaveBase<Ticker, TickerState, loom::Accept<ObserveProbeCommand>,
                                       loom::Emit<ProbeTick, ProbeState>> {
 public:
@@ -78,7 +78,7 @@ private:
     Host* host_;
 };
 
-/// A participant that does NOT hold the office, publishing the office's shape.
+/// A participant that does NOT hold the role, publishing the role's shape.
 class Forger : public loom::WeaveBase<Forger, TickerState, loom::Accept<ObserveProbeCommand>,
                                       loom::Emit<ProbeTick>> {
 public:
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
             if (r.verb == "foreign") {
                 (void)bus.send(forger_id, loom::Message(loom::to_value(ObserveProbeCommand{"tick", 1})));
             } else if (r.verb == "replace") {
-                // THE OFFICE CHANGES HANDS: a new participant holds it, with a new id, from now on --
+                // THE ROLE CHANGES HANDS: a new participant holds it, with a new id, from now on --
                 // after the holder's answer to the asker was delivered, which a holder already gone
                 // could no longer send.
                 (void)bus.unregister_weave(bus.role_holder(kTicker));

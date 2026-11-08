@@ -47,8 +47,8 @@ ordinary weave: from inside an ordinary handler it calls
 **The ceiling is not the holder's own grant.** "What a Weaver may say" and "what
 a Weaver may hand out" are different questions, and only the host answers the
 second. Containment is semantic: `any` contains each exact selector; a rule
-naming an **office** and a rule naming a **WeaveId** contain one another in
-neither direction, whoever holds that office right now — otherwise today's
+naming an **role** and a rule naming a **WeaveId** contain one another in
+neither direction, whoever holds that role right now — otherwise today's
 routing would become permanent authority.
 
 **Revocation is effective at delivery**, including for a message queued while
@@ -59,25 +59,25 @@ the target sees the subject.
 
 ### Doors
 
-A send rule to an office may name a **door**: a name finer than the office,
-which the office itself judges when an act reaches it. `allow_to_role(shape,
+A send rule to a role may name a **door**: a name finer than the role,
+which the role itself judges when an act reaches it. `allow_to_role(shape,
 version, role, door)` on a `LiveAuthority` or a `Grant` makes one; the door is a
 [`loom::Door`](../../include/zen/switchboard/door.hpp), made only by
 `Door::parse`, which refuses a malformed spelling in words.
 
 ```text
-<office>/*              every door beneath the office
-<office>/<pane>         the pane's own door
-<office>/<pane>:<id>    a control of the pane; <id> may be *, or end in .*
-<root>:<id>             a root the office declares, such as arrange:<id>
+<role>/*              every door beneath the role
+<role>/<pane>         the pane's own door
+<role>/<pane>:<id>    a control of the pane; <id> may be *, or end in .*
+<root>:<id>             a root the role declares, such as arrange:<id>
 ```
 
 A name is segments of letters, digits, `-` and `_` joined by single dots, and
 `*` stands only as a whole last segment or as an id's tail after a dot:
 `zengine.files*`, `builder.build*` and a bare `*` are malformed.
 
-**Containment compares whole segments.** `<office>/*` contains every pane door
-beneath the office; `<office>/<pane>:*` contains the pane's controls and not the
+**Containment compares whole segments.** `<role>/*` contains every pane door
+beneath the role; `<role>/<pane>:*` contains the pane's controls and not the
 pane's own door; an id ending in `.*` contains the ids beneath it. So
 `zengine.files/*` never contains `zengine.files-evil/x`, and `builder.build`
 never contains `builder.build-realize`. A ceiling judges a door rule by this: a
@@ -90,9 +90,9 @@ included, answers no door question, and a door rule answers no door-less one.
 Containment follows the predicate, so a door-less ceiling holds no door rule and
 a door ceiling no door-less one. Every question delivery asks is door-less, so
 **a door rule authorizes no delivery**: no act carries a door, and the bus, the
-bridge and the dynamic ABI carry none. A door rule is read by the office it
+bridge and the dynamic ABI carry none. A door rule is read by the role it
 names, through `describe_authority`, at the act it governs. Loom holds the
-grammar; the office answers what a door names.
+grammar; the role answers what a door names.
 
 A door is rendered with its rule, as `ControlRequested v1 -> role
 zengine.workshop door zengine.files/*`, wherever a rule is said: in an
@@ -105,7 +105,7 @@ words.
 `host_describe_only_authority(bus, subject)`
 ([`zen/host/grant_wiring.hpp`](../../include/zen/host/grant_wiring.hpp)): a
 `GrantAuthority` that answers `describe_authority` and refuses every install
-through it `DescribeOnly`, the empty authority that revokes included. An office
+through it `DescribeOnly`, the empty authority that revokes included. A role
 judging a subject's doors must read them and must not be able to take them
 away.
 
@@ -262,7 +262,7 @@ its own, not B2 plus something: it needs no child process. Against the tiers:
   host; the module addresses only its own linear memory, which the runtime checks
   on every access and the box checks on every span and name a door is handed.
   Since it runs inside the host's own delivery it keeps every door a B2 child
-  nulls: answers, deferred answers, office speech, claims and observations, joint
+  nulls: answers, deferred answers, role speech, claims and observations, joint
   offers, and the provenance a delivery carries.
 - **B3 and B4: nothing to project.** The module can import no socket, no
   descriptor and no clock, and every import outside the host's doors is refused

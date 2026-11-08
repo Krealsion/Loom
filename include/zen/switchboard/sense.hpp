@@ -38,9 +38,9 @@ enum class SenseRefusal : std::uint8_t {
     NotAuthorized,
     /// The claimant did not declare this shape in `Claims<...>` (claim side).
     Undeclared,
-    /// The claimant does not hold the office it asked to claim as (claim side). Refused, never
+    /// The claimant does not hold the role it asked to claim as (claim side). Refused, never
     /// made a personal claim instead (as MSG-07 for speech).
-    OfficeNotHeld,
+    RoleNotHeld,
     /// The value did not pass the gate for the shape it claimed (claim side).
     GateRefused,
 };
@@ -48,7 +48,7 @@ enum class SenseRefusal : std::uint8_t {
 const char* name_of(SenseRefusal r) noexcept;
 
 /// Who claimed this, and whether that is still who it was: carried on every reading and never
-/// recomputed, like office-authored delivery provenance (MSG-07).
+/// recomputed, like role-authored delivery provenance (MSG-07).
 struct SenseAuthorship {
     /// The exact weave that made the claim.
     WeaveId author{};
@@ -62,21 +62,21 @@ struct SenseAuthorship {
     /// replacement changes the code without ending the life, leaving the life current and this
     /// false, so a reader can tell a predecessor's claim from the current code's.
     bool author_incarnation_is_current = false;
-    /// The office this claim was deliberately authored as; empty for a personal claim, which
+    /// The role this claim was deliberately authored as; empty for a personal claim, which
     /// is what a role holder's ordinary claim is.
-    std::string office;
-    /// For an office claim: does the author still hold the office? False after a replacement
+    std::string role;
+    /// For a role claim: does the author still hold the role? False after a replacement
     /// moved it; the claim still says the predecessor made it.
-    bool office_holder_is_current = false;
+    bool role_holder_is_current = false;
     /// Increases with each claim under this key; not a clock, and not comparable across keys.
     std::uint64_t revision = 0;
     /// The shape claimed, so a reading describes itself.
     std::string schema_name;
     std::uint32_t schema_version = 0;
 
-    /// True when this claim was authored as an office whose holder has since changed.
-    bool office_claim_is_stale() const noexcept {
-        return !office.empty() && !office_holder_is_current;
+    /// True when this claim was authored as a role whose holder has since changed.
+    bool role_claim_is_stale() const noexcept {
+        return !role.empty() && !role_holder_is_current;
     }
 };
 
@@ -91,8 +91,8 @@ struct SenseReading {
     /// there is no blank one.
     std::optional<Value> value{};
 
-    /// True iff a claim was read. A stale office claim is still a claim, so this stays true
-    /// for it (see `SenseAuthorship::office_claim_is_stale`).
+    /// True iff a claim was read. A stale role claim is still a claim, so this stays true
+    /// for it (see `SenseAuthorship::role_claim_is_stale`).
     explicit operator bool() const noexcept { return refusal == SenseRefusal::None; }
 };
 
@@ -228,7 +228,7 @@ struct JointStatus {
     JointRefusal reason = JointRefusal::None;
     /// After a commit, the application over every bound claimant: Failed if any failed, else
     /// Lost, else Declined, else Pending, else Applied; None before a commit. `failed` names the
-    /// claimant a Failed, Lost or Declined result is about, `failed_role` the office it was bound
+    /// claimant a Failed, Lost or Declined result is about, `failed_role` the role it was bound
     /// through, if any.
     JointApplication application = JointApplication::None;
     WeaveId failed{};

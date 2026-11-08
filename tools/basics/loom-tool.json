@@ -7,13 +7,13 @@
       "name": "session-report",
       "script": "session_report.py",
       "summary": "Ask the session's door what this session is -- lifetime, connections, links -- and write it down.",
-      "description": "Records what it is about to ask (request.txt), asks the door (loom.session.Describe), checks that the answer is about this run's own lifetime and lists this run's own session as an admitted run, and writes the answer (session.json). Asking another office is refused by the bus: this tool is granted the door, and nothing else.",
+      "description": "Records what it is about to ask (request.txt), asks the door (loom.session.Describe), checks that the answer is about this run's own lifetime and lists this run's own session as an admitted run, and writes the answer (session.json). Asking another role is refused by the bus: this tool is granted the door, and nothing else.",
       "inputs": [
         {
-          "name": "office",
+          "name": "role",
           "type": "text",
           "default": "loom.session",
-          "help": "the office to ask; anything but loom.session is refused, which is how a refusal after partial work looks"
+          "help": "the role to ask; anything but loom.session is refused, which is how a refusal after partial work looks"
         }
       ],
       "outputs": [
@@ -45,7 +45,7 @@
         "inspect"
       ],
       "example": "loom-session run <dir> basics/session-report --name report",
-      "recovery": "A dispatch refusal (CapabilityDenied) means the run's session may not ask that office: its grant names loom.session only. If loom.session itself is refused, the run manager was not allowed to pass the rule on: authority allow runs loom.session.Describe v1 -> role loom.session."
+      "recovery": "A dispatch refusal (CapabilityDenied) means the run's session may not ask that role: its grant names loom.session only. If loom.session itself is refused, the run manager was not allowed to pass the rule on: authority allow runs loom.session.Describe v1 -> role loom.session."
     }
   ]
 }

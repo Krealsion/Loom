@@ -79,7 +79,7 @@ struct JointApplied {
     std::string op;       ///< canonical unsigned decimal
     bool applied = false; ///< every bound claimant applied its published value
     std::string claimant; ///< decimal WeaveId of the claimant a non-application is about; empty when applied
-    std::string role;     ///< the office that claimant was bound through, if any
+    std::string role;     ///< the role that claimant was bound through, if any
     std::string reason;   ///< `name_of(JointApplication)`: Applied / Declined / Failed / Lost
     using ZenSelf = JointApplied;
     static constexpr const char* zen_name = "zen.JointApplied";

@@ -299,7 +299,7 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
     if (!to.well_formed()) {
         return refuse(TerminalOutcome::BadAddress,
                       to.mode == Addressing::Role
-                          ? std::string("a role send needs an office name")
+                          ? std::string("a role send needs a role name")
                           : std::string("a directed send needs a weave id"));
     }
     if (as_ask && to.mode == Addressing::Publish) {
@@ -341,7 +341,7 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
     if (as_ask) {
         // WHICH DOOR IS THE ADDRESSING'S ANSWER, and it is the whole expected-respondent question:
         // a directed ask names the one weave whose answer may settle it, while a role-addressed
-        // one cannot, because whoever holds the office at delivery is not knowable here.
+        // one cannot, because whoever holds the role at delivery is not knowable here.
         opened = to.mode == Addressing::Role
                      ? asks_.open_to_role(to.role, composition.schema->name(),
                                           composition.schema->version())
@@ -349,7 +349,7 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
                                   composition.schema->version());
         if (!opened) {
             // The book refuses for exactly the three reasons this function already refused for
-            // above — a full book, no target, an empty office — so arriving here means one of
+            // above — a full book, no target, an empty role — so arriving here means one of
             // those doors has stopped agreeing with it. Refuse rather than author a question this
             // participant would then have nowhere to remember asking.
             return refuse(TerminalOutcome::TooManyAsks,
@@ -399,7 +399,7 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
 TerminalResult TerminalSession::request_authority(std::string_view shape, std::int64_t version,
                                                   std::string_view to_role,
                                                   std::string_view purpose,
-                                                  std::string_view office, std::string_view door) {
+                                                  std::string_view role, std::string_view door) {
     // SUGAR, AND ONLY SUGAR. Five named arguments and an ordinary role-addressed ask; the shape is
     // resolved out of the vocabulary the host supplied, like every other. Nothing here knows what
     // a Weaver is, and nothing here calls one, or reads the door.
@@ -409,11 +409,11 @@ TerminalResult TerminalSession::request_authority(std::string_view shape, std::i
     args.push_back(Arg{std::string("to_role"), FieldValue{std::string(to_role)}});
     args.push_back(Arg{std::string("purpose"), FieldValue{std::string(purpose)}});
     args.push_back(Arg{std::string("door"), FieldValue{std::string(door)}});
-    return ask(Address::to_role(std::string(office)), "zen.RequestAuthority", 2, args);
+    return ask(Address::to_role(std::string(role)), "zen.RequestAuthority", 2, args);
 }
 
-TerminalResult TerminalSession::describe_authority(std::string_view office) {
-    return ask(Address::to_role(std::string(office)), "zen.DescribeAuthority", 1, {});
+TerminalResult TerminalSession::describe_authority(std::string_view role) {
+    return ask(Address::to_role(std::string(role)), "zen.DescribeAuthority", 1, {});
 }
 
 TerminalResult TerminalSession::cancel_ask(std::uint64_t ask_id) {
@@ -475,7 +475,7 @@ void TerminalSession::handle(const loom::Message& in, loom::Bus& bus) {
     entry.shape = in.payload.schema().name();
     entry.version = in.payload.schema().version();
     entry.correlation = in.correlation;
-    // TRUSTED, AND NOT PAYLOAD. The sender is the bus stamp; the authored role is an office Loom
+    // TRUSTED, AND NOT PAYLOAD. The sender is the bus stamp; the authored role is a role Loom
     // verified at the authorship moment. A payload field that happens to name somebody is never
     // copied into either.
     entry.sender = in.sender;

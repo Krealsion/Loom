@@ -59,7 +59,7 @@ struct Nothing {
     ZEN_SHAPE(Nothing, 1, ZEN_FIELD(n));
 };
 
-/// An ordinary service in an ordinary office. It reports who it heard from,
+/// An ordinary service in an ordinary role. It reports who it heard from,
 /// which is the fact the whole architecture is arranged to protect.
 class Service final : public loom::WeaveBase<Service, Nothing, loom::Accept<Work>> {
 public:
@@ -257,7 +257,7 @@ int main() {
                                      loom::schema_of<loom::Refused>()});
     const loom::WeaveId operator_seat = engine.console_id();
 
-    // THE SERVICE — holds an office, speaks to nobody.
+    // THE SERVICE — holds a role, speaks to nobody.
     auto service = std::make_unique<Service>();
     Service* service_raw = service.get();
     const loom::WeaveId service_id =

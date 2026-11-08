@@ -9,7 +9,7 @@
 // `loom-host --serve <dir>` is the supplied host kept alive on purpose: it does not end when a
 // console closes, and it listens -- on loopback only -- for CLIENTS that attach, do some work and
 // leave again, and for the RUN WORKERS a run manager starts (docs/guides/sessions.md). Two host
-// offices answer them, and this header is their whole vocabulary:
+// roles answer them, and this header is their whole vocabulary:
 //
 //   loom.session   the session's door: what this host lifetime is, who is attached, the links it
 //                  holds, and the one operation that ends it. A run manager also registers here
@@ -34,7 +34,7 @@
 //
 // ATTENUATION, NOT A RUN LABEL. A run is admitted with the rules its registrar asked for, and the
 // door grants a rule only when the registrar's OWN approved authority (the operator's decision
-// in the authority store) already contains it -- or when the rule addresses an office the
+// in the authority store) already contains it -- or when the rule addresses a role the
 // registrar itself holds, which lets a worker report to its manager and nothing else. A run name
 // narrows nothing on its own.
 
@@ -200,7 +200,7 @@ struct RunConnection {
 // own. Its words for a fact are the Recorder's: RETAINED (here it is), FORGOTTEN (it was held and
 // the window moved past it), NOT-RECORDED (seen, and policy kept nothing), UNOBSERVED (beyond what
 // this recorder has seen). A crossing's fields are the link's own account of what ARRIVED -- the
-// far session, the name the far host established, the far bus's stamp and office, the attempt --
+// far session, the name the far host established, the far bus's stamp and role, the attempt --
 // never an observation of the far execution. Its own questions and answers are declared to the
 // Recorder's structural blacklist, so reading history never writes history.
 

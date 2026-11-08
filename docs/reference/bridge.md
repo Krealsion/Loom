@@ -114,7 +114,7 @@ sender            the bus's stamp of who spoke
 correlation       the number the session put on its ask, echoed by an answer
 answers_ask       Loom's own word that this is THE answer to an ask this session sent (ANS-05)
 dispatch_refused  this is a zen.DispatchRefused notice about one of this session's own sends
-authored_role     the office the sender deliberately spoke as, or empty
+authored_role     the role the sender deliberately spoke as, or empty
 ```
 
 A peer that only got bytes could not tell an attested answer from any admitted
@@ -197,7 +197,7 @@ that asked.
 
 `zen/bridge/link.hpp` is how an ordinary weave asks across a link a host holds
 for it: `loom.link.Ask{role | target, payload bytes, settle}` to the link's
-office, under the asker's own correlation. The link answers each ask **once,
+role, under the asker's own correlation. The link answers each ask **once,
 through Loom's answer door** — a deferred answer Loom binds to the asker's
 incarnation and correlation — so the asker's `mail.answers_ask()` is its own
 bus's word. The answer is either the far owner's (only a delivery the far bus
@@ -211,7 +211,7 @@ reply can reach, so equal correlations from separate askers, replies in any
 order, duplicates and late words from an ended session each land where they
 belong or nowhere. With `settle` the answer is held until the far host's
 `Settled`. Every far frame becomes a `loom.link.Crossed` record the link says
-to itself — far session and established name, far stamp and office, attempt,
+to itself — far session and established name, far stamp and role, attempt,
 kind, bytes — which is how the host's history holds the crossing, and what the
 link acts on (only its own record acts). The supplied host mounts one such link
 per `links` row of its boot plan
@@ -239,7 +239,7 @@ subscription it carried is told `Ended` `lost`. At most `LinkWeave::kMaxWatches`
 **The link enforces whose subscription it is**, because the far relay cannot: every local asker is
 the link's one session there. A `Release` or `Acknowledge` crosses only for the local participant
 that holds that subscription on the current session under the relay lifetime it names; anybody
-else's — in either encoding, to the relay's office or its id — is told `Outcome` `refused` (attempt
+else's — in either encoding, to the relay's role or its id — is told `Outcome` `refused` (attempt
 0) and changes nothing on either side. **A subscriber that is gone** (removed, dead, or succeeded by
 a new life or incarnation, even mid-subscribe) is noticed on the host's own turn, not at the next
 word: the link asks the far relay to release, tells nobody, and counts the subscription as

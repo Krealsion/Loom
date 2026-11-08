@@ -8,7 +8,7 @@
 // One WeaveId, one admission grant the host chose, one vocabulary the host supplied, and its
 // own transcript. It composes typed messages from real schemas, authors them under its own
 // identity, receives what its doors admit, asks and recognizes Loom's authenticated answers,
-// and asks a policy office for more authority when it needs some. docs/reference/terminal.md
+// and asks a policy role for more authority when it needs some. docs/reference/terminal.md
 //
 // What it is not, because "terminal" sounds like "root":
 //
@@ -40,10 +40,10 @@
 
 namespace loom {
 
-/// The conventional office a policy delegate holds (the Weaver's reference
+/// The conventional role a policy delegate holds (the Weaver's reference
 /// wiring binds this one). AN ADDRESS, NEVER A POWER: naming it grants nothing,
 /// reaching it proves nothing, and a host is free to use another.
-inline constexpr const char* kPolicyOffice = "loom.weaver";
+inline constexpr const char* kPolicyRole = "loom.weaver";
 
 /// WHERE A MESSAGE IS GOING — the three modes Loom's ordinary participant surface
 /// has, and no fourth. In particular there is no "target 0": an unaddressed send
@@ -54,8 +54,8 @@ struct Address {
     std::string role;
 
     static Address to_weave(WeaveId id) { return Address{Addressing::Weave, id, {}}; }
-    static Address to_role(std::string office) {
-        return Address{Addressing::Role, WeaveId{}, std::move(office)};
+    static Address to_role(std::string role) {
+        return Address{Addressing::Role, WeaveId{}, std::move(role)};
     }
     static Address to_all() { return Address{Addressing::Publish, WeaveId{}, {}}; }
 
@@ -100,8 +100,8 @@ public:
     /// cannot use it to read the host journal or infer delivery.
     virtual Ticket send(WeaveId target, Value payload, std::uint64_t correlation) = 0;
 
-    /// Author `payload` to whoever holds `office` AT DELIVERY.
-    virtual Ticket send_to_role(std::string_view office, Value payload,
+    /// Author `payload` to whoever holds `role` AT DELIVERY.
+    virtual Ticket send_to_role(std::string_view role, Value payload,
                                 std::uint64_t correlation) = 0;
 
     /// Author `payload` to every accepter of its shape; returns the fanout count.
@@ -126,7 +126,7 @@ enum class TerminalOutcome : std::uint8_t {
     UnknownShape,  ///< not in this participant's vocabulary (which is not the world's)
     BadArguments,  ///< the composer refused: no such field, wrong type, assigned twice
     NeedsInput,    ///< the ladder will not guess; the open fields are named
-    BadAddress,    ///< no target, or an empty office, or a publication used as an ask
+    BadAddress,    ///< no target, or an empty role, or a publication used as an ask
     TooManyAsks,   ///< this participant already holds the most conversations it will track
     NoSuchAsk,     ///< cancel named an ask that is not outstanding
 };
@@ -226,11 +226,11 @@ public:
     TerminalResult ask(const Address& to, std::string_view name, std::uint32_t version,
                        const std::vector<Arg>& args);
 
-    /// ASK A POLICY OFFICE FOR ONE EXACT SEND RIGHT — sugar, and only sugar, over
-    /// `ask(to_role(office), "zen.RequestAuthority" v2, {shape, version, to_role,
+    /// ASK A POLICY ROLE FOR ONE EXACT SEND RIGHT — sugar, and only sugar, over
+    /// `ask(to_role(role), "zen.RequestAuthority" v2, {shape, version, to_role,
     /// purpose, door})`. An empty `door` asks for a door-less rule.
     ///
-    /// There is no Weaver in this core: no include, no type, no branch. The office
+    /// There is no Weaver in this core: no include, no type, no branch. The role
     /// is an address, the request is an ordinary composed message out of the
     /// vocabulary the host supplied, and if the host did not supply that shape this
     /// is an ordinary UnknownShape. Approval, when it comes, grants authority and
@@ -238,14 +238,14 @@ public:
     /// sends nothing at all.
     TerminalResult request_authority(std::string_view shape, std::int64_t version,
                                      std::string_view to_role, std::string_view purpose,
-                                     std::string_view office = kPolicyOffice,
+                                     std::string_view role = kPolicyRole,
                                      std::string_view door = {});
 
-    /// Ask a policy office what this participant's authority currently is. The same
+    /// Ask a policy role what this participant's authority currently is. The same
     /// sugar, over `zen.DescribeAuthority v1`. The answer is rendered by the
-    /// office from the Kernel's own values; this core keeps no authority state of
+    /// role from the Kernel's own values; this core keeps no authority state of
     /// its own and could not, because it has nothing to read.
-    TerminalResult describe_authority(std::string_view office = kPolicyOffice);
+    TerminalResult describe_authority(std::string_view role = kPolicyRole);
 
     /// STOP WAITING — locally, and only locally.
     ///

@@ -16,8 +16,8 @@ Four facts about a message, and each exists:
 ```text
 sender identity          who the exact weave was            the bus stamp
 role-addressed delivery  where the message was routed       send_to_role
-role membership          which office the weave holds now   role_holder lookup
-role-authored provenance which office the weave
+role membership          which role the weave holds now   role_holder lookup
+role-authored provenance which role the weave
                          DELIBERATELY SPOKE AS              mail.as_role /
                                                             authored_from_role (MSG-07)
 ```
@@ -28,17 +28,17 @@ deliberately spoken as R). Holding is insufficient by law — the same
 holder's personal speech arrives unauthored — and **publications are
 first-class** (a forged `WorkerOpen` announcement is exactly what
 `as_role(R).publish` answers). Current semantics:
-[messaging](messaging.md#office-authorship-role-authored-provenance); law:
+[messaging](messaging.md#role-authorship-role-authored-provenance); law:
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
 why explicit-not-inferred:
-[decision](../decisions/office-authorship-is-deliberate.md); the applications
+[decision](../decisions/role-authorship-is-deliberate.md); the applications
 that priced the seam:
 [evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced).
 
-Deliberately outside it: office authorship across the **out-of-process pipe**
+Deliberately outside it: role authorship across the **out-of-process pipe**
 fails closed in both directions (the pipe carries no attestation; the first
-out-of-process office needs a verified control-protocol frame), and no public
-door produces a combined answer+office fact (the representation admits it; an
+out-of-process role needs a verified control-protocol frame), and no public
+door produces a combined answer+role fact (the representation admits it; an
 `answer_as_role` waits for a consumer).
 
 ## Live authority administration — what delegation deliberately does not do
@@ -141,7 +141,7 @@ not available to an ordinary participant*, because power includes saying no
 truthfully. Closing this needs a real scoped observation law (what may be
 observed, by whom, authorized how) — the same shape `ObserveRule` gave Senses,
 and that law is a design of its own, not yet made. The relay in [observation](observation.md) is the
-narrower thing that does exist: an office's own publications, under a policy.
+narrower thing that does exist: a role's own publications, under a policy.
 F and I are separate entries above and below.
 
 ## Service discovery is not a participant's power
@@ -169,7 +169,7 @@ and needs a `Switchboard&`; a [terminal session](terminal.md) does not have it,
 and neither does anything else. Enumerating live weaves is a fact about the
 running world rather than about the participant, and handing it to every
 terminal would give an ordinary weave a power nothing granted it. `send_to_role`
-addresses an office without resolving it, which is why addressing an office
+addresses a role without resolving it, which is why addressing a role
 never needs the list.
 
 **Absent, and not wanted:** global schema enumeration. Nothing in Loom can
@@ -188,7 +188,7 @@ not a human.
 
 The seat needs no special powers: the [terminal](terminal.md)'s operator seat is
 an ordinary participant holding four rules — approve / refuse / revoke /
-describe, each to one office — with no wildcard, no registry read and no tap,
+describe, each to one role — with no wildcard, no registry read and no tap,
 and it drives the whole Weaver workflow.
 
 The **human** half is the seam. A host designates a WeaveId; there is no account,

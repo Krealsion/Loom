@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE SESSION HOST'S TWO OFFICES, AT THE MECHANISM ALTITUDE: the session door (who may attach, as
+// THE SESSION HOST'S TWO ROLES, AT THE MECHANISM ALTITUDE: the session door (who may attach, as
 // whom, under what grant -- src/host/session_door.hpp) and the scoped history reader (what a
 // client that is not the console may learn from the host's Recorder -- src/host/history_reader.hpp).
 // Real sockets and real bridge clients; a real Recorder. The process-level journey that uses them
@@ -251,7 +251,7 @@ TEST_CASE("door: the owner's key admits a CLIENT, in compat, with exactly the cl
     Admission d = admit(compat::parse(got[0].payload), schema_of<session::Description>());
     REQUIRE(d.ok());
     CHECK(d.value().get("lifetime")->as_text() == "feedfacefeedfacefeedfacefeedface");
-    // ...and what it does not -- registering a run, or speaking to an office it was not given --
+    // ...and what it does not -- registering a run, or speaking to a role it was not given --
     // is refused by the BUS, and the client is told.
     got = ask(h, *c, session::kSessionRole, to_value(session::ExpectRun{"r", std::string(64, 'a'), {}}), 2);
     REQUIRE(got.size() == 1);
@@ -347,7 +347,7 @@ TEST_CASE("door: a rule outside the registrar's approved authority refuses the W
     CHECK(h.door->expectations() == 0); // not a partial grant: nothing was registered
 }
 
-TEST_CASE("door: a rule to the registrar's OWN office needs no ceiling; a registrar that is no administered artifact may pass on nothing else") {
+TEST_CASE("door: a rule to the registrar's OWN role needs no ceiling; a registrar that is no administered artifact may pass on nothing else") {
     DoorHost h;
     WeaveId mgr_id{};
     Registrar* mgr = h.registrar("runs", {}, &mgr_id, "loom.runs");

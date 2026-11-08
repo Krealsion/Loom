@@ -18,7 +18,7 @@
 // send it — that is the Kernel's answer, given at delivery against this
 // participant's own effective authority — and it is not evidence that anybody is
 // listening. A terminal can know `Work v1` perfectly, be refused when it sends
-// one, and be refused again by a world where no service holds the office. Those
+// one, and be refused again by a world where no service holds the role. Those
 // are three separate facts and this type answers only the first.
 //
 // IT IS SUPPLIED, NOT DISCOVERED. The host names the shapes when it mounts the

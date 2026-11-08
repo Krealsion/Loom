@@ -679,7 +679,7 @@ TEST_CASE("the answer describes the holder that answered, and goes stale on repl
     CHECK(before.count("StartTimer v1") == 1);
     CHECK(before.count("Outer v1") == 0);
 
-    // The office changes hands. The old answer is not corrected, invalidated or
+    // The role changes hands. The old answer is not corrected, invalidated or
     // resent -- it remains exactly what it always was: a snapshot.
     bus.unregister_weave(id);
     auto second = std::make_unique<Nested>();

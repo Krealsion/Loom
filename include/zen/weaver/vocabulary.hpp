@@ -21,7 +21,7 @@
 //   The decision is the shape, never a field. `ApproveAuthority` and `RefuseAuthority` are two
 //       shapes that carry only the name of the prompt they answer; a mistyped shape name is a
 //       gate refusal, never a yes.
-//   The request language is narrower than `LiveAuthority`: one shape, one version, one office,
+//   The request language is narrower than `LiveAuthority`: one shape, one version, one role,
 //       and at most one door. No "any shape", "any target", WeaveId or observe rule can be asked
 //       for, however wide the Weaver's ceiling.
 //
@@ -44,7 +44,7 @@ namespace loom {
 /// or, naming a `door`, "may I act at that door with it?". Sent as an ordinary message, so the
 /// Weaver answers through Loom's own answer authority and the session reads
 /// `mail.answers_ask()`; there is no request id of its own. A role, not a WeaveId: authority
-/// that follows an office follows whoever holds it at delivery, as `Grant::allow_to_role` does.
+/// that follows a role follows whoever holds it at delivery, as `Grant::allow_to_role` does.
 /// A door is parsed by the Weaver (`Door::parse`) and a malformed one refused in words; empty,
 /// the request is for a door-less rule. `purpose` is untrusted prose, never part of the
 /// decision, and escaped by the Weaver before an operator sees it (`safe_operator_text`); it may
@@ -52,7 +52,7 @@ namespace loom {
 struct RequestAuthority {
     std::string shape;    ///< the shape name the session wants to be allowed to send
     std::int64_t version; ///< that shape's version (1 .. UINT32_MAX)
-    std::string to_role;  ///< the office it wants to speak to
+    std::string to_role;  ///< the role it wants to speak to
     std::string purpose;  ///< requester-authored prose. UNTRUSTED. may be empty
     std::string door{};   ///< the door the rule is to name, or empty for a door-less rule
 
@@ -113,14 +113,14 @@ struct RequestAuthorityV1 {
 /// some.service" means exactly that and never "requests access to the running
 /// FooService at #19": the Weaver does not resolve the role, is not authorized
 /// to, and authority is not service discovery. Nor does a door claim that the
-/// office has such a pane or control: what a door names is the office's to answer.
+/// role has such a pane or control: what a door names is the role's to answer.
 struct AuthorityPrompt {
     std::int64_t prompt;        ///< TRUSTED: this prompt's name, unique on its bus
     std::string door;           ///< TRUSTED: the requested door, as parsed; empty for none
     std::int64_t requester;     ///< TRUSTED: the bus-stamped requester's WeaveId
     std::string shape;          ///< TRUSTED: the requested shape, as parsed
     std::int64_t version;       ///< TRUSTED: its version, as parsed
-    std::string to_role;        ///< TRUSTED: the requested office, as parsed
+    std::string to_role;        ///< TRUSTED: the requested role, as parsed
     std::string until;          ///< TRUSTED: what a yes lasts for (never "once")
     std::string requester_says; ///< UNTRUSTED: the requester's own prose, escaped
 

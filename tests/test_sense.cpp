@@ -4,9 +4,9 @@
 // SENSES: what a participant claims is currently so.
 // SENSE-01..05; docs/laws/sense-laws.md
 // Messages (what happened, what I want done) are causal, FIFO and queued; senses are acausal,
-// latest-only and pulled. The cases pin ordered observation, no future knowledge, an office claim
-// across replacement, personal vs office claims, cleanup bounded by current keys, and loud refusal
-// of an unauthorized read or a forged office claim; plus a reading that cannot mutate its
+// latest-only and pulled. The cases pin ordered observation, no future knowledge, a role claim
+// across replacement, personal vs role claims, cleanup bounded by current keys, and loud refusal
+// of an unauthorized read or a forged role claim; plus a reading that cannot mutate its
 // producer, and revision order.
 
 #include <doctest.h>
@@ -80,27 +80,27 @@ public:
     std::vector<SenseReading> seen;
 };
 
-/// A weave that holds an office and can be told to claim personally or as the
-/// office, so the two can be compared with everything else held equal.
+/// A weave that holds a role and can be told to claim personally or as the
+/// role, so the two can be compared with everything else held equal.
 struct ClaimPersonally {
     std::string text;
     ZEN_SHAPE(ClaimPersonally, 1, ZEN_FIELD(text));
 };
-struct ClaimAsOffice {
+struct ClaimAsRole {
     std::string text;
-    ZEN_SHAPE(ClaimAsOffice, 1, ZEN_FIELD(text));
+    ZEN_SHAPE(ClaimAsRole, 1, ZEN_FIELD(text));
 };
 
-class Officer : public WeaveBase<Officer, WatcherState, Accept<ClaimPersonally, ClaimAsOffice>,
+class RoleHolder : public WeaveBase<RoleHolder, WatcherState, Accept<ClaimPersonally, ClaimAsRole>,
                                  Emit<>, Claims<Status>> {
 public:
     void on(const ClaimPersonally& c, Mail& mail) { personal = mail.claim(Status{c.text}); }
-    void on(const ClaimAsOffice& c, Mail& mail) {
-        office = mail.as_role(role).claim(Status{c.text});
+    void on(const ClaimAsRole& c, Mail& mail) {
+        role = mail.as_role(role).claim(Status{c.text});
     }
     std::string role = "station";
     SenseClaimResult personal{};
-    SenseClaimResult office{};
+    SenseClaimResult role{};
 };
 
 /// Register a weave and hand back its raw pointer, the way these tests want it.
@@ -174,7 +174,7 @@ TEST_CASE("many readers observe a producer's latest claim synchronously, with no
 }
 
 TEST_CASE("a reading carries truthful authorship — who claimed it, under which life and "
-          "incarnation, at which revision, and personally rather than as an office") {
+          "incarnation, at which revision, and personally rather than as a role") {
     Switchboard bus;
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     (void)producer;
@@ -191,8 +191,8 @@ TEST_CASE("a reading carries truthful authorship — who claimed it, under which
     CHECK(by.author_life == 1);
     CHECK(by.author_incarnation == 1);
     CHECK(by.author_life_is_current);
-    CHECK(by.office.empty()); // a personal claim, and it says so
-    CHECK_FALSE(by.office_holder_is_current);
+    CHECK(by.role.empty()); // a personal claim, and it says so
+    CHECK_FALSE(by.role_holder_is_current);
     CHECK(by.revision == 1);
     CHECK(by.schema_name == "Health");
     CHECK(by.schema_version == 1);
@@ -226,50 +226,50 @@ TEST_CASE("a reader delivered BEFORE a state-changing message observes the OLD c
     CHECK(producer->last_claim.revision == 2);
 }
 
-// ---- office claim across replacement ----------------------------------------
+// ---- role claim across replacement ----------------------------------------
 
-TEST_CASE("role movement never relabels a predecessor's office claim, and the successor is not "
+TEST_CASE("role movement never relabels a predecessor's role claim, and the successor is not "
           "considered to have claimed anything until it deliberately does") {
     Switchboard bus;
-    auto [aid, incumbent] = put<Officer>(bus, Grant{}, "station");
+    auto [aid, incumbent] = put<RoleHolder>(bus, Grant{}, "station");
     incumbent->role = "station";
 
-    bus.send(aid, Message(to_value(ClaimAsOffice{"A is on duty"})));
+    bus.send(aid, Message(to_value(ClaimAsRole{"A is on duty"})));
     bus.drain_until_idle();
-    REQUIRE(incumbent->office.accepted);
+    REQUIRE(incumbent->role.accepted);
 
-    // The office claim reads as A's, and A currently holds the office.
-    SenseReading before = bus.observe_office("station", "Status", 1);
+    // The role claim reads as A's, and A currently holds the role.
+    SenseReading before = bus.observe_role("station", "Status", 1);
     REQUIRE(before);
     CHECK(text_of(before) == "A is on duty");
     CHECK(before.by.author == aid);
-    CHECK(before.by.office == "station");
-    CHECK(before.by.office_holder_is_current);
-    CHECK_FALSE(before.by.office_claim_is_stale());
+    CHECK(before.by.role == "station");
+    CHECK(before.by.role_holder_is_current);
+    CHECK_FALSE(before.by.role_claim_is_stale());
 
-    // A LEAVES. The role becomes unheld, which is the ONLY way an office claim
-    // is dropped — an office with no officeholder has no current claimant, and
+    // A LEAVES. The role becomes unheld, which is the ONLY way a role claim
+    // is dropped — a role with no role holder has no current claimant, and
     // keeping the claim would be a claim by nobody.
     bus.unregister_weave(aid);
 
-    SenseReading after = bus.observe_office("station", "Status", 1);
-    CHECK_FALSE(after);                            // gone with the office
+    SenseReading after = bus.observe_role("station", "Status", 1);
+    CHECK_FALSE(after);                            // gone with the role
     CHECK(after.refusal == SenseRefusal::NoClaim); // and says exactly that
 
-    // The successor takes the office and claims for itself.
-    auto [bid, successor] = put<Officer>(bus, Grant{}, "station");
+    // The successor takes the role and claims for itself.
+    auto [bid, successor] = put<RoleHolder>(bus, Grant{}, "station");
     successor->role = "station";
-    // Loom invents nothing for it: before it claims, the office has no claim.
-    CHECK_FALSE(bus.observe_office("station", "Status", 1));
+    // Loom invents nothing for it: before it claims, the role has no claim.
+    CHECK_FALSE(bus.observe_role("station", "Status", 1));
     CHECK_FALSE(bus.observe(bid, "Status", 1));
 
-    bus.send(bid, Message(to_value(ClaimAsOffice{"B is on duty"})));
+    bus.send(bid, Message(to_value(ClaimAsRole{"B is on duty"})));
     bus.drain_until_idle();
-    SenseReading now = bus.observe_office("station", "Status", 1);
+    SenseReading now = bus.observe_role("station", "Status", 1);
     REQUIRE(now);
     CHECK(text_of(now) == "B is on duty");
     CHECK(now.by.author == bid);
-    CHECK(now.by.office_holder_is_current);
+    CHECK(now.by.role_holder_is_current);
     // A fresh claim under a key that had been cleaned up — not a continuation of
     // A's, and its revision says so.
     CHECK(now.by.revision == 1);
@@ -359,44 +359,44 @@ TEST_CASE("a DEATH-AND-REVIVAL moves both generations — incarnation-currentnes
     CHECK_FALSE(after.by.author_incarnation_is_current);
 }
 
-// ---- personal vs office -----------------------------------------------------
+// ---- personal vs role -----------------------------------------------------
 
-TEST_CASE("the SAME holder's personal claim and office claim stay distinguishable — merely "
-          "holding the office attaches nothing") {
+TEST_CASE("the SAME holder's personal claim and role claim stay distinguishable — merely "
+          "holding the role attaches nothing") {
     Switchboard bus;
-    auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
-    officer->role = "station";
+    auto [oid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    holder->role = "station";
 
     bus.send(oid, Message(to_value(ClaimPersonally{"personally speaking"})));
-    bus.send(oid, Message(to_value(ClaimAsOffice{"officially speaking"})));
+    bus.send(oid, Message(to_value(ClaimAsRole{"officially speaking"})));
     bus.drain_until_idle();
-    REQUIRE(officer->personal.accepted);
-    REQUIRE(officer->office.accepted);
+    REQUIRE(holder->personal.accepted);
+    REQUIRE(holder->role.accepted);
 
     // Two claims, same weave, same shape, same instant — two different keys.
     SenseReading personal = bus.observe(oid, "Status", 1);
-    SenseReading office = bus.observe_office("station", "Status", 1);
+    SenseReading role = bus.observe_role("station", "Status", 1);
     REQUIRE(personal);
-    REQUIRE(office);
+    REQUIRE(role);
     CHECK(text_of(personal) == "personally speaking");
-    CHECK(text_of(office) == "officially speaking");
-    // The personal one carries NO office. That is the whole law.
-    CHECK(personal.by.office.empty());
-    CHECK(office.by.office == "station");
-    CHECK(personal.by.author == office.by.author); // same weave, still distinguishable
+    CHECK(text_of(role) == "officially speaking");
+    // The personal one carries NO role. That is the whole law.
+    CHECK(personal.by.role.empty());
+    CHECK(role.by.role == "station");
+    CHECK(personal.by.author == role.by.author); // same weave, still distinguishable
 }
 
-TEST_CASE("a role holder's personal claim does NOT become the office's claim") {
+TEST_CASE("a role holder's personal claim does NOT become the role's claim") {
     Switchboard bus;
-    auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
-    officer->role = "station";
+    auto [oid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    holder->role = "station";
 
     bus.send(oid, Message(to_value(ClaimPersonally{"just me"})));
     bus.drain_until_idle();
 
     CHECK(bus.observe(oid, "Status", 1));               // the personal claim exists
-    CHECK_FALSE(bus.observe_office("station", "Status", 1)); // the office has claimed nothing
-    CHECK(bus.observe_office("station", "Status", 1).refusal == SenseRefusal::NoClaim);
+    CHECK_FALSE(bus.observe_role("station", "Status", 1)); // the role has claimed nothing
+    CHECK(bus.observe_role("station", "Status", 1).refusal == SenseRefusal::NoClaim);
 }
 
 // ---- lifetime cleanup -------------------------------------------------------
@@ -430,12 +430,12 @@ TEST_CASE("the repository is bounded by CURRENT KEYS — a thousand claims, repe
         CHECK(bus.retained_claim_count() == 0);
     }
 
-    // An office key is bounded the same way, and released when the office is.
+    // A role key is bounded the same way, and released when the role is.
     {
-        auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
-        officer->role = "station";
+        auto [oid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+        holder->role = "station";
         for (int i = 0; i < 50; ++i) {
-            bus.send(oid, Message(to_value(ClaimAsOffice{"on duty"})));
+            bus.send(oid, Message(to_value(ClaimAsRole{"on duty"})));
         }
         bus.drain_until_idle();
         CHECK(bus.retained_claim_count() == 1);
@@ -500,8 +500,8 @@ TEST_CASE("an unauthorized read refuses EXPLICITLY, and is not confusable with '
 TEST_CASE("an authorized reader is authorized per SHAPE — the rule it holds, not the one it does "
           "not") {
     Switchboard bus;
-    auto [oid, officer] = put<Officer>(bus, Grant{}, "station");
-    officer->role = "station";
+    auto [oid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    holder->role = "station";
     auto [pid, producer] = put<Producer>(bus, Grant{}, "");
     (void)producer;
     const WeaveId reader =
@@ -515,24 +515,24 @@ TEST_CASE("an authorized reader is authorized per SHAPE — the rule it holds, n
 
     CHECK(bus.observe_as(reader, oid, "Status", 1));  // the granted shape
     CHECK(bus.observe_as(reader, pid, "Health", 1).refusal == SenseRefusal::NotAuthorized);
-    CHECK(bus.observe_office_as(reader, "station", "Status", 1).refusal == SenseRefusal::NoClaim);
+    CHECK(bus.observe_role_as(reader, "station", "Status", 1).refusal == SenseRefusal::NoClaim);
 }
 
-TEST_CASE("claiming as an office you do not hold is refused, and NOTHING is stored — never "
+TEST_CASE("claiming as a role you do not hold is refused, and NOTHING is stored — never "
           "downgraded to a personal claim") {
     Switchboard bus;
-    auto [aid, holder] = put<Officer>(bus, Grant{}, "station");
-    auto [bid, pretender] = put<Officer>(bus, Grant{}, "");
+    auto [aid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    auto [bid, pretender] = put<RoleHolder>(bus, Grant{}, "");
     holder->role = "station";
-    pretender->role = "station"; // it will ASK to claim as an office it does not hold
+    pretender->role = "station"; // it will ASK to claim as a role it does not hold
 
-    bus.send(bid, Message(to_value(ClaimAsOffice{"I am the station"})));
+    bus.send(bid, Message(to_value(ClaimAsRole{"I am the station"})));
     bus.drain_until_idle();
 
-    CHECK_FALSE(pretender->office.accepted);
-    CHECK(pretender->office.why == SenseRefusal::OfficeNotHeld);
-    // Nothing was stored anywhere: not under the office key...
-    CHECK_FALSE(bus.observe_office("station", "Status", 1));
+    CHECK_FALSE(pretender->role.accepted);
+    CHECK(pretender->role.why == SenseRefusal::RoleNotHeld);
+    // Nothing was stored anywhere: not under the role key...
+    CHECK_FALSE(bus.observe_role("station", "Status", 1));
     // ...and not, quietly, under the pretender's own personal key.
     CHECK_FALSE(bus.observe(bid, "Status", 1));
     CHECK(bus.retained_claim_count() == 0);

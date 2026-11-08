@@ -271,8 +271,8 @@ void tell(Switchboard& bus, WeaveId who, Cmd cmd) {
     (void)bus.send(who, Message(to_value(cmd)));
 }
 
-/// The whole rig: a document owner in one office, a view owner in another, an operator
-/// whose ceiling is exactly those two offices, and a reader authorized for both claims.
+/// The whole rig: a document owner in one role, a view owner in another, an operator
+/// whose ceiling is exactly those two roles, and a reader authorized for both claims.
 struct Rig {
     Switchboard bus;
     WeaveId doc{};
@@ -1013,7 +1013,7 @@ static void joint_showing_fails(const char* image) {
         CHECK(d.by.author == loaded.id);
         CHECK(d.by.author_incarnation_is_current); // the incarnation that failed is this one
     }
-    // THE OPERATOR IS TOLD, ONCE, naming the participant and the office it was bound by;
+    // THE OPERATOR IS TOLD, ONCE, naming the participant and the role it was bound by;
     // it re-reads the record, which is the fact.
     rig.bus.drain_until_idle();
     REQUIRE(rig.o->applied.size() == 1);
@@ -1500,7 +1500,7 @@ ZEN_BOXED_TWIN("the same doors through a box: a boxed participant's performed wr
 // not consumption.
 
 /// A second, UNRELATED coordination on the same bus: its own document and view owners in
-/// offices of their own, and its own operator with an authority over exactly those.
+/// roles of their own, and its own operator with an authority over exactly those.
 struct Unrelated {
     WeaveId doc{};
     Doc* d = nullptr;

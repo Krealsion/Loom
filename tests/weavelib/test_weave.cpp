@@ -14,7 +14,7 @@
 // Answers and seams: ANSWERS answers at once and ANSWERS_TWICE tries a second; DEFERS keeps
 // the answer right and answers from a later handler; SEAM_EMIT sends, and SEAM_PUBLISH
 // publishes, a shape no registry knows; EMITS_GREET declares Greet v1 in its emit-set, as
-// {text} under GREET_CONFLICT; SENSES claims a Sense and reads offices back verbatim.
+// {text} under GREET_CONFLICT; SENSES claims a Sense and reads roles back verbatim.
 
 // Nested schemas: NEST_OLD accepts Box {Part v1 {a}}, NEST_NEW Box2 {Part v1 {a, b}},
 // NEST_MIXED both (one artifact, two Part v1s; _REVERSED in the other order), NEST_AGREE Box
@@ -253,8 +253,8 @@ std::shared_ptr<const Schema> part_new() {
     return s;
 }
 [[maybe_unused]] std::shared_ptr<const Schema> senseprobe_schema() { // only the senses variant
-    // "Observe this office and tell me EXACTLY what identity you were given." The role travels
-    // as Text with no bound, because the case that uses it names an office longer than any
+    // "Observe this role and tell me EXACTLY what identity you were given." The role travels
+    // as Text with no bound, because the case that uses it names a role longer than any
     // fixed buffer, and compares what this artifact saw with it byte for byte.
     static const auto s = SchemaBuilder("SenseProbe", 1).field("role", Kind::Text).build();
     return s;
@@ -276,15 +276,15 @@ std::shared_ptr<const Schema> counter_schema() {
                               .field("count", Kind::Int)
                               .field("claimed", Kind::Int)     // 1 = the personal claim took
                               .field("revision", Kind::Int)    // its revision under the key
-                              .field("office_denied", Kind::Int) // 1 = office claim refused
+                              .field("role_denied", Kind::Int) // 1 = role claim refused
                               .field("read_hp", Kind::Int)     // what it read back, -1 = nothing
                               .field("read_author", Kind::Int) // whom the reading named
-                              .field("read_personal", Kind::Int) // 1 = the reading carried no office
-                              // The OFFICE IDENTITY an office reading carried, verbatim. Text
+                              .field("read_personal", Kind::Int) // 1 = the reading carried no role
+                              // The ROLE IDENTITY a role reading carried, verbatim. Text
                               // rather than a length or a digest because the claim under test
                               // is `observed == authored` byte for byte: anything summarised
                               // could agree while the identity itself differed.
-                              .field("read_office", Kind::Text, /*required=*/false)
+                              .field("read_role", Kind::Text, /*required=*/false)
                               // ...and the two generation facts the reading reported, which a
                               // truncating or deriving seam would get wrong independently.
                               .field("read_life_current", Kind::Int, /*required=*/false)
@@ -361,7 +361,7 @@ public:
         return {ping_schema(), schema_of<loom::Activated>()};
 #elif defined(ZEN_WEAVE_SENSES)
         // Ping drives the claim/read-back parity case; SenseProbe asks this
-        // artifact to observe a named OFFICE and report the identity verbatim.
+        // artifact to observe a named ROLE and report the identity verbatim.
         return {ping_schema(), senseprobe_schema()};
 #elif defined(ZEN_WEAVE_NEST_MIXED_REVERSED)
         return {box2_schema(), box_schema()}; // the contradiction, the other way round
@@ -502,24 +502,24 @@ public:
             return; // never falls through to the Ping path below ('seq' is absent)
         }
 #elif defined(ZEN_WEAVE_SENSES)
-        // THE EXACT-OFFICE PROBE (SENSE-03). Observe the office this message names
+        // THE EXACT-ROLE PROBE (SENSE-03). Observe the role this message names
         // and record the identity VERBATIM. Nothing here shortens, hashes or
         // normalises it: the test compares what came back against what it
         // authored, so a seam that truncates is caught by the comparison rather
         // than by a bound this artifact would have to know about.
         if (in.payload.schema().name() == "SenseProbe") {
             const std::string role(in.payload.get("role")->as_text());
-            const SenseReading r = bus.observe_office(role, sensehealth_schema());
+            const SenseReading r = bus.observe_role(role, sensehealth_schema());
             if (r) {
-                read_office_ = r.by.office;
+                read_role_ = r.by.role;
                 read_hp_ = r.value->get("hp")->as_int();
                 read_author_ = static_cast<std::int64_t>(r.by.author.value);
-                read_personal_ = r.by.office.empty();
+                read_personal_ = r.by.role.empty();
                 read_life_current_ = r.by.author_life_is_current;
                 read_inc_current_ = r.by.author_incarnation_is_current;
             } else {
                 read_hp_ = -1;
-                read_office_.clear();
+                read_role_.clear();
             }
             return; // never falls through to the Ping path below ('seq' is absent)
         }
@@ -557,12 +557,12 @@ public:
         sense_claimed_ = claim.accepted;
         revision_ = static_cast<std::int64_t>(claim.revision);
 
-        // Asking to claim as an office this artifact does not hold must refuse
+        // Asking to claim as a role this artifact does not hold must refuse
         // precisely — never a silent downgrade to a personal claim.
         Value forged(sensehealth_schema());
         forged.set("hp", Cell::integer(9000));
-        const SenseClaimResult denied = bus.office_claim("nobody.holds.this", std::move(forged));
-        office_denied_ = !denied.accepted && denied.why == SenseRefusal::OfficeNotHeld;
+        const SenseClaimResult denied = bus.role_claim("nobody.holds.this", std::move(forged));
+        role_denied_ = !denied.accepted && denied.why == SenseRefusal::RoleNotHeld;
 
         // ...and read a claim back, synchronously, with the authorship the HOST
         // computed. `reply_to` is where the test points it — an address handed in
@@ -572,7 +572,7 @@ public:
         if (r) {
             read_hp_ = r.value->get("hp")->as_int();
             read_author_ = static_cast<std::int64_t>(r.by.author.value);
-            read_personal_ = r.by.office.empty();
+            read_personal_ = r.by.role.empty();
         } else {
             read_hp_ = -1;
         }
@@ -855,11 +855,11 @@ public:
 #if defined(ZEN_WEAVE_SENSES)
         v.set("claimed", Cell::integer(sense_claimed_ ? 1 : 0));
         v.set("revision", Cell::integer(revision_));
-        v.set("office_denied", Cell::integer(office_denied_ ? 1 : 0));
+        v.set("role_denied", Cell::integer(role_denied_ ? 1 : 0));
         v.set("read_hp", Cell::integer(read_hp_));
         v.set("read_author", Cell::integer(read_author_));
         v.set("read_personal", Cell::integer(read_personal_ ? 1 : 0));
-        v.set("read_office", Cell::text(read_office_));
+        v.set("read_role", Cell::text(read_role_));
         v.set("read_life_current", Cell::integer(read_life_current_ ? 1 : 0));
         v.set("read_inc_current", Cell::integer(read_inc_current_ ? 1 : 0));
 #endif
@@ -945,11 +945,11 @@ private:
 #if defined(ZEN_WEAVE_SENSES)
     bool sense_claimed_ = false;   // did the host accept the personal claim?
     std::int64_t revision_ = 0;    // ...at what revision under its key
-    bool office_denied_ = false;   // did the forged office claim refuse precisely?
+    bool role_denied_ = false;   // did the forged role claim refuse precisely?
     std::int64_t read_hp_ = -1;    // what the synchronous read-back saw (-1 = nothing)
     std::int64_t read_author_ = 0; // whom the reading named as author
-    bool read_personal_ = false;   // did the reading carry NO office (a personal claim)?
-    std::string read_office_;      // the office identity a reading carried, VERBATIM
+    bool read_personal_ = false;   // did the reading carry NO role (a personal claim)?
+    std::string read_role_;      // the role identity a reading carried, VERBATIM
     bool read_life_current_ = false; // was the author's life still current?
     bool read_inc_current_ = false;  // ...and its incarnation? (a separate question)
 #endif

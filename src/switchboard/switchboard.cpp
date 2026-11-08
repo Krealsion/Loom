@@ -237,7 +237,7 @@ std::string Refusal::message() const {
                "changed and the incumbent is still the service";
     case RefusalReason::RoleAuthorshipDenied:
         // Names the AUTHORSHIP, not a grant or a forged capability: the sender
-        // asked to speak for an office it does not currently hold. Nothing was
+        // asked to speak for a role it does not currently hold. Nothing was
         // queued, and nothing was downgraded to personal speech.
         return "the sender does not hold the role it deliberately asked to "
                "speak for; nothing was queued";
@@ -512,12 +512,12 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     }
     if (!it->second.role.empty()) {
         roles_.erase(it->second.role); // a role has no holder once its Weave is removed
-        // ...and an office with no officeholder has no current claimant, so its
-        // latest claims go with it. This is the ONLY way office claims
+        // ...and a role with no role holder has no current claimant, so its
+        // latest claims go with it. This is the ONLY way role claims
         // are dropped: an admission moves the role holder IN PLACE and never
         // passes through unheld, so a replacement leaves the predecessor's claim
         // standing — stamped stale, never deleted and never relabelled.
-        forget_office_claims(it->second.role);
+        forget_role_claims(it->second.role);
     }
     // The weave's own latest claims end with it. This is what bounds the
     // repository by CURRENT keys rather than by claims ever made.
@@ -540,7 +540,7 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
 // That single assignment is what makes provenance unforgeable by ordinary weave
 // code: a weave may construct a Message however it likes, and may even copy one
 // it was delivered, but the moment it hands that Message to the bus the fact is
-// erased. Only the verified answer, lifecycle, office and refusal paths attest.
+// erased. Only the verified answer, lifecycle, role and refusal paths attest.
 std::uint64_t Switchboard::allocate_sequence() {
     if (next_seq_ == 0) {
         throw std::overflow_error("Loom delivery sequence exhausted");
@@ -627,7 +627,7 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     // The same single assignment that makes provenance unforgeable on the
     // directed path: ordinary callers pass nothing and the default ERASES
-    // whatever the Message carried; only the office-authorship door passes a
+    // whatever the Message carried; only the role-authorship door passes a
     // verified fact.
     msg.provenance = std::move(provenance);
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
@@ -673,8 +673,8 @@ const char* name_of(SenseRefusal r) noexcept {
         return "NotAuthorized";
     case SenseRefusal::Undeclared:
         return "Undeclared";
-    case SenseRefusal::OfficeNotHeld:
-        return "OfficeNotHeld";
+    case SenseRefusal::RoleNotHeld:
+        return "RoleNotHeld";
     case SenseRefusal::GateRefused:
         return "GateRefused";
     }
@@ -756,35 +756,35 @@ SenseClaimResult Switchboard::claim_as(WeaveId claimant, Value value) {
     return made.result;
 }
 
-SenseClaimResult Switchboard::office_claim_as(WeaveId claimant, std::string_view as_role,
+SenseClaimResult Switchboard::role_claim_as(WeaveId claimant, std::string_view as_role,
                                               Value value) {
     auto it = weaves_.find(claimant.value);
     if (it == weaves_.end() || !it->second.alive) {
-        return SenseClaimResult{false, SenseRefusal::OfficeNotHeld, 0};
+        return SenseClaimResult{false, SenseRefusal::RoleNotHeld, 0};
     }
     // THE MSG-07 RULE, at the claim moment. Holding is necessary and not
     // sufficient; not holding refuses and stores NOTHING — never a downgrade to
     // a personal claim, which would silently answer a different question.
     if (as_role.empty() || !holds_role_now(claimant, as_role)) {
-        return SenseClaimResult{false, SenseRefusal::OfficeNotHeld, 0};
+        return SenseClaimResult{false, SenseRefusal::RoleNotHeld, 0};
     }
-    const OfficeKey key{std::string(as_role), value.schema().name(), value.schema().version()};
-    auto slot = office_claims_.find(key);
-    const std::uint64_t previous = slot == office_claims_.end() ? 0 : slot->second.revision;
+    const RoleKey key{std::string(as_role), value.schema().name(), value.schema().version()};
+    auto slot = role_claims_.find(key);
+    const std::uint64_t previous = slot == role_claims_.end() ? 0 : slot->second.revision;
 
     MadeClaim made = make_claim(it->second, std::move(value), previous);
     if (!made.result.accepted) {
         return made.result;
     }
-    if (slot == office_claims_.end()) {
-        office_claims_.emplace(key, std::move(*made.record));
+    if (slot == role_claims_.end()) {
+        role_claims_.emplace(key, std::move(*made.record));
     } else {
         slot->second = std::move(*made.record);
     }
     return made.result;
 }
 
-SenseAuthorship Switchboard::authorship_of(const ClaimRecord& rec, const std::string& office,
+SenseAuthorship Switchboard::authorship_of(const ClaimRecord& rec, const std::string& role,
                                            const std::string& name,
                                            std::uint32_t version) const {
     SenseAuthorship by;
@@ -801,9 +801,9 @@ SenseAuthorship Switchboard::authorship_of(const ClaimRecord& rec, const std::st
     // incarnation-only comparison would call that a match.
     by.author_incarnation_is_current =
         by.author_life_is_current && incarnation_of(rec.author) == rec.author_incarnation;
-    by.office = office;
-    by.office_holder_is_current =
-        !office.empty() && role_holder(office).value == rec.author.value;
+    by.role = role;
+    by.role_holder_is_current =
+        !role.empty() && role_holder(role).value == rec.author.value;
     by.revision = rec.revision;
     by.schema_name = name;
     by.schema_version = version;
@@ -824,11 +824,11 @@ SenseReading Switchboard::observe(WeaveId author, std::string_view shape_name,
     return out;
 }
 
-SenseReading Switchboard::observe_office(std::string_view role, std::string_view shape_name,
+SenseReading Switchboard::observe_role(std::string_view role, std::string_view shape_name,
                                          std::uint32_t shape_version) const {
-    const OfficeKey key{std::string(role), std::string(shape_name), shape_version};
-    auto it = office_claims_.find(key);
-    if (it == office_claims_.end()) {
+    const RoleKey key{std::string(role), std::string(shape_name), shape_version};
+    auto it = role_claims_.find(key);
+    if (it == role_claims_.end()) {
         return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
     }
     SenseReading out;
@@ -855,7 +855,7 @@ SenseReading Switchboard::observe_as(WeaveId reader, WeaveId author, std::string
     return observe(author, shape_name, shape_version);
 }
 
-SenseReading Switchboard::observe_office_as(WeaveId reader, std::string_view role,
+SenseReading Switchboard::observe_role_as(WeaveId reader, std::string_view role,
                                             std::string_view shape_name,
                                             std::uint32_t shape_version) const {
     auto it = weaves_.find(reader.value);
@@ -864,7 +864,7 @@ SenseReading Switchboard::observe_office_as(WeaveId reader, std::string_view rol
                                                          shape_version)) {
         return SenseReading{SenseRefusal::NotAuthorized, {}, std::nullopt};
     }
-    return observe_office(role, shape_name, shape_version);
+    return observe_role(role, shape_name, shape_version);
 }
 
 std::vector<std::shared_ptr<const Schema>> Switchboard::claimed_schemas(WeaveId id) const {
@@ -883,9 +883,9 @@ void Switchboard::forget_personal_claims(WeaveId id) {
     }
 }
 
-void Switchboard::forget_office_claims(const std::string& role) {
-    for (auto it = office_claims_.begin(); it != office_claims_.end();) {
-        it = std::get<0>(it->first) == role ? office_claims_.erase(it) : std::next(it);
+void Switchboard::forget_role_claims(const std::string& role) {
+    for (auto it = role_claims_.begin(); it != role_claims_.end();) {
+        it = std::get<0>(it->first) == role ? role_claims_.erase(it) : std::next(it);
     }
 }
 
@@ -1039,7 +1039,7 @@ JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& aut
     for (ClaimKey key : keys) {
         const std::string named_role = key.role; // kept for the words a failure is told in
         // A KEY NAMED BY ROLE IS RESOLVED NOW, to the exact holder, and bound as that
-        // weave: what the parts record is always a participant, never an office.
+        // weave: what the parts record is always a participant, never a role.
         if (!key.role.empty()) {
             if (key.claimant.valid()) {
                 return JointBegin{false, 0, JointRefusal::NoClaim}; // both: a contradiction
@@ -1094,7 +1094,7 @@ JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& aut
         JointPart part;
         part.key = key;
         part.claimant = participant(key.claimant);
-        // THE OFFICE A FAILURE WILL BE TOLD IN: the one the key was named by, or --
+        // THE ROLE A FAILURE WILL BE TOLD IN: the one the key was named by, or --
         // for a key named by weave -- the one the claimant holds at this moment. A
         // fact about the bound participant, recorded now, so a later role movement
         // does not rewrite whom the operator was coordinating.
@@ -1685,7 +1685,7 @@ void Switchboard::note_seam_refusal(WeaveId sender, WeaveId target, std::string_
     ev.schema_name = std::string(claimed_name);
     ev.schema_version = claimed_version;
     // WHERE IT WAS GOING, on the doors that were told. `addressed_role` reads
-    // the same here as on a delivery — the office the SENDER named — and it is
+    // the same here as on a delivery — the role the SENDER named — and it is
     // empty for the doors that named none, exactly as it is for a native
     // directed send and a native publication.
     ev.addressed_role = std::string(addressed_role);
@@ -2068,7 +2068,7 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
         // Rebuilt field by field, so a published Message carries no provenance whatever the
         // caller's copy held. Every recipient's envelope is stamped, so each delivery asks
-        // about a dead author for itself; an office-authored publication stamps the same
+        // about a dead author for itself; a role-authored publication stamps the same
         // verified fact on every recipient's envelope.
         Envelope env{Message(msg.payload, msg.sender, msg.reply_to, msg.correlation), rec.id,
                      seq, gated, std::string{}, sender_life};
@@ -2124,7 +2124,7 @@ Ticket Switchboard::send_as_to_role(WeaveId as_sender, std::string_view role, Me
     return enqueue_role(std::string(role), std::move(msg), /*gated=*/true);
 }
 
-// ---- deliberate office authorship (MSG-07) ----------------------------------
+// ---- deliberate role authorship (MSG-07) ----------------------------------
 //
 // The authorization moment is authorship, never delivery. Each door asks whether this exact
 // sender holds that role now, as it asks to speak as it; on yes it stamps the fact into the
@@ -2133,38 +2133,38 @@ Ticket Switchboard::send_as_to_role(WeaveId as_sender, std::string_view role, Me
 
 bool Switchboard::holds_role_now(WeaveId as_sender, std::string_view as_role) const {
     if (!as_sender.valid() || as_role.empty()) {
-        return false; // no identity holds no office; the empty name is no office
+        return false; // no identity holds no role; the empty name is no role
     }
     const auto it = roles_.find(std::string(as_role));
     return it != roles_.end() && it->second == as_sender;
 }
 
-Ticket Switchboard::refuse_office(WeaveId target, WeaveId as_sender, const Message& msg) {
+Ticket Switchboard::refuse_role(WeaveId target, WeaveId as_sender, const Message& msg) {
     // Visible on the tap and in the journal with the precise reason — and the
     // caller receives the INVALID ticket, because nothing was queued. A refusal
-    // ticket here would tell an office its statement had been sent; silence
-    // would downgrade unauthorized office speech into a mystery. Neither is
+    // ticket here would tell a role its statement had been sent; silence
+    // would downgrade unauthorized role speech into a mystery. Neither is
     // this: the attempt is named, the statement went nowhere.
     (void)refuse_now(target, as_sender, msg, RefusalReason::RoleAuthorshipDenied);
     return Ticket{};
 }
 
-Ticket Switchboard::office_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
+Ticket Switchboard::role_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
                                    Message msg) {
     if (!holds_role_now(as_sender, as_role)) {
-        return refuse_office(target, as_sender, msg);
+        return refuse_role(target, as_sender, msg);
     }
     msg.sender = as_sender;
     return enqueue_directed(target, std::move(msg), /*gated=*/true,
                             Provenance{}.with_authored_role(std::string(as_role)));
 }
 
-Ticket Switchboard::office_send_to_role_as(WeaveId as_sender, std::string_view as_role,
+Ticket Switchboard::role_send_to_role_as(WeaveId as_sender, std::string_view as_role,
                                            std::string_view to_role, Message msg) {
     if (!holds_role_now(as_sender, as_role)) {
-        return refuse_office(WeaveId{}, as_sender, msg);
+        return refuse_role(WeaveId{}, as_sender, msg);
     }
-    // TWO ROLES, TWO FACTS, TWO FIELDS: the authored office rides the
+    // TWO ROLES, TWO FACTS, TWO FIELDS: the authored role rides the
     // provenance; the destination rides the envelope's role slot and is
     // resolved at delivery exactly as an ordinary send_to_role. Nothing
     // downstream can mistake one for the other because they never share a
@@ -2174,11 +2174,11 @@ Ticket Switchboard::office_send_to_role_as(WeaveId as_sender, std::string_view a
                         Provenance{}.with_authored_role(std::string(as_role)));
 }
 
-OfficePublication Switchboard::office_publish_as(WeaveId as_sender, std::string_view as_role,
+RolePublication Switchboard::role_publish_as(WeaveId as_sender, std::string_view as_role,
                                                  Message msg) {
     if (!holds_role_now(as_sender, as_role)) {
-        (void)refuse_office(WeaveId{}, as_sender, msg);
-        return OfficePublication{}; // refused: not authored, and 0 means nothing
+        (void)refuse_role(WeaveId{}, as_sender, msg);
+        return RolePublication{}; // refused: not authored, and 0 means nothing
     }
     // No sealed-speech check is needed before the fanout, and not because it
     // was forgotten: a sealed weave holds no role — seal_weave refuses role
@@ -2188,29 +2188,29 @@ OfficePublication Switchboard::office_publish_as(WeaveId as_sender, std::string_
     const std::size_t recipients =
         fanout(std::move(msg), /*gated=*/true,
                Provenance{}.with_authored_role(std::string(as_role)));
-    return OfficePublication{true, recipients};
+    return RolePublication{true, recipients};
 }
 
-Ticket Switchboard::office_send(std::string_view as_role, WeaveId target, Message msg) {
+Ticket Switchboard::role_send(std::string_view as_role, WeaveId target, Message msg) {
     // The root surface: a host program speaking with no weave identity. It
-    // holds no office by definition, and the refusal says so on the tap rather
+    // holds no role by definition, and the refusal says so on the tap rather
     // than silently returning the base default — "a root tried to author
-    // office speech" is exactly the kind of thing an operator wants to see.
+    // role speech" is exactly the kind of thing an operator wants to see.
     (void)as_role;
-    return refuse_office(target, WeaveId{}, msg);
+    return refuse_role(target, WeaveId{}, msg);
 }
 
-Ticket Switchboard::office_send_to_role(std::string_view as_role, std::string_view to_role,
+Ticket Switchboard::role_send_to_role(std::string_view as_role, std::string_view to_role,
                                         Message msg) {
     (void)as_role;
     (void)to_role;
-    return refuse_office(WeaveId{}, WeaveId{}, msg);
+    return refuse_role(WeaveId{}, WeaveId{}, msg);
 }
 
-OfficePublication Switchboard::office_publish(std::string_view as_role, Message msg) {
+RolePublication Switchboard::role_publish(std::string_view as_role, Message msg) {
     (void)as_role;
-    (void)refuse_office(WeaveId{}, WeaveId{}, msg);
-    return OfficePublication{};
+    (void)refuse_role(WeaveId{}, WeaveId{}, msg);
+    return RolePublication{};
 }
 
 void Switchboard::record(std::uint64_t seq, Disposition disposition, const Refusal& refusal) {
@@ -2292,7 +2292,7 @@ void Switchboard::deliver_one(Envelope env) {
     ev.schema_name = env.msg.payload.schema().name();
     ev.schema_version = env.msg.payload.schema().version();
     // Three facts the envelope holds, set before any refusal branch so a refused delivery is
-    // as legible as a delivered one: which conversation, which office was addressed, and which
+    // as legible as a delivered one: which conversation, which role was addressed, and which
     // delivery this was authored from.
     ev.correlation = env.msg.correlation;
     ev.addressed_role = env.role;
@@ -2300,7 +2300,7 @@ void Switchboard::deliver_one(Envelope env) {
     // The STAMPED authorship fact, read from the envelope — never a role_of()
     // lookup, which would report current membership instead of historical
     // authorship (MSG-07). Set before any refusal branch, so a refused
-    // office-authored delivery still shows which office it was authored as.
+    // role-authored delivery still shows which role it was authored as.
     ev.authored_role = std::string(env.msg.provenance.authored_role());
 
     const WeaveRecord* author = env.gated ? find(env.msg.sender) : nullptr;

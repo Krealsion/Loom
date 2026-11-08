@@ -3,7 +3,7 @@
 **Status: current since ABI v9 (2026-09-18).** Laws:
 [GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [LIFE-08](../laws/lifecycle-laws.md#life-08--a-schema-is-retained-by-a-live-claim-never-by-having-been-registered),
-[SENSE-04](../laws/sense-laws.md#sense-04--claiming-as-an-office-is-explicit-the-claim-set-is-a-contract),
+[SENSE-04](../laws/sense-laws.md#sense-04--claiming-as-an-role-is-explicit-the-claim-set-is-a-contract),
 [KERN-04](../laws/kernel-laws.md#kern-04--the-abi-seam-refuses-loudly). Reference:
 [values and admission](../reference/values-and-admission.md#registry),
 [kernel](../reference/kernel.md), [dynamic ABI](../reference/dynamic-abi.md).

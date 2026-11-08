@@ -38,8 +38,8 @@ supplies the mechanism and no vocabulary of either.
 - **No universal transaction.** Ordinary claims and weaves that never offer keep
   their contract and pay nothing: a weave that declares no `on_claim_published`
   hears nothing and is applied trivially.
-- **No office keys.** An operation binds personal keys; a claimant may be *named*
-  by the office it holds at `begin`, which resolves to the exact holder then.
+- **No role keys.** An operation binds personal keys; a claimant may be *named*
+  by the role it holds at `begin`, which resolves to the exact holder then.
 - **No loaded coordination.** A loaded weave can offer; the operator's verbs are
   native ([what crosses the ABI](#what-crosses-the-abi)).
 - **No durability across a process**, and single-threaded, FIFO, non-reentrant
@@ -51,7 +51,7 @@ The right to coordinate is a host-minted, operator-bound capability:
 
 ```cpp
 loom::JointAuthority authority =
-    bus.mint_joint_authority(operator_id, {"editor.office", "desk.office"});
+    bus.mint_joint_authority(operator_id, {"editor.role", "desk.role"});
 ```
 
 Every operator verb checks that the presenter is the *exact* operator (weave,
@@ -114,7 +114,7 @@ the live delivery the Mail is.
 | `release_joint(authority, op)` | operator | retires a terminal record it has consumed; the slot is free, the id names nothing again | `WrongState` while Preparing (cancel it), `NoSuchOperation` once released, `NotOperator` |
 
 A key is named with `loom::claim_key<Shape>(weave_id)` or
-`loom::claim_key<Shape>("office")`. The host's ungated views are
+`loom::claim_key<Shape>("role")`. The host's ungated views are
 `Switchboard::joint_status(op)`, `joint_pending()`, `joint_records()` (live or
 unreleased — what counts against the bound), `joint_retained_bytes()`,
 `has_unobserved_publication(id)`, `has_failed_application(id)` and
@@ -272,7 +272,7 @@ operator that began the operation and only if it explicitly accepts them:
   is alive and answers the operator in its own words.
 - **`zen.JointApplied {op, applied, claimant, role, reason}`** — the application
   settled: every claimant applied, or one Declined, Failed or was Lost, named
-  with the office it was bound through. Once per settlement; a repair that
+  with the role it was bound through. Once per settlement; a repair that
   re-settles is said again.
 
 A notice **wakes an operator to read authoritative state**; its ordinary

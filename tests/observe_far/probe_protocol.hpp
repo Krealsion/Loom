@@ -16,13 +16,13 @@
 
 namespace zen_tests::observe_probe {
 
-/// The producer's office on the far host, and the office its commands are asked of.
+/// The producer's role on the far host, and the role its commands are asked of.
 inline constexpr const char* kTicker = "far.ticker";
 
 /// TELL THE PRODUCER WHAT TO DO, answered `zen.Ack` (or `zen.Refused` for a verb it does not know):
 ///   tick N / burst N  publish N ticks, then the state, in this delivery (burst: N large)
-///   foreign           a participant that does NOT hold the office publishes a tick
-///   replace           the office changes hands: a new producer holds it from the next turn
+///   foreign           a participant that does NOT hold the role publishes a tick
+///   replace           the role changes hands: a new producer holds it from the next turn
 ///   revoke            the far host withdraws every subscription of the asking session
 ///   quit              the far host ends (the link's session with it)
 struct ObserveProbeCommand {

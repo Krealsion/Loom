@@ -290,7 +290,7 @@ struct ArtifactPage {
 /// the host's history by that correlation (`loom.history.DeliveriesTo`).
 struct Asked {
     std::int64_t correlation = 0;
-    std::string office;   ///< the office asked (a far office when `via` names a link)
+    std::string role;   ///< the role asked (a far role when `via` names a link)
     std::string via;      ///< the link it crossed, or empty for a local ask
     std::string shape;
     std::int64_t version = 0;
@@ -299,7 +299,7 @@ struct Asked {
     std::string detail;
     LOOM_RUNS_SHAPE(Asked, "loom.runs.Asked");
     static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(correlation), ZEN_FIELD(office), ZEN_FIELD(via),
+        return std::make_tuple(ZEN_FIELD(correlation), ZEN_FIELD(role), ZEN_FIELD(via),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(settle),
                                ZEN_FIELD(outcome), ZEN_FIELD(detail));
     }

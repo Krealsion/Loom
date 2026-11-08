@@ -5,7 +5,7 @@ hears it. A participant somewhere else — another host's agent, a monitor, a to
 needs the same sentences *as they happen*: that a build was taken, that an enemy stepped onto a
 cell. It is not a listener the producer's host installed, and it must not get a tap on that
 host's whole bus. An **observation relay** is how a host offers exactly that: a subscriber asks
-the relay's office for **one office's publications of named shapes**, the host's policy says yes
+the relay's role for **one role's publications of named shapes**, the host's policy says yes
 or no, and from then on the relay tells the subscriber each such publication — in order, numbered,
 bounded — until the subscription ends.
 
@@ -23,7 +23,7 @@ Limits: [bounds](bounds.md#observation-relay).
 
 ## Mounting a relay
 
-A relay is host wiring, like a bridge server: it registers listeners, reads who holds an office
+A relay is host wiring, like a bridge server: it registers listeners, reads who holds a role
 and speaks as itself outside its own deliveries.
 
 ```cpp
@@ -32,13 +32,13 @@ loom::observe::Relay* relay = loom::observe::mount_relay(
     [&](loom::Fence f) { return server.settle_origin(f); }); // who opened which fence (optional)
 ```
 
-`mount_relay` registers it in the office `loom.observe` with `relay_grant()` (its own vocabulary
+`mount_relay` registers it in the role `loom.observe` with `relay_grant()` (its own vocabulary
 and the standard replies, to whoever asked) and attaches it to the bus. The pointer is for the
 host's own calls: `revoke(subscriber, why)`, `end_all(kind, why)`, `forget(subscriber)`,
 `rows()`.
 
 **The policy decides, and its default admits nothing.** `ObservePolicy` is a function of the
-`ObserveRequest` — the subscriber as the bus stamped it, the producer office, the shapes, the
+`ObserveRequest` — the subscriber as the bus stamped it, the producer role, the shapes, the
 subscriber's label — returning `allow()` or `refuse(words)`; the words reach the subscriber
 verbatim. `observe_nothing()`, the default, refuses everyone and says so. There is no "allow
 everything" switch: a host that wants one — a test, a development host — writes that policy
@@ -47,10 +47,10 @@ itself, visibly, and nothing in a subscriber's reach can write it for it.
 ## Authority: observation is its own decision
 
 - **Asking is not being admitted.** A `Subscribe` needs an ordinary send rule to the relay's
-  office, like any ask. Being answered `Subscribed` is the host's policy, and only that.
+  role, like any ask. Being answered `Subscribed` is the host's policy, and only that.
 - **No other power implies it.** A guest that may inject input, take pictures or ask what a
   participant accepts has not thereby been allowed to observe anything; a relay is no bus-wide
-  feed, and a subscription names one office and at most eight shapes.
+  feed, and a subscription names one role and at most eight shapes.
 - **Observing grants nothing.** A subscriber that sees a producer's words may still say nothing
   to it: the relay's words are ordinary speech, never authority, and never an answer to anything
   the subscriber asked other than `Subscribe` and `Release`.
@@ -76,7 +76,7 @@ itself, visibly, and nothing in a subscriber's reach can write it for it.
 
 `Subscribed { subscription, relay, producer, holder, incarnation, window, encoding, latest,
 shapes, next }` says where the subscription begins: the relay's **lifetime** (minted when it was
-made, never reused — a subscription number is only ever read together with it), the office's
+made, never reused — a subscription number is only ever read together with it), the role's
 holder and incarnation at that moment (0 when nobody holds it), the window granted, and the
 number the first word will carry. `shapes` is `loom.observe.Shapes`: `zen.SchemaDesc` v1 for each
 subscribed shape and the closure it nests, in the subscription's encoding — so a subscriber
@@ -105,14 +105,14 @@ not as zero. No part of this is a sleep: the order above is the bus's own.
 | `seq` | this subscription's number for it, from `next` with no holes (shared with `Gap` and `Ended`) | a bus sequence |
 | `shape`, `version`, `payload` | the published value, in the subscription's encoding | re-validated authority: it is what the producer published |
 | `producer`, `incarnation` | the bus-stamped publisher and its incarnation **at delivery** — a replaced holder, or a new incarnation after a reload, shows here | a name the producer chose |
-| `office` | the office it deliberately spoke as, if it did | proof it holds that office now |
+| `role` | the role it deliberately spoke as, if it did | proof it holds that role now |
 | `coalesced` | for a `latest` shape: how many earlier publications this one stands for | a count of occurrences lost |
 | `cause` | the **subscriber's own** correlation of the settle-requested send whose synchronous dispatch published it, or 0 | another participant's number, ever |
 | `delivery`, `published_in` | the producer bus's sequence numbers of this publication's delivery to the relay and of the delivery during which it was published — references into that host's history | identities anywhere else |
 | `link`, `epoch`, `session` | filled by a link that carried it (below); empty on the relay's own bus | |
 
-**Only the office's holder is told.** A listener hears a subscribed shape from anyone who may
-publish it; the relay tells the subscriber only what the bus-stamped holder of the named office
+**Only the role's holder is told.** A listener hears a subscribed shape from anyone who may
+publish it; the relay tells the subscriber only what the bus-stamped holder of the named role
 published at that delivery. The same shape from anyone else is counted (`foreign` in `Status`)
 and never told — a forged or wrong-source publication cannot reach a subscriber as the
 producer's.
@@ -187,7 +187,7 @@ relay's lifetime.
 **Whose subscription it is stays the link's to say.** The far relay judges `Release` and
 `Acknowledge` by their subscriber, and every local asker is the link's one session there, so the
 far check cannot tell one local asker from another. The link decides before anything crosses: a
-control — in either encoding, addressed to the relay's office or to its id — goes out only for the
+control — in either encoding, addressed to the relay's role or to its id — goes out only for the
 local participant that holds that subscription, exactly (the same life and incarnation), on the
 current session and under the relay lifetime the control names. Anybody else's, and any control
 naming a subscription that ended, a session that ended or another relay lifetime, is answered
@@ -228,7 +228,7 @@ a quiet spell finds nearly the whole window open. `summary()` is its account: wo
 
 - **Not history.** Nothing before the subscription began, and nothing retained: a subscriber
   that needs the past asks the producer's owner, or a host's history, for it.
-- **Not a tap.** One office, named shapes, one subscriber, the host's decision each time.
+- **Not a tap.** One role, named shapes, one subscriber, the host's decision each time.
 - **Not an answer.** An observation is not the outcome of anything the subscriber asked; a
   dispatch observed is not completion, and a producer's word is only its word.
 - **Not a completion proof.** A caused observation proves what the send set in motion *here*;

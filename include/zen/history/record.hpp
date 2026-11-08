@@ -110,8 +110,8 @@ struct HistoryRecord {
     std::uint64_t seq = 0; ///< the delivery seq; 0 for lifecycle and policy records
     WeaveId sender{};
     WeaveId target{};           ///< the RESOLVED recipient
-    std::string addressed_role; ///< the office the sender named, empty if none
-    std::string authored_role;  ///< the office the sender SPOKE AS, empty for personal speech
+    std::string addressed_role; ///< the role the sender named, empty if none
+    std::string authored_role;  ///< the role the sender SPOKE AS, empty for personal speech
     std::string shape;
     std::uint32_t shape_version = 0;
     std::uint64_t correlation = 0;     ///< 0 == none stated (and a legal choice; ANS-05)

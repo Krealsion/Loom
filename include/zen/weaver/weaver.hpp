@@ -53,14 +53,14 @@ namespace loom {
 /// facts off the top of somebody's screen.
 inline constexpr std::size_t kMaxPurposeBytes = 200;
 
-/// The most bytes a requested shape name or office name may have. Both become
+/// The most bytes a requested shape name or role name may have. Both become
 /// rules in a `LiveAuthority` and both are shown to a person; neither is a
 /// document.
 inline constexpr std::size_t kMaxNameBytes = 128;
 
 /// How many prompts one Weaver can name. A prompt's name is its Weaver's WeaveId times this, plus
 /// the prompt's place in that Weaver's count, so no two Weavers on one bus put the same name: a
-/// WeaveId is never reused, and a Weaver replacing another in its office has a WeaveId of its own.
+/// WeaveId is never reused, and a Weaver replacing another in its role has a WeaveId of its own.
 /// docs/reference/weaver.md#a-decision-names-the-prompt-it-answers
 inline constexpr std::int64_t kPromptNamesPerWeaver = 1000 * 1000 * 1000;
 
@@ -98,7 +98,7 @@ inline std::string safe_operator_text(std::string_view raw, std::size_t max_byte
 /// door, `ControlRequested v1 -> role zengine.workshop door zengine.files/*`. Rendered from the
 /// snapshot the Kernel handed back, never from a string the Weaver kept, so it cannot disagree
 /// with the bus. A role is printed as a role, never as the weave holding it now: role authority
-/// follows whoever holds the office at delivery.
+/// follows whoever holds the role at delivery.
 inline std::string render_rule(const SendRule& rule) {
     std::string out =
         rule.any_shape ? std::string("any shape")
@@ -277,7 +277,7 @@ public:
         ++state_.prompts;
         // The operator sees the prompt's name, the door and the rule AS PARSED, the
         // requester's identity AS STAMPED, and the requester's prose AS ESCAPED — and
-        // nothing that claims the destination office, or its door, currently exists.
+        // nothing that claims the destination role, or its door, currently exists.
         (void)mail.send(operator_seat_,
                         AuthorityPrompt{request_.prompt,
                                         request_.door ? request_.door->text() : std::string{},
@@ -495,11 +495,11 @@ private:
         request_ = Requested{};
     }
 
-    /// STRUCTURE ONLY. A request must name one shape, one version and one office,
+    /// STRUCTURE ONLY. A request must name one shape, one version and one role,
     /// and at most one door in the door grammar, in bytes that are safe to print and
     /// short enough to read. It is deliberately NOT checked against the world:
     /// whether that role is currently held, whether anything currently accepts that
-    /// shape, and whether the office has that door, are questions about
+    /// shape, and whether the role has that door, are questions about
     /// configuration, not about authority — and answering them to an untrusted
     /// requester would turn a policy door into a service directory.
     static bool well_formed(const RequestAuthority& ask, std::optional<Door>* door,
@@ -547,7 +547,7 @@ private:
     /// somewhere different. A single "failed" would send all four to the same
     /// wrong place.
     ///
-    /// None of these says whether the requested office exists. Loom checks
+    /// None of these says whether the requested role exists. Loom checks
     /// authority BEFORE it resolves a role, precisely so a refusal cannot be used
     /// to enumerate what is running, and a policy refusal must not become the
     /// oracle the delivery path refuses to be.

@@ -556,8 +556,8 @@ def main():
 
     # ---- I. a refusal after work began: the bus says no, and it is attributed ----------------
     with Session.attach(session_dir) as s:
-        s.start("basics/session-report", "wrong-office", {"office": "loom.history"})
-        n = s.wait("wrong-office", timeout=60)
+        s.start("basics/session-report", "wrong-role", {"role": "loom.history"})
+        n = s.wait("wrong-role", timeout=60)
         asked = n["asks"][-1] if n["asks"] else {}
         partial = dict((x["name"], x) for x in n["artifacts"]).get("request.txt")
         check("I1 an ask outside the run's grant is refused by the bus after work began: the "
@@ -812,7 +812,7 @@ def main():
               notes[-400:])
         check("O3 a cleanup that cannot finish is recorded as what it was -- the bus's own "
               "refusal -- never as done",
-              "ask an office this run was never granted: RuntimeError" in notes and
+              "ask a role this run was never granted: RuntimeError" in notes and
               "CapabilityDenied" in notes, notes[-400:])
         check("O4 the run is cancelled, and its account of its cleanups is part of why",
               done["state"] == "cancelled" and "cleanup" in done["failure"],

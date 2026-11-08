@@ -129,7 +129,7 @@ struct Rig {
         producer->zen_set_self(producer_id);
     }
 
-    /// A subscriber that may speak to the relay's office -- and, with `commands`, may also tell
+    /// A subscriber that may speak to the relay's role -- and, with `commands`, may also tell
     /// the producer to publish (a session acting on the producer, for the `cause` case).
     Subscriber* subscriber(loom::WeaveId* id, bool commands = false) {
         loom::Grant g;
@@ -148,7 +148,7 @@ struct Rig {
         return raw;
     }
 
-    /// Say `msg` as `who` to the relay's office, under a fresh correlation, and pump.
+    /// Say `msg` as `who` to the relay's role, under a fresh correlation, and pump.
     template <class T>
     void ask(loom::WeaveId who, const T& msg) {
         (void)bus.send_as_to_role(who, ob::kObserveRole,
@@ -257,7 +257,7 @@ TEST_CASE("observe: ready means ready -- a publication enqueued after the subscr
     CHECK(sub->observed[0].seq == 1);
 }
 
-TEST_CASE("observe: the same shape from a participant that does not hold the office is counted, not told") {
+TEST_CASE("observe: the same shape from a participant that does not hold the role is counted, not told") {
     Rig rig(allow_all());
     loom::WeaveId sid{};
     Subscriber* sub = rig.subscriber(&sid);
@@ -486,13 +486,13 @@ TEST_CASE("observe: a window asked past the maximum is granted the maximum, and 
     CHECK(sub->subscribed[0].window == ob::kMaxWindow);
 }
 
-TEST_CASE("observe: a new holder of the office is told by its own id") {
+TEST_CASE("observe: a new holder of the role is told by its own id") {
     Rig rig(allow_all());
     loom::WeaveId sid{};
     Subscriber* sub = rig.subscriber(&sid);
     rig.ask(sid, rig.want({tick_ref()}));
     rig.say(1);
-    // The office changes hands: the old holder leaves, a new weave takes the role.
+    // The role changes hands: the old holder leaves, a new weave takes the role.
     (void)rig.bus.unregister_weave(rig.producer_id);
     auto next = std::make_unique<Producer>();
     Producer* raw = next.get();

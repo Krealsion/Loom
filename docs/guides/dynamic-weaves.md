@@ -206,16 +206,16 @@ not talk.
 ## What is different from native (and what is not)
 
 Answers work identically — a dynamic `mail.answer()` succeeds or is refused
-*with the weave told* ([ANS-06](../laws/answer-authority-laws.md)). Office
+*with the weave told* ([ANS-06](../laws/answer-authority-laws.md)). Role
 authorship works identically too (since ABI v5): `mail.as_role(...)`
 requests, the host verifies the membership at that moment, and incoming
 `mail.authored_from_role(...)` reads the same stamped fact a native recipient
 reads ([MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit)).
 ABI v7 returns the real attempt ticket for directed and role-addressed sends,
-including office authorship. Explicitly accepting `zen.DispatchRefused` v1 opts
+including role authorship. Explicitly accepting `zen.DispatchRefused` v1 opts
 into the same authenticated later refusal a native sender can receive. Check
 `mail.dispatch_refused()` and match the attempt, not correlation alone. A malformed
-seam value or refused office authorship returns an invalid ticket immediately.
+seam value or refused role authorship returns an invalid ticket immediately.
 The [contract](../reference/messaging.md#sender-visible-dispatch-refusal) distinguishes
 those boundaries from later dispatch and from unanswered delivery. Isolated
 children cannot request this attestation; their manifest is refused.
@@ -239,4 +239,4 @@ Reference: [kernel](../reference/kernel.md) ·
 [capabilities](../reference/capabilities.md#the-grant-in-process) (the
 in-process trust statement above, in its own reference). Real artifacts to
 crib:
-`tests/weavelib/` (e.g. `versioned_service.cpp`, `office_worker.cpp`).
+`tests/weavelib/` (e.g. `versioned_service.cpp`, `role_worker.cpp`).

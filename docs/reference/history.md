@@ -45,7 +45,7 @@ security role). No scoped-observation law is needed, and none is invented.
 ## One record
 
 `HistoryRecord` carries only facts a `BusEvent` states — sequence, sender,
-resolved target, addressed role, authored office, shape and version,
+resolved target, addressed role, authored role, shape and version,
 correlation, dispatch parent, handler duration, outcome, refusal reason and the
 gate's detail, plus the recorder's own `record_seq`. Fields a log conventionally
 holds and this bus cannot supply (a wall-clock stamp, a user, a severity) are
@@ -303,7 +303,7 @@ rises and `counters().appended` does not.
 ## A reader for a client that is not the console
 
 A [session host](../guides/sessions.md) serves clients that are not its console and are given no
-tap. For them it mounts one participant, office `loom.history`
+tap. For them it mounts one participant, role `loom.history`
 (`src/host/history_reader.hpp`, vocabulary `zen/session/vocabulary.hpp`), that answers two
 questions from the Recorder and adds no memory of its own:
 
@@ -316,7 +316,7 @@ Each row is a record as the Recorder holds it — seq, sender, target, shape, co
 parent, outcome and refusal, payload state — plus what can be said about its dispatch parent:
 its horizon, and, when that parent is a `loom.link.Crossed` record **said by a link this host
 mounted, to itself**, the crossing's fields read back through the gate (the link, its epoch, the
-far session and established name, the far author and office, the attempt). A record anybody else
+far session and established name, the far author and role, the attempt). A record anybody else
 sends itself in that shape is ordinary traffic here. The fields need the record's payload; when
 retention declined or evicted it the row says which and names no field. The reader is declared in
 the structural blacklist, so asking never writes history. Who may ask is the grant's business:

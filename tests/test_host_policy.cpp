@@ -133,7 +133,7 @@ TEST_CASE("a rule naming a WeaveId is refused, because a WeaveId is minted per r
 
 TEST_CASE("a rule naming a door is refused, because an authority file holds no doors") {
     // What `render_rule` prints for a door rule, written back: no one reads a door from this
-    // file, so it is refused in words rather than kept as an office whose name has spaces in it.
+    // file, so it is refused in words rather than kept as a role whose name has spaces in it.
     for (const char* text : {"ControlRequested v1 -> role zengine.workshop door zengine.files/*",
                              "ControlRequested v1 -> role zengine.workshop  door\tx/y",
                              "ControlRequested v1 -> role zengine.workshop door"}) {
@@ -165,7 +165,7 @@ TEST_CASE("every way of mistyping a rule is a named refusal, never a silent no-o
         "Greet vX -> any target", // unreadable version
         "Greet v1",               // no destination
         "Greet v1 -> somewhere",  // unreadable destination
-        "Greet v1 -> role ",      // no office
+        "Greet v1 -> role ",      // no role
         "observe Greet",          // no version on an observe
     };
     for (const char* text : bad) {

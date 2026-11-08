@@ -293,7 +293,7 @@ A run's worker is its own session, so the host's Recorder holds what was deliver
 `loom-session crossings work <name>` asks the history reader for those deliveries and joins them
 with the worker's own account of its asks, by correlation. When an answer came through a
 [link](running-loom.md#10-link-to-another-host), the row carries the crossing it descends from —
-the link, the far session and the name the far host established, the far author and office, the
+the link, the far session and the name the far host established, the far author and role, the
 attempt — as the link recorded what **arrived**; it is not an observation of the far execution.
 Its fields need the crossing record's bytes, which is your retention choice
 ([§ 11](running-loom.md#11-what-this-host-remembers-and-what-it-keeps)); without them the reader says
@@ -323,7 +323,7 @@ complete account the tool itself needs to preserve. `--json` cannot recover disc
 | what a link's session may do on another host | that host | e.g. the guests file of Zengine's Workshop, an application built on Loom |
 
 **A client** is admitted with exactly the session, run-manager and history vocabularies, to exactly
-those offices, and no tap. It cannot register runs or speak to your other participants.
+those roles, and no tap. It cannot register runs or speak to your other participants.
 
 **A worker** is admitted once, with a one-time credential its manager minted, as `run:<name>`,
 under the rules its package asks for (`"asks"` in `loom-tool.json`) — and the door grants a rule
@@ -370,7 +370,7 @@ def run(ctx):
     return "one line saying what passed"
 ```
 
-- `ctx.ask(office, shape, fields, via=<link>, settle=...)` sends one ask and waits for **its**
+- `ctx.ask(role, shape, fields, via=<link>, settle=...)` sends one ask and waits for **its**
   answer — only a delivery Loom attests as that answer, typed by the host's own schema. A refusal
   is an exception: `Refused` (the owner said no), `DispatchRefused` (the bus said no),
   `SendRefused` (dropped before the bus), `LinkOutcome` (the link's word; `lost` means the outcome
@@ -386,7 +386,7 @@ def run(ctx):
 - `ctx.hold(gate)` waits until `<run>/release/<gate>` exists — for demonstrations and tests that
   must decide when a run proceeds while no client is attached.
 - `ctx.inputs` are typed as the manifest declares them (`text`, `int`, `bool`, `number`).
-- `ctx.observe(office, shapes, via=<link>, latest=...)` subscribes to one office's publications
+- `ctx.observe(role, shapes, via=<link>, latest=...)` subscribes to one role's publications
   of the named shapes at the relay `loom.observe` — here, or on the far host through the link —
   when that host's policy lets this session observe them
   ([observation](../reference/observation.md)). It returns a `Subscription` whose `next(timeout)`
@@ -483,7 +483,7 @@ that declares that application's vocabulary (Zengine ships one for Workshop).
 | `run handle ... belongs to another host lifetime` | that run belonged to an ended host | `runs --past` shows its record |
 | `not approved to run` / `changed since it was approved` | the catalog's decision | approve in `loom-tools.json` |
 | `package 'P' uses 'N': ...` | a package this one builds on is missing, unapproved, or builds on others | list and approve `N` in `loom-tools.json` |
-| `ctx.observe` refused in the far host's words | that host's policy: this session may not observe that office's shapes | the far host's owner decides (e.g. a Workshop guests row's `observe`) |
+| `ctx.observe` refused in the far host's words | that host's policy: this session may not observe that role's shapes | the far host's owner decides (e.g. a Workshop guests row's `observe`) |
 | `this link carries no subscription N of that relay lifetime for you` | a release or acknowledgement for a subscription this run does not hold — another run's, or one whose session or subscription already ended | only the run that subscribed controls it; nothing was sent |
 | a `Gap` from a subscription | observations were lost — the relay's window, or this client's bound, or a hole in the numbers | a count that needed them is unknowable: say so; acknowledge faster or ask for a larger window |
 | `the session door refused run ...: ... may not say itself` | the manager's ceiling | `authority allow runs <rule>` |

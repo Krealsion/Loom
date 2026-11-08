@@ -105,7 +105,7 @@ set(LOOM_WASM_MODULES "" CACHE PATH
 # each case that proves a door for a native image proves it for a boxed one with the same code.
 set(zen_box_module_names
     box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching
-    box_defers box_senses box_office_worker box_dispatch box_joint box_versioned_v1
+    box_defers box_senses box_role_worker box_dispatch box_joint box_versioned_v1
     box_versioned_v2)
 set(zen_box_modules "")
 if(LOOM_WASI_SDK)
@@ -127,8 +127,8 @@ if(LOOM_WASI_SDK)
                     SOURCES weavelib/test_weave.cpp DEFINITIONS ZEN_WEAVE_DEFERS)
     loom_wasm_weave(zen_box_senses_wasm OUTPUT "${zen_box_modules}/box_senses.wasm"
                     SOURCES weavelib/test_weave.cpp DEFINITIONS ZEN_WEAVE_SENSES)
-    loom_wasm_weave(zen_box_office_worker_wasm OUTPUT "${zen_box_modules}/box_office_worker.wasm"
-                    SOURCES weavelib/office_worker.cpp)
+    loom_wasm_weave(zen_box_role_worker_wasm OUTPUT "${zen_box_modules}/box_role_worker.wasm"
+                    SOURCES weavelib/role_worker.cpp)
     loom_wasm_weave(zen_box_dispatch_wasm OUTPUT "${zen_box_modules}/box_dispatch.wasm"
                     SOURCES weavelib/dispatch_probe.cpp)
     loom_wasm_weave(zen_box_joint_wasm OUTPUT "${zen_box_modules}/box_joint.wasm"
@@ -140,7 +140,7 @@ if(LOOM_WASI_SDK)
     add_custom_target(loom-wasm-modules DEPENDS
         zen_box_probe_wasm zen_box_probe_path_open_wasm zen_box_probe_env_wasm
         zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm
-        zen_box_defers_wasm zen_box_senses_wasm zen_box_office_worker_wasm zen_box_dispatch_wasm
+        zen_box_defers_wasm zen_box_senses_wasm zen_box_role_worker_wasm zen_box_dispatch_wasm
         zen_box_joint_wasm zen_box_versioned_v1_wasm zen_box_versioned_v2_wasm)
 elseif(LOOM_WASM_MODULES)
     set(zen_box_modules "${LOOM_WASM_MODULES}")
@@ -181,7 +181,7 @@ if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
         "ZEN_BOX_COUNTER_REACHING_WASM=\"${zen_box_modules}/box_counter_reaching.wasm\""
         "ZEN_BOX_DEFERS=\"${zen_box_modules}/box_defers.wasm\""
         "ZEN_BOX_SENSES=\"${zen_box_modules}/box_senses.wasm\""
-        "ZEN_BOX_OFFICE_WORKER=\"${zen_box_modules}/box_office_worker.wasm\""
+        "ZEN_BOX_ROLE_WORKER=\"${zen_box_modules}/box_role_worker.wasm\""
         "ZEN_BOX_DISPATCH=\"${zen_box_modules}/box_dispatch.wasm\""
         "ZEN_BOX_JOINT=\"${zen_box_modules}/box_joint.wasm\""
         "ZEN_BOX_VERSIONED_V1=\"${zen_box_modules}/box_versioned_v1.wasm\""
@@ -340,7 +340,7 @@ zen_add_test_weave(zen_test_weave_seam_emit ZEN_WEAVE_SEAM_EMIT)
 # The same unresolvable shape with no address on it: publishes SeamOnly v1 (unheard, so not a
 # refusal) and then a resolvable Pong whose bytes fail the gate (undelivered, so still one).
 zen_add_test_weave(zen_test_weave_seam_publish ZEN_WEAVE_SEAM_PUBLISH)
-# The Sense fixture: claims, a forged office refused, and a synchronous read-back, all from the
+# The Sense fixture: claims, a forged role refused, and a synchronous read-back, all from the
 # far side of the seam.
 zen_add_test_weave(zen_test_weave_senses ZEN_WEAVE_SENSES)
 # Schema admission (since ABI v9): the declared emitter and its divergent twin, the loaded half of the
@@ -425,12 +425,12 @@ target_link_libraries(zen_host_probe_forge PRIVATE loom zen-switchboard zen-warn
 target_compile_definitions(zen_host_probe_forge PRIVATE ZEN_PROBE_FORGE)
 loom_weave_build_contract(zen_host_probe_forge)
 
-# The office worker: office authorship across the seam, loaded in process under the role
+# The role worker: role authorship across the seam, loaded in process under the role
 # "worker.a" (kernel suite) and out of process (isolation suite), where the pipe's fail-closed
 # rule is what is under test.
-add_library(zen_test_office_worker SHARED weavelib/office_worker.cpp)
-target_link_libraries(zen_test_office_worker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
-loom_weave_build_contract(zen_test_office_worker)
+add_library(zen_test_role_worker SHARED weavelib/role_worker.cpp)
+target_link_libraries(zen_test_role_worker PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_role_worker)
 
 add_library(zen_test_badabi SHARED weavelib/bad_abi.cpp)
 target_link_libraries(zen_test_badabi PRIVATE loom zen-warnings zen-sanitize)
@@ -477,7 +477,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_nest_mixed_rev zen_test_weave_nest_agree zen_test_weave_ping_drift
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
-    zen_test_office_worker zen_test_dispatch zen_test_sink_overflow zen_test_joint
+    zen_test_role_worker zen_test_dispatch zen_test_sink_overflow zen_test_joint
     zen_host_probe zen_host_probe_forge
     zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
@@ -516,7 +516,7 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_HANDOFF_V1=\"$<TARGET_FILE:zen_test_handoff_v1>\""
     "ZEN_SO_HANDOFF_V2=\"$<TARGET_FILE:zen_test_handoff_v2>\""
     "ZEN_SO_HANDOFF_MIGRATOR=\"$<TARGET_FILE:zen_test_handoff_migrator>\""
-    "ZEN_SO_OFFICE_WORKER=\"$<TARGET_FILE:zen_test_office_worker>\""
+    "ZEN_SO_ROLE_WORKER=\"$<TARGET_FILE:zen_test_role_worker>\""
     "ZEN_SO_EMITS=\"$<TARGET_FILE:zen_test_weave_emits>\""
     "ZEN_SO_EMITS_CONFLICT=\"$<TARGET_FILE:zen_test_weave_emits_conflict>\""
     "ZEN_SO_NEST_OLD=\"$<TARGET_FILE:zen_test_weave_nest_old>\""

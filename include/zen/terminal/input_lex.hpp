@@ -142,7 +142,7 @@ inline std::variant<FieldValue, Ref> lex_value(const std::string& s, bool quoted
     return FieldValue{s}; // quoted, or a non-numeric bareword -> Text
 }
 
-/// WHERE A TYPED LINE IS ADDRESSED — `#12` one weave, `@office` whichever weave holds it at
+/// WHERE A TYPED LINE IS ADDRESSED — `#12` one weave, `@role` whichever weave holds it at
 /// delivery, `*` publish. There is deliberately no fourth form and no default: an unaddressed
 /// send is not a mode, it is a mistake, and `Address` itself has no way to spell one.
 ///

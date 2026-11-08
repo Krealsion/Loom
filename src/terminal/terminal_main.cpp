@@ -30,7 +30,7 @@ namespace {
 using loom::lex_arg;
 // The address half of the command grammar is shared with every other presentation of this
 // core, as the value half is: one parser, in <zen/terminal/input_lex.hpp>, so `#12`,
-// `@office` and `*` cannot come to mean two things.
+// `@role` and `*` cannot come to mean two things.
 using loom::parse_address;
 using loom::parse_u64;
 using loom::Token;
@@ -68,7 +68,7 @@ struct Nothing {
     ZEN_SHAPE(Nothing, 1, ZEN_FIELD(n));
 };
 
-/// An ordinary service in an ordinary office. It answers questions and does work,
+/// An ordinary service in an ordinary role. It answers questions and does work,
 /// and it reports WHO it heard from — the fact the whole architecture protects.
 class Service final
     : public loom::WeaveBase<Service, Nothing, loom::Accept<Work, Query>, loom::Emit<Reply>> {
@@ -232,7 +232,7 @@ void print_message(const loom::ReceivedMessage& m) {
                       << "` decides it, and nothing else";
         } else if (is_prompt && f.name == "door") {
             std::cout << "     <- the door a yes opens, as the Weaver parsed it (empty: none); "
-                         "the office it names judges it";
+                         "the role it names judges it";
         } else if (is_prompt && f.name == "requester") {
             std::cout << "     <- the Weaver's own trusted fact (the bus-stamped requester)";
         }
@@ -293,7 +293,7 @@ int main() {
 
     // ---- the operator seat: a DIFFERENT weave -------------------------------
     //
-    // Four rules, all of them "say one decision to the policy office". No allow_any, no tap, no
+    // Four rules, all of them "say one decision to the policy role". No allow_any, no tap, no
     // discovery, no host root: none is needed to be the user.
     loom::Grant operator_grant;
     operator_grant.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
@@ -418,8 +418,8 @@ as the current participant:
   send <addr> <Shape> <v> [args...]      author one message; expect no answer
   ask  <addr> <Shape> <v> [args...]      author one message; wait for LOOM's answer to it
   request <Shape> <v> @<role> [door=<door>] [purpose]
-                                ask the policy office for one exact send right, or a door
-  authority                     ask the policy office what my authority is right now
+                                ask the policy role for one exact send right, or a door
+  authority                     ask the policy role what my authority is right now
   pending                       the conversations I am waiting on
   await [turns]                 pump the host loop until my asks settle (bounded)
   cancel <ask>                  stop waiting LOCALLY (the far end is not told)
@@ -596,7 +596,7 @@ debug lens only (the HOST looking - powers no participant has):
                     }
                     print_result(me.request_authority(tok[1].text, static_cast<std::int64_t>(v),
                                                       tok[3].text.substr(1), purpose,
-                                                      loom::kPolicyOffice, door));
+                                                      loom::kPolicyRole, door));
                 }
             } else if (cmd == "authority") {
                 print_result(me.describe_authority());

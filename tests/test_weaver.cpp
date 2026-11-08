@@ -87,7 +87,7 @@ class Session final
     : public WeaveBase<Session, Nothing, Accept<Go, AuthorityGranted, Refused, AuthorityDescription>,
                        Emit<Work, RequestAuthority, RequestAuthorityV1, DescribeAuthority>> {
 public:
-    /// What the next `kAsk` will request, and of which office. Fields of the test, never of the
+    /// What the next `kAsk` will request, and of which role. Fields of the test, never of the
     /// wire.
     RequestAuthority want{"Work", 1, kServiceRole, ""};
     /// What the next `kAskV1` will request, in the version that names no door.
@@ -240,10 +240,10 @@ struct Cast {
     std::vector<TapRecord> tap;
 
     /// `ceiling` is what the host lets this Weaver ever delegate. The default is
-    /// exactly one rule: Work v1 may be spoken to the service's office. A
+    /// exactly one rule: Work v1 may be spoken to the service's role. A
     /// `describe_only` Weaver holds the capability that reads and installs nothing.
     explicit Cast(LiveAuthority ceiling = default_ceiling(), bool describe_only = false) {
-        // The service: holds the office, says nothing at all.
+        // The service: holds the role, says nothing at all.
         std::tie(service_id, service) =
             place<Service>(bus, Grant::nothing(), std::string(kServiceRole));
 
@@ -325,7 +325,7 @@ struct Cast {
     }
     void clear_tap() { tap.clear(); }
 
-    /// Did the bus refuse a `shape` addressed at the service's office for want of
+    /// Did the bus refuse a `shape` addressed at the service's role for want of
     /// authority? (A role-targeted refusal is recorded before the role resolves,
     /// so the target id is not yet the service's.)
     bool denied(const std::string& shape) const {
@@ -584,7 +584,7 @@ TEST_CASE("an approval cannot widen the authority the host let this Weaver deleg
     REQUIRE(c.op->refusals.size() == 1);
     CHECK(c.op->refusals[0].find("outside the authority this Weaver may delegate") !=
           std::string::npos);
-    // The refusal says nothing about whether that office exists — a policy door
+    // The refusal says nothing about whether that role exists — a policy door
     // must not become the service directory the delivery path refuses to be.
     CHECK(c.op->refusals[0].find(kServiceRole) == std::string::npos);
 
@@ -891,14 +891,14 @@ TEST_CASE("a prompt's name is never reused in its Weaver's life") {
     CHECK(c.op->described[0].delegated == std::vector<std::string>{"Work v1 -> role some.service"});
 }
 
-TEST_CASE("a decision for a replaced Weaver's prompt, sent to the office, decides nothing") {
+TEST_CASE("a decision for a replaced Weaver's prompt, sent to the role, decides nothing") {
     Cast c;
     c.go(c.session_id, step::kAsk);
     REQUIRE(c.op->prompts.size() == 1);
     const std::int64_t old_prompt = c.op->prompts[0].prompt;
 
-    // The Weaver is replaced in its office, its question undecided -- the session reconnects --
-    // and a new Weaver over the same session takes the office.
+    // The Weaver is replaced in its role, its question undecided -- the session reconnects --
+    // and a new Weaver over the same session takes the role.
     (void)c.bus.unregister_weave(c.weaver_id);
     GrantAuthority cap = host_grant_authority(c.bus, c.session_id, Cast::default_ceiling());
     auto [next_id, next] =
@@ -914,7 +914,7 @@ TEST_CASE("a decision for a replaced Weaver's prompt, sent to the office, decide
     CHECK(next->pending_prompt() == new_prompt);
     const std::size_t heard = c.session->answers.size();
 
-    // THE STALE PRESS: a decision on the old prompt, sent to the office, reaches the new Weaver.
+    // THE STALE PRESS: a decision on the old prompt, sent to the role, reaches the new Weaver.
     c.op->naming = old_prompt;
     c.go(c.operator_id, step::kApprove);
     REQUIRE(c.op->refusals.size() == 1);
@@ -941,7 +941,7 @@ TEST_CASE("a decision for a replaced Weaver's prompt, sent to the office, decide
 
 TEST_CASE("two Weavers on one bus never put the same prompt name") {
     Cast c;
-    // A second session, and a second Weaver governing it, in an office of its own.
+    // A second session, and a second Weaver governing it, in a role of its own.
     Grant asker;
     asker.allow_to_role("zen.RequestAuthority", 2, "loom.weaver.b");
     auto [other_session_id, other_session] = place<Session>(c.bus, std::move(asker), "");
@@ -1208,8 +1208,8 @@ TEST_CASE("what the operator reads is what the bus will apply") {
     c.go(c.session_id, step::kWork);
     CHECK(c.service->heard.size() == 1);
 
-    // A ROLE IS DESCRIBED AS A ROLE. The service holds the office now and the description still
-    // does not name it: role authority follows whoever holds the office at delivery, and "weave
+    // A ROLE IS DESCRIBED AS A ROLE. The service holds the role now and the description still
+    // does not name it: role authority follows whoever holds the role at delivery, and "weave
     // #N" would describe a narrower, more permanent grant. `weave #N` is the ONLY form a WeaveId
     // takes in a rendered rule, so its absence is the whole claim; bare digits would match "v1".
     CHECK(c.op->described[0].delegated[0].find("weave #") == std::string::npos);
@@ -1255,7 +1255,7 @@ TEST_CASE("the rendered vocabulary states every kind of rule a description can c
 
 TEST_CASE("holding the Weaver's role confers no authority at all") {
     Switchboard bus;
-    // A weave in the Weaver's own office, wearing the Weaver's own grant — and
+    // A weave in the Weaver's own role, wearing the Weaver's own grant — and
     // holding an INERT capability, because the host never minted it one.
     auto [id, weaver] = place<Weaver>(bus, Cast::weaver_grant(WeaveId{}, WeaveId{}),
                                       std::string(kWeaverRole), GrantAuthority{}, WeaveId{});
@@ -1270,7 +1270,7 @@ TEST_CASE("holding the Weaver's role confers no authority at all") {
     bus.send(session_id, Message(to_value(Go{step::kAsk})));
     bus.drain_until_idle();
 
-    // It governs nobody, so it grants nobody anything. The office got the
+    // It governs nobody, so it grants nobody anything. The role got the
     // message delivered; it did not make its holder an administrator.
     REQUIRE(session->answers.size() == 1);
     CHECK(session->answers[0].kind == "refused");
@@ -1392,7 +1392,7 @@ TEST_CASE("revoking does not answer a question the operator has not answered") {
 // =========================================================================
 
 namespace {
-/// A ceiling of one office's doors on the Work rule, and nothing door-less.
+/// A ceiling of one role's doors on the Work rule, and nothing door-less.
 LiveAuthority doors_of(const char* door) {
     LiveAuthority ceiling;
     ceiling.allow_to_role("Work", 1, kServiceRole, *Door::parse(door));
@@ -1426,7 +1426,7 @@ TEST_CASE("a door is shown beside the prompt's name, and a yes installs exactly 
           std::vector<std::string>{
               "Work v1 -> role some.service door zengine.files/files:files.open"});
 
-    // A door rule is read by its office and lets no delivery through: Work is still refused.
+    // A door rule is read by its role and lets no delivery through: Work is still refused.
     c.clear_tap();
     c.go(c.session_id, step::kWork);
     CHECK(c.service->heard.empty());

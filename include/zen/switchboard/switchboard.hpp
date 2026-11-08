@@ -69,7 +69,7 @@ enum class RefusalReason : std::uint8_t {
     /// PR-03 (the drift check), PR-07 (the window it can drift in);
     /// docs/laws/replacement-laws.md
     AdmissionRevoked,
-    /// A weave asked to speak as an office it does not hold. Refused when the statement is
+    /// A weave asked to speak as a role it does not hold. Refused when the statement is
     /// authored: nothing is queued, and it is not sent as personal speech instead.
     /// MSG-07; docs/laws/messaging-laws.md
     RoleAuthorshipDenied,
@@ -173,7 +173,7 @@ struct BusEvent {
     std::uint64_t expected_requester_incarnation = 0;
     std::uint64_t requester_life_now = 0;
     std::uint64_t requester_incarnation_now = 0;
-    /// The office this delivery was deliberately authored as, stamped on the envelope; empty
+    /// The role this delivery was deliberately authored as, stamped on the envelope; empty
     /// for personal speech. Not the sender's current role: `role_of(sender)` answers that, and
     /// may already differ.
     /// MSG-07; docs/laws/messaging-laws.md
@@ -181,10 +181,10 @@ struct BusEvent {
     /// The envelope's correlation, as the sender chose it. It identifies a conversation and
     /// authenticates nothing (ANS-05); 0 is both "none stated" and a legal choice.
     std::uint64_t correlation = 0;
-    /// The office the sender addressed, resolved to `target` at dispatch; empty for a directed
+    /// The role the sender addressed, resolved to `target` at dispatch; empty for a directed
     /// send and for a publication. On a seam refusal from a role door `target` stays invalid
     /// beside it, so read it as where the message was sent, never as who answered. Not
-    /// `authored_role`, the office the speaker spoke as.
+    /// `authored_role`, the role the speaker spoke as.
     std::string addressed_role{};
     /// The delivery being dispatched when this one was enqueued; 0 for a host send between
     /// turns. Synchronous dispatch ancestry, not causality: what an asynchronous operation
@@ -461,32 +461,32 @@ public:
     /// bound keeps a host adapter from growing it without limit on a peer's behalf.
     static constexpr std::size_t kMaxFences = 64;
 
-    // ---- deliberate office authorship ---------------------------------------
+    // ---- deliberate role authorship ---------------------------------------
     // A weave may deliberately author one statement as a role it holds. Membership is verified
     // when the statement is authored, so the role moving while it waits cannot change what it
     // says; the stamped fact is never recomputed. Every other delivery law still applies. A
     // refusal queues nothing and shows on the tap as `RoleAuthorshipDenied`.
     // MSG-07, MSG-04; docs/laws/messaging-laws.md
-    // docs/reference/messaging.md#office-authorship-role-authored-provenance
+    // docs/reference/messaging.md#role-authorship-role-authored-provenance
 
-    /// Office-authored direct send. An invalid Ticket means authorship was refused and nothing
+    /// Role-authored direct send. An invalid Ticket means authorship was refused and nothing
     /// was queued; the refusal is on the tap and in the journal.
-    Ticket office_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
+    Ticket role_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
                           Message msg);
-    /// Office-authored role-addressed send: `as_role` is the office spoken for, verified now;
+    /// Role-authored role-addressed send: `as_role` is the role spoken for, verified now;
     /// `to_role` is the destination, resolved at delivery. Both facts are carried separately.
-    Ticket office_send_to_role_as(WeaveId as_sender, std::string_view as_role,
+    Ticket role_send_to_role_as(WeaveId as_sender, std::string_view as_role,
                                   std::string_view to_role, Message msg);
-    /// Office-authored publication. "Authorship refused" and "authorized, zero recipients" stay
+    /// Role-authored publication. "Authorship refused" and "authorized, zero recipients" stay
     /// distinct, and each recipient's delivery is still authorized against the sender's grant.
-    OfficePublication office_publish_as(WeaveId as_sender, std::string_view as_role, Message msg);
+    RolePublication role_publish_as(WeaveId as_sender, std::string_view as_role, Message msg);
 
-    /// The Bus office verbs, which the root surface always refuses: a host has no weave identity
-    /// and holds no office. A host speaks as a weave through `send_as` and `office_send_as`.
-    Ticket office_send(std::string_view as_role, WeaveId target, Message msg) override;
-    Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+    /// The Bus role verbs, which the root surface always refuses: a host has no weave identity
+    /// and holds no role. A host speaks as a weave through `send_as` and `role_send_as`.
+    Ticket role_send(std::string_view as_role, WeaveId target, Message msg) override;
+    Ticket role_send_to_role(std::string_view as_role, std::string_view to_role,
                                Message msg) override;
-    OfficePublication office_publish(std::string_view as_role, Message msg) override;
+    RolePublication role_publish(std::string_view as_role, Message msg) override;
 
 
     /// Dispatch the work waiting at entry, then return how many deliveries were made: the
@@ -528,25 +528,25 @@ public:
     // SENSE-01, SENSE-02; docs/laws/sense-laws.md
 
     /// Claim `value` personally as `claimant`: the host's door; a weave claims through its
-    /// WeaveBus. Keyed by (claimant, shape), which no office key reaches.
+    /// WeaveBus. Keyed by (claimant, shape), which no role key reaches.
     SenseClaimResult claim_as(WeaveId claimant, Value value);
 
-    /// Claim `value` as the office `as_role`, verified now (`role_holder(as_role) == claimant`,
+    /// Claim `value` as the role `as_role`, verified now (`role_holder(as_role) == claimant`,
     /// as MSG-07 verifies authorship). A claimant that does not hold it is refused
-    /// `OfficeNotHeld` and nothing is stored; it is never made a personal claim instead. Keyed
+    /// `RoleNotHeld` and nothing is stored; it is never made a personal claim instead. Keyed
     /// by (role, shape), and recording which weave claimed it.
-    SenseClaimResult office_claim_as(WeaveId claimant, std::string_view as_role, Value value);
+    SenseClaimResult role_claim_as(WeaveId claimant, std::string_view as_role, Value value);
 
     /// The latest claim `author` made personally of this shape, gated by `reader`'s grant. The
     /// value is a copy the caller owns.
     SenseReading observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
                             std::uint32_t shape_version) const;
 
-    /// The latest claim made as the office `role`, gated by `reader`'s grant. After the role
+    /// The latest claim made as the role `role`, gated by `reader`'s grant. After the role
     /// moves this still returns the predecessor's claim, marked
-    /// `office_holder_is_current=false`; a reader wanting only the current holder's checks it.
+    /// `role_holder_is_current=false`; a reader wanting only the current holder's checks it.
     /// SENSE-03; docs/laws/sense-laws.md
-    SenseReading observe_office_as(WeaveId reader, std::string_view role,
+    SenseReading observe_role_as(WeaveId reader, std::string_view role,
                                    std::string_view shape_name,
                                    std::uint32_t shape_version) const;
 
@@ -554,13 +554,13 @@ public:
     /// (name, version) overloads would hide `Bus`'s schema-typed ones on a `Switchboard&`; the
     /// `using` declarations keep both reachable.
     using Bus::observe;
-    using Bus::observe_office;
+    using Bus::observe_role;
     /// And the host's ungated `joint_status(op)` beside the operator's authenticated one.
     using Bus::joint_status;
 
     SenseReading observe(WeaveId author, std::string_view shape_name,
                          std::uint32_t shape_version) const;
-    SenseReading observe_office(std::string_view role, std::string_view shape_name,
+    SenseReading observe_role(std::string_view role, std::string_view shape_name,
                                 std::uint32_t shape_version) const;
 
     /// The claim-set this participant declared, so a consumer can learn what it may claim before
@@ -576,7 +576,7 @@ public:
     /// (registered weaves times the shapes they declare, plus held roles times shapes): a reload,
     /// a revival or a re-claim replaces the value under its key and adds none.
     std::size_t retained_claim_count() const noexcept {
-        return personal_claims_.size() + office_claims_.size();
+        return personal_claims_.size() + role_claims_.size();
     }
 
     // ---- Joint publication of latest claims -----------------------------------
@@ -1057,27 +1057,27 @@ private:
                                   std::int64_t sequence) override {
             return sb_.announce_as(self_, authority, target, std::move(msg), sequence);
         }
-        Ticket office_send(std::string_view as_role, WeaveId target, Message msg) override {
-            return sb_.office_send_as(self_, as_role, target, std::move(msg));
+        Ticket role_send(std::string_view as_role, WeaveId target, Message msg) override {
+            return sb_.role_send_as(self_, as_role, target, std::move(msg));
         }
-        Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+        Ticket role_send_to_role(std::string_view as_role, std::string_view to_role,
                                    Message msg) override {
-            return sb_.office_send_to_role_as(self_, as_role, to_role, std::move(msg));
+            return sb_.role_send_to_role_as(self_, as_role, to_role, std::move(msg));
         }
-        OfficePublication office_publish(std::string_view as_role, Message msg) override {
-            return sb_.office_publish_as(self_, as_role, std::move(msg));
+        RolePublication role_publish(std::string_view as_role, Message msg) override {
+            return sb_.role_publish_as(self_, as_role, std::move(msg));
         }
         SenseClaimResult claim(Value value) override {
             return sb_.claim_as(self_, std::move(value));
         }
-        SenseClaimResult office_claim(std::string_view as_role, Value value) override {
-            return sb_.office_claim_as(self_, as_role, std::move(value));
+        SenseClaimResult role_claim(std::string_view as_role, Value value) override {
+            return sb_.role_claim_as(self_, as_role, std::move(value));
         }
         SenseReading observe(WeaveId author, std::shared_ptr<const Schema> shape) override {
             return sb_.observe_as(self_, author, shape->name(), shape->version());
         }
-        SenseReading observe_office(std::string_view role, std::shared_ptr<const Schema> shape) override {
-            return sb_.observe_office_as(self_, role, shape->name(), shape->version());
+        SenseReading observe_role(std::string_view role, std::shared_ptr<const Schema> shape) override {
+            return sb_.observe_role_as(self_, role, shape->name(), shape->version());
         }
         GrantChange delegate_authority(const GrantAuthority& authority,
                                        LiveAuthority requested) override {
@@ -1127,13 +1127,13 @@ private:
                         Provenance provenance = Provenance{});
     std::size_t fanout(Message msg, bool gated, Provenance provenance = Provenance{});
 
-    /// Whether `as_sender` holds `as_role` now: the one membership question every office door
+    /// Whether `as_sender` holds `as_role` now: the one membership question every role door
     /// asks (MSG-07), read from the table routing uses.
     bool holds_role_now(WeaveId as_sender, std::string_view as_role) const;
 
-    /// Refuse an office-authorship request: `RoleAuthorshipDenied` on the tap and in the journal,
+    /// Refuse a role-authorship request: `RoleAuthorshipDenied` on the tap and in the journal,
     /// nothing queued, and the invalid ticket returned.
-    Ticket refuse_office(WeaveId target, WeaveId as_sender, const Message& msg);
+    Ticket refuse_role(WeaveId target, WeaveId as_sender, const Message& msg);
 
     /// The one write path for an attested answer. Refuses, on the tap and in the journal, when
     /// the caller is not the weave being dispatched, the request had no one to answer, or the
@@ -1293,8 +1293,8 @@ private:
     void record(std::uint64_t seq, Disposition disposition, const Refusal& refusal);
 
     // ---- the latest-claim repository ----------------------------------------
-    // Personal claims are keyed by the claimant's WeaveId, office claims by role, in separate
-    // maps, so a personal claim can never be reached through or promoted to an office key
+    // Personal claims are keyed by the claimant's WeaveId, role claims by role, in separate
+    // maps, so a personal claim can never be reached through or promoted to a role key
     // (SENSE-04). One record per key: a new claim replaces the value and bumps its revision.
     struct ClaimRecord {
         Value value;
@@ -1315,10 +1315,10 @@ private:
     /// key: (claimant id, shape name, shape version)
     using PersonalKey = std::tuple<std::uint64_t, std::string, std::uint32_t>;
     /// key: (role, shape name, shape version)
-    using OfficeKey = std::tuple<std::string, std::string, std::uint32_t>;
+    using RoleKey = std::tuple<std::string, std::string, std::uint32_t>;
 
     std::map<PersonalKey, ClaimRecord> personal_claims_;
-    std::map<OfficeKey, ClaimRecord> office_claims_;
+    std::map<RoleKey, ClaimRecord> role_claims_;
 
     /// The declared claim-set's entry for this shape, or nullptr: the one place the claim door
     /// and discovery ask.
@@ -1338,19 +1338,19 @@ private:
     MadeClaim make_claim(const WeaveRecord& rec, Value value, std::uint64_t previous_revision);
     /// A reading's authorship from a stored record, answering the "is that still true?"
     /// questions when read, never storing them.
-    SenseAuthorship authorship_of(const ClaimRecord& rec, const std::string& office,
+    SenseAuthorship authorship_of(const ClaimRecord& rec, const std::string& role,
                                   const std::string& name, std::uint32_t version) const;
     /// Drop the claims under keys that stopped meaning anything: a removed weave's personal keys,
-    /// an unheld role's office keys. An admission moves a role in place and never leaves it
-    /// unheld, so the predecessor's office claim survives it, marked stale.
+    /// an unheld role's role keys. An admission moves a role in place and never leaves it
+    /// unheld, so the predecessor's role claim survives it, marked stale.
     void forget_personal_claims(WeaveId id);
-    void forget_office_claims(const std::string& role);
+    void forget_role_claims(const std::string& role);
 
     // ---- Joint publication: the bus-private records -------------------------------
     struct JointPart {
         ClaimKey key;
         ParticipantRef claimant{};   ///< exact life + incarnation, bound at begin
-        /// The office the key was named by at begin, or its claimant's then: the words a failure
+        /// The role the key was named by at begin, or its claimant's then: the words a failure
         /// about this part is told in.
         std::string bound_role;
         std::uint64_t revision = 0;  ///< the key's revision at begin
@@ -1420,7 +1420,7 @@ private:
     /// if still held, then settle the operation's application once every part is in.
     void note_application(const PersonalKey& key, ClaimRecord& record, JointApplication what);
     /// Tell the operator once per settlement (`zen.JointApplied`), naming the operation and, for
-    /// a non-application, the exact claimant and the office it was bound through.
+    /// a non-application, the exact claimant and the role it was bound through.
     void settle_application(JointOp& op);
     /// A code swap's successor is shown what its predecessor could not apply: every Failed key
     /// of `id` returns to Pending, on the record and on its operation.

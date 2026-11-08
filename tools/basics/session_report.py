@@ -6,15 +6,15 @@ import json
 
 
 def run(ctx):
-    office = ctx.inputs.get("office") or "loom.session"
+    role = ctx.inputs.get("role") or "loom.session"
     # Partial work first, on purpose: a refusal below comes AFTER something was already done,
     # and the run's record shows both.
     ctx.step("record the question")
-    ctx.produce("request.txt", ("asking %s what this session is\n" % office).encode("utf-8"))
-    ctx.step("ask " + office)
-    d = ctx.ask(office, "loom.session.Describe", {})
+    ctx.produce("request.txt", ("asking %s what this session is\n" % role).encode("utf-8"))
+    ctx.step("ask " + role)
+    d = ctx.ask(role, "loom.session.Describe", {})
     ctx.check(d.shape == "loom.session.Description",
-              "%s answered %s, not loom.session.Description" % (office, d.shape))
+              "%s answered %s, not loom.session.Description" % (role, d.shape))
     ctx.check(d["lifetime"] == ctx.lifetime,
               "the door describes lifetime %s, but this run belongs to %s"
               % (d["lifetime"], ctx.lifetime))

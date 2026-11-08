@@ -70,7 +70,7 @@ Its vocabulary is **supplied by the host at mount**, not discovered. That is
 narrower than the console's registry read on purpose: enumerating a live
 Switchboard's registry is a fact about the running world rather than about this
 participant, and it needs a `Switchboard&` no ordinary weave holds. Service
-discovery is deliberately **omitted** — a terminal that can speak to an office
+discovery is deliberately **omitted** — a terminal that can speak to a role
 the user names is a useful terminal, and none of the workflows below needed it.
 
 `knows()` adds type knowledge; `accepts()` adds type knowledge **and a door**.
@@ -172,7 +172,7 @@ Two things a terminal participant adds on top of the book, both because it can:
   its asker as an *ordinary* send — but a terminal talks to weaves that answer it
   directly, so it insists.
 - **The expected respondent, where there is one.** `ask` to a weave records that
-  weave as the one whose answer may settle the conversation; `ask` to an office
+  weave as the one whose answer may settle the conversation; `ask` to a role
   cannot, because whoever holds it at delivery is not knowable when the ask is
   authored.
 
@@ -204,7 +204,7 @@ session.request_authority("Work", 1, "some.service", "so I can finish the job");
 ```
 
 There is **no Weaver in the terminal core**: no include, no type, no branch. The
-office is an address, the request is an ordinary composed message out of the
+role is an address, the request is an ordinary composed message out of the
 host-supplied vocabulary, and a host that did not supply that shape gets an
 ordinary `UnknownShape`. The operator's four decisions (`Approve`, `Refuse`,
 `Revoke`, `DescribeAuthority`) are not even sugar — a presentation authors them
@@ -230,7 +230,7 @@ Trusted facts are kept apart from payload, always:
 
 ```text
 sender          the bus stamp                     TRUSTED
-authored_role   an office Loom verified at authorship, or empty
+authored_role   a role Loom verified at authorship, or empty
 answers_ask     provenance no ordinary enqueue can write
 <payload>       whatever the message says about itself   NOT trusted
 ```

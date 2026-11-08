@@ -74,7 +74,7 @@ untouched. No descriptor-size negotiation and no old-image bridge: rebuild
 hosts, libraries and images together.
 
 **v7 carries sender-visible dispatch refusal.** The four ordinary addressed
-send callbacks (`send`, `send_to_role`, `office_send`, `office_send_to_role`)
+send callbacks (`send`, `send_to_role`, `role_send`, `role_send_to_role`)
 return their actual queued sequence through `attempt_out`; NULL is allowed and
 zero means no queued identity. The C++ wrappers return that sequence as Ticket,
 so matching needs no invalid or success-sentinel tickets. Immediate
@@ -93,8 +93,8 @@ attestation reach. Nonparticipating child speech is unaffected. The bridge/wire
 payload format carries no trusted provenance field.
 
 **v6 carries Senses across the seam, both ways**, so a loaded weave has exactly
-the surface a native one has: `claim` / `office_claim` outbound, `observe` /
-`observe_office` inbound, and the declared **claim-set in the manifest** — which
+the surface a native one has: `claim` / `role_claim` outbound, `observe` /
+`observe_role` inbound, and the declared **claim-set in the manifest** — which
 is what makes a loaded artifact's Sense capability discoverable at load rather
 than after some runtime claim accidentally reveals a shape. The claim-set rides
 the existing manifest rather than a second descriptor entry point: it is the same
@@ -109,26 +109,26 @@ re-admits against its own definition of the shape — no host pointer into the
 repository reaches a library, so a loaded reader has exactly the reach a native
 one has: none. Sense refusals cross as their own statuses
 (`ZEN_ERR_SENSE_NO_CLAIM`, `_NOT_AUTHORIZED`, `_UNDECLARED`,
-`_OFFICE_NOT_HELD`), so four different problems stay four different answers
+`_ROLE_NOT_HELD`), so four different problems stay four different answers
 rather than one silence.
 
 **An observed reading loses nothing to the seam.** The authorship a loaded reader
 receives carries every fact a native one gets: author id, life and incarnation as
 of the claim, whether that **life** is still current, whether that
 **incarnation** is still current (a separate question — a live replacement moves
-the code without ending the life), the authored office, whether that office's
+the code without ending the life), the authored role, whether that role's
 holder is still current, and the claim's revision. The shape's identity is not
 carried back because it is the *query* — a reading answers for the (name,
 version) that was asked for.
 
-**The office name crosses exactly, at any length.** It travels through a
+**The role name crosses exactly, at any length.** It travels through a
 caller-provided `ZenByteSink` — the same mechanism the claim's value uses — and
-is *not* a field in `ZenSenseBy`. A fixed `char office[128]` would truncate at the
-bound and let an observation report an office identity nobody ever authored: a
-200-character role arriving as a plausible 127-character prefix, and two offices
+is *not* a field in `ZenSenseBy`. A fixed `char role[128]` would truncate at the
+bound and let an observation report a role identity nobody ever authored: a
+200-character role arriving as a plausible 127-character prefix, and two roles
 agreeing for their first 127 bytes indistinguishable. A bigger buffer only moves
 that lie further out, so there is no bound, no representability limit and no
-truncation refusal. An office sink that is never written means the claim was
+truncation refusal. A role sink that is never written means the claim was
 personal, which no real role name can imitate.
 
 No binary compatibility is claimed: a v5 artifact refuses at load, naming both
@@ -137,7 +137,7 @@ Bus whose claim/observe verbs silently return the refusing defaults: unable to
 claim, unable to read, and unable to say so.
 
 **v5 carried role-authored delivery provenance and gave loaded weaves the
-explicit office-authorship doors native weaves already have**, for the same
+explicit role-authorship doors native weaves already have**, for the same
 reason and with the same honest refusal of its predecessor.
 
 ## Shape
@@ -205,7 +205,7 @@ same-signature doors each answering for themselves, pins the successful
 consequences; a swap of any two is refused by the gate, since each door's answer
 has its own schema.
 
-**The host table has one compatible pair.** `send_to_role` and `office_publish`
+**The host table has one compatible pair.** `send_to_role` and `role_publish`
 share a function-pointer type since v7 added `attempt_out` to the addressed door:
 both end in `uint64_t*`, but one returns an attempt and the other a recipient count.
 They are the only pair among the host's fifteen callbacks (sixteen fields including
@@ -220,14 +220,14 @@ schema and `claim_published` against the CLAIM-SET, so a swap is a gate
 refusal at the first real showing (the loaded claimant is shown a `DocFact`,
 which the probe's `ProbeState` gate refuses), never a silent success.
 
-The `dispatch_loaded` case for loaded role sends and office publications loads
+The `dispatch_loaded` case for loaded role sends and role publications loads
 the real image and checks the host's actual
-destination set, personal versus verified office provenance, and exact attempt
+destination set, personal versus verified role provenance, and exact attempt
 versus recipient count. It chooses an addressed role the author also holds and
 primes sequences above the fanout count, so both wrong callbacks can succeed and
 an accidental numerical equality cannot hide the swap. Results are read through
 the image's snapshot, independent of the callbacks being tested. Ordinary direct
-send/publication and unauthorized-office controls remain. Cross-wiring the real
+send/publication and unauthorized-role controls remain. Cross-wiring the real
 host's two named initializers compiles and makes this witness fail semantically;
 restoring that host makes it pass.
 
@@ -243,7 +243,7 @@ For an appended field **or a changed existing signature**:
 
 1. Inventory assignment-compatible callbacks across **all** fields, including
    nonadjacent pairs. A signature change can create a collision without adding
-   or moving a field: v7's `attempt_out` made `send_to_role` and `office_publish`
+   or moving a field: v7's `attempt_out` made `send_to_role` and `role_publish`
    one type.
 2. Keep each construction site explicit and in declaration order: export macro,
    in-process host, isolation child and manual bad/stale descriptors. Append new
@@ -283,12 +283,12 @@ publication counts retain their existing behavior), since
 v4 the **answer doors** with real success/failure: `answer`, `defer_answer`
 (opaque token), `answer_deferred`, `release_deferred` — a refused dynamic
 answer is *told* to the weave (`ZEN_ERR_REFUSED`), the parity law
-([ANS-06](../laws/answer-authority-laws.md)) — and since v5 the **office
-doors**: `office_send`, `office_send_to_role`, `office_publish`. The library
+([ANS-06](../laws/answer-authority-laws.md)) — and since v5 the **role
+doors**: `role_send`, `role_send_to_role`, `role_publish`. The library
 REQUESTS "speak as R"; the host knows the exact weave bound to the context,
 verifies membership at that moment, and stamps. A refused authorship crosses
 back as the precise `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` (never downgraded to a
-personal send), and `office_publish` carries its recipient count out-of-band
+personal send), and `role_publish` carries its recipient count out-of-band
 so "authorized, zero listeners" and "denied" stay distinct.
 
 **No exception crosses a door, in either direction.** A loaded image may carry
@@ -320,10 +320,10 @@ The operator's verbs keep the refusing defaults across the seam.
 
 Out-of-process children receive **null** capability doors and fail closed
 (cross-process attestation is deliberately out of scope) — including
-the v5 office doors, in both directions: an isolated weave genuinely holding
-its role is still refused office authorship at the pipe, and told so. The v6
+the v5 role doors, in both directions: an isolated weave genuinely holding
+its role is still refused role authorship at the pipe, and told so. The v6
 Sense doors join the same standing law: the claim doors are null because the pipe
-carries no verified identity for the parent to check a claim-set or an office
+carries no verified identity for the parent to check a claim-set or a role
 against, and the **observe** doors are null for the mirror reason — reading is
 authorized against the reader's own grant, and the child cannot present one the
 parent minted.
@@ -343,7 +343,7 @@ the current host with both versions named, and a version bump owes one.
 ## Tests
 
 Suite `kernel` (descriptor gate, byte-sink ownership, dynamic answer parity,
-provenance across the seam, office-authorship parity + the previous-ABI
+provenance across the seam, role-authorship parity + the previous-ABI
 refusal at load and at reload — the fixture always declares
 `ZEN_ABI_VERSION - 1`, so those cases never name a frozen number; the "schema
 admission" cases: a loaded emitter's definition meeting acceptors at load, in

@@ -319,7 +319,7 @@ public:
 
     // ---- links to other hosts ---------------------------------------------------
 
-    /// MOUNT THE LINKS THE PLAN NAMES, each as one ordinary participant holding office
+    /// MOUNT THE LINKS THE PLAN NAMES, each as one ordinary participant holding role
     /// `loom.link.<name>`, and connect each. A link that cannot connect is still mounted --
     /// it answers `unlinked` to every ask and `links connect <name>` tries again -- so a
     /// far host that is not up yet costs the boot one sentence and nothing else.
@@ -342,7 +342,7 @@ public:
             if (raw->connect(kLinkConnectMs, &why)) {
                 said.push_back("  link " + e.name + " -> " + e.connect + ": admitted as '" +
                                raw->established_name() + "' (session " +
-                               std::to_string(raw->session()) + "; office " +
+                               std::to_string(raw->session()) + "; role " +
                                loom::link::role_of(e.name) + ", weave " +
                                std::to_string(id.value) + ")");
             } else {
@@ -355,7 +355,7 @@ public:
 
     // ---- serve mode: the session door and the scoped history reader ---------------------------
 
-    /// MOUNT THE SESSION'S TWO OFFICES AND OPEN THE LISTENER (serve mode only). Both are host
+    /// MOUNT THE SESSION'S TWO ROLES AND OPEN THE LISTENER (serve mode only). Both are host
     /// wiring beside the warden and the links: `loom.session` owns admission to this host and its
     /// lifetime (host/session_door.hpp); `loom.history` reads this host's own Recorder for a client
     /// that is not the console and is given no tap (host/history_reader.hpp). The reader is
@@ -372,7 +372,7 @@ public:
         reader_grant.allow_to_any(loom::session::Records::zen_name,
                                   loom::session::Records::zen_version);
         reader_grant.allow_to_any(loom::Refused::zen_name, loom::Refused::zen_version);
-        // ...and SELF-DESCRIBING, deliberately: a client that knows only the office may ask it
+        // ...and SELF-DESCRIBING, deliberately: a client that knows only the role may ask it
         // what it accepts (`zen.DescribeAccepted`). Describing grants nothing to the asker.
         loom::allow_describe_answers(reader_grant);
         reader_id_ = bus_.register_weave(std::move(reader), reader_grant,
@@ -769,7 +769,7 @@ void print_help() {
   start <name> <path> [role]    load an artifact (through the steward — policy decides)
   reload <name> <path>          reload it in place, same id, state carried
   stop <name>                   unload it: that application ends, this host does not
-  list                          what the steward says is loaded, and under which offices
+  list                          what the steward says is loaded, and under which roles
 
 )" << loom::host::authority_help()
               << R"(
@@ -1629,7 +1629,7 @@ int main(int argc, char** argv) {
         std::cout << "  nothing from it was started. Fix " << plan_source.path
                   << " and restart, or start things by hand here.\n";
     }
-    // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's office already held
+    // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's role already held
     // when it is told it is live.
     for (const std::string& line : session.mount_links(plan.links)) {
         std::cout << line << '\n';

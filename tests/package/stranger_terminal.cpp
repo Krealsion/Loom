@@ -103,7 +103,7 @@ int main() {
     oracle_raw->zen_set_self(oracle_id);
 
     // 3. THE COMMAND GRAMMAR IS LOOM'S, and a stranger gets it through the package: a
-    // presentation that re-authored `#N` / `@office` / `*` would be a second grammar pretending
+    // presentation that re-authored `#N` / `@role` / `*` would be a second grammar pretending
     // to be the first, and only this witness can tell whether the shared one is REACHABLE from
     // outside the build tree.
     loom::Address to;
@@ -169,7 +169,7 @@ int main() {
 
     // A denied ask is still a Submitted fact; only a later authenticated receipt
     // retires its local record. This consumer sees only installed public headers.
-    const auto denied=session.session->ask(loom::Address::to_role("ungranted.office"),"Question",1,args);
+    const auto denied=session.session->ask(loom::Address::to_role("ungranted.role"),"Question",1,args);
     ok(static_cast<bool>(denied),"a stranger can author an ask without a delivery guarantee");
     bus.pump_pending();
     ok(session.session->waiting_on(denied.ask),"refusal notification is a later delivery");

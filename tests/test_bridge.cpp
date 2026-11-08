@@ -253,7 +253,7 @@ std::string make_send_frame(std::uint64_t wire_sender, std::uint64_t target,
     put_u64(frame, target);
     put_u64(frame, wire_reply_to);
     put_u64(frame, correlation);
-    put_bytes(frame, ""); // v4: no office address
+    put_bytes(frame, ""); // v4: no role address
     frame.append(payload);
     return frame;
 }
@@ -1035,7 +1035,7 @@ TEST_CASE("bridge protocol: the sender is stamped from the connection — a FORG
     put_u64(frame, h.gid.value);  // target: the greeter
     put_u64(frame, kVictim);      // forged wire_reply_to — the bridge MUST ignore this too
     put_u64(frame, 1);            // correlation
-    put_bytes(frame, "");         // v4: no office address
+    put_bytes(frame, "");         // v4: no role address
     frame.append(loom::serialize(greet));
     raw.queue(BridgeOp::Send, frame);
     raw.flush();
@@ -2264,7 +2264,7 @@ struct GuestHost {
     }
 };
 
-/// The narrow grant an application's policy hands a guest: one shape, to one office.
+/// The narrow grant an application's policy hands a guest: one shape, to one role.
 loom::ConnectionAdmitted echo_only(std::string name) {
     loom::ConnectionAdmitted a;
     a.grant.allow_to_role(Echo::zen_name, Echo::zen_version, "echo");
@@ -2836,7 +2836,7 @@ private:
         h.sender = mail.sender();
         h.correlation = mail.correlation();
         h.answers_ask = mail.answers_ask();
-        // THE ASKER'S OWN WALL: an ask to an office is settled by Loom's answer and nothing less.
+        // THE ASKER'S OWN WALL: an ask to a role is settled by Loom's answer and nothing less.
         h.settled = h.answers_ask && book_.settle(mail.correlation(), mail.sender()).has_value();
         heard_.push_back(std::move(h));
     }
@@ -3739,7 +3739,7 @@ private:
     }
 };
 
-/// Say `msg` to the far office `far_role` through the near link, AS `who`; returns its correlation.
+/// Say `msg` to the far role `far_role` through the near link, AS `who`; returns its correlation.
 template <class T>
 std::uint64_t ask_through(NearHost& near, loom::WeaveId who, const std::string& far_role, const T& msg,
                           bool settle = false) {
@@ -4012,7 +4012,7 @@ TEST_CASE("link: a release through the link is answered Ended and ends the link'
 
 namespace {
 
-/// The envelope for `msg` to a far office, in Zen's JSON rather than the canonical binary.
+/// The envelope for `msg` to a far role, in Zen's JSON rather than the canonical binary.
 template <class T>
 loom::link::Ask compat_ask(const std::string& far_role, const T& msg) {
     loom::link::Ask a;
@@ -4076,7 +4076,7 @@ TEST_CASE("link: a subscription's release and acknowledgement cross only for the
     const ob::Release release = release_of(held.subscription, held.relay);
     const ob::Acknowledge ack = ack_of(held.subscription, held.relay, 4);
     const loom::WeaveId relay_far = o.far.host.bus.role_holder(ob::kObserveRole);
-    // B knows A's numbers, and tries every door: canonical and JSON, the relay's office and its id.
+    // B knows A's numbers, and tries every door: canonical and JSON, the relay's role and its id.
     (void)ask_as(near, b_id, loom::link::ask_role(ob::kObserveRole, release));
     (void)ask_as(near, b_id, compat_ask(ob::kObserveRole, release));
     (void)ask_as(near, b_id, loom::link::ask_target(relay_far.value, release));
@@ -4317,7 +4317,7 @@ TEST_CASE("link: a release the far host never delivers leaves the subscription c
 
 namespace {
 
-/// A far stand-in at the relay's office that answers every Subscribe yes: a controlled probe for
+/// A far stand-in at the relay's role that answers every Subscribe yes: a controlled probe for
 /// the link's own bound, which a real relay's per-subscriber bound would reach first.
 struct YesState {
     std::int64_t n = 0;

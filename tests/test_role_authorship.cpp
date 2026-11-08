@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// Deliberate office authorship: role-authored provenance.
+// Deliberate role authorship: role-authored provenance.
 // MSG-07, MSG-04; docs/laws/messaging-laws.md
 // A weave may deliberately author one statement as a role it holds; Loom verifies the membership
-// at authorship and carries the office fact as immutable delivery provenance, and merely holding
+// at authorship and carries the role fact as immutable delivery provenance, and merely holding
 // the role attaches nothing. Both halves bear load: AUTHORIZATION (the author held R) and INTENT
 // (this statement was spoken as R). Every attack is made by an ordinary weave with an ordinary
 // grant for the shape it abuses: "the honest API cannot express it" is not "Loom refuses it".
@@ -37,7 +37,7 @@ namespace {
 // ---- local fixture vocabulary ----------------------------------------------
 
 /// What a recipient can actually know about one delivery, copied out durably:
-/// the stamped sender, and the two office facts a handler reads back.
+/// the stamped sender, and the two role facts a handler reads back.
 struct Heard {
     std::uint64_t sender = 0;
     std::string schema;
@@ -49,7 +49,7 @@ struct Heard {
     std::int64_t attested_sequence = 0;
 };
 
-/// A listener that records every delivery with its office facts.
+/// A listener that records every delivery with its role facts.
 struct Listener {
     std::vector<Heard> heard;
 
@@ -118,11 +118,11 @@ Value activation_of(std::int64_t sequence) { return to_value(loom::Activated{seq
 TEST_SUITE("role_authorship") {
 
 // ---------------------------------------------------------------------------
-// The central hostile case: same WeaveId, same office, same payload shape, same
+// The central hostile case: same WeaveId, same role, same payload shape, same
 // destination — different authored standing.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("the same holder speaks personally and as the office, and the two arrive distinguishable") {
+TEST_CASE("the same holder speaks personally and as the role, and the two arrive distinguishable") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered player = Listener::mount(bus, {greet_schema()}, log);
@@ -131,30 +131,30 @@ TEST_CASE("the same holder speaks personally and as the office, and the two arri
     // From inside its own handler — the WeaveBus, the only door a weave has.
     holder.weave->on_handle = [player](const Message&, Bus& b, ProbeWeave&) {
         (void)b.send(player.id, Message(greet("personal")));
-        const Ticket office = b.office_send("matchmaker", player.id, Message(greet("office")));
-        CHECK(office.valid()); // authored: verified and queued
+        const Ticket role = b.role_send("matchmaker", player.id, Message(greet("role")));
+        CHECK(role.valid()); // authored: verified and queued
     };
     bus.send(holder.id, Message(ping(1)));
     bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 2);
     const Heard& personal = log->heard[0];
-    const Heard& office = log->heard[1];
+    const Heard& role = log->heard[1];
     // Same sender, same shape — the stamp alone cannot tell these apart.
     CHECK(personal.sender == holder.id.value);
-    CHECK(office.sender == holder.id.value);
-    CHECK(personal.schema == office.schema);
-    // The office fact is the ONLY difference, and it is the one that matters.
+    CHECK(role.sender == holder.id.value);
+    CHECK(personal.schema == role.schema);
+    // The role fact is the ONLY difference, and it is the one that matters.
     CHECK_FALSE(personal.from_matchmaker);
     CHECK(personal.authored_role.empty());
-    CHECK(office.from_matchmaker);
-    CHECK(office.authored_role == "matchmaker");
-    // "No office" can never satisfy a membership question, in either direction.
+    CHECK(role.from_matchmaker);
+    CHECK(role.authored_role == "matchmaker");
+    // "No role" can never satisfy a membership question, in either direction.
     CHECK_FALSE(personal.from_empty_probe);
-    CHECK_FALSE(office.from_empty_probe);
+    CHECK_FALSE(role.from_empty_probe);
 }
 
-TEST_CASE("wrong office and no office are refused at authorship — visibly, and nothing is queued "
+TEST_CASE("wrong role and no role are refused at authorship — visibly, and nothing is queued "
           "or downgraded") {
     Switchboard bus;
     Tap tap;
@@ -165,18 +165,18 @@ TEST_CASE("wrong office and no office are refused at authorship — visibly, and
     Registered nobody = register_probe(bus, {ping_schema()});
 
     holder_a.weave->on_handle = [player](const Message&, Bus& b, ProbeWeave&) {
-        // Holder of A asks to speak as B: holding ONE office is not holding another.
-        const Ticket t = b.office_send("roleB", player.id, Message(greet("as B")));
+        // Holder of A asks to speak as B: holding ONE role is not holding another.
+        const Ticket t = b.role_send("roleB", player.id, Message(greet("as B")));
         CHECK_FALSE(t.valid());
-        const OfficePublication p = b.office_publish("roleB", Message(greet("as B")));
+        const RolePublication p = b.role_publish("roleB", Message(greet("as B")));
         CHECK_FALSE(p.authored);
         CHECK(p.recipients == 0);
     };
     nobody.weave->on_handle = [player](const Message&, Bus& b, ProbeWeave&) {
-        // No office at all.
-        const Ticket t = b.office_send("roleA", player.id, Message(greet("as A")));
+        // No role at all.
+        const Ticket t = b.role_send("roleA", player.id, Message(greet("as A")));
         CHECK_FALSE(t.valid());
-        const Ticket via_role = b.office_send_to_role("roleA", "roleA", Message(greet("as A")));
+        const Ticket via_role = b.role_send_to_role("roleA", "roleA", Message(greet("as A")));
         CHECK_FALSE(via_role.valid());
     };
     bus.send(holder_a.id, Message(ping(1)));
@@ -187,7 +187,7 @@ TEST_CASE("wrong office and no office are refused at authorship — visibly, and
     CHECK(log->heard.empty());
     CHECK(bus.pending() == 0);
     // Every attempt is on the tap with the PRECISE reason: not a grant problem,
-    // not a forged capability — the sender does not hold that office.
+    // not a forged capability — the sender does not hold that role.
     CHECK(tap.count(RefusalReason::RoleAuthorshipDenied) == 4);
 }
 
@@ -240,14 +240,14 @@ TEST_CASE("authorship and destination are orthogonal — all four combinations, 
     worker.weave->on_handle = [dispatcher](const Message&, Bus& b, ProbeWeave&) {
         // personal -> direct
         (void)b.send(dispatcher, Message(greet("p-direct")));
-        // personal -> role destination (the sender HOLDS an office; addressing a
+        // personal -> role destination (the sender HOLDS a role; addressing a
         // role still attaches nothing — MSG-04 is not authorship)
         (void)b.send_to_role("dispatcher", Message(greet("p-role")));
-        // office -> direct
-        CHECK(b.office_send("worker.a", dispatcher, Message(greet("o-direct"))).valid());
-        // office -> role destination: authored as worker.a, delivered to the
-        // dispatcher office. BOTH facts, never conflated.
-        CHECK(b.office_send_to_role("worker.a", "dispatcher", Message(greet("o-role"))).valid());
+        // role -> direct
+        CHECK(b.role_send("worker.a", dispatcher, Message(greet("o-direct"))).valid());
+        // role -> role destination: authored as worker.a, delivered to the
+        // dispatcher role. BOTH facts, never conflated.
+        CHECK(b.role_send_to_role("worker.a", "dispatcher", Message(greet("o-role"))).valid());
     };
     bus.send(worker.id, Message(ping(1)));
     bus.drain_until_idle();
@@ -255,9 +255,9 @@ TEST_CASE("authorship and destination are orthogonal — all four combinations, 
     REQUIRE(log->heard.size() == 4);
     CHECK(log->heard[0].authored_role.empty());           // personal -> direct
     CHECK(log->heard[1].authored_role.empty());           // personal -> role
-    CHECK(log->heard[2].authored_role == "worker.a");     // office -> direct
-    CHECK(log->heard[3].authored_role == "worker.a");     // office -> role: the
-    // authored office is worker.a; the DESTINATION was the dispatcher role —
+    CHECK(log->heard[2].authored_role == "worker.a");     // role -> direct
+    CHECK(log->heard[3].authored_role == "worker.a");     // role -> role: the
+    // authored role is worker.a; the DESTINATION was the dispatcher role —
     // never "authored as dispatcher".
     for (const Heard& h : log->heard) {
         CHECK(h.sender == worker.id.value);
@@ -265,7 +265,7 @@ TEST_CASE("authorship and destination are orthogonal — all four combinations, 
     }
 }
 
-TEST_CASE("publication carries the office fact to every listener; a rogue's same-shaped "
+TEST_CASE("publication carries the role fact to every listener; a rogue's same-shaped "
           "publication carries nothing") {
     Switchboard bus;
     auto log_a = std::make_shared<Listener>();
@@ -276,14 +276,14 @@ TEST_CASE("publication carries the office fact to every listener; a rogue's same
     Registered rogue = register_probe(bus, {ping_schema()});
 
     worker.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
-        const OfficePublication p = b.office_publish("worker.a", Message(greet("open")));
+        const RolePublication p = b.role_publish("worker.a", Message(greet("open")));
         CHECK(p.authored);
         CHECK(p.recipients == 2);
         // ...and personal publication remains personal, from the same holder.
         (void)b.publish(Message(greet("chatter")));
     };
     rogue.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
-        (void)b.publish(Message(greet("open"))); // same shape, no office
+        (void)b.publish(Message(greet("open"))); // same shape, no role
     };
     bus.send(worker.id, Message(ping(1)));
     bus.send(rogue.id, Message(ping(2)));
@@ -291,11 +291,11 @@ TEST_CASE("publication carries the office fact to every listener; a rogue's same
 
     for (const auto& log : {log_a, log_b}) {
         REQUIRE(log->heard.size() == 3);
-        // The office publication: verifiable by EVERY recipient.
+        // The role publication: verifiable by EVERY recipient.
         CHECK(log->heard[0].authored_role == "worker.a");
-        // The same holder's personal publication: not office speech.
+        // The same holder's personal publication: not role speech.
         CHECK(log->heard[1].authored_role.empty());
-        // The rogue's same-shaped publication: not verifiable as the office.
+        // The rogue's same-shaped publication: not verifiable as the role.
         CHECK(log->heard[2].authored_role.empty());
     }
 }
@@ -309,13 +309,13 @@ TEST_CASE("an authorized publication with zero recipients is not a refusal, and 
     Registered worker = register_role_probe(bus, "worker.a", {ping_schema()});
     Registered rogue = register_probe(bus, {ping_schema()});
     worker.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
-        const OfficePublication p = b.office_publish("worker.a", Message(greet("open")));
-        CHECK(p.authored);          // the office spoke...
+        const RolePublication p = b.role_publish("worker.a", Message(greet("open")));
+        CHECK(p.authored);          // the role spoke...
         CHECK(p.recipients == 0);   // ...to an empty room. Both facts true.
     };
     rogue.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
-        const OfficePublication p = b.office_publish("worker.a", Message(greet("open")));
-        CHECK_FALSE(p.authored);    // no office spoke...
+        const RolePublication p = b.role_publish("worker.a", Message(greet("open")));
+        CHECK_FALSE(p.authored);    // no role spoke...
         CHECK(p.recipients == 0);   // ...and the 0 means NOTHING fanned out.
     };
     bus.send(worker.id, Message(ping(1)));
@@ -330,26 +330,26 @@ TEST_CASE("an authorized publication with zero recipients is not a refusal, and 
 // delivery law rather than bypassing any.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("a valid office author with an insufficient ordinary grant is still denied delivery — "
-          "the office is not a super-grant") {
+TEST_CASE("a valid role author with an insufficient ordinary grant is still denied delivery — "
+          "the role is not a super-grant") {
     Switchboard bus;
     Tap tap;
     tap.attach(bus);
     auto log = std::make_shared<Listener>();
     Registered player = Listener::mount(bus, {greet_schema()}, log);
-    // Holds the office; may emit only Ping. The office send of Greet is
+    // Holds the role; may emit only Ping. The role send of Greet is
     // legitimately AUTHORED and then refused by the ordinary grant at delivery.
     Registered holder = register_role_probe(bus, "matchmaker", {ping_schema()},
                                             Grant{}.allow_to_any("Ping", 1));
 
     const Ticket t =
-        bus.office_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
+        bus.role_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
     CHECK(t.valid()); // authorship verified; the delivery was queued...
     bus.drain_until_idle();
     CHECK(bus.outcome(t).disposition == Disposition::Refused);
     CHECK(bus.outcome(t).refusal.reason == RefusalReason::CapabilityDenied); // ...and denied.
     CHECK(log->heard.empty());
-    // The tap shows the refused delivery still carried its authored office —
+    // The tap shows the refused delivery still carried its authored role —
     // the stamp is not erased by an independent refusal, and the reason names
     // the grant, not the authorship.
     REQUIRE(tap.count(RefusalReason::CapabilityDenied) == 1);
@@ -360,7 +360,7 @@ TEST_CASE("a valid office author with an insufficient ordinary grant is still de
     }
 }
 
-TEST_CASE("office speech from a life that ended obeys SenderLifeEnded — role provenance cannot "
+TEST_CASE("role speech from a life that ended obeys SenderLifeEnded — role provenance cannot "
           "resurrect dead speech") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
@@ -368,7 +368,7 @@ TEST_CASE("office speech from a life that ended obeys SenderLifeEnded — role p
     Registered holder = register_role_probe(bus, "matchmaker", {ping_schema()});
 
     const Ticket t =
-        bus.office_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
+        bus.role_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
     REQUIRE(t.valid());
     bus.kill(holder.id); // the author's life ends while the speech is queued
     bus.drain_until_idle();
@@ -377,7 +377,7 @@ TEST_CASE("office speech from a life that ended obeys SenderLifeEnded — role p
     CHECK(log->heard.empty());
 }
 
-TEST_CASE("a root cannot author office speech — the refusal is visible, not a base-class silence") {
+TEST_CASE("a root cannot author role speech — the refusal is visible, not a base-class silence") {
     Switchboard bus;
     Tap tap;
     tap.attach(bus);
@@ -386,26 +386,26 @@ TEST_CASE("a root cannot author office speech — the refusal is visible, not a 
     (void)register_role_probe(bus, "matchmaker", {ping_schema()});
 
     Bus& as_bus = bus; // the root surface, through the Bus contract it inherits
-    CHECK_FALSE(as_bus.office_send("matchmaker", player.id, Message(greet("root"))).valid());
-    CHECK_FALSE(as_bus.office_send_to_role("matchmaker", "matchmaker", Message(greet("root")))
+    CHECK_FALSE(as_bus.role_send("matchmaker", player.id, Message(greet("root"))).valid());
+    CHECK_FALSE(as_bus.role_send_to_role("matchmaker", "matchmaker", Message(greet("root")))
                     .valid());
-    CHECK_FALSE(as_bus.office_publish("matchmaker", Message(greet("root"))).authored);
+    CHECK_FALSE(as_bus.role_publish("matchmaker", Message(greet("root"))).authored);
     bus.drain_until_idle();
     CHECK(log->heard.empty());
     CHECK(tap.count(RefusalReason::RoleAuthorshipDenied) == 3);
 }
 
 // ---------------------------------------------------------------------------
-// Copy/replay: observed office provenance cannot be laundered.
+// Copy/replay: observed role provenance cannot be laundered.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("re-sending a received office-authored Message — provenance field and all — arrives "
+TEST_CASE("re-sending a received role-authored Message — provenance field and all — arrives "
           "as ordinary personal speech") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered second = Listener::mount(bus, {greet_schema()}, log);
 
-    // The launderer receives a legitimate office statement and re-sends the
+    // The launderer receives a legitimate role statement and re-sends the
     // whole public Message representation it observed — the exact struct, the
     // provenance member included.
     Registered launderer = register_probe(bus, {greet_schema()});
@@ -416,12 +416,12 @@ TEST_CASE("re-sending a received office-authored Message — provenance field an
     };
 
     Registered holder = register_role_probe(bus, "matchmaker", {ping_schema()});
-    REQUIRE(bus.office_send_as(holder.id, "matchmaker", launderer.id, Message(greet("real")))
+    REQUIRE(bus.role_send_as(holder.id, "matchmaker", launderer.id, Message(greet("real")))
                 .valid());
     bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 1);
-    // The re-send is the LAUNDERER'S personal speech: its own stamp, no office.
+    // The re-send is the LAUNDERER'S personal speech: its own stamp, no role.
     CHECK(log->heard[0].sender == launderer.id.value);
     CHECK_FALSE(log->heard[0].from_matchmaker);
     CHECK(log->heard[0].authored_role.empty());
@@ -444,10 +444,10 @@ TEST_CASE("a legitimately authored fact survives a later role move — history i
     REQUIRE(bus.seal_weave(successor.id, coordinator.id));
 
     const Ticket t =
-        bus.office_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
-    REQUIRE(t.valid()); // authored while holder held the office
+        bus.role_send_as(holder.id, "matchmaker", player.id, Message(greet("match")));
+    REQUIRE(t.valid()); // authored while holder held the role
     REQUIRE(bus.commit_candidate(successor.id, holder.id, "matchmaker"));
-    REQUIRE(bus.role_holder("matchmaker") == successor.id); // the office has moved
+    REQUIRE(bus.role_holder("matchmaker") == successor.id); // the role has moved
     bus.drain_until_idle();
 
     // Delivered — and the historical fact is intact: the author DID deliberately
@@ -459,7 +459,7 @@ TEST_CASE("a legitimately authored fact survives a later role move — history i
     CHECK(log->heard[0].sender == holder.id.value);
 }
 
-TEST_CASE("a message queued personally does not become office-authored because its sender acquires "
+TEST_CASE("a message queued personally does not become role-authored because its sender acquires "
           "the role before delivery") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
@@ -479,7 +479,7 @@ TEST_CASE("a message queued personally does not become office-authored because i
     const Ticket personal = bus.send_as(candidate.id, coordinator.id, Message(greet("hello")));
     bus.drain_until_idle();
 
-    REQUIRE(bus.role_holder("service") == candidate.id); // it holds the office now...
+    REQUIRE(bus.role_holder("service") == candidate.id); // it holds the role now...
     CHECK(bus.outcome(personal).disposition == Disposition::Delivered);
     REQUIRE(!log->heard.empty());
     const Heard& h = log->heard.back();
@@ -491,7 +491,7 @@ TEST_CASE("a message queued personally does not become office-authored because i
 // The replacement matrix: a REAL prepared replacement, end to end.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("the office survives its officeholder — prepared replacement moves authorship without "
+TEST_CASE("the role survives its role holder — prepared replacement moves authorship without "
           "conflating identities") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
@@ -499,7 +499,7 @@ TEST_CASE("the office survives its officeholder — prepared replacement moves a
     Tap tap;
     tap.attach(bus);
 
-    // The cast: op/coordinator, v1 holding the office, the candidate sealed.
+    // The cast: op/coordinator, v1 holding the role, the candidate sealed.
     Registered op = register_probe(bus, {ping_schema()});
     auto ready_schema = SchemaBuilder("Ready", 1).field("txn", Kind::Int).build();
     Registered coordinator = register_probe(bus, {ready_schema});
@@ -507,8 +507,8 @@ TEST_CASE("the office survives its officeholder — prepared replacement moves a
     Registered cand = register_probe(bus, {schema_of<loom::Activated>(), ping_schema()});
     REQUIRE(bus.seal_weave(cand.id, coordinator.id));
 
-    // v1 office speech accepted.
-    REQUIRE(bus.office_send_as(v1.id, "service", player.id, Message(greet("from v1"))).valid());
+    // v1 role speech accepted.
+    REQUIRE(bus.role_send_as(v1.id, "service", player.id, Message(greet("from v1"))).valid());
     bus.drain_until_idle();
     REQUIRE(log->heard.size() == 1);
     CHECK(log->heard[0].sender == v1.id.value);
@@ -517,7 +517,7 @@ TEST_CASE("the office survives its officeholder — prepared replacement moves a
     // v2, sealed, cannot author as the production role — refused with the
     // precise reason, before its seal is even consulted.
     CHECK_FALSE(
-        bus.office_send_as(cand.id, "service", player.id, Message(greet("from v2"))).valid());
+        bus.role_send_as(cand.id, "service", player.id, Message(greet("from v2"))).valid());
     CHECK(tap.count(RefusalReason::RoleAuthorshipDenied) == 1);
 
     // The real transaction: begin, converse, become Ready.
@@ -541,8 +541,8 @@ TEST_CASE("the office survives its officeholder — prepared replacement moves a
     bus.drain_until_idle();
     REQUIRE(bus.transaction_state(txn) == TxnState::Ready);
 
-    // v1 remains the office throughout preparation.
-    REQUIRE(bus.office_send_as(v1.id, "service", player.id, Message(greet("still v1"))).valid());
+    // v1 remains the role throughout preparation.
+    REQUIRE(bus.role_send_as(v1.id, "service", player.id, Message(greet("still v1"))).valid());
     bus.drain_until_idle();
     CHECK(log->heard.back().sender == v1.id.value);
     CHECK(log->heard.back().authored_role == "service");
@@ -555,21 +555,21 @@ TEST_CASE("the office survives its officeholder — prepared replacement moves a
     CHECK(bus.role_holder("service") == v1.id);
 
     // Dispatch the admission: the role moves, and the candidate's first breath
-    // is a lifecycle attestation — not office speech, not an answer.
+    // is a lifecycle attestation — not role speech, not an answer.
     bus.drain_until_idle();
     REQUIRE(bus.role_holder("service") == cand.id);
     CHECK(bus.transaction_state(txn) == TxnState::Committed);
 
-    // The successor's office speech is accepted; the predecessor's NEW attempt
-    // is refused. Identity changed; the office did not.
+    // The successor's role speech is accepted; the predecessor's NEW attempt
+    // is refused. Identity changed; the role did not.
     REQUIRE(
-        bus.office_send_as(cand.id, "service", player.id, Message(greet("from v2"))).valid());
+        bus.role_send_as(cand.id, "service", player.id, Message(greet("from v2"))).valid());
     CHECK_FALSE(
-        bus.office_send_as(v1.id, "service", player.id, Message(greet("v1 again"))).valid());
+        bus.role_send_as(v1.id, "service", player.id, Message(greet("v1 again"))).valid());
     bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 3);
-    // A strict receiver trusting the OFFICE accepts v1's pre-move speech and
+    // A strict receiver trusting the ROLE accepts v1's pre-move speech and
     // v2's post-move speech — different senders, the same authored role.
     CHECK(log->heard[0].sender == v1.id.value);
     CHECK(log->heard[2].sender == cand.id.value);
@@ -579,37 +579,37 @@ TEST_CASE("the office survives its officeholder — prepared replacement moves a
 }
 
 // ---------------------------------------------------------------------------
-// Answer/activation provenance: undamaged, and representable beside the office.
+// Answer/activation provenance: undamaged, and representable beside the role.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("the representation lets conversation provenance and the authored office coexist — "
+TEST_CASE("the representation lets conversation provenance and the authored role coexist — "
           "neither fact erases the other") {
     // The type-level pin: Kind and authored_role are separate axes. No public
     // V1 door produces the combination; the representation must still hold it,
     // so a future answer_as_role needs no redesign.
-    const Provenance answer_and_office =
+    const Provenance answer_and_role =
         Provenance::attested(Provenance::Kind::Answer, 0).with_authored_role("worker.a");
-    CHECK(answer_and_office.answers_ask());
-    CHECK(answer_and_office.authored_from_role("worker.a"));
-    CHECK_FALSE(answer_and_office.lifecycle_activation());
+    CHECK(answer_and_role.answers_ask());
+    CHECK(answer_and_role.authored_from_role("worker.a"));
+    CHECK_FALSE(answer_and_role.lifecycle_activation());
 
-    const Provenance activation_and_office =
+    const Provenance activation_and_role =
         Provenance::attested(Provenance::Kind::Activation, 7).with_authored_role("worker.a");
-    CHECK(activation_and_office.lifecycle_activation());
-    CHECK(activation_and_office.attested_sequence() == 7);
-    CHECK(activation_and_office.authored_from_role("worker.a"));
-    CHECK_FALSE(activation_and_office.answers_ask());
+    CHECK(activation_and_role.lifecycle_activation());
+    CHECK(activation_and_role.attested_sequence() == 7);
+    CHECK(activation_and_role.authored_from_role("worker.a"));
+    CHECK_FALSE(activation_and_role.answers_ask());
 
-    // And the empty office matches nothing, on every kind.
-    CHECK_FALSE(answer_and_office.authored_from_role(""));
+    // And the empty role matches nothing, on every kind.
+    CHECK_FALSE(answer_and_role.authored_from_role(""));
     CHECK_FALSE(Provenance{}.authored_from_role(""));
 }
 
-TEST_CASE("an office-authored ask earns an ordinary authenticated answer — the answer is an "
-          "answer, not office speech") {
+TEST_CASE("a role-authored ask earns an ordinary authenticated answer — the answer is an "
+          "answer, not role speech") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
-    // The asker holds an office and asks AS it; it records what comes back.
+    // The asker holds a role and asks AS it; it records what comes back.
     auto asker_probe = std::make_unique<ProbeWeave>(
         std::vector<std::shared_ptr<const Schema>>{greet_schema(), ping_schema()});
     ProbeWeave* asker_raw = asker_probe.get();
@@ -623,23 +623,23 @@ TEST_CASE("an office-authored ask earns an ordinary authenticated answer — the
     };
     Registered service = register_role_probe(bus, "service", {greet_schema()});
     service.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
-        // The service sees the office-authored ask, and answers it.
+        // The service sees the role-authored ask, and answers it.
         CHECK(in.provenance.authored_from_role("client"));
         (void)b.answer(Message(greet("answered")));
     };
 
-    REQUIRE(bus.office_send_to_role_as(asker, "client", "service", Message(greet("ask")))
+    REQUIRE(bus.role_send_to_role_as(asker, "client", "service", Message(greet("ask")))
                 .valid());
     bus.drain_until_idle();
 
     REQUIRE(log->heard.size() == 1);
     CHECK(log->heard[0].answers_ask);              // Loom's word: THE answer
-    CHECK(log->heard[0].authored_role.empty());    // the ask's office did not leak
+    CHECK(log->heard[0].authored_role.empty());    // the ask's role did not leak
     CHECK(log->heard[0].sender == service.id.value);
 }
 
-TEST_CASE("a committed activation remains lifecycle provenance — never office speech, even "
-          "though the admitted candidate now holds the office") {
+TEST_CASE("a committed activation remains lifecycle provenance — never role speech, even "
+          "though the admitted candidate now holds the role") {
     Switchboard bus;
     auto log = std::make_shared<Listener>();
     Registered coordinator = register_probe(bus, {ping_schema()});
@@ -665,7 +665,7 @@ TEST_CASE("a committed activation remains lifecycle provenance — never office 
     REQUIRE(log->heard.size() == 1);
     CHECK(log->heard[0].lifecycle);
     CHECK(log->heard[0].attested_sequence == 9);
-    CHECK(log->heard[0].authored_role.empty()); // Loom's act, nobody's office
+    CHECK(log->heard[0].authored_role.empty()); // Loom's act, nobody's role
     CHECK_FALSE(log->heard[0].answers_ask);
 }
 
@@ -693,7 +693,7 @@ public:
     void on(const MakeMatch&, Mail& mail) {
         // Speaking personally...
         mail.send(player_, MatchCreated{server_});
-        // ...and deliberately speaking AS the office, for this one statement.
+        // ...and deliberately speaking AS the role, for this one statement.
         mail.as_role("matchmaker").send(player_, MatchCreated{server_});
     }
 
@@ -721,7 +721,7 @@ public:
     std::int64_t rejected() const { return state_.rejected; }
 };
 
-TEST_CASE("the whole program — a strict player joins only office-authored matches, through Mail "
+TEST_CASE("the whole program — a strict player joins only role-authored matches, through Mail "
           "alone") {
     Switchboard bus;
     auto player = std::make_unique<StrictPlayer>();
@@ -743,7 +743,7 @@ TEST_CASE("the whole program — a strict player joins only office-authored matc
     bus.drain_until_idle();
 
     // Two identical statements arrived from one weave; the player joined on the
-    // office-authored one and rejected the personal one. No Switchboard access,
+    // role-authored one and rejected the personal one. No Switchboard access,
     // no role lookup, no payload field — the delivery already carried the fact.
     CHECK(player_raw->joined() == 1);
     CHECK(player_raw->rejected() == 1);

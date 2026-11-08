@@ -4,7 +4,7 @@
 #ifndef ZEN_HOST_LINK_HPP
 #define ZEN_HOST_LINK_HPP
 
-// A link to another host, as one ordinary participant of this one: office `loom.link.<name>`,
+// A link to another host, as one ordinary participant of this one: role `loom.link.<name>`,
 // asked with `loom.link.Ask` (zen/bridge/link.hpp). One crossing per ask, under the link's own
 // `attempt` and session `epoch`; the answer is Loom's, spent through the asker's deferred
 // answer (ANS-02). A far frame is read on the host's turn, outside every delivery, so it becomes

@@ -87,7 +87,7 @@ Each of these would otherwise be a runtime check somebody could delete.
   prompt it answers. A field can be defaulted or mis-parsed into meaning yes; a
   mistyped shape name is a gate refusal, and a defaulted `prompt` names none.
 - **The request language is narrower than `LiveAuthority`.** A request names one
-  shape, one version, one office and at most one
+  shape, one version, one role and at most one
   [door](capabilities.md#doors), which the Weaver parses and refuses in words
   when it is malformed; an empty `door` asks for a door-less rule. There is no
   way to spell "any shape", "any target", an exact WeaveId, or an observe rule —
@@ -142,8 +142,8 @@ answered to the seat with a `zen.Refused` saying why; the session hears nothing.
 Weaver's own WeaveId times `kPromptNamesPerWeaver`
 ([`weaver.hpp`](../../include/zen/weaver/weaver.hpp)), plus the prompt's place
 in that Weaver's count, from 1. A WeaveId is never reused on a bus, so a Weaver
-that replaces another in its office (a session reconnecting, say) puts names
-the old one never put, and a decision sent to the office for the old Weaver's
+that replaces another in its role (a session reconnecting, say) puts names
+the old one never put, and a decision sent to the role for the old Weaver's
 prompt is refused by the new one rather than deciding the new one's prompt. A
 Weaver that was never told its WeaveId, or that has named every prompt it can,
 refuses further requests rather than repeat a name.
@@ -153,9 +153,9 @@ by bus stamp, and a stranger naming the right prompt is refused as a stranger.
 The name is the second guard, not the first: a seat serving more than one
 Weaver, or one whose Weaver can be replaced, still tells them apart by the
 prompt's bus-stamped sender and sends each decision to that Weaver's WeaveId, so
-a decision does not reach the wrong Weaver at all; a decision sent to an office
+a decision does not reach the wrong Weaver at all; a decision sent to a role
 reaches whoever holds it when it arrives, and the name is what refuses it there.
-The [terminal](terminal.md)'s REPL sends to the office because its host mounts
+The [terminal](terminal.md)'s REPL sends to the role because its host mounts
 one Weaver for the process's life. `zen.RevokeAuthority` names nothing on
 purpose: it acts on what is installed, never on a request.
 
@@ -170,7 +170,7 @@ purpose: it acts on what is installed, never on a request.
 | already-effective request | answered `already-permitted` at once — the human is not woken, and no duplicate rule grows |
 | approval | additive: `view.delegated` **+** the one approved rule, its door exactly the one the prompt showed, installed as one replacement |
 | refusal | nothing changes; the session hears `zen.Refused` as the authenticated answer |
-| beyond the ceiling | the Kernel refuses; nothing changes; both sides are told, and the refusal does not say whether the office, or its door, exists |
+| beyond the ceiling | the Kernel refuses; nothing changes; both sides are told, and the refusal does not say whether the role, or its door, exists |
 | a capability that only reads | describes; every approval and revoke installs nothing, and both are refused in words (`DescribeOnly`) |
 | revoke | the **whole** delegated overlay at once; the admission baseline is untouched |
 | decision with nothing pending | refused; it is never banked for a later request |

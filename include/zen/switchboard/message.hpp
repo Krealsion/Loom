@@ -45,7 +45,7 @@ private:
 ///
 /// A well-shaped `zen.Bequest` from a weave that merely holds the grant for it passes the first
 /// two and not the third. Provenance has two independent axes: `Kind` (none, an answer, an
-/// activation, a dispatch refusal) and the authored office (empty for personal speech), so a
+/// activation, a dispatch refusal) and the authored role (empty for personal speech), so a
 /// delivery may carry both, though no public door produces that combination.
 /// MSG-07, ANS-01; docs/laws/messaging-laws.md
 ///
@@ -74,7 +74,7 @@ public:
         return p;
     }
 
-    /// Attach the authored-office fact, the second axis, to any Kind. Public for the same
+    /// Attach the authored-role fact, the second axis, to any Kind. Public for the same
     /// reason as `attested`: only the Switchboard's verified doors and a library's dispatch shim
     /// write a value that reaches a recipient.
     Provenance with_authored_role(std::string role) && {
@@ -96,13 +96,13 @@ public:
     /// The sequence Loom attested, for an activation, to compare with the payload's own.
     std::int64_t attested_sequence() const noexcept { return sequence_; }
 
-    /// The office this delivery was deliberately authored as, verified when it was authored;
+    /// The role this delivery was deliberately authored as, verified when it was authored;
     /// empty for personal speech, which no bindable role can equal. A fact about the statement,
     /// never about now: current membership is `Switchboard::role_holder`'s question.
     std::string_view authored_role() const noexcept { return authored_role_; }
 
     /// Was this delivery deliberately authored as `role`? False for empty
-    /// `role`, so "no office" can never satisfy a membership question.
+    /// `role`, so "no role" can never satisfy a membership question.
     bool authored_from_role(std::string_view role) const noexcept {
         return !role.empty() && authored_role_ == role;
     }

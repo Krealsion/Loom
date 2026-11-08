@@ -26,9 +26,9 @@ public:
                             Message(std::move(payload), self_, WeaveId{}, correlation));
     }
 
-    Ticket send_to_role(std::string_view office, Value payload,
+    Ticket send_to_role(std::string_view role, Value payload,
                         std::uint64_t correlation) override {
-        return bus_.send_as_to_role(self_, office,
+        return bus_.send_as_to_role(self_, role,
                                     Message(std::move(payload), self_, WeaveId{}, correlation));
     }
 

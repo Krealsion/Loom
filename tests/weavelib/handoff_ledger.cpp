@@ -57,8 +57,8 @@ public:
     }
 
     void on(const loom::Activated&, Mail& mail) {
-        // Legally live. The successor claims as the office for the FIRST time
-        // here — before this, the office's claim is its predecessor's and says so.
+        // Legally live. The successor claims as the role for the FIRST time
+        // here — before this, the role's claim is its predecessor's and says so.
         ++activations_;
         claim_status(mail);
     }
@@ -94,7 +94,7 @@ public:
 
 private:
     void claim_status(Mail& mail) {
-        // Deliberately AS THE OFFICE: this is the ledger speaking, not this
+        // Deliberately AS THE ROLE: this is the ledger speaking, not this
         // artifact speaking about itself. Refused unless it holds the role right
         // now — which a sealed candidate does not.
         (void)mail.as_role(kLedgerRole)

@@ -41,12 +41,12 @@ public:
             t = mail.send(target, dispatch_test::Payload{1}, corr);
         } else if (cmd.mode == "role") {
             t = mail.send_to_role(cmd.role, dispatch_test::Payload{1}, corr);
-        } else if (cmd.mode == "office-direct") {
+        } else if (cmd.mode == "role-direct") {
             t = mail.as_role("dispatch.author").send(target, dispatch_test::Payload{1}, corr);
-        } else if (cmd.mode == "office-role") {
+        } else if (cmd.mode == "role-role") {
             t = mail.as_role("dispatch.author")
                     .send_to_role(cmd.role, dispatch_test::Payload{1}, corr);
-        } else if (cmd.mode == "office-publish") {
+        } else if (cmd.mode == "role-publish") {
             const auto p = mail.as_role(cmd.role).publish(dispatch_test::Payload{1});
             state_.authored = p.authored;
             state_.recipients = static_cast<std::int64_t>(p.recipients);
@@ -67,8 +67,8 @@ public:
                                           Message(to_value(dispatch_test::Payload{1})));
         } else if (cmd.mode == "claim-unheard") {
             taken = mail.bus().claim(to_value(Unheard{1})).accepted;
-        } else if (cmd.mode == "office-claim-unheard") {
-            taken = mail.bus().office_claim(cmd.role, to_value(Unheard{1})).accepted;
+        } else if (cmd.mode == "role-claim-unheard") {
+            taken = mail.bus().role_claim(cmd.role, to_value(Unheard{1})).accepted;
         } else if (cmd.mode == "offer-unheard") {
             taken = mail.bus().offer_claim(1, to_value(Unheard{1})).ok;
         } else if (cmd.mode == "malformed") {

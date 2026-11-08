@@ -631,7 +631,7 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
         if (settle && kind == kEmitPublish) {
             send_refused(c, correlation,
                          "a publication cannot be settled: it has no one delivery to follow; send it "
-                         "to one target or office");
+                         "to one target or role");
             break;
         }
         if (settle && c.settling.size() >= kMaxSettlingPerConnection) {

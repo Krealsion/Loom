@@ -206,9 +206,9 @@ int main(int argc, char** argv) {
 
     // The pipe carries no attestation and no verified identity, so every door that would need
     // one is null and fails closed at the library shim: answers (the answer authority lives in
-    // the parent's delivery), office authorship (never a silent downgrade to personal speech),
+    // the parent's delivery), role authorship (never a silent downgrade to personal speech),
     // and Sense claims, reads and offers (a child cannot present the parent's grant or identity).
-    // A verified office frame on this pipe is the seam an out-of-process office would need.
+    // A verified role frame on this pipe is the seam an out-of-process role would need.
     // By name, in declaration order (KERN-04): a designator is the comment the compiler reads.
     ZenHostApi api{.ctx                  = nullptr,
                    .send                 = &zen_child_send,
@@ -218,13 +218,13 @@ int main(int argc, char** argv) {
                    .answer_deferred      = nullptr,
                    .release_deferred     = nullptr,
                    .answer               = nullptr,
-                   .office_send          = nullptr,
-                   .office_send_to_role  = nullptr,
-                   .office_publish       = nullptr,
+                   .role_send          = nullptr,
+                   .role_send_to_role  = nullptr,
+                   .role_publish       = nullptr,
                    .sense_claim          = nullptr,
-                   .sense_office_claim   = nullptr,
+                   .sense_role_claim   = nullptr,
                    .sense_observe        = nullptr,
-                   .sense_observe_office = nullptr,
+                   .sense_observe_role = nullptr,
                    // the isolated pipe supplies no offer door, as it supplies no claim or
                    // observe door: a child cannot present the identity a joint operation binds
                    .sense_offer          = nullptr};
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
             std::string_view bytes = cursor.rest();
             // Provenance does not cross this pipe: a Deliver frame carries no attestation, so an
             // out-of-process weave is told nothing here is attested, and never adopts an
-            // authenticated answer, an attested activation or an authored office (the NULL role
+            // authenticated answer, an attested activation or an authored role (the NULL role
             // below) that the parent could not vouch for across it.
             abi->handle(instance, sender, reply_to, correlation, ZEN_PROV_NONE,
                         /*attested_sequence=*/0, /*authored_role=*/nullptr,

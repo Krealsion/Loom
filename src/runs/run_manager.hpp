@@ -5,7 +5,7 @@
 #define ZEN_RUNS_RUN_MANAGER_HPP
 
 // The run manager: named runs of editable tools, owned while the host that loaded it lives. An
-// ordinary loadable weave (`loom-runs`) holding office `loom.runs` (zen/runs/vocabulary.hpp),
+// ordinary loadable weave (`loom-runs`) holding role `loom.runs` (zen/runs/vocabulary.hpp),
 // and task policy, not host authority: the session door admits each worker, attenuated to this
 // manager's own approved authority, before the worker starts. It never resumes across a host
 // restart or believes a report it cannot attribute. Verdict, execution and evidence are kept
@@ -409,7 +409,7 @@ public:
             refuse(mail, "run '" + s.name + "': " + why);
             return;
         }
-        // THE DOOR DECIDES WHAT THE WORKER MAY SAY: its reports to this office, and what the tool
+        // THE DOOR DECIDES WHAT THE WORKER MAY SAY: its reports to this role, and what the tool
         // asks for -- each rule contained in this manager's own approved authority, or refused.
         session::ExpectRun expect;
         expect.run = s.name;

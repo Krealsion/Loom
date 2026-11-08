@@ -47,7 +47,7 @@
    "name": "cleanup",
    "script": "cleanup.py",
    "summary": "Hold, then clean up on the bus -- one cleanup that can finish and one that cannot.",
-   "description": "Registers two cleanups that both SPEAK: one asks the session door, which it is allowed to ask, and one asks an office it was never granted, which the bus refuses. Both run after a cancellation, and each says what it actually came to.",
+   "description": "Registers two cleanups that both SPEAK: one asks the session door, which it is allowed to ask, and one asks a role it was never granted, which the bus refuses. Both run after a cancellation, and each says what it actually came to.",
    "inputs": [
     {"name": "hold", "type": "text", "default": "go", "help": "the release gate to wait at"},
     {"name": "refuse", "type": "bool", "default": true, "help": "register the cleanup that cannot finish"}
@@ -73,7 +73,7 @@
    "name": "settle",
    "script": "settle.py",
    "summary": "Ask the run manager to start a run, asking for that send to be settled.",
-   "description": "A DIRECT ask (no link) that asks for settlement, of an office whose answering sets more work in motion on the host's own bus. What it reports is whether its conversation was complete only once BOTH the attested answer and the host's settlement for that send had arrived.",
+   "description": "A DIRECT ask (no link) that asks for settlement, of a role whose answering sets more work in motion on the host's own bus. What it reports is whether its conversation was complete only once BOTH the attested answer and the host's settlement for that send had arrived.",
    "inputs": [
     {"name": "name", "type": "text", "required": true, "help": "the run name to start"},
     {"name": "tool", "type": "text", "default": "basics-machine/steps", "help": "the tool to start"}

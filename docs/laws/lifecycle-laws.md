@@ -113,7 +113,7 @@ MEANS
   callback has exited — by normal return **or** by exception unwind — and gets
   the weave then;
 - the refusal is total, because the check precedes every mutation: no role
-  released, no personal or office claim forgotten, no deferred conversation
+  released, no personal or role claim forgotten, no deferred conversation
   abandoned, no transaction invalidated, no registry entry erased, no ownership
   transferred;
 - it covers **both** paths that call `Weave::handle` — ordinary delivery and the

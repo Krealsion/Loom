@@ -206,7 +206,7 @@ A host that rests between turns waits on its sources once, on its dispatch threa
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
-| `kMaxWaitedHandles` | <!-- value kMaxWaitedHandles -->62<!-- /value --> | handles | everything one wait holds: every held office's handles and descriptors, and a watched console's | the office whose claim would pass it is **not held**, in the order the host trusted its offices, and is told why (`loom.host.Waited`, `held` false); its source polls as it would with no host waiting |
+| `kMaxWaitedHandles` | <!-- value kMaxWaitedHandles -->62<!-- /value --> | handles | everything one wait holds: every held role's handles and descriptors, and a watched console's | the role whose claim would pass it is **not held**, in the order the host trusted its roles, and is told why (`loom.host.Waited`, `held` false); its source polls as it would with no host waiting |
 
 **Why <!-- value kMaxWaitedHandles -->62<!-- /value -->.** A Windows wait takes 64 handles, and the
 host's takes two of them itself: the thread's message queue and the high-resolution timer that is

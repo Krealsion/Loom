@@ -14,7 +14,7 @@
 #define ZEN_ENFORCEMENT_DOMAIN "isolation"
 #include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
-#include "weavelib/office_protocol.hpp"
+#include "weavelib/role_protocol.hpp"
 
 #include <zen/isolation/channel.hpp>
 #include <zen/isolation/host.hpp>
@@ -1548,11 +1548,11 @@ TEST_CASE("an out-of-process weave gets no deferred-answer capability, and says 
     CHECK(answers == 0);
 }
 
-// ---- office authorship is in-process only, and FAILS CLOSED out of it (MSG-07) --
+// ---- role authorship is in-process only, and FAILS CLOSED out of it (MSG-07) --
 
-TEST_CASE("an out-of-process weave really holding the role still cannot author office speech "
+TEST_CASE("an out-of-process weave really holding the role still cannot author role speech "
           "across the pipe — refused honestly, never downgraded, in both directions") {
-    // The answer doors' law, extended to the office: the pipe carries no attestation, so the
+    // The answer doors' law, extended to the role: the pipe carries no attestation, so the
     // child gets no authorship door outbound and no authored-role fact inbound. The membership
     // itself is REAL (the mounted weave holds "worker.a" host-side), so the only wall standing
     // is the pipe's, and it must refuse rather than downgrade or pretend.
@@ -1560,25 +1560,25 @@ TEST_CASE("an out-of-process weave really holding the role still cannot author o
     IsolationHost host(bus, kHostExe);
 
     static const auto worker_state =
-        SchemaBuilder("OfficeWorkerState", 1).field("acts", Kind::Int).build();
+        SchemaBuilder("RoleWorkerState", 1).field("acts", Kind::Int).build();
 
-    auto reports = std::make_shared<std::vector<office::OfficeReport>>();
+    auto reports = std::make_shared<std::vector<role::RoleReport>>();
     auto news_count = std::make_shared<int>(0);
     auto commander_probe = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
-        schema_of<office::OfficeReport>(), schema_of<office::WorkerNews>()});
+        schema_of<role::RoleReport>(), schema_of<role::WorkerNews>()});
     ProbeWeave* commander_raw = commander_probe.get();
     const WeaveId commander =
         bus.register_weave(std::move(commander_probe), Grant{}.allow_any(), "commander");
     commander_raw->on_handle = [reports, news_count](const Message& in, Bus&, ProbeWeave&) {
-        if (in.payload.schema().name() == std::string_view(office::OfficeReport::zen_name)) {
-            reports->push_back(from_value<office::OfficeReport>(in.payload));
+        if (in.payload.schema().name() == std::string_view(role::RoleReport::zen_name)) {
+            reports->push_back(from_value<role::RoleReport>(in.payload));
         } else {
             ++*news_count;
         }
     };
 
     OutOfProcessResult out =
-        host.mount("worker", ZEN_SO_OFFICE_WORKER, Grant{}.allow_any(), "worker.a");
+        host.mount("worker", ZEN_SO_ROLE_WORKER, Grant{}.allow_any(), "worker.a");
     REQUIRE_MESSAGE(out.ok, out.error);
     REQUIRE(bus.role_holder("worker.a") == out.id); // the membership is real, host-side
 
@@ -1593,8 +1593,8 @@ TEST_CASE("an out-of-process weave really holding the role still cannot author o
         return c == nullptr ? -1 : c->as_int();
     };
 
-    // OUTBOUND: the child deliberately asks to speak as the office it holds.
-    office::OfficeCommand cmd;
+    // OUTBOUND: the child deliberately asks to speak as the role it holds.
+    role::RoleCommand cmd;
     cmd.mode = "direct";
     cmd.target = static_cast<std::int64_t>(commander.value);
     bus.send_as(commander, out.id, Message(to_value(cmd)));
@@ -1604,15 +1604,15 @@ TEST_CASE("an out-of-process weave really holding the role still cannot author o
     CHECK_FALSE((*reports)[0].authored); // refused at the seam — and the child was TOLD
     CHECK(*news_count == 0);             // nothing was downgraded to a personal send
 
-    // INBOUND: office speech TO the child. The fact is stamped and real
+    // INBOUND: role speech TO the child. The fact is stamped and real
     // host-side; the pipe cannot vouch for it, so the child reads exactly
     // nothing rather than an unbacked flag.
     auto dispatcher_probe = std::make_unique<ProbeWeave>(
         std::vector<std::shared_ptr<const Schema>>{ping_schema()});
     const WeaveId dispatcher =
         bus.register_weave(std::move(dispatcher_probe), Grant{}.allow_any(), "dispatcher");
-    REQUIRE(bus.office_send_as(dispatcher, "dispatcher", out.id,
-                               Message(to_value(office::WorkerNews{"flash"})))
+    REQUIRE(bus.role_send_as(dispatcher, "dispatcher", out.id,
+                               Message(to_value(role::WorkerNews{"flash"})))
                 .valid());
     REQUIRE(host.run_until([&] { return acts() >= 2 && reports->size() >= 2; }, 2000));
     CHECK((*reports)[1].what == "heard");

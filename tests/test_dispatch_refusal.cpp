@@ -47,9 +47,9 @@ Ticket send_mode(Switchboard& sb, int mode, WeaveId from, WeaveId to, Value payl
     case 1:
         return sb.send_as_to_role(from, "service.dispatch", std::move(msg));
     case 2:
-        return sb.office_send_as(from, "author.office", to, std::move(msg));
+        return sb.role_send_as(from, "author.role", to, std::move(msg));
     default:
-        return sb.office_send_to_role_as(from, "author.office", "service.dispatch", std::move(msg));
+        return sb.role_send_to_role_as(from, "author.role", "service.dispatch", std::move(msg));
     }
 }
 } // namespace
@@ -69,7 +69,7 @@ TEST_SUITE("dispatch_refusal") {
                 if (reason != 0) {
                     grant.allow("Ping", 1, target.id).allow_to_role("Ping", 1, "service.dispatch");
                 }
-                auto a = author(sb, heard, std::move(grant), "author.office");
+                auto a = author(sb, heard, std::move(grant), "author.role");
                 if (reason == 2) {
                     sb.kill(target.id);
                 }
@@ -109,15 +109,15 @@ TEST_SUITE("dispatch_refusal") {
         }
     }
 
-    TEST_CASE("delivered controls preserve personal and office authorship without a refusal") {
+    TEST_CASE("delivered controls preserve personal and role authorship without a refusal") {
         for (int mode = 0; mode < 4; ++mode) {
             Switchboard sb;
             std::vector<Heard> heard;
-            auto a = author(sb, heard, Grant{}.allow_any(), "author.office");
+            auto a = author(sb, heard, Grant{}.allow_any(), "author.role");
             auto target = reg_role(sb, {ping_schema()}, "service.dispatch");
             target.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
                 CHECK(in.sender == a.id);
-                CHECK(in.provenance.authored_from_role("author.office") == (mode >= 2));
+                CHECK(in.provenance.authored_from_role("author.role") == (mode >= 2));
             };
             Ticket t = send_mode(sb, mode, a.id, target.id, ping(3));
             sb.pump_pending();
@@ -256,11 +256,11 @@ TEST_SUITE("dispatch_refusal") {
         }
     }
 
-    TEST_CASE("ordinary queued speech survives live reload while notice destination ignores office "
+    TEST_CASE("ordinary queued speech survives live reload while notice destination ignores role "
               "movement") {
         Switchboard sb;
         std::vector<Heard> ah, bh;
-        auto a = author(sb, ah, Grant{}.allow_any(), "author.office");
+        auto a = author(sb, ah, Grant{}.allow_any(), "author.role");
         auto b = author(sb, bh);
         auto target = reg_role(sb, {ping_schema()}, "service.dispatch");
         const auto speech = sb.send_as(a.id, target.id, Message(ping(1)));
@@ -268,9 +268,9 @@ TEST_SUITE("dispatch_refusal") {
         sb.pump_pending();
         CHECK(sb.outcome(speech).disposition == Disposition::Delivered);
         const auto refused =
-            sb.office_send_as(a.id, "author.office", WeaveId{800}, Message(ping(2)));
+            sb.role_send_as(a.id, "author.role", WeaveId{800}, Message(ping(2)));
         REQUIRE(sb.seal_weave(b.id, a.id));
-        REQUIRE(sb.commit_candidate(b.id, a.id, "author.office"));
+        REQUIRE(sb.commit_candidate(b.id, a.id, "author.role"));
         sb.pump_pending();
         sb.pump_pending();
         REQUIRE(ah.size() == 1);

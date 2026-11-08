@@ -74,49 +74,49 @@ case).
 
 ## SENSE-03 — Role movement never relabels a predecessor's claim
 
-LAW — An office claim records the exact weave that made it. When the role moves,
-the claim is still that weave's, stamped `office_holder_is_current == false`. A
+LAW — A role claim records the exact weave that made it. When the role moves,
+the claim is still that weave's, stamped `role_holder_is_current == false`. A
 successor is considered to have claimed nothing until it deliberately claims.
 
 MEANS
 - a role-bound reading after a replacement returns the predecessor's claim, with
-  `author`, `office` and the staleness stamp all truthful;
+  `author`, `role` and the staleness stamp all truthful;
 - the alternative — returning nothing — is **deliberately rejected**: it would
-  collapse "this office has never claimed" and "this office's claim is the
+  collapse "this role has never claimed" and "this role's claim is the
   previous holder's" into one empty answer, and those are different facts. A
   reader wanting the strict view writes
-  `if (r && r.by.office_holder_is_current)`, which is one visible line;
-- once the successor claims as the office, the role-bound view follows it, at
+  `if (r && r.by.role_holder_is_current)`, which is one visible line;
+- once the successor claims as the role, the role-bound view follows it, at
   the next revision of the same key;
 - `author_life_is_current` answers the same question about the claiming *life*,
   mirroring `BusEvent::sender_life` / `sender_life_now`.
 
 DOES NOT MEAN
 - that a stale claim is withheld — staleness is a stamp, never an absence;
-- that a sealed candidate can pre-claim an office: it does not hold the role, so
+- that a sealed candidate can pre-claim a role: it does not hold the role, so
   it is refused (SENSE-04);
 - that the reading is recomputed history — the author, life and incarnation are
   stored as of the claim; only the two "is that still true?" questions are asked
   at read time, so they can never go stale inside the repository.
 
 PROVEN BY — `Switchboard::authorship_of` (currency asked at read, never stored);
-suite `sense` (role movement, and the office/personal separation), suite
+suite `sense` (role movement, and the role/personal separation), suite
 `kernel` (the same across a real committed admission, where the role moves in
 place), suite `handoff` (the same across a full authored handoff).
 
-## SENSE-04 — Claiming as an office is explicit; the claim-set is a contract
+## SENSE-04 — Claiming as a role is explicit; the claim-set is a contract
 
 LAW — A weave may claim only shapes it declared in `Claims<...>`, and may claim
-**as an office** only if it holds that office at the claim moment. Holding a role
+**as a role** only if it holds that role at the claim moment. Holding a role
 attaches nothing.
 
 MEANS
-- the same holder's personal claim and office claim are different keys, and a
+- the same holder's personal claim and role claim are different keys, and a
   reader can tell — this is [MSG-07](messaging-laws.md#msg-07--role-authorship-is-explicit)'s
   law in the Sense category, reusing the same `as_role(...)` grammar because it
   is the same law;
-- an undeclared shape refuses `Undeclared`; an unheld office refuses
-  `OfficeNotHeld`, and **nothing is stored** — never a silent downgrade to a
+- an undeclared shape refuses `Undeclared`; an unheld role refuses
+  `RoleNotHeld`, and **nothing is stored** — never a silent downgrade to a
   personal claim;
 - the claim-set registers at mount, so a participant's Sense capability is
   discoverable **before** it has claimed anything, rather than after a runtime
@@ -130,22 +130,22 @@ MEANS
 
 DOES NOT MEAN
 - that the claim-set widens anything — it is a declaration, not a grant;
-- that a role holder's ordinary claim becomes the office's (the exact
+- that a role holder's ordinary claim becomes the role's (the exact
   MSG-04/MSG-07 mistake in a new costume);
 - that declaring a shape claims it: a declared, never-claimed Sense reads
   `NoClaim`;
 - that **no mechanism** can attribute a claim to another weave. The law binds
   *participants*: `Mail` offers no spelling for it, so an ordinary weave claims
-  as itself or as an office it holds, and a loaded artifact reaches only the
+  as itself or as a role it holds, and a loaded artifact reaches only the
   gated path where the host verifies membership. The trusted root/host door
-  `Switchboard::claim_as` / `office_claim_as` names the claimant explicitly, as
+  `Switchboard::claim_as` / `role_claim_as` names the claimant explicitly, as
   `Switchboard::send` is the ungated send. Saying otherwise would overstate the
   law and leave an operator auditing provenance unaware that a host-authored
   claim is representable at all.
 
-PROVEN BY — `Switchboard::make_claim` (declaration check), `office_claim_as`
-(`holds_role_now` at the claim moment); suite `sense` (personal and office
-claims kept apart, the unheld office and the undeclared shape refused, the
+PROVEN BY — `Switchboard::make_claim` (declaration check), `role_claim_as`
+(`holds_role_now` at the claim moment); suite `sense` (personal and role
+claims kept apart, the unheld role and the undeclared shape refused, the
 discovery case), suite `kernel` (the sealed candidate refused, and dynamic
 parity).
 
@@ -166,9 +166,9 @@ MEANS
   `NoClaim`, and a stamped stale reading;
 - authorization happens **before** the lookup, so an unauthorized reader cannot
   learn whether a claim exists;
-- keys: personal claims die with the weave; office claims die when the role
+- keys: personal claims die with the weave; role claims die when the role
   becomes unheld. A replacement's admission overwrites the holder in place and
-  never passes through unheld, which is exactly why a predecessor's office claim
+  never passes through unheld, which is exactly why a predecessor's role claim
   survives it (SENSE-03);
 - a reload or a thousand re-claims replace the value under one key — the
   repository is bounded by registered weaves × declared shapes plus held roles ×
@@ -181,13 +181,13 @@ DOES NOT MEAN
   per-claimant rule waits for a consumer that needs it;
 - that the host is gated: holding a `Switchboard&` is root authority, and its
   `observe` is ungated exactly as its `send` is;
-- that a dropped claim is a claim that was wrong — an office with no
-  officeholder simply has no current claimant, and keeping the claim would be a
+- that a dropped claim is a claim that was wrong — a role with no
+  role holder simply has no current claimant, and keeping the claim would be a
   claim by nobody.
 
 PROVEN BY — `Grant::permits_observe` (its own rule vector),
 `Switchboard::observe_as` (authorization before lookup),
-`forget_personal_claims` / `forget_office_claims`; suite `sense` (the bounded
+`forget_personal_claims` / `forget_role_claims`; suite `sense` (the bounded
 repository and its lifetime witness, the authorization witnesses), suite `kernel` (a loaded
 reader refused without a rule; `Kernel::load`'s explicit-grant overload).
 

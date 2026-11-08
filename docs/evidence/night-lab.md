@@ -5,7 +5,7 @@ application lab. Three experiments live side by side, each pinned to the
 substrate it ran on: `original/`, the first, against its own older Loom;
 `marathon/`, six applications against Loom `63da2c6` and Zengine `5ee3314`
 at ABI v4, all green; and `followups/role-authorship/`, which replayed three
-of them against Loom `077f30f` at ABI v5 once office authorship existed. Its
+of them against Loom `077f30f` at ABI v5 once role authorship existed. Its
 reports, which carry the counts, are `marathon/FINAL-REPORT.md`,
 `marathon/EVIDENCE.md`, `marathon/FRICTION.md` and
 `followups/role-authorship/REPORT.md` in that repository.
@@ -30,26 +30,26 @@ announcement is evidence — and a publication is the case any direct-send-only
 authorship design would miss) → a lobby player sent to an attacker's server.
 The lobby also supplies the sharpest half of the finding: **the same exact
 weave, holding the same exact role, speaking personally versus speaking as
-the office** — holding is necessary and not sufficient, so the missing fact
+the role** — holding is necessary and not sufficient, so the missing fact
 is two-part (the sender held R, *and* deliberately authored this message as
 R). Both application-level workarounds were built and measured: a registry
 (its belief rests on an unauthenticated announcement) and push-to-pull
 inversion (works; spends the Loom-wide deferral bound, strands strict
 receivers across honest replacement, covers no observers). The import
 pipeline is the control: identity works when you talk to *somebody*; it fails
-when you talk to *whoever holds an office*. Meaning: independent applications
-need trusted office authorship.
+when you talk to *whoever holds a role*. Meaning: independent applications
+need trusted role authorship.
 
-**This evidence is why office authorship exists, and the seam is closed.** The follow-up replay
+**This evidence is why role authorship exists, and the seam is closed.** The follow-up replay
 (`followups/role-authorship/` in the same repository, pinned to its own
 vendored Loom at ABI v5) re-ran the three sharpest verticals on
 `mail.as_role(...)` / `mail.authored_from_role(...)`: the lobby's strict
-player joins the office push, rejects the same holder's chatter and every
-rogue, and follows the office through a real replacement — with the entire
+player joins the role push, rejects the same holder's chatter and every
+rogue, and follows the role through a real replacement — with the entire
 pull apparatus deleted; the farm's `WorkerOpen` **publication** verifies at
 every listener while the rogue's same-shaped one verifies as nothing; and the
 download manager attests BOTH halves of its long operation (the acceptance as
-the answer, the terminal truth as office speech) with zero deferred slots
+the answer, the terminal truth as role speech) with zero deferred slots
 parked. → current law:
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
 seam entry (closed):

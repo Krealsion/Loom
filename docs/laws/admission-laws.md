@@ -120,8 +120,8 @@ MEANS
   exactly as the baseline is, so it survives a code swap or a revival and is
   destroyed with the record;
 - the ceiling relation is **semantic**: "any" contains each exact selector, and
-  an office rule and a WeaveId rule contain one another in neither direction —
-  whichever weave holds the office today — so a routing decision can never become
+  a role rule and a WeaveId rule contain one another in neither direction —
+  whichever weave holds the role today — so a routing decision can never become
   permanent authority;
 - only the two domains that are read at the moment of use are delegable. Send
   rules and observe rules are; the containment fields of a `Grant` are not, and

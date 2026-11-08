@@ -200,7 +200,7 @@ struct HostCtx {
 /// Report a seam rejection to the host's diagnostics, and return the status the library is
 /// given: the one place, so every `resolve_schema`/`admit` failure below reports. `target` is
 /// invalid wherever the emission named no target (see RefusalReason::SeamUnresolved: a
-/// fabricated one would be worse). `to_role` is the office the library named, empty on every
+/// fabricated one would be worse). `to_role` is the role the library named, empty on every
 /// door that named none: the address it was going to, never a resolution (MSG-08).
 ZenStatus seam_reject(HostCtx* h, const loom::Unverified& u, loom::WeaveId target,
                       const loom::Refusal& refusal, std::string_view to_role = {}) {
@@ -539,11 +539,11 @@ static void zen_host_release_deferred(void* ctx, uint64_t token) {
     }
 }
 
-// Deliberate office authorship. As every outbound door: the payload is admitted host-side,
+// Deliberate role authorship. As every outbound door: the payload is admitted host-side,
 // then routed through the gated WeaveBus, which stamps the loaded weave's id from the
 // connection and asks the Switchboard's authorship door to verify membership. An invalid
-// result maps to the precise status, so a loaded office learns "you do not hold that role".
-static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint64_t target,
+// result maps to the precise status, so a loaded role learns "you do not hold that role".
+static ZenStatus zen_host_role_send(void* ctx, const char* as_role, std::uint64_t target,
                                       std::uint64_t reply_to, std::uint64_t correlation,
                                       const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
     if (attempt_out != nullptr) { *attempt_out = 0; }
@@ -559,7 +559,7 @@ static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint6
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
         }
-        const loom::Ticket t = h->gated->office_send(
+        const loom::Ticket t = h->gated->role_send(
             as_role, loom::WeaveId{target},
             loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
                           correlation));
@@ -570,7 +570,7 @@ static ZenStatus zen_host_office_send(void* ctx, const char* as_role, std::uint6
     });
 }
 
-static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, const char* to_role,
+static ZenStatus zen_host_role_send_to_role(void* ctx, const char* as_role, const char* to_role,
                                               std::uint64_t reply_to, std::uint64_t correlation,
                                               const std::uint8_t* payload, std::size_t len, std::uint64_t* attempt_out) {
     if (attempt_out != nullptr) { *attempt_out = 0; }
@@ -586,7 +586,7 @@ static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, co
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), to_role);
         }
-        const loom::Ticket t = h->gated->office_send_to_role(
+        const loom::Ticket t = h->gated->role_send_to_role(
             as_role, to_role,
             loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
                           correlation));
@@ -595,7 +595,7 @@ static ZenStatus zen_host_office_send_to_role(void* ctx, const char* as_role, co
     });
 }
 
-static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::uint64_t reply_to,
+static ZenStatus zen_host_role_publish(void* ctx, const char* as_role, std::uint64_t reply_to,
                                          std::uint64_t correlation, const std::uint8_t* payload,
                                          std::size_t len, std::uint64_t* recipients_out) {
     return seam_guarded([&]() -> ZenStatus {
@@ -607,13 +607,13 @@ static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::ui
         std::shared_ptr<const loom::Schema> door =
             h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
-            return kUnheardPublication; // an office publication is a publication
+            return kUnheardPublication; // a role publication is a publication
         }
         loom::Admission a = loom::admit(u, door);
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
-        const loom::OfficePublication p = h->gated->office_publish(
+        const loom::RolePublication p = h->gated->role_publish(
             as_role, loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
                                    correlation));
         if (!p.authored) {
@@ -631,7 +631,7 @@ static ZenStatus zen_host_office_publish(void* ctx, const char* as_role, std::ui
 // Same shape as every other outbound door: the value crosses as bytes, the HOST
 // admits it through the one gate, and the host — not the library — knows which
 // weave is speaking, whether it declared the shape, and whether it holds the
-// office. A library requests; it never attests.
+// role. A library requests; it never attests.
 
 /// The four distinct Sense refusals, back to the seam's four distinct statuses.
 static ZenStatus sense_status_of(loom::SenseRefusal why) {
@@ -642,8 +642,8 @@ static ZenStatus sense_status_of(loom::SenseRefusal why) {
         return ZEN_ERR_SENSE_NOT_AUTHORIZED;
     case loom::SenseRefusal::Undeclared:
         return ZEN_ERR_SENSE_UNDECLARED;
-    case loom::SenseRefusal::OfficeNotHeld:
-        return ZEN_ERR_SENSE_OFFICE_NOT_HELD;
+    case loom::SenseRefusal::RoleNotHeld:
+        return ZEN_ERR_SENSE_ROLE_NOT_HELD;
     case loom::SenseRefusal::GateRefused:
         return ZEN_ERR_REFUSED;
     case loom::SenseRefusal::None:
@@ -652,11 +652,11 @@ static ZenStatus sense_status_of(loom::SenseRefusal why) {
     return ZEN_OK;
 }
 
-/// Fill the C-layout authorship from the host's own reading, and write the authored office
+/// Fill the C-layout authorship from the host's own reading, and write the authored role
 /// name into the library's own sink, exactly, at whatever length it is (see ZenSenseBy: a
 /// fixed buffer would truncate). A personal claim leaves the sink untouched, so "nothing
-/// written" means "no office", which no real role name can imitate.
-static void fill_sense_by(const loom::SenseReading& r, ZenByteSink office_sink, ZenSenseBy* by) {
+/// written" means "no role", which no real role name can imitate.
+static void fill_sense_by(const loom::SenseReading& r, ZenByteSink role_sink, ZenSenseBy* by) {
     if (by != nullptr) {
         *by = ZenSenseBy{};
         by->author = r.by.author.value;
@@ -668,13 +668,13 @@ static void fill_sense_by(const loom::SenseReading& r, ZenByteSink office_sink, 
         // from the line above would report a predecessor's claim as the current
         // incarnation's.
         by->author_incarnation_is_current = r.by.author_incarnation_is_current ? 1u : 0u;
-        by->office_holder_is_current = r.by.office_holder_is_current ? 1u : 0u;
+        by->role_holder_is_current = r.by.role_holder_is_current ? 1u : 0u;
         by->revision = r.by.revision;
     }
-    if (office_sink.write != nullptr && !r.by.office.empty()) {
-        office_sink.write(office_sink.ctx,
-                          reinterpret_cast<const std::uint8_t*>(r.by.office.data()),
-                          r.by.office.size());
+    if (role_sink.write != nullptr && !r.by.role.empty()) {
+        role_sink.write(role_sink.ctx,
+                          reinterpret_cast<const std::uint8_t*>(r.by.role.data()),
+                          r.by.role.size());
     }
 }
 
@@ -702,7 +702,7 @@ static ZenStatus zen_host_sense_claim(void* ctx, const std::uint8_t* payload, st
     });
 }
 
-static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
+static ZenStatus zen_host_sense_role_claim(void* ctx, const char* as_role,
                                              const std::uint8_t* payload, std::size_t len,
                                              std::uint64_t* revision_out) {
     return seam_guarded([&]() -> ZenStatus {
@@ -718,7 +718,7 @@ static ZenStatus zen_host_sense_office_claim(void* ctx, const char* as_role,
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
         const loom::SenseClaimResult r =
-            h->gated->office_claim(as_role != nullptr ? as_role : "", std::move(a).value());
+            h->gated->role_claim(as_role != nullptr ? as_role : "", std::move(a).value());
         if (revision_out != nullptr) {
             *revision_out = r.revision;
         }
@@ -753,7 +753,7 @@ static ZenStatus zen_host_sense_offer(void* ctx, std::uint64_t op, const std::ui
 
 static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const char* shape_name,
                                         std::uint32_t shape_version, ZenByteSink sink,
-                                        ZenByteSink office_sink, ZenSenseBy* by) {
+                                        ZenByteSink role_sink, ZenSenseBy* by) {
     return seam_guarded([&]() -> ZenStatus {
         auto* h = static_cast<HostCtx*>(ctx);
         // The host resolves the shape it was NAMED. A library asking for a shape this
@@ -768,7 +768,7 @@ static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const c
         if (!r) {
             return sense_status_of(r.refusal);
         }
-        fill_sense_by(r, office_sink, by);
+        fill_sense_by(r, role_sink, by);
         // The value crosses as BYTES the library copies out of the sink — the same
         // ownership rule every other outbound value follows. No host pointer into
         // the repository ever reaches the library, so a loaded reader has exactly the
@@ -779,10 +779,10 @@ static ZenStatus zen_host_sense_observe(void* ctx, std::uint64_t author, const c
     });
 }
 
-static ZenStatus zen_host_sense_observe_office(void* ctx, const char* role,
+static ZenStatus zen_host_sense_observe_role(void* ctx, const char* role,
                                                const char* shape_name,
                                                std::uint32_t shape_version, ZenByteSink sink,
-                                               ZenByteSink office_sink, ZenSenseBy* by) {
+                                               ZenByteSink role_sink, ZenSenseBy* by) {
     return seam_guarded([&]() -> ZenStatus {
         auto* h = static_cast<HostCtx*>(ctx);
         std::shared_ptr<const loom::Schema> shape =
@@ -791,11 +791,11 @@ static ZenStatus zen_host_sense_observe_office(void* ctx, const char* role,
             return ZEN_ERR_UNKNOWN_SCHEMA;
         }
         const loom::SenseReading r =
-            h->gated->observe_office(role != nullptr ? role : "", std::move(shape));
+            h->gated->observe_role(role != nullptr ? role : "", std::move(shape));
         if (!r) {
             return sense_status_of(r.refusal);
         }
-        fill_sense_by(r, office_sink, by);
+        fill_sense_by(r, role_sink, by);
         const std::string bytes = loom::serialize(*r.value);
         sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
         return ZEN_OK;
@@ -909,9 +909,9 @@ public:
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
         // bus_ is the Switchboard, used only to resolve emitted schemas.
         HostCtx ctx{&bus, bus_, self_};
-        // By name, in declaration order (KERN-04). send_to_role and office_publish share a
+        // By name, in declaration order (KERN-04). send_to_role and role_publish share a
         // type (attempt_out and recipients_out are both uint64_t*), so a designator can still
-        // name the wrong function; the loaded semantic witness tells destination, office
+        // name the wrong function; the loaded semantic witness tells destination, role
         // provenance and attempt from count through this table. The payload gate cannot.
         // See docs/reference/dynamic-abi.md#constructing-the-tables.
         ZenHostApi api{.ctx                  = &ctx,
@@ -922,18 +922,18 @@ public:
                        .answer_deferred      = &zen_host_answer_deferred,
                        .release_deferred     = &zen_host_release_deferred,
                        .answer               = &zen_host_answer,
-                       .office_send          = &zen_host_office_send,
-                       .office_send_to_role  = &zen_host_office_send_to_role,
-                       .office_publish       = &zen_host_office_publish,
+                       .role_send          = &zen_host_role_send,
+                       .role_send_to_role  = &zen_host_role_send_to_role,
+                       .role_publish       = &zen_host_role_publish,
                        .sense_claim          = &zen_host_sense_claim,
-                       .sense_office_claim   = &zen_host_sense_office_claim,
+                       .sense_role_claim   = &zen_host_sense_role_claim,
                        .sense_observe        = &zen_host_sense_observe,
-                       .sense_observe_office = &zen_host_sense_observe_office,
+                       .sense_observe_role = &zen_host_sense_observe_role,
                        // the claimant's joint offer, last in declaration order; its type is
                        // unique in this table
                        .sense_offer          = &zen_host_sense_offer};
         // Provenance crosses as host-computed facts beside the sender, and it
-        // crosses ONE WAY ONLY: the office doors above carry REQUESTS the host
+        // crosses ONE WAY ONLY: the role doors above carry REQUESTS the host
         // verifies, never attested facts, so the seam is a place a loaded weave
         // learns Loom's word and never a place it can invent one.
         std::uint32_t prov = ZEN_PROV_NONE;
@@ -950,7 +950,7 @@ public:
         case loom::Provenance::Kind::None:
             break;
         }
-        // The authored office: the delivery's stamped fact, NUL-terminated for the seam;
+        // The authored role: the delivery's stamped fact, NUL-terminated for the seam;
         // NULL means personal speech.
         const std::string authored(in.provenance.authored_role());
         // The library handler's status is contained, not discarded. The delivery was valid

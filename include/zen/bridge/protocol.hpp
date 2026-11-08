@@ -21,11 +21,11 @@
 //              connection has no proxy and acts on nothing.
 //   Welcome    the session identity the host minted (the proxy's WeaveId) and the name its
 //              policy established (empty when none).
-//   Send       to a WeaveId, to an office (`role`) or published; it may ask to be told when
+//   Send       to a WeaveId, to a role (`role`) or published; it may ask to be told when
 //              what it set in motion on the host's bus has been dispatched.
 //   Delivered  the payload and what Loom stamped beside it: the sender, the correlation,
 //              whether Loom attests it as the answer to an ask this connection sent, whether it
-//              is a dispatch-refusal notice, and the office the sender spoke as.
+//              is a dispatch-refusal notice, and the role the sender spoke as.
 //   Settled    the host's word, once, that everything a settle-requested Send set in motion
 //              has been dispatched (`loom::Fence`). Not an answer, and not a claim that nothing
 //              else is pending: work deferred to a timer or a later turn is not waited for.

@@ -19,7 +19,7 @@ settled ask's observations arrive in order, numbered from 1, marked with the ask
 correlation, before its answer; a late subscriber is told nothing from before it began, and
 another run's send is never its cause; a burst past a small window is dropped, counted exactly and
 said, while the state shape keeps its newest; a publication by a participant not holding the
-office is never told, and a replaced holder is visible; the far host's revocation ends the
+role is never told, and a replaced holder is visible; the far host's revocation ends the
 subscription in words; a cancelled run's cleanup frees its subscription, and the next run on the
 same link starts clean; a client that stops waiting leaves the run to its manager; a worker that
 goes without releasing -- stopped outright with its producer silent, or exiting with its window
@@ -210,7 +210,7 @@ def main():
               all(i["cause"] == corr for i in items), (corr, items))
         check("R4 released at the asker's request: Ended `released`, the last number named",
               ok and st[3]["ended"]["how"] == "released" and st[3]["ended"]["last"] == 4, st[3:4])
-        # THE PRODUCER'S OWN NUMBERING carries on across runs (it is the office's): what the next
+        # THE PRODUCER'S OWN NUMBERING carries on across runs (it is the role's): what the next
         # checks expect is counted from here.
         said = items[-1]["fields"]["last"] if items else 0
 
@@ -257,7 +257,7 @@ def main():
               [i["seq"] for i in items] == list(range(1, len(items) + 1)),
               (len(ticks), gaps, state[-1:] if state else None))
 
-        # ---- R7 the office's holder only; a replaced holder is visible ----------------------
+        # ---- R7 the role's holder only; a replaced holder is visible ----------------------
         r, st = run(s, "identity", [{"subscribe": {}},
                                     {"ask": {"verb": "tick", "count": 1, "settle": True}},
                                     {"ask": {"verb": "foreign", "settle": True}}, {"sleep": 0.5},
@@ -268,7 +268,7 @@ def main():
         drained = observed(st[7]["items"]) if len(st) > 7 else []
         ticks = [i for i in drained if i["shape"] == "ProbeTick"]
         rows = st[8].get("rows", []) if len(st) > 8 else []
-        check("R7 a publication by a participant not holding the office is never told (the relay "
+        check("R7 a publication by a participant not holding the role is never told (the relay "
               "counts it foreign), and a replaced holder shows as another producer",
               len(ticks) == 2 and all(t["fields"]["n"] > 0 for t in ticks) and
               ticks[0]["producer"] != ticks[1]["producer"] and

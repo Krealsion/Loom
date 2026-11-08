@@ -4,7 +4,7 @@
 
 ``ctx.observe(producer, shapes, via=link)`` asks the relay at ``loom.observe`` -- on this host, or
 on a far one through a link -- to tell this run each publication of ``shapes`` by whoever holds
-the office ``producer``, from now on. What comes back is a ``Subscription``; ``next()`` hands over,
+the role ``producer``, from now on. What comes back is a ``Subscription``; ``next()`` hands over,
 in order, what it was told:
 
   ``Observation``   one publication: ``shape``, ``fields`` (decoded with the descriptors the relay
@@ -45,7 +45,7 @@ WORDS = ("loom.observe.Observed", "loom.observe.Gap", "loom.observe.Ended")
 class Observation(object):
     """One publication the relay told."""
 
-    __slots__ = ("shape", "version", "fields", "seq", "producer", "incarnation", "office",
+    __slots__ = ("shape", "version", "fields", "seq", "producer", "incarnation", "role",
                  "coalesced", "cause", "delivery", "published_in", "link", "epoch", "session",
                  "received")
 
@@ -54,7 +54,7 @@ class Observation(object):
         self.seq = int(word["seq"])
         self.producer = int(word.get("producer", 0))
         self.incarnation = int(word.get("incarnation", 0))
-        self.office = word.get("office", "")
+        self.role = word.get("role", "")
         self.coalesced = int(word.get("coalesced", 0))
         self.cause = int(word.get("cause", 0))
         self.delivery = int(word.get("delivery", 0))
@@ -76,7 +76,7 @@ class Observation(object):
         """A plain dict for evidence files."""
         return {"kind": "observed", "seq": self.seq, "shape": self.shape, "version": self.version,
                 "fields": _plain(self.fields), "producer": self.producer,
-                "incarnation": self.incarnation, "office": self.office,
+                "incarnation": self.incarnation, "role": self.role,
                 "coalesced": self.coalesced, "cause": self.cause, "delivery": self.delivery,
                 "published_in": self.published_in, "link": self.link, "epoch": self.epoch,
                 "session": self.session, "received": round(self.received, 4)}
