@@ -5,7 +5,7 @@
 // end over a real socket: it connects, discovers the bus, fetches a shape, composes and sends a
 // message, waits for the echoed reply, prints PASS and disconnects. Run it against
 // zen-bridge-host from another process, or from a Windows client that reaches its loopback port.
-// Usage: zen-bridge-probe [host=127.0.0.1] [port=7654] [message="hello from the remote operator"]
+// Usage: zen-bridge-probe [host=127.0.0.1] [port=7654] [message="hello from the remote weaver"]
 
 #include <zen/bridge/remote_console.hpp>
 
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     const std::string host = argc > 1 ? argv[1] : "127.0.0.1";
     const std::uint16_t port =
         argc > 2 ? static_cast<std::uint16_t>(std::atoi(argv[2])) : static_cast<std::uint16_t>(7654);
-    const std::string message = argc > 3 ? argv[3] : "hello from the remote operator";
+    const std::string message = argc > 3 ? argv[3] : "hello from the remote weaver";
 
     std::string err;
     if (!loom::bridge_net_init(&err)) {

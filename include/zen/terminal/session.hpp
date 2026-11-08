@@ -167,7 +167,7 @@ inline constexpr std::size_t kMaxOutstandingAsks = 8;
 class TerminalSession final : public loom::Weave {
 public:
     /// `label` is what a presentation calls this participant ("session",
-    /// "operator"). It is a NAME FOR A PERSON TO READ and nothing else: it is
+    /// "weaver"). It is a NAME FOR A PERSON TO READ and nothing else: it is
     /// never sent, never compared, and confers no authority — the identity that
     /// matters is the WeaveId the host registered.
     ///

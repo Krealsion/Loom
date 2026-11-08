@@ -682,7 +682,7 @@ TEST_CASE("a second request cannot displace the one the weaver is deciding") {
     REQUIRE(c.session->answers.size() == 1);
     CHECK(c.session->answers[0].kind == "refused");
     CHECK(c.session->answers[0].answers_ask);
-    CHECK(c.session->answers[0].detail.find("already awaiting the operator") != std::string::npos);
+    CHECK(c.session->answers[0].detail.find("already awaiting the weaver") != std::string::npos);
     CHECK(c.op->prompts.size() == 1);
 
     // THE DISCRIMINATOR: the weaver's yes applies to A — the request it was
@@ -1484,7 +1484,7 @@ TEST_CASE("a door-less ceiling delegates no door, and a door ceiling no door-les
     CHECK(doors.service->heard.empty());
 }
 
-TEST_CASE("a malformed door is refused in words, and nothing reaches the operator") {
+TEST_CASE("a malformed door is refused in words, and nothing reaches the weaver") {
     Cast c(doors_of("zengine.files/*"));
     std::size_t answered = 0;
     for (const char* door : {"builder.build*", "zengine.files*", "*", "zengine.files/files*",

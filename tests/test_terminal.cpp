@@ -174,7 +174,7 @@ public:
             bus, std::make_unique<TerminalSession>("session", session_vocabulary(), order),
             std::move(session_grant));
         seat = host_mount_terminal(
-            bus, std::make_unique<TerminalSession>("operator", weaver_vocabulary(), order),
+            bus, std::make_unique<TerminalSession>("weaver", weaver_vocabulary(), order),
             weaver_seat_grant());
 
         auto owned = std::make_unique<ProbeWeave>(
@@ -1156,7 +1156,7 @@ TEST_CASE("a merged chronology is the order this presentation observed, and labe
         std::any_of(merged.begin(), merged.end(),
                     [](const DeskEntry& d) { return d.lens == "session"; }) &&
         std::any_of(merged.begin(), merged.end(),
-                    [](const DeskEntry& d) { return d.lens == "operator"; });
+                    [](const DeskEntry& d) { return d.lens == "weaver"; });
     CHECK(both_lenses);
     // A merged VIEW is not a merged identity: every entry still names the weave that knows it.
     for (const DeskEntry& d : merged) {

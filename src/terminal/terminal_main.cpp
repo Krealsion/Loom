@@ -301,7 +301,7 @@ int main() {
     weaver_seat_grant.allow_to_role("zen.RevokeAuthority", 1, kWeaverRole);
     weaver_seat_grant.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     const loom::MountedTerminal seat = loom::host_mount_terminal(
-        bus, std::make_unique<loom::TerminalSession>("operator", std::move(weaver_seat_vocab), order),
+        bus, std::make_unique<loom::TerminalSession>("weaver", std::move(weaver_seat_vocab), order),
         std::move(weaver_seat_grant));
 
     // The pairing — and the refusal to be one participant. Constructing this throws if the two
@@ -455,7 +455,7 @@ debug lens only (the HOST looking - powers no participant has):
     enum class Lens { Session, Weaver, Debug };
     Lens lens = Lens::Session;
     const auto lens_name = [](Lens l) {
-        return l == Lens::Session ? "session" : (l == Lens::Weaver ? "operator" : "debug");
+        return l == Lens::Session ? "session" : (l == Lens::Weaver ? "weaver" : "debug");
     };
     const auto participant = [&desk](Lens l) -> loom::TerminalSession& {
         // EXPLICIT, ALWAYS. The lens names the author; nothing here ever substitutes the other
@@ -480,11 +480,11 @@ debug lens only (the HOST looking - powers no participant has):
         }
         const std::size_t tap_before = tap.size();
 
-        if (cmd == "session" || cmd == "operator" || cmd == "debug") {
+        if (cmd == "session" || cmd == "weaver" || cmd == "debug") {
             // Moving the hand is a PRESENTATION act, recorded as one in the transcript of the
             // participant being left, so a chronology shows when the author changed.
             const Lens next = cmd == "session" ? Lens::Session
-                                               : (cmd == "operator" ? Lens::Weaver : Lens::Debug);
+                                               : (cmd == "weaver" ? Lens::Weaver : Lens::Debug);
             if (lens != Lens::Debug) {
                 participant(lens).record_notice("presentation switched to the " + cmd + " lens");
             }

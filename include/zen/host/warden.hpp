@@ -133,7 +133,7 @@ public:
     void on(const HostAuthoritySync& s, Mail& mail) {
         ++state_.syncs;
         if (mail.sender() != seat_) {
-            (void)mail.answer(Refused{"this host's authority is administered from the operator "
+            (void)mail.answer(Refused{"this host's authority is administered from the weaver "
                                       "seat only"});
             return;
         }

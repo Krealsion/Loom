@@ -2523,7 +2523,7 @@ TEST_CASE("admission: a peer speaking another protocol version is refused in wor
 
 TEST_CASE("admission: a guest is given no tap, and a weaver still is") {
     GuestHost h([](const loom::ConnectionRequest& r) {
-        if (r.claimed_name == "operator") {
+        if (r.claimed_name == "weaver") {
             return loom::weaver_admission()(r);
         }
         return loom::ConnectionVerdict::admit(echo_only("agent"));
@@ -2531,7 +2531,7 @@ TEST_CASE("admission: a guest is given no tap, and a weaver still is") {
     std::unique_ptr<loom::BridgeClient> g;
     std::unique_ptr<loom::BridgeClient> o;
     loom::BridgeClient& guest = connect_client(g, h.port, "agent", "");
-    loom::BridgeClient& op = connect_client(o, h.port, "operator", "");
+    loom::BridgeClient& op = connect_client(o, h.port, "weaver", "");
     REQUIRE(guest.await_admission(2000));
     REQUIRE(op.await_admission(2000));
     guest.send_to_role("echo", 5, loom::serialize(loom::to_value(Echo{"tapped?"})));

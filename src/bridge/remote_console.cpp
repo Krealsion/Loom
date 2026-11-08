@@ -21,7 +21,7 @@ RemoteConsole::RemoteConsole(socket_t sock, int handshake_timeout_ms) {
     ch_ = std::make_unique<BridgeChannel>(sock);
     std::string hello;
     put_u32(hello, kBridgeProtocolVersion);
-    put_bytes(hello, "operator"); // the console claims the weaver's seat; the host's policy decides
+    put_bytes(hello, "weaver"); // the console claims the weaver's seat; the host's policy decides
     put_bytes(hello, "");
     ch_->queue(BridgeOp::Hello, hello);
     ch_->flush();

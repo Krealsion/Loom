@@ -252,7 +252,7 @@ public:
         const std::int64_t name = next_prompt_name();
         if (name == 0) {
             (void)mail.answer(Refused{"this Weaver cannot name another prompt; nothing was put "
-                                      "to the operator"});
+                                      "to the weaver"});
             return;
         }
         // TAKE THE ANSWER AWAY WITH US. The human is not in this call stack, and

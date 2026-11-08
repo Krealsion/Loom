@@ -288,7 +288,7 @@ struct Rig {
         std::tie(doc, d) = put<Doc>(bus, Grant{}, "joint.doc");
         std::tie(view, v) = put<View>(bus, Grant{}, "joint.view");
         std::tie(op, o) = put<Initiator>(bus, Grant{}.allow_to_any(Cmd::zen_name, Cmd::zen_version),
-                                       "joint.operator");
+                                       "joint.initiator");
         std::tie(reader, r) = put<Pair>(bus, reads_both(), "");
         r->doc = doc;
         r->view = view;
@@ -462,7 +462,7 @@ TEST_CASE("a removed claimant aborts the operation and its offers are released")
 
 TEST_CASE("every unauthorized or mistaken act is refused by name and changes nothing") {
     Rig rig;
-    SUBCASE("a second weave presenting the initiator's authority is not the operator") {
+    SUBCASE("a second weave presenting the initiator's authority is not the initiator") {
         // THE COPY IS REFUSED AT THE AUTHORITY, before any operation is looked at. A second
         // initiator's OWN valid authority named with this initiator's operation id does reach the
         // record: that is the foreign-initiator case at the end.
