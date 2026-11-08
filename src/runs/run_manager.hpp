@@ -919,8 +919,9 @@ public:
 
     /// An older record, re-spelled as the current shape so the gate can judge it. The envelope's
     /// content id is dropped -- it names the shape the record WAS written against, which is the
-    /// thing being read forward -- and every other member is carried through untouched. The
-    /// result is admitted normally: a record that is wrong about anything else is still refused.
+    /// thing being read forward -- and every other member is carried through untouched but one:
+    /// a v1 record's asks name the role asked as `office`, and say it as `role` here. The result
+    /// is admitted normally: a record that is wrong about anything else is still refused.
     static std::optional<std::string> read_forward(const std::string& text) {
         const loom::detail::JsonParse parsed = loom::detail::parse_json(text, 32);
         if (!parsed.ok || !parsed.value.is(loom::detail::JsonValue::Type::Object)) {
@@ -936,7 +937,7 @@ public:
         }
         std::string out = "{\"zen\":1,\"schema\":";
         loom::detail::json_quote(Run::zen_name, out);
-        out += ",\"version\":1,\"fields\":{";
+        out += ",\"version\":" + std::to_string(Run::zen_version) + ",\"fields\":{";
         bool first = true;
         for (const auto& [name, value] : fields->members) {
             if (!first) {
@@ -945,7 +946,11 @@ public:
             first = false;
             loom::detail::json_quote(name, out);
             out += ":";
-            json_emit(value, out);
+            if (name == "asks" && value.is(loom::detail::JsonValue::Type::Array)) {
+                emit_asks_v1(value, out);
+            } else {
+                json_emit(value, out);
+            }
         }
         for (const auto& [name, spelling] : record_defaults()) {
             if (fields->find(name) != nullptr) {
@@ -961,6 +966,35 @@ public:
         }
         out += "}}";
         return out;
+    }
+
+    /// A v1 record's asks, each with its `office` member said as `role`, `loom.runs.Asked` v2's
+    /// word for it; every other member as it stands.
+    static void emit_asks_v1(const loom::detail::JsonValue& asks, std::string& out) {
+        out += "[";
+        for (std::size_t i = 0; i < asks.items.size(); ++i) {
+            if (i != 0) {
+                out += ",";
+            }
+            const loom::detail::JsonValue& one = asks.items[i];
+            if (!one.is(loom::detail::JsonValue::Type::Object)) {
+                json_emit(one, out);
+                continue;
+            }
+            out += "{";
+            bool first = true;
+            for (const auto& [name, value] : one.members) {
+                if (!first) {
+                    out += ",";
+                }
+                first = false;
+                loom::detail::json_quote(name == "office" ? std::string("role") : name, out);
+                out += ":";
+                json_emit(value, out);
+            }
+            out += "}";
+        }
+        out += "]";
     }
 
     /// One parsed JSON node, written back out. Numbers keep their own token text, so nothing a

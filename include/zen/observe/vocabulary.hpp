@@ -149,7 +149,7 @@ struct Observed {
     std::int64_t session = 0;
     using ZenSelf = Observed;
     static constexpr const char* zen_name = "loom.observe.Observed";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(seq),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(payload),

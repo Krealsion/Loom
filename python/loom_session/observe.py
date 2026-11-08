@@ -54,7 +54,8 @@ class Observation(object):
         self.seq = int(word["seq"])
         self.producer = int(word.get("producer", 0))
         self.incarnation = int(word.get("incarnation", 0))
-        self.role = word.get("role", "")
+        # A host before loom.observe.Observed v2 said the same fact as "office".
+        self.role = word.get("role", word.get("office", ""))
         self.coalesced = int(word.get("coalesced", 0))
         self.cause = int(word.get("cause", 0))
         self.delivery = int(word.get("delivery", 0))

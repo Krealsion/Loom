@@ -1,12 +1,21 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v10**
+The C seam a weave library and the host agree on. Current version: **v11**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v11 names the role doors by role.** The slots a library calls to speak or claim as a role it
+holds are `role_send`, `role_send_to_role`, `role_publish`, `sense_role_claim` and
+`sense_observe_role`, the error a claim as an unheld role returns is
+`ZEN_ERR_SENSE_ROLE_NOT_HELD`, and a reading's flag is `role_holder_is_current`: each in the
+place, with the meaning, its earlier name had. A native table's layout is unchanged; a box imports
+the doors from `zen_host` by these names, so a box built before them imports names this host does
+not define. The version says it once for both: a v10 image is refused at load with both versions
+named, before any callback into it.
 
 **v10 carries the words of a making refused.** `ZenWeaveAbi::create` takes a `ZenByteSink`: a
 weave that makes no instance returns NULL having written why, and `ZEN_EXPORT_WEAVE` writes there

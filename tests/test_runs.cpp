@@ -978,6 +978,10 @@ TEST_CASE("record: one written before this manager had a word for its own saving
         REQUIRE(at != std::string::npos);
         text.erase(at, std::strlen(gone));
     }
+    const std::string v2 = "\"schema\":\"loom.runs.Run\",\"version\":2";
+    const std::size_t head = text.find(v2);
+    REQUIRE(head != std::string::npos);
+    text.replace(head, v2.size(), "\"schema\":\"loom.runs.Run\",\"version\":1");
     write(file, text);
     // The gate refuses it by identity, as it should; the manager reads it forward and admits it.
     CHECK_FALSE(admit(compat::parse(text), schema_of<Run>()).ok());
@@ -998,6 +1002,49 @@ TEST_CASE("record: one written before this manager had a word for its own saving
     broken.erase(at, end - at + 1);
     write(file, broken);
     CHECK_FALSE(RunManager::read_record(file).has_value());
+}
+
+TEST_CASE("record: a v1 record's asks said the role asked as office; they are read forward as role") {
+    Scratch s{"forward-asks"};
+    const fs::path file = s.path / "run.json";
+    const fs::path tmp = s.path / "run.json.tmp";
+    Run view;
+    view.lifetime = "0011223344556677889900aabbccddee";
+    view.name = "old-asks";
+    view.state = "passed";
+    view.record = "saved";
+    Asked one;
+    one.correlation = 4;
+    one.role = "loom.link.workshop";
+    one.shape = "loom.link.StatusRequested";
+    one.version = 1;
+    one.outcome = "answer";
+    view.asks.push_back(one);
+    std::string why;
+    REQUIRE(RunManager::save_record(file, tmp, view, &why));
+    std::string text = [&] {
+        std::ifstream in(file, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }();
+    // AS A V1 MANAGER WROTE IT: its header names version 1, and its ask says office.
+    for (const auto& [now, then] : {std::pair<std::string, std::string>{
+                                        "\"schema\":\"loom.runs.Run\",\"version\":2",
+                                        "\"schema\":\"loom.runs.Run\",\"version\":1"},
+                                    {"\"role\":\"loom.link.workshop\"", "\"office\":\"loom.link.workshop\""}}) {
+        const std::size_t at = text.find(now);
+        REQUIRE(at != std::string::npos);
+        text.replace(at, now.size(), then);
+    }
+    write(file, text);
+    CHECK_FALSE(admit(compat::parse(text), schema_of<Run>()).ok());
+    const std::optional<Run> old = RunManager::read_record(file);
+    REQUIRE(old.has_value());
+    REQUIRE(old->asks.size() == 1);
+    CHECK(old->asks[0].role == "loom.link.workshop");
+    CHECK(old->asks[0].shape == "loom.link.StatusRequested");
+    CHECK(old->asks[0].outcome == "answer");
 }
 
 TEST_CASE("manager: a finished run is forgotten on release, and its directory removed when asked") {

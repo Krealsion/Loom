@@ -57,10 +57,11 @@ namespace loom::runs {
 
 inline constexpr const char* kRunsRole = "loom.runs";
 
-#define LOOM_RUNS_SHAPE(Type, Name)                                                               \
+#define LOOM_RUNS_SHAPE(Type, Name) LOOM_RUNS_SHAPE_AT(Type, Name, 1)
+#define LOOM_RUNS_SHAPE_AT(Type, Name, Version)                                                   \
     using ZenSelf = Type;                                                                         \
     static constexpr const char* zen_name = Name;                                                 \
-    static constexpr std::uint32_t zen_version = 1
+    static constexpr std::uint32_t zen_version = Version
 
 // ---- the catalog --------------------------------------------------------------------------------
 
@@ -297,7 +298,7 @@ struct Asked {
     bool settle = false;
     std::string outcome;  ///< answer / refused / dispatch-refused / unlinked / lost / pending
     std::string detail;
-    LOOM_RUNS_SHAPE(Asked, "loom.runs.Asked");
+    LOOM_RUNS_SHAPE_AT(Asked, "loom.runs.Asked", 2);
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(correlation), ZEN_FIELD(role), ZEN_FIELD(via),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(settle),
@@ -337,7 +338,7 @@ struct Run {
     std::int64_t started_ms = 0; ///< wall clock, for a person
     std::int64_t ended_ms = 0;
     std::string log;             ///< the worker's stdout/stderr file
-    LOOM_RUNS_SHAPE(Run, "loom.runs.Run");
+    LOOM_RUNS_SHAPE_AT(Run, "loom.runs.Run", 2);
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(lifetime), ZEN_FIELD(name), ZEN_FIELD(tool), ZEN_FIELD(revision),
@@ -357,7 +358,7 @@ struct RunList {
     std::int64_t active = 0;
     std::int64_t capacity = 0; ///< how many runs this manager holds at most
     std::vector<Run> rows;
-    LOOM_RUNS_SHAPE(RunList, "loom.runs.RunList");
+    LOOM_RUNS_SHAPE_AT(RunList, "loom.runs.RunList", 2);
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(active), ZEN_FIELD(capacity),
                                ZEN_FIELD(rows));
@@ -394,7 +395,7 @@ struct Progress {
 /// One of the worker's asks, as it stands (see `Asked`).
 struct AskReport {
     Asked ask;
-    LOOM_RUNS_SHAPE(AskReport, "loom.runs.AskReport");
+    LOOM_RUNS_SHAPE_AT(AskReport, "loom.runs.AskReport", 2);
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(ask)); }
 };
 

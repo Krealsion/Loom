@@ -319,7 +319,7 @@ class Context(object):
         self.conn.ask("loom.runs.AskReport", {"ask": {
             "correlation": p.correlation, "role": p.role, "via": p.via or "",
             "shape": p.shape, "version": p.version, "settle": bool(p.settle),
-            "outcome": outcome, "detail": detail[:400]}}, role=RUNS_ROLE, fire=True)
+            "outcome": outcome, "detail": detail[:400]}}, version=2, role=RUNS_ROLE, fire=True)
 
     # ---- producing files --------------------------------------------------------------------
 

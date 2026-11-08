@@ -79,8 +79,8 @@ loom> authority allow runs loom.session.ExpectRun v1 -> role loom.session
 loom> authority allow runs loom.session.ForgetRun v1 -> role loom.session
 loom> authority allow runs loom.runs.Tools v1 -> any target
 loom> authority allow runs loom.runs.ToolDescription v1 -> any target
-loom> authority allow runs loom.runs.Run v1 -> any target
-loom> authority allow runs loom.runs.RunList v1 -> any target
+loom> authority allow runs loom.runs.Run v2 -> any target
+loom> authority allow runs loom.runs.RunList v2 -> any target
 loom> authority allow runs loom.runs.ArtifactPage v1 -> any target
 loom> authority allow runs loom.runs.Directive v1 -> any target
 loom> start runs <prefix>/lib/loom/loom-runs.dll loom.runs
@@ -127,7 +127,7 @@ Every `loom-session` command attaches as a fresh client, asks the owners, prints
 ```text
 $ loom-session status work
 session /home/you/work -- lifetime 3f17415b4ee53b1ddce611b8ac90b0f7
-  loom-host 0.1.0, pid 36712, weave ABI v10, listening on 127.0.0.1:50113
+  loom-host 0.1.0, pid 36712, weave ABI v11, listening on 127.0.0.1:50113
   connection 4: client client (claims 'loom-session-cli') admitted, session 11, compat
   0 run connection(s) expected
 $ loom-session tools work
